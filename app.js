@@ -764,6 +764,9 @@
     instrumentTimelineLoading: {},
     instrumentTimelineErrors: {},
     instrumentTimelineLastKeys: {},
+    instrumentValuations: {},
+    instrumentValuationLoading: {},
+    instrumentValuationErrors: {},
     instrumentWorkspaceTabs: {},
     instrumentTimelineRanges: {},
     expandedOntologyGraphId: ""
@@ -1142,7 +1145,53 @@
 
   function instrumentWorkspaceTab(symbol) {
     var value = String((state.instrumentWorkspaceTabs || {})[String(symbol || "").toUpperCase()] || "summary");
-    return ["summary", "chart", "decision", "timeline"].indexOf(value) >= 0 ? value : "summary";
+    return ["summary", "valuation", "chart", "decision", "timeline"].indexOf(value) >= 0 ? value : "summary";
+  }
+
+  function instrumentValuationCacheKey(symbol) {
+    var accountId = accountIdOf(activeWatchAccount()) || "default";
+    return accountId + ":" + String(symbol || "").toUpperCase().trim();
+  }
+
+  function instrumentValuationViewState(symbol) {
+    var key = instrumentValuationCacheKey(symbol);
+    return {
+      key: key,
+      payload: (state.instrumentValuations || {})[key] || null,
+      loading: Boolean((state.instrumentValuationLoading || {})[key]),
+      error: String((state.instrumentValuationErrors || {})[key] || ""),
+      staticPreview: isStaticPreviewHost()
+    };
+  }
+
+  function loadInstrumentValuation(symbol, force) {
+    var normalized = String(symbol || "").toUpperCase().trim();
+    if (!normalized || isStaticPreviewHost()) return Promise.resolve(null);
+    var key = instrumentValuationCacheKey(normalized);
+    if (!force && state.instrumentValuations[key]) return Promise.resolve(state.instrumentValuations[key]);
+    if (state.instrumentValuationLoading[key]) return activeJsonRequests["instrument-valuation:" + key] || Promise.resolve(null);
+    state.instrumentValuationLoading[key] = true;
+    state.instrumentValuationErrors[key] = "";
+    render();
+    var accountId = accountIdOf(activeWatchAccount());
+    var params = new URLSearchParams();
+    if (accountId) params.set("accountId", accountId);
+    var suffix = params.toString() ? "?" + params.toString() : "";
+    return requestJson("/api/instruments/" + encodeURIComponent(normalized) + "/valuation" + suffix, {
+      key: "instrument-valuation:" + key,
+      timeoutMs: 16000,
+      force: Boolean(force)
+    }).then(function (payload) {
+      state.instrumentValuations[key] = payload;
+      state.instrumentValuationErrors[key] = "";
+      return payload;
+    }).catch(function (error) {
+      state.instrumentValuationErrors[key] = error.message || "기업가치 자료를 불러오지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.instrumentValuationLoading[key] = false;
+      render();
+    });
   }
 
   function instrumentTimelineRange(symbol) {
@@ -12465,9 +12514,19 @@
       }, 220);
     }
     if (state.workDetailLayer && state.workDetailLayer.type === "market-instrument" && state.workDetailLayer.key) {
-      var timelineKey = instrumentTimelineCacheKey(state.workDetailLayer.key, instrumentTimelineRange(state.workDetailLayer.key));
-      if (!state.instrumentTimelines[timelineKey] && !state.instrumentTimelineLoading[timelineKey]) {
-        loadInstrumentTimeline(state.workDetailLayer.key, false);
+      var activeInstrumentTab = instrumentWorkspaceTab(state.workDetailLayer.key);
+      if (activeInstrumentTab === "valuation") {
+        var valuationKey = instrumentValuationCacheKey(state.workDetailLayer.key);
+        if (!state.instrumentValuations[valuationKey]
+          && !state.instrumentValuationLoading[valuationKey]
+          && !state.instrumentValuationErrors[valuationKey]) {
+          loadInstrumentValuation(state.workDetailLayer.key, false);
+        }
+      } else if (["chart", "decision", "timeline"].indexOf(activeInstrumentTab) >= 0) {
+        var timelineKey = instrumentTimelineCacheKey(state.workDetailLayer.key, instrumentTimelineRange(state.workDetailLayer.key));
+        if (!state.instrumentTimelines[timelineKey] && !state.instrumentTimelineLoading[timelineKey]) {
+          loadInstrumentTimeline(state.workDetailLayer.key, false);
+        }
       }
     }
     if (state.workDetailLayer && state.workDetailLayer.type === "instrument-event-group" && state.workDetailLayer.key) {
@@ -12741,7 +12800,9 @@
     writeWorkDetailHistory(type, key);
     render({ transition: "detail-open" });
     if (state.workDetailLayer.type === "market-instrument") {
-      loadInstrumentTimeline(state.workDetailLayer.key, false);
+      var activeInstrumentTab = instrumentWorkspaceTab(state.workDetailLayer.key);
+      if (activeInstrumentTab === "valuation") loadInstrumentValuation(state.workDetailLayer.key, false);
+      if (["chart", "decision", "timeline"].indexOf(activeInstrumentTab) >= 0) loadInstrumentTimeline(state.workDetailLayer.key, false);
     }
     if (state.workDetailLayer.type === "instrument-event-group") {
       ensureInstrumentEventGroupTimeline(state.workDetailLayer.key);
@@ -16081,12 +16142,13 @@
     var active = instrumentWorkspaceTab(symbol);
     var tabs = [
       ["summary", "요약"],
+      ["valuation", "기업가치"],
       ["chart", "차트"],
       ["decision", "판단"],
       ["timeline", "타임라인"]
     ];
-    return '<nav class="instrument-workspace-tabs" aria-label="종목 상세 보기">' + tabs.map(function (item) {
-      return '<button type="button" data-instrument-workspace-tab="' + item[0] + '" data-instrument-symbol="' + escapeHtml(symbol) + '" class="' + (active === item[0] ? "active" : "") + '"' + (active === item[0] ? ' aria-current="page"' : '') + '>' + escapeHtml(item[1]) + '</button>';
+    return '<nav class="instrument-workspace-tabs" role="tablist" aria-label="종목 상세 보기">' + tabs.map(function (item) {
+      return '<button type="button" role="tab" aria-selected="' + (active === item[0] ? "true" : "false") + '" data-instrument-workspace-tab="' + item[0] + '" data-instrument-symbol="' + escapeHtml(symbol) + '" class="' + (active === item[0] ? "active" : "") + '">' + escapeHtml(item[1]) + '</button>';
     }).join("") + '</nav>';
   }
 
@@ -16113,6 +16175,214 @@
       '</div></section>',
       '</div>',
       '<section class="instrument-data-contract"><span class="tone-chip ' + escapeHtml(row.isMock ? "caution" : "watch") + '">' + escapeHtml(row.isMock ? "MOCK" : "ACTUAL") + '</span><p><strong>' + escapeHtml(row.apiSource || "시세 출처 미기록") + '</strong><em>최종 변경 ' + escapeHtml(formatClock(row.updatedAt)) + '</em></p></section>'
+    ].join("");
+  }
+
+  function instrumentValuationDecimal(value, suffix, digits) {
+    if (!hasNumericValue(value)) return "-";
+    var number = Number(value);
+    if (!Number.isFinite(number)) return "-";
+    return number.toLocaleString("ko-KR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: digits == null ? 2 : digits
+    }) + (suffix || "");
+  }
+
+  function instrumentValuationPrice(value, currency) {
+    if (!hasNumericValue(value)) return "-";
+    var number = Number(value);
+    var formatted = number.toLocaleString("ko-KR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: String(currency || "").toUpperCase() === "KRW" ? 0 : 2
+    });
+    if (String(currency || "").toUpperCase() === "KRW") return formatted + "원";
+    if (String(currency || "").toUpperCase() === "USD") return "$" + formatted;
+    return formatted + (currency ? " " + currency : "");
+  }
+
+  function instrumentValuationSignedPct(value) {
+    if (!hasNumericValue(value)) return "-";
+    var number = Number(value);
+    return (number > 0 ? "+" : "") + number.toLocaleString("ko-KR", { maximumFractionDigits: 1 }) + "%";
+  }
+
+  function instrumentValuationPerText(metrics) {
+    var status = String((metrics || {}).perStatus || "missing");
+    if (status === "not-meaningful-loss") return "적자 · 산출 불가";
+    if (status === "not-meaningful-zero-earnings") return "이익 0 · 산출 불가";
+    if (status === "available" && hasNumericValue((metrics || {}).currentPER) && Number(metrics.currentPER) > 0) {
+      return instrumentValuationDecimal(metrics.currentPER, "배", 2);
+    }
+    return "자료 없음";
+  }
+
+  function instrumentValuationQualityMeta(quality, valuationStatus) {
+    var status = String((quality || {}).status || valuationStatus || "unavailable").toLowerCase();
+    if (status === "ready") return { label: "근거 충족", tone: "watch" };
+    if (status === "blocked" || String(valuationStatus || "").indexOf("blocked") === 0) return { label: "계산 보류", tone: "danger" };
+    if (status === "partial" || valuationStatus === "calculated") return { label: "참고값", tone: "caution" };
+    return { label: "자료 부족", tone: "hold" };
+  }
+
+  function instrumentValuationModelLabel(model) {
+    var id = String((model || {}).id || "");
+    var labels = {
+      "semiconductor-cycle-earnings": "반도체 이익·업황 방식",
+      "growth-quality-earnings": "성장주 이익 방식",
+      "bitcoin-treasury-nav": "비트코인 보유가치 방식",
+      "preferred-income-yield": "배당수익률 방식",
+      "generic-fundamental-earnings": "기업 이익 방식",
+      "current-price-reference": "현재가 참고 방식"
+    };
+    return labels[id] || "적정가 계산 자료 없음";
+  }
+
+  function instrumentValuationPeriodLabel(value) {
+    var labels = {
+      "ttm": "최근 12개월",
+      "trailing-12m": "최근 12개월",
+      "forward-12m": "향후 12개월",
+      "fy1": "다음 회계연도",
+      "fy2": "그다음 회계연도",
+      "annual": "연간",
+      "annualized": "연환산",
+      "interim": "누적 분기",
+      "quarterly": "분기"
+    };
+    return labels[String(value || "").toLowerCase()] || String(value || "기준 미확인");
+  }
+
+  function instrumentValuationMultipleBasisLabel(value) {
+    var labels = {
+      "historical": "과거 PER 표본",
+      "peer": "비교기업 PER 표본",
+      "historical+peer": "과거·비교기업 PER 표본",
+      "bootstrap-prior": "종목 유형별 초기 참고 범위",
+      "current-market": "현재 시장 PER"
+    };
+    return labels[String(value || "").toLowerCase()] || "근거 범위 미확인";
+  }
+
+  function instrumentValuationStateLabel(value) {
+    var labels = {
+      sufficient: "충분",
+      ready: "충분",
+      partial: "일부만 있음",
+      unavailable: "사용 불가",
+      fresh: "최신",
+      aging: "오래됨",
+      stale: "만료",
+      unknown: "확인 필요",
+      ai_applied_pending_review: "사용자 검토 전",
+      user_approved: "사용자 승인",
+      user_modified: "사용자 수정",
+      user_rejected: "사용 제외"
+    };
+    return labels[String(value || "").toLowerCase()] || String(value || "확인 필요");
+  }
+
+  function instrumentValuationSourceScopeLabel(value) {
+    var labels = {
+      overview: "기업 지표",
+      "overview-secondary": "보조 기업 지표",
+      "statements-governance": "재무·경영 정보",
+      "official-filing": "공식 공시",
+      "official-filing-company": "국내 공식 공시",
+      "valuation-model-input": "적정가 계산 입력",
+      "company-metrics": "기업 평가 지표"
+    };
+    return labels[String(value || "").toLowerCase()] || String(value || "기업 자료");
+  }
+
+  function instrumentValuationMissingLabel(value) {
+    var labels = {
+      "financial-statements": "재무제표 기간 자료",
+      "executive-governance": "경영진·지배구조 자료",
+      "valuation-metrics": "PER·PBR 등 시장 평가 지표",
+      "capital-structure": "발행주식수·부채 등 자본구조 자료"
+    };
+    return labels[String(value || "")] || String(value || "");
+  }
+
+  function renderInstrumentValuationMetric(label, value, detail, tone) {
+    return '<div class="instrument-valuation-metric ' + escapeHtml(tone || "hold") + '"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value || "-") + '</strong><em>' + escapeHtml(detail || "") + '</em></div>';
+  }
+
+  function renderInstrumentValuationScenario(label, value, margin, currency, tone) {
+    return '<div class="instrument-valuation-scenario ' + escapeHtml(tone || "hold") + '"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(instrumentValuationPrice(value, currency)) + '</strong><em>현재가 대비 ' + escapeHtml(instrumentValuationSignedPct(margin)) + '</em></div>';
+  }
+
+  function renderInstrumentValuation(row, view) {
+    if (view.staticPreview) {
+      return '<div class="instrument-chart-state"><strong>정적 화면에서는 기업가치 자료를 조회하지 않습니다.</strong><p>로컬 또는 공유 앱에서 최신 기업 지표와 적정가 계산 근거를 확인하세요.</p></div>';
+    }
+    var payload = view.payload || {};
+    if (view.loading && !view.payload) {
+      return '<div class="instrument-chart-state is-loading"><span></span><strong>PER와 적정가 근거를 조회하고 있습니다.</strong></div>';
+    }
+    if (view.error && !view.payload) {
+      return '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-valuation-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>';
+    }
+    if (!view.payload) {
+      return '<div class="instrument-empty"><strong>기업가치 자료를 아직 불러오지 않았습니다.</strong><button type="button" class="text-button" data-instrument-valuation-refresh="' + escapeHtml(row.symbol) + '">조회</button></div>';
+    }
+
+    var instrument = payload.instrument || {};
+    var metrics = payload.marketMetrics || {};
+    var valuation = payload.valuation || {};
+    var quality = valuation.quality || {};
+    var fairValue = valuation.fairValue || {};
+    var safety = valuation.safetyMargin || {};
+    var earnings = valuation.earningsScenario || {};
+    var multiple = valuation.multipleBand || {};
+    var company = payload.companyData || {};
+    var qualityMeta = instrumentValuationQualityMeta(quality, valuation.status);
+    var currency = fairValue.currency || instrument.currency || row.currency;
+    var currentPrice = instrument.currentPrice || row.currentPrice;
+    var currentPerDetail = metrics.perStatus === "available" ? "현재 주가 ÷ 최근 이익" : "이익이 없거나 값이 수집되지 않음";
+    var modelHasFairValue = hasNumericValue(fairValue.base) && Number(fairValue.base) > 0;
+    var evidenceBacked = Boolean(multiple.evidenceBacked);
+    var sourceRows = Array.isArray(payload.sources) ? payload.sources : [];
+    var missing = Array.isArray(payload.missingData) ? payload.missingData : [];
+    var decisionLabel = quality.decisionEligible ? "투자 판단에 사용 가능" : "투자 판단에는 참고만";
+    var decisionTone = quality.decisionEligible ? "watch" : "caution";
+
+    return [
+      '<section class="instrument-valuation-workspace">',
+      '<header><div><span class="label">COMPANY VALUE</span><h3>기업가치</h3><p>시장 평가 지표와 우리 계산의 가정·출처·한계를 분리해 보여줍니다.</p></div><div class="instrument-valuation-head-actions"><span class="tone-chip ' + escapeHtml(qualityMeta.tone) + '">' + escapeHtml(qualityMeta.label) + '</span><button type="button" class="text-button compact" data-instrument-valuation-refresh="' + escapeHtml(row.symbol) + '">새로고침</button></div></header>',
+      '<div class="instrument-valuation-metrics">',
+      renderInstrumentValuationMetric("현재 PER", instrumentValuationPerText(metrics), currentPerDetail, metrics.perStatus === "available" ? "watch" : "hold"),
+      renderInstrumentValuationMetric("선행 PER", hasNumericValue(metrics.forwardPER) ? instrumentValuationDecimal(metrics.forwardPER, "배", 2) : "자료 없음", "향후 이익 예상치 기준", "hold"),
+      renderInstrumentValuationMetric("최근 EPS", hasNumericValue(metrics.trailingEPS) ? instrumentValuationPrice(metrics.trailingEPS, currency) : "자료 없음", instrumentValuationPeriodLabel(metrics.trailingEPSPeriod || "ttm"), "hold"),
+      renderInstrumentValuationMetric("PBR", hasNumericValue(metrics.pbr) ? instrumentValuationDecimal(metrics.pbr, "배", 2) : "자료 없음", "주가 ÷ 주당순자산", "hold"),
+      renderInstrumentValuationMetric("PEG", hasNumericValue(metrics.pegRatio) ? instrumentValuationDecimal(metrics.pegRatio, "배", 2) : "자료 없음", "PER와 이익 성장의 비교", "hold"),
+      '</div>',
+      '<section class="instrument-valuation-band">',
+      '<div class="instrument-valuation-section-head"><div><span class="label">FAIR VALUE RANGE</span><h4>우리 기준 적정가</h4></div><span class="tone-chip ' + escapeHtml(decisionTone) + '">' + escapeHtml(decisionLabel) + '</span></div>',
+      '<p class="instrument-valuation-model"><strong>' + escapeHtml(instrumentValuationModelLabel(valuation.model)) + '</strong><span>현재가 ' + escapeHtml(instrumentValuationPrice(currentPrice, currency)) + '</span></p>',
+      modelHasFairValue ? '<div class="instrument-valuation-scenarios">' + [
+        renderInstrumentValuationScenario("보수적", fairValue.low, safety.conservativePct, currency, "hold"),
+        renderInstrumentValuationScenario("기준", fairValue.base, safety.basePct, currency, "watch"),
+        renderInstrumentValuationScenario("낙관적", fairValue.high, safety.optimisticPct, currency, "hold")
+      ].join("") + '</div>' : '<div class="instrument-valuation-unavailable"><strong>적정가 계산 보류</strong><p>' + escapeHtml(valuation.sourceReason || "필수 입력값이 부족해 현재가를 적정가로 대신하지 않았습니다.") + '</p></div>',
+      modelHasFairValue ? '<p class="instrument-valuation-explanation">' + escapeHtml(valuation.sourceReason || "확인된 EPS와 PER 범위를 조합해 계산했습니다.") + '</p>' : '',
+      '</section>',
+      '<div class="instrument-valuation-detail-grid">',
+      '<section class="instrument-valuation-band"><div class="instrument-valuation-section-head"><div><span class="label">EARNINGS</span><h4>계산에 쓴 이익</h4></div><span>' + escapeHtml(instrumentValuationPeriodLabel(earnings.period)) + '</span></div>',
+      '<div class="instrument-valuation-inline-values"><span><b>낮음</b><strong>' + escapeHtml(instrumentValuationPrice(earnings.low, currency)) + '</strong></span><span><b>기준</b><strong>' + escapeHtml(instrumentValuationPrice(earnings.base, currency)) + '</strong></span><span><b>높음</b><strong>' + escapeHtml(instrumentValuationPrice(earnings.high, currency)) + '</strong></span></div>',
+      '<p>' + escapeHtml([earnings.sourceCount ? "출처 " + earnings.sourceCount + "곳" : "출처 수 미확인", earnings.analystCount ? "분석가 " + earnings.analystCount + "명" : "분석가 수 미확인", earnings.providers && earnings.providers.length ? earnings.providers.join(", ") : "제공자 미확인"].join(" · ")) + '</p></section>',
+      '<section class="instrument-valuation-band"><div class="instrument-valuation-section-head"><div><span class="label">P/E EVIDENCE</span><h4>비교에 쓴 PER 범위</h4></div><span class="tone-chip ' + escapeHtml(evidenceBacked ? "watch" : "caution") + '">' + escapeHtml(evidenceBacked ? "실제 표본" : "초기 참고값") + '</span></div>',
+      '<div class="instrument-valuation-inline-values"><span><b>낮음</b><strong>' + escapeHtml(instrumentValuationDecimal(multiple.low, "배", 1)) + '</strong></span><span><b>기준</b><strong>' + escapeHtml(instrumentValuationDecimal(multiple.base, "배", 1)) + '</strong></span><span><b>높음</b><strong>' + escapeHtml(instrumentValuationDecimal(multiple.high, "배", 1)) + '</strong></span></div>',
+      '<p><strong>' + escapeHtml(instrumentValuationMultipleBasisLabel(multiple.basis)) + '</strong> · 표본 ' + escapeHtml(String(multiple.sampleCount || 0)) + '개' + (evidenceBacked ? '' : ' · 실제 과거·비교기업 표본이 부족해 투자 판단에는 사용하지 않습니다.') + '</p></section>',
+      '</div>',
+      '<section class="instrument-valuation-quality">',
+      '<div><span class="tone-chip ' + escapeHtml(decisionTone) + '">' + escapeHtml(decisionLabel) + '</span><p><strong>자료 상태 ' + escapeHtml(qualityMeta.label) + '</strong><em>' + escapeHtml(["기업 자료 " + instrumentValuationStateLabel(company.state), "신선도 " + instrumentValuationStateLabel(quality.freshnessStatus), instrumentValuationStateLabel(valuation.reviewStatus)].join(" · ")) + '</em></p></div>',
+      missing.length ? '<div class="instrument-valuation-missing"><strong>더 필요한 자료</strong><ul>' + missing.map(function (item) { return '<li>' + escapeHtml(instrumentValuationMissingLabel(item)) + '</li>'; }).join("") + '</ul></div>' : '<div class="instrument-valuation-missing is-complete"><strong>필수 누락 자료 없음</strong><p>그래도 적정가는 범위로 보고 실제 실적 변화와 함께 재검토해야 합니다.</p></div>',
+      '</section>',
+      '<section class="instrument-valuation-sources"><div class="instrument-valuation-section-head"><div><span class="label">PROVENANCE</span><h4>출처와 기준일</h4></div><span>' + escapeHtml(formatClock(valuation.asOf || company.sourceAsOf || instrument.priceAsOf)) + '</span></div>',
+      sourceRows.length ? '<div>' + sourceRows.map(function (source) { var scopes = Array.isArray(source.scopes) && source.scopes.length ? source.scopes : [source.scope]; return '<p><strong>' + escapeHtml(source.provider || "출처 미기록") + '</strong><span>' + escapeHtml(scopes.filter(Boolean).map(instrumentValuationSourceScopeLabel).join(" · ") || "기업 자료") + '</span><time>' + escapeHtml(formatClock(source.asOf)) + '</time></p>'; }).join("") + '</div>' : '<p class="instrument-valuation-explanation">출처 기록이 없습니다.</p>',
+      '</section>',
+      '</section>'
     ].join("");
   }
 
@@ -16338,13 +16608,16 @@
     if (!row) return null;
     var active = instrumentWorkspaceTab(symbol);
     var view = instrumentTimelineViewState(symbol);
+    var valuationView = instrumentValuationViewState(symbol);
     var content = active === "chart"
       ? renderInstrumentChart(row, view)
-      : active === "decision"
-        ? renderInstrumentDecision(row, view)
-        : active === "timeline"
-          ? renderInstrumentTimeline(row, view)
-          : renderInstrumentSummary(row);
+      : active === "valuation"
+        ? renderInstrumentValuation(row, valuationView)
+        : active === "decision"
+          ? renderInstrumentDecision(row, view)
+          : active === "timeline"
+            ? renderInstrumentTimeline(row, view)
+            : renderInstrumentSummary(row);
     return {
       kicker: "Instrument Workspace",
       title: row.name || row.symbol,
@@ -34419,7 +34692,8 @@
         var instrumentSymbol = String(instrumentTab.getAttribute("data-instrument-symbol") || "").toUpperCase();
         state.instrumentWorkspaceTabs[instrumentSymbol] = instrumentTab.getAttribute("data-instrument-workspace-tab") || "summary";
         render({ transition: "section" });
-        if (state.instrumentWorkspaceTabs[instrumentSymbol] !== "summary") loadInstrumentTimeline(instrumentSymbol, false);
+        if (state.instrumentWorkspaceTabs[instrumentSymbol] === "valuation") loadInstrumentValuation(instrumentSymbol, false);
+        if (["chart", "decision", "timeline"].indexOf(state.instrumentWorkspaceTabs[instrumentSymbol]) >= 0) loadInstrumentTimeline(instrumentSymbol, false);
         return;
       }
       var instrumentRange = event.target.closest && event.target.closest("[data-instrument-range]");
@@ -34444,6 +34718,12 @@
       if (instrumentRefresh && app.contains(instrumentRefresh)) {
         event.preventDefault();
         loadInstrumentTimeline(instrumentRefresh.getAttribute("data-instrument-timeline-refresh"), true);
+        return;
+      }
+      var instrumentValuationRefresh = event.target.closest && event.target.closest("[data-instrument-valuation-refresh]");
+      if (instrumentValuationRefresh && app.contains(instrumentValuationRefresh)) {
+        event.preventDefault();
+        loadInstrumentValuation(instrumentValuationRefresh.getAttribute("data-instrument-valuation-refresh"), true);
         return;
       }
       var consoleMetricTarget = event.target.closest && event.target.closest("[data-console-metric-target]");

@@ -9,7 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.decision_continuity_service import DecisionContinuityService
 from digital_twin.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
 from digital_twin.application.notification_ai_gate_message import decision_continuity_rows
-from digital_twin.application.notification_decision_memory import context_with_previous_investment_decision
+from digital_twin.application.notification_decision_memory import (
+    context_with_previous_investment_decision,
+    context_with_previous_investment_insight,
+)
 from digital_twin.domain.decision_continuity import build_decision_continuity_packet
 from digital_twin.domain.investment_decision_actionability import (
     investment_decision_actionability,
@@ -232,6 +235,76 @@ class DecisionContinuityTests(unittest.TestCase):
         self.assertEqual(
             first["decisionContinuityPacket"]["packetId"],
             second["decisionContinuityPacket"]["packetId"],
+        )
+
+    def test_previous_insight_memory_skips_current_and_unpublishable_episodes(self):
+        class InsightStore:
+            calls = []
+
+            def latest_insight_episodes(self, account_id="", symbol="", limit=0):
+                self.calls.append((account_id, symbol, limit))
+                return [
+                    {
+                        "episodeId": "insight:current",
+                        "subjectCaseId": "subject:current",
+                        "insight": {"insightAssessment": {
+                            "publishable": True,
+                            "direction": "positive",
+                        }},
+                    },
+                    {
+                        "episodeId": "insight:rejected",
+                        "subjectCaseId": "subject:rejected",
+                        "insight": {"insightAssessment": {
+                            "publishable": False,
+                            "direction": "negative",
+                        }},
+                    },
+                    {
+                        "episodeId": "insight:previous",
+                        "subjectCaseId": "subject:previous",
+                        "inferenceGenerationId": "generation:previous",
+                        "createdAt": "2026-08-16T00:30:00Z",
+                        "insight": {"insightAssessment": {
+                            "publishable": True,
+                            "status": "conditional",
+                            "direction": "negative",
+                            "directionLabel": "하락 위험 우세",
+                            "horizon": "medium-term",
+                            "conviction": "moderate",
+                            "dominantThesis": "수익성 둔화 위험이 중기 관점을 지배합니다.",
+                            "causalMechanism": "매출 둔화가 이익 추정치를 낮춥니다.",
+                            "investmentImplication": "신규 노출 확대보다 위험 관찰이 우선입니다.",
+                            "thesisKey": "earnings-deceleration",
+                            "materialFingerprint": "fingerprint:previous",
+                        }},
+                    },
+                ]
+
+        store = InsightStore()
+        enriched = context_with_previous_investment_insight(
+            {
+                "messageType": "investmentInsight",
+                "accountId": "main",
+                "rawSymbol": "005930",
+                "investmentSubjectDecisionCaseId": "subject:current",
+            },
+            store,
+        )
+
+        self.assertEqual([("main", "005930", 8)], store.calls)
+        self.assertEqual(
+            "insight:previous",
+            enriched["previousInvestmentAIInsightEpisode"]["episodeId"],
+        )
+        self.assertEqual(
+            "negative",
+            enriched["previousInvestmentAIInsightEpisode"]["insightAssessment"]["direction"],
+        )
+        self.assertEqual("found", enriched["investmentInsightHistory"]["status"])
+        self.assertEqual(
+            "fingerprint:previous",
+            enriched["investmentInsightHistory"]["previousMaterialFingerprint"],
         )
 
     def test_ai_queue_captures_continuity_before_persisting_immutable_request(self):

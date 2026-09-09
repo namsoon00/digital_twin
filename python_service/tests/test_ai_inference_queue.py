@@ -884,7 +884,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v4", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v5", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v17", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-judge-v18", prompt_audit["promptRelease"]["version"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])

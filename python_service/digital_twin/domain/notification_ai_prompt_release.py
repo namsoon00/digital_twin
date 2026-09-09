@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v17"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v16"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v18"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v17"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
@@ -24,7 +24,7 @@ AI_DECISION_RESPONSE_SCHEMA = {
     "counterEvidence": ["반대 근거 최대 2개"],
     "narrativeClaims": [{
         "claimId": "응답 안에서 고유한 문장 ID",
-        "section": "view|change|support|counter|next-condition|limitation",
+        "section": "view|mechanism|implication|catalyst|change|support|counter|next-condition|limitation",
         "text": "사용자에게 보여줄 한 문장",
         "evidenceIds": ["DecisionCore.evidenceLedger의 근거 ID"],
     }],
@@ -58,6 +58,21 @@ AI_DECISION_RESPONSE_SCHEMA = {
         "evidenceIds": ["DecisionCore의 근거 ID"],
         "status": "supported|contested|unresolved",
     }],
+    "insightAssessment": {
+        "direction": "positive|balanced|negative",
+        "directionLabel": "상방 우세|상하방 균형|하방 우세",
+        "horizon": "intraday|short-term|medium-term|long-term|multi-horizon",
+        "horizonLabel": "장중|단기|중기|장기|복합 기간",
+        "conviction": "tentative|moderate|strong",
+        "convictionLabel": "초기|보통|강함",
+        "dominantThesis": "가장 강하게 지지되는 결론",
+        "causalMechanism": "관측 변화가 가치·수급·가격에 이어지는 경로",
+        "investmentImplication": "보유자 또는 관심 투자자에게 주는 의미",
+        "catalysts": ["강화 사건 최대 2개"],
+        "risks": ["반대 시나리오 최대 2개"],
+        "invalidationCondition": "관점을 무효화할 재관측 조건",
+        "thesisKey": "의미 변화 추적용 짧은 영문 키",
+    },
     "alternativeAction": {
         "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
         "whyNotSelected": "현재 선택하지 않은 이유",
@@ -82,12 +97,16 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "hypothesisSet.comparisonMode이 research-only이면 모든 연구용 가설을 비교하고 selectedHypothesisId에는 현재 사실을 가장 잘 설명하는 연구 선두 가설을 쓰되, 이를 최종 투자 가설이나 행동 권한으로 승격하지 않는다. summary에는 선두 가설의 의미, 약점, 다음 반증 조건을 구체적으로 설명한다.",
     "연구용 가설의 evidenceState가 blocked 또는 quarantined이면 supported로 판정하지 않는다. blocked는 누락되거나 검증되지 않은 필수 근거를 reasoning과 unresolvedQuestions에 명시하고 unresolved 또는 weakened로 판정한다.",
     "action만 사용자가 읽을 유일한 최종 행동이다. 정책·실행·품질 규칙이 선택 가설의 후보 행동을 제약하면 executionDecision과 disagreementReason에 검증 가능한 이유를 쓴다.",
+    "투자 인사이트와 매매 실행은 별도 결과다. 매매가 금지돼도 가설이 있으면 최선의 가설을 선택해 방향·인과 경로·투자 의미를 insightAssessment에 결론내린다. 불확실성은 conviction을 낮추되 결론을 없애지 않는다.",
+    "direction은 근거의 순효과로 고르고 자료 부족만으로 balanced를 쓰지 않는다. 정말 대등한 상반 근거일 때만 balanced로 쓰고 균형을 깨는 조건을 밝힌다.",
+    "dominantThesis·causalMechanism·investmentImplication은 narrativeClaims의 view·mechanism·implication과 같은 의미여야 하며, 사용 가능한 핵심 관측 수치 1~2개와 검증 근거 ID를 연결한다.",
+    "previousInsight가 있으면 문구가 아니라 direction, horizon, conviction, thesisKey의 의미 변화를 비교한다. 의미 변화가 없으면 새 인사이트인 것처럼 과장하지 않는다.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
-    "사용자에게 보여줄 투자 관점, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
+    "사용자에게 보여줄 투자 관점, 인과 경로, 투자 의미, 촉매, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
     "narrativeClaims는 section별 허용 ID만 쓰고, narrativeClaimContract.recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
     "TypeDB 규칙을 인용할 때 narrativeClaimContract.evidenceBundlesByInference에 연결된 관찰 사실 ID도 함께 인용한다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",
-    "확인된 사실은 명확히 말하되, 확인되지 않은 원인·전망·인과관계는 단정하지 않고 limitation에 검증 한계를 적는다.",
+    "확인된 사실은 명확히 말하고 가장 잘 지지되는 인과 해석을 결론으로 제시한다. 확인되지 않은 세부 원인이나 영향 규모만 limitation에 적고, 자료 한계를 알림의 중심 결론으로 만들지 않는다.",
     "narrativeClaims의 support는 role=support 근거만, counter는 role=counter 근거만 연결하고 context나 limitation을 행동 근거로 바꾸지 않는다.",
     "자료 부족은 limitation으로만 쓰고 counter 근거로 쓰지 않는다. 행동 결론 자체를 support 근거로 반복하지 않는다.",
     "확인된 반대 사실이 없으면 counter 문장을 만들지 않는다. 확인되지 않은 내용을 채우기 위해 일반론을 만들지 않는다.",

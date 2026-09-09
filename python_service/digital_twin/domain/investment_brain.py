@@ -2182,6 +2182,12 @@ def compact_hypotheses_by_causal_family(
                 if independence_key
                 else " 같은 인과 구조의 TypeDB 규칙 "
             ) + str(count) + "개가 이 설명을 함께 뒷받침합니다. 독립된 " + str(count) + "표로 계산하지 않습니다."
+        scope_lineage = merged_hypothesis_scope_lineage(
+            ordered,
+            family_id=family_id,
+            fallback_subject_symbol=question.subject_symbol or name,
+            horizon=primary.horizon,
+        )
         compacted.append(InvestmentHypothesis(
             hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id),
             template_id=primary.template_id,
@@ -2228,13 +2234,13 @@ def compact_hypotheses_by_causal_family(
             causal_signature=primary.causal_signature,
             family_source=primary.family_source,
             merged_rule_count=count,
-            scope_state=merged_hypothesis_scope_state(ordered),
+            scope_state=str(scope_lineage.get("scopeState") or UNVERIFIED_SCOPE),
             scope_version=primary.scope_version or HYPOTHESIS_SCOPE_VERSION,
-            market_hypothesis_id=common_hypothesis_value(ordered, "market_hypothesis_id"),
-            market_world_id=common_hypothesis_value(ordered, "market_world_id"),
-            market_id=common_hypothesis_value(ordered, "market_id"),
-            subject_symbol=common_hypothesis_value(ordered, "subject_symbol"),
-            market_causal_signature=common_hypothesis_value(ordered, "market_causal_signature"),
+            market_hypothesis_id=str(scope_lineage.get("marketHypothesisId") or ""),
+            market_world_id=str(scope_lineage.get("marketWorldId") or ""),
+            market_id=str(scope_lineage.get("marketId") or ""),
+            subject_symbol=str(scope_lineage.get("subjectSymbol") or ""),
+            market_causal_signature=str(scope_lineage.get("marketCausalSignature") or ""),
             market_condition_ids=unique_texts(
                 [value for item in ordered for value in item.market_condition_ids],
                 24,
@@ -2243,9 +2249,9 @@ def compact_hypotheses_by_causal_family(
                 [value for item in ordered for value in item.market_relation_types],
                 24,
             ),
-            account_hypothesis_overlay_id=common_hypothesis_value(ordered, "account_hypothesis_overlay_id"),
-            account_id=common_hypothesis_value(ordered, "account_id"),
-            portfolio_world_id=common_hypothesis_value(ordered, "portfolio_world_id"),
+            account_hypothesis_overlay_id=str(scope_lineage.get("accountHypothesisOverlayId") or ""),
+            account_id=str(scope_lineage.get("accountId") or ""),
+            portfolio_world_id=str(scope_lineage.get("portfolioWorldId") or ""),
             account_condition_ids=unique_texts(
                 [value for item in ordered for value in item.account_condition_ids],
                 24,
@@ -2315,6 +2321,106 @@ def common_hypothesis_value(hypotheses: Iterable[InvestmentHypothesis], field_na
         if str(getattr(item, field_name, "") or "").strip()
     }
     return next(iter(values)) if len(values) == 1 else ""
+
+
+def merged_hypothesis_scope_lineage(
+    hypotheses: Iterable[InvestmentHypothesis],
+    *,
+    family_id: str,
+    fallback_subject_symbol: str,
+    horizon: str,
+) -> Dict[str, object]:
+    """Create stable lineage for a compacted, correlated hypothesis family."""
+
+    members = list(hypotheses or [])
+    scope_state = merged_hypothesis_scope_state(members)
+    market_world_id = common_hypothesis_value(members, "market_world_id")
+    market_id = common_hypothesis_value(members, "market_id")
+    subject_symbol = (
+        common_hypothesis_value(members, "subject_symbol")
+        or str(fallback_subject_symbol or "").upper().strip()
+    )
+    market_signature = common_hypothesis_value(members, "market_causal_signature")
+    market_hypothesis_id = common_hypothesis_value(members, "market_hypothesis_id")
+    member_market_signatures = [
+        str(item.market_causal_signature or "").strip()
+        for item in members
+    ]
+    if (
+        scope_state == MARKET_SHARED_SCOPE
+        and market_world_id
+        and subject_symbol
+        and members
+        and all(member_market_signatures)
+    ):
+        if not market_signature:
+            market_signature = stable_id(
+                "typedb-market-composite",
+                *sorted(set(member_market_signatures)),
+            )
+        if not market_hypothesis_id:
+            market_hypothesis_id = stable_id(
+                "market-hypothesis",
+                market_world_id,
+                subject_symbol,
+                horizon,
+                market_signature,
+            )
+
+    account_id = common_hypothesis_value(members, "account_id")
+    portfolio_world_id = common_hypothesis_value(members, "portfolio_world_id")
+    account_overlay_id = common_hypothesis_value(
+        members,
+        "account_hypothesis_overlay_id",
+    )
+    if not account_overlay_id and (portfolio_world_id or account_id):
+        account_overlay_id = account_overlay_id_for_scope(
+            {
+                "accountId": account_id,
+                "portfolioWorldId": portfolio_world_id,
+            },
+            family_id,
+            {
+                "scopeState": scope_state,
+                "accountConditionIds": unique_texts([
+                    value for item in members for value in item.account_condition_ids
+                ], 24),
+                "accountFields": unique_texts([
+                    value for item in members for value in item.account_fields
+                ], 24),
+                "accountRelationTypes": unique_texts([
+                    value for item in members for value in item.account_relation_types
+                ], 24),
+                "accountTargetKinds": unique_texts([
+                    value for item in members for value in item.account_target_kinds
+                ], 24),
+            },
+            {
+                "targetRoles": unique_texts([
+                    value for item in members for value in item.target_roles
+                ], 12),
+                "actionPolicies": unique_texts([
+                    value for item in members for value in item.action_policies
+                ], 12),
+                "allowedActions": unique_texts([
+                    value for item in members for value in item.allowed_actions
+                ], 12),
+                "blockedActions": unique_texts([
+                    value for item in members for value in item.blocked_actions
+                ], 12),
+            },
+        )
+    return {
+        "scopeState": scope_state,
+        "marketHypothesisId": market_hypothesis_id,
+        "marketWorldId": market_world_id,
+        "marketId": market_id,
+        "subjectSymbol": subject_symbol,
+        "marketCausalSignature": market_signature,
+        "accountHypothesisOverlayId": account_overlay_id,
+        "accountId": account_id,
+        "portfolioWorldId": portfolio_world_id,
+    }
 
 
 def merged_hypothesis_scope_state(hypotheses: Iterable[InvestmentHypothesis]) -> str:

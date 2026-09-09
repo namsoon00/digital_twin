@@ -10,8 +10,10 @@ from typing import Callable, Dict, Optional
 
 from ..domain.context_observation_notifications import typedb_context_observation_contract
 from ..domain.investment_decision_actionability import investment_decision_actionability
+from ..domain.investment_insight_assessment import investment_insight_assessment
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from ..domain.notification_ai_gate_text import parse_ai_response_json
 from ..domain.notification_ai_inference_packet import (
     NotificationAIInferencePacket,
     build_notification_ai_inference_packet,
@@ -231,6 +233,183 @@ def ensure_packet_claim_validation(
     response.claim_validation = validation
 
 
+def refresh_investment_insight_assessment(
+    response: NotificationAIValidatedResponse,
+) -> None:
+    """Rebuild the insight from the final packet-verified claim set."""
+
+    response.insight_assessment = investment_insight_assessment(
+        {"insightAssessment": dict(response.insight_assessment or {})},
+        hypotheses=response.hypotheses,
+        selected_hypothesis_id=response.selected_hypothesis_id,
+        research_lead_hypothesis_id=response.research_lead_hypothesis_id,
+        narrative_claims=response.narrative_claims,
+        causal_chain=response.causal_chain,
+        comparison_state=response.hypothesis_comparison_state,
+        validation_state=response.validation_state,
+        data_state=response.data_state,
+        decision_readiness=response.decision_readiness,
+        counter_evidence_status=response.counter_evidence_status,
+        invalidation_condition=response.invalidation_condition,
+    )
+
+
+def _structured_claim_evidence_ids(
+    prepared_core: Dict[str, object],
+    packet: NotificationAIInferencePacket,
+    section: str,
+) -> list:
+    claim_contract = prepared_core.get("narrativeClaimContract")
+    claim_contract = claim_contract if isinstance(claim_contract, dict) else {}
+    recommended = claim_contract.get("recommendedEvidenceIdsBySection")
+    recommended = recommended if isinstance(recommended, dict) else {}
+    allowed = claim_contract.get("allowedEvidenceIdsBySection")
+    allowed = allowed if isinstance(allowed, dict) else {}
+    packet_ids = set(packet.evidence_ids)
+    permitted_ids = {
+        str(value or "").strip()
+        for value in allowed.get(section) or []
+        if str(value or "").strip() in packet_ids
+    }
+    evidence_ids = []
+    for value in [
+        *(recommended.get(section) or []),
+        *(allowed.get(section) or []),
+    ]:
+        evidence_id = str(value or "").strip()
+        if (
+            evidence_id
+            and evidence_id in packet_ids
+            and evidence_id in permitted_ids
+            and evidence_id not in evidence_ids
+        ):
+            evidence_ids.append(evidence_id)
+        if len(evidence_ids) >= 4:
+            break
+    ledger_by_id = {
+        str(item.get("evidenceId") or ""): item
+        for item in prepared_core.get("evidenceLedger") or []
+        if isinstance(item, dict) and str(item.get("evidenceId") or "")
+    }
+    if not any(
+        str((ledger_by_id.get(evidence_id) or {}).get("kind") or "")
+        not in {"inference", "data-limit"}
+        for evidence_id in evidence_ids
+    ):
+        return []
+    return evidence_ids
+
+
+def recover_structured_investment_insight_claims(
+    context: Dict[str, object],
+    packet: NotificationAIInferencePacket,
+    response: NotificationAIValidatedResponse,
+) -> Dict[str, object]:
+    """Recover omitted claim rows from the model's own structured insight.
+
+    This repairs schema duplication only.  It reuses the exact model text,
+    attaches packet-approved observed evidence, and runs the normal validator;
+    it never creates a market assertion or changes execution authority.
+    """
+
+    if str(context.get("messageType") or "") != INVESTMENT_INSIGHT:
+        return {"status": "not-applicable"}
+    prepared_core = context.get("_notificationAiPreparedDecisionCore")
+    prepared_core = prepared_core if isinstance(prepared_core, dict) else packet.decision_core
+    hypothesis_set = prepared_core.get("hypothesisSet")
+    hypothesis_set = hypothesis_set if isinstance(hypothesis_set, dict) else {}
+    if not any(
+        isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+        for item in hypothesis_set.get("hypotheses") or []
+    ):
+        return {"status": "not-applicable"}
+    raw_payload = parse_ai_response_json(str(response.raw_response or ""))
+    raw_assessment = (
+        raw_payload.get("insightAssessment")
+        or raw_payload.get("insight_assessment")
+        or {}
+    )
+    raw_assessment = raw_assessment if isinstance(raw_assessment, dict) else {}
+    if not raw_assessment:
+        return {"status": "unavailable", "reason": "structured-insight-missing"}
+
+    existing_sections = response.verified_claim_sections
+    candidates = []
+    required_values = (
+        ("view", raw_assessment.get("dominantThesis") or raw_assessment.get("dominant_thesis")),
+        ("mechanism", raw_assessment.get("causalMechanism") or raw_assessment.get("causal_mechanism")),
+        ("implication", raw_assessment.get("investmentImplication") or raw_assessment.get("investment_implication")),
+    )
+    for section, value in required_values:
+        text = str(value or "").strip()
+        if text and section not in existing_sections:
+            candidates.append((section, text))
+    if "catalyst" not in existing_sections:
+        catalysts = raw_assessment.get("catalysts") or []
+        if not isinstance(catalysts, (list, tuple)):
+            catalysts = [catalysts]
+        candidates.extend(
+            ("catalyst", str(value or "").strip())
+            for value in catalysts[:2]
+            if str(value or "").strip()
+        )
+    if not candidates:
+        return {"status": "not-required"}
+
+    additions = []
+    unavailable_sections = []
+    for section, text in candidates:
+        evidence_ids = _structured_claim_evidence_ids(
+            prepared_core,
+            packet,
+            section,
+        )
+        if not evidence_ids:
+            unavailable_sections.append(section)
+            continue
+        claim_id = "claim:structured-insight:" + hashlib.sha256(
+            json.dumps(
+                {"section": section, "text": text, "evidenceIds": evidence_ids},
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        additions.append({
+            "claimId": claim_id,
+            "section": section,
+            "text": text,
+            "evidenceIds": evidence_ids,
+        })
+    if not additions:
+        return {
+            "status": "unavailable",
+            "reason": "observable-evidence-missing",
+            "sections": sorted(set(unavailable_sections)),
+        }
+
+    claims, validation = normalize_narrative_claims(
+        context,
+        {"narrativeClaims": [*(response.narrative_claims or []), *additions]},
+        writer_kind="ai",
+    )
+    validation["inferencePacketId"] = packet.packet_id
+    validation["evidenceFingerprint"] = packet.evidence_fingerprint
+    response.narrative_claims = claims
+    response.claim_validation = validation
+    added_ids = {item["claimId"] for item in additions}
+    repaired_sections = sorted({
+        str(item.get("section") or "")
+        for item in claims
+        if item.get("claimId") in added_ids
+    })
+    return {
+        "status": "repaired" if repaired_sections else "rejected",
+        "sections": repaired_sections,
+        "unavailableSections": sorted(set(unavailable_sections)),
+    }
+
+
 def recover_structured_next_condition_claim(
     context: Dict[str, object],
     packet: NotificationAIInferencePacket,
@@ -359,9 +538,21 @@ def narrative_publication_contract_error(
     if _claim_validation_ledger_ids(response) != set(packet.evidence_ids):
         return "claim validation did not use the inference packet evidence ledger."
     sections = response.verified_claim_sections
+    prepared_core = context.get("_notificationAiPreparedDecisionCore")
+    prepared_core = prepared_core if isinstance(prepared_core, dict) else packet.decision_core
+    hypothesis_set = prepared_core.get("hypothesisSet")
+    hypothesis_set = hypothesis_set if isinstance(hypothesis_set, dict) else {}
+    hypothesis_backed = bool([
+        item for item in hypothesis_set.get("hypotheses") or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    ])
     missing = []
     if "view" not in sections:
         missing.append("view")
+    if hypothesis_backed and "mechanism" not in sections:
+        missing.append("mechanism")
+    if hypothesis_backed and "implication" not in sections:
+        missing.append("implication")
     if not sections.intersection({"next-condition", "limitation"}):
         missing.append("next-condition-or-limitation")
     if str(response.action or "").upper() in {"BUY", "ADD", "TRIM", "SELL", "AVOID"}:
@@ -376,6 +567,15 @@ def narrative_publication_contract_error(
         return "required verified narrative sections are missing: " + ", ".join(missing)
     if not response.verified_claim_count:
         return "no verified narrative claim is available for publication."
+    if hypothesis_backed and (response.insight_assessment or {}).get("publishable") is not True:
+        reasons = ", ".join(
+            str(value or "")
+            for value in (response.insight_assessment or {}).get("validationReasons") or []
+            if str(value or "")
+        )
+        return "investment insight assessment is not publishable" + (
+            ": " + reasons if reasons else "."
+        )
     return ""
 
 
@@ -404,14 +604,56 @@ def ai_contract_repair_prompt(
     marker = "DecisionCore:\n"
     decision_core = str(prompt or "").split(marker, 1)[1] if marker in str(prompt or "") else "{}"
     previous = str(getattr(response, "raw_response", "") or "")[:8 * 1024]
+    required_shape = {
+        "action": "NO_ACTION|BUY|ADD|HOLD|TRIM|SELL|AVOID",
+        "summary": "최종 결론",
+        "currentActionPlan": "현재 대응",
+        "nextActionPlan": "재관측 조건과 판단 변화",
+        "hypotheses": [{
+            "hypothesisId": "입력 ID",
+            "evidenceReviewStatus": "all-input-evidence-reviewed",
+            "verdict": "supported|weakened|rejected|unresolved",
+            "reasoning": "비교 이유",
+        }],
+        "selectedHypothesisId": "입력 ID",
+        "decisionReadiness": "ready|conditional|insufficient",
+        "causalChain": [{
+            "driver": "확인 변화",
+            "channel": "revenue|cost|cash-flow|valuation|flow|risk",
+            "expectedEffect": "영향 경로",
+            "evidenceIds": ["허용 근거 ID"],
+            "status": "supported|contested|unresolved",
+        }],
+        "insightAssessment": {
+            "direction": "positive|balanced|negative",
+            "horizon": "intraday|short-term|medium-term|long-term|multi-horizon",
+            "conviction": "tentative|moderate|strong",
+            "dominantThesis": "지배 결론",
+            "causalMechanism": "관측에서 투자 영향까지의 경로",
+            "investmentImplication": "보유자·관심 투자자에게 주는 의미",
+            "catalysts": ["강화 사건"],
+            "risks": ["반대 시나리오"],
+            "invalidationCondition": "무효화 조건",
+            "thesisKey": "stable-key",
+        },
+        "narrativeClaims": [{
+            "claimId": "고유 ID",
+            "section": "view|mechanism|implication|catalyst|next-condition|limitation",
+            "text": "표시 문장",
+            "evidenceIds": ["섹션별 허용 근거 ID"],
+        }],
+    }
     return "\n".join((
         "너는 TypeDB 투자 판단 JSON의 계약 오류만 수정한다. 도구나 파일을 사용하지 않는다.",
         "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
         "action은 actionEnvelope 안에서 선택하고 모든 입력 가설을 한 번씩 검토한다.",
         "각 가설의 입력 근거와 반대 근거를 모두 확인한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 근거 ID 배열을 응답에 복사하지 않는다.",
-        "narrativeClaims는 허용된 evidence ID만 연결하며 view와 next-condition 또는 limitation을 포함한다.",
+        "narrativeClaims는 허용된 evidence ID만 연결하며 가설이 있으면 view, mechanism, implication과 next-condition 또는 limitation을 포함한다.",
+        "insightAssessment에는 가장 근거가 강한 방향, 기간, 근거 강도, 지배 가설, 인과 경로, 투자 의미, 촉매, 반대 시나리오와 무효화 조건을 채운다.",
+        "자료 한계는 conviction과 영향 범위를 낮추되, 가장 잘 지지되는 투자 결론 자체를 없애거나 양쪽 가능성 나열로 대체하지 않는다.",
         "currentActionPlan에는 지금 할 일과 보류할 일을, nextActionPlan에는 실제로 재관측할 가격·거래량·수급·실적·공시·금리·환율과 그 결과에 따른 판단 변화를 쓴다.",
         "BUY·ADD·TRIM·SELL은 decisionReadiness=ready, executionEligibility=eligible, qualification decisionUse=execution, 근거 ID가 있는 supported causalChain을 모두 만족할 때만 선택한다.",
+        "필수 응답 골격: " + json.dumps(required_shape, ensure_ascii=False, separators=(",", ":")),
         "검증 오류: " + json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         "이전 응답: " + previous,
         "DecisionCore:",
@@ -538,6 +780,7 @@ class NotificationAIJudgementService:
         initial_model_ms = int((time.monotonic() - initial_model_started) * 1000)
         validation_started = time.monotonic()
         ensure_packet_claim_validation(review_context, prepared_packet, response)
+        refresh_investment_insight_assessment(response)
         enforce_contract = bool(
             self.enforce_contract_for_typed_response
             or str(response.raw_response or "").strip()
@@ -550,6 +793,18 @@ class NotificationAIJudgementService:
         )
         initial_contract_error = contract_error
         initial_publication_error = publication_error
+        structured_insight_repair = recover_structured_investment_insight_claims(
+            review_context,
+            prepared_packet,
+            response,
+        )
+        if structured_insight_repair.get("status") == "repaired":
+            refresh_investment_insight_assessment(response)
+            publication_error = narrative_publication_contract_error(
+                review_context,
+                prepared_packet,
+                response,
+            )
         structured_claim_repair = {"status": "not-required"}
         if "next-condition-or-limitation" in publication_error:
             structured_claim_repair = recover_structured_next_condition_claim(
@@ -558,6 +813,7 @@ class NotificationAIJudgementService:
                 response,
             )
             if structured_claim_repair.get("status") == "repaired":
+                refresh_investment_insight_assessment(response)
                 publication_error = narrative_publication_contract_error(
                     review_context,
                     prepared_packet,
@@ -574,6 +830,8 @@ class NotificationAIJudgementService:
         repair_model_ms = 0
         repair_validation_ms = 0
         repair_reasoning_effort = self.repair_reasoning_effort
+        repair_structured_insight_repair = {"status": "not-attempted"}
+        repair_structured_claim_repair = {"status": "not-attempted"}
         executed_prompt = prepared_packet.prompt
         if repair_attempted:
             executed_prompt = ai_contract_repair_prompt(
@@ -619,6 +877,14 @@ class NotificationAIJudgementService:
                 repair_model_ms = int((time.monotonic() - repair_model_started) * 1000)
                 repair_validation_started = time.monotonic()
                 ensure_packet_claim_validation(repair_context, prepared_packet, response)
+                refresh_investment_insight_assessment(response)
+                repair_structured_insight_repair = recover_structured_investment_insight_claims(
+                    repair_context,
+                    prepared_packet,
+                    response,
+                )
+                if repair_structured_insight_repair.get("status") == "repaired":
+                    refresh_investment_insight_assessment(response)
                 enforce_contract = bool(
                     self.enforce_contract_for_typed_response
                     or str(response.raw_response or "").strip()
@@ -629,6 +895,19 @@ class NotificationAIJudgementService:
                     prepared_packet,
                     response,
                 )
+                if "next-condition-or-limitation" in publication_error:
+                    repair_structured_claim_repair = recover_structured_next_condition_claim(
+                        repair_context,
+                        prepared_packet,
+                        response,
+                    )
+                    if repair_structured_claim_repair.get("status") == "repaired":
+                        refresh_investment_insight_assessment(response)
+                        publication_error = narrative_publication_contract_error(
+                            repair_context,
+                            prepared_packet,
+                            response,
+                        )
                 repair_succeeded = bool(
                     not (enforce_contract and hypothesis_comparison_needs_repair(context.get("messageType"), response))
                     and not contract_error
@@ -658,7 +937,10 @@ class NotificationAIJudgementService:
                 "repairModelMs": repair_model_ms,
                 "repairValidationMs": repair_validation_ms,
                 "repairReasoningEffort": repair_reasoning_effort,
+                "structuredInsightRepair": structured_insight_repair,
                 "structuredNarrativeRepair": structured_claim_repair,
+                "repairStructuredInsightRepair": repair_structured_insight_repair,
+                "repairStructuredNarrativeRepair": repair_structured_claim_repair,
                 "totalJudgementMs": int((time.monotonic() - total_started) * 1000),
                 "modelAttempts": list(getattr(self.reviewer, "execution_history", []) or []),
             },

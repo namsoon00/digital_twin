@@ -218,6 +218,18 @@ class V2GraphDecisionCandidateBuilder:
             severity = "WATCH"
         if not severity and source_trigger.get("material"):
             severity = "WATCH"
+        if (
+            not severity
+            and review_observation
+            and synthesis.change_state in {
+                "new-condition",
+                "new-evidence",
+                "improving",
+                "worsening",
+                "direction-changed",
+            }
+        ):
+            severity = "WATCH"
         if not severity:
             return None
         if not narrative_observation and disposition_delivery.get("decision") == "suppress":

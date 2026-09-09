@@ -7,6 +7,9 @@ from typing import Dict, Mapping
 from ..domain.ai_inference_queue import notification_ai_subject
 from ..domain.decision_continuity import compact_decision_continuity_packet
 from ..domain.investment_decision_history import compact_decision_episode_memory
+from ..domain.investment_insight_assessment import (
+    compact_previous_investment_insight_episode,
+)
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -154,4 +157,76 @@ def context_with_previous_investment_decision(
         "previousAction": memory.get("action") or "",
     })
     enriched["investmentDecisionHistory"] = audit
+    return enriched
+
+
+def context_with_previous_investment_insight(
+    context: Mapping[str, object],
+    insight_episode_store=None,
+    *,
+    account_id: str = "",
+    symbol: str = "",
+) -> Dict[str, object]:
+    """Attach the latest publishable AI insight for semantic change detection."""
+
+    enriched = _mapping(context)
+    existing = compact_previous_investment_insight_episode(
+        enriched.get("previousInvestmentAIInsightEpisode")
+    )
+    if existing:
+        enriched["previousInvestmentAIInsightEpisode"] = existing
+        return enriched
+
+    subject = notification_ai_subject(enriched)
+    resolved_account = str(account_id or enriched.get("accountId") or "").strip()
+    resolved_symbol = str(symbol or subject.get("symbol") or "").strip().upper()
+    current_subject_case_id = str(
+        enriched.get("investmentSubjectDecisionCaseId")
+        or _mapping(enriched.get("investmentSubjectDecisionCase")).get("subjectCaseId")
+        or ""
+    ).strip()
+    audit = {
+        "version": "investment-insight-history-v1",
+        "status": "unavailable",
+        "accountId": resolved_account,
+        "symbol": resolved_symbol,
+    }
+    reader = getattr(insight_episode_store, "latest_insight_episodes", None)
+    if not callable(reader) or not resolved_account or not resolved_symbol:
+        enriched["investmentInsightHistory"] = audit
+        return enriched
+    try:
+        episodes = reader(
+            account_id=resolved_account,
+            symbol=resolved_symbol,
+            limit=8,
+        )
+    except Exception as error:  # noqa: BLE001 - history must not block inference.
+        audit.update({"status": "error", "errorType": type(error).__name__})
+        enriched["investmentInsightHistory"] = audit
+        return enriched
+
+    previous = {}
+    for episode in episodes or []:
+        candidate = compact_previous_investment_insight_episode(episode)
+        if not candidate:
+            continue
+        if current_subject_case_id and str(candidate.get("subjectCaseId") or "") == current_subject_case_id:
+            continue
+        previous = candidate
+        break
+    if not previous:
+        audit["status"] = "not-found"
+        enriched["investmentInsightHistory"] = audit
+        return enriched
+    enriched["previousInvestmentAIInsightEpisode"] = previous
+    audit.update({
+        "status": "found",
+        "previousEpisodeId": previous.get("episodeId") or "",
+        "previousCreatedAt": previous.get("createdAt") or "",
+        "previousMaterialFingerprint": _mapping(
+            previous.get("insightAssessment")
+        ).get("materialFingerprint") or "",
+    })
+    enriched["investmentInsightHistory"] = audit
     return enriched

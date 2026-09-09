@@ -16,6 +16,7 @@ from digital_twin.domain.notification_narrative import (
     apply_narrative_brief_to_response,
     build_investment_narrative_brief,
     narrative_claim_evidence_contract,
+    normalize_narrative_claims,
 )
 from digital_twin.domain.notifications import NotificationJob
 
@@ -126,7 +127,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             {
                 "evidenceId": "context:" + str(index),
                 "role": "context",
-                "kind": "fact",
+                "kind": "decision-transition",
                 "label": "현재 상태 " + str(index),
                 "judgementEligible": True,
             }
@@ -220,6 +221,18 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 if item["evidenceId"] in required_evidence_ids
             },
         )
+        claim_contract = fitted["narrativeClaimContract"]
+        allowed_sections = claim_contract["allowedEvidenceIdsBySection"]
+        recommended_sections = claim_contract["recommendedEvidenceIdsBySection"]
+        for section in ("view", "mechanism", "implication", "catalyst"):
+            self.assertTrue(allowed_sections[section])
+            self.assertTrue(recommended_sections[section])
+            self.assertLessEqual(len(recommended_sections[section]), 3)
+        ledger_by_id = {
+            item["evidenceId"]: item for item in fitted["evidenceLedger"]
+        }
+        self.assertEqual(1775000, ledger_by_id["fact:currentPrice"]["value"])
+        self.assertEqual(0.84, ledger_by_id["fact:volumeRatio"]["value"])
         self.assertLessEqual(
             len(json.dumps(fitted, ensure_ascii=False, separators=(",", ":")).encode()),
             15_220,
@@ -524,9 +537,10 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual("observed", fitted_hypotheses[0]["qualification"]["status"])
         self.assertEqual(4, fitted_hypotheses[0]["qualification"]["decisiveOutcomeCount"])
         self.assertEqual(0.25, fitted_hypotheses[0]["qualification"]["directionalHitRate"])
-        self.assertEqual(
-            set(evidence_ids),
-            {item["evidenceId"] for item in fitted["evidenceLedger"]},
+        self.assertTrue(
+            set(evidence_ids).issubset({
+                item["evidenceId"] for item in fitted["evidenceLedger"]
+            })
         )
 
     def test_packet_is_stable_and_declares_section_evidence(self):
@@ -794,6 +808,131 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual("repaired", structured["status"])
         self.assertEqual("nextActionPlan", structured["sourceField"])
         self.assertTrue(structured["evidenceIds"])
+
+    def test_research_insight_survives_execution_block_and_structured_claim_omission(self):
+        context = investment_context()
+        rule_id = "graph.holding.guard.v1"
+        hypothesis_id = "hypothesis:holding-guard"
+        context["notificationAiReviewMode"] = "context-narrative"
+        context["ontologyRelationContext"]["hypothesisSet"] = {
+            "comparisonMode": "research-only",
+            "referenceHypothesisIds": [hypothesis_id],
+            "minimumComparisonCount": 1,
+            "hypotheses": [{
+                "hypothesisId": hypothesis_id,
+                "familyId": "holding-guard",
+                "templateId": "hypothesis-template:" + rule_id,
+                "claim": "단기 회복이 아직 실행 기준을 충족하지 못했습니다.",
+                "stance": "risk",
+                "candidateAction": "HOLD",
+                "horizon": "short-term",
+                "supportingRuleIds": [rule_id],
+                "qualification": {
+                    "status": "research-reviewed",
+                    "decisionUse": "research",
+                },
+            }],
+        }
+
+        class Reviewer:
+            calls = 0
+
+            def review(self, prepared):
+                self.calls += 1
+                payload = {
+                    "action": "NO_ACTION",
+                    "summary": "단기 하방 위험이 회복 가능성보다 우세합니다.",
+                    "currentActionPlan": "기존 보유만 유지하고 추가 노출은 늘리지 않습니다.",
+                    "nextActionPlan": "현재가와 20일선 관계를 다시 확인합니다.",
+                    "hypotheses": [{
+                        "hypothesisId": hypothesis_id,
+                        "templateId": "hypothesis-template:" + rule_id,
+                        "claim": "단기 회복이 아직 실행 기준을 충족하지 못했습니다.",
+                        "stance": "risk",
+                        "evidenceReviewStatus": "all-input-evidence-reviewed",
+                        "verdict": "supported",
+                        "reasoning": "현재 가격과 20일선 관계가 위험 가설을 지지합니다.",
+                    }],
+                    "selectedHypothesisId": hypothesis_id,
+                    "decisionReadiness": "conditional",
+                    "insightAssessment": {
+                        "direction": "negative",
+                        "horizon": "short-term",
+                        "conviction": "moderate",
+                        "dominantThesis": "단기 하방 위험이 회복 가능성보다 우세합니다.",
+                        "causalMechanism": "가격 회복 제한이 단기 수급의 추세 전환을 늦춥니다.",
+                        "investmentImplication": "보유자는 회복 확인 전 추가 노출을 늘리지 않는 편이 유리합니다.",
+                        "catalysts": ["20일선 회복이 관점을 바꿀 촉매입니다."],
+                        "risks": ["약한 흐름이 이어질 수 있습니다."],
+                        "invalidationCondition": "현재가가 20일선 위에서 유지되면 하방 관점을 무효화합니다.",
+                        "thesisKey": "holding-guard",
+                    },
+                    # Deliberately omit mechanism/implication claim rows. The
+                    # service may only reuse the model's structured text.
+                    "narrativeClaims": [{
+                        "claimId": "claim:view",
+                        "section": "view",
+                        "text": "단기 하방 위험이 회복 가능성보다 우세합니다.",
+                        "evidenceIds": ["fact:currentPrice", "fact:ma20Distance"],
+                    }, {
+                        "claimId": "claim:next",
+                        "section": "next-condition",
+                        "text": "현재가와 20일선 관계를 다시 확인합니다.",
+                        "evidenceIds": ["fact:currentPrice", "fact:ma20Distance"],
+                    }],
+                    "invalidationCondition": "현재가가 20일선 위에서 유지되면 하방 관점을 무효화합니다.",
+                }
+                return validated_response_from_payload(
+                    prepared,
+                    payload,
+                    raw_response=json.dumps(payload, ensure_ascii=False),
+                    source="test AI",
+                )
+
+        reviewer = Reviewer()
+        outcome = NotificationAIJudgementService(reviewer, {}).judge(context)
+
+        self.assertTrue(outcome.publishable)
+        self.assertEqual(1, reviewer.calls)
+        self.assertFalse(outcome.repair_attempted)
+        self.assertIn("mechanism", outcome.response.verified_claim_sections)
+        self.assertIn("implication", outcome.response.verified_claim_sections)
+        self.assertTrue(outcome.response.insight_assessment["publishable"])
+        self.assertFalse(outcome.response.insight_assessment["executionEligible"])
+        self.assertEqual(
+            "repaired",
+            outcome.execution_spans["structuredInsightRepair"]["status"],
+        )
+        counter_ledger = [{
+            "evidenceId": "assertion:risk",
+            "role": "counter",
+            "kind": "model-signal",
+            "label": "검증된 반대 모델 신호",
+            "judgementEligible": True,
+        }]
+        counter_context = {
+            "messageType": "investmentInsight",
+            "contextObservationDecision": {
+                "decisionMode": "typedb-context-observation",
+                "requiresAiNarrative": True,
+            },
+            "_notificationAiPreparedDecisionCore": {
+                "evidenceLedger": counter_ledger,
+                "narrativeClaimContract": narrative_claim_evidence_contract(counter_ledger),
+            },
+        }
+        counter_claims, counter_validation = normalize_narrative_claims(
+            counter_context,
+            {"narrativeClaims": [{
+                "claimId": "claim:research-risk",
+                "section": "counter",
+                "text": "반대 모델 신호가 이어지면 현재 관점이 약해집니다.",
+                "evidenceIds": ["assertion:risk"],
+            }]},
+            writer_kind="ai",
+        )
+        self.assertEqual(1, counter_validation["verifiedClaimCount"])
+        self.assertEqual("counter", counter_claims[0]["section"])
 
     def test_unrepairable_ai_claims_fall_back_without_ai_writer_label(self):
         class Reviewer:

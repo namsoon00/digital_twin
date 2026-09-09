@@ -339,6 +339,8 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
 
     context = _mapping(context)
     validated = _mapping(context.get("notificationAiValidatedResponse"))
+    insight_assessment = _mapping(validated.get("insightAssessment"))
+    insight_transition = _mapping(context.get("investmentInsightTransition"))
     execution_audit = _mapping(context.get("notificationAiExecutionAudit"))
     publication = _mapping(context.get("decisionPublication"))
     writer = _mapping(context.get("notificationWriterProvenance"))
@@ -388,6 +390,10 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
         "observableRelationEvidenceChanged": observable_relation_delta,
         "pushValueClass": "undetermined",
         "customerActionContractGaps": action_contract_gaps,
+        "investmentInsightPublishable": insight_assessment.get("publishable") is True,
+        "investmentInsightTransitionKind": _text(insight_transition.get("kind")).lower(),
+        "investmentInsightMaterial": bool(insight_transition.get("material")),
+        "investmentInsightDirection": _text(insight_assessment.get("direction")).lower(),
     }
     if typedb_context_observation_contract(context) and publication_outcome == "OBSERVATION":
         observation_decision = context_observation_delivery_decision(context)
@@ -496,6 +502,7 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
         _text(context.get("cooldownDecision")).lower() == "scheduled-summary"
         and _text(ai_transition.get("kind")).lower() != "action-changed"
         and not bool(user_transition.get("material"))
+        and not bool(insight_transition.get("material"))
         and not verified_follow_ups
         and not material_sources
     ):
@@ -508,6 +515,12 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
         return base
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False
     if not ai_transition.get("historyAvailable"):
+        if insight_assessment.get("publishable") is True and insight_transition.get("material") is True:
+            base.update({
+                "reason": "이 종목의 첫 근거 기반 투자 인사이트가 완성됐습니다.",
+                "pushValueClass": "initial-grounded-investment-insight",
+            })
+            return base
         if base["finalAction"] == "HOLD":
             base.update({
                 "decision": "suppress",
@@ -573,6 +586,12 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
         base["reason"] = "최종 행동은 유지됐지만 판단 변경 원문이 새로 확인됐습니다."
         base["pushValueClass"] = "material-source-evidence"
         return base
+    if insight_assessment.get("publishable") is True and insight_transition.get("material") is True:
+        base.update({
+            "reason": "투자 방향, 관측 기간, 근거 강도 또는 지배 가설이 달라졌습니다.",
+            "pushValueClass": "material-investment-insight-change",
+        })
+        return base
     if (
         _text(ai_transition.get("kind")).lower() == "unchanged"
         and bool(graph_transition.get("material"))
@@ -635,6 +654,8 @@ def decision_delta_from_context(context: Mapping[str, object]) -> DecisionDelta:
 
     values = _mapping(context)
     validated = _mapping(values.get("notificationAiValidatedResponse"))
+    insight_assessment = _mapping(validated.get("insightAssessment"))
+    insight_transition = _mapping(values.get("investmentInsightTransition"))
     execution_audit = _mapping(values.get("notificationAiExecutionAudit"))
     publication = _mapping(values.get("decisionPublication"))
     writer = _mapping(values.get("notificationWriterProvenance"))
@@ -686,6 +707,10 @@ def decision_delta_from_context(context: Mapping[str, object]) -> DecisionDelta:
         verified_market_transition_reason=_text(market_transition.get("reason")),
         material_source_event_count=len(material_sources),
         observable_relation_evidence_changed=has_user_observable_relation_delta(values),
+        investment_insight_publishable=insight_assessment.get("publishable") is True,
+        investment_insight_transition_kind=_text(insight_transition.get("kind")).lower(),
+        investment_insight_material=bool(insight_transition.get("material")),
+        investment_insight_direction=_text(insight_assessment.get("direction")).lower(),
     )
 
 

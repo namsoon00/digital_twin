@@ -39,6 +39,10 @@ class DecisionDelta:
     verified_market_transition_reason: str = ""
     material_source_event_count: int = 0
     observable_relation_evidence_changed: bool = False
+    investment_insight_publishable: bool = False
+    investment_insight_transition_kind: str = ""
+    investment_insight_material: bool = False
+    investment_insight_direction: str = ""
     version: str = DECISION_DELTA_VERSION
 
     @property
@@ -86,6 +90,10 @@ class DecisionDelta:
             "verifiedMarketTransitionId": self.verified_market_transition_id,
             "materialSourceEventCount": self.material_source_event_count,
             "observableRelationEvidenceChanged": self.observable_relation_evidence_changed,
+            "investmentInsightPublishable": self.investment_insight_publishable,
+            "investmentInsightTransitionKind": self.investment_insight_transition_kind,
+            "investmentInsightMaterial": self.investment_insight_material,
+            "investmentInsightDirection": self.investment_insight_direction,
         }
 
     def delivery_diagnostics(self) -> Dict[str, object]:
@@ -105,5 +113,9 @@ class DecisionDelta:
             "verifiedMarketTransitionCount": self.verified_market_transition_count,
             "observableRelationEvidenceChanged": self.observable_relation_evidence_changed,
             "customerActionContractGaps": list(self.customer_action_contract_gaps),
+            "investmentInsightPublishable": self.investment_insight_publishable,
+            "investmentInsightTransitionKind": self.investment_insight_transition_kind,
+            "investmentInsightMaterial": self.investment_insight_material,
+            "investmentInsightDirection": self.investment_insight_direction,
             "decisionDelta": self.to_dict(),
         }

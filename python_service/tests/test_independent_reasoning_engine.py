@@ -581,22 +581,20 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             action_authority="observe",
             disposition_code="HYPOTHESIS_RESEARCH_ONLY",
             review_level="check",
+            change_state="new-condition",
+            judgement_blocked=True,
+            graph_trace_complete=True,
+            ai_state="RESEARCH_ONLY",
         )
-        source_trigger = {
-            "material": True,
-            "userObservable": True,
-            "reasons": ["price-move"],
-            "materialRevisionKeys": ["revision:000660:price:1"],
-        }
 
         event = builder._base_event(
             snapshot,
             relation,
             synthesis,
-            source_trigger=source_trigger,
         )
 
         self.assertIsNotNone(event)
+        self.assertEqual("WATCH", event.severity)
         contract = event.metadata["contextObservationDecision"]
         self.assertEqual("typedb-review-observation", event.metadata["notificationDecisionMode"])
         self.assertTrue(contract["researchOnly"])

@@ -25,7 +25,8 @@ NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validatio
 NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v2"
 
 CLAIM_SECTIONS = {
-    "view", "change", "support", "counter", "next-condition", "limitation",
+    "view", "mechanism", "implication", "catalyst", "change", "support",
+    "counter", "next-condition", "limitation",
 }
 
 FACT_LABELS = {
@@ -731,6 +732,9 @@ def narrative_claim_evidence_contract(
         "version": NARRATIVE_CLAIM_CONTRACT_VERSION,
         "allowedEvidenceIdsBySection": {
             "view": all_decision_ids,
+            "mechanism": all_decision_ids,
+            "implication": all_decision_ids,
+            "catalyst": all_decision_ids,
             "change": change_ids,
             "support": support_ids,
             "counter": counter_ids,
@@ -739,6 +743,9 @@ def narrative_claim_evidence_contract(
         },
         "recommendedEvidenceIdsBySection": {
             "view": observed_ids[:4],
+            "mechanism": observed_ids[:4],
+            "implication": observed_ids[:4],
+            "catalyst": observed_ids[:4],
             "change": change_ids[:2],
             "support": support_ids[:4],
             "counter": counter_ids[:3],
@@ -750,6 +757,8 @@ def narrative_claim_evidence_contract(
             "allClaimsNeedEvidence": True,
             "actionClaimsNeedJudgementEligibleEvidence": True,
             "viewNeedsObservedState": True,
+            "mechanismNeedsObservedState": True,
+            "implicationNeedsObservedState": True,
             "nextConditionNeedsObservableEvidence": True,
             "unverifiedClaimsAreNotPublished": True,
         },
@@ -786,7 +795,7 @@ def normalize_narrative_claims(
         evidence_ids = _unique(item.get("evidenceIds") or item.get("evidence_ids") or [], 12)
         closure_added_ids: List[str] = []
         initial_rows = [evidence_by_id[value] for value in evidence_ids if value in evidence_by_id]
-        if section in {"view", "next-condition"} and initial_rows and not any(
+        if section in {"view", "mechanism", "implication", "catalyst", "next-condition"} and initial_rows and not any(
             str(row.get("kind") or "") != "inference" for row in initial_rows
         ):
             allowed_ids_for_closure = {
@@ -806,7 +815,7 @@ def normalize_narrative_claims(
         reasons: List[str] = []
         if section not in CLAIM_SECTIONS:
             reasons.append("unsupported-section")
-        if narrative_only and section in {"support", "counter"}:
+        if narrative_only and section == "support":
             reasons.append("context-observation-cannot-assert-action-evidence")
         if not text:
             reasons.append("empty-text")
@@ -824,6 +833,10 @@ def normalize_narrative_claims(
         if section in CLAIM_SECTIONS and not known_rows:
             reasons.append("evidence-required")
         if section in {"support", "counter"} and any(
+            not bool(row.get("judgementEligible", True)) for row in known_rows
+        ):
+            reasons.append("judgement-ineligible-evidence")
+        if section in {"mechanism", "implication", "catalyst"} and any(
             not bool(row.get("judgementEligible", True)) for row in known_rows
         ):
             reasons.append("judgement-ineligible-evidence")
@@ -845,6 +858,10 @@ def normalize_narrative_claims(
             str(row.get("kind") or "") != "inference" for row in known_rows
         ):
             reasons.append("view-needs-observed-state")
+        if section in {"mechanism", "implication"} and known_rows and not any(
+            str(row.get("kind") or "") != "inference" for row in known_rows
+        ):
+            reasons.append(section + "-needs-observed-state")
         if section == "next-condition" and known_rows and not any(
             str(row.get("kind") or "") != "inference" for row in known_rows
         ):
@@ -1208,6 +1225,9 @@ def build_investment_narrative_brief(
         "verifiedClaimCount": len(verified_claims),
         "rejectedClaimCount": rejected,
         "supportClaimCount": len([item for item in verified_claims if item.get("section") == "support"]),
+        "mechanismClaimCount": len([item for item in verified_claims if item.get("section") == "mechanism"]),
+        "implicationClaimCount": len([item for item in verified_claims if item.get("section") == "implication"]),
+        "catalystClaimCount": len([item for item in verified_claims if item.get("section") == "catalyst"]),
         "counterClaimCount": len([item for item in verified_claims if item.get("section") == "counter"]),
         "limitationClaimCount": len([item for item in verified_claims if item.get("section") == "limitation"]),
         "inferencePacketId": str(response_validation.get("inferencePacketId") or ""),

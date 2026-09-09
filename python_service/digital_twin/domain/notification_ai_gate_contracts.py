@@ -110,6 +110,7 @@ class NotificationAIValidatedResponse:
     epistemic_summary: str = ""
     decision_readiness: str = "conditional"
     decision_assurance: Dict[str, object] = field(default_factory=dict)
+    insight_assessment: Dict[str, object] = field(default_factory=dict)
     causal_chain: List[Dict[str, object]] = field(default_factory=list)
     alternative_action: Dict[str, object] = field(default_factory=dict)
     follow_up_conditions: List[Dict[str, object]] = field(default_factory=list)
@@ -183,6 +184,7 @@ class NotificationAIValidatedResponse:
             "epistemicSummary": "epistemic_summary",
             "decisionReadiness": "decision_readiness",
             "decisionAssurance": "decision_assurance",
+            "insightAssessment": "insight_assessment",
             "causalChain": "causal_chain",
             "alternativeAction": "alternative_action",
             "followUpConditions": "follow_up_conditions",
@@ -262,6 +264,7 @@ class NotificationAIValidatedResponse:
         payload["epistemicSummary"] = payload.pop("epistemic_summary")
         payload["decisionReadiness"] = payload.pop("decision_readiness")
         payload["decisionAssurance"] = payload.pop("decision_assurance")
+        payload["insightAssessment"] = payload.pop("insight_assessment")
         payload["causalChain"] = payload.pop("causal_chain")
         payload["alternativeAction"] = payload.pop("alternative_action")
         payload["followUpConditions"] = payload.pop("follow_up_conditions")

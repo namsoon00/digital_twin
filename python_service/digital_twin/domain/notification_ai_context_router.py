@@ -20,6 +20,18 @@ from .prompt_evidence_admission import assess_prompt_evidence
 AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v5"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v4"
 
+RESEARCH_INSIGHT_FACT_LABELS = (
+    ("priceChangeRate", "가격 변화율"),
+    ("ma20Distance", "20일 평균 괴리"),
+    ("ma60Distance", "60일 평균 괴리"),
+    ("profitLossRate", "보유 수익률"),
+    ("foreignNetVolume", "외국인 순매수"),
+    ("institutionNetVolume", "기관 순매수"),
+    ("tradeStrength", "체결강도"),
+    ("currentPrice", "현재가"),
+    ("volumeRatio", "평균 대비 거래량"),
+)
+
 
 CORE_FACT_KEYS = (
     "currentPrice", "averagePrice", "profitLossRate", "profitLossRateDeltaPct",
@@ -652,15 +664,57 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             ),
         )
         row["label"] = _sentence_text(item.get("label"), 32)
+        if (
+            str(row.get("kind") or "") in {"fact", "derived"}
+            and item.get("value") not in (None, "")
+            and not isinstance(item.get("value"), (dict, list, tuple))
+        ):
+            row["value"] = item.get("value")
         ledger.append(row)
+    retained_observed_fact_count = len([
+        item for item in ledger
+        if str(item.get("kind") or "") in {"fact", "derived"}
+    ])
+    if retained_observed_fact_count < 2:
+        existing_ids = {str(item.get("evidenceId") or "") for item in ledger}
+        facts = _mapping(core.get("facts"))
+        for key, label in RESEARCH_INSIGHT_FACT_LABELS:
+            evidence_id = "fact:" + key
+            value = facts.get(key)
+            if evidence_id in existing_ids or value in (None, ""):
+                continue
+            ledger.append({
+                "evidenceId": evidence_id,
+                "role": "context",
+                "kind": "derived",
+                "label": label,
+                "value": value,
+                "judgementEligible": True,
+            })
+            existing_ids.add(evidence_id)
+            retained_observed_fact_count += 1
+            if retained_observed_fact_count >= 2:
+                break
     full_claim_contract = narrative_claim_evidence_contract(ledger)
     full_allowed = _mapping(full_claim_contract.get("allowedEvidenceIdsBySection"))
-    observed_ids = [
+    required_observed_ids = [
+        str(item.get("evidenceId") or "")
+        for item in ledger
+        if str(item.get("evidenceId") or "") in required_evidence_ids
+        and str(item.get("kind") or "") not in {"inference", "data-limit"}
+    ]
+    observed_fact_ids = [
+        str(item.get("evidenceId") or "")
+        for item in ledger
+        if str(item.get("evidenceId") or "")
+        and str(item.get("kind") or "") in {"fact", "derived"}
+    ]
+    other_observed_ids = [
         str(item.get("evidenceId") or "")
         for item in ledger
         if str(item.get("evidenceId") or "")
         and str(item.get("kind") or "") not in {"inference", "data-limit"}
-    ][:4]
+    ]
     limitation_ids = [
         str(item.get("evidenceId") or "")
         for item in ledger
@@ -670,17 +724,41 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             or item.get("judgementEligible") is False
         )
     ][:4]
-    view_ids = observed_ids or list(full_allowed.get("view") or [])[:4]
+    view_ids = _unique(
+        [*required_observed_ids, *observed_fact_ids, *other_observed_ids],
+        8,
+    ) or list(full_allowed.get("view") or [])[:8]
+    recommended_view_ids = _unique(
+        [*observed_fact_ids, *required_observed_ids, *other_observed_ids],
+        3,
+    )
+    counter_ids = list(full_allowed.get("counter") or [])[:4]
+    next_condition_ids = _unique([*view_ids, *limitation_ids], 6)
     claim_contract = {
         "version": full_claim_contract.get("version"),
         "allowedEvidenceIdsBySection": {
             "view": view_ids,
+            "mechanism": view_ids,
+            "implication": view_ids,
+            "catalyst": next_condition_ids,
             "change": [],
             "support": [],
-            "counter": [],
-            "next-condition": _unique([*view_ids, *limitation_ids], 6),
+            "counter": counter_ids,
+            "next-condition": next_condition_ids,
             "limitation": limitation_ids,
         },
+        "recommendedEvidenceIdsBySection": {
+            "view": recommended_view_ids,
+            "mechanism": recommended_view_ids,
+            "implication": recommended_view_ids,
+            "catalyst": recommended_view_ids,
+            "change": [],
+            "support": [],
+            "counter": counter_ids,
+            "next-condition": recommended_view_ids,
+            "limitation": limitation_ids,
+        },
+        "requirements": _mapping(full_claim_contract.get("requirements")),
     }
     decision = _mapping(core.get("decision"))
     return {
@@ -1522,6 +1600,9 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
         "subject": _selected(brief.get("subject"), ("symbol", "name", "market", "targetRole", "referenceDate")),
         "decision": {
             "previousAction": _mapping(decision_state.get("previousFinalDecision")).get("action"),
+            "previousInsight": _mapping(
+                _mapping(decision_state.get("previousInvestmentInsight")).get("insightAssessment")
+            ),
             "precomputedActionCandidate": decision_state.get("precomputedActionCandidate"),
             "typeDbDecision": _selected(decision_state.get("decision"), ("primaryAction", "decisionEffect", "judgementBlocked", "targetRole")),
             "actionEnvelope": _selected(envelope, (

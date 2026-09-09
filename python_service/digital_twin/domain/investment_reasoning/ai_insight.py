@@ -11,7 +11,7 @@ from ..portfolio import utc_now_iso
 
 
 AI_INSIGHT_HANDOFF_VERSION = "investment-ai-insight-handoff-v1"
-AI_INSIGHT_EPISODE_VERSION = "investment-ai-insight-episode-v3"
+AI_INSIGHT_EPISODE_VERSION = "investment-ai-insight-episode-v4"
 DECISION_RECONCILIATION_VERSION = "investment-decision-reconciliation-v1"
 SUBJECT_DECISION_ORIGIN = "subject-decision"
 
@@ -307,6 +307,7 @@ def compact_ai_insight(value: Mapping[str, object]) -> Dict[str, object]:
             "unresolvedQuestions",
             "epistemicSummary",
             "decisionReadiness",
+            "insightAssessment",
             "causalChain",
             "followUpConditions",
             "source",
@@ -350,6 +351,9 @@ class AIInsightEpisode:
         reconciliation = _mapping(values.get("decisionReconciliation"))
         provenance = _mapping(values.get("notificationAIInsightProvenance"))
         insight = compact_ai_insight(getattr(result, "response", {}) or {})
+        transition = _mapping(values.get("investmentInsightTransition"))
+        if transition:
+            insight["insightTransition"] = transition
         material = {
             "requestId": _text(getattr(request, "request_id", "")),
             "resultId": _text(getattr(result, "result_id", "")),

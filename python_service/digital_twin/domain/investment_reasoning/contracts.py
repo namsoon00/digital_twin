@@ -940,6 +940,7 @@ class AIJudgmentResult:
     next_action_plan: str = ""
     invalidation_condition: str = ""
     decision_assurance: Dict[str, object] = field(default_factory=dict)
+    insight_assessment: Dict[str, object] = field(default_factory=dict)
     causal_chain: Tuple[Dict[str, object], ...] = ()
     model: str = ""
     reasoning_effort: str = ""
@@ -1045,6 +1046,7 @@ class AIJudgmentResult:
             next_action_plan=str(payload.get("nextActionPlan") or ""),
             invalidation_condition=str(payload.get("invalidationCondition") or ""),
             decision_assurance=_mapping(payload.get("decisionAssurance")),
+            insight_assessment=_mapping(payload.get("insightAssessment")),
             causal_chain=tuple(
                 dict(item)
                 for item in payload.get("causalChain") or []
@@ -1065,6 +1067,7 @@ class AIJudgmentResult:
         payload["hypothesis_reviews"] = [dict(item) for item in self.hypothesis_reviews]
         payload["follow_up_conditions"] = [dict(item) for item in self.follow_up_conditions]
         payload["unsupported_follow_ups"] = [dict(item) for item in self.unsupported_follow_ups]
+        payload["insight_assessment"] = dict(self.insight_assessment or {})
         payload["causal_chain"] = [dict(item) for item in self.causal_chain]
         return payload
 
@@ -1123,6 +1126,9 @@ class AIJudgmentResult:
             ),
             decision_assurance=_mapping(
                 payload.get("decision_assurance") or payload.get("decisionAssurance")
+            ),
+            insight_assessment=_mapping(
+                payload.get("insight_assessment") or payload.get("insightAssessment")
             ),
             causal_chain=tuple(
                 dict(item)

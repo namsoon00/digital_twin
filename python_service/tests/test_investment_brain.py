@@ -690,6 +690,99 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("account-a", first["accountOverlays"][0]["accountId"])
         self.assertEqual("account-b", second["accountOverlays"][0]["accountId"])
 
+        def correlated_market_context(account_id):
+            context = scoped_relation_context(account_id)
+            knowledge_basis = {
+                "ruleKind": "predictive-hypothesis",
+                "theoryFamily": "fundamental-valuation-and-factors",
+                "thesisFamily": "fundamental-deterioration",
+                "basisOrigin": "test-fixture",
+                "thresholdOrigin": "governed-model-score-contract",
+                "validationStatus": "validated-deterministic",
+                "decisionEligibility": "conditional",
+                "requiresHypothesis": True,
+                "outcomeValidationRequired": True,
+                "evidenceIndependenceKey": "fundamental-deterioration",
+            }
+            rules = [
+                ("graph.company.capital.dilution.risk.v1", "HAS_DILUTION_RISK"),
+                ("graph.company.market.value_trap.risk.v1", "HAS_VALUATION_RISK"),
+            ]
+            context["activeRules"] = [
+                {"ruleId": rule_id, "evidenceRole": "risk", "candidateAction": "HOLD"}
+                for rule_id, _relation_type in rules
+            ]
+            context["graphStoreInference"]["relations"] = [
+                {
+                    "id": "relation:" + rule_id,
+                    "source": "stock:005930",
+                    "target": "risk:" + rule_id,
+                    "type": relation_type,
+                    "ruleId": rule_id,
+                    "polarity": "risk",
+                    "candidateAction": "HOLD",
+                    "decisionEffect": "constrain",
+                    "knowledgeBasis": knowledge_basis,
+                }
+                for rule_id, relation_type in rules
+            ]
+            context["graphStoreInference"]["traces"] = [
+                {
+                    "id": "trace:" + rule_id,
+                    "ruleId": rule_id,
+                    "ruleConditionShapes": [{
+                        "conditionId": "condition:" + rule_id,
+                        "kind": "relation",
+                        "role": "required",
+                        "relationType": relation_type,
+                        "targetKind": "risk",
+                    }],
+                    "matchedConditionIds": ["condition:" + rule_id],
+                    "matchedConditions": [{
+                        "conditionId": "condition:" + rule_id,
+                        "kind": "relation",
+                        "role": "required",
+                        "relationType": relation_type,
+                        "targetKind": "risk",
+                    }],
+                }
+                for rule_id, relation_type in rules
+            ]
+            return context
+
+        correlated_first = hypothesis_set_from_relation_context(
+            correlated_market_context("account-a")
+        )["hypothesisSet"]
+        correlated_second = hypothesis_set_from_relation_context(
+            correlated_market_context("account-b")
+        )["hypothesisSet"]
+        correlated_risk = next(
+            item for item in correlated_first["hypotheses"]
+            if set(item["supportingRuleIds"]) == {
+                "graph.company.capital.dilution.risk.v1",
+                "graph.company.market.value_trap.risk.v1",
+            }
+        )
+        second_correlated_risk = next(
+            item for item in correlated_second["hypotheses"]
+            if len(item["supportingRuleIds"]) == 2
+        )
+        self.assertEqual("market-shared", correlated_risk["scopeState"])
+        self.assertTrue(correlated_risk["marketHypothesisId"])
+        self.assertTrue(correlated_risk["marketCausalSignature"])
+        self.assertEqual("eligible", correlated_risk["decisionEligibility"])
+        self.assertEqual(
+            correlated_risk["marketHypothesisId"],
+            second_correlated_risk["marketHypothesisId"],
+        )
+        self.assertTrue(correlated_risk["accountHypothesisOverlayId"])
+        self.assertNotEqual(
+            correlated_risk["accountHypothesisOverlayId"],
+            second_correlated_risk["accountHypothesisOverlayId"],
+        )
+        self.assertEqual(1, len(correlated_first["marketHypotheses"]))
+        self.assertEqual(1, len(correlated_first["accountOverlays"]))
+
     def test_rulebox_market_override_cannot_promote_account_condition(self):
         context = scoped_relation_context("account-a", mixed=True)
         context["graphStoreInference"]["traces"][0]["ruleConditionShapes"][0]["hypothesisScope"] = "market"

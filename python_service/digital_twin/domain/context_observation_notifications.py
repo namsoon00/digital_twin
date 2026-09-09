@@ -16,7 +16,7 @@ CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
 CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v4"
 REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v2"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
-REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v5"
+REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v6"
 
 DELIVERY_POLICY_BLOCKING_DECISIONS = {
     "baseline",
@@ -290,23 +290,6 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         )
         if _text(item)
     ]
-    qualification_pending = bool(
-        action_authority == "originate"
-        and disposition_code == "HYPOTHESIS_QUALIFICATION_PENDING"
-        and not execution_eligible_hypothesis_ids
-    )
-    research_only = bool(
-        disposition_code == "HYPOTHESIS_RESEARCH_ONLY"
-        and reference_hypothesis_ids
-        and not execution_eligible_hypothesis_ids
-    )
-    if action_authority not in {"modify", "observe"} and not qualification_pending:
-        return {}
-    selected_rule_id = _text(
-        synthesis.get("selected_rule_id")
-        or synthesis.get("selectedRuleId")
-        or _mapping(relation.get("decision")).get("selectedRuleId")
-    )
     eligible_hypothesis_ids = [
         _text(item)
         for item in (
@@ -316,6 +299,23 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         )
         if _text(item)
     ]
+    qualification_pending = bool(
+        action_authority == "originate"
+        and disposition_code == "HYPOTHESIS_QUALIFICATION_PENDING"
+        and not execution_eligible_hypothesis_ids
+    )
+    research_only = bool(
+        disposition_code == "HYPOTHESIS_RESEARCH_ONLY"
+        and (eligible_hypothesis_ids or reference_hypothesis_ids)
+        and not execution_eligible_hypothesis_ids
+    )
+    if action_authority not in {"modify", "observe"} and not qualification_pending:
+        return {}
+    selected_rule_id = _text(
+        synthesis.get("selected_rule_id")
+        or synthesis.get("selectedRuleId")
+        or _mapping(relation.get("decision")).get("selectedRuleId")
+    )
     review_hypothesis_ids = list(dict.fromkeys([
         *eligible_hypothesis_ids,
         *reference_hypothesis_ids,
@@ -578,7 +578,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
 
 
 def review_observation_delivery_decision(value: object) -> Dict[str, object]:
-    """Deliver review-only evidence only with a concrete source or condition change."""
+    """Deliver a grounded AI insight without granting trade execution authority."""
 
     payload = _mapping(value)
     contract = typedb_review_observation_contract(payload)
@@ -614,10 +614,28 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         in {"satisfied", "invalidated", "expired"}
     ]
     validated = _mapping(payload.get("notificationAiValidatedResponse"))
+    assessment = _mapping(validated.get("insightAssessment"))
+    insight_transition = _mapping(payload.get("investmentInsightTransition"))
+    execution = _mapping(payload.get("notificationAiExecutionAudit"))
+    fallback = _mapping(execution.get("fallback"))
+    writer = _mapping(payload.get("notificationWriterProvenance"))
+    insight_publishable = bool(
+        assessment.get("publishable") is True
+        and _text(assessment.get("dominantThesis"))
+        and _text(assessment.get("causalMechanism"))
+        and _text(assessment.get("investmentImplication"))
+    )
+    ai_publication_complete = bool(
+        _text(execution.get("status")).lower() == "completed"
+        and fallback.get("used") is not True
+        and (not writer or bool(writer.get("aiAuthored")))
+    )
     next_condition_available = bool(
         _text(validated.get("nextActionPlan") or validated.get("invalidationCondition"))
         or [item for item in validated.get("nextChecks") or [] if _text(item)]
         or [item for item in validated.get("followUpConditions") or [] if _text(item)]
+        or _text(assessment.get("invalidationCondition"))
+        or [item for item in assessment.get("catalysts") or [] if _text(item)]
     )
     authorization_sources = []
     if material_source_keys:
@@ -649,6 +667,9 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         "relationLifecycleTransition": lifecycle_transition,
         "actionAuthority": contract.get("actionAuthority"),
         "qualificationPending": bool(contract.get("qualificationPending")),
+        "investmentInsightPublishable": insight_publishable,
+        "investmentInsightTransition": insight_transition,
+        "aiPublicationComplete": ai_publication_complete,
     }
     if outcome != "REVIEW_ONLY":
         decision.update({
@@ -663,16 +684,50 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
             "suppressionReason": "review_observation_delivery_cooldown",
         })
         return decision
-    if authorization_sources and (next_condition_available or verified_follow_ups):
+    if not ai_publication_complete:
+        decision.update({
+            "reason": "완료되고 검증된 AI 투자 인사이트가 없어 웹 이력에만 저장합니다.",
+            "suppressionReason": "review_observation_ai_publication_incomplete",
+        })
+        return decision
+    if not insight_publishable:
+        decision.update({
+            "reason": "지배 가설·인과 경로·투자 의미의 근거 연결이 완성되지 않아 웹 이력에만 저장합니다.",
+            "suppressionReason": "investment_insight_contract_incomplete",
+        })
+        return decision
+    if not next_condition_available:
+        decision.update({
+            "reason": "현재 관점을 재검증할 다음 조건이 없어 웹 이력에만 저장합니다.",
+            "suppressionReason": "investment_insight_missing_next_condition",
+        })
+        return decision
+    if insight_transition.get("material") is True:
+        transition_kind = _text(insight_transition.get("kind")).lower()
         decision.update({
             "decision": "send",
-            "reason": "검증된 시장·근거 변화와 AI가 제시한 다음 확인 조건이 연결됐습니다.",
+            "reason": (
+                "이 종목의 첫 근거 기반 투자 인사이트가 완성됐습니다."
+                if transition_kind == "initial-insight"
+                else "투자 방향, 관측 기간, 근거 강도 또는 지배 가설이 달라졌습니다."
+            ),
             "suppressionReason": "",
-            "pushValueClass": "material-review-observation",
+            "pushValueClass": (
+                "initial-grounded-investment-insight"
+                if transition_kind == "initial-insight"
+                else "material-investment-insight-change"
+            ),
         })
-    elif authorization_sources:
+    elif authorization_sources and verified_follow_ups:
         decision.update({
-            "reason": "새 근거는 있으나 사용자가 확인할 다음 조건이 없어 웹 이력에만 저장합니다.",
-            "suppressionReason": "review_observation_missing_next_condition",
+            "decision": "send",
+            "reason": "직전 투자 관점의 확인 조건이 실제로 성립해 결과를 다시 평가했습니다.",
+            "suppressionReason": "",
+            "pushValueClass": "verified-investment-insight-condition",
+        })
+    else:
+        decision.update({
+            "reason": "투자 인사이트의 핵심 의미가 이전과 같아 웹 이력에만 저장합니다.",
+            "suppressionReason": "unchanged_investment_insight",
         })
     return decision

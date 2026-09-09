@@ -506,6 +506,7 @@ def notification_ai_decision_brief(
         },
         "decisionState": {
             "previousFinalDecision": decision_input.get("previousFinalDecision") or {},
+            "previousInvestmentInsight": merged.get("previousInvestmentAIInsightEpisode") or {},
             "precomputedActionCandidate": decision_input.get("precomputedActionCandidate"),
             "decisionTransition": relation.get("decisionTransition") or {},
             "decision": relation.get("decision") or {},
@@ -1231,6 +1232,12 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
             "previousFinalDecision": _selected_fields(
                 decision_state.get("previousFinalDecision"),
                 ("action", "label", "summary", "source", "generatedAt", "referenceDate"),
+            ),
+            "previousInvestmentInsight": _bounded_value(
+                decision_state.get("previousInvestmentInsight") or {},
+                string_limit=360,
+                list_limit=4,
+                dict_limit=24,
             ),
             "precomputedActionCandidate": decision_state.get("precomputedActionCandidate"),
             "decisionTransition": _selected_fields(
@@ -1992,6 +1999,12 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             "previousFinalDecision": _selected_fields(
                 decision_state.get("previousFinalDecision"),
                 ("action", "summary", "referenceDate"),
+            ),
+            "previousInvestmentInsight": _bounded_value(
+                decision_state.get("previousInvestmentInsight") or {},
+                string_limit=260,
+                list_limit=2,
+                dict_limit=18,
             ),
             "precomputedActionCandidate": decision_state.get("precomputedActionCandidate"),
             "decision": decision_payload,

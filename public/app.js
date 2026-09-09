@@ -15843,6 +15843,25 @@
     );
   }
 
+  function renderInvestmentInsightAssessmentCard(value) {
+    var assessment = value && typeof value === "object" ? value : {};
+    if (assessment.publishable !== true) return "";
+    var direction = String(assessment.direction || "balanced");
+    var tone = direction === "positive" ? "pass" : direction === "negative" ? "warning" : "pending";
+    var catalysts = Array.isArray(assessment.catalysts) ? assessment.catalysts : [];
+    var risks = Array.isArray(assessment.risks) ? assessment.risks : [];
+    var meta = [assessment.directionLabel, assessment.horizonLabel, assessment.convictionLabel].filter(Boolean).join(" · ");
+    return [
+      '<section class="oa-decision-rationale compact" data-flow-state="' + escapeHtml(tone) + '">',
+      '<header><div><span>INVESTMENT INSIGHT</span><strong>' + escapeHtml(assessment.directionLabel || "투자 관점") + '</strong></div><b>' + escapeHtml(assessment.horizonLabel || "기간 확인") + '</b></header>',
+      '<div class="oa-decision-rationale-body"><p><strong>핵심 판단</strong> · ' + escapeHtml(assessment.dominantThesis || "") + '</p><p><strong>작동 경로</strong> · ' + escapeHtml(assessment.causalMechanism || "") + '</p><p><strong>투자 의미</strong> · ' + escapeHtml(assessment.investmentImplication || "") + '</p></div>',
+      '<footer><span>근거 수준</span><strong>' + escapeHtml(meta || "검증된 근거 기반") + '</strong></footer>',
+      '</section>',
+      catalysts.length || risks.length ? '<div class="oa-assurance-groups">' + (catalysts.length ? '<section class="oa-assurance-group"><header><div><strong>관점을 강화할 촉매</strong><p>현재 설명을 더 강하게 만들 다음 사건입니다.</p></div><span>' + escapeHtml(catalysts.length) + '개</span></header><ul class="oa-decision-cause-list">' + catalysts.slice(0, 3).map(function (item) { return '<li><span>' + escapeHtml(item) + '</span></li>'; }).join("") + '</ul></section>' : '') + (risks.length ? '<section class="oa-assurance-group"><header><div><strong>반대 시나리오</strong><p>현재 관점을 약화하거나 뒤집을 수 있는 근거입니다.</p></div><span>' + escapeHtml(risks.length) + '개</span></header><ul class="oa-decision-cause-list">' + risks.slice(0, 3).map(function (item) { return '<li><span>' + escapeHtml(item) + '</span></li>'; }).join("") + '</ul></section>' : '') + '</div>' : '',
+      assessment.invalidationCondition ? '<section class="oa-assurance-context"><span>VIEW INVALIDATION</span><strong>판단이 바뀌는 조건</strong><p>' + escapeHtml(assessment.invalidationCondition) + '</p></section>' : ''
+    ].join("");
+  }
+
   function renderSubjectDecisionAIInsight(detail) {
     var ai = detail && detail.aiInsight && typeof detail.aiInsight === "object"
       ? detail.aiInsight
@@ -15876,6 +15895,8 @@
     var counterEvidence = Array.isArray(ai.counterEvidence) ? ai.counterEvidence : [];
     var nextChecks = Array.isArray(ai.nextChecks) ? ai.nextChecks : [];
     var hypotheses = Array.isArray(ai.hypotheses) ? ai.hypotheses : [];
+    var insightAssessment = ai.insightAssessment && typeof ai.insightAssessment === "object" ? ai.insightAssessment : {};
+    var assessmentBody = renderInvestmentInsightAssessmentCard(insightAssessment);
     var researchLeadId = String(ai.researchLeadHypothesisId || "");
     var verdictLabels = {
       supported: "지지",
@@ -15884,7 +15905,7 @@
       unresolved: "미해결",
       unreviewed: "미검토"
     };
-    var interpretation = ai.summary || ai.investmentView || "AI 해석 요약이 저장되지 않았습니다.";
+    var interpretation = insightAssessment.dominantThesis || ai.summary || ai.investmentView || "AI 해석 요약이 저장되지 않았습니다.";
     var evidenceBody = evidence.length || counterEvidence.length ? [
       '<div class="oa-assurance-groups">',
       evidence.length ? '<section class="oa-assurance-group"><header><div><strong>AI가 사용한 근거</strong><p>TypeDB 후보 안에서 비교한 근거입니다.</p></div><span>' + escapeHtml(evidence.length) + '개</span></header><ul class="oa-decision-cause-list">' + evidence.map(function (item) { return '<li><span>' + escapeHtml(item) + '</span></li>'; }).join("") + '</ul></section>' : '',
@@ -15911,10 +15932,11 @@
       '<strong>' + escapeHtml(statusMeta.label) + '</strong>',
       '<p>' + escapeHtml(ai.reason || "TypeDB 결과에 연결된 AI 해석입니다.") + '</p>',
       '</section>',
+      assessmentBody,
       '<div class="oa-console-metrics">',
       '<article><span>AI 실행</span><strong>' + escapeHtml(ai.model || "모델 미기록") + '</strong><em>' + escapeHtml(ai.reasoningEffort ? "추론 " + ai.reasoningEffort : "추론 강도 미기록") + '</em></article>',
       '<article><span>검증 상태</span><strong>' + escapeHtml(validationLabels[ai.validationState] || ai.validationState || "미기록") + '</strong><em>행동 범위는 TypeDB가 제한</em></article>',
-      '<article><span>AI 역할</span><strong>설명·후보 비교</strong><em>단독 주문 판단 권한 없음</em></article>',
+      '<article><span>AI 역할</span><strong>투자 관점·인과 해석</strong><em>주문 실행 권한과 분리</em></article>',
       '<article><span>알림 결과</span><strong>' + escapeHtml(notificationLabel) + '</strong><em>' + escapeHtml(ai.deliveryReason || "발송 정책 결과") + '</em></article>',
       '</div>',
       '<section class="oa-decision-rationale compact" data-flow-state="' + escapeHtml(ai.validationState === "blocked" ? "warning" : "pass") + '">',
@@ -26182,6 +26204,7 @@
       '</section>',
       '<section class="oa-case-record-contract" data-flow-state="' + escapeHtml(integrity.state || "warning") + '"><div><span>판단 기준 시각</span><strong>' + escapeHtml(formatClock(freshness.decisionAsOf || detail.decidedAt) || "기록 없음") + '</strong><em>원천 ' + escapeHtml(formatClock(freshness.sourceAsOf) || "기준 시각 미기록") + ' · 추론 ' + escapeHtml(formatClock(freshness.inferenceAsOf) || "기준 시각 미기록") + '</em></div><div><span>기록 무결성</span><strong>' + escapeHtml(integrity.label || "확인 필요") + '</strong><em>' + escapeHtml(integrityIssues.length ? integrityIssues[0].detail : "판단 당시 사실과 추론 상세가 연결되어 있습니다.") + '</em></div></section>',
       renderInvestmentCaseLineageChain(detail),
+      renderInvestmentInsightAssessmentCard(((((detail.reasoningLineage || {}).ai) || {}).insightAssessment) || {}),
       renderInvestmentDecisionRationale(detail, false),
       '<section class="oa-case-overview-section"><header><strong>처리 상태와 영향</strong>' + renderDecisionInfoButton("decision-readiness", "자료 부족, 관계 추론, AI 비교와 결과 관측을 분리해 각각의 이유를 표시합니다.") + '</header>' + renderDecisionStatusDimensions(detail.statusDimensions, false) + '</section>',
       '<div class="oa-case-cause-columns"><section><header><strong>' + escapeHtml(supportTitle) + '</strong>' + renderDecisionInfoButton("reasoning-rule", "성립한 관계와 규칙 중 현재 투자 의견에 실제로 채택된 근거입니다.") + '</header>' + renderDecisionCauseList(support, supportEmpty) + '</section><section><header><strong>반대 근거와 제한</strong>' + renderDecisionInfoButton("competing-hypothesis", "다른 결론을 지지하거나 현재 의견의 강도를 낮춘 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 기록된 반대 근거나 제한 조건이 없습니다.") + '</section></div>',

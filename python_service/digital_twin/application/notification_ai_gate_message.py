@@ -4755,85 +4755,121 @@ def research_narrative_telegram_message(
     response: NotificationAIValidatedResponse,
     detail_level: str = "concise",
 ) -> str:
-    """Render AI research insight separately from an executable decision."""
+    """Render one directional, evidence-bound insight without order authority."""
 
     level = delivery_level_from_context(context)
     normalized_detail = normalize_notification_detail_level(detail_level)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     target_name = target_name_for_headline(target)
-    headline = "🧠 " + (((target_name + " · ") if target_name else "") + "AI 가설 비교")
-    summary = compact_sentence_count(
-        customer_visible_ai_text(response.summary or response.investment_view or ""),
+    assessment = (
+        dict(response.insight_assessment or {})
+        if isinstance(response.insight_assessment, dict)
+        else {}
+    )
+    direction = str(assessment.get("direction") or "balanced").strip().lower()
+    direction_icon = {"positive": "🟢", "negative": "🔴", "balanced": "⚖️"}.get(
+        direction,
+        "🧭",
+    )
+    direction_label = customer_visible_ai_text(
+        assessment.get("directionLabel") or "투자 관점"
+    )
+    headline = direction_icon + " " + (
+        ((target_name + " · ") if target_name else "") + direction_label
+    )
+    thesis = compact_sentence_count(
+        customer_visible_ai_text(
+            assessment.get("dominantThesis")
+            or response.summary
+            or response.investment_view
+            or ""
+        ),
+        2,
+    )
+    mechanism = compact_sentence_count(
+        customer_visible_ai_text(assessment.get("causalMechanism") or ""),
+        2,
+    )
+    implication = compact_sentence_count(
+        customer_visible_ai_text(assessment.get("investmentImplication") or ""),
         2,
     )
     action_plan = compact_sentence_count(
-        customer_visible_ai_text(response.current_action_plan or ""),
+        customer_visible_ai_text(response.current_action_plan or response.execution_decision or ""),
         2,
-    ) or "이번 결과만으로 주문하지 않고 기존 보유 수량을 유지합니다."
-    next_plan = compact_sentence_count(
-        customer_visible_ai_text(response.next_action_plan or ""),
-        2,
-    )
-    if not next_plan and response.next_checks:
-        next_plan = compact_sentence_count(
-            customer_visible_ai_text(response.next_checks[0]),
-            1,
-        )
+    ) or "현재 관점은 참고하되 새 주문 신호로 사용하지 않습니다."
+    catalysts = [
+        compact_sentence_count(customer_visible_ai_text(item), 1)
+        for item in assessment.get("catalysts") or []
+        if customer_visible_ai_text(item)
+    ][:2]
+    risks = [
+        compact_sentence_count(customer_visible_ai_text(item), 1)
+        for item in assessment.get("risks") or []
+        if customer_visible_ai_text(item)
+    ][:2]
     invalidation = compact_sentence_count(
-        customer_visible_ai_text(response.invalidation_condition or ""),
+        customer_visible_ai_text(
+            assessment.get("invalidationCondition")
+            or response.invalidation_condition
+            or ""
+        ),
         2,
     )
     if compact_reason_is_internal(invalidation):
         invalidation = ""
-    hypothesis_rows = _research_hypothesis_comparison_rows(response, level)
-    flow_limit = 5 if normalized_detail == "concise" else 6
+    if not catalysts:
+        next_plan = compact_sentence_count(
+            customer_visible_ai_text(response.next_action_plan or ""),
+            1,
+        )
+        if next_plan:
+            catalysts.append(next_plan)
+    flow_limit = 4 if normalized_detail == "concise" else 6
     flow_rows = [
         item for item in compact_current_flow_rows(context)
         if not str(item or "").startswith("현재 공급자 미지원:")
     ][:flow_limit]
-    limitation = compact_sentence_count(
-        customer_visible_ai_text(response.epistemic_summary or ""),
-        2,
-    )
-    unresolved = ""
-    if response.unresolved_questions:
-        unresolved = compact_sentence_count(
-            customer_visible_ai_text(response.unresolved_questions[0]),
-            1,
-        )
+    meta = " · ".join(part for part in [
+        customer_visible_ai_text(assessment.get("horizonLabel") or ""),
+        customer_visible_ai_text(assessment.get("convictionLabel") or ""),
+    ] if part)
 
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
-        "",
-        "<b>분석 범위</b>",
-        _html_bullet(
-            "매매 판단이 아니라 TypeDB가 만든 연구 설명 후보를 AI가 비교한 결과입니다.",
-            level,
-        ),
     ]
-    if summary:
-        parts.extend(["", "<b>AI 결론</b>", _html_bullet(summary, level)])
-    if hypothesis_rows:
-        parts.extend(["", "<b>가설 비교</b>", *hypothesis_rows])
-    parts.extend(["", "<b>지금 할 일</b>", _html_bullet(action_plan, level)])
-    next_rows = []
-    if next_plan:
-        next_rows.append(_html_bullet(next_plan, level))
-    if invalidation and invalidation not in next_plan:
-        next_rows.append(_html_bullet("선두 가설 해제 조건: " + invalidation, level))
-    if unresolved and unresolved not in next_plan:
-        next_rows.append(_html_bullet("남은 질문: " + unresolved, level))
-    if next_rows:
-        parts.extend(["", "<b>다음 검증</b>", *next_rows[:3]])
-    if flow_rows:
+    if meta:
+        parts.append("<i>" + html.escape(meta, quote=False) + "</i>")
+    if thesis:
+        parts.extend(["", "<b>핵심 판단</b>", _html_bullet(thesis, level)])
+    if mechanism:
+        parts.extend(["", "<b>왜 그렇게 보나</b>", _html_bullet(mechanism, level)])
+    if implication:
+        parts.extend(["", "<b>투자 의미</b>", _html_bullet(implication, level)])
+    parts.extend(["", "<b>현재 대응</b>", _html_bullet(action_plan, level)])
+    if catalysts:
         parts.extend([
             "",
-            "<b>현재 수치</b>",
-            *[_html_bullet(row, level) for row in flow_rows],
+            "<b>관점을 강화할 촉매</b>",
+            *[_html_bullet(item, level) for item in catalysts],
         ])
-    if limitation:
-        parts.extend(["", "<b>해석 한계</b>", _html_bullet(limitation, level)])
+    if risks:
+        parts.extend([
+            "",
+            "<b>반대 시나리오</b>",
+            *[_html_bullet(item, level) for item in risks],
+        ])
+    if invalidation:
+        parts.extend([
+            "",
+            "<b>판단이 바뀌는 조건</b>",
+            _html_bullet(invalidation, level),
+        ])
+    if flow_rows:
+        parts.extend(["", "<b>현재 수치</b>", *[
+            _html_bullet(row, level) for row in flow_rows
+        ]])
     link_row = _notification_detail_link_row(context, level)
     if link_row:
         parts.extend(["", link_row])
@@ -4873,6 +4909,12 @@ def execution_telegram_message_decision_first(
         "full": {"reason": 3, "counter": 2, "followUp": 4, "flow": 6},
     }[normalized_detail]
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
+    insight_assessment = (
+        dict(response.insight_assessment or {})
+        if isinstance(response.insight_assessment, dict)
+        else {}
+    )
+    insight_publishable = insight_assessment.get("publishable") is True
     strict_actionability = bool(
         context.get("notificationAiDecisionContractVersion")
         or context.get("_notificationAiPreparedDecisionCore")
@@ -4921,11 +4963,27 @@ def execution_telegram_message_decision_first(
         if customer_visible_ai_text(item)
         and not compact_reason_is_internal(customer_visible_ai_text(item))
     ][:limits["counter"]]
+    if insight_publishable:
+        for item in reversed(insight_assessment.get("risks") or []):
+            text = compact_sentence_count(customer_visible_ai_text(item), 1)
+            if text and text not in counter_rows:
+                counter_rows.insert(0, text)
+        counter_rows = counter_rows[:limits["counter"]]
     follow_up_rows = customer_follow_up_rows(
         context,
         response,
         limit=limits["followUp"],
     )
+    if insight_publishable:
+        preferred_follow_ups = [
+            *list(insight_assessment.get("catalysts") or []),
+            insight_assessment.get("invalidationCondition"),
+        ]
+        for item in reversed(preferred_follow_ups):
+            text = compact_sentence_count(customer_visible_ai_text(item), 1)
+            if text and text not in follow_up_rows:
+                follow_up_rows.insert(0, text)
+        follow_up_rows = follow_up_rows[:limits["followUp"]]
     if review_only and not follow_up_rows:
         follow_up_rows = [
             "재판단 기준 없음: 수치 임계값이나 명확한 상태 전환 기준이 없어 "
@@ -4979,10 +5037,27 @@ def execution_telegram_message_decision_first(
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
-        "",
-        "<b>지금 할 일</b>",
-        _html_bullet(action_line, level),
     ]
+    if insight_publishable:
+        insight_meta = " · ".join(part for part in [
+            customer_visible_ai_text(insight_assessment.get("directionLabel") or ""),
+            customer_visible_ai_text(insight_assessment.get("horizonLabel") or ""),
+            customer_visible_ai_text(insight_assessment.get("convictionLabel") or ""),
+        ] if part)
+        if insight_meta:
+            parts.append("<i>" + html.escape(insight_meta, quote=False) + "</i>")
+        for title, key in (
+            ("핵심 투자 관점", "dominantThesis"),
+            ("왜 그렇게 보나", "causalMechanism"),
+            ("투자 의미", "investmentImplication"),
+        ):
+            text = compact_sentence_count(
+                customer_visible_ai_text(insight_assessment.get(key) or ""),
+                2,
+            )
+            if text:
+                parts.extend(["", "<b>" + title + "</b>", _html_bullet(text, level)])
+    parts.extend(["", "<b>지금 할 일</b>", _html_bullet(action_line, level)])
     transition = compact_decision_transition(context, response)
     transition_state = ai_decision_transition_from_context(context)
     if not transition_state:

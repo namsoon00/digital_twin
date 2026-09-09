@@ -906,6 +906,7 @@ def subject_reasoning_lineage(
     inference_generation_id = _text(_first(subject, "inference_generation_id", "inferenceGenerationId"))
     selected_rule_id = _text(_first(synthesis, "selected_rule_id", "selectedRuleId"))
     ai_insight = _mapping(ai_episode.get("insight"))
+    ai_insight_assessment = _mapping(ai_insight.get("insightAssessment"))
     selected_hypothesis_id = _text(
         _first(final, "selected_hypothesis_id", "selectedHypothesisId")
         or _first(ai_insight, "selected_hypothesis_id", "selectedHypothesisId")
@@ -1240,6 +1241,7 @@ def subject_reasoning_lineage(
                         "publicationContractPassed": contract_passed,
                         "contractFailureCode": _text(ai_episode.get("contractFailureCode")),
                         "abstained": ai_action == "NO_ACTION",
+                        "insightAssessment": _safe_value(ai_insight_assessment),
                     }],
                 },
             ],
@@ -1488,6 +1490,10 @@ def subject_reasoning_lineage(
             ),
             "epistemicSummary": _text(ai_insight.get("epistemicSummary")),
             "causalChain": _safe_value(ai_insight.get("causalChain") or []),
+            "insightAssessment": _safe_value(ai_insight_assessment),
+            "insightTransition": _safe_value(
+                ai_insight.get("insightTransition") or {}
+            ),
         },
         "traceRefs": {
             "subjectCaseId": _text(_first(subject, "subject_case_id", "subjectCaseId")),

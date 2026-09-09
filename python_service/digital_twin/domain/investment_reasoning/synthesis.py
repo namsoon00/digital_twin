@@ -7,6 +7,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 
 from ..context_observation_notifications import typedb_context_observation_contract
 from ..decision_evidence_contract import hypothesis_decision_eligibility
+from ..investment_brain import is_research_reviewable_hypothesis_payload
 from .contracts import ActionAlternative, DataGap, DecisionSynthesis
 
 
@@ -207,6 +208,7 @@ def _disposition_contract(
     investment_view_action: str,
     comparison_required: bool,
     data_gaps: Tuple[DataGap, ...],
+    research_interpretation_available: bool,
 ) -> Tuple[str, str, str]:
     if context_observation:
         return "CONTEXT_OBSERVATION", "context-observation", "context-only"
@@ -214,6 +216,8 @@ def _disposition_contract(
         return "DATA_SOURCE_FAILURE", "data-source-failure", "blocked"
     if not hypotheses and (selected_rule_id or investment_view_action):
         return "RULE_COVERAGE_GAP_CANDIDATE", "hypothesis-materialization-gap", "candidate-gap"
+    if judgement_blocked and research_interpretation_available:
+        return "HYPOTHESIS_RESEARCH_ONLY", "hypothesis-research-only", "research-only"
     if judgement_blocked:
         return "JUDGEMENT_BLOCKED", "judgement-blocked", "blocked"
     if comparison_required:
@@ -469,7 +473,6 @@ def decision_synthesis_from_relation_context(
         and traces
     )
     quality_blocked = bool(quality_assessment.get("judgementBlocked"))
-    no_eligible_thesis = not eligible_ids
     selected_action_conflict = candidate_contract_conflict
     judgement_blocked = bool(
         envelope.get("judgementBlocked")
@@ -494,6 +497,19 @@ def decision_synthesis_from_relation_context(
         relation,
         selected_rule_id=selected_rule_id,
     )
+    explicit_data_state = str(
+        relation.get("dataState") or decision.get("dataState") or ""
+    ).lower().strip()
+    research_interpretation_available = bool(
+        graph_trace_complete
+        and not quality_blocked
+        and explicit_data_state not in {"unavailable", "insufficient", "failed", "error"}
+        and not any(item.blocking and item.state == "failed" for item in data_gaps)
+        and any(
+            is_research_reviewable_hypothesis_payload(hypothesis)
+            for hypothesis in hypotheses
+        )
+    )
     disposition_code, execution_disposition, rule_coverage_state = _disposition_contract(
         context_observation=context_observation,
         judgement_blocked=judgement_blocked,
@@ -504,14 +520,19 @@ def decision_synthesis_from_relation_context(
         investment_view_action=investment_view_action,
         comparison_required=comparison_required,
         data_gaps=data_gaps,
+        research_interpretation_available=research_interpretation_available,
     )
+    if disposition_code == "HYPOTHESIS_RESEARCH_ONLY" and action_authority == "originate":
+        action_authority = "observe"
     ai_state = (
-        "BLOCKED"
-        if judgement_blocked
-        else "JUDGEMENT_READY"
+        "JUDGEMENT_READY"
         if disposition_code in {"ACTIONABLE_DECISION", "HYPOTHESIS_COMPARISON_REQUIRED"}
         else "INTERPRETATION_READY"
         if disposition_code == "CONTEXT_OBSERVATION"
+        else "RESEARCH_ONLY"
+        if disposition_code == "HYPOTHESIS_RESEARCH_ONLY"
+        else "BLOCKED"
+        if judgement_blocked
         else "RESEARCH_ONLY"
     )
     return DecisionSynthesis(
@@ -577,7 +598,13 @@ def decision_synthesis_from_relation_context(
         judgement_blocked=judgement_blocked,
         graph_trace_complete=graph_trace_complete,
         evidence_state="INVALID" if quality_blocked else ("VERIFIED" if graph_trace_complete else "PARTIAL"),
-        hypothesis_state="NO_ELIGIBLE_THESIS" if no_eligible_thesis else ("ELIGIBLE" if eligible_ids else "REFERENCE_ONLY"),
+        hypothesis_state=(
+            "ELIGIBLE"
+            if eligible_ids
+            else "REFERENCE_ONLY"
+            if reference_ids
+            else "NO_ELIGIBLE_THESIS"
+        ),
         action_state=(
             "COMPARISON_REQUIRED"
             if comparison_required

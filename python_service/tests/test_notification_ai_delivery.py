@@ -64,6 +64,21 @@ def initial_holding_review_context(ai_status="completed"):
     context["notificationAiValidatedResponse"] = {
         "action": "NO_ACTION",
         "nextChecks": ["다음 거래일 가격과 거래량을 다시 확인합니다."],
+        "insightAssessment": {
+            "publishable": True,
+            "direction": "positive",
+            "directionLabel": "상승 요인 우세",
+            "dominantThesis": "가격 회복과 거래 흐름이 단기 상방 관점을 지지합니다.",
+            "causalMechanism": "가격 회복이 수급 개선과 연결돼 단기 추세를 강화합니다.",
+            "investmentImplication": "보유자는 회복 지속 여부를 기준으로 대응 강도를 판단할 수 있습니다.",
+            "invalidationCondition": "가격이 회복 기준 아래로 다시 내려가면 관점을 재검토합니다.",
+            "evidenceIds": ["fact:price", "fact:volume"],
+        },
+    }
+    context["investmentInsightTransition"] = {
+        "kind": "initial-insight",
+        "material": True,
+        "currentDirection": "positive",
     }
     context["notificationAiExecutionAudit"] = {
         "status": ai_status,
@@ -452,11 +467,11 @@ class FinalAIDeliveryTests(unittest.TestCase):
         )
         self.assertEqual("valid", explanation["validation"]["state"])
         self.assertEqual(
-            "material-review-observation",
+            "initial-grounded-investment-insight",
             explanation["primaryCause"]["code"],
         )
         self.assertEqual(
-            "material-evidence",
+            "insight-transition",
             explanation["primaryCause"]["category"],
         )
         self.assertIn(
@@ -513,14 +528,23 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "status": "completed",
             "adoptionState": "narrative-adopted-action-not-applicable",
         }
+        nonmaterial_review["notificationAiValidatedResponse"] = {
+            "action": "NO_ACTION",
+            "nextChecks": ["다음 거래일 가격과 거래량을 다시 확인합니다."],
+            "insightAssessment": initial_holding_review_context()["notificationAiValidatedResponse"]["insightAssessment"],
+        }
         nonmaterial_review["decisionTransition"] = {
             "kind": "initial",
+            "material": False,
+        }
+        nonmaterial_review["investmentInsightTransition"] = {
+            "kind": "unchanged-insight",
             "material": False,
         }
         nonmaterial_decision = final_ai_delivery_decision(nonmaterial_review)
         self.assertEqual("suppress", nonmaterial_decision["decision"])
         self.assertEqual(
-            "review_observation_web_history",
+            "unchanged_investment_insight",
             nonmaterial_decision["suppressionReason"],
         )
 
@@ -538,6 +562,11 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "notificationAiValidatedResponse": {
                 "action": "NO_ACTION",
                 "nextChecks": ["신규 발행 조건과 주식 수 변화를 확인합니다."],
+                "insightAssessment": initial_holding_review_context()["notificationAiValidatedResponse"]["insightAssessment"],
+            },
+            "investmentInsightTransition": {
+                "kind": "initial-insight",
+                "material": True,
             },
             "cooldownDecision": "cooldown",
             "cooldownSuppressed": True,
@@ -564,11 +593,16 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "notificationAiValidatedResponse": {
                 "action": "NO_ACTION",
                 "nextChecks": ["신규 발행 조건과 주식 수 변화를 확인합니다."],
+                "insightAssessment": initial_holding_review_context()["notificationAiValidatedResponse"]["insightAssessment"],
+            },
+            "investmentInsightTransition": {
+                "kind": "initial-insight",
+                "material": True,
             },
         })
         material_decision = final_ai_delivery_decision(material_review)
         self.assertEqual("send", material_decision["decision"])
-        self.assertEqual("material-review-observation", material_decision["pushValueClass"])
+        self.assertEqual("initial-grounded-investment-insight", material_decision["pushValueClass"])
         self.assertEqual(["material-source-event"], material_decision["authorizationSources"])
 
         qualification_review = review_observation_context()
@@ -597,6 +631,11 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "notificationAiValidatedResponse": {
                 "action": "NO_ACTION",
                 "nextChecks": ["다음 거래일 거래량과 가격 회복 여부를 확인합니다."],
+                "insightAssessment": initial_holding_review_context()["notificationAiValidatedResponse"]["insightAssessment"],
+            },
+            "investmentInsightTransition": {
+                "kind": "initial-insight",
+                "material": True,
             },
         })
         qualification_decision = final_ai_delivery_decision(qualification_review)

@@ -89,7 +89,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # claim-contract identifier from reclassifying reasoning state as evidence.
         # Native matched-fact slicing also keeps a separate bounded read
         # contract so historical calibration reaches current AI comparison.
-        self.assertLessEqual(total, 984)
+        # Evidence-bound investment insight and semantic-transition contracts
+        # separately protect interpretation quality from execution authority;
+        # structured insight recovery also prevents execution blocks from
+        # suppressing evidence-verified research conclusions.
+        self.assertLessEqual(total, 990)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -170,9 +170,11 @@ class InvestmentCaseQueryService:
                 # Compatibility for clients that still read the old validation summary.
                 "validation": dict(readiness_counts),
                 "attentionRequired": sum(
-                    attention_counts.get(value, 0) for value in ("action", "review")
+                    attention_counts.get(value, 0)
+                    for value in ("action", "insight", "review")
                 ),
                 "actionRequired": attention_counts.get("action", 0),
+                "insightAvailable": attention_counts.get("insight", 0),
                 "reviewRequired": attention_counts.get("review", 0),
                 "blockedRequired": attention_counts.get("blocked", 0),
                 "systemRequired": attention_counts.get("system", 0),
@@ -283,6 +285,8 @@ class InvestmentCaseQueryService:
                 ),
             }
         insight = item_dict(saved.get("insight"))
+        insight_assessment = item_dict(insight.get("insightAssessment"))
+        insight_transition = item_dict(insight.get("insightTransition"))
         reconciliation = item_dict(saved.get("reconciliation"))
         delivery_policy = item_dict(reconciliation.get("deliveryPolicy"))
         current_generation = bool(
@@ -328,6 +332,8 @@ class InvestmentCaseQueryService:
             "contractFailureCode": text(saved.get("contractFailureCode")),
             "action": text(insight.get("action")).upper() or "NO_ACTION",
             "actionLabel": text(insight.get("actionLabel")) or "매매 판단 없음",
+            "insightAssessment": insight_assessment,
+            "insightTransition": insight_transition,
             "summary": text(insight.get("summary") or insight.get("investmentView")),
             "investmentView": text(insight.get("investmentView")),
             "currentActionPlan": text(insight.get("currentActionPlan")),
@@ -522,11 +528,20 @@ class InvestmentCaseQueryService:
             and text(ai_insight.get("hypothesisComparisonState")).lower()
             == "research-reviewed"
         )
+        insight_assessment = item_dict(ai_insight.get("insightAssessment"))
+        grounded_insight = bool(
+            ai_current and insight_assessment.get("publishable") is True
+        )
         if ai_current:
             headline = text(
-                ai_insight.get("summary") or ai_insight.get("investmentView")
+                insight_assessment.get("dominantThesis")
+                or ai_insight.get("summary")
+                or ai_insight.get("investmentView")
             ) or headline
-            ai_next_action = text(ai_insight.get("invalidationCondition"))
+            ai_next_action = text(
+                insight_assessment.get("invalidationCondition")
+                or ai_insight.get("invalidationCondition")
+            )
             if not ai_next_action:
                 ai_next_action = text(ai_insight.get("nextActionPlan"))
             if not ai_next_action:
@@ -577,6 +592,8 @@ class InvestmentCaseQueryService:
             "readinessLabel": (
                 "판단 가능"
                 if has_final else
+                "투자 인사이트"
+                if grounded_insight else
                 "가설 비교 완료"
                 if ai_research_review else
                 "최종 판단 전"
@@ -599,6 +616,8 @@ class InvestmentCaseQueryService:
                 "stateLabel": (
                     "AI 최종 판단"
                     if has_final else
+                    "AI 투자 인사이트"
+                    if grounded_insight else
                     "AI 연구 해석"
                     if ai_research_review else
                     "TypeDB 후보"
@@ -620,12 +639,12 @@ class InvestmentCaseQueryService:
                 {"id": "data", "label": "판단 자료", "state": "warning" if missing_data else "pass", "stateLabel": "일부 확인" if missing_data else "사용 가능", "reason": text(missing_data[0] if missing_data else "현재 가설 평가에 사용한 자료가 기록되어 있습니다.")},
             ],
             "attention": {
-                "state": attention_state,
-                "label": attention_label,
-                "category": "investment" if attention_state in {"action", "observe"} else "review",
+                "state": "insight" if grounded_insight else attention_state,
+                "label": "투자 인사이트" if grounded_insight else attention_label,
+                "category": "investment" if grounded_insight or attention_state in {"action", "observe"} else "review",
                 "userActionable": attention_state == "action",
-                "userReviewable": attention_state == "review",
-                "userAttentionRequired": attention_state in {"action", "review"},
+                "userReviewable": grounded_insight or attention_state == "review",
+                "userAttentionRequired": grounded_insight or attention_state in {"action", "review"},
                 "investmentAction": action,
                 "issueCount": len(missing_data),
                 "issues": [],
@@ -766,6 +785,7 @@ class InvestmentCaseQueryService:
         explanation = item_dict(lineage.get("explanation"))
         integrity = item_dict(lineage.get("integrity"))
         ai = item_dict(lineage.get("ai"))
+        lineage_insight_assessment = item_dict(ai.get("insightAssessment"))
         facts_count = int(item_dict(reasoning.get("counts")).get("facts") or 0)
         relation_count = int(item_dict(reasoning.get("counts")).get("relations") or 0)
         hypothesis_count = int(item_dict(reasoning.get("counts")).get("hypotheses") or 0)
@@ -788,6 +808,10 @@ class InvestmentCaseQueryService:
         decision["rationale"] = text(ai.get("summary")) or text(
             item_dict(explanation.get("primaryCause")).get("summary")
         )
+        if lineage_insight_assessment.get("publishable") is True:
+            decision["rationale"] = text(
+                lineage_insight_assessment.get("dominantThesis")
+            ) or decision["rationale"]
         if final:
             decision["selectedHypothesisId"] = text(
                 final.get("selectedHypothesisId") or final.get("selected_hypothesis_id")
@@ -810,8 +834,12 @@ class InvestmentCaseQueryService:
                 "detail": detail,
             })
         primary = item_dict(explanation.get("primaryCause"))
-        if ai.get("status") == "ai-authored" and ai.get("summary"):
-            headline = text(ai.get("summary"))
+        if ai.get("status") == "ai-authored" and (
+            lineage_insight_assessment.get("dominantThesis") or ai.get("summary")
+        ):
+            headline = text(
+                lineage_insight_assessment.get("dominantThesis") or ai.get("summary")
+            )
         else:
             headline = text(base.get("headline")) or text(primary.get("summary"))
         base.update({

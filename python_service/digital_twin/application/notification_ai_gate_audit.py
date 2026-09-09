@@ -4,6 +4,10 @@ from typing import Dict, Optional
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.investment_decision_history import context_with_ai_decision_transition
 from ..domain.investment_decision_actionability import investment_decision_actionability
+from ..domain.investment_insight_assessment import (
+    investment_insight_assessment,
+    investment_insight_transition,
+)
 from ..domain.investment_notification_state import (
     context_with_investment_notification_state,
     investment_notification_transition_line,
@@ -104,6 +108,7 @@ def notification_ai_validation_assertions(
     validation_id = _ontology_id("ai-validation" if ai_decision_authored else "presentation-validation", assertion_key)
     opinion_id = _ontology_id("validated-opinion" if ai_decision_authored else "inference-opinion", assertion_key + ":" + response.action)
     audit_id = _ontology_id("ai-judgment-audit" if ai_decision_authored else "inference-presentation-audit", assertion_key + ":" + response.action)
+    insight_id = _ontology_id("investment-insight-assessment", assertion_key)
     dispatch_id = _ontology_id("notification-dispatch", assertion_key)
     delivery_profile = delivery_profile_from_context(context)
     delivery_id = _ontology_id("message-delivery-profile", delivery_profile.get("level") or "absoluteBeginner")
@@ -179,6 +184,18 @@ def notification_ai_validation_assertions(
         {"source": validation_id, "target": dispatch_id, "relationType": "PRODUCES_VALIDATED_MESSAGE"},
         {"source": dispatch_id, "target": delivery_id, "relationType": "USES_MESSAGE_DELIVERY_PROFILE"},
     ]
+    if response.insight_assessment:
+        entities.append({
+            "id": insight_id,
+            "ontologyBox": "ABox",
+            "tboxClass": "InvestmentInsightAssessment",
+            **dict(response.insight_assessment),
+        })
+        relations.append({
+            "source": validation_id,
+            "target": insight_id,
+            "relationType": "PRODUCES_AI_INSIGHT",
+        })
     if ai_decision_authored:
         relations.append({"source": validation_id, "target": opinion_id, "relationType": "PRODUCES_AI_DECISION"})
     else:
@@ -246,6 +263,13 @@ def notification_ai_decision_audit(
         "sourceUrls": source_urls,
         "sourceLabels": source_labels,
         "strategyGuideQuality": guide_quality,
+        "insightAssessment": dict(response.insight_assessment or {}),
+        "previousInvestmentInsight": dict(
+            (context or {}).get("previousInvestmentAIInsightEpisode") or {}
+        ),
+        "investmentInsightTransition": dict(
+            (context or {}).get("investmentInsightTransition") or {}
+        ),
         "decisionHistory": dict((context or {}).get("investmentDecisionHistory") or {}),
         "previousFinalDecision": dict((context or {}).get("previousInvestmentDecisionEpisode") or {}),
         "decisionContinuity": dict((context or {}).get("decisionContinuityPacket") or {}),
@@ -314,6 +338,27 @@ def context_with_validated_ai_response(
             response.validation_warnings.append(warning)
     narrative_brief = build_investment_narrative_brief(enriched, response)
     apply_narrative_brief_to_response(narrative_brief, response)
+    response.insight_assessment = investment_insight_assessment(
+        {"insightAssessment": dict(response.insight_assessment or {})},
+        hypotheses=response.hypotheses,
+        selected_hypothesis_id=(
+            str((response.insight_assessment or {}).get("selectedHypothesisId") or "")
+            or response.selected_hypothesis_id
+        ),
+        research_lead_hypothesis_id=response.research_lead_hypothesis_id,
+        narrative_claims=response.narrative_claims,
+        causal_chain=response.causal_chain,
+        comparison_state=response.hypothesis_comparison_state,
+        validation_state=response.validation_state,
+        data_state=response.data_state,
+        decision_readiness=response.decision_readiness,
+        counter_evidence_status=response.counter_evidence_status,
+        invalidation_condition=response.invalidation_condition,
+    )
+    enriched["investmentInsightTransition"] = investment_insight_transition(
+        enriched.get("previousInvestmentAIInsightEpisode"),
+        response.insight_assessment,
+    )
     narrative_payload = narrative_brief.to_dict()
     narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)
     payload = response.to_dict()

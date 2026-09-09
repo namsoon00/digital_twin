@@ -54,7 +54,10 @@ from .notification_ai_judgement_service import (
     hypothesis_comparison_needs_repair,
     hypothesis_comparison_repair_prompt,
 )
-from .notification_decision_memory import context_with_previous_investment_decision
+from .notification_decision_memory import (
+    context_with_previous_investment_decision,
+    context_with_previous_investment_insight,
+)
 from .notification.quality import (
     apply_ontology_quality_gate_to_response,
     ontology_quality_gate_context,
@@ -329,6 +332,11 @@ class NotificationAIRequestEnqueuer:
                 self.continuity_service,
                 account_id=job.account_id,
             )
+            context = context_with_previous_investment_insight(
+                context,
+                self.queue,
+                account_id=job.account_id,
+            )
         reasoning_case_context = (
             context.get("investmentReasoningCase")
             if isinstance(context.get("investmentReasoningCase"), dict)
@@ -509,6 +517,11 @@ class NotificationAIRequestEnqueuer:
                 context,
                 self.decision_episode_store,
                 self.continuity_service,
+                account_id=job.account_id,
+            )
+            context = context_with_previous_investment_insight(
+                context,
+                self.queue,
                 account_id=job.account_id,
             )
         reasoning_case_context = (
@@ -820,6 +833,12 @@ class AIInferenceQueueRunner:
                     context,
                     self.decision_episode_store,
                     self.continuity_service,
+                    account_id=request.account_id,
+                    symbol=request.symbol,
+                )
+                context = context_with_previous_investment_insight(
+                    context,
+                    self.queue,
                     account_id=request.account_id,
                     symbol=request.symbol,
                 )

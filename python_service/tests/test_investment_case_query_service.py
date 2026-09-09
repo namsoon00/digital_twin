@@ -319,6 +319,26 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
                     "researchLeadHypothesisId": "hypothesis:2",
                     "hypothesisComparisonState": "research-reviewed",
                     "epistemicSummary": "가격 회복은 확인됐지만 지속 여부는 미확인입니다.",
+                    "insightAssessment": {
+                        "version": "investment-insight-assessment-v1",
+                        "direction": "positive",
+                        "directionLabel": "상승 요인 우세",
+                        "horizon": "short-term",
+                        "horizonLabel": "단기",
+                        "conviction": "moderate",
+                        "convictionLabel": "근거 강도 보통",
+                        "dominantThesis": "가격 회복과 수급 개선이 단기 상방 관점을 지지합니다.",
+                        "causalMechanism": "20일선 회복과 순매수가 추세 지속 가능성을 높입니다.",
+                        "investmentImplication": "추격보다 회복 기준을 지키는지 관찰할 구간입니다.",
+                        "invalidationCondition": "20일선 아래로 다시 내려가면 상방 관점을 취소합니다.",
+                        "publishable": True,
+                        "status": "conditional",
+                    },
+                    "insightTransition": {
+                        "version": "investment-insight-transition-v1",
+                        "kind": "initial-insight",
+                        "material": True,
+                    },
                 },
                 "reconciliation": {
                     "notificationDecision": "suppress",
@@ -335,12 +355,14 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         insight = item["subjectDecisionCase"]["aiInsight"]
         ai_dimension = next(row for row in item["statusDimensions"] if row["id"] == "ai")
         self.assertEqual("subject-decision-case", item["detailType"])
-        self.assertEqual("review", item["attention"]["state"])
+        self.assertEqual("insight", item["attention"]["state"])
         self.assertTrue(item["attention"]["userReviewable"])
         self.assertFalse(item["attention"]["userActionable"])
         self.assertEqual("BUY", item["decision"]["candidateAction"])
         self.assertEqual("NO_ACTION", item["decision"]["action"])
-        self.assertEqual(1, result["summary"]["reviewRequired"])
+        self.assertEqual(1, result["summary"]["attentionRequired"])
+        self.assertEqual(1, result["summary"]["insightAvailable"])
+        self.assertEqual(0, result["summary"]["reviewRequired"])
         self.assertEqual("completed", insight["status"])
         self.assertTrue(insight["currentGeneration"])
         self.assertEqual("gpt-5.6-sol", insight["model"])
@@ -349,13 +371,22 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual("hypothesis:2", insight["researchLeadHypothesisId"])
         self.assertEqual("supported", insight["hypotheses"][0]["verdict"])
         self.assertEqual("suppress", insight["notificationDecision"])
+        self.assertTrue(insight["insightAssessment"]["publishable"])
+        self.assertEqual("initial-insight", insight["insightTransition"]["kind"])
         self.assertEqual("AI 해석", ai_dimension["label"])
         self.assertEqual("해석 완료", ai_dimension["stateLabel"])
         self.assertIn("AI 해석 완료", item["phaseLabel"])
-        self.assertEqual(insight["summary"], item["headline"])
-        self.assertEqual(insight["nextActionPlan"], item["nextAction"])
-        self.assertEqual("AI 연구 해석", item["decision"]["stateLabel"])
-        self.assertEqual("가설 비교 완료", item["readinessLabel"])
+        self.assertEqual(
+            insight["insightAssessment"]["dominantThesis"],
+            item["headline"],
+        )
+        self.assertEqual(
+            insight["insightAssessment"]["invalidationCondition"],
+            item["nextAction"],
+        )
+        self.assertEqual("AI 투자 인사이트", item["decision"]["stateLabel"])
+        self.assertEqual("투자 인사이트", item["readinessLabel"])
+        self.assertEqual("insight", item["attention"]["state"])
         projected = InvestmentCaseQueryService._ai_insight_projection(
             {
                 "subjectCaseId": "subject:current",

@@ -8,7 +8,7 @@ from typing import Dict
 from ..investment_reasoning.decision_delta import DecisionDelta
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v17"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v18"
 
 
 @dataclass(frozen=True)
@@ -157,6 +157,7 @@ def evaluate_final_decision_delivery(
         policy.cooldown_decision == "scheduled-summary"
         and not delta.final_action_changed
         and not delta.user_state_material
+        and not delta.investment_insight_material
         and not delta.has_verified_follow_up
         and not delta.has_material_source_event
     ):
@@ -166,6 +167,11 @@ def evaluate_final_decision_delivery(
             "web-only-scheduled-summary",
         )
     if not delta.history_available:
+        if delta.investment_insight_publishable and delta.investment_insight_material:
+            return _send(
+                "이 종목의 첫 근거 기반 투자 인사이트가 완성됐습니다.",
+                "initial-grounded-investment-insight",
+            )
         if delta.final_action == "HOLD":
             return _suppress(
                 "최초 보유·관찰 상태지만 첫 판단 발송 조건을 충족하지 않아 기준선으로만 저장합니다.",
@@ -223,6 +229,11 @@ def evaluate_final_decision_delivery(
         return _send(
             "최종 행동은 유지됐지만 판단 변경 원문이 새로 확인됐습니다.",
             "material-source-evidence",
+        )
+    if delta.investment_insight_publishable and delta.investment_insight_material:
+        return _send(
+            "투자 방향, 관측 기간, 근거 강도 또는 지배 가설이 달라졌습니다.",
+            "material-investment-insight-change",
         )
     if (
         delta.ai_transition_kind == "unchanged"

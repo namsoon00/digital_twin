@@ -21,6 +21,7 @@ from .investment_brain import (
     is_selectable_hypothesis_payload,
 )
 from .investment_decision_history import previous_decision_episode_value
+from .investment_insight_assessment import investment_insight_assessment
 from .investment_strategy_guidance import merge_strategy_context, strategy_guidance_context
 from .notification_ai import (
     active_investment_opinion_value,
@@ -814,6 +815,7 @@ def normalized_hypothesis_comparison(
             "predictionTarget": str(candidate.get("predictionTarget") or ""),
             "expectedDirection": str(candidate.get("expectedDirection") or ""),
             "expectedOutcome": str(candidate.get("expectedOutcome") or ""),
+            "horizon": str(candidate.get("horizon") or ""),
             "outcomeMetric": str(candidate.get("outcomeMetric") or ""),
             "falsificationContract": user_friendly_ai_text(candidate.get("falsificationContract") or "", 280),
             "supportingEvidenceIds": user_friendly_ai_list(candidate.get("supportingEvidenceIds") or [], 12),
@@ -2147,6 +2149,8 @@ def build_notification_ai_gate_prompt(
         "hypotheses 배열에 모든 입력 규칙 가설을 정확히 한 번씩 빠짐없이 평가하고 selectedHypothesisId에는 그중 최종 action을 가장 잘 설명하는 가설 ID 하나를 그대로 쓴다. 입력에 없는 ID, 안전 제한 ID, 중복 가설 행을 쓰면 전체 비교가 무효가 된다.",
         "BUY·ADD·TRIM·SELL을 선택할 때는 decisionReadiness=ready로 쓰고, causalChain에 실제 입력 evidenceId가 연결된 supported 경로를 하나 이상 적는다. 이 조건이 없으면 실행 행동을 선택하지 않는다.",
         "alternativeAction에는 허용된 현실적 대안 하나와 현재 선택하지 않은 이유, 그 대안으로 바뀌는 조건을 적는다.",
+        "투자 인사이트와 매매 실행 가능성은 분리한다. 실행 자격이 부족해도 현재 근거가 가장 강하게 지지하는 방향, 지배 가설, 인과 경로와 투자 의미는 insightAssessment에 명확히 결론낸다.",
+        "불확실성은 conviction을 낮추되 결론을 없애는 핑계로 쓰지 않는다. 정말 비슷한 강도의 상반 근거가 있을 때만 balanced를 선택하고 균형을 깨는 다음 조건을 쓴다.",
         "unresolvedQuestions에는 결론을 바꿀 수 있지만 아직 답하지 못한 질문만 쓴다. epistemicSummary에는 무엇을 알고, 무엇을 모르며, 어떤 반증이 남았는지 한 문단으로 쓴다.",
         "summary와 opinion의 첫 문장은 관계 규칙 이름이나 상태 이름을 반복하지 말고 AI가 독립적으로 고른 최종 판단과 그 이유여야 한다.",
         "currentActionPlan, changeAnalysis, nextActionPlan은 사용자 알림의 서로 다른 세 영역이다. 세 필드에 같은 문장을 바꿔 쓰지 않는다.",
@@ -2175,7 +2179,7 @@ def build_notification_ai_gate_prompt(
         "계정의 메시지 전달 수준은 " + str(delivery_profile.get("label") or "") + "이다. " + str(delivery_profile.get("promptInstruction") or ""),
         "계정의 투자 성향은 " + strategy_label + "이다. " + str(strategy_guidance.get("stance") or "") + " " + str(strategy_guidance.get("response") or ""),
         "투자 성향은 행동의 경계 조건이다. 성향이 공격형이어도 자동 주문 지시처럼 쓰지 말고, 안정형이면 손실 제한·현금 여력·비중 한도를 먼저 확인한다.",
-        "반대 근거, 부족 데이터 영향, 무효화 조건, 다음 확인 조건을 반드시 포함한다.",
+        "확인된 반대 근거, 결론에 실제 영향을 주는 자료 한계, 무효화 조건과 다음 확인 조건을 구분한다. 자료 한계를 알림의 중심 결론으로 만들지 않는다.",
         "strategyGuide에는 실제 대응 기준을 구조화한다. actionMode는 즉시 실행/정규장 확인/대기/분할 준비/소액 진입 검토 중 가장 가까운 표현으로 쓴다.",
         "strategyGuide.positionSizing에는 TypeDB 실행 계획이나 사용자가 제공한 비중·수량 기준이 있을 때만 그 값을 쓴다. 근거 없이 임의의 분할 수량·비율을 만들지 않는다.",
         "strategyGuide.riskPrice와 recoveryPrice에는 TypeDB 실행 계획 또는 제공된 관측값에 명시된 가격만 쓴다. 가격을 새로 추정하거나 고정 이동평균 규칙을 적용하지 않는다.",
@@ -2222,6 +2226,27 @@ def build_notification_ai_gate_prompt(
                 "expectedEffect": "decision effect",
                 "evidenceIds": ["input evidence id"],
                 "status": "supported|contested|unresolved"
+            }],
+            "insightAssessment": {
+                "direction": "positive|balanced|negative",
+                "directionLabel": "상승 요인 우세|상승·하락 요인 균형|하락 위험 우세",
+                "horizon": "intraday|short-term|medium-term|long-term|multi-horizon",
+                "horizonLabel": "장중|단기|중기|장기|복합 기간",
+                "conviction": "tentative|moderate|strong",
+                "convictionLabel": "근거 강도 낮음|근거 강도 보통|근거 강도 높음",
+                "dominantThesis": "string",
+                "causalMechanism": "string",
+                "investmentImplication": "string",
+                "catalysts": ["string"],
+                "risks": ["string"],
+                "invalidationCondition": "string",
+                "thesisKey": "string"
+            },
+            "narrativeClaims": [{
+                "claimId": "unique response claim id",
+                "section": "view|mechanism|implication|catalyst|change|support|counter|next-condition|limitation",
+                "text": "string",
+                "evidenceIds": ["input evidence id"]
             }],
             "alternativeAction": {
                 "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
@@ -2675,6 +2700,19 @@ def validated_response_from_payload(
             + str(claim_validation.get("rejectedClaimCount"))
             + "개를 알림에서 제외했습니다."
         )
+    insight_assessment = investment_insight_assessment(
+        payload,
+        hypotheses=hypotheses,
+        selected_hypothesis_id=selected_hypothesis_id,
+        narrative_claims=narrative_claims,
+        causal_chain=causal_chain,
+        comparison_state=comparison_state,
+        validation_state=validation_state,
+        data_state=data_state,
+        decision_readiness=decision_readiness,
+        counter_evidence_status=counter_evidence_status,
+        invalidation_condition=invalidation,
+    )
     response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
@@ -2739,6 +2777,7 @@ def validated_response_from_payload(
             ),
             "counterEvidenceStatus": counter_evidence_status,
         },
+        insight_assessment=insight_assessment,
         causal_chain=causal_chain,
         alternative_action=alternative_action,
         follow_up_conditions=follow_up_conditions,

@@ -23,6 +23,7 @@ VALID_CAUSE_CATEGORIES = {
     "threshold-crossing",
     "scheduled-repeat",
     "initial-actionable",
+    "insight-transition",
 }
 ACTION_LABELS = {
     "BUY": "매수 검토",
@@ -283,6 +284,10 @@ def _review_observation_cause(context: Mapping[str, object]) -> CustomerDelivery
         for item in _items(decision.get("authorizationSources"))
         if _text(item)
     }
+    validated = _mapping(context.get("notificationAiValidatedResponse"))
+    assessment = _mapping(validated.get("insightAssessment"))
+    insight_transition = _mapping(decision.get("investmentInsightTransition"))
+    value_class = _text(decision.get("pushValueClass")).lower()
     trigger = _mapping(decision.get("reasoningDeliveryTrigger"))
     continuity = _mapping(context.get("decisionContinuityPacket"))
     follow_ups = [
@@ -316,6 +321,30 @@ def _review_observation_cause(context: Mapping[str, object]) -> CustomerDelivery
         or (follow_ups[0].get("transitionAt") if follow_ups else "")
         or context.get("reasoningSourceObservedAt")
     )
+    if value_class in {
+        "initial-grounded-investment-insight",
+        "material-investment-insight-change",
+    }:
+        initial = value_class == "initial-grounded-investment-insight"
+        return _cause(
+            value_class,
+            "insight-transition",
+            (
+                "이 종목의 첫 근거 기반 투자 관점이 완성됐습니다: "
+                if initial
+                else "이전과 다른 투자 관점이 확인됐습니다: "
+            ) + _text(assessment.get("dominantThesis")),
+            label="첫 투자 인사이트" if initial else "투자 관점 변화",
+            previous_value=insight_transition.get("previousDirection"),
+            current_value=assessment.get("directionLabel") or assessment.get("direction"),
+            observed_at=observed_at,
+            source_references=[
+                *_items(assessment.get("evidenceIds")),
+                *_items(trigger.get("materialRevisionKeys")),
+                decision.get("selectedRuleId"),
+            ],
+            basis="investment-insight-transition",
+        )
     if "verified-follow-up-transition" in authorizations and follow_ups:
         return _cause(
             "verified-review-follow-up-transition",

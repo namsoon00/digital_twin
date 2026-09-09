@@ -207,6 +207,17 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         active = decision_synthesis_from_relation_context(
             "account:main", relation_context("active")
         )
+        research_relation = relation_context("shadow")
+        research_relation["dataState"] = "sufficient"
+        research_relation["actionEnvelope"].update({
+            "judgementBlocked": True,
+            "selectedDecisionEffect": "constrain",
+        })
+        research_hypothesis = research_relation["hypothesisSet"]["hypotheses"][0]
+        research_hypothesis["knowledgeBasis"]["decisionEligibility"] = "reference-only"
+        research = decision_synthesis_from_relation_context(
+            "account:main", research_relation
+        )
 
         self.assertEqual(("hypothesis:price-flow-entry",), shadow.eligible_hypothesis_ids)
         self.assertEqual((), shadow.execution_eligible_hypothesis_ids)
@@ -220,6 +231,16 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         self.assertTrue(active.execution_qualified)
         self.assertEqual("BUY", active.execution_action)
         self.assertTrue(active.alternatives[0].execution_eligible)
+        self.assertTrue(research.judgement_blocked)
+        self.assertEqual("HYPOTHESIS_RESEARCH_ONLY", research.disposition_code)
+        self.assertEqual("RESEARCH_ONLY", research.ai_state)
+        self.assertEqual("modify", research.action_authority)
+        self.assertEqual((), research.execution_eligible_hypothesis_ids)
+        self.assertEqual(
+            ("hypothesis:price-flow-entry",),
+            research.reference_hypothesis_ids,
+        )
+        self.assertEqual("REFERENCE_ONLY", research.hypothesis_state)
 
     def test_blocked_action_does_not_create_a_false_hypothesis_comparison(self):
         hold = hypothesis("shadow")
@@ -362,6 +383,18 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
             "epistemicSummary": "회복 지속성과 펀더멘털 경로는 아직 확인되지 않았습니다.",
             "researchLeadHypothesisId": "hypothesis:recovery",
             "hypothesisComparisonState": "research-reviewed",
+            "insightAssessment": {
+                "publishable": True,
+                "direction": "positive",
+                "directionLabel": "상승 요인 우세",
+                "horizonLabel": "단기",
+                "convictionLabel": "근거 강도 보통",
+                "dominantThesis": "단기 가격 회복과 외국인 수급 개선이 상방 관점을 지지합니다.",
+                "causalMechanism": "가격 회복이 외국인 순매수와 이어지면 단기 추세가 강화됩니다.",
+                "investmentImplication": "보유자는 회복 지속 여부를 기준으로 비중 확대 시점을 구분해야 합니다.",
+                "catalysts": ["20일선 위 가격과 외국인 순매수가 다음 거래일에도 유지되는지 확인합니다."],
+                "risks": ["외국인 순매도 전환은 현재 상방 관점을 약화합니다."],
+            },
             "hypotheses": [
                 {
                     "hypothesisId": "hypothesis:fundamental",
@@ -386,17 +419,17 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
 
         message = execution_telegram_message(values, response)
 
-        self.assertIn("AI 가설 비교", message)
-        self.assertIn("연구 선두 · 단기 회복 + 수급 확인", message)
-        self.assertIn("조건부 통계 검증 결과", message)
-        self.assertIn("사후 5건의 방향 적중률은 40%", message)
+        self.assertIn("상승 요인 우세", message)
+        self.assertIn("핵심 판단", message)
+        self.assertIn("단기 가격 회복", message)
+        self.assertIn("왜 그렇게 보나", message)
+        self.assertIn("투자 의미", message)
         self.assertNotIn("성립값이 부족", message)
-        self.assertIn("대안 · 매출·현금흐름 개선 + 가격 회복", message)
-        self.assertIn("대안 · 위험 이벤트 + 가격 방어", message)
-        self.assertIn("설명력 약화", message)
         self.assertIn("현재 보유 수량은 바꾸지 않습니다", message)
-        self.assertIn("선두 가설 해제 조건", message)
+        self.assertIn("판단이 바뀌는 조건", message)
         self.assertIn("20일선 아래", message)
+        self.assertNotIn("소액 진입", message)
+        self.assertNotIn("사후 5건의 방향 적중률", message)
         self.assertNotIn("재판단 기준 없음", message)
         self.assertNotIn("현재 신호는 확인했지만 실행 판단", message)
 

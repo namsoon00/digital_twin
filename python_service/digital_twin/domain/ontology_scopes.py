@@ -2457,6 +2457,7 @@ def select_target_scoped_manifest_patch(
         incoming,
         selected,
         fact_slot_plan,
+        active_scope_plan_by_id=active_by_scope,
     )
     if str(fact_slot_selection.get("status") or "").startswith("blocked-"):
         return {

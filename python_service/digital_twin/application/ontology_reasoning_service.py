@@ -351,6 +351,32 @@ def reasoning_request_provenance(
                 signature = str(item.get("signature") or "").strip()
                 if signature:
                     crypto_transitions[signature] = dict(item)
+        # Queue persistence can replace the descriptive monitor barrier with
+        # the compact immutable-snapshot pointer. The authoritative source
+        # facts still carry each symbol-owned crypto transition, so recover
+        # that premise here instead of silently dropping it from the TypeDB
+        # execution context.
+        for source_fact in payload.get("sourceFacts") or []:
+            if not isinstance(source_fact, Mapping):
+                continue
+            fact_payload = source_fact.get("payload")
+            fact_payload = fact_payload if isinstance(fact_payload, Mapping) else {}
+            owned_symbols = {
+                str(value or "").upper().strip()
+                for value in source_fact.get("subjectIds") or []
+                if str(value or "").strip()
+            }
+            fact_symbol = str(fact_payload.get("symbol") or "").upper().strip()
+            if fact_symbol:
+                owned_symbols.add(fact_symbol)
+            if targets and owned_symbols and owned_symbols.isdisjoint(targets):
+                continue
+            for item in fact_payload.get("cryptoTransitions") or []:
+                if not isinstance(item, Mapping):
+                    continue
+                signature = str(item.get("signature") or "").strip()
+                if signature:
+                    crypto_transitions[signature] = dict(item)
         event_targets = targets or set(event_symbols(event))
         for raw_symbol, fields in raw_fields.items():
             symbol = str(raw_symbol or "").upper().strip()
@@ -372,7 +398,7 @@ def reasoning_request_provenance(
                 revisions[symbol] = clean_revision[:160]
     ordered_fact_types = sorted(fact_types)
     context = {
-        "version": "reasoning-request-context-v3",
+        "version": "reasoning-request-context-v4-source-fact-crypto-transitions",
         "requestEventIds": sorted(request_event_ids)[:80],
         "sourceEventIds": sorted(source_event_ids)[:80],
         "triggers": sorted(triggers)[:20],

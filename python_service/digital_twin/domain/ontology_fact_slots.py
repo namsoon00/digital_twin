@@ -18,7 +18,7 @@ from .ontology_change_impact import (
 )
 
 
-FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v5-explicit-derived-closure"
+FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v6-active-dependency-proof"
 
 # A source event can update values derived into adjacent factual families.
 # The closure keeps those derived facts coherent while excluding unrelated
@@ -485,9 +485,16 @@ def select_fact_slot_scope_ids(
     scope_plan_by_id: Mapping[str, Mapping[str, object]],
     candidate_scope_ids: Iterable[object],
     fact_slot_plan: Mapping[str, object] = None,
+    active_scope_plan_by_id: Mapping[str, Mapping[str, object]] = None,
 ) -> Dict[str, object]:
-    """Choose compatible changed scopes, or retain all candidates safely."""
+    """Choose compatible changed scopes, or retain all candidates safely.
+
+    An authoritative dependency may be treated as already current only when
+    the same target-owned scope and dependency fingerprint are present in the
+    active manifest. An unrelated instrument cannot prove a semantic no-op.
+    """
     plan = dict(fact_slot_plan or {})
+    active_scopes = dict(active_scope_plan_by_id or {})
     candidates = sorted({_clean(scope_id) for scope_id in candidate_scope_ids or [] if _clean(scope_id)})
     enabled = bool(plan.get("enabled"))
     slots = _family_values(plan.get("slotFamilies") or [])
@@ -627,6 +634,8 @@ def select_fact_slot_scope_ids(
     ) -> Set[str]:
         direct_symbol = scope_symbol(scope_id)
         if direct_symbol:
+            if target_symbols and direct_symbol not in target_symbols:
+                return set()
             return set(values_by_symbol.get(direct_symbol, shared_values))
         if not event_boundary_authoritative:
             return set(shared_values)
@@ -662,6 +671,41 @@ def select_fact_slot_scope_ids(
                 for scope_key in scope_dependency_keys
                 for requested_key in applicable_dependency_keys
             )
+        )
+
+    def matching_dependency_fingerprints(
+        scope_id: str,
+        item: Mapping[str, object],
+    ) -> Dict[str, str]:
+        applicable_dependency_keys = applicable_values_for_scope(
+            scope_id,
+            item,
+            dependency_keys_by_symbol,
+            dependency_keys,
+        )
+        if not applicable_dependency_keys:
+            return {}
+        return {
+            scope_key: fingerprint
+            for scope_key, fingerprint in unpack_semantic_dependency_fingerprints(item).items()
+            if any(
+                dependency_key_matches(scope_key, requested_key)
+                for requested_key in applicable_dependency_keys
+            )
+        }
+
+    def active_manifest_proves_current_dependency(
+        scope_id: str,
+        item: Mapping[str, object],
+    ) -> bool:
+        active_item = active_scopes.get(scope_id)
+        if not active_item:
+            return False
+        incoming_fingerprints = matching_dependency_fingerprints(scope_id, item)
+        active_fingerprints = matching_dependency_fingerprints(scope_id, active_item)
+        return bool(
+            incoming_fingerprints
+            and incoming_fingerprints == active_fingerprints
         )
 
     def reverse_dependency_matches_event_family(
@@ -790,6 +834,7 @@ def select_fact_slot_scope_ids(
             for scope_id, item in scope_plan_by_id.items()
             if scope_id not in candidate_set
             and scope_matches_requested_dependency(scope_id, item)
+            and active_manifest_proves_current_dependency(scope_id, item)
         )
     if dependency_boundary_authoritative and selected:
         # Relation scopes normally own links while their dependency list owns

@@ -15,6 +15,73 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
+    def assert_compact_frozen_catalog_retains_crypto_rule_subjects(self):
+        frozen_catalog = {
+            "configured": True,
+            "status": "ok",
+            "ruleCount": 1,
+            "frozenReleaseVerified": True,
+            "rules": [{
+                "rule_id": "graph.crypto.market.7d.up.watch.v1",
+                "enabled": True,
+                "source_kind": "crypto-asset",
+                "conditions": [{
+                    "kind": "relation",
+                    "relation_type": "HAS_OBSERVATION",
+                    "direction": "out",
+                }],
+                "derivations": [],
+            }],
+        }
+        recorder = PortfolioOntologyProjectionRecorder(
+            object(),
+            frozen_rulebox_catalog=frozen_catalog,
+        )
+        compact_catalog = recorder.ensure_rulebox_ready()
+        graph = PortfolioOntology(
+            "crypto-rule-subject-test",
+            entities=[
+                OntologyEntity(
+                    "crypto-asset:ETH",
+                    "Ethereum",
+                    "crypto-asset",
+                    {"ontologyBox": "ABox", "symbol": "ETH"},
+                ),
+                OntologyEntity(
+                    "market-event:ETH:crypto-threshold:7d:up:watch",
+                    "Ethereum 7d threshold",
+                    "market-event",
+                    {"ontologyBox": "ABox", "eventType": "crypto-market-7d-up-watch"},
+                ),
+            ],
+            relations=[
+                OntologyRelation(
+                    "crypto-asset:ETH",
+                    "market-event:ETH:crypto-threshold:7d:up:watch",
+                    "HAS_OBSERVATION",
+                    properties={"ontologyBox": "ABox"},
+                ),
+            ],
+        )
+
+        self.assertNotIn("rules", compact_catalog)
+        persisted = recorder.graph_for_graph_store_persistence(
+            graph,
+            compact_catalog,
+        )
+
+        self.assertEqual(
+            {
+                "crypto-asset:ETH",
+                "market-event:ETH:crypto-threshold:7d:up:watch",
+            },
+            {item.entity_id for item in persisted.entities},
+        )
+        self.assertEqual(
+            {"HAS_OBSERVATION"},
+            {item.relation_type for item in persisted.relations},
+        )
+
     def test_native_result_reads_calibration_from_active_scope_not_matched_fact_slice(self):
         class CalibrationRepository(TypeDBOntologyGraphRepository):
             def __init__(self):
@@ -78,6 +145,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
     def test_persistence_graph_keeps_complete_hypothesis_calibration_lineage(self):
+        self.assert_compact_frozen_catalog_retains_crypto_rule_subjects()
         graph = PortfolioOntology(
             "default",
             entities=[
@@ -130,7 +198,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "v15-hypothesis-calibration-state-scope",
+            "v16-frozen-rule-subjects",
             PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
         )
         self.assertEqual(

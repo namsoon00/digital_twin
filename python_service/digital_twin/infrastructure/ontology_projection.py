@@ -984,7 +984,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v15-hypothesis-calibration-state-scope"
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v16-frozen-rule-subjects"
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = "projection-runtime-context-cache-v1"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
@@ -5260,6 +5260,14 @@ class PortfolioOntologyProjectionRecorder:
             for item in (rule_catalog or {}).get("rules") or []
             if isinstance(item, dict)
         ]
+        if not active_rules:
+            # ``ensure_rulebox_ready`` deliberately returns a compact catalog
+            # for an immutable V2 release. The executable rule bodies remain
+            # in the recorder and are still authoritative for deciding which
+            # source kinds belong in the persisted ABox. Falling back to the
+            # legacy stock/portfolio surface here removed standalone crypto
+            # subjects before TypeDB could evaluate their native rules.
+            active_rules = self.rulebox_rules_for_impact()
         subject_patterns = rulebox_relation_subject_patterns(active_rules)
         if not subject_patterns:
             # The bootstrap summary may omit full rules. Keep the historic

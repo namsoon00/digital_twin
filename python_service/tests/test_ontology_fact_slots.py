@@ -952,6 +952,9 @@ class OntologyFactSlotTests(unittest.TestCase):
             scopes,
             ["symbol:MSTR:evidence"],
             plan,
+            active_scope_plan_by_id={
+                "symbol:MSTR:state": deepcopy(scopes["symbol:MSTR:state"]),
+            },
         )
 
         self.assertTrue(selection["enabled"])
@@ -967,6 +970,41 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertEqual(
             ["symbol:MSTR:evidence"],
             selection["deferredScopeIds"],
+        )
+
+        unrelated_scopes = {
+            "symbol:005930:state": {
+                "scopeFamily": "state",
+                "semanticDependencyFingerprints": {
+                    "kind:stock:field:currentprice": "price-v2",
+                },
+            },
+            "symbol:MSTR:evidence": deepcopy(scopes["symbol:MSTR:evidence"]),
+        }
+        unrelated_selection = select_fact_slot_scope_ids(
+            unrelated_scopes,
+            ["symbol:MSTR:evidence"],
+            plan,
+            active_scope_plan_by_id=unrelated_scopes,
+        )
+        self.assertFalse(unrelated_selection["enabled"])
+        self.assertEqual(
+            "blocked-dependency-key-no-scope-match",
+            unrelated_selection["status"],
+        )
+
+        missing_active_proof = select_fact_slot_scope_ids(
+            scopes,
+            ["symbol:MSTR:evidence"],
+            plan,
+            active_scope_plan_by_id={
+                "symbol:MSTR:evidence": deepcopy(scopes["symbol:MSTR:evidence"]),
+            },
+        )
+        self.assertFalse(missing_active_proof["enabled"])
+        self.assertEqual(
+            "blocked-dependency-key-no-scope-match",
+            missing_active_proof["status"],
         )
 
         family_only_plan = build_fact_slot_projection_plan(

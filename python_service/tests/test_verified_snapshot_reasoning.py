@@ -8,7 +8,10 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
-from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
+from digital_twin.application.ontology_reasoning_service import (
+    OntologyReasoningRunner,
+    reasoning_request_provenance,
+)
 from digital_twin.domain.events import (
     MAX_REASONING_SOURCE_FACTS_PER_EVENT,
     DomainEvent,
@@ -712,6 +715,16 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             "kind:stock:field:cryptomarkets",
             contract["dependencyKeys"],
         )
+        event.payload["verifiedSourceSnapshot"] = {
+            "snapshotId": "reasoning-source:btc",
+            "generatedAt": current.generated_at,
+        }
+        context = reasoning_request_provenance([event], ["BTC"])
+        self.assertEqual(
+            "reasoning-request-context-v4-source-fact-crypto-transitions",
+            context["version"],
+        )
+        self.assertEqual("down", context["cryptoTransitions"][0]["direction"])
 
     def test_missing_crypto_baseline_bootstraps_an_existing_threshold_move_once(self):
         previous = snapshot(external_signals={

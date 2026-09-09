@@ -18,6 +18,7 @@ from ...domain.market_hours import (
 from ...domain.notification_ai_delivery import (
     explicit_delivery_authorization,
     first_holding_review_candidate_is_admissible,
+    verified_typedb_direct_delivery_authorization,
 )
 from ...domain.notification_ai_context import is_graph_backed_relation_context
 from ...domain.notifications import NotificationJob
@@ -120,16 +121,23 @@ class NotificationDispatchEligibilityService:
         if not is_graph_backed_relation_context(relation) or "material" not in relation_diff:
             return True
         material = bool(relation_diff.get("material"))
-        explicit_authorization = explicit_delivery_authorization(context)
+        explicit_authorization = (
+            verified_typedb_direct_delivery_authorization(context)
+            or explicit_delivery_authorization(context)
+        )
         first_holding_review = (
             not material
             and first_holding_review_candidate_is_admissible(context)
         )
         context["inferenceChangeGate"] = {
-            "version": "dispatch-inference-change-v3",
+            "version": "dispatch-inference-change-v4",
             "decision": "send" if material or first_holding_review or explicit_authorization else "suppress",
             "material": material,
-            "deliveryAuthorization": explicit_authorization.get("decision", ""),
+            "deliveryAuthorization": (
+                explicit_authorization.get("decision")
+                or explicit_authorization.get("status")
+                or ""
+            ),
             "reason": (
                 explicit_authorization.get("reason")
                 or (

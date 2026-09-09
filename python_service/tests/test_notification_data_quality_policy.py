@@ -239,6 +239,56 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             profit_loss_job.context["inferenceChangeGate"]["deliveryAuthorization"],
         )
 
+        crypto_transition = {
+            "version": "reasoning-delivery-trigger-v1",
+            "status": "verified-material-transition",
+            "material": True,
+            "userObservable": True,
+            "materialRevisionKeys": ["fact-revision:eth:7d:up:watch"],
+            "matchedConditions": ["crypto-7d-up-threshold-crossed"],
+            "reasons": [
+                "이더리움 7일 변동률 +4.0%가 상승 기준 +4.0%에 도달했습니다."
+            ],
+        }
+        crypto_job = NotificationJob.create(
+            "이더리움 임계값 전환",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                **holding_job.context,
+                "notificationDecisionOwner": "typedb",
+                "notificationAiBypass": {"status": "typedb-direct"},
+                "reasoningDeliveryTrigger": crypto_transition,
+                "ontologyRelationDiff": {
+                    "material": False,
+                    "decisionTransition": {"kind": "unchanged", "material": False},
+                },
+                "inferenceDispatchDecision": {
+                    "route": "PUBLISH_TYPEDB",
+                    "details": {
+                        "semanticDeliveryDecision": {
+                            "decision": "send",
+                            "authorizationSources": ["verified-reasoning-trigger"],
+                            "reasoningDeliveryTrigger": crypto_transition,
+                        },
+                    },
+                },
+            },
+        )
+        self.assertTrue(
+            NotificationDispatchEligibilityService(queue=None).apply_inference_change_gate(
+                crypto_job
+            )
+        )
+        self.assertEqual(
+            "authorized",
+            crypto_job.context["inferenceChangeGate"]["deliveryAuthorization"],
+        )
+        self.assertEqual(
+            "dispatch-inference-change-v4",
+            crypto_job.context["inferenceChangeGate"]["version"],
+        )
+
         watchlist_job = NotificationJob.create(
             "카카오 관심 점검",
             account_id="main",

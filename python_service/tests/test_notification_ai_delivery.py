@@ -842,6 +842,49 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("material-context-observation", material["pushValueClass"])
         self.assertEqual(["material-source-event"], material["authorizationSources"])
 
+        crypto_transition = context_observation_context()
+        crypto_transition.update({
+            "cooldownDecision": "new-condition",
+            "notificationDecisionOwner": "typedb",
+            "notificationAiBypass": {"status": "typedb-direct"},
+            "reasoningDeliveryTrigger": {
+                "version": "reasoning-delivery-trigger-v1",
+                "status": "verified-material-transition",
+                "material": True,
+                "userObservable": True,
+                "materialRevisionKeys": ["fact-revision:eth:7d:up:watch"],
+                "sourceEventIds": ["event:eth:threshold"],
+                "observedAt": "2026-09-09T15:09:28Z",
+                "reasons": [
+                    "이더리움 7일 변동률 +4.0%가 상승 기준 +4.0%에 도달했습니다."
+                ],
+                "facts": {
+                    "cryptoTransitions": [{"changePct": 4.0}],
+                },
+            },
+        })
+        crypto_decision = final_ai_delivery_decision(crypto_transition)
+        self.assertEqual("send", crypto_decision["decision"])
+        self.assertEqual(
+            ["verified-reasoning-trigger"],
+            crypto_decision["authorizationSources"],
+        )
+        crypto_explanation = build_customer_delivery_explanation(
+            message_type="investmentInsight",
+            source_event_name="investment.inference_episode_completed",
+            source_event_id="event:eth:threshold",
+            context=crypto_transition,
+        )
+        self.assertEqual("valid", crypto_explanation["validation"]["state"])
+        self.assertEqual(
+            "threshold-crossing",
+            crypto_explanation["primaryCause"]["category"],
+        )
+        self.assertIn(
+            "이더리움 7일 변동률 +4.0%",
+            crypto_explanation["primaryCause"]["summary"],
+        )
+
         material_in_cooldown = context_observation_context(
             material_sources=["news:MSTR:material-1"]
         )

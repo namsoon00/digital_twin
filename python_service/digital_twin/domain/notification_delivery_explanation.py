@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
-from .context_observation_notifications import review_observation_delivery_decision
+from .context_observation_notifications import (
+    context_observation_delivery_decision,
+    review_observation_delivery_decision,
+)
 from .message_types import INVESTMENT_INSIGHT
 from .notification_ai_delivery import (
     first_holding_review_delivery_is_authorized,
@@ -377,6 +380,44 @@ def _review_observation_cause(context: Mapping[str, object]) -> CustomerDelivery
     )
 
 
+def _context_observation_cause(context: Mapping[str, object]) -> CustomerDeliveryCause | None:
+    """Explain a verified source transition behind a TypeDB observation."""
+
+    decision = context_observation_delivery_decision(context)
+    if _text(decision.get("decision")).lower() != "send":
+        return None
+    authorizations = {
+        _text(item).lower()
+        for item in _items(decision.get("authorizationSources"))
+        if _text(item)
+    }
+    if "verified-reasoning-trigger" not in authorizations:
+        return None
+    trigger = _mapping(decision.get("reasoningDeliveryTrigger"))
+    reasons = _unique(trigger.get("reasons") or [], 2)
+    facts = _mapping(trigger.get("facts"))
+    transitions = [
+        _mapping(item)
+        for item in _items(facts.get("cryptoTransitions"))
+        if isinstance(item, Mapping)
+    ]
+    current_value = transitions[0].get("changePct") if transitions else ""
+    return _cause(
+        "verified-context-observation-transition",
+        "threshold-crossing",
+        reasons[0] if reasons else "검증된 시장 조건이 설정한 알림 기준에 새로 진입했습니다.",
+        label="시장 조건 변화",
+        current_value=current_value,
+        observed_at=trigger.get("observedAt"),
+        source_references=[
+            *_items(trigger.get("materialRevisionKeys")),
+            *_items(trigger.get("sourceEventIds")),
+            decision.get("selectedRuleId"),
+        ],
+        basis="verified-reasoning-trigger",
+    )
+
+
 def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCause | None:
     values = _transition_values(context)
     previous_action = str(values["previousAction"] or "")
@@ -415,6 +456,9 @@ def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCau
     market_transition = _verified_market_transition_cause(context)
     if market_transition is not None:
         return market_transition
+    context_observation = _context_observation_cause(context)
+    if context_observation is not None:
+        return context_observation
     review_observation = _review_observation_cause(context)
     if review_observation is not None:
         return review_observation

@@ -11,7 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality, crypto_signal_freshness, evaluate_external_signal_quality
 from digital_twin.domain.events import MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED
-from digital_twin.domain.ontology_external_abox import external_quality_data_state
+from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.domain.ontology_external_abox import add_external_signal_concepts, external_quality_data_state
+from digital_twin.domain.ontology_inference_materializer import observation_metadata
 from digital_twin.domain.ontology_relation_facts import _external_quality_facts
 from digital_twin.domain.portfolio import Position
 from digital_twin.application.market_data_collection_service import MarketDataCollectionRunner
@@ -24,6 +26,65 @@ from digital_twin.infrastructure.event_bus import EventBus
 
 
 class RuntimeResilienceTests(unittest.TestCase):
+    def _assert_crypto_threshold_event_keeps_coingecko_freshness_contract(self):
+        now = datetime.now(timezone.utc)
+        fetched_at = now.isoformat().replace("+00:00", "Z")
+        source_as_of = (now - timedelta(minutes=12)).isoformat().replace("+00:00", "Z")
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity(
+                "portfolio:main",
+                "Portfolio",
+                "portfolio",
+                {"ontologyBox": "ABox"},
+            )],
+        )
+        signals = {
+            "cryptoMarkets": {
+                "ethereum": {
+                    "symbol": "ETH",
+                    "name": "Ethereum",
+                    "price": 4_500,
+                    "change24h": 1.2,
+                    "change7d": 5.4,
+                    "lastUpdated": source_as_of,
+                    "fetchedAt": fetched_at,
+                    "provider": "CoinGecko",
+                },
+            },
+            "cryptoFetchedAt": fetched_at,
+            "cryptoSourceAsOf": source_as_of,
+            "cryptoFreshness": {
+                "status": "fresh",
+                "ageMinutes": 0,
+                "maxAgeMinutes": 25,
+                "fetchedAt": fetched_at,
+                "sourceAsOf": source_as_of,
+            },
+        }
+
+        add_external_signal_concepts(
+            graph,
+            "portfolio:main",
+            signals,
+            {"settings": {"dataFreshnessExternalCryptoMaxAgeMinutes": "25"}},
+        )
+
+        event = next(
+            item
+            for item in graph.entities
+            if item.kind == "market-event"
+            and item.properties.get("eventType") == "crypto-market-7d-up-watch"
+        )
+        self.assertEqual("crypto", event.properties["observationDomain"])
+        self.assertEqual("fresh", event.properties["freshnessStatus"])
+        self.assertEqual(25, event.properties["maxAgeMinutes"])
+        self.assertEqual(fetched_at, event.properties["sourceFetchedAt"])
+
+        evidence = observation_metadata(event.properties, event.properties["state"])
+        self.assertEqual("fresh", evidence["freshnessStatus"])
+        self.assertTrue(evidence["judgementEvidenceUsable"])
+
     def test_market_data_event_waits_for_the_verified_monitor_snapshot_before_reasoning(self):
         events = EventBus()
         runner = MarketDataCollectionRunner(None, None, None, {}, None, event_publisher=events)
@@ -247,6 +308,7 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertEqual("fresh", result["cryptoFreshness"]["status"])
         self.assertEqual("aggregate-migrated", result["cryptoFreshness"]["cacheState"])
         self.assertEqual(63811, dedicated.load()["markets"]["bitcoin"]["price"])
+        self._assert_crypto_threshold_event_keeps_coingecko_freshness_contract()
 
     def test_fresh_dedicated_crypto_cache_prevents_duplicate_vendor_fetch(self):
         class MemoryCache:

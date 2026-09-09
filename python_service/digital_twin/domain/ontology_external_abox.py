@@ -762,6 +762,12 @@ def add_portfolio_macro_and_cross_asset_concepts(
                 "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CryptoMarketSignal"],
                 **dict(event),
                 "source": "crypto-market-observation-policy",
+                # Keep the source-specific freshness contract on the exact
+                # threshold event consumed by TypeDB. Without this profile the
+                # materializer falls back to the generic 10-minute quote
+                # window even though CoinGecko was collected within its
+                # configured crypto window.
+                **crypto_profile,
             })
             add_relation(
                 graph,

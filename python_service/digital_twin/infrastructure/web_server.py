@@ -33,9 +33,8 @@ from ..application.notification_ai_gate_message import (
     compact_next_action_line,
     decision_transition_presentation,
     execution_headline,
-    execution_telegram_message,
-    prepend_execution_start_badge,
 )
+from ..application.notification.rendering import NotificationRenderingService
 from ..application.notification_replay_service import NotificationReplayService
 from ..application.investment_case_query_service import InvestmentCaseQueryService
 from ..application.investment_flow_query_service import InvestmentFlowQueryService
@@ -3415,19 +3414,9 @@ def full_notification_text(value: str) -> str:
 
 
 def notification_customer_text(job: NotificationJob) -> str:
-    """Render persisted AI decisions with the current customer-safe format."""
+    """Render persisted decisions with the current customer-safe format."""
 
-    context = job.context if isinstance(job.context, dict) else {}
-    payload = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
-    if payload:
-        try:
-            response = NotificationAIValidatedResponse.from_dict(payload)
-            rendered = prepend_execution_start_badge(execution_telegram_message(context, response), context)
-            if rendered:
-                return rendered
-        except Exception:  # noqa: BLE001 - an old incomplete payload must not hide a ledger item.
-            pass
-    return str(job.text or "")
+    return NotificationRenderingService.render_persisted_customer_text(job)
 
 
 def notification_processing_age_minutes(job: NotificationJob) -> float:

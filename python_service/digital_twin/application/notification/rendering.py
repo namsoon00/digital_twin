@@ -126,6 +126,23 @@ class NotificationRenderingService:
         return rendered
 
     @staticmethod
+    def render_persisted_customer_text(job: NotificationJob) -> str:
+        """Re-render an archived investment alert without changing its ledger record."""
+
+        original = str(job.text or "")
+        if str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return original
+        if bool((job.context or {}).get("notificationReplayPreserveOriginal")):
+            return original
+        snapshot = NotificationJob.from_dict(job.to_dict())
+        try:
+            NotificationRenderingService.apply_investment_presentation_contract(snapshot)
+        except Exception:  # noqa: BLE001 - malformed legacy context must remain readable.
+            return original
+        rendered = str((snapshot.context or {}).get("telegramMessage") or snapshot.text or "").strip()
+        return enforce_customer_message_quality(rendered) if rendered else original
+
+    @staticmethod
     def apply_investment_presentation_contract(job: NotificationJob) -> None:
         """Render every investment insight through one versioned document contract."""
 

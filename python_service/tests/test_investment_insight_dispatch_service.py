@@ -3,6 +3,7 @@ import unittest
 from digital_twin.application.investment_insight_dispatch_service import (
     InvestmentInsightDispatchService,
 )
+from digital_twin.application.notification.rendering import NotificationRenderingService
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.investment_reasoning import (
     ARCHIVE,
@@ -392,6 +393,23 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assertIn("가격이 직전 확인 기준보다 +0.8% 변해", policy_message)
         self.assertIn("수익률은 +47.8%이며, 성립 기준은 +25.0% 이상", policy_message)
         self.assertNotIn("price-move", policy_message)
+
+        historical_job = NotificationJob.create(
+            "<b>TypeDB 추론</b>\n• price-move",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context=policy_context,
+        )
+        NotificationRenderingService.apply_investment_presentation_contract(historical_job)
+        historical_job.text = "<b>TypeDB 추론</b>\n• price-move"
+        historical_job.context["telegramMessage"] = historical_job.text
+        persisted_message = NotificationRenderingService.render_persisted_customer_text(
+            historical_job
+        )
+        self.assertIn("계정 수익 보호선 도달", persisted_message)
+        self.assertIn("수익률은 +47.8%이며, 성립 기준은 +25.0% 이상", persisted_message)
+        self.assertNotIn("price-move", persisted_message)
+        self.assertEqual("<b>TypeDB 추론</b>\n• price-move", historical_job.text)
 
         crypto_context = context_observation(observation)
         crypto_context["displayTarget"] = "이더리움 / ETH"

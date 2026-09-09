@@ -810,6 +810,46 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual("repaired", structured["status"])
         self.assertEqual("nextActionPlan", structured["sourceField"])
         self.assertTrue(structured["evidenceIds"])
+        self.assertEqual("repaired", structured["attempts"][0]["status"])
+
+        class AlternateNextReviewer:
+            calls = 0
+
+            def review(self, prepared):
+                self.calls += 1
+                core = prepared["_notificationAiPreparedDecisionCore"]
+                support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
+                payload = response_payload("fact:currentPrice", support_id, "fact:ma20Distance")
+                payload["narrativeClaims"] = payload["narrativeClaims"][:2]
+                payload["nextActionPlan"] = (
+                    "현재가가 999999원에 도달하는지 다음 관측에서 확인합니다."
+                )
+                payload["invalidationCondition"] = (
+                    "가격 흐름이 약해지면 현재 관점을 다시 검토합니다."
+                )
+                return validated_response_from_payload(
+                    prepared,
+                    payload,
+                    raw_response=json.dumps(payload, ensure_ascii=False),
+                    source="test AI",
+                )
+
+        alternate_next_reviewer = AlternateNextReviewer()
+        alternate_outcome = NotificationAIJudgementService(
+            alternate_next_reviewer,
+            {},
+        ).judge(investment_context())
+
+        self.assertTrue(alternate_outcome.publishable)
+        self.assertEqual(1, alternate_next_reviewer.calls)
+        self.assertFalse(alternate_outcome.repair_attempted)
+        alternate_repair = alternate_outcome.execution_spans["structuredNarrativeRepair"]
+        self.assertEqual("repaired", alternate_repair["status"])
+        self.assertEqual("invalidationCondition", alternate_repair["sourceField"])
+        self.assertEqual(2, len(alternate_repair["attempts"]))
+        self.assertEqual("rejected", alternate_repair["attempts"][0]["status"])
+        self.assertIn("ungrounded-number", alternate_repair["attempts"][0]["reasons"])
+        self.assertEqual("repaired", alternate_repair["attempts"][1]["status"])
 
     def test_research_insight_survives_execution_block_and_structured_claim_omission(self):
         context = investment_context()

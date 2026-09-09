@@ -432,17 +432,20 @@ def recover_structured_next_condition_claim(
     structured_sources = [
         ("nextActionPlan", response.next_action_plan),
         ("invalidationCondition", response.invalidation_condition),
-        *(("nextChecks", value) for value in response.next_checks or []),
-    ]
-    source_field, text = next(
-        (
-            (field, str(value or "").strip())
-            for field, value in structured_sources
-            if str(value or "").strip()
+        *(
+            ("nextChecks[" + str(index) + "]", value)
+            for index, value in enumerate(response.next_checks or [])
         ),
-        ("", ""),
-    )
-    if not text:
+    ]
+    candidates = []
+    seen_texts = set()
+    for source_field, value in structured_sources:
+        text = str(value or "").strip()
+        if not text or text in seen_texts:
+            continue
+        seen_texts.add(text)
+        candidates.append((source_field, text))
+    if not candidates:
         return {"status": "unavailable", "reason": "structured-next-condition-missing"}
 
     prepared_core = context.get("_notificationAiPreparedDecisionCore")
@@ -485,42 +488,66 @@ def recover_structured_next_condition_claim(
     ):
         return {"status": "unavailable", "reason": "observable-evidence-missing"}
 
-    claim_id = "claim:structured-next:" + hashlib.sha256(
-        json.dumps(
-            {"text": text, "evidenceIds": evidence_ids},
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()[:20]
-    claims, validation = normalize_narrative_claims(
-        context,
-        {
-            "narrativeClaims": [
-                *(response.narrative_claims or []),
-                {
-                    "claimId": claim_id,
-                    "section": "next-condition",
-                    "text": text,
-                    "evidenceIds": evidence_ids,
-                },
-            ]
-        },
-        writer_kind="ai",
-    )
-    validation["inferencePacketId"] = packet.packet_id
-    validation["evidenceFingerprint"] = packet.evidence_fingerprint
-    response.narrative_claims = claims
-    response.claim_validation = validation
-    repaired = any(
-        item.get("claimId") == claim_id and item.get("section") == "next-condition"
-        for item in claims
-    )
+    attempts = []
+    for source_field, text in candidates:
+        claim_id = "claim:structured-next:" + hashlib.sha256(
+            json.dumps(
+                {"text": text, "evidenceIds": evidence_ids},
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        claims, validation = normalize_narrative_claims(
+            context,
+            {
+                "narrativeClaims": [
+                    *(response.narrative_claims or []),
+                    {
+                        "claimId": claim_id,
+                        "section": "next-condition",
+                        "text": text,
+                        "evidenceIds": evidence_ids,
+                    },
+                ]
+            },
+            writer_kind="ai",
+        )
+        validation["inferencePacketId"] = packet.packet_id
+        validation["evidenceFingerprint"] = packet.evidence_fingerprint
+        response.narrative_claims = claims
+        response.claim_validation = validation
+        repaired = any(
+            item.get("claimId") == claim_id and item.get("section") == "next-condition"
+            for item in claims
+        )
+        candidate_validation = next((
+            item
+            for item in validation.get("validations") or []
+            if item.get("claimId") == claim_id
+        ), {})
+        attempt = {
+            "status": "repaired" if repaired else "rejected",
+            "claimId": claim_id,
+            "sourceField": source_field,
+            "evidenceIds": evidence_ids,
+            "reasons": list(candidate_validation.get("reasons") or []),
+        }
+        attempts.append(attempt)
+        if repaired:
+            return {
+                "status": "repaired",
+                "claimId": claim_id,
+                "sourceField": source_field,
+                "evidenceIds": evidence_ids,
+                "attempts": attempts,
+            }
     return {
-        "status": "repaired" if repaired else "rejected",
-        "claimId": claim_id,
-        "sourceField": source_field,
+        "status": "rejected",
+        "claimId": attempts[-1]["claimId"],
+        "sourceField": attempts[-1]["sourceField"],
         "evidenceIds": evidence_ids,
+        "attempts": attempts,
     }
 
 

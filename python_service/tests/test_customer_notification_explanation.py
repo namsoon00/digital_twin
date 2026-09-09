@@ -13,6 +13,7 @@ from digital_twin.domain.customer_evidence_explanation import (
     enforce_customer_message_quality,
 )
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.domain.notification_ai_gate_text import user_friendly_ai_text
 from digital_twin.domain.notifications import NotificationJob
 
 
@@ -139,6 +140,22 @@ class CustomerNotificationExplanationTests(unittest.TestCase):
         self.assertNotIn("반대 근거 확인", repaired)
         self.assertNotIn("모든 후보 근거", repaired)
         self.assertFalse(customer_text_quality_issues(repaired))
+        ai_text = user_friendly_ai_text(
+            "현재 보유 10주는 HOLD하고 ma20Slope 1.2와 volume, buyVolume, "
+            "sellVolume, bidAskImbalance, macroDgs10, macroDgs2, macroDff, "
+            "usdKrwRate, usdKrwDeltaPct를 확인한 뒤 actionEnvelope를 재검토합니다.",
+            700,
+        )
+        self.assertIn("현재 보유 10주를 유지하고", ai_text)
+        self.assertIn("20일선 기울기 1.2%", ai_text)
+        self.assertIn("금리", ai_text)
+        self.assertIn("원·달러 환율", ai_text)
+        for internal in (
+            "HOLD", "ma20Slope", "buyVolume", "sellVolume",
+            "bidAskImbalance", "macroDgs10", "macroDgs2", "macroDff",
+            "usdKrwRate", "usdKrwDeltaPct", "actionEnvelope",
+        ):
+            self.assertNotIn(internal, ai_text)
 
     def test_review_only_message_explains_conflict_without_fake_hold(self):
         context = review_only_context()

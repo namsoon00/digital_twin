@@ -378,8 +378,23 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
             "action": "NO_ACTION",
             "summary": "단기 가격 회복이 현재 상황을 가장 잘 설명하지만 주문 근거는 아닙니다.",
             "currentActionPlan": "현재 보유 수량은 바꾸지 않습니다.",
-            "nextActionPlan": "다음 가격과 외국인 수급에서 회복 지속 여부를 확인합니다.",
-            "invalidationCondition": "현재가가 20일선 아래로 내려가거나 외국인이 순매도로 바뀌면 연구 선두에서 제외합니다.",
+            "nextActionPlan": (
+                "다음 관측에서 가격은 currentPrice와 ma20Distance·ma20Slope, "
+                "거래량은 volume·volumeRatio, 수급은 buyVolume·sellVolume·tradeStrength·"
+                "bidAskImbalance, 실적과 공시는 매출·현금흐름, 금리는 macroDgs10·"
+                "macroDgs2·macroDff, 환율은 usdKrwRate·usdKrwDeltaPct를 확인합니다."
+            ),
+            "invalidationCondition": (
+                "ma20Distance가 0 이하가 되거나 다음 실적·공시에서 매출 또는 "
+                "현금흐름이 개선에서 보합·악화로 전환되면 현재 관점을 취소합니다."
+            ),
+            "followUpConditions": [{
+                "field": "ma20Distance",
+                "operator": "<=",
+                "threshold": 0,
+                "purpose": "invalidate",
+                "onSatisfied": "가격 회복 전제가 무효화되므로 현재 관점을 재검토합니다.",
+            }],
             "epistemicSummary": "회복 지속성과 펀더멘털 경로는 아직 확인되지 않았습니다.",
             "researchLeadHypothesisId": "hypothesis:recovery",
             "hypothesisComparisonState": "research-reviewed",
@@ -428,12 +443,20 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         self.assertNotIn("성립값이 부족", message)
         self.assertIn("현재 보유 수량은 바꾸지 않습니다", message)
         self.assertIn("판단이 바뀌는 조건", message)
-        self.assertIn("20일선 아래", message)
+        self.assertIn("20일선 차이가 0% 이하", message)
         self.assertNotIn("소액 진입", message)
         self.assertNotIn("사후 5건의 방향 적중률", message)
         self.assertNotIn("재판단 기준 없음", message)
         self.assertNotIn("현재 신호는 확인했지만 실행 판단", message)
         self.assertNotIn("모든 후보 근거를 비교했으며", message)
+        self.assertIn("거래량과 매수 우위 수급이 가격 흐름을 확인하는지", message)
+        self.assertEqual(1, message.count("20일선 차이가 0% 이하"))
+        for internal in (
+            "currentPrice", "ma20Distance", "ma20Slope", "volumeRatio",
+            "buyVolume", "sellVolume", "bidAskImbalance", "macroDgs10",
+            "macroDgs2", "macroDff", "usdKrwRate", "usdKrwDeltaPct",
+        ):
+            self.assertNotIn(internal, message)
 
         legacy_response = NotificationAIValidatedResponse.from_dict({
             "action": "NO_ACTION",

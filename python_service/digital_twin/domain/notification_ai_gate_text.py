@@ -24,6 +24,7 @@ INTERNAL_VARIABLE_REPLACEMENTS = [
     (re.compile(r"\bsourceFacts\b", re.IGNORECASE), "판단에 사용한 데이터"),
     (re.compile(r"\bontologyRelationContext\b", re.IGNORECASE), "관계 분석 데이터"),
     (re.compile(r"\bactiveInvestmentOpinion\b", re.IGNORECASE), "현재 투자 의견"),
+    (re.compile(r"\bactionEnvelope\b", re.IGNORECASE), "허용 행동 범위"),
     (re.compile(r"\bexecutionPlan\b", re.IGNORECASE), "실행 점검 계획"),
     (re.compile(r"\bcounterEvidence\b", re.IGNORECASE), "반대 근거"),
     (re.compile(r"\bnextChecks\b", re.IGNORECASE), "다음 확인"),
@@ -43,6 +44,7 @@ INTERNAL_VARIABLE_TEXT_REPLACEMENTS = [
     ("sourceFacts", "판단에 사용한 데이터"),
     ("ontologyRelationContext", "관계 분석 데이터"),
     ("activeInvestmentOpinion", "현재 투자 의견"),
+    ("actionEnvelope", "허용 행동 범위"),
     ("executionPlan", "실행 점검 계획"),
     ("counterEvidence", "반대 근거"),
     ("nextChecks", "다음 확인"),
@@ -64,6 +66,9 @@ USER_FRIENDLY_REPLACEMENTS = [
     ("조건부 통계 검증 결과", "조건부 검증 신호"),
     ("통계 검증 결과", "검증 신호"),
     ("독립 결과", "독립 근거"),
+    ("펀더멘털 확인 검증 신호의 가격 회복 경로", "매출·현금흐름 개선과 가격 회복의 연결"),
+    ("현재 관점은 긍정적 보유입니다", "현재 관점은 보유 유지에 우호적입니다"),
+    ("양의 기울기", "상승 기울기"),
     ("손실 보유 + 기준선 이탈 -> 손실 관리", "손실이 커지고 주요 평균선 아래에 있어 손실 관리"),
     ("추세 훼손 + 하락 가속 -> 리스크 강화", "주요 평균선 아래에서 하락 속도가 빨라져 위험 증가"),
     ("보유 종목 + 추세 훼손 -> 추가매수 보류", "보유 종목의 가격 흐름이 약해져 추가매수 보류"),
@@ -154,6 +159,8 @@ def customer_visible_ai_text(value: object) -> str:
         or re.search(r"(?<![\d.])-?\d+\.\d{5,}(?!\d)", result)
     ):
         result = customer_safe_text(result)
+        if not result:
+            return ""
     if INTERNAL_IDENTIFIER_ONLY_PATTERN.match(result):
         return ""
     for status, label in INTERNAL_ACTION_STATUS_LABELS.items():
@@ -285,16 +292,24 @@ def user_friendly_ai_text(value: object, limit: int = 220) -> str:
     for before, after in USER_FRIENDLY_REPLACEMENTS:
         result = result.replace(before, after)
     for action, label in ACTION_TEXT_REPLACEMENTS.items():
-        result = re.sub(r"\b" + action + r"\s*의견", label + " 의견", result)
-        result = re.sub(r"\b" + action + r"\s*을\s*선택", label + " 의견을 선택", result)
-        result = re.sub(r"\b" + action + r"\s*를\s*선택", label + " 의견을 선택", result)
-        result = re.sub(r"\b" + action + r"\b", label, result)
+        token = r"(?<![A-Za-z0-9_])" + action + r"(?![A-Za-z0-9_])"
+        result = re.sub(token + r"\s*의견", label + " 의견", result)
+        result = re.sub(token + r"\s*을\s*선택", label + " 의견을 선택", result)
+        result = re.sub(token + r"\s*를\s*선택", label + " 의견을 선택", result)
+        result = re.sub(token, label, result)
+    result = result.replace("현재 관점은 긍정적 보유입니다", "현재 관점은 보유 유지에 우호적입니다")
+    result = result.replace("연결를", "연결을")
     result = result.replace("->", "→")
     result = re.sub(r"\btrue\b", "예", result, flags=re.IGNORECASE)
     result = re.sub(r"\bfalse\b", "아니오", result, flags=re.IGNORECASE)
     result = result.replace("주요 평균선 아래로 내려감이", "주요 평균선 아래 상태가")
     result = result.replace("하락 속도 증가이", "하락 속도 증가가")
     result = result.replace("조건를", "조건을")
+    result = re.sub(
+        r"현재 보유\s+([0-9,.]+주)는?\s+보유하고",
+        r"현재 보유 \1를 유지하고",
+        result,
+    )
     result = result.replace("..", ".")
     result = re.sub(r"\s+", " ", result).strip()
     return result

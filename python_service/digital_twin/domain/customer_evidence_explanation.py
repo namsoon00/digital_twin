@@ -21,17 +21,36 @@ FIELD_LABELS = {
     "ma5Distance": "5일선 차이",
     "ma20Distance": "20일선 차이",
     "ma60Distance": "60일선 차이",
+    "ma5Slope": "5일선 기울기",
+    "ma20Slope": "20일선 기울기",
+    "ma60Slope": "60일선 기울기",
+    "volume": "거래량",
     "volumeRatio": "평균 대비 거래량",
     "timeAdjustedVolumeRatio": "장 진행률 보정 거래량",
+    "buyVolume": "매수 체결량",
+    "sellVolume": "매도 체결량",
     "tradeStrength": "체결강도",
+    "bidAskImbalance": "호가 잔량 불균형",
+    "orderbookImbalance": "호가 잔량 불균형",
     "foreignNetVolume": "외국인 순매수",
     "institutionNetVolume": "기관 순매수",
+    "macroDgs10": "미국 10년 금리",
+    "macroDgs2": "미국 2년 금리",
+    "macroDff": "미국 기준금리",
+    "usdKrwRate": "원·달러 환율",
+    "usdKrwDeltaPct": "원·달러 환율 변화율",
     "expectedEPS": "예상 EPS",
     "fairValue": "적정가",
     "targetPER": "목표 PER",
     "priceChangeRate": "가격 변화율",
+    "priceChangePct": "가격 변화율",
     "eligibilityStatus": "검증 상태",
+    "actionEnvelope": "허용 행동 범위",
 }
+
+_FIELD_TOKEN_PATTERN = "|".join(
+    re.escape(field) for field in sorted(FIELD_LABELS, key=len, reverse=True)
+)
 
 _FORBIDDEN_PATTERNS = (
     re.compile(r"\b(?:HAS|MATCHES|BLOCKS|MITIGATES)_[A-Z0-9_]+\b"),
@@ -41,10 +60,7 @@ _FORBIDDEN_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?<![A-Za-z0-9_])(?:currentPrice|profitLossRate|ma5Distance|ma20Distance|ma60Distance|"
-        r"volumeRatio|timeAdjustedVolumeRatio|tradeStrength|foreignNetVolume|"
-        r"institutionNetVolume|expectedEPS|fairValue|targetPER|priceChangeRate|"
-        r"eligibilityStatus)(?![A-Za-z0-9_])"
+        r"(?<![A-Za-z0-9_])(?:" + _FIELD_TOKEN_PATTERN + r")(?![A-Za-z0-9_])"
     ),
     re.compile(r"(?<![A-Za-z0-9_-])event-[a-z0-9_.-]+(?![A-Za-z0-9_-])", re.IGNORECASE),
     re.compile(r"(?<![\d.])-?\d+\.\d{5,}(?!\d)"),
@@ -187,6 +203,12 @@ def customer_safe_text(value: object) -> str:
         lambda match: (f"{float(match.group(1)):.2f}").rstrip("0").rstrip("."),
         text,
     )
+    text = re.sub(
+        r"(\d+)일선 차이\s*([-+]?\d+(?:\.\d+)?)(?:%)?(?:과|와)\s*"
+        r"기울기\s*([-+]?\d+(?:\.\d+)?)(?:%)?",
+        r"\1일선 차이 \2%와 \1일선 기울기 \3%",
+        text,
+    )
     for operator, suffix in (("<=", "이하"), (">=", "이상"), ("<", "미만"), (">", "초과")):
         text = re.sub(
             r"(현재가|수익률|\d+일선 차이|가격 변화율|평균 대비 거래량|체결강도|"
@@ -196,11 +218,24 @@ def customer_safe_text(value: object) -> str:
             text,
         )
     text = re.sub(
-        r"(수익률|\d+일선 차이|가격 변화율|미국 10년 금리|한국 기준금리)"
-        r"([이가은는]?)\s*(-?[\d,.]+)(?![%\d])\s*(이상|이하|초과|미만)",
+        r"(수익률|\d+일선 차이|\d+일선 기울기|가격 변화율|원·달러 환율 변화율|"
+        r"미국 10년 금리|미국 2년 금리|미국 기준금리|한국 기준금리)"
+        r"([이가은는]?)\s*([-+]?\d+(?:,\d{3})*(?:\.\d+)?)(?![%\d])\s*"
+        r"(이상|이하|초과|미만)",
         lambda match: (
             match.group(1) + match.group(2) + " " + match.group(3)
             + "% " + match.group(4)
+        ),
+        text,
+    )
+    text = re.sub(
+        r"(수익률|\d+일선 차이|\d+일선 기울기|가격 변화율|원·달러 환율 변화율|"
+        r"미국 10년 금리|미국 2년 금리|미국 기준금리|한국 기준금리)"
+        r"([이가은는]?)\s*([-+]?\d+(?:,\d{3})*(?:\.\d+)?)(?![%\d]|[.,]\d)([과와]?)"
+        r"(?=\s|[가-힣]|[,.!?]|$)",
+        lambda match: (
+            match.group(1) + match.group(2) + " " + match.group(3)
+            + "%" + ("와" if match.group(4) else "")
         ),
         text,
     )
@@ -235,6 +270,7 @@ def customer_safe_text(value: object) -> str:
     text = text.replace("모델 신호", "검증 신호")
     text = text.replace("조건부 통계 검증 결과", "조건부 검증 신호")
     text = text.replace("통계 검증 결과", "검증 신호")
+    text = text.replace("기간 관측 신선도 부족", "최근 기간 관측값 부족")
     text = re.sub(r"\s*·\s*모델 신호\s*$", "", text)
     text = text.replace("->", "→")
     left, separator, right = text.partition(":")

@@ -4103,6 +4103,39 @@ def _friendly_next_check_text(context: Dict[str, object], value: object) -> str:
     ]
     for before, after in replacements:
         text = text.replace(before, after)
+    field_mentions = sum(
+        token in text
+        for token in (
+            "현재가", "20일선 차이", "20일선 기울기", "거래량",
+            "평균 대비 거래량", "매수 체결량", "매도 체결량", "체결강도",
+            "호가 잔량 불균형", "미국 10년 금리", "미국 2년 금리",
+            "미국 기준금리", "원·달러 환율", "매출", "현금흐름",
+        )
+    )
+    if len(text) >= 120 and field_mentions >= 4:
+        checks = []
+        if any(token in text for token in ("현재가", "20일선 차이", "20일선 기울기")):
+            checks.append("현재가가 20일선 위 흐름을 유지하는지")
+        if any(
+            token in text
+            for token in (
+                "거래량", "매수 체결량", "매도 체결량", "체결강도",
+                "호가 잔량 불균형", "외국인 순매수", "기관 순매수",
+            )
+        ):
+            checks.append("거래량과 매수 우위 수급이 가격 흐름을 확인하는지")
+        if any(token in text for token in ("매출", "현금흐름", "실적", "공시")):
+            checks.append("실적·공시의 매출과 현금흐름이 현재 관점을 뒷받침하는지")
+        if any(
+            token in text
+            for token in (
+                "미국 10년 금리", "미국 2년 금리", "미국 기준금리",
+                "원·달러 환율",
+            )
+        ):
+            checks.append("금리·원·달러 환율 변화가 종목 흐름에 부담을 더하는지")
+        if checks:
+            return "다음 관측에서 " + ", ".join(checks) + " 확인합니다."
     return text
 
 
@@ -4638,12 +4671,13 @@ def customer_follow_up_rows(
         customer_visible_ai_text(response.next_action_plan or ""),
         2,
     )
+    friendly_next_action = _friendly_next_check_text(context, next_action)
     if (
-        next_action
-        and not compact_reason_is_internal(next_action)
-        and is_concrete_observable_condition(next_action)
+        friendly_next_action
+        and not compact_reason_is_internal(friendly_next_action)
+        and is_concrete_observable_condition(friendly_next_action)
     ):
-        append_unique_text(rows, "다음 확인: " + _friendly_next_check_text(context, next_action), 420)
+        append_unique_text(rows, "다음 확인: " + friendly_next_action, 420)
     elif not next_action:
         derived_next = compact_sentence_count(compact_next_action_line(context, response), 2)
         if (
@@ -4853,6 +4887,53 @@ def _distinct_message_rows(values: List[object], limit: int = 3) -> List[str]:
     return rows
 
 
+def _observable_condition_keys(value: object) -> set:
+    text = customer_visible_ai_text(value)
+    pattern = re.compile(
+        r"(현재가|수익률|\d+일선(?: 차이| 기울기)?|가격 변화율|평균 대비 거래량|"
+        r"체결강도|원·달러 환율|미국 \d+년 금리)"
+        r"[이가은는]?\s*([-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:%|배|원|주)?)\s*"
+        r"(이상|이하|초과|미만|상회|하회)"
+    )
+    return {
+        "|".join(match.groups()).replace(" ", "")
+        for match in pattern.finditer(text)
+    }
+
+
+def _dedupe_decision_change_rows(values: List[str], limit: int = 2) -> List[str]:
+    rows: List[str] = []
+    row_keys: List[set] = []
+    for value in values or []:
+        text = _polite_customer_text(value)
+        if not text:
+            continue
+        keys = _observable_condition_keys(text)
+        duplicate_index = next(
+            (
+                index for index, existing in enumerate(rows)
+                if keys and row_keys[index] and keys.intersection(row_keys[index])
+                and text.startswith("판단 취소") and existing.startswith("판단 취소")
+            ),
+            None,
+        )
+        if duplicate_index is not None:
+            existing = rows[duplicate_index]
+            existing_score = len(row_keys[duplicate_index]) * 100 + len(existing)
+            current_score = len(keys) * 100 + len(text)
+            if current_score > existing_score:
+                rows[duplicate_index] = text
+                row_keys[duplicate_index] = keys
+            continue
+        if any(_same_message_claim(text, existing) for existing in rows):
+            continue
+        rows.append(text)
+        row_keys.append(keys)
+        if len(rows) >= max(1, int(limit or 1)):
+            break
+    return rows
+
+
 def _insight_transition_line(
     context: Dict[str, object],
     assessment: Dict[str, object],
@@ -4978,6 +5059,11 @@ def research_narrative_telegram_message(
         if not any(_same_message_claim(row, existing) for existing in judgment_rows)
     ]
     transition_line = _insight_transition_line(context, assessment)
+    if transition_line:
+        judgment_rows = [
+            row for row in judgment_rows
+            if not _same_message_claim(row, transition_line)
+        ]
     follow_up_rows = customer_follow_up_rows(context, response, limit=3)
     assessment_invalidation = compact_sentence_count(
         _polite_customer_text(assessment.get("invalidationCondition") or ""),
@@ -4999,6 +5085,7 @@ def research_narrative_telegram_message(
             )
         else:
             decision_change_rows.append(row)
+    decision_change_rows = _dedupe_decision_change_rows(decision_change_rows, 2)
     catalysts = [
         row for row in _distinct_message_rows(catalysts, 2)
         if not any(_same_message_claim(row, existing) for existing in follow_up_rows)

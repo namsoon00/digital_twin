@@ -325,13 +325,73 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assertIn("🧩 TypeDB 추론 · 스트래티지 · 벤치마크 민감도 변화", typedb_message)
         self.assertIn("이번 추론 계기", typedb_message)
         self.assertIn("새 관측값은 가격 변화율 +2.4%입니다.", typedb_message)
-        self.assertIn("새로 확인한 관계", typedb_message)
+        self.assertIn("관계 변화", typedb_message)
         self.assertIn("시장 민감도(베타)는 1.34이며, 성립 기준은 1.2 이상입니다.", typedb_message)
         self.assertIn("현재가 $132.38", typedb_message)
         self.assertIn("평균 대비 &lt;0.01배", typedb_message)
         self.assertNotIn("AI 투자", typedb_message)
         self.assertEqual(PUBLISH_TYPEDB, observation.inference_dispatch_decision.route)
         self.assertEqual(HANDOFF_AI, actionable.inference_dispatch_decision.route)
+
+        policy_context = context_observation(observation)
+        policy_context["displayTarget"] = "스트래티지 / MSTR"
+        policy_context["notificationDecisionOwner"] = "typedb"
+        policy_rule = {
+            "ruleId": "graph.notification.profit_policy_threshold.v1",
+            "label": "스트래티지 · 계정 수익 보호선 도달 -> 수익 보호 알림 후보",
+            "matched": True,
+            "matchedConditions": [{
+                "field": "profitLossRate",
+                "operator": ">=",
+                "observedValue": 47.8,
+                "ruleConditionShape": {
+                    "field": "profitLossRate",
+                    "operator": ">=",
+                    "value": {"field": "strategyProfitProtectionPct", "default": 12},
+                },
+            }],
+        }
+        policy_context["ontologyRelationContext"]["activeRules"].append(policy_rule)
+        policy_context["ontologyRelationContext"]["facts"].update({
+            "profitLossRate": 47.8,
+            "strategyProfitProtectionPct": 25,
+        })
+        policy_context["inferenceDispatchDecision"] = {
+            "route": PUBLISH_TYPEDB,
+            "details": {
+                "semanticDeliveryDecision": {
+                    "notificationIntentRuleIds": [policy_rule["ruleId"]],
+                },
+            },
+        }
+        policy_context["reasoningDeliveryTrigger"] = {
+            "material": True,
+            "userObservable": True,
+            "facts": {
+                "confirmedSignalTransitions": [{
+                    "signalId": "price",
+                    "observedValue": 0.8033,
+                    "toState": "positive",
+                }],
+            },
+            "matchedConditions": ["price-move"],
+            "reasons": ["price-move"],
+        }
+        policy_context["relationLifecycleTransition"] = {
+            "transitions": [{
+                "currentState": "strengthened",
+                "materialChange": True,
+                "record": {"snapshot": {"sourceRuleIds": [policy_rule["ruleId"]]}},
+            }],
+        }
+        policy_message = execution_telegram_message(
+            policy_context,
+            NotificationAIValidatedResponse(action="NO_ACTION"),
+        )
+        self.assertIn("계정 수익 보호선 도달", policy_message)
+        self.assertIn("가격이 직전 확인 기준보다 +0.8% 변해", policy_message)
+        self.assertIn("수익률은 +47.8%이며, 성립 기준은 +25.0% 이상", policy_message)
+        self.assertNotIn("price-move", policy_message)
 
         crypto_context = context_observation(observation)
         crypto_context["displayTarget"] = "이더리움 / ETH"

@@ -16118,6 +16118,9 @@
     var detail = row.subjectDecisionCase || {};
     var hypotheses = Array.isArray(detail.hypotheses) ? detail.hypotheses : [];
     var candidate = decisionActionMeta(detail.candidateAction, detail.candidateAction);
+    var dispatch = detail.dispatch || {};
+    var dispatchLabel = dispatch.label || "연결 경로 미기록";
+    var dispatchReason = dispatch.deliveryReason || dispatch.reason || "과거 추론 기록에는 후속 처리 경로가 저장되지 않았습니다.";
     var hypothesisBody = hypotheses.length ? '<div class="oa-assurance-groups"><section class="oa-assurance-group"><header><div><strong>경쟁 가설</strong><p>같은 TypeDB 세대에서 성립한 대안을 비교합니다.</p></div><span>' + escapeHtml(hypotheses.length) + '개</span></header><div>' + hypotheses.map(function (item) {
       var rules = Array.isArray(item.supportingRuleIds) ? item.supportingRuleIds : [];
       var evidence = Array.isArray(item.supportingEvidenceIds) ? item.supportingEvidenceIds : [];
@@ -16135,7 +16138,8 @@
     var gaps = Array.isArray(detail.missingData) ? detail.missingData : [];
     var body = [
       '<section class="oa-assurance-context"><span>TYPE DB SUBJECT CASE</span><strong>' + escapeHtml(row.name || row.symbol) + ' · ' + escapeHtml(candidate.label) + '</strong><p>' + escapeHtml(row.reason || "TypeDB 관계와 가설 후보를 확인합니다.") + '</p></section>',
-      '<div class="oa-console-metrics"><article><span>현재 단계</span><strong>' + escapeHtml(detail.stage || "-") + '</strong><em>AI·발송과 분리된 추론 상태</em></article><article><span>가설</span><strong>' + escapeHtml(hypotheses.length + "개") + '</strong><em>현재 세대 후보</em></article><article><span>허용 행동</span><strong>' + escapeHtml((detail.allowedActions || []).length + "개") + '</strong><em>' + escapeHtml((detail.allowedActions || []).join(", ") || "없음") + '</em></article><article><span>자료 공백</span><strong>' + escapeHtml(gaps.length + "개") + '</strong><em>행동 확정 제약</em></article></div>',
+      '<div class="oa-console-metrics"><article><span>현재 단계</span><strong>' + escapeHtml(detail.stage || "-") + '</strong><em>AI·발송과 분리된 추론 상태</em></article><article><span>연결 경로</span><strong>' + escapeHtml(dispatchLabel) + '</strong><em>' + escapeHtml(dispatch.deliveryState || "not-requested") + '</em></article><article><span>가설</span><strong>' + escapeHtml(hypotheses.length + "개") + '</strong><em>현재 세대 후보</em></article><article><span>허용 행동</span><strong>' + escapeHtml((detail.allowedActions || []).length + "개") + '</strong><em>' + escapeHtml((detail.allowedActions || []).join(", ") || "없음") + '</em></article><article><span>자료 공백</span><strong>' + escapeHtml(gaps.length + "개") + '</strong><em>행동 확정 제약</em></article></div>',
+      '<section class="oa-assurance-context"><span>TYPE DB OUTPUT ROUTE</span><strong>' + escapeHtml(dispatchLabel) + '</strong><p>' + escapeHtml(dispatchReason) + '</p></section>',
       hypothesisBody,
       renderSubjectDecisionAIInsight(detail),
       '<section class="oa-assurance-context"><span>NEXT VALIDATION</span><strong>다음 판단에서 확인할 조건</strong><p>' + escapeHtml(checks.join(" · ") || "다음 사실 변경에서 동일 가설과 반대 근거를 다시 비교합니다.") + '</p></section>',

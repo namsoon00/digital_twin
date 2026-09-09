@@ -977,7 +977,31 @@ def add_hypothesis_calibration_concepts(
             continue
         latest = sorted(outcomes, key=lambda item: str(item.get("observedAt") or ""))[-1]
         status = str(latest.get("selectedHypothesisStatus") or "")
-        template_id = str(selected.get("templateId") or "").strip()
+        claim_contract = (
+            selected.get("claimContract")
+            if isinstance(selected.get("claimContract"), dict)
+            else {}
+        )
+        claim_contract_id = str(
+            selected.get("claimContractId")
+            or claim_contract.get("claimContractId")
+            or episode_contract.get("claimContractId")
+            or episode_contract.get("hypothesisContractId")
+            or ""
+        ).strip()
+        family_id = str(selected.get("familyId") or "").strip()
+        template_id = str(
+            selected.get("templateId")
+            or family_id
+            or claim_contract_id
+            or ""
+        ).strip()
+        calibration_identity = claim_contract_id or family_id or template_id
+        calibration_identity_type = (
+            "claim-contract" if claim_contract_id
+            else "family" if family_id
+            else "template"
+        )
         episode_id = str(episode.get("episodeId") or "").strip()
         latest_payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
         latest_adjusted_return = action_adjusted_return(
@@ -985,13 +1009,17 @@ def add_hypothesis_calibration_concepts(
             number(latest.get("priceChangeFromDecisionPct")),
         )
         independence_key = str(latest_payload.get("accountIndependenceKey") or episode_id).strip()
-        if not episode_id or not template_id or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
+        if not episode_id or not calibration_identity or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
             continue
-        scope_key = symbol + "|" + template_id
+        scope_key = symbol + "|" + calibration_identity_type + "|" + calibration_identity
         row = grouped.setdefault(scope_key, {
             "symbol": symbol,
             "subjectName": str(episode.get("subjectName") or symbol),
             "templateId": template_id,
+            "familyId": family_id,
+            "claimContractId": claim_contract_id,
+            "calibrationIdentity": calibration_identity,
+            "calibrationIdentityType": calibration_identity_type,
             "templateLabel": str(selected.get("templateLabel") or template_id),
             "episodeOutcomes": {},
             "episodeHorizonOutcomes": {},
@@ -1063,12 +1091,18 @@ def add_hypothesis_calibration_concepts(
             for per_episode in row["episodeHorizonOutcomes"].values()
             for outcome in per_episode.values()
         ]
-        calibration_id = add_entity(graph, "hypothesis-calibration", symbol + "|" + template_id, str(row["subjectName"]) + " " + str(row["templateLabel"]) + " 결과 보정", {
+        calibration_identity = str(row["calibrationIdentity"])
+        calibration_identity_type = str(row["calibrationIdentityType"])
+        calibration_id = add_entity(graph, "hypothesis-calibration", symbol + "|" + calibration_identity_type + "|" + calibration_identity, str(row["subjectName"]) + " " + str(row["templateLabel"]) + " 결과 보정", {
             "tboxClass": "HypothesisCalibration",
             "calibrationScope": "account-symbol-template",
             "accountId": portfolio_id,
             "symbol": symbol,
             "templateId": template_id,
+            "familyId": str(row.get("familyId") or ""),
+            "claimContractId": str(row.get("claimContractId") or ""),
+            "calibrationIdentity": calibration_identity,
+            "calibrationIdentityType": calibration_identity_type,
             "templateLabel": str(row["templateLabel"]),
             "independentEpisodeCount": independent_count,
             "decisiveOutcomeCount": decisive_count,

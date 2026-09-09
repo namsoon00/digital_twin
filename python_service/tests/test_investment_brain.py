@@ -19,6 +19,10 @@ from digital_twin.domain.investment_brain import (
 )
 from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
 from digital_twin.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
+from digital_twin.domain.hypothesis_calibration import (
+    attach_abox_hypothesis_calibrations,
+    hypothesis_calibration_snapshot_from_abox_rows,
+)
 from digital_twin.domain.decision_performance import (
     contradiction_learning_candidates,
     evaluate_decision_performance,
@@ -1276,6 +1280,18 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(1, calibration.properties["contradictedCount"])
         self.assertEqual("usable", calibration.properties["calibrationStatus"])
         self.assertFalse(calibration.properties["automaticDeployment"])
+        self.assertEqual(
+            selected["claimContract"]["claimContractId"],
+            calibration.properties["calibrationIdentity"],
+        )
+        self.assertEqual(
+            "claim-contract",
+            calibration.properties["calibrationIdentityType"],
+        )
+        self.assertEqual(
+            selected["familyId"],
+            calibration.properties["familyId"],
+        )
         template_id = calibration.properties["templateId"]
         self.assertEqual(len(episodes), len([
             item for item in graph.entities
@@ -1369,6 +1385,66 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(["decision-episode:episode-current"], [item.entity_id for item in decision_episodes])
         self.assertEqual(3, calibration.properties["independentEpisodeCount"])
         self.assertEqual("usable", calibration.properties["calibrationStatus"])
+
+    def test_abox_calibration_qualifies_current_hypothesis_by_stable_claim_identity(self):
+        brain = hypothesis_set_from_relation_context(relation_context())
+        hypothesis = brain["hypothesisSet"]["hypotheses"][0]
+        claim_id = hypothesis["claimContract"]["claimContractId"]
+        snapshot_id = "abox-manifest:stable-claim"
+        snapshot = hypothesis_calibration_snapshot_from_abox_rows(
+            [{
+                "id": "hypothesis-calibration:stable-claim",
+                "kind": "hypothesis-calibration",
+                "tboxClass": "HypothesisCalibration",
+                "symbol": "005930",
+                "templateId": "hypothesis-family:historical-shape",
+                "familyId": "hypothesis-family:historical-shape",
+                "claimContractId": claim_id,
+                "calibrationIdentity": claim_id,
+                "calibrationIdentityType": "claim-contract",
+                "aboxSnapshotId": snapshot_id,
+                "decisiveOutcomeCount": 4,
+                "independentEpisodeCount": 5,
+                "corroboratedCount": 1,
+                "contradictedCount": 3,
+                "inconclusiveCount": 1,
+                "directionalHitRate": 0.25,
+                "directionalHitRateConfidence95": {
+                    "lower": 0.045587,
+                    "upper": 0.699358,
+                },
+                "averageActionAdjustedReturnPct": -0.1562,
+                "actionReturnState": "negative",
+                "latestObservedAt": "2026-08-31T01:00:00Z",
+                "calibrationStatus": "usable",
+            }],
+            symbols=["005930"],
+            source_abox_snapshot_id=snapshot_id,
+            generation_aligned=True,
+        )
+
+        enriched = attach_abox_hypothesis_calibrations(
+            brain,
+            snapshot,
+            subject_symbol="005930",
+            inference_generation_id="generation-current",
+            inference_generation_at="2026-09-01T01:00:00Z",
+            source_abox_snapshot_id=snapshot_id,
+            generation_aligned=True,
+        )
+
+        calibrated = enriched["hypothesisSet"]["hypotheses"][0]
+        self.assertEqual("applied", enriched["hypothesisCalibration"]["status"])
+        self.assertEqual("observed", calibrated["qualification"]["status"])
+        self.assertEqual(4, calibrated["qualification"]["decisiveOutcomeCount"])
+        self.assertEqual(
+            "claim-contract",
+            calibrated["historicalCalibration"]["matchedIdentityType"],
+        )
+        self.assertEqual(
+            claim_id,
+            calibrated["historicalCalibration"]["matchedIdentity"],
+        )
 
 
 if __name__ == "__main__":

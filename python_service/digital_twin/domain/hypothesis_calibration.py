@@ -147,15 +147,14 @@ def attach_abox_hypothesis_calibrations(
         enriched["hypothesisCalibration"] = context
         return enriched
 
-    by_template: Dict[str, Dict[str, object]] = {}
+    by_identity: Dict[tuple, List[Dict[str, object]]] = {}
     for raw in snapshot.get("calibrations") or []:
         item = dict(raw or {}) if isinstance(raw, dict) else {}
         if str(item.get("symbol") or "").upper().strip() != symbol:
             continue
-        template_id = str(item.get("templateId") or "").strip()
-        if not template_id or not calibration_is_not_after(item, inference_generation_at):
+        if not calibration_is_not_after(item, inference_generation_at):
             continue
-        by_template[template_id] = {
+        calibrated = {
             **item,
             "source": str(item.get("source") or context["source"]),
             "sourceAboxSnapshotId": expected_snapshot_id,
@@ -163,28 +162,60 @@ def attach_abox_hypothesis_calibrations(
             "decisionEligibility": "historical-review-only",
             "automaticDeployment": False,
         }
+        for identity_key in calibration_identity_keys(calibrated):
+            by_identity.setdefault(identity_key, []).append(calibrated)
 
     updated_hypotheses = []
     matched_template_ids: List[str] = []
+    matched_identities: List[Dict[str, str]] = []
+    matched_calibrations: List[Dict[str, object]] = []
     qualification_by_template: Dict[str, Dict[str, object]] = {}
     for hypothesis in hypotheses:
         template_id = str(hypothesis.get("templateId") or "").strip()
-        calibration = by_template.get(template_id)
+        calibration = None
+        matched_identity = None
+        for identity_key in hypothesis_identity_keys(hypothesis):
+            candidates = by_identity.get(identity_key) or []
+            if not candidates:
+                continue
+            calibration = sorted(
+                candidates,
+                key=lambda value: (
+                    str(value.get("latestObservedAt") or ""),
+                    str(value.get("calibrationId") or ""),
+                ),
+                reverse=True,
+            )[0]
+            matched_identity = identity_key
+            break
         if calibration:
-            hypothesis["historicalCalibration"] = calibration
+            historical_calibration = dict(calibration)
+            historical_calibration["matchedIdentityType"] = matched_identity[0]
+            historical_calibration["matchedIdentity"] = matched_identity[1]
+            hypothesis["historicalCalibration"] = historical_calibration
             claim_contract = RuleClaimContract.from_dict(hypothesis.get("claimContract"))
             if claim_contract.is_predictive and claim_contract.claim_contract_id:
                 qualification = hypothesis_qualification(claim_contract, calibration)
                 hypothesis["qualification"] = qualification
                 qualification_by_template[template_id] = qualification
             matched_template_ids.append(template_id)
+            matched_identities.append({
+                "type": matched_identity[0],
+                "id": matched_identity[1],
+            })
+            if not any(
+                str(item.get("calibrationId") or "") == str(calibration.get("calibrationId") or "")
+                for item in matched_calibrations
+            ):
+                matched_calibrations.append(calibration)
         updated_hypotheses.append(hypothesis)
     context.update({
         "status": "applied" if matched_template_ids else "no-exact-history",
         "reason": "" if matched_template_ids else "현재 종목과 같은 가설 템플릿의 검증 가능한 결과 기록이 없습니다.",
         "candidateCalibrationCount": len(matched_template_ids),
         "candidateTemplateIds": matched_template_ids,
-        "calibrations": [by_template[key] for key in matched_template_ids],
+        "matchedIdentities": matched_identities,
+        "calibrations": matched_calibrations,
     })
     updated_hypothesis_set = {
         **hypothesis_set,
@@ -222,9 +253,28 @@ def normalized_hypothesis_calibration_row(
         return {}
     symbol = str(payload.get("symbol") or "").upper().strip()
     template_id = str(payload.get("templateId") or "").strip()
+    family_id = str(payload.get("familyId") or "").strip()
+    claim_contract_id = str(payload.get("claimContractId") or "").strip()
+    calibration_identity = str(
+        payload.get("calibrationIdentity")
+        or claim_contract_id
+        or family_id
+        or template_id
+        or ""
+    ).strip()
+    calibration_identity_type = str(
+        payload.get("calibrationIdentityType")
+        or ("claim-contract" if claim_contract_id else "")
+        or ("family" if family_id or template_id.startswith("hypothesis-family:") else "")
+        or "template"
+    ).strip()
+    if not family_id and calibration_identity_type == "family":
+        family_id = calibration_identity
+    if not claim_contract_id and calibration_identity_type == "claim-contract":
+        claim_contract_id = calibration_identity
     row_snapshot_id = str(payload.get("aboxSnapshotId") or payload.get("snapshotId") or "").strip()
     snapshot_matches = row_snapshot_id == source_abox_snapshot_id
-    if not symbol or not template_id or (not snapshot_matches and not active_membership_verified):
+    if not symbol or not calibration_identity or (not snapshot_matches and not active_membership_verified):
         return {}
     decisive_count = positive_int(payload.get("decisiveOutcomeCount"))
     corroborated_count = positive_int(payload.get("corroboratedCount"))
@@ -234,8 +284,12 @@ def normalized_hypothesis_calibration_row(
     return {
         "calibrationId": str(payload.get("id") or ""),
         "symbol": symbol,
-        "templateId": template_id,
-        "templateLabel": str(payload.get("templateLabel") or template_id),
+        "templateId": template_id or calibration_identity,
+        "familyId": family_id,
+        "claimContractId": claim_contract_id,
+        "calibrationIdentity": calibration_identity,
+        "calibrationIdentityType": calibration_identity_type,
+        "templateLabel": str(payload.get("templateLabel") or template_id or calibration_identity),
         "calibrationStatus": str(payload.get("calibrationStatus") or "insufficient-history"),
         "outcomeState": str(payload.get("outcomeState") or "insufficient-history"),
         "reviewRecommendation": str(payload.get("reviewRecommendation") or "continue-observation"),
@@ -267,6 +321,48 @@ def normalized_hypothesis_calibration_row(
         "decisionEligibility": "historical-review-only",
         "automaticDeployment": False,
     }
+
+
+def calibration_identity_keys(calibration: Dict[str, object]) -> List[tuple]:
+    """Return typed identities carried by one materialized calibration fact."""
+
+    result: List[tuple] = []
+    explicit_type = str(calibration.get("calibrationIdentityType") or "").strip()
+    explicit_id = str(calibration.get("calibrationIdentity") or "").strip()
+    if explicit_type and explicit_id:
+        result.append((explicit_type, explicit_id))
+    for identity_type, field in (
+        ("claim-contract", "claimContractId"),
+        ("family", "familyId"),
+        ("template", "templateId"),
+    ):
+        identity = str(calibration.get(field) or "").strip()
+        key = (identity_type, identity)
+        if identity and key not in result:
+            result.append(key)
+    return result
+
+
+def hypothesis_identity_keys(hypothesis: Dict[str, object]) -> List[tuple]:
+    """Match only explicit, stable RuleBox or hypothesis-family identities."""
+
+    claim_contract = (
+        hypothesis.get("claimContract")
+        if isinstance(hypothesis.get("claimContract"), dict)
+        else {}
+    )
+    candidates = (
+        ("claim-contract", claim_contract.get("claimContractId")),
+        ("family", hypothesis.get("familyId")),
+        ("template", hypothesis.get("templateId")),
+    )
+    result: List[tuple] = []
+    for identity_type, raw_identity in candidates:
+        identity = str(raw_identity or "").strip()
+        key = (identity_type, identity)
+        if identity and key not in result:
+            result.append(key)
+    return result
 
 
 def flattened_row(row: Dict[str, object]) -> Dict[str, object]:

@@ -65,7 +65,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "v13-hypothesis-feedback-lineage",
+            "v14-stable-hypothesis-calibration-identity",
             PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
         )
         self.assertEqual(

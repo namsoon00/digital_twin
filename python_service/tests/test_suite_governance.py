@@ -83,7 +83,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Subject-scoped TBox/ABox/RuleBox lineage, AI replay isolation, and
         # persisted hypothesis-calibration links now protect the complete
         # graph-to-AI explanation boundary from silent relation loss.
-        self.assertLessEqual(total, 981)
+        # Stable claim-identity calibration also proves that feedback reaches
+        # a current hypothesis after its transient family shape changes.
+        self.assertLessEqual(total, 982)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

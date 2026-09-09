@@ -322,6 +322,67 @@ class FinalAIDeliveryTests(unittest.TestCase):
             triggered_decision["authorizationSources"],
         )
 
+        triggered["ontologyRelationDiff"] = {
+            "material": False,
+            "decisionTransition": {
+                "kind": "initial",
+                "material": False,
+                "currentAction": "NO_ACTION",
+            },
+        }
+        triggered["contextObservationDeliveryDecision"] = triggered_decision
+        triggered["notificationDecisionOwner"] = "typedb"
+        triggered["notificationAiBypass"] = {"status": "typedb-direct"}
+        triggered["inferenceDispatchDecision"] = {
+            "route": "PUBLISH_TYPEDB",
+            "details": {"semanticDeliveryDecision": triggered_decision},
+        }
+        job = NotificationJob.create(
+            "검증된 시장 전환",
+            account_id="main",
+            message_type="investmentInsight",
+            context=triggered,
+        )
+        state_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(
+                job,
+                default_notification_rule("investmentInsight"),
+            ),
+            default_notification_rule("investmentInsight"),
+            sent_count=0,
+            previous_context={},
+            job=job,
+        )
+        self.assertTrue(state_decision.should_send)
+        self.assertEqual("new-condition", state_decision.state_decision)
+        self.assertNotEqual(
+            "initial_graph_baseline",
+            state_decision.suppression_reason,
+        )
+
+        triggered["reasoningDeliveryTrigger"]["materialRevisionKeys"] = []
+        unverified_job = NotificationJob.create(
+            "검증 식별자 없는 시장 전환",
+            account_id="main",
+            message_type="investmentInsight",
+            context=triggered,
+        )
+        unverified_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(
+                unverified_job,
+                default_notification_rule("investmentInsight"),
+            ),
+            default_notification_rule("investmentInsight"),
+            sent_count=0,
+            previous_context={},
+            job=unverified_job,
+        )
+        self.assertFalse(unverified_decision.should_send)
+        self.assertEqual(
+            "initial_graph_baseline",
+            unverified_decision.suppression_reason,
+        )
+
     def test_unchanged_graph_is_deferred_until_follow_up_conditions_are_loaded(self):
         self._assert_relation_lifecycle_observation_is_web_only_without_user_evidence()
         policy = NotificationAdmissionPolicy()

@@ -14,6 +14,7 @@ from .notification_ai_delivery import (
     VERIFIED_MARKET_TRANSITION_TRIGGER_IDS,
     final_ai_insight_delivery_is_authorized,
     holding_review_baseline_is_deliverable,
+    verified_typedb_direct_delivery_authorization,
 )
 from .ontology_relation_delivery import (
     relation_delivery_diff,
@@ -1210,6 +1211,56 @@ def apply_state_cooldown_rule(
         )
         decision.state_suppressed = False
         decision.state_reason = reason
+        decision.similarity_bypassed = True
+        decision.similarity_bypass_reason = reason
+        decision.should_send = True
+        decision.delivery_state = "send"
+        decision.gate_state = "eligible"
+        decision.gate_reason = reason
+        decision.suppression_reason = ""
+        decision.reasons.append("상태 정책: " + reason)
+        return decision
+
+    verified_source_transition = verified_typedb_direct_delivery_authorization(
+        job_context
+    )
+    if verified_source_transition:
+        reason = str(
+            verified_source_transition.get("reason")
+            or "검증된 원천 데이터의 중요 조건 전환"
+        )
+        cadence_tier = str(
+            verified_source_transition.get("cadenceTier") or "material"
+        )
+        cadence_minutes = (
+            immediate_minutes if cadence_tier == "immediate" else material_minutes
+        )
+        if not delivery_cadence_allows(
+            decision,
+            cadence_tier,
+            cadence_minutes,
+            reason,
+        ):
+            return decision
+        decision.add_trigger(
+            "verified-source-transition",
+            "verified-market-transition",
+            "검증된 시장 조건 변화",
+            reason,
+            triggerCategory="market-transition",
+            customerVisible=True,
+            status="matched",
+            sourceRevisionKeys=list(
+                verified_source_transition.get("materialRevisionKeys") or []
+            ),
+        )
+        decision.state_decision = (
+            "new-condition"
+            if decision.state_recent_sent_count <= 0
+            else "verified-source-transition"
+        )
+        decision.state_reason = reason
+        decision.state_suppressed = False
         decision.similarity_bypassed = True
         decision.similarity_bypass_reason = reason
         decision.should_send = True

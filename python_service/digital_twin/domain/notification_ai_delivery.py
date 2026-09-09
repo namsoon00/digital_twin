@@ -83,6 +83,73 @@ def explicit_delivery_authorization(context: Mapping[str, object]) -> Dict[str, 
     }
 
 
+def verified_typedb_direct_delivery_authorization(
+    context: Mapping[str, object],
+) -> Dict[str, object]:
+    """Honor an auditable TypeDB source transition at final admission.
+
+    Reference-only TypeDB relations normally establish a silent first
+    baseline. A direct notification that already carries a verified,
+    user-observable source transition is different: suppressing it would
+    discard the concrete event that authorized the publication upstream.
+    Keep this fail-closed by requiring the direct TypeDB dispatch contract,
+    semantic send decision, immutable revision identity, and verified trigger
+    together.
+    """
+
+    payload = _mapping(context)
+    dispatch = _mapping(payload.get("inferenceDispatchDecision"))
+    details = _mapping(dispatch.get("details"))
+    semantic = _mapping(payload.get("contextObservationDeliveryDecision"))
+    if not semantic:
+        semantic = _mapping(details.get("semanticDeliveryDecision"))
+    trigger = _mapping(payload.get("reasoningDeliveryTrigger"))
+    if not trigger:
+        trigger = _mapping(semantic.get("reasoningDeliveryTrigger"))
+    bypass = _mapping(payload.get("notificationAiBypass"))
+    authorization_sources = {
+        _text(item)
+        for item in semantic.get("authorizationSources") or []
+        if _text(item)
+    }
+    revision_keys = [
+        _text(item)
+        for item in trigger.get("materialRevisionKeys") or []
+        if _text(item)
+    ]
+    if not (
+        _text(payload.get("notificationDecisionOwner")).lower() == "typedb"
+        and _text(bypass.get("status")).lower() == "typedb-direct"
+        and _text(dispatch.get("route")).upper() == "PUBLISH_TYPEDB"
+        and _text(semantic.get("decision")).lower() == "send"
+        and "verified-reasoning-trigger" in authorization_sources
+        and _text(trigger.get("status")).lower() == "verified-material-transition"
+        and trigger.get("material") is True
+        and trigger.get("userObservable") is True
+        and revision_keys
+    ):
+        return {}
+
+    matched_conditions = [
+        _text(item)
+        for item in trigger.get("matchedConditions") or []
+        if _text(item)
+    ]
+    immediate = any(
+        marker in condition
+        for condition in matched_conditions
+        for marker in ("direction-changed", "severity-escalated")
+    )
+    reasons = [_text(item) for item in trigger.get("reasons") or [] if _text(item)]
+    return {
+        "status": "authorized",
+        "reason": reasons[0] if reasons else _text(semantic.get("reason")),
+        "cadenceTier": "immediate" if immediate else "material",
+        "matchedConditions": matched_conditions,
+        "materialRevisionKeys": revision_keys,
+    }
+
+
 def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> bool:
     """Allow one useful first graph opinion without opening baseline floods.
 

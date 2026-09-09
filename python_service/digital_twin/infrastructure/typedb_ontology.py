@@ -13050,6 +13050,43 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             limit=limit,
         )
 
+    def hypothesis_calibration_snapshot_for_native_result(
+        self,
+        matched_graph: PortfolioOntology,
+        symbols: Iterable[str],
+        source_abox_snapshot_id: str,
+        generation_aligned: bool,
+        scoped_active_abox: bool,
+        limit: int = 40,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Load calibration from the complete active subject boundary.
+
+        Native materialization intentionally narrows ``matched_graph`` to the
+        facts used by matched RuleBox conditions. Calibration is historical
+        reasoning state rather than a direct rule premise, so a scoped ABox
+        must read that small entity class from active membership separately.
+        """
+        if scoped_active_abox:
+            return self.hypothesis_calibration_snapshot(
+                symbols,
+                limit,
+                world_id,
+                source_abox_snapshot_id=source_abox_snapshot_id,
+                generation_aligned=generation_aligned,
+            )
+        return hypothesis_calibration_snapshot_from_abox_rows(
+            [
+                row for row in self.rows_for_entities(matched_graph)
+                if str(row.get("kind") or "") == "hypothesis-calibration"
+                or str(row.get("tboxClass") or "") == "HypothesisCalibration"
+            ],
+            symbols=symbols,
+            source_abox_snapshot_id=source_abox_snapshot_id,
+            generation_aligned=generation_aligned,
+            limit=limit,
+        )
+
     def read_entity_rows_by_ids(self, ids: Iterable[str], boxes: Iterable[str] = None, world_id: str = "") -> List[Dict[str, object]]:
         clean_ids = sorted(set(str(item or "").strip() for item in ids or [] if str(item or "").strip()))
         if not clean_ids:
@@ -24690,21 +24727,17 @@ relation ontology-assertion,
             rule_target_symbols,
             inferencebox_limit,
         )
-        # ``inference_graph`` intentionally contains only materialized
-        # InferenceBox facts. The calibration facts remain in the exact ABox
-        # generation used for this run, so reuse that source graph here rather
-        # than treating an empty InferenceBox-only view as missing history.
-        inferencebox_payload["hypothesisCalibration"] = hypothesis_calibration_snapshot_from_abox_rows(
-            [
-                row for row in self.rows_for_entities(graph)
-                if str(row.get("kind") or "") == "hypothesis-calibration"
-                or str(row.get("tboxClass") or "") == "HypothesisCalibration"
-            ],
-            symbols=target_symbols,
-            source_abox_snapshot_id=str(runtime_rulebox_metadata.get("sourceAboxSnapshotId") or ""),
-            generation_aligned=source_generation_valid,
-            active_membership_verified=scoped_active_abox,
+        # The materialization graph contains only direct RuleBox premises.
+        # Historical calibration is active ABox state and needs its own bounded
+        # membership read so it reaches hypothesis comparison and the AI input.
+        inferencebox_payload["hypothesisCalibration"] = self.hypothesis_calibration_snapshot_for_native_result(
+            graph,
+            target_symbols,
+            str(runtime_rulebox_metadata.get("sourceAboxSnapshotId") or ""),
+            source_generation_valid,
+            scoped_active_abox,
             limit=min(40, inferencebox_limit),
+            world_id=world_id,
         )
         return {
             "configured": True,

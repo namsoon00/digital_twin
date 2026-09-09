@@ -87,7 +87,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # a current hypothesis after its transient family shape changes.
         # Hypothesis calibration scope ownership independently prevents a
         # claim-contract identifier from reclassifying reasoning state as evidence.
-        self.assertLessEqual(total, 983)
+        # Native matched-fact slicing also keeps a separate bounded read
+        # contract so historical calibration reaches current AI comparison.
+        self.assertLessEqual(total, 984)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

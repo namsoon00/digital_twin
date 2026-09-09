@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin.application.ai_inference_queue_service import (
@@ -95,6 +96,26 @@ class RecordingDecisionStore:
 
 
 class AIInferenceQueueTests(unittest.TestCase):
+    def test_max_reasoning_model_gets_a_long_enough_execution_watchdog(self):
+        runner = AIInferenceQueueRunner(
+            None,
+            None,
+            {"notificationAiAttemptWatchdogSeconds": "300"},
+        )
+
+        self.assertEqual(
+            900,
+            runner.effective_attempt_watchdog_seconds(
+                SimpleNamespace(model="gpt-5.6-sol", reasoning_effort="max")
+            ),
+        )
+        self.assertEqual(
+            300,
+            runner.effective_attempt_watchdog_seconds(
+                SimpleNamespace(model="gpt-5.6-sol", reasoning_effort="high")
+            ),
+        )
+
     def create_detached_request(self, subject_case_id="subject:detached:1"):
         job = NotificationJob.create(
             "detached AI insight draft",
@@ -828,10 +849,10 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(request.request_id, prompt_audit["requestId"])
         self.assertEqual("gpt-5.6-sol", prompt_audit["model"])
         self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는"))
-        self.assertEqual("investment-ai-decision-brief-v5", prompt_audit["decisionBriefVersion"])
-        self.assertEqual("investment-ai-decision-core-v2", prompt_audit["decisionCore"]["schemaVersion"])
-        self.assertEqual("notification-ai-context-route-v3", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v15", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
+        self.assertEqual("investment-ai-decision-core-v3", prompt_audit["decisionCore"]["schemaVersion"])
+        self.assertEqual("notification-ai-context-route-v4", prompt_audit["contextRouting"]["version"])
+        self.assertEqual("investment-ai-judge-v16", prompt_audit["promptRelease"]["version"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])

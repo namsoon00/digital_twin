@@ -48,6 +48,48 @@ SOURCE_FACT_FIELD_TYPES = {
     "bidaskimbalance": {"OrderBook"},
 }
 
+# These properties explain how a governed model signal was produced. They are
+# bounded scalar/list fields, not the full model packet, and must survive the
+# compact inference proof so the web read model and AI prompt can show the same
+# ABox -> model -> RuleBox lineage.
+LINEAGE_TARGET_PROPERTY_KEYS = {
+    "symbol",
+    "signalType",
+    "signalFamily",
+    "hypothesisContractId",
+    "hypothesisFamilyId",
+    "releaseId",
+    "sourceFeatureSnapshotId",
+    "modelEvidenceIds",
+    "score",
+    "strengthBand",
+    "confidence",
+    "contractMatched",
+    "validationStatus",
+    "decisionEligibility",
+    "eligibilityStatus",
+    "knowledgeCutoffAt",
+    "marketSession",
+    "sourceAgeSeconds",
+    "freshnessCompatible",
+    "priceReturn",
+    "currentPrice",
+    "recentReturn",
+    "velocityChange",
+    "realizedVolatility",
+    "slopeRatio",
+    "drawdown",
+    "rebound",
+    "ma20Distance",
+    "ma60Distance",
+    "latestSmartMoneyVolumeRatio",
+    "meanSmartMoneyVolumeRatio",
+    "flowSignPersistence",
+    "tradeStrength",
+    "bidAskImbalance",
+    "volumeRatio",
+}
+
 
 def _condition_source_fact_ids(
     stock_properties: Mapping[str, object],
@@ -655,9 +697,14 @@ def grounded_inference_context(
                     target_properties.setdefault("observationRelationType", relation.relation_type)
                     observed_value = evidence_observed_value(target, condition)
                     item.update(observation_metadata(target_properties or {}, observed_value))
+                    matched_property_keys = set(
+                        str(key)
+                        for key in (getattr(condition, "target_property_filters", {}) or {}).keys()
+                    )
+                    matched_property_keys.update(LINEAGE_TARGET_PROPERTY_KEYS)
                     matched_properties = {
                         str(key): target_properties.get(str(key))
-                        for key in (getattr(condition, "target_property_filters", {}) or {}).keys()
+                        for key in matched_property_keys
                         if target_properties.get(str(key)) not in (None, "")
                     }
                     if matched_properties:

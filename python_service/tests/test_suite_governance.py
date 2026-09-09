@@ -80,7 +80,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Exact TypeDB evidence assertions, admissible-action comparison, and
         # fingerprinted multi-horizon outcome replay add independent fail-closed
         # coverage for the inference-to-learning boundary.
-        self.assertLessEqual(total, 975)
+        # Subject-scoped TBox/ABox/RuleBox lineage, AI replay isolation, and
+        # persisted hypothesis-calibration links now protect the complete
+        # graph-to-AI explanation boundary from silent relation loss.
+        self.assertLessEqual(total, 981)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

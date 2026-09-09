@@ -361,6 +361,32 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertFalse(projected["currentGeneration"])
         self.assertIn("이전", projected["reason"])
 
+        fallback = InvestmentCaseQueryService._ai_insight_projection(
+            {
+                "subjectCaseId": "subject:current",
+                "stage": "AI_COMPLETED",
+                "inferenceGenerationId": "generation:current",
+                "candidateSet": {"fingerprint": "candidate:current"},
+            },
+            {
+                "episodeId": "ai-insight:fallback",
+                "subjectCaseId": "subject:current",
+                "inferenceGenerationId": "generation:current",
+                "candidateFingerprint": "candidate:current",
+                "publicationMode": "typedb-fallback",
+                "aiAuthored": False,
+                "publicationContractPassed": False,
+                "contractFailureCode": "prompt-contract-budget",
+                "insight": {"summary": "TypeDB 추론만 보존했습니다."},
+            },
+        )
+
+        self.assertEqual("fallback", fallback["status"])
+        self.assertFalse(fallback["aiAuthored"])
+        self.assertFalse(fallback["publicationContractPassed"])
+        self.assertEqual("prompt-contract-budget", fallback["contractFailureCode"])
+        self.assertIn("TypeDB", fallback["reason"])
+
     def test_subject_case_explains_rule_gap_without_requesting_user_action(self):
         subject_case = {
             "subjectCaseId": "subject:coverage-gap",

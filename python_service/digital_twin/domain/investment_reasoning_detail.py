@@ -9,6 +9,7 @@ the current graph generation.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from typing import Dict, Iterable, List, Mapping, Optional
@@ -641,5 +642,813 @@ def reasoning_detail_from_episode(
             "rules": len(rules),
             "traces": len(traces),
             "hypotheses": len(hypotheses),
+        },
+    }
+
+
+SUBJECT_REASONING_LINEAGE_VERSION = "subject-reasoning-lineage-v1"
+
+
+def _first(item: Mapping[str, object], *keys: str, default=None):
+    for key in keys:
+        if key in item and item.get(key) not in (None, ""):
+            return item.get(key)
+    return default
+
+
+def _stable_suffix(value: object, length: int = 20) -> str:
+    encoded = json.dumps(
+        _safe_value(value),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:length]
+
+
+def _subject_trace_symbol(trace_id: object) -> str:
+    match = re.match(r"^inference-trace:([^:]+):", _text(trace_id), re.IGNORECASE)
+    return match.group(1).upper() if match else ""
+
+
+def _identifier_mentions_symbol(identifier: object, symbol: str) -> bool:
+    value = _text(identifier).upper()
+    normalized = _text(symbol).upper()
+    return bool(normalized and re.search(r"(?:^|:)" + re.escape(normalized) + r"(?:[:]|$)", value))
+
+
+def _subject_evaluation_state(
+    evaluation: Mapping[str, object],
+    *,
+    account_id: str,
+    symbol: str,
+    source_abox_snapshot_id: str,
+    inference_generation_id: str,
+) -> tuple[str, str]:
+    """Return included, foreign, or invalid for one frozen batch proof."""
+
+    proof = _mapping(evaluation.get("proof") or evaluation.get("matchProof"))
+    evaluation_account = _text(_first(evaluation, "account_id", "accountId")) or "default"
+    evaluation_snapshot = _text(_first(evaluation, "source_abox_snapshot_id", "sourceAboxSnapshotId"))
+    evaluation_generation = _text(_first(evaluation, "inference_generation_id", "inferenceGenerationId"))
+    expected_account = _text(account_id) or "default"
+    if evaluation_account != expected_account:
+        return "invalid", "account-id-mismatch"
+    if source_abox_snapshot_id and evaluation_snapshot != source_abox_snapshot_id:
+        return "invalid", "source-abox-snapshot-id-mismatch"
+    if inference_generation_id and evaluation_generation != inference_generation_id:
+        return "invalid", "inference-generation-id-mismatch"
+
+    trace_id = _text(_first(proof, "trace_id", "traceId", "id"))
+    trace_symbol = _subject_trace_symbol(trace_id)
+    if trace_symbol:
+        return ("included", "trace-symbol-match") if trace_symbol == symbol else ("foreign", "trace-symbol-mismatch")
+    proof_subject = _text(_first(proof, "subject_id", "subjectId", "sourceId")).upper()
+    if proof_subject:
+        return ("included", "proof-subject-match") if proof_subject == symbol else ("foreign", "proof-subject-mismatch")
+    target_ids = [
+        _first(_mapping(condition), "target_id", "targetId")
+        for condition in proof.get("conditions") or proof.get("matchedConditions") or []
+        if isinstance(condition, Mapping)
+    ]
+    target_ids = [value for value in target_ids if _text(value)]
+    if target_ids:
+        return (
+            ("included", "condition-target-match")
+            if any(_identifier_mentions_symbol(value, symbol) for value in target_ids)
+            else ("foreign", "condition-target-mismatch")
+        )
+    return "invalid", "subject-lineage-unverifiable"
+
+
+def _subject_hypothesis_row(
+    item: Mapping[str, object],
+    *,
+    selected_hypothesis_id: str,
+    selected_rule_id: str,
+    observations: Iterable[Mapping[str, object]],
+) -> Dict[str, object]:
+    hypothesis_id = _text(_first(item, "hypothesis_id", "hypothesisId", "id"))
+    support_rules = _unique(_rows(_first(item, "supporting_rule_ids", "supportingRuleIds", default=[])), 50)
+    counter_rules = _unique(_rows(_first(item, "counter_rule_ids", "counterRuleIds", default=[])), 50)
+    support_evidence = _unique(_rows(_first(item, "supporting_evidence_ids", "supportingEvidenceIds", default=[])), 100)
+    counter_evidence = _unique(_rows(_first(item, "counter_evidence_ids", "counterEvidenceIds", default=[])), 100)
+    trace_ids = _unique(_rows(_first(item, "causal_trace_ids", "causalTraceIds", "causal_path_ids", "causalPathIds", default=[])), 50)
+    knowledge = _mapping(_first(item, "knowledge_basis", "knowledgeBasis", default={}))
+    contract = _mapping(_first(item, "claim_contract", "claimContract", default={}))
+    qualification = _mapping(item.get("qualification"))
+    claim_contract_id = _text(_first(contract, "claimContractId", "claim_contract_id"))
+    matched_observations = [
+        _mapping(row)
+        for row in observations or []
+        if isinstance(row, Mapping)
+        and (
+            (claim_contract_id and _text(_first(row, "claimContractId", "claim_contract_id")) == claim_contract_id)
+            or _text(_first(row, "hypothesisId", "hypothesis_id")) == hypothesis_id
+        )
+    ]
+    compact_observations = [{
+        "episodeId": _text(_first(row, "episodeId", "episode_id")),
+        "candidateSetId": _text(_first(row, "candidateSetId", "candidate_set_id")),
+        "hypothesisId": _text(_first(row, "hypothesisId", "hypothesis_id")),
+        "claimContractId": _text(_first(row, "claimContractId", "claim_contract_id")),
+        "sourceAboxSnapshotId": _text(_first(row, "sourceAboxSnapshotId", "source_abox_snapshot_id")),
+        "inferenceGenerationId": _text(_first(row, "inferenceGenerationId", "inference_generation_id")),
+        "observedFromAt": _text(_first(row, "observedFromAt", "observed_from_at")),
+        "independenceBucket": _text(_first(row, "independenceBucket", "independence_bucket")),
+        "candidateAction": _text(_first(row, "candidateAction", "candidate_action")).upper(),
+        "status": _text(row.get("status")),
+    } for row in matched_observations]
+    ai_selected = bool(selected_hypothesis_id and hypothesis_id == selected_hypothesis_id)
+    typedb_leading = bool(not selected_hypothesis_id and selected_rule_id in support_rules)
+    label = _text(_first(item, "template_label", "templateLabel", "label")) or _human_identifier(support_rules[0] if support_rules else hypothesis_id)
+    claim = _text(item.get("claim")) or label
+    return {
+        "id": hypothesis_id,
+        "label": label,
+        "title": label,
+        "claim": claim,
+        "stance": _text(item.get("stance")) or "context",
+        "horizon": _text(item.get("horizon")) or "multi-horizon",
+        "state": _text(_first(item, "evidence_state", "evidenceState")) or "unresolved",
+        "stateLabel": _text(_first(item, "evidence_state_label", "evidenceStateLabel")) or "확인 중",
+        "verificationStatus": _text(_first(item, "verification_status", "verificationStatus")),
+        "selected": ai_selected or typedb_leading,
+        "selectionSource": "ai" if ai_selected else "typedb-synthesis" if typedb_leading else "alternative",
+        "candidateAction": _text(_first(item, "candidate_action", "candidateAction")).upper(),
+        "supportingRuleIds": support_rules,
+        "counterRuleIds": counter_rules,
+        "ruleIds": _unique([*support_rules, *counter_rules], 100),
+        "supportingEvidenceIds": support_evidence,
+        "counterEvidenceIds": counter_evidence,
+        "supportCount": len(support_evidence),
+        "counterCount": len(counter_evidence),
+        "traceIds": trace_ids,
+        "relationIds": trace_ids,
+        "assumptions": _unique(_rows(item.get("assumptions")), 20),
+        "invalidationConditions": _unique(_rows(_first(item, "invalidation_conditions", "invalidationConditions", default=[])), 20),
+        "decisionEligibility": _text(knowledge.get("decisionEligibility") or contract.get("decisionAuthority")),
+        "knowledgeBasis": _safe_value(knowledge),
+        "plainLanguageBasis": _text(knowledge.get("plainLanguageBasis")),
+        "claimContract": _safe_value(contract),
+        "claimContractId": claim_contract_id,
+        "qualification": _safe_value(qualification),
+        "observationState": {
+            "status": _text(matched_observations[0].get("status")) if matched_observations else "not-linked",
+            "sampleCount": len(matched_observations),
+            "episodes": compact_observations[:8],
+        },
+    }
+
+
+def _subject_condition_row(
+    condition: Mapping[str, object],
+    *,
+    rule_id: str,
+    trace_id: str,
+    proof_id: str,
+    evidence_role: str,
+) -> Dict[str, object]:
+    condition_id = _text(_first(condition, "condition_id", "conditionId", "id"))
+    field = _text(condition.get("field"))
+    relation_type = _text(_first(condition, "relation_type", "relationType"))
+    observed = _first(condition, "observed_value", "observedValue")
+    target_properties = _mapping(_first(condition, "target_properties", "targetProperties", "matchedTargetProperties", default={}))
+    source_properties = _mapping(_first(condition, "source_properties", "sourceProperties", "matchedSourceProperties", default={}))
+    if not target_properties and isinstance(observed, Mapping):
+        target_properties = dict(observed)
+    source_fact_ids = _unique(_rows(_first(condition, "source_fact_ids", "sourceFactIds", default=[])), 64)
+    evidence_ids = _unique([
+        *_rows(_first(condition, "evidence_ids", "evidenceIds", default=[])),
+        *source_fact_ids,
+    ], 100)
+    target_id = _text(_first(condition, "target_id", "targetId"))
+    label = (
+        FACT_LABELS.get(field)
+        or _text(target_properties.get("signalType"))
+        or _relation_type_label(relation_type)
+        or _human_identifier(condition_id)
+        or "성립 조건"
+    )
+    fact_identity = source_fact_ids[0] if source_fact_ids else target_id or (
+        "condition-fact:" + _stable_suffix([field, observed, relation_type, target_properties])
+    )
+    return {
+        "id": fact_identity,
+        "conditionId": condition_id,
+        "label": label,
+        "kind": "model-signal" if target_properties.get("releaseId") else _text(condition.get("kind")) or "fact",
+        "field": field,
+        "relationType": relation_type,
+        "role": evidence_role,
+        "observedValue": _safe_value(observed),
+        "expected": _expected_text({
+            "operator": condition.get("operator"),
+            "expectedValue": _first(condition, "expected_value", "expectedValue"),
+        }),
+        "result": _text(condition.get("result")) or "matched",
+        "source": _text(condition.get("source")),
+        "sourceUrl": _text(_first(condition, "source_url", "sourceUrl")),
+        "asOf": _text(_first(condition, "source_as_of", "sourceAsOf", "observedAt")),
+        "freshnessStatus": _text(_first(condition, "freshness", "freshnessStatus")),
+        "relationId": _text(_first(condition, "relation_id", "relationId")),
+        "targetId": target_id,
+        "targetKind": _text(_first(condition, "target_kind", "targetKind")),
+        "sourceProperties": _safe_value(source_properties),
+        "targetProperties": _safe_value(target_properties),
+        "sourceFactIds": source_fact_ids,
+        "evidenceIds": evidence_ids,
+        "proofId": proof_id,
+        "ruleIds": [rule_id],
+        "traceIds": [trace_id] if trace_id else [],
+    }
+
+
+def _merge_subject_fact(existing: Dict[str, object], current: Mapping[str, object]) -> Dict[str, object]:
+    if not existing:
+        return dict(current)
+    existing["ruleIds"] = _unique([*(existing.get("ruleIds") or []), *(current.get("ruleIds") or [])], 100)
+    existing["traceIds"] = _unique([*(existing.get("traceIds") or []), *(current.get("traceIds") or [])], 100)
+    existing["evidenceIds"] = _unique([*(existing.get("evidenceIds") or []), *(current.get("evidenceIds") or [])], 100)
+    if existing.get("role") != current.get("role"):
+        existing["role"] = "mixed"
+    return existing
+
+
+def subject_reasoning_lineage(
+    subject_case: Mapping[str, object],
+    reasoning_case: Mapping[str, object],
+    ai_insight_episode: Mapping[str, object] = None,
+    hypothesis_observations: Iterable[Mapping[str, object]] = (),
+) -> Dict[str, object]:
+    """Build one immutable subject path across TBox, ABox, rules, hypotheses and AI.
+
+    A reasoning batch can contain several securities. Every included proof must
+    therefore match the subject account, ABox snapshot, inference generation,
+    and trace subject. Anything else is excluded before it reaches either the
+    web detail or the AI prompt.
+    """
+
+    subject = _mapping(subject_case)
+    batch = _mapping(reasoning_case)
+    ai_episode = _mapping(ai_insight_episode)
+    candidate = _mapping(_first(subject, "candidate_set", "candidateSet", default={}))
+    synthesis = _mapping(subject.get("synthesis"))
+    final = _mapping(_first(subject, "final_decision", "finalDecision", default={}))
+    inference = _mapping(_first(batch, "inference_result", "inferenceResult", default={}))
+    release_manifest = _mapping(
+        _first(batch, "release_manifest", "releaseManifest", default={})
+    )
+    account_id = _text(_first(subject, "account_id", "accountId")) or "default"
+    symbol = _text(subject.get("symbol")).upper()
+    source_abox_snapshot_id = _text(_first(subject, "source_abox_snapshot_id", "sourceAboxSnapshotId"))
+    inference_generation_id = _text(_first(subject, "inference_generation_id", "inferenceGenerationId"))
+    selected_rule_id = _text(_first(synthesis, "selected_rule_id", "selectedRuleId"))
+    ai_insight = _mapping(ai_episode.get("insight"))
+    selected_hypothesis_id = _text(
+        _first(final, "selected_hypothesis_id", "selectedHypothesisId")
+        or _first(ai_insight, "selected_hypothesis_id", "selectedHypothesisId")
+    )
+    raw_hypotheses = [
+        _mapping(item)
+        for item in candidate.get("hypotheses") or []
+        if isinstance(item, Mapping)
+    ]
+    observations = [
+        _mapping(item)
+        for item in hypothesis_observations or []
+        if isinstance(item, Mapping)
+    ]
+    hypotheses = [
+        _subject_hypothesis_row(
+            item,
+            selected_hypothesis_id=selected_hypothesis_id,
+            selected_rule_id=selected_rule_id,
+            observations=observations,
+        )
+        for item in raw_hypotheses
+    ]
+    hypothesis_rules = {
+        rule_id
+        for item in hypotheses
+        for rule_id in item.get("ruleIds") or []
+    }
+    constraint_rule_ids = set(_unique([
+        *_rows(_first(synthesis, "portfolio_constraint_rule_ids", "portfolioConstraintRuleIds", default=[])),
+        *_rows(_first(synthesis, "execution_constraint_rule_ids", "executionConstraintRuleIds", default=[])),
+    ], 100))
+    quality_rule_ids = set(_unique(_rows(_first(synthesis, "data_quality_rule_ids", "dataQualityRuleIds", default=[])), 100))
+    relevant_rule_ids = set(hypothesis_rules) | constraint_rule_ids | quality_rule_ids
+    if selected_rule_id:
+        relevant_rule_ids.add(selected_rule_id)
+
+    issues: List[Dict[str, object]] = []
+    limitations: List[str] = []
+    identity_checks = {
+        "candidateAccountId": _text(_first(candidate, "account_id", "accountId")) or account_id,
+        "candidateSymbol": _text(candidate.get("symbol")).upper() or symbol,
+        "candidateAboxSnapshotId": _text(_first(candidate, "source_abox_snapshot_id", "sourceAboxSnapshotId")) or source_abox_snapshot_id,
+        "candidateInferenceGenerationId": _text(_first(candidate, "inference_generation_id", "inferenceGenerationId")) or inference_generation_id,
+        "synthesisAccountId": _text(_first(synthesis, "account_id", "accountId")) or account_id,
+        "synthesisSymbol": _text(synthesis.get("symbol")).upper() or symbol,
+        "synthesisAboxSnapshotId": _text(_first(synthesis, "source_abox_snapshot_id", "sourceAboxSnapshotId")) or source_abox_snapshot_id,
+        "synthesisInferenceGenerationId": _text(_first(synthesis, "inference_generation_id", "inferenceGenerationId")) or inference_generation_id,
+    }
+    expected_identity = {
+        "candidateAccountId": account_id,
+        "candidateSymbol": symbol,
+        "candidateAboxSnapshotId": source_abox_snapshot_id,
+        "candidateInferenceGenerationId": inference_generation_id,
+        "synthesisAccountId": account_id,
+        "synthesisSymbol": symbol,
+        "synthesisAboxSnapshotId": source_abox_snapshot_id,
+        "synthesisInferenceGenerationId": inference_generation_id,
+    }
+    for key, expected in expected_identity.items():
+        actual = identity_checks.get(key)
+        if expected and actual != expected:
+            issues.append({
+                "code": "LINEAGE_IDENTITY_MISMATCH",
+                "state": "blocked",
+                "detail": key + "가 현재 종목 추론 식별자와 일치하지 않습니다.",
+                "expected": expected,
+                "actual": actual,
+            })
+
+    included = []
+    foreign_count = 0
+    invalid_count = 0
+    for raw in inference.get("rule_evaluations") or inference.get("ruleEvaluations") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        evaluation = _mapping(raw)
+        rule_id = _text(_first(evaluation, "rule_id", "ruleId"))
+        if relevant_rule_ids and rule_id not in relevant_rule_ids:
+            continue
+        state, reason = _subject_evaluation_state(
+            evaluation,
+            account_id=account_id,
+            symbol=symbol,
+            source_abox_snapshot_id=source_abox_snapshot_id,
+            inference_generation_id=inference_generation_id,
+        )
+        if state == "foreign":
+            foreign_count += 1
+            continue
+        if state == "invalid":
+            invalid_count += 1
+            issues.append({
+                "code": "UNVERIFIABLE_RULE_PROOF",
+                "state": "warning",
+                "detail": rule_id + " 규칙 증거를 현재 종목에 안전하게 연결할 수 없습니다.",
+                "reason": reason,
+            })
+            continue
+        included.append(evaluation)
+
+    facts_by_id: Dict[str, Dict[str, object]] = {}
+    relations_by_id: Dict[str, Dict[str, object]] = {}
+    rules_by_id: Dict[str, Dict[str, object]] = {}
+    traces: List[Dict[str, object]] = []
+    for evaluation in included:
+        proof = _mapping(evaluation.get("proof") or evaluation.get("matchProof"))
+        rule_id = _text(_first(evaluation, "rule_id", "ruleId") or _first(proof, "rule_id", "ruleId"))
+        trace_id = _text(_first(proof, "trace_id", "traceId", "id"))
+        proof_id = _text(_first(proof, "proof_id", "proofId"))
+        if rule_id in constraint_rule_ids:
+            evidence_role = "constraint"
+        elif rule_id in quality_rule_ids:
+            evidence_role = "data-quality"
+        elif any(rule_id in item.get("counterRuleIds", []) for item in hypotheses):
+            evidence_role = "counter"
+        else:
+            evidence_role = "support"
+        related_hypotheses = [item for item in hypotheses if rule_id in item.get("ruleIds", [])]
+        condition_rows = []
+        for raw_condition in proof.get("conditions") or proof.get("matchedConditions") or []:
+            condition = _mapping(raw_condition)
+            if _text(condition.get("kind")) == "any-condition-group":
+                continue
+            row = _subject_condition_row(
+                condition,
+                rule_id=rule_id,
+                trace_id=trace_id,
+                proof_id=proof_id,
+                evidence_role=evidence_role,
+            )
+            observed = row.get("observedValue")
+            if observed in (None, "", {}, []) and not row.get("targetId"):
+                if _text(condition.get("role") or "required").lower() != "optional":
+                    limitations.append(
+                        rule_id + "의 " + (row.get("label") or row.get("conditionId")) + " 조건은 성립 표시만 있고 관측값 계보가 없습니다."
+                    )
+                continue
+            condition_rows.append(row)
+            fact_id = _text(row.get("id"))
+            facts_by_id[fact_id] = _merge_subject_fact(facts_by_id.get(fact_id, {}), row)
+            if row.get("relationType"):
+                relation_id = row.get("relationId") or (
+                    "proof-relation:" + _stable_suffix([proof_id, row.get("conditionId"), row.get("targetId")])
+                )
+                relations_by_id[relation_id] = {
+                    "id": relation_id,
+                    "type": row.get("relationType"),
+                    "label": row.get("label"),
+                    "source": symbol,
+                    "sourceLabel": symbol,
+                    "target": row.get("targetId"),
+                    "targetLabel": _text(_mapping(row.get("targetProperties")).get("signalType")) or _text(row.get("observedValue")) or row.get("targetId"),
+                    "ruleId": rule_id,
+                    "traceId": trace_id,
+                    "polarity": evidence_role,
+                    "dataState": _text(_mapping(row.get("targetProperties")).get("dataState")),
+                    "freshnessStatus": row.get("freshnessStatus"),
+                    "evidenceUsable": bool(evaluation.get("decision_eligible") or evaluation.get("decisionEligible")),
+                    "referenceOnly": not bool(evaluation.get("decision_eligible") or evaluation.get("decisionEligible")),
+                }
+        trace = {
+            "id": trace_id,
+            "proofId": proof_id,
+            "ruleId": rule_id,
+            "label": _human_identifier(rule_id),
+            "matched": bool(evaluation.get("matched", True)),
+            "selected": rule_id == selected_rule_id,
+            "decisionEligible": bool(evaluation.get("decision_eligible") or evaluation.get("decisionEligible")),
+            "dataState": "sufficient" if condition_rows else "partial",
+            "freshnessStatus": next((_text(item.get("freshnessStatus")) for item in condition_rows if _text(item.get("freshnessStatus"))), ""),
+            "evidenceUsable": bool(evaluation.get("decision_eligible") or evaluation.get("decisionEligible")),
+            "matchedConditionIds": [item.get("conditionId") for item in condition_rows],
+            "evidenceRelationIds": _unique(_rows(_first(proof, "evidence_ids", "evidenceIds", default=[])), 100),
+            "conditions": condition_rows,
+        }
+        traces.append(trace)
+        knowledge = next((_mapping(item.get("knowledgeBasis")) for item in related_hypotheses if item.get("knowledgeBasis")), {})
+        description = _text(knowledge.get("plainLanguageBasis")) or next((_text(item.get("claim")) for item in related_hypotheses), "")
+        rule = rules_by_id.setdefault(rule_id, {
+            "id": rule_id,
+            "label": _human_identifier(rule_id),
+            "description": description,
+            "evidenceRole": evidence_role,
+            "selected": rule_id == selected_rule_id,
+            "decisionEligible": bool(evaluation.get("decision_eligible") or evaluation.get("decisionEligible")),
+            "candidateAction": next((_text(item.get("candidateAction")) for item in related_hypotheses), ""),
+            "traceIds": [],
+            "relationIds": [],
+            "conditions": [],
+            "knowledgeBasis": _safe_value(knowledge),
+        })
+        rule["traceIds"] = _unique([*(rule.get("traceIds") or []), trace_id], 100)
+        rule["relationIds"] = _unique([
+            *(rule.get("relationIds") or []),
+            *(item["id"] for item in relations_by_id.values() if item.get("ruleId") == rule_id),
+        ], 100)
+        rule["conditions"] = [*(rule.get("conditions") or []), *condition_rows]
+
+    rules = list(rules_by_id.values())
+    facts = list(facts_by_id.values())
+    relations = list(relations_by_id.values())
+    proof_rule_ids = {item.get("id") for item in rules}
+    missing_rule_ids = sorted(rule_id for rule_id in hypothesis_rules if rule_id not in proof_rule_ids)
+    if missing_rule_ids:
+        issues.append({
+            "code": "HYPOTHESIS_RULE_PROOF_MISSING",
+            "state": "blocked" if selected_rule_id in missing_rule_ids else "warning",
+            "detail": "가설이 참조한 규칙 증거를 현재 종목의 저장 세대에서 찾지 못했습니다: " + ", ".join(missing_rule_ids[:6]),
+            "ruleIds": missing_rule_ids,
+        })
+    if selected_rule_id and selected_rule_id not in proof_rule_ids:
+        issues.append({
+            "code": "SELECTED_RULE_PROOF_MISSING",
+            "state": "blocked",
+            "detail": "선택 규칙의 관측 사실과 실행 trace가 없어 연결된 투자 설명으로 사용할 수 없습니다.",
+            "ruleId": selected_rule_id,
+        })
+    if limitations:
+        issues.append({
+            "code": "CONDITION_VALUE_LINEAGE_PARTIAL",
+            "state": "warning",
+            "detail": limitations[0],
+            "affectedCount": len(limitations),
+        })
+
+    publication_mode = _text(ai_episode.get("publicationMode"))
+    ai_authored = bool(ai_episode.get("aiAuthored"))
+    contract_passed = bool(ai_episode.get("publicationContractPassed"))
+    current_ai = bool(
+        ai_episode
+        and _text(ai_episode.get("subjectCaseId")) == _text(_first(subject, "subject_case_id", "subjectCaseId"))
+        and _text(ai_episode.get("inferenceGenerationId")) == inference_generation_id
+        and _text(ai_episode.get("candidateFingerprint")) == _text(candidate.get("fingerprint"))
+    )
+    ai_status = (
+        "ai-authored" if current_ai and ai_authored and contract_passed
+        else "typedb-fallback" if current_ai and publication_mode == "typedb-fallback"
+        else "contract-failed" if current_ai and ai_episode and not contract_passed
+        else "previous-generation" if ai_episode
+        else "not-run"
+    )
+    ai_summary = _text(ai_insight.get("summary") or ai_insight.get("investmentView"))
+    ai_action = _text(ai_insight.get("action")).upper() or "NO_ACTION"
+
+    scenarios = []
+    paths = []
+    for hypothesis in hypotheses:
+        rule_ids = set(hypothesis.get("ruleIds") or [])
+        path_facts = [item for item in facts if rule_ids.intersection(item.get("ruleIds") or [])]
+        path_relations = [item for item in relations if item.get("ruleId") in rule_ids]
+        path_rules = [item for item in rules if item.get("id") in rule_ids]
+        path_traces = [item for item in traces if item.get("ruleId") in rule_ids]
+        scenarios.append({
+            **hypothesis,
+            "ruleIds": list(hypothesis.get("ruleIds") or []),
+            "relationIds": [item.get("id") for item in path_relations],
+        })
+        paths.append({
+            "id": hypothesis.get("id") + ":lineage",
+            "title": hypothesis.get("title"),
+            "selected": bool(hypothesis.get("selected")),
+            "selectionSource": hypothesis.get("selectionSource"),
+            "eligibility": hypothesis.get("decisionEligibility") or "unknown",
+            "nodes": [
+                {"layer": "fact", "label": "ABox 관측 사실", "refIds": [item.get("id") for item in path_facts], "items": path_facts},
+                {"layer": "relation", "label": "ABox 관계", "refIds": [item.get("id") for item in path_relations], "items": path_relations},
+                {"layer": "rule", "label": "RuleBox 성립 규칙", "refIds": [item.get("id") for item in path_rules], "items": path_rules, "traces": path_traces},
+                {"layer": "hypothesis", "label": "검증 중인 투자 가설", "refIds": [hypothesis.get("id")], "items": [hypothesis]},
+                {
+                    "layer": "decision",
+                    "label": "AI 분석" if ai_status == "ai-authored" else "TypeDB 결과" if ai_status == "typedb-fallback" else "현재 판단 단계",
+                    "refIds": [_text(ai_episode.get("episodeId"))] if ai_episode else [],
+                    "items": [{
+                        "id": _text(ai_episode.get("episodeId")) or "ai-not-run",
+                        "label": ai_status,
+                        "reason": ai_summary or (
+                            "AI 모델 실행에 실패해 TypeDB 결과만 보존했습니다."
+                            if ai_status == "typedb-fallback"
+                            else "AI가 아직 이 추론 세대를 분석하지 않았습니다."
+                        ),
+                        "selectedHypothesisId": selected_hypothesis_id,
+                        "action": ai_action,
+                        "publicationMode": publication_mode,
+                        "aiAuthored": ai_authored,
+                        "publicationContractPassed": contract_passed,
+                        "contractFailureCode": _text(ai_episode.get("contractFailureCode")),
+                        "abstained": ai_action == "NO_ACTION",
+                    }],
+                },
+            ],
+            "inferenceGenerationId": inference_generation_id,
+        })
+
+    supporting_causes = [{
+        "id": item.get("id"),
+        "layer": "hypothesis",
+        "role": "support",
+        "status": item.get("state"),
+        "title": item.get("title"),
+        "summary": item.get("plainLanguageBasis") or item.get("claim"),
+        "effect": "후보 행동 " + (item.get("candidateAction") or "관찰") + " · 지지 근거 " + str(item.get("supportCount") or 0) + "개",
+    } for item in hypotheses if item.get("selected") or item.get("supportCount")]
+    constraint_causes = [{
+        "id": item.get("id"),
+        "layer": "rule",
+        "role": "constraint",
+        "status": "matched",
+        "title": item.get("label"),
+        "summary": item.get("description") or "현재 행동 범위를 제한하는 규칙이 성립했습니다.",
+        "effect": "현재 행동 후보와 별도로 적용되는 제약입니다.",
+    } for item in rules if item.get("evidenceRole") in {"constraint", "data-quality"}]
+    change_conditions = _unique([
+        condition
+        for item in hypotheses
+        for condition in item.get("invalidationConditions") or []
+    ], 12)
+    type_db_actions = _unique(
+        (item.get("candidateAction") for item in hypotheses if item.get("candidateAction")),
+        12,
+    )
+    comparison = {
+        "state": "typedb-and-ai" if ai_status == "ai-authored" else ai_status,
+        "label": (
+            "TypeDB 추론과 AI 분석 연결 완료" if ai_status == "ai-authored"
+            else "AI 실패 · TypeDB 대체 해석" if ai_status == "typedb-fallback"
+            else "TypeDB 추론만 완료" if ai_status == "not-run"
+            else "AI 분석 계약 확인 필요"
+        ),
+        "comparable": ai_status == "ai-authored",
+        "typeDbCandidateActions": type_db_actions,
+        "aiFinalAction": ai_action,
+        "selectedHypothesisId": selected_hypothesis_id,
+        "reason": ai_summary or (
+            "AI가 작성한 분석이 아니므로 TypeDB 후보와 AI 의견을 동일하게 표시하지 않습니다."
+            if ai_status == "typedb-fallback"
+            else "현재 세대의 TypeDB 가설과 규칙 증거를 먼저 확인합니다."
+        ),
+    }
+
+    fact_times = sorted(_text(item.get("asOf")) for item in facts if _text(item.get("asOf")))
+    current_items = [{
+        "id": item.get("id"),
+        "field": item.get("field") or item.get("conditionId"),
+        "label": item.get("label"),
+        "value": item.get("observedValue"),
+        "source": item.get("source"),
+        "sourceAsOf": item.get("asOf"),
+        "freshnessStatus": item.get("freshnessStatus"),
+        "role": item.get("role"),
+    } for item in facts]
+    blocking_issues = [item for item in issues if item.get("state") == "blocked"]
+    integrity_state = "blocked" if blocking_issues else "warning" if issues or limitations else "pass"
+    reasoning = {
+        "version": REASONING_DETAIL_VERSION,
+        "snapshotState": "exact" if included else "unavailable",
+        "snapshotStateLabel": "종목별 저장 추론 계보" if included else "종목별 추론 계보 없음",
+        "snapshotReason": "배치 추론에서 현재 계정·종목·ABox·세대가 모두 일치하는 증거만 연결했습니다.",
+        "recordCompleteness": "exact" if included and not blocking_issues else "partial",
+        "limitations": _unique(limitations, 20),
+        "sourceAboxSnapshotId": source_abox_snapshot_id,
+        "inferenceGenerationId": inference_generation_id,
+        "inferenceGenerationAt": _text(_first(subject, "completed_at", "completedAt", "updated_at", "updatedAt")),
+        "graphStore": "typedb",
+        "facts": facts,
+        "relations": relations,
+        "rules": rules,
+        "traces": traces,
+        "hypotheses": hypotheses,
+        "counts": {
+            "facts": len(facts),
+            "relations": len(relations),
+            "rules": len(rules),
+            "traces": len(traces),
+            "hypotheses": len(hypotheses),
+        },
+    }
+    evidence_ids = _unique([
+        evidence_id
+        for item in facts
+        for evidence_id in item.get("evidenceIds") or []
+    ], 200)
+    evidence_records = [{
+        "id": evidence_id,
+        "role": next((item.get("role") for item in facts if evidence_id in (item.get("evidenceIds") or [])), "context"),
+        "roleLabel": "연결 근거",
+        "useState": "used",
+        "useStateLabel": "추론에 사용",
+        "resolutionState": "lineage-linked",
+        "title": next((item.get("label") for item in facts if evidence_id in (item.get("evidenceIds") or [])), evidence_id),
+        "summary": "ABox 관측값과 RuleBox 조건을 통해 현재 가설에 연결된 근거입니다.",
+        "kind": "reasoning-lineage",
+        "source": next((item.get("source") for item in facts if evidence_id in (item.get("evidenceIds") or [])), "TypeDB"),
+        "sourceAsOf": next((item.get("asOf") for item in facts if evidence_id in (item.get("evidenceIds") or [])), ""),
+    } for evidence_id in evidence_ids]
+    return {
+        "version": SUBJECT_REASONING_LINEAGE_VERSION,
+        "status": "ok" if not blocking_issues else "integrity-blocked",
+        "identity": {
+            "subjectCaseId": _text(_first(subject, "subject_case_id", "subjectCaseId")),
+            "batchCaseId": _text(_first(subject, "batch_case_id", "batchCaseId")),
+            "accountId": account_id,
+            "symbol": symbol,
+            "deploymentId": _text(_first(batch, "deployment_id", "deploymentId")),
+            "releaseFingerprint": _text(_first(batch, "release_fingerprint", "releaseFingerprint")),
+            "releaseId": _text(_first(release_manifest, "release_id", "releaseId")),
+            "tboxReleaseId": _text(
+                _first(release_manifest, "tbox_release_id", "tboxReleaseId")
+            ),
+            "tboxFingerprint": _text(
+                _first(release_manifest, "tbox_fingerprint", "tboxFingerprint")
+            ),
+            "ruleboxReleaseId": _text(
+                _first(release_manifest, "rulebox_release_id", "ruleboxReleaseId")
+            ),
+            "ruleboxFingerprint": _text(
+                _first(release_manifest, "rulebox_fingerprint", "ruleboxFingerprint")
+            ),
+            "modelSignalReleaseId": _text(
+                _first(release_manifest, "model_signal_release_id", "modelSignalReleaseId")
+            ),
+            "promptReleaseId": _text(
+                _first(release_manifest, "prompt_release_id", "promptReleaseId")
+            ),
+            "sourceAboxSnapshotId": source_abox_snapshot_id,
+            "inferenceGenerationId": inference_generation_id,
+            "synthesisId": _text(_first(synthesis, "synthesis_id", "synthesisId")),
+            "candidateSetId": _text(_first(candidate, "candidate_set_id", "candidateSetId")),
+            "candidateFingerprint": _text(candidate.get("fingerprint")),
+            "eligibleHypothesisIds": _unique(
+                _rows(_first(candidate, "eligible_hypothesis_ids", "eligibleHypothesisIds", default=[])),
+                100,
+            ),
+            "executionEligibleHypothesisIds": _unique(
+                _rows(_first(candidate, "execution_eligible_hypothesis_ids", "executionEligibleHypothesisIds", default=[])),
+                100,
+            ),
+            "referenceHypothesisIds": _unique(
+                _rows(_first(candidate, "reference_hypothesis_ids", "referenceHypothesisIds", default=[])),
+                100,
+            ),
+            "selectedRuleId": selected_rule_id,
+            "selectedHypothesisId": selected_hypothesis_id,
+            "aiInsightEpisodeId": _text(ai_episode.get("episodeId")),
+        },
+        "integrity": {
+            "state": integrity_state,
+            "label": "계보 연결 완료" if integrity_state == "pass" else "계보 일부 확인 필요" if integrity_state == "warning" else "계보 연결 차단",
+            "issues": issues,
+            "includedRuleEvaluationCount": len(included),
+            "excludedForeignSubjectEvaluationCount": foreign_count,
+            "invalidRuleEvaluationCount": invalid_count,
+        },
+        "reasoning": reasoning,
+        "scenarios": scenarios,
+        "explanation": {
+            "primaryCause": supporting_causes[0] if supporting_causes else {
+                "id": "typedb-no-qualified-hypothesis",
+                "layer": "hypothesis",
+                "role": "constraint",
+                "status": "incomplete",
+                "title": "검증 가능한 가설 없음",
+                "summary": "현재 종목의 규칙 증거와 연결된 가설을 찾지 못했습니다.",
+                "effect": "투자 행동을 만들지 않습니다.",
+            },
+            "supportingCauses": supporting_causes[:6],
+            "counterCauses": [],
+            "constraints": constraint_causes[:8],
+            "dataGaps": list(candidate.get("data_gaps") or candidate.get("dataGaps") or []),
+            "changeConditions": change_conditions,
+            "causalPaths": paths,
+            "comparison": comparison,
+        },
+        "currentState": {
+            "snapshotState": reasoning["snapshotState"],
+            "snapshotStateLabel": reasoning["snapshotStateLabel"],
+            "asOf": fact_times[-1] if fact_times else reasoning["inferenceGenerationAt"],
+            "groups": [{
+                "id": "reasoning-lineage-facts",
+                "label": "추론에 실제 사용한 관측값",
+                "items": current_items,
+            }] if current_items else [],
+        },
+        "freshness": {
+            "decisionAsOf": _text(_first(subject, "completed_at", "completedAt", "updated_at", "updatedAt")),
+            "sourceAsOf": fact_times[-1] if fact_times else "",
+            "inferenceAsOf": reasoning["inferenceGenerationAt"],
+            "updatedAt": _text(_first(subject, "updated_at", "updatedAt")),
+            "snapshotState": reasoning["snapshotState"],
+            "snapshotStateLabel": reasoning["snapshotStateLabel"],
+        },
+        "evidence": {
+            "supportingIds": _unique([evidence_id for item in hypotheses for evidence_id in item.get("supportingEvidenceIds") or []], 200),
+            "counterIds": _unique([evidence_id for item in hypotheses for evidence_id in item.get("counterEvidenceIds") or []], 200),
+            "records": evidence_records,
+            "resolvedCount": len(evidence_records),
+            "identifierOnlyCount": 0,
+        },
+        "ai": {
+            "status": ai_status,
+            "currentGeneration": current_ai,
+            "publicationMode": publication_mode,
+            "aiAuthored": ai_authored,
+            "publicationContractPassed": contract_passed,
+            "contractFailureCode": _text(ai_episode.get("contractFailureCode")),
+            "episodeId": _text(ai_episode.get("episodeId")),
+            "model": _text(ai_episode.get("model")),
+            "reasoningEffort": _text(ai_episode.get("reasoningEffort")),
+            "summary": ai_summary,
+            "action": ai_action,
+        },
+        "traceRefs": {
+            "subjectCaseId": _text(_first(subject, "subject_case_id", "subjectCaseId")),
+            "batchCaseId": _text(_first(subject, "batch_case_id", "batchCaseId")),
+            "sourceAboxSnapshotId": source_abox_snapshot_id,
+            "inferenceGenerationId": inference_generation_id,
+            "selectedHypothesisId": selected_hypothesis_id,
+            "ruleIds": sorted(proof_rule_ids),
+            "modelRelease": {
+                "deploymentId": _text(_first(batch, "deployment_id", "deploymentId")),
+                "releaseId": _text(_first(release_manifest, "release_id", "releaseId")),
+                "releaseFingerprint": _text(
+                    _first(batch, "release_fingerprint", "releaseFingerprint")
+                ),
+                "tboxReleaseId": _text(
+                    _first(release_manifest, "tbox_release_id", "tboxReleaseId")
+                ),
+                "tboxFingerprint": _text(
+                    _first(release_manifest, "tbox_fingerprint", "tboxFingerprint")
+                ),
+                "ruleboxReleaseId": _text(
+                    _first(release_manifest, "rulebox_release_id", "ruleboxReleaseId")
+                ),
+                "ruleboxFingerprint": _text(
+                    _first(release_manifest, "rulebox_fingerprint", "ruleboxFingerprint")
+                ),
+                "modelSignalReleaseId": _text(
+                    _first(release_manifest, "model_signal_release_id", "modelSignalReleaseId")
+                ),
+                "promptReleaseId": _text(
+                    _first(release_manifest, "prompt_release_id", "promptReleaseId")
+                ),
+                "lineageLabel": "TBox → ABox → RuleBox → InferenceBox → 가설 → AI",
+            },
         },
     }

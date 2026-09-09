@@ -292,9 +292,11 @@ def add_position_statistical_signal_concepts(
                 "sourceAgeSeconds": signal.get("sourceAgeSeconds"),
                 "freshnessCompatible": bool(signal.get("freshnessCompatible", True)),
                 "materialHash": str(signal.get("materialHash") or ""),
+                "sourceFeatureSnapshotId": feature_reference,
                 "modelEvidenceIds": list(
                     (_mapping(signal.get("inputFeatures"))).get("evidenceIds") or []
                 )[:64],
+                **_feature_summary(signal),
             }
             contract_node_id = add_entity(
                 graph,

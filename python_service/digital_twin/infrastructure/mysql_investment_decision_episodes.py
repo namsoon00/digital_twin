@@ -714,6 +714,54 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 result[episode.episode_id] = episode
         return result
 
+    def shadow_observation_episodes_for_claims(
+        self,
+        account_id: str,
+        symbol: str,
+        claim_contract_ids: Iterable[str],
+        limit: int = 100,
+    ) -> List[ShadowHypothesisObservationEpisode]:
+        """Read reused shadow samples by stable claim identity.
+
+        A shadow episode is intentionally deduplicated across candidate sets in
+        one independence bucket. Querying only by the latest candidate-set id
+        therefore hides valid observation history from the current hypothesis.
+        """
+
+        claim_ids = list(dict.fromkeys(
+            str(item or "").strip()
+            for item in claim_contract_ids or []
+            if str(item or "").strip()
+        ))
+        normalized_account = str(account_id or "").strip() or "default"
+        normalized_symbol = str(symbol or "").upper().strip()
+        if not normalized_symbol or not claim_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(claim_ids))
+        bounded_limit = max(1, min(500, int(limit or 100)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json, status, observed_from_at "
+                "FROM investment_hypothesis_observation_episodes "
+                "WHERE account_id = %s AND symbol = %s "
+                "AND claim_contract_id IN (" + placeholders + ") "
+                "ORDER BY observed_from_at DESC, episode_id DESC LIMIT %s",
+                (normalized_account, normalized_symbol, *claim_ids, bounded_limit),
+            ).fetchall()
+        result = []
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if not payload:
+                continue
+            payload["status"] = str(row.get("status") or payload.get("status") or "")
+            payload["observedFromAt"] = canonical_investment_timestamp(
+                row.get("observed_from_at") or payload.get("observedFromAt")
+            )
+            episode = ShadowHypothesisObservationEpisode.from_dict(payload)
+            if episode.episode_id:
+                result.append(episode)
+        return result
+
     @staticmethod
     def upsert_outcome_target(
         connection,

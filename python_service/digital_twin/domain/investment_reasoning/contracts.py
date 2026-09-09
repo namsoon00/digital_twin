@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from dataclasses import field as dataclass_field
 import hashlib
 import json
 from typing import Dict, Iterable, Mapping, Optional, Tuple
@@ -582,6 +583,9 @@ class ConditionEvidence:
     source_as_of: str = ""
     freshness: str = ""
     evidence_ids: Tuple[str, ...] = ()
+    source_fact_ids: Tuple[str, ...] = ()
+    source_properties: Dict[str, object] = dataclass_field(default_factory=dict)
+    target_properties: Dict[str, object] = dataclass_field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "ConditionEvidence":
@@ -589,8 +593,12 @@ class ConditionEvidence:
         shape = _mapping(payload.get("ruleConditionShape"))
         relation_id = str(payload.get("relationId") or "")
         evidence_ids = _texts(payload.get("evidenceIds") or payload.get("evidence_ids"))
+        source_fact_ids = _texts(
+            payload.get("sourceFactIds") or payload.get("source_fact_ids")
+        )
         if relation_id and relation_id not in evidence_ids:
             evidence_ids = _texts((*evidence_ids, relation_id))
+        evidence_ids = _texts((*evidence_ids, *source_fact_ids))
         return cls(
             condition_id=str(payload.get("condition_id") or payload.get("conditionId") or shape.get("conditionId") or ""),
             kind=str(payload.get("kind") or shape.get("kind") or ""),
@@ -608,11 +616,23 @@ class ConditionEvidence:
             source_as_of=str(payload.get("source_as_of") or payload.get("sourceAsOf") or payload.get("observedAt") or ""),
             freshness=str(payload.get("freshness") or payload.get("freshnessStatus") or ""),
             evidence_ids=evidence_ids,
+            source_fact_ids=source_fact_ids,
+            source_properties=_mapping(
+                payload.get("source_properties")
+                or payload.get("sourceProperties")
+                or payload.get("matchedSourceProperties")
+            ),
+            target_properties=_mapping(
+                payload.get("target_properties")
+                or payload.get("targetProperties")
+                or payload.get("matchedTargetProperties")
+            ),
         )
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["evidence_ids"] = list(self.evidence_ids)
+        payload["source_fact_ids"] = list(self.source_fact_ids)
         return payload
 
 

@@ -11,6 +11,7 @@ from ..domain.investment_case import (
     parse_investment_case_id,
 )
 from ..domain.investment_analysis import investment_decision_key
+from ..domain.investment_reasoning_detail import subject_reasoning_lineage
 from ..domain.investment_flow import (
     FLOW_STAGE_LABELS,
     FLOW_STATE_LABELS,
@@ -40,6 +41,8 @@ class InvestmentCaseQueryService:
         symbol_repository=None,
         subject_case_repository=None,
         ai_insight_repository=None,
+        reasoning_case_repository=None,
+        hypothesis_observation_repository=None,
     ):
         self.decision_episode_store = decision_episode_store
         self.notification_job_store = notification_job_store
@@ -49,6 +52,8 @@ class InvestmentCaseQueryService:
         self.symbol_repository = symbol_repository
         self.subject_case_repository = subject_case_repository
         self.ai_insight_repository = ai_insight_repository
+        self.reasoning_case_repository = reasoning_case_repository
+        self.hypothesis_observation_repository = hypothesis_observation_repository
         self.flow_service = InvestmentFlowQueryService(
             decision_episode_store=decision_episode_store,
             notification_job_store=notification_job_store,
@@ -293,8 +298,28 @@ class InvestmentCaseQueryService:
             and text(saved.get("candidateFingerprint"))
             == text(item_dict(case.get("candidateSet")).get("fingerprint"))
         )
+        publication_mode = text(saved.get("publicationMode"))
+        provenance_present = any(
+            key in saved
+            for key in (
+                "publicationMode", "aiAuthored", "publicationContractPassed",
+                "contractFailureCode",
+            )
+        )
+        ai_authored = bool(saved.get("aiAuthored"))
+        publication_contract_passed = bool(saved.get("publicationContractPassed"))
+        if not current_generation:
+            status = "previous-generation"
+        elif publication_mode == "typedb-fallback":
+            status = "fallback"
+        elif provenance_present and not (
+            ai_authored and publication_contract_passed
+        ):
+            status = "contract-failed"
+        else:
+            status = "completed"
         return {
-            "status": "completed" if current_generation else "previous-generation",
+            "status": status,
             "currentGeneration": current_generation,
             "episodeId": text(saved.get("episodeId")),
             "subjectCaseId": text(saved.get("subjectCaseId")),
@@ -303,6 +328,10 @@ class InvestmentCaseQueryService:
             "model": text(saved.get("model")),
             "reasoningEffort": text(saved.get("reasoningEffort")),
             "validationState": text(saved.get("validationState")),
+            "publicationMode": publication_mode,
+            "aiAuthored": ai_authored,
+            "publicationContractPassed": publication_contract_passed,
+            "contractFailureCode": text(saved.get("contractFailureCode")),
             "action": text(insight.get("action")).upper() or "NO_ACTION",
             "actionLabel": text(insight.get("actionLabel")) or "매매 판단 없음",
             "summary": text(insight.get("summary") or insight.get("investmentView")),
@@ -320,8 +349,12 @@ class InvestmentCaseQueryService:
             "deliveryReason": text(reconciliation.get("reason")),
             "createdAt": text(saved.get("createdAt")),
             "reason": (
-                "현재 TypeDB 세대와 일치하는 AI 해석입니다."
-                if current_generation
+                "현재 TypeDB 세대와 일치하는 AI 모델 해석입니다."
+                if status == "completed"
+                else "AI 모델 실행을 완료하지 못해 TypeDB 추론 문장을 대체 해석으로 저장했습니다."
+                if status == "fallback"
+                else "AI 결과가 출판 계약을 통과하지 못해 투자 의견으로 채택하지 않았습니다."
+                if status == "contract-failed"
                 else "현재 TypeDB 세대보다 이전에 생성된 AI 해석이며 현재 행동을 변경하지 않습니다."
             ),
         }
@@ -462,9 +495,15 @@ class InvestmentCaseQueryService:
         ai_status = text(ai_insight.get("status"))
         ai_current = ai_status == "completed"
         ai_processing = ai_status == "pending"
+        ai_fallback = ai_status == "fallback"
+        ai_failed = ai_status == "contract-failed"
         ai_state_label = (
             "해석 완료"
             if ai_current
+            else "TypeDB 대체 해석"
+            if ai_fallback
+            else "출판 계약 미통과"
+            if ai_failed
             else "처리 중"
             if ai_processing
             else "이전 해석 있음"
@@ -474,6 +513,10 @@ class InvestmentCaseQueryService:
         phase_label = (
             "최신 TypeDB 추론 · AI 해석 완료"
             if ai_current
+            else "최신 TypeDB 추론 · AI 실패로 TypeDB 대체"
+            if ai_fallback
+            else "최신 TypeDB 추론 · AI 결과 미채택"
+            if ai_failed
             else "최신 TypeDB 추론 · 이전 AI 해석 있음"
             if ai_status == "previous-generation"
             else "최신 TypeDB 추론 · AI 처리 중"
@@ -519,7 +562,7 @@ class InvestmentCaseQueryService:
                 {
                     "id": "ai",
                     "label": "AI 해석",
-                    "state": "pending" if ai_processing else "pass",
+                    "state": "pending" if ai_processing else "warning" if ai_fallback or ai_failed else "pass",
                     "stateLabel": ai_state_label,
                     "reason": text(ai_insight.get("reason")),
                 },
@@ -565,6 +608,9 @@ class InvestmentCaseQueryService:
         }
 
     def detail(self, case_id: str) -> Dict[str, object]:
+        subject_case = self._subject_case(case_id)
+        if subject_case:
+            return self._subject_detail(case_id, subject_case)
         episode, snapshot = self._resolve(case_id)
         if not episode or not snapshot:
             return self._not_found(case_id)
@@ -586,6 +632,181 @@ class InvestmentCaseQueryService:
             "traceEndpoint": f"/api/investment-cases/{snapshot.case_id}/trace",
         })
         return payload
+
+    def _subject_case(self, subject_case_id: str) -> Dict[str, object]:
+        getter = getattr(self.subject_case_repository, "get", None)
+        if not callable(getter) or not text(subject_case_id).startswith("subject-decision-case:"):
+            return {}
+        try:
+            row = getter(text(subject_case_id))
+        except Exception:  # noqa: BLE001 - legacy DecisionEpisode resolution remains available.
+            return {}
+        return row.to_dict() if hasattr(row, "to_dict") else item_dict(row)
+
+    def _ai_insight_for_subject(self, subject_case: Mapping[str, object]) -> Dict[str, object]:
+        account_id = text(subject_case.get("accountId") or subject_case.get("account_id"))
+        symbol = text(subject_case.get("symbol")).upper()
+        subject_case_id = text(subject_case.get("subjectCaseId") or subject_case.get("subject_case_id"))
+        rows = self._latest_ai_insights(account_id, symbol, 100)
+        return next(
+            (row for row in rows if text(row.get("subjectCaseId")) == subject_case_id),
+            rows[0] if rows else {},
+        )
+
+    def _reasoning_case_for_subject(self, subject_case: Mapping[str, object]) -> Dict[str, object]:
+        getter = getattr(self.reasoning_case_repository, "get", None)
+        if not callable(getter):
+            return {}
+        batch_case_id = text(subject_case.get("batchCaseId") or subject_case.get("batch_case_id"))
+        try:
+            row = getter(batch_case_id)
+        except Exception:  # noqa: BLE001 - detail reports the missing lineage explicitly.
+            return {}
+        return row.to_dict() if hasattr(row, "to_dict") else item_dict(row)
+
+    def _observations_for_subject(self, subject_case: Mapping[str, object]) -> List[Dict[str, object]]:
+        loader = getattr(
+            self.hypothesis_observation_repository,
+            "shadow_observation_episodes_for_claims",
+            None,
+        )
+        if not callable(loader):
+            return []
+        candidate = item_dict(subject_case.get("candidateSet") or subject_case.get("candidate_set"))
+        claim_ids = []
+        for hypothesis in candidate.get("hypotheses") or []:
+            row = item_dict(hypothesis)
+            contract = item_dict(row.get("claimContract") or row.get("claim_contract"))
+            claim_id = text(contract.get("claimContractId") or contract.get("claim_contract_id"))
+            if claim_id and claim_id not in claim_ids:
+                claim_ids.append(claim_id)
+        if not claim_ids:
+            return []
+        try:
+            rows = loader(
+                text(subject_case.get("accountId") or subject_case.get("account_id")) or "default",
+                text(subject_case.get("symbol")).upper(),
+                claim_ids,
+                100,
+            )
+        except Exception:  # noqa: BLE001 - observations enrich but do not create inference proof.
+            return []
+        return [
+            row.to_dict() if hasattr(row, "to_dict") else item_dict(row)
+            for row in rows or []
+        ]
+
+    def _subject_detail(
+        self,
+        requested_key: str,
+        subject_case: Mapping[str, object],
+    ) -> Dict[str, object]:
+        ai_episode = self._ai_insight_for_subject(subject_case)
+        reasoning_case = self._reasoning_case_for_subject(subject_case)
+        observations = self._observations_for_subject(subject_case)
+        lineage = subject_reasoning_lineage(
+            subject_case,
+            reasoning_case,
+            ai_episode,
+            observations,
+        )
+        base = self._subject_case_item(subject_case, ai_episode)
+        subject_case_id = text(subject_case.get("subjectCaseId") or subject_case.get("subject_case_id"))
+        reasoning = item_dict(lineage.get("reasoning"))
+        explanation = item_dict(lineage.get("explanation"))
+        integrity = item_dict(lineage.get("integrity"))
+        ai = item_dict(lineage.get("ai"))
+        facts_count = int(item_dict(reasoning.get("counts")).get("facts") or 0)
+        relation_count = int(item_dict(reasoning.get("counts")).get("relations") or 0)
+        hypothesis_count = int(item_dict(reasoning.get("counts")).get("hypotheses") or 0)
+        final = item_dict(subject_case.get("finalDecision") or subject_case.get("final_decision"))
+        decision = item_dict(base.get("decision"))
+        decision["requiredChecks"] = list(
+            item_dict(base.get("subjectDecisionCase")).get("nextChecks") or []
+        )
+        decision["rationale"] = text(ai.get("summary")) or text(
+            item_dict(explanation.get("primaryCause")).get("summary")
+        )
+        if final:
+            decision["selectedHypothesisId"] = text(
+                final.get("selectedHypothesisId") or final.get("selected_hypothesis_id")
+            )
+        status_dimensions = [dict(item) for item in base.get("statusDimensions") or []]
+        stages = []
+        stage_sources = [
+            ("fact", "사실", "pass" if facts_count else "blocked", f"추론에 사용한 관측 사실 {facts_count}개"),
+            ("signal", "관계·규칙", "pass" if relation_count or reasoning.get("rules") else "blocked", f"관계 {relation_count}개 · 규칙 {len(reasoning.get('rules') or [])}개"),
+            ("case", "가설 비교", "pass" if hypothesis_count else "blocked", f"연결된 가설 {hypothesis_count}개"),
+            ("decision", "AI 분석", "pass" if ai.get("status") == "ai-authored" else "warning", text(item_dict(base.get("subjectDecisionCase")).get("aiInsight", {}).get("reason")) or "AI 분석 상태를 확인합니다."),
+            ("outcome", "성과 관측", "pending", f"가설 관측 기록 {len(observations)}개" if observations else "독립 사후 결과를 기다리는 중입니다."),
+        ]
+        for stage_id, label, state, detail in stage_sources:
+            stages.append({
+                "id": stage_id,
+                "label": label,
+                "state": state,
+                "stateLabel": FLOW_STATE_LABELS.get(state, "확인 필요"),
+                "detail": detail,
+            })
+        primary = item_dict(explanation.get("primaryCause"))
+        if ai.get("status") == "ai-authored" and ai.get("summary"):
+            headline = text(ai.get("summary"))
+        else:
+            headline = text(base.get("headline")) or text(primary.get("summary"))
+        base.update({
+            "status": "ok",
+            "readOnly": True,
+            "detailType": "investment-case",
+            "caseId": subject_case_id,
+            "episodeId": "",
+            "requestedKey": text(requested_key),
+            "resolvedFromLegacyKey": False,
+            "canonicalUrl": f"/?tab=modeling&detail=investment-case&detailKey={subject_case_id}",
+            "headline": headline,
+            "decision": decision,
+            "facts": {
+                "state": "pass" if facts_count else "blocked",
+                "dataState": "sufficient" if facts_count else "unavailable",
+                "sourceSnapshotId": item_dict(lineage.get("identity")).get("sourceAboxSnapshotId"),
+                "storedFieldCount": facts_count,
+                "summary": f"실제 관측값 {facts_count}개가 관계·규칙과 연결되어 있습니다." if facts_count else "연결된 관측 사실이 없습니다.",
+            },
+            "signals": {
+                "state": "pass" if relation_count else "warning",
+                "supportCount": len(explanation.get("supportingCauses") or []),
+                "counterCount": len(explanation.get("counterCauses") or []),
+                "relationCount": relation_count,
+                "summary": f"TypeDB 관계 {relation_count}개와 규칙 {len(reasoning.get('rules') or [])}개를 가설에 연결했습니다.",
+            },
+            "stages": stages,
+            "statusDimensions": status_dimensions,
+            "reasoning": reasoning,
+            "scenarios": list(lineage.get("scenarios") or []),
+            "explanation": explanation,
+            "currentState": item_dict(lineage.get("currentState")),
+            "freshness": item_dict(lineage.get("freshness")),
+            "evidence": item_dict(lineage.get("evidence")),
+            "integrity": integrity,
+            "traceRefs": item_dict(lineage.get("traceRefs")),
+            "reasoningLineage": lineage,
+            "outcome": {
+                "state": "pending",
+                "count": sum(
+                    int(item_dict(item.get("observationState")).get("sampleCount") or 0)
+                    for item in lineage.get("scenarios") or []
+                    if isinstance(item, Mapping)
+                ),
+                "observations": [
+                    episode
+                    for item in lineage.get("scenarios") or []
+                    if isinstance(item, Mapping)
+                    for episode in item_dict(item.get("observationState")).get("episodes") or []
+                ][:12],
+            },
+            "availableViews": ["summary", "current", "evidence", "reasoning", "trace"],
+            "traceEndpoint": f"/api/investment-cases/{subject_case_id}/trace",
+        })
+        return base
 
     def history(self, case_id: str, limit: int = 30) -> Dict[str, object]:
         episode, head = self._resolve(case_id)
@@ -900,6 +1121,24 @@ class InvestmentCaseQueryService:
         }
 
     def trace(self, case_id: str) -> Dict[str, object]:
+        subject_case = self._subject_case(case_id)
+        if subject_case:
+            detail = self._subject_detail(case_id, subject_case)
+            return {
+                "version": INVESTMENT_CASE_VERSION,
+                "status": "ok",
+                "readOnly": True,
+                "audience": "operator",
+                "caseId": text(case_id),
+                "episodeId": "",
+                "accountId": detail.get("accountId"),
+                "symbol": detail.get("symbol"),
+                "trace": {
+                    "stages": detail.get("stages") or [],
+                    "gaps": item_dict(detail.get("integrity")).get("issues") or [],
+                    **item_dict(detail.get("traceRefs")),
+                },
+            }
         _episode, snapshot = self._resolve(case_id)
         if not snapshot:
             return self._not_found(case_id)

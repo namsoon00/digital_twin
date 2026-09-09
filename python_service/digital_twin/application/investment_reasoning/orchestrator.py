@@ -54,6 +54,7 @@ from ...domain.investment_reasoning.subject_case import (
 )
 from ...domain.investment_alert_coverage import derive_delivery_eligibility
 from ...domain.investment_decision_actionability import investment_decision_actionability
+from ...domain.investment_reasoning_detail import subject_reasoning_lineage
 from ...domain.investment_reasoning.disposition import (
     CONTEXT_OBSERVATION,
     HYPOTHESIS_QUALIFICATION_PENDING,
@@ -548,6 +549,32 @@ class InvestmentReasoningOrchestrator:
         enriched["investmentSubjectDecisionCaseId"] = subject_case.subject_case_id
         enriched["investmentSubjectDecisionCase"] = self.compact_subject_context(subject_case)
         enriched["decisionCandidateFingerprint"] = subject_case.candidate_set.fingerprint
+        claim_contract_ids = [
+            str((hypothesis.claim_contract or {}).get("claimContractId") or "").strip()
+            for hypothesis in subject_case.candidate_set.hypotheses
+            if str((hypothesis.claim_contract or {}).get("claimContractId") or "").strip()
+        ]
+        observation_loader = getattr(
+            self.decision_episode_store,
+            "shadow_observation_episodes_for_claims",
+            None,
+        )
+        observations = []
+        if callable(observation_loader) and claim_contract_ids:
+            observations = observation_loader(
+                subject_case.account_id,
+                subject_case.symbol,
+                claim_contract_ids,
+                100,
+            ) or []
+        enriched["investmentReasoningLineage"] = subject_reasoning_lineage(
+            subject_case.to_dict(),
+            reasoning_case.to_dict(),
+            hypothesis_observations=[
+                item.to_dict() if hasattr(item, "to_dict") else dict(item or {})
+                for item in observations
+            ],
+        )
         self._persist_subject(subject_case)
         return enriched
 

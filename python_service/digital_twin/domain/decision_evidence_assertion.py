@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 from typing import Dict, Iterable, List, Mapping, Tuple
 
@@ -68,6 +68,11 @@ class EvidenceAssertion:
     condition_id: str = ""
     evidence_independence_key: str = ""
     related_fact_ids: Tuple[str, ...] = ()
+    source_fact_ids: Tuple[str, ...] = ()
+    model_evidence_ids: Tuple[str, ...] = ()
+    source_feature_snapshot_id: str = ""
+    model_release_id: str = ""
+    feature_summary: Dict[str, object] = field(default_factory=dict)
     judgement_eligible: bool = True
     version: str = DECISION_EVIDENCE_ASSERTION_VERSION
 
@@ -89,6 +94,11 @@ class EvidenceAssertion:
             "conditionId": payload.pop("condition_id"),
             "evidenceIndependenceKey": payload.pop("evidence_independence_key"),
             "relatedFactIds": list(payload.pop("related_fact_ids")),
+            "sourceFactIds": list(payload.pop("source_fact_ids")),
+            "modelEvidenceIds": list(payload.pop("model_evidence_ids")),
+            "sourceFeatureSnapshotId": payload.pop("source_feature_snapshot_id"),
+            "modelReleaseId": payload.pop("model_release_id"),
+            "featureSummary": dict(payload.pop("feature_summary") or {}),
             "judgementEligible": payload.pop("judgement_eligible"),
         }
 
@@ -212,6 +222,19 @@ def inference_evidence_assertions(
                 continue
             value = condition.get("observedValue")
             target = _mapping(condition.get("matchedTargetProperties"))
+            source_fact_ids = _unique(condition.get("sourceFactIds") or [], 64)
+            model_evidence_ids = _unique(target.get("modelEvidenceIds") or [], 64)
+            feature_summary = {
+                key: target.get(key)
+                for key in (
+                    "priceReturn", "currentPrice", "recentReturn", "velocityChange",
+                    "realizedVolatility", "slopeRatio", "drawdown", "rebound",
+                    "ma20Distance", "ma60Distance", "latestSmartMoneyVolumeRatio",
+                    "meanSmartMoneyVolumeRatio", "flowSignPersistence", "tradeStrength",
+                    "bidAskImbalance", "volumeRatio",
+                )
+                if target.get(key) not in (None, "")
+            }
             signal_type = _text(target.get("signalType") or _mapping(value).get("signalType"), 100)
             strength = _text(target.get("strengthBand") or _mapping(value).get("strengthBand"), 40)
             label = trace_label
@@ -225,7 +248,10 @@ def inference_evidence_assertions(
                 polarity=polarity,
                 value=_compact_value(value if value not in (None, "", {}, []) else target),
                 source=_text(condition.get("source") or "TypeDB", 120),
-                source_as_of=_text(condition.get("observedAt"), 100),
+                source_as_of=_text(
+                    condition.get("sourceAsOf") or condition.get("observedAt"),
+                    100,
+                ),
                 fetched_at=_text(condition.get("sourceFetchedAt"), 100),
                 freshness=_text(condition.get("freshnessStatus") or trace.get("freshnessStatus"), 60),
                 relation_type=_text(condition.get("relationType"), 100),
@@ -236,6 +262,13 @@ def inference_evidence_assertions(
                     120,
                 ),
                 related_fact_ids=related_fact_ids,
+                source_fact_ids=tuple(source_fact_ids),
+                model_evidence_ids=tuple(model_evidence_ids),
+                source_feature_snapshot_id=_text(
+                    target.get("sourceFeatureSnapshotId"), 220
+                ),
+                model_release_id=_text(target.get("releaseId"), 160),
+                feature_summary=_compact_value(feature_summary),
                 judgement_eligible=bool(
                     trace.get("evidenceUsableForJudgement") is not False
                     and condition.get("judgementEvidenceUsable") is not False

@@ -17,8 +17,8 @@ from .notification_narrative import (
 from .prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v3"
-AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v2"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v4"
+AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v3"
 
 
 CORE_FACT_KEYS = (
@@ -101,6 +101,255 @@ def _unique_all(values: Iterable[object]) -> List[str]:
 
 def _json_bytes(value: object) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
+
+
+def _lineage_rows(value: object, fields: Iterable[str], limit: int) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    for item in value or []:
+        if not isinstance(item, dict):
+            continue
+        row = _selected(item, fields)
+        if row:
+            rows.append(row)
+        if len(rows) >= max(1, int(limit or 1)):
+            break
+    return rows
+
+
+def _minimum_reasoning_lineage(value: object, *, emergency: bool = False) -> Dict[str, object]:
+    """Keep the selected subject proof when the AI request is budget constrained."""
+
+    lineage = _mapping(value)
+    if not lineage:
+        return {}
+    identity = _mapping(lineage.get("identity"))
+    integrity = _mapping(lineage.get("integrity"))
+    proof = _mapping(lineage.get("proof"))
+    selected_rule_id = str(identity.get("selectedRuleId") or "").strip()
+    raw_rules = [item for item in proof.get("rules") or [] if isinstance(item, dict)]
+    selected_rules = [
+        item for item in raw_rules
+        if str(item.get("id") or "").strip() == selected_rule_id or item.get("selected") is True
+    ]
+    retained_rules = selected_rules[:1] or raw_rules[:1]
+    retained_rule_ids = {
+        str(item.get("id") or "").strip()
+        for item in retained_rules
+        if str(item.get("id") or "").strip()
+    }
+    raw_traces = [item for item in proof.get("traces") or [] if isinstance(item, dict)]
+    retained_traces = [
+        item for item in raw_traces
+        if str(item.get("ruleId") or "").strip() in retained_rule_ids
+    ][:1 if emergency else 2]
+    retained_trace_ids = {
+        str(item.get("id") or "").strip()
+        for item in retained_traces
+        if str(item.get("id") or "").strip()
+    }
+    raw_facts = [item for item in proof.get("facts") or [] if isinstance(item, dict)]
+    retained_facts = [
+        item for item in raw_facts
+        if retained_rule_ids.intersection(str(entry or "").strip() for entry in item.get("ruleIds") or [])
+        or retained_trace_ids.intersection(str(entry or "").strip() for entry in item.get("traceIds") or [])
+    ][:2 if emergency else 4]
+    retained_fact_ids = {
+        str(item.get("id") or "").strip()
+        for item in retained_facts
+        if str(item.get("id") or "").strip()
+    }
+    raw_relations = [item for item in proof.get("relations") or [] if isinstance(item, dict)]
+    retained_relations = [
+        item for item in raw_relations
+        if str(item.get("ruleId") or "").strip() in retained_rule_ids
+        or str(item.get("traceId") or "").strip() in retained_trace_ids
+        or str(item.get("source") or "").strip() in retained_fact_ids
+    ][:1 if emergency else 3]
+    return {
+        "version": lineage.get("version"),
+        "status": lineage.get("status"),
+        "judgementEligible": lineage.get("judgementEligible"),
+        "identity": _selected(
+            identity,
+            (
+                "subjectCaseId", "batchCaseId", "accountId", "symbol",
+                "deploymentId", "releaseId", "releaseFingerprint",
+                "tboxReleaseId", "tboxFingerprint",
+                "ruleboxReleaseId", "ruleboxFingerprint",
+                "modelSignalReleaseId", "promptReleaseId",
+                "sourceAboxSnapshotId", "inferenceGenerationId",
+                "candidateFingerprint", "selectedRuleId", "selectedHypothesisId",
+                "eligibleHypothesisIds", "executionEligibleHypothesisIds",
+                "referenceHypothesisIds",
+            ),
+        ),
+        "integrity": {
+            **_selected(integrity, ("state", "includedRuleEvaluationCount", "excludedForeignSubjectEvaluationCount", "invalidRuleEvaluationCount")),
+            "issues": _lineage_rows(integrity.get("issues"), ("code", "state", "detail"), 1 if emergency else 3),
+        },
+        "proof": {
+            **_selected(proof, ("sourceAboxSnapshotId", "inferenceGenerationId", "recordCompleteness")),
+            "facts": _lineage_rows(
+                retained_facts,
+                (
+                    "id", "conditionId", "label", "kind", "field", "relationType",
+                    "role", "observedValue", "expected", "result", "source", "asOf",
+                    "freshnessStatus", "targetId", "sourceFactIds", "evidenceIds",
+                    "ruleIds", "traceIds", "targetProperties",
+                ),
+                2 if emergency else 4,
+            ),
+            "relations": _lineage_rows(
+                retained_relations,
+                ("id", "type", "label", "source", "target", "ruleId", "traceId", "polarity", "evidenceUsable"),
+                1 if emergency else 3,
+            ),
+            "rules": _lineage_rows(
+                retained_rules,
+                ("id", "label", "description", "evidenceRole", "selected", "decisionEligible", "candidateAction", "traceIds", "relationIds"),
+                1,
+            ),
+            "traces": _lineage_rows(
+                retained_traces,
+                ("id", "proofId", "ruleId", "label", "matched", "selected", "decisionEligible", "evidenceUsable", "matchedConditionIds", "evidenceRelationIds"),
+                1 if emergency else 2,
+            ),
+        },
+    }
+
+
+def _reasoning_lineage_for_core(
+    value: object,
+    *,
+    subject_symbol: object,
+    selected_rule_id: object,
+) -> Dict[str, object]:
+    """Validate and route one immutable TBox-to-AI subject lineage."""
+
+    lineage = _mapping(value)
+    if not lineage:
+        return {}
+    identity = _mapping(lineage.get("identity"))
+    integrity = _mapping(lineage.get("integrity"))
+    proof = _mapping(lineage.get("proof") or lineage.get("reasoning"))
+    expected_symbol = str(subject_symbol or "").strip().upper()
+    lineage_symbol = str(identity.get("symbol") or "").strip().upper()
+    expected_rule_id = str(selected_rule_id or identity.get("selectedRuleId") or "").strip()
+    issues = [
+        _selected(item, ("code", "state", "detail", "expected", "actual", "ruleId", "ruleIds"))
+        for item in integrity.get("issues") or []
+        if isinstance(item, dict)
+    ][:8]
+    blocked = str(integrity.get("state") or "").strip().lower() == "blocked"
+    if expected_symbol and lineage_symbol != expected_symbol:
+        blocked = True
+        issues.append({
+            "code": "AI_LINEAGE_SUBJECT_MISMATCH",
+            "state": "blocked",
+            "detail": "AI 입력 종목과 저장 추론 계보의 종목이 일치하지 않습니다.",
+            "expected": expected_symbol,
+            "actual": lineage_symbol,
+        })
+    source_abox_snapshot_id = str(identity.get("sourceAboxSnapshotId") or "").strip()
+    inference_generation_id = str(identity.get("inferenceGenerationId") or "").strip()
+    if (
+        source_abox_snapshot_id
+        and str(proof.get("sourceAboxSnapshotId") or "").strip() != source_abox_snapshot_id
+    ) or (
+        inference_generation_id
+        and str(proof.get("inferenceGenerationId") or "").strip() != inference_generation_id
+    ):
+        blocked = True
+        issues.append({
+            "code": "AI_LINEAGE_SNAPSHOT_MISMATCH",
+            "state": "blocked",
+            "detail": "ABox 스냅샷 또는 추론 세대가 AI 입력 계보와 일치하지 않습니다.",
+        })
+
+    raw_rules = [item for item in proof.get("rules") or [] if isinstance(item, dict)]
+    if expected_rule_id and not any(str(item.get("id") or "").strip() == expected_rule_id for item in raw_rules):
+        blocked = True
+        issues.append({
+            "code": "AI_LINEAGE_SELECTED_RULE_MISSING",
+            "state": "blocked",
+            "detail": "선택 규칙의 저장 증거를 AI 입력 계보에서 찾지 못했습니다.",
+            "ruleId": expected_rule_id,
+        })
+
+    if blocked:
+        proof = {
+            "sourceAboxSnapshotId": proof.get("sourceAboxSnapshotId"),
+            "inferenceGenerationId": proof.get("inferenceGenerationId"),
+            "recordCompleteness": "blocked",
+            "facts": [],
+            "relations": [],
+            "rules": [],
+            "traces": [],
+        }
+    return {
+        "version": lineage.get("version"),
+        "status": "integrity-blocked" if blocked else lineage.get("status"),
+        "judgementEligible": not blocked,
+        "identity": _selected(
+            identity,
+            (
+                "subjectCaseId", "batchCaseId", "accountId", "symbol",
+                "deploymentId", "releaseId", "releaseFingerprint",
+                "tboxReleaseId", "tboxFingerprint",
+                "ruleboxReleaseId", "ruleboxFingerprint",
+                "modelSignalReleaseId", "promptReleaseId", "sourceAboxSnapshotId",
+                "inferenceGenerationId", "synthesisId", "candidateSetId",
+                "candidateFingerprint", "selectedRuleId", "selectedHypothesisId",
+                "eligibleHypothesisIds", "executionEligibleHypothesisIds",
+                "referenceHypothesisIds",
+            ),
+        ),
+        "integrity": {
+            **_selected(
+                integrity,
+                (
+                    "state", "label", "includedRuleEvaluationCount",
+                    "excludedForeignSubjectEvaluationCount", "invalidRuleEvaluationCount",
+                ),
+            ),
+            "state": "blocked" if blocked else integrity.get("state") or "warning",
+            "issues": issues,
+        },
+        "proof": {
+            **_selected(proof, ("sourceAboxSnapshotId", "inferenceGenerationId", "recordCompleteness")),
+            "limitations": [_sentence_text(item, 180) for item in list(proof.get("limitations") or [])[:6]],
+            "facts": _lineage_rows(
+                proof.get("facts"),
+                (
+                    "id", "conditionId", "label", "kind", "field", "relationType",
+                    "role", "observedValue", "expected", "result", "source", "asOf",
+                    "freshnessStatus", "targetId", "targetKind", "targetProperties",
+                    "sourceFactIds", "evidenceIds", "ruleIds", "traceIds",
+                ),
+                12,
+            ),
+            "relations": _lineage_rows(
+                proof.get("relations"),
+                ("id", "type", "label", "source", "target", "targetLabel", "ruleId", "traceId", "polarity", "freshnessStatus", "evidenceUsable"),
+                12,
+            ),
+            "rules": _lineage_rows(
+                proof.get("rules"),
+                ("id", "label", "description", "evidenceRole", "selected", "decisionEligible", "candidateAction", "traceIds", "relationIds", "knowledgeBasis"),
+                8,
+            ),
+            "traces": _lineage_rows(
+                proof.get("traces"),
+                ("id", "proofId", "ruleId", "label", "matched", "selected", "decisionEligible", "evidenceUsable", "matchedConditionIds", "evidenceRelationIds"),
+                8,
+            ),
+        },
+        "hypothesisObservations": _lineage_rows(
+            lineage.get("hypothesisObservations"),
+            ("hypothesisId", "claimContractId", "selectionSource", "qualification", "observationState"),
+            8,
+        ),
+    }
 
 
 def _rule_linked_fact_keys(rules: List[Dict[str, object]], drivers: List[Dict[str, object]]) -> List[str]:
@@ -205,6 +454,14 @@ def _active_rule_rows(inference: Dict[str, object], envelope: Dict[str, object])
 
 def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
     source = _mapping(inference.get("hypothesisSet"))
+    lineage = _mapping(inference.get("lineage"))
+    lineage_proof = _mapping(lineage.get("proof") or lineage.get("reasoning"))
+    lineage_rule_ids = {
+        str(item.get("id") or item.get("ruleId") or "").strip()
+        for item in lineage_proof.get("rules") or []
+        if isinstance(item, dict)
+        and str(item.get("id") or item.get("ruleId") or "").strip()
+    }
     known_rule_ids = {
         str(item.get("ruleId") or "").strip()
         for item in inference.get("activeRules") or []
@@ -214,7 +471,7 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
             and _mapping(item.get("evidenceState")).get("evidenceUsableForJudgement") is not False
             and str(_mapping(item.get("evidenceState")).get("inferenceEligibilityStatus") or "eligible") == "eligible"
         )
-    }
+    } | lineage_rule_ids
     rows: List[Dict[str, object]] = []
     for item in source.get("hypotheses") or []:
         if not isinstance(item, dict) or not str(item.get("hypothesisId") or "").strip():
@@ -315,7 +572,9 @@ def _evidence_assertion_rows(
                 "version", "evidenceId", "ruleId", "label", "kind", "polarity",
                 "value", "source", "sourceAsOf", "fetchedAt", "freshness",
                 "relationType", "conditionId", "evidenceIndependenceKey",
-                "relatedFactIds", "judgementEligible",
+                "relatedFactIds", "sourceFactIds", "modelEvidenceIds",
+                "sourceFeatureSnapshotId", "modelReleaseId", "featureSummary",
+                "judgementEligible",
             ),
         )
         if row:
@@ -690,6 +949,11 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     assessment = _mapping(brief.get("assessmentBundle"))
     reasoning_trigger = _mapping(current.get("reasoningDeliveryTrigger"))
     relation_lifecycle = _mapping(current.get("relationLifecycleTransition"))
+    reasoning_lineage = _reasoning_lineage_for_core(
+        inference.get("lineage"),
+        subject_symbol=_mapping(brief.get("subject")).get("symbol"),
+        selected_rule_id=envelope.get("selectedRuleId"),
+    )
     core = {
         "schemaVersion": AI_DECISION_CORE_VERSION,
         "notificationIntent": brief.get("notificationIntent"),
@@ -726,6 +990,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
         "temporalEvidence": temporal,
         "companyEvidence": company,
         "rules": rules,
+        "reasoningLineage": reasoning_lineage,
         "hypothesisSet": {
             **hypothesis_metadata,
             "hypotheses": hypotheses,
@@ -819,6 +1084,8 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
             "continuityDelta": bool(core.get("continuityDelta")),
             "evidenceLedgerCount": len(core.get("evidenceLedger") or []),
             "evidenceAssertionCount": len(evidence_assertions),
+            "reasoningLineage": bool(reasoning_lineage),
+            "reasoningLineageIntegrity": _mapping(reasoning_lineage.get("integrity")).get("state"),
         },
         "excluded": {
             "unmatchedTemporalWindowCount": max(0, len(current.get("temporalWindows") or []) - len(temporal.get("windows") or [])),
@@ -887,7 +1154,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
             (
                 "evidenceId", "role", "kind", "label", "value", "source",
                 "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
-                "hypothesisIds", "relatedEvidenceIds", "judgementEligible",
+                "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
+                "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
+                "featureSummary", "judgementEligible",
             ),
         )
         for item in compact_ledger(10)
@@ -947,6 +1216,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         fitted["evidenceLedger"]
     )
     fitted["dataLimits"] = list(fitted.get("dataLimits") or [])[:3]
+    fitted["reasoningLineage"] = _minimum_reasoning_lineage(
+        fitted.get("reasoningLineage")
+    )
     if _json_bytes(fitted) <= budget:
         fitted["routingAudit"]["status"] = "decision-contract-compacted"
         return fitted
@@ -1069,13 +1341,19 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     fitted["externalEvidence"] = list(fitted.get("externalEvidence") or [])[:1]
     fitted["decisionDrivers"] = list(fitted.get("decisionDrivers") or [])[:2]
     fitted["dataLimits"] = list(fitted.get("dataLimits") or [])[:2]
+    fitted["reasoningLineage"] = _minimum_reasoning_lineage(
+        fitted.get("reasoningLineage"),
+        emergency=True,
+    )
     fitted["evidenceLedger"] = [
         _selected(
             item,
             (
                 "evidenceId", "role", "kind", "label", "value", "source",
                 "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
-                "hypothesisIds", "relatedEvidenceIds", "judgementEligible",
+                "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
+                "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
+                "featureSummary", "judgementEligible",
             ),
         )
         for item in compact_ledger(3)

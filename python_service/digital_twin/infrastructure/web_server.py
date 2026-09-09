@@ -1562,11 +1562,13 @@ def investment_reasoning_cases_payload(query: Dict[str, List[str]]) -> Dict[str,
     if subject_case_id:
         subject_case = subject_store.get(subject_case_id)
         batch_case = store.get(subject_case.batch_case_id) if subject_case else None
+        detail = investment_case_api_payload({}, case_id=subject_case_id) if subject_case else {}
         return {
             "status": "ok" if subject_case else "not-found",
             "subjectCase": subject_case.to_dict() if subject_case else {},
             "batchCase": batch_case.to_dict() if batch_case else {},
             "auditTrail": subject_store.audit_trail(subject_case_id) if subject_case else [],
+            "lineage": detail.get("reasoningLineage") or {},
         }
     case_id = str(first_query(query, "caseId") or "").strip()
     if case_id:
@@ -1778,8 +1780,9 @@ def investment_case_api_payload(
     """Read user-facing cases from persisted decisions without invoking TypeDB."""
 
     settings = operational_read_settings()
+    decision_episode_store = stores.investment_decision_episode_store(settings)
     service = InvestmentCaseQueryService(
-        decision_episode_store=stores.investment_decision_episode_store(settings),
+        decision_episode_store=decision_episode_store,
         notification_job_store=stores.notification_job_store(settings),
         hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
         monitor_store=stores.monitor_store(settings) if case_id else None,
@@ -1788,6 +1791,8 @@ def investment_case_api_payload(
         symbol_repository=stores.symbol_universe_store(settings),
         subject_case_repository=stores.subject_decision_case_store(settings),
         ai_insight_repository=stores.ai_inference_queue_store(settings),
+        reasoning_case_repository=stores.investment_reasoning_case_store(settings),
+        hypothesis_observation_repository=decision_episode_store,
     )
     if case_id and section == "history":
         return service.history(

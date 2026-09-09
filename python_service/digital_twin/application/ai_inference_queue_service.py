@@ -1363,11 +1363,28 @@ class AIInferenceQueueRunner:
         attempt_started_monotonic: float,
     ) -> int:
         elapsed = max(0, int(time.monotonic() - float(attempt_started_monotonic)))
-        remaining = max(0, self.attempt_watchdog_seconds - elapsed)
+        remaining = max(0, self.effective_attempt_watchdog_seconds(request) - elapsed)
         delivery_remaining = self.remaining_delivery_seconds(request)
         if delivery_remaining is not None:
             remaining = min(remaining, delivery_remaining)
         return remaining
+
+    def effective_attempt_watchdog_seconds(self, request: AIInferenceRequest) -> int:
+        """Give the configured highest-quality model enough time to finish.
+
+        gpt-5.6-sol at max reasoning regularly needs more than the historical
+        five-minute worker watchdog. Keeping that limit silently converted a
+        valid TypeDB case into a fallback narrative and made the web UI look as
+        if AI had completed. The lease heartbeat still protects worker recovery.
+        """
+
+        model = str(getattr(request, "model", "") or "").strip().lower()
+        effort = str(
+            getattr(request, "reasoning_effort", "") or ""
+        ).strip().lower()
+        if model == "gpt-5.6-sol" and effort == "max":
+            return max(self.attempt_watchdog_seconds, 900)
+        return self.attempt_watchdog_seconds
 
     def publish_preparation_fallback(
         self,

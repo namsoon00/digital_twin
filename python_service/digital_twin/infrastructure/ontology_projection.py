@@ -597,6 +597,7 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
 # window properties only.
 ABOX_STRUCTURAL_RELATION_TYPES = {
     "ASSESSES_HYPOTHESIS_FAMILY",
+    "CALIBRATED_BY_OUTCOME",
     "COMPARES_WITH_MARKET_PROXY",
     "HAS_CAPITAL_FLOW_WINDOW",
     "ISSUES",
@@ -618,6 +619,7 @@ ABOX_STRUCTURAL_RELATION_TYPES = {
     "HAS_RISK_SNAPSHOT",
     "HAS_POSITION_RISK",
     "HAS_HYPOTHESIS_ASSESSMENT",
+    "HAS_HYPOTHESIS_CALIBRATION",
     "HAS_REBALANCE_PROPOSAL",
     "HAS_REBALANCE_SCENARIO",
 }
@@ -982,7 +984,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v12-hypothesis-assessment"
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v13-hypothesis-feedback-lineage"
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = "projection-runtime-context-cache-v1"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
@@ -6061,6 +6063,52 @@ class PortfolioOntologyProjectionRecorder:
         emit("ontology_graph.done", runtimeMs=int((time.perf_counter() - assembly_started) * 1000))
         emit("persistence_graph.start")
         persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
+        source_calibration_ids = {
+            item.entity_id
+            for item in graph.entities
+            if str(item.kind or "") == "hypothesis-calibration"
+        }
+        persisted_calibration_ids = {
+            item.entity_id
+            for item in persistence_graph.entities
+            if str(item.kind or "") == "hypothesis-calibration"
+        }
+        source_calibration_relations = {
+            (item.source, item.target, item.relation_type)
+            for item in graph.relations
+            if str(item.relation_type or "").upper().strip()
+            in {"CALIBRATED_BY_OUTCOME", "HAS_HYPOTHESIS_CALIBRATION"}
+            and (
+                item.source in source_calibration_ids
+                or item.target in source_calibration_ids
+            )
+        }
+        persisted_calibration_relations = {
+            (item.source, item.target, item.relation_type)
+            for item in persistence_graph.relations
+            if str(item.relation_type or "").upper().strip()
+            in {"CALIBRATED_BY_OUTCOME", "HAS_HYPOTHESIS_CALIBRATION"}
+        }
+        missing_calibration_ids = sorted(
+            source_calibration_ids - persisted_calibration_ids
+        )
+        missing_calibration_relations = sorted(
+            source_calibration_relations - persisted_calibration_relations
+        )
+        stage_timings["hypothesisCalibrationSourceCount"] = len(
+            source_calibration_ids
+        )
+        stage_timings["hypothesisCalibrationPersistedCount"] = len(
+            persisted_calibration_ids
+        )
+        stage_timings["hypothesisCalibrationLineageComplete"] = (
+            0 if missing_calibration_ids or missing_calibration_relations else 1
+        )
+        if missing_calibration_ids or missing_calibration_relations:
+            raise RuntimeError(
+                "ABox hypothesis calibration lineage was removed at the graph "
+                "persistence boundary."
+            )
         persistence_graph.worldview["activeTBox"] = deepcopy(active_tbox)
         stage_timings["ontologyGraphAssemblyMs"] = int((time.perf_counter() - assembly_started) * 1000)
         emit("persistence_graph.done", runtimeMs=stage_timings["ontologyGraphAssemblyMs"])

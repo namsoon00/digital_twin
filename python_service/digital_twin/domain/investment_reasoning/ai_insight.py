@@ -11,7 +11,7 @@ from ..portfolio import utc_now_iso
 
 
 AI_INSIGHT_HANDOFF_VERSION = "investment-ai-insight-handoff-v1"
-AI_INSIGHT_EPISODE_VERSION = "investment-ai-insight-episode-v1"
+AI_INSIGHT_EPISODE_VERSION = "investment-ai-insight-episode-v2"
 DECISION_RECONCILIATION_VERSION = "investment-decision-reconciliation-v1"
 SUBJECT_DECISION_ORIGIN = "subject-decision"
 
@@ -322,6 +322,10 @@ class AIInsightEpisode:
     model: str
     reasoning_effort: str
     validation_state: str
+    publication_mode: str = ""
+    ai_authored: bool = False
+    publication_contract_passed: bool = False
+    contract_failure_code: str = ""
     insight: Dict[str, object] = field(default_factory=dict)
     reconciliation: Dict[str, object] = field(default_factory=dict)
     notification_job_id: str = ""
@@ -335,6 +339,7 @@ class AIInsightEpisode:
         if handoff is None or not handoff.valid:
             raise ValueError("A valid subject-decision AI insight handoff is required.")
         reconciliation = _mapping(values.get("decisionReconciliation"))
+        provenance = _mapping(values.get("notificationAIInsightProvenance"))
         insight = compact_ai_insight(getattr(result, "response", {}) or {})
         material = {
             "requestId": _text(getattr(request, "request_id", "")),
@@ -356,6 +361,12 @@ class AIInsightEpisode:
             model=_text(getattr(request, "model", "")),
             reasoning_effort=_text(getattr(request, "reasoning_effort", "")),
             validation_state=_text(getattr(result, "validation_state", "")),
+            publication_mode=_text(provenance.get("publicationMode")),
+            ai_authored=bool(provenance.get("aiAuthored")),
+            publication_contract_passed=bool(
+                provenance.get("publicationContractPassed")
+            ),
+            contract_failure_code=_text(provenance.get("contractFailureCode")),
             insight=insight,
             reconciliation=reconciliation,
             notification_job_id=_text(reconciliation.get("notificationJobId")),
@@ -378,6 +389,10 @@ class AIInsightEpisode:
             "model": payload["model"],
             "reasoningEffort": payload["reasoning_effort"],
             "validationState": payload["validation_state"],
+            "publicationMode": payload["publication_mode"],
+            "aiAuthored": payload["ai_authored"],
+            "publicationContractPassed": payload["publication_contract_passed"],
+            "contractFailureCode": payload["contract_failure_code"],
             "insight": dict(payload["insight"] or {}),
             "reconciliation": dict(payload["reconciliation"] or {}),
             "notificationJobId": payload["notification_job_id"],

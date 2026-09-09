@@ -1139,6 +1139,14 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 (AI_INFERENCE_COMPLETED, stamp, stamp, request.request_id),
             )
             completed_context = dict(notification_context or {})
+            completed_context["notificationAIInsightProvenance"] = {
+                "version": "notification-ai-insight-provenance-v1",
+                "publicationMode": publication_mode,
+                "aiAuthored": ai_authored,
+                "publicationContractPassed": publication_contract_passed,
+                "contractFailureCode": ai_contract_failure_code(contract_error),
+                "source": result.source,
+            }
             completed_context["notificationAiQueue"] = {
                 "status": AI_INFERENCE_COMPLETED,
                 "requestId": request.request_id,
@@ -1444,10 +1452,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         normalized_account = _clean(account_id)
         normalized_symbol = _clean(symbol).upper()
         if normalized_account:
-            clauses.append("account_id = %s")
+            clauses.append("episode.account_id = %s")
             params.append(normalized_account)
         if normalized_symbol:
-            clauses.append("symbol = %s")
+            clauses.append("episode.symbol = %s")
             params.append(normalized_symbol)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         try:
@@ -1457,19 +1465,37 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         params.append(bounded_limit)
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT payload_json FROM investment_ai_insight_episodes"
+                "SELECT episode.payload_json, result.publication_mode, result.ai_authored, "
+                "result.publication_contract_passed, result.contract_failure_code "
+                "FROM investment_ai_insight_episodes AS episode "
+                "LEFT JOIN ai_inference_results AS result ON result.result_id = episode.result_id"
                 + where
-                + " ORDER BY created_at DESC, episode_id DESC LIMIT %s",
+                + " ORDER BY episode.created_at DESC, episode.episode_id DESC LIMIT %s",
                 tuple(params),
             ).fetchall()
-        return [
-            payload
-            for payload in (
-                _json_loads(row.get("payload_json"), {})
-                for row in rows or []
+        result = []
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if not isinstance(payload, dict) or not payload.get("episodeId"):
+                continue
+            payload["publicationMode"] = _clean(
+                row.get("publication_mode") or payload.get("publicationMode")
             )
-            if isinstance(payload, dict) and payload.get("episodeId")
-        ]
+            payload["aiAuthored"] = bool(
+                row.get("ai_authored")
+                if row.get("ai_authored") is not None
+                else payload.get("aiAuthored")
+            )
+            payload["publicationContractPassed"] = bool(
+                row.get("publication_contract_passed")
+                if row.get("publication_contract_passed") is not None
+                else payload.get("publicationContractPassed")
+            )
+            payload["contractFailureCode"] = _clean(
+                row.get("contract_failure_code") or payload.get("contractFailureCode")
+            )
+            result.append(payload)
+        return result
 
     def trace_for_notification(self, notification_job_id: str) -> Dict[str, object]:
         """Return one read-only AI execution trace for notification diagnostics."""

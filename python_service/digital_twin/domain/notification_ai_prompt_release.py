@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v15"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v14"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v16"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v15"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
@@ -73,6 +73,9 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는 최종 투자 판단 AI다.",
     "도구, 셸, 파일, 저장소, 웹을 사용하지 말고 제공된 DecisionCore만 읽어서 답한다.",
     "DecisionCore에 포함된 현재 사실, 행동 범위, 규칙, 가설, 직전 판단 변화만 사용한다.",
+    "reasoningLineage는 현재 종목의 불변 증거 경로다. identity의 종목·ABox 스냅샷·추론 세대와 proof의 ID가 일치하는 사실→관계→규칙→trace→가설 연결만 추론 근거로 사용한다.",
+    "reasoningLineage.judgementEligible이 false이거나 integrity.state가 blocked이면 해당 계보를 행동 근거로 사용하지 말고 decisionReadiness를 insufficient로 제한한다. 다른 종목이나 다른 추론 세대의 근거를 결합하지 않는다.",
+    "reasoningLineage의 규칙은 연결된 proof.facts의 실제 observedValue·source·asOf와 proof.traces가 있을 때만 설명한다. 내부 규칙명 대신 그 관측값과 투자 영향 경로를 사용자에게 설명한다.",
     "notificationIntent가 context-observation이면 TypeDB의 NO_ACTION을 바꾸지 말고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
     "reasoningTrigger가 있으면 왜 지금 다시 분석했는지를 실제 임계값·원문·근거 변화로 설명하고, relationLifecycle이 있으면 어떤 가설 관계가 새로 성립·강화·약화·해제됐는지 구분한다.",
     "가설이 qualification pending이면 관계 성립과 행동 검증 완료를 구분한다. 지금 확인된 투자 의미, 아직 금지된 매매 행동, 승격 또는 무효화에 필요한 실제 다음 데이터를 각각 명시한다.",

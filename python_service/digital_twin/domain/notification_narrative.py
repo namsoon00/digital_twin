@@ -186,6 +186,11 @@ class NarrativeEvidence:
     rule_ids: Tuple[str, ...] = ()
     hypothesis_ids: Tuple[str, ...] = ()
     related_evidence_ids: Tuple[str, ...] = ()
+    source_fact_ids: Tuple[str, ...] = ()
+    model_evidence_ids: Tuple[str, ...] = ()
+    source_feature_snapshot_id: str = ""
+    model_release_id: str = ""
+    feature_summary: Dict[str, object] = field(default_factory=dict)
     judgement_eligible: bool = True
     detail: str = ""
 
@@ -204,6 +209,11 @@ class NarrativeEvidence:
             "ruleIds": list(payload.pop("rule_ids")),
             "hypothesisIds": list(payload.pop("hypothesis_ids")),
             "relatedEvidenceIds": list(payload.pop("related_evidence_ids")),
+            "sourceFactIds": list(payload.pop("source_fact_ids")),
+            "modelEvidenceIds": list(payload.pop("model_evidence_ids")),
+            "sourceFeatureSnapshotId": payload.pop("source_feature_snapshot_id"),
+            "modelReleaseId": payload.pop("model_release_id"),
+            "featureSummary": dict(payload.pop("feature_summary") or {}),
             "judgementEligible": payload.pop("judgement_eligible"),
             "detail": payload.pop("detail"),
         }
@@ -387,6 +397,11 @@ def build_decision_core_evidence_ledger(
             freshness=_text(item.get("freshness"), 80),
             rule_ids=(rule_id,) if rule_id else (),
             related_evidence_ids=tuple(_unique(item.get("relatedFactIds") or [], 16)),
+            source_fact_ids=tuple(_unique(item.get("sourceFactIds") or [], 32)),
+            model_evidence_ids=tuple(_unique(item.get("modelEvidenceIds") or [], 32)),
+            source_feature_snapshot_id=_text(item.get("sourceFeatureSnapshotId"), 220),
+            model_release_id=_text(item.get("modelReleaseId"), 160),
+            feature_summary=_mapping(item.get("featureSummary")),
             judgement_eligible=bool(item.get("judgementEligible", True)),
             detail=_text(" / ".join(filter(None, [
                 str(item.get("relationType") or ""),
@@ -452,6 +467,11 @@ def build_decision_core_evidence_ledger(
                         rule_ids=existing.rule_ids,
                         hypothesis_ids=hypotheses_for_evidence,
                         related_evidence_ids=existing.related_evidence_ids,
+                        source_fact_ids=existing.source_fact_ids,
+                        model_evidence_ids=existing.model_evidence_ids,
+                        source_feature_snapshot_id=existing.source_feature_snapshot_id,
+                        model_release_id=existing.model_release_id,
+                        feature_summary=existing.feature_summary,
                         judgement_eligible=existing.judgement_eligible,
                         detail=existing.detail,
                     )
@@ -483,6 +503,11 @@ def build_decision_core_evidence_ledger(
                 rule_ids=existing.rule_ids,
                 hypothesis_ids=tuple(_unique([*existing.hypothesis_ids, hypothesis_id], 16)),
                 related_evidence_ids=existing.related_evidence_ids,
+                source_fact_ids=existing.source_fact_ids,
+                model_evidence_ids=existing.model_evidence_ids,
+                source_feature_snapshot_id=existing.source_feature_snapshot_id,
+                model_release_id=existing.model_release_id,
+                feature_summary=existing.feature_summary,
                 judgement_eligible=existing.judgement_eligible,
                 detail=existing.detail,
             )
@@ -502,6 +527,11 @@ def build_decision_core_evidence_ledger(
                         rule_ids=tuple(_unique([*fact.rule_ids, str(rule_id)], 16)),
                         hypothesis_ids=tuple(_unique([*fact.hypothesis_ids, hypothesis_id], 16)),
                         related_evidence_ids=fact.related_evidence_ids,
+                        source_fact_ids=fact.source_fact_ids,
+                        model_evidence_ids=fact.model_evidence_ids,
+                        source_feature_snapshot_id=fact.source_feature_snapshot_id,
+                        model_release_id=fact.model_release_id,
+                        feature_summary=fact.feature_summary,
                         judgement_eligible=fact.judgement_eligible,
                         detail=fact.detail,
                     )

@@ -32,9 +32,17 @@ def inference_trace(rule_id, evidence_id, signal_type, direction, label):
             "relationId": evidence_id,
             "relationType": "HAS_MODEL_SIGNAL",
             "observedValue": observed_value,
-            "matchedTargetProperties": observed_value,
+            "matchedTargetProperties": {
+                **observed_value,
+                "releaseId": "event-response-statistics-production-v2",
+                "sourceFeatureSnapshotId": "feature-snapshot:000660",
+                "modelEvidenceIds": ["model-evidence:000660:event"],
+                "currentPrice": 1775000,
+                "ma20Distance": 8.6,
+            },
+            "sourceFactIds": ["source-fact:000660:price"],
             "source": "statistical-signal-pipeline",
-            "observedAt": "2026-09-08T08:09:00Z",
+            "sourceAsOf": "2026-09-08T08:09:00Z",
             "sourceFetchedAt": "2026-09-08T08:09:05Z",
             "freshnessStatus": "fresh",
             "judgementEvidenceUsable": True,
@@ -105,6 +113,23 @@ class DecisionEvidenceAssertionTests(unittest.TestCase):
         self.assertEqual("2026-09-08T08:09:00Z", by_id[risk_id]["sourceAsOf"])
         self.assertEqual("2026-09-08T08:09:05Z", by_id[risk_id]["fetchedAt"])
         self.assertEqual("fresh", by_id[risk_id]["freshness"])
+        self.assertEqual(
+            ["source-fact:000660:price"],
+            by_id[risk_id]["sourceFactIds"],
+        )
+        self.assertEqual(
+            ["model-evidence:000660:event"],
+            by_id[risk_id]["modelEvidenceIds"],
+        )
+        self.assertEqual(
+            "feature-snapshot:000660",
+            by_id[risk_id]["sourceFeatureSnapshotId"],
+        )
+        self.assertEqual(
+            "event-response-statistics-production-v2",
+            by_id[risk_id]["modelReleaseId"],
+        )
+        self.assertEqual(8.6, by_id[risk_id]["featureSummary"]["ma20Distance"])
 
     def test_unusable_or_unresolved_derived_evidence_fails_closed(self):
         trace = inference_trace(

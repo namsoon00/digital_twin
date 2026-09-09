@@ -47,7 +47,7 @@ from .notification_decision_policy import (
 )
 
 
-AI_DECISION_BRIEF_VERSION = "investment-ai-decision-brief-v5"
+AI_DECISION_BRIEF_VERSION = "investment-ai-decision-brief-v6"
 AI_PROFILE_STANDARD = "standard"
 AI_PROFILE_DEEP_RESEARCH = "deepResearch"
 VALID_REASONING_EFFORTS = {"low", "medium", "high", "max"}
@@ -267,6 +267,69 @@ def _enriched_prompt_hypothesis_set(
     }
 
 
+def _immutable_lineage_hypothesis_set(
+    lineage: Dict[str, object],
+    fallback: Dict[str, object],
+) -> Dict[str, object]:
+    """Use the persisted subject candidate set as the replay-safe AI source."""
+
+    identity = _mapping(lineage.get("identity"))
+    scenarios = [
+        dict(item)
+        for item in lineage.get("scenarios") or []
+        if isinstance(item, dict)
+        and str(item.get("id") or item.get("hypothesisId") or "").strip()
+    ]
+    if not scenarios:
+        return fallback
+    fallback_by_id = {
+        str(item.get("hypothesisId") or "").strip(): dict(item)
+        for item in _mapping(fallback).get("hypotheses") or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    }
+    hypotheses = []
+    for scenario in scenarios:
+        hypothesis_id = str(
+            scenario.get("id") or scenario.get("hypothesisId") or ""
+        ).strip()
+        row = {**fallback_by_id.get(hypothesis_id, {}), **scenario}
+        row["hypothesisId"] = hypothesis_id
+        row.pop("id", None)
+        row["lineageSource"] = "subject-reasoning-lineage"
+        hypotheses.append(row)
+    hypothesis_ids = [item["hypothesisId"] for item in hypotheses]
+    eligible_ids = [
+        str(item or "").strip()
+        for item in identity.get("eligibleHypothesisIds") or []
+        if str(item or "").strip() in hypothesis_ids
+    ]
+    reference_ids = [
+        str(item or "").strip()
+        for item in identity.get("referenceHypothesisIds") or []
+        if str(item or "").strip() in hypothesis_ids
+    ]
+    if not eligible_ids and not reference_ids:
+        eligible_ids = hypothesis_ids
+    return {
+        **_mapping(fallback),
+        "hypothesisSetId": identity.get("candidateSetId"),
+        "candidateFingerprint": identity.get("candidateFingerprint"),
+        "accountId": identity.get("accountId"),
+        "subjectSymbol": identity.get("symbol"),
+        "inferenceGenerationId": identity.get("inferenceGenerationId"),
+        "eligibleHypothesisIds": eligible_ids,
+        "executionEligibleHypothesisIds": [
+            str(item or "").strip()
+            for item in identity.get("executionEligibleHypothesisIds") or []
+            if str(item or "").strip() in hypothesis_ids
+        ],
+        "referenceHypothesisIds": reference_ids,
+        "analysisHypothesisIds": hypothesis_ids,
+        "lineageSource": "subject-reasoning-lineage",
+        "hypotheses": hypotheses,
+    }
+
+
 def notification_ai_decision_brief(
     context: Dict[str, object],
     settings: Dict[str, object] = None,
@@ -371,15 +434,25 @@ def notification_ai_decision_brief(
     canonical_hypothesis_set = _mapping(canonical_relation.get("hypothesisSet")) or _mapping(
         canonical_brain.get("hypothesisSet")
     )
+    immutable_lineage = _mapping(
+        decision_context.get("investmentReasoningLineage")
+        or merged.get("investmentReasoningLineage")
+    )
     hypothesis_set = _enriched_prompt_hypothesis_set(
         _mapping(relation.get("hypothesisSet")),
         canonical_hypothesis_set,
     )
     graph_inference = _mapping(canonical_relation.get("graphStoreInference"))
-    hypothesis_set = rebind_hypothesis_evidence_ids(
-        hypothesis_set,
-        graph_inference.get("traces") or [],
-    )
+    if immutable_lineage.get("scenarios"):
+        hypothesis_set = _immutable_lineage_hypothesis_set(
+            immutable_lineage,
+            hypothesis_set,
+        )
+    else:
+        hypothesis_set = rebind_hypothesis_evidence_ids(
+            hypothesis_set,
+            graph_inference.get("traces") or [],
+        )
     for hypothesis in hypothesis_set.get("hypotheses") or []:
         if not isinstance(hypothesis, dict):
             continue
@@ -404,7 +477,6 @@ def notification_ai_decision_brief(
     )
     research_cycle = _mapping(relation.get("researchCycle"))
     research_plan = _mapping(canonical_brain.get("researchPlan")) or _mapping(relation.get("researchPlan"))
-
     return {
         "schemaVersion": AI_DECISION_BRIEF_VERSION,
         "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
@@ -458,6 +530,7 @@ def notification_ai_decision_brief(
             "companyValuationContext": relation.get("companyValuationContext") or {},
         },
         "inference": {
+            "lineage": immutable_lineage,
             "activeRules": active_rule_rows,
             "contextCoverage": {
                 "activeRuleCount": len(active_rule_rows),
@@ -517,6 +590,8 @@ def notification_ai_decision_brief(
             "mustReviewEveryInputHypothesis": bool(hypothesis_set.get("hypotheses")),
             "mustRespectActionEnvelope": True,
             "mustRespectSystemReadinessCeiling": True,
+            "mustUseImmutableReasoningLineage": bool(immutable_lineage),
+            "mustRejectMismatchedReasoningLineage": True,
             "loadedTemporalWindowsAreCoverageOnly": True,
             "mustIgnorePortfolioRebalancePolicy": policy_scope.get("name") == INSTRUMENT_MARKET_SCOPE,
         },
@@ -648,6 +723,8 @@ EVIDENCE_ASSERTION_FIELDS = (
     "version", "evidenceId", "ruleId", "label", "kind", "polarity", "value",
     "source", "sourceAsOf", "fetchedAt", "freshness", "relationType",
     "conditionId", "evidenceIndependenceKey", "relatedFactIds",
+    "sourceFactIds", "modelEvidenceIds", "sourceFeatureSnapshotId",
+    "modelReleaseId", "featureSummary",
     "judgementEligible",
 )
 
@@ -993,6 +1070,127 @@ def _question_bounded_active_rules(
     return rows[:limit]
 
 
+def _compact_reasoning_lineage(
+    value: object,
+    *,
+    fact_limit: int = 20,
+    rule_limit: int = 12,
+) -> Dict[str, object]:
+    """Keep the immutable subject proof small without breaking its joins."""
+
+    lineage = _mapping(value)
+    reasoning = _mapping(lineage.get("reasoning"))
+    identity = _mapping(lineage.get("identity"))
+    integrity = _mapping(lineage.get("integrity"))
+    facts = _compact_dict_rows(
+        reasoning.get("facts"),
+        (
+            "id", "conditionId", "label", "kind", "field", "relationType",
+            "role", "observedValue", "expected", "result", "source", "asOf",
+            "freshnessStatus", "targetId", "targetKind", "targetProperties",
+            "sourceFactIds", "evidenceIds", "ruleIds", "traceIds",
+        ),
+        fact_limit,
+    )
+    rules = _compact_dict_rows(
+        reasoning.get("rules"),
+        (
+            "id", "label", "description", "evidenceRole", "selected",
+            "decisionEligible", "candidateAction", "traceIds", "relationIds",
+            "knowledgeBasis",
+        ),
+        rule_limit,
+    )
+    traces = _compact_dict_rows(
+        reasoning.get("traces"),
+        (
+            "id", "proofId", "ruleId", "label", "matched", "selected",
+            "decisionEligible", "evidenceUsable", "matchedConditionIds",
+            "evidenceRelationIds",
+        ),
+        rule_limit,
+    )
+    relations = _compact_dict_rows(
+        reasoning.get("relations"),
+        (
+            "id", "type", "label", "source", "target", "targetLabel",
+            "ruleId", "traceId", "polarity", "freshnessStatus",
+            "evidenceUsable",
+        ),
+        rule_limit * 2,
+    )
+    return {
+        "version": lineage.get("version"),
+        "status": lineage.get("status"),
+        "identity": _selected_fields(
+            identity,
+            (
+                "subjectCaseId", "batchCaseId", "accountId", "symbol",
+                "deploymentId", "releaseId", "releaseFingerprint",
+                "tboxReleaseId", "tboxFingerprint",
+                "ruleboxReleaseId", "ruleboxFingerprint",
+                "modelSignalReleaseId", "promptReleaseId", "sourceAboxSnapshotId",
+                "inferenceGenerationId", "synthesisId", "candidateSetId",
+                "candidateFingerprint", "selectedRuleId", "selectedHypothesisId",
+                "eligibleHypothesisIds", "executionEligibleHypothesisIds",
+                "referenceHypothesisIds",
+            ),
+        ),
+        "integrity": {
+            **_selected_fields(
+                integrity,
+                (
+                    "state", "label", "includedRuleEvaluationCount",
+                    "excludedForeignSubjectEvaluationCount",
+                    "invalidRuleEvaluationCount",
+                ),
+            ),
+            "issues": _bounded_value(
+                integrity.get("issues") or [],
+                string_limit=160,
+                list_limit=8,
+                dict_limit=12,
+            ),
+        },
+        "proof": {
+            "sourceAboxSnapshotId": reasoning.get("sourceAboxSnapshotId"),
+            "inferenceGenerationId": reasoning.get("inferenceGenerationId"),
+            "recordCompleteness": reasoning.get("recordCompleteness"),
+            "limitations": _bounded_value(
+                reasoning.get("limitations") or [],
+                string_limit=180,
+                list_limit=8,
+                dict_limit=8,
+            ),
+            "facts": facts,
+            "relations": relations,
+            "rules": rules,
+            "traces": traces,
+        },
+        "hypothesisObservations": [
+            {
+                "hypothesisId": item.get("id"),
+                "claimContractId": item.get("claimContractId"),
+                "selectionSource": item.get("selectionSource"),
+                "qualification": _bounded_value(
+                    item.get("qualification") or {},
+                    string_limit=120,
+                    list_limit=6,
+                    dict_limit=16,
+                ),
+                "observationState": _bounded_value(
+                    item.get("observationState") or {},
+                    string_limit=120,
+                    list_limit=4,
+                    dict_limit=16,
+                ),
+            }
+            for item in (lineage.get("scenarios") or [])[:rule_limit]
+            if isinstance(item, Mapping)
+        ],
+    }
+
+
 def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
     """Keep decision-bearing fields before reducing presentation detail.
 
@@ -1117,6 +1315,7 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
             ),
         },
         "inference": {
+            "lineage": _compact_reasoning_lineage(inference.get("lineage")),
             "activeRules": _compact_dict_rows(
                 _question_bounded_active_rules(inference.get("activeRules"), action_envelope),
                 RULE_DECISION_FIELDS,
@@ -1708,6 +1907,7 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             critical.get("guardrails"),
             (
                 "mustReviewEveryInputHypothesis", "mustRespectActionEnvelope",
+                "mustUseImmutableReasoningLineage", "mustRejectMismatchedReasoningLineage",
                 "mustIgnorePortfolioRebalancePolicy",
             ),
         )
@@ -1859,6 +2059,11 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             ),
         },
         "inference": {
+            "lineage": _compact_reasoning_lineage(
+                inference.get("lineage"),
+                fact_limit=8 if emergency else 16,
+                rule_limit=6 if emergency else 12,
+            ),
             "activeRules": _minimum_rule_rows(
                 inference.get("activeRules"), emergency=emergency,
             ),

@@ -468,6 +468,53 @@ class InvestmentBrainTest(unittest.TestCase):
             audit.reviews[0].reviewed_counter_evidence_ids,
         )
 
+        blocked_research = {
+            "hypothesisId": "hypothesis:blocked-research",
+            "supportingRuleIds": ["rule:blocked-research"],
+            "supportingEvidenceIds": ["evidence:blocked-research"],
+            "evidenceState": "blocked",
+            "approvalStatus": "approved-active",
+            "scopeState": "market-shared",
+            "knowledgeBasis": {"requiresHypothesis": True},
+            "claimContract": {"claimType": "market-hypothesis"},
+            "qualification": {"status": "shadow"},
+        }
+        default_audit = hypothesis_comparison_audit(
+            [blocked_research],
+            [],
+            "",
+        )
+        research_audit = hypothesis_comparison_audit(
+            [blocked_research],
+            [{
+                "hypothesisId": "hypothesis:blocked-research",
+                "evidenceReviewStatus": "all-input-evidence-reviewed",
+                "verdict": "unresolved",
+                "reasoning": "필수 관측값이 검증되지 않아 아직 결론을 낼 수 없습니다.",
+            }],
+            "hypothesis:blocked-research",
+            allow_research_only=True,
+        )
+        self.assertEqual("unavailable", default_audit.comparison_state)
+        self.assertEqual("completed", research_audit.comparison_state)
+        self.assertEqual(
+            "hypothesis:blocked-research",
+            research_audit.selected_hypothesis_id,
+        )
+        falsely_supported = hypothesis_comparison_audit(
+            [blocked_research],
+            [{
+                "hypothesisId": "hypothesis:blocked-research",
+                "evidenceReviewStatus": "all-input-evidence-reviewed",
+                "verdict": "supported",
+                "reasoning": "현재 신호가 가설과 같은 방향입니다.",
+            }],
+            "hypothesis:blocked-research",
+            allow_research_only=True,
+        )
+        self.assertEqual("unresolved", falsely_supported.reviews[0].verdict)
+        self.assertIn("blocked", falsely_supported.reviews[0].reasoning)
+
     def test_learning_review_never_combines_different_families_or_horizons(self):
         episodes = []
         definitions = [

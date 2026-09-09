@@ -312,6 +312,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
     def test_delivery_cadence_does_not_remove_judgment_candidate(self):
         self._assert_non_originating_hypothesis_routes_to_review_observation()
         self._assert_qualification_pending_originating_hypothesis_routes_to_ai_review()
+        self._assert_research_only_hypotheses_route_to_ai_review()
         self._assert_target_scope_repair_is_retryable_without_duplicate_flag()
         self._assert_target_scope_repair_uses_bounded_subject_local_wait()
         self._assert_failure_recovery_allows_only_repairable_blocked_results()
@@ -531,6 +532,79 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             "created",
             event.metadata["relationLifecycleTransition"]["changeKind"],
         )
+
+    def _assert_research_only_hypotheses_route_to_ai_review(self):
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+        snapshot = SimpleNamespace(
+            account_id="acct",
+            account_label="Test",
+            generated_at="2026-09-09T02:00:00Z",
+        )
+        rule = {
+            "ruleId": "graph.company.fundamental.confirmation.v1",
+            "matched": True,
+            "knowledgeBasis": {
+                "ruleKind": "predictive-hypothesis",
+                "decisionEligibility": "conditional",
+                "requiresHypothesis": True,
+            },
+        }
+        relation = {
+            "source": "typedbInferenceBox",
+            "graphStore": "typedb",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "sourceAboxSnapshotId": "abox:research",
+            "inferenceGenerationId": "generation:research",
+            "generationAligned": True,
+            "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
+            "facts": {"currentPrice": 1776000, "source": "holding"},
+            "decision": {"label": "가설 연구 비교", "basis": "typedbInferenceBox"},
+            "activeRules": [rule],
+            "matchedRules": [rule],
+            "graphStoreInference": {
+                "graphStore": "typedb",
+                "sourceAboxSnapshotId": "abox:research",
+                "inferenceGenerationId": "generation:research",
+                "relations": [rule],
+                "traces": [{"traceId": "trace:research", **rule}],
+            },
+        }
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:research",
+            account_id="acct",
+            symbol="000660",
+            source_abox_snapshot_id="abox:research",
+            inference_generation_id="generation:research",
+            graph_candidate_action="NO_ACTION",
+            reference_hypothesis_ids=("hypothesis:research:fundamental",),
+            action_authority="observe",
+            disposition_code="HYPOTHESIS_RESEARCH_ONLY",
+            review_level="check",
+        )
+        source_trigger = {
+            "material": True,
+            "userObservable": True,
+            "reasons": ["price-move"],
+            "materialRevisionKeys": ["revision:000660:price:1"],
+        }
+
+        event = builder._base_event(
+            snapshot,
+            relation,
+            synthesis,
+            source_trigger=source_trigger,
+        )
+
+        self.assertIsNotNone(event)
+        contract = event.metadata["contextObservationDecision"]
+        self.assertEqual("typedb-review-observation", event.metadata["notificationDecisionMode"])
+        self.assertTrue(contract["researchOnly"])
+        self.assertEqual(
+            ["hypothesis:research:fundamental"],
+            contract["reviewHypothesisIds"],
+        )
+        self.assertEqual("NO_ACTION", contract["action"])
 
     def _assert_relation_resolution_without_hypothesis_routes_to_observation(self):
         builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))

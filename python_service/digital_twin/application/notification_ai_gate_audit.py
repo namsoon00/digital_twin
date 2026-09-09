@@ -277,17 +277,27 @@ def context_with_validated_ai_response(
     narrative_only = review_mode == "context-narrative"
     if narrative_only:
         enriched = dict(context or {})
+        response.research_lead_hypothesis_id = response.selected_hypothesis_id
         response.action = "NO_ACTION"
         response.action_label = "매매 판단 없음"
         response.investment_view_action = ""
         response.execution_action = "NO_ACTION"
         response.execution_disposition = "reference-only"
         response.precomputed_action = "NO_ACTION"
-        response.hypotheses = []
+        response.hypotheses = [
+            {
+                **dict(item),
+                "decisionEligible": False,
+                "executionEligible": False,
+                "researchOnly": True,
+            }
+            for item in response.hypotheses
+            if isinstance(item, dict)
+        ]
         response.selected_hypothesis_id = ""
-        response.hypothesis_comparison_state = "not-required"
-        response.hypothesis_selection_source = "not-required"
-        response.decision_abstention = {}
+        if response.hypothesis_comparison_state == "completed":
+            response.hypothesis_comparison_state = "research-reviewed"
+            response.hypothesis_selection_source = "research-lead"
         false_initial_history = False
     else:
         enriched = context_with_ai_decision_transition(context or {}, response.action)

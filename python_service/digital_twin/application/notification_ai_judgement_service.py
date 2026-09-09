@@ -62,6 +62,9 @@ def ai_response_contract_error(
 
     prepared_core = context.get("_notificationAiPreparedDecisionCore")
     if isinstance(prepared_core, dict):
+        narrative_only = str(
+            context.get("notificationAiReviewMode") or ""
+        ).strip().lower() == "context-narrative"
         hypothesis_set = prepared_core.get("hypothesisSet")
         hypothesis_set = hypothesis_set if isinstance(hypothesis_set, dict) else {}
         hypothesis_ids = {
@@ -72,6 +75,10 @@ def ai_response_contract_error(
         selected_id = str(getattr(response, "selected_hypothesis_id", "") or "")
         if hypothesis_ids and selected_id not in hypothesis_ids:
             return "selectedHypothesisId is not present in the routed TypeDB hypothesis set."
+        if narrative_only:
+            if not hypothesis_ids and selected_id:
+                return "selectedHypothesisId is not present in the empty routed TypeDB hypothesis set."
+            return ""
         selected_hypothesis = next((
             item
             for item in hypothesis_set.get("hypotheses") or []

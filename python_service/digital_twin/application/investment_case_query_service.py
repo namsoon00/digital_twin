@@ -203,17 +203,10 @@ class InvestmentCaseQueryService:
             return []
         insights = self._latest_ai_insights(account_id, symbol, limit)
         insights_by_subject = {}
-        insights_by_scope = {}
         for episode in insights:
             subject_case_id = text(episode.get("subjectCaseId"))
-            scope = (
-                text(episode.get("accountId")) or "default",
-                text(episode.get("symbol")).upper(),
-            )
             if subject_case_id and subject_case_id not in insights_by_subject:
                 insights_by_subject[subject_case_id] = episode
-            if scope[1] and scope not in insights_by_scope:
-                insights_by_scope[scope] = episode
         result = []
         seen = set()
         for subject_case in rows:
@@ -226,7 +219,7 @@ class InvestmentCaseQueryService:
                 continue
             seen.add(scope)
             subject_case_id = text(payload.get("subjectCaseId"))
-            insight = insights_by_subject.get(subject_case_id) or insights_by_scope.get(scope) or {}
+            insight = insights_by_subject.get(subject_case_id) or {}
             result.append(self._subject_case_item(payload, insight))
         return result
 
@@ -327,6 +320,7 @@ class InvestmentCaseQueryService:
             "candidateFingerprint": text(saved.get("candidateFingerprint")),
             "model": text(saved.get("model")),
             "reasoningEffort": text(saved.get("reasoningEffort")),
+            "promptVersion": text(saved.get("promptVersion")),
             "validationState": text(saved.get("validationState")),
             "publicationMode": publication_mode,
             "aiAuthored": ai_authored,
@@ -342,6 +336,32 @@ class InvestmentCaseQueryService:
             "invalidationCondition": text(insight.get("invalidationCondition")),
             "evidence": list(insight.get("evidence") or [])[:8],
             "counterEvidence": list(insight.get("counterEvidence") or [])[:8],
+            "hypotheses": [
+                dict(item)
+                for item in insight.get("hypotheses") or []
+                if isinstance(item, Mapping)
+            ][:8],
+            "researchLeadHypothesisId": text(
+                insight.get("researchLeadHypothesisId")
+            ),
+            "hypothesisComparisonState": text(
+                insight.get("hypothesisComparisonState")
+            ),
+            "unresolvedQuestions": list(
+                insight.get("unresolvedQuestions") or []
+            )[:8],
+            "epistemicSummary": text(insight.get("epistemicSummary")),
+            "decisionReadiness": text(insight.get("decisionReadiness")),
+            "causalChain": [
+                dict(item)
+                for item in insight.get("causalChain") or []
+                if isinstance(item, Mapping)
+            ][:8],
+            "followUpConditions": [
+                dict(item)
+                for item in insight.get("followUpConditions") or []
+                if isinstance(item, Mapping)
+            ][:8],
             "actionAuthority": text(delivery_policy.get("actionAuthority")),
             "adoptionState": text(delivery_policy.get("aiAdoptionState")),
             "notificationDecision": text(reconciliation.get("notificationDecision")) or "suppress",
@@ -562,7 +582,7 @@ class InvestmentCaseQueryService:
                 {
                     "id": "ai",
                     "label": "AI 해석",
-                    "state": "pending" if ai_processing else "warning" if ai_fallback or ai_failed else "pass",
+                    "state": "pending" if ai_processing else "pass" if ai_current else "warning",
                     "stateLabel": ai_state_label,
                     "reason": text(ai_insight.get("reason")),
                 },
@@ -650,7 +670,7 @@ class InvestmentCaseQueryService:
         rows = self._latest_ai_insights(account_id, symbol, 100)
         return next(
             (row for row in rows if text(row.get("subjectCaseId")) == subject_case_id),
-            rows[0] if rows else {},
+            {},
         )
 
     def _reasoning_case_for_subject(self, subject_case: Mapping[str, object]) -> Dict[str, object]:

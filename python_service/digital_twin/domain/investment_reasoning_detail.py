@@ -910,6 +910,23 @@ def subject_reasoning_lineage(
         _first(final, "selected_hypothesis_id", "selectedHypothesisId")
         or _first(ai_insight, "selected_hypothesis_id", "selectedHypothesisId")
     )
+    research_lead_hypothesis_id = _text(
+        _first(
+            ai_insight,
+            "research_lead_hypothesis_id",
+            "researchLeadHypothesisId",
+        )
+    )
+    ai_hypothesis_reviews = [
+        _mapping(item)
+        for item in ai_insight.get("hypotheses") or []
+        if isinstance(item, Mapping)
+    ]
+    ai_reviews_by_id = {
+        _identity(item, "hypothesisId", "hypothesis_id", "id"): item
+        for item in ai_hypothesis_reviews
+        if _identity(item, "hypothesisId", "hypothesis_id", "id")
+    }
     raw_hypotheses = [
         _mapping(item)
         for item in candidate.get("hypotheses") or []
@@ -929,6 +946,15 @@ def subject_reasoning_lineage(
         )
         for item in raw_hypotheses
     ]
+    for hypothesis in hypotheses:
+        hypothesis_id = _text(hypothesis.get("id"))
+        hypothesis["researchLead"] = bool(
+            research_lead_hypothesis_id
+            and hypothesis_id == research_lead_hypothesis_id
+        )
+        hypothesis["aiReview"] = _safe_value(
+            ai_reviews_by_id.get(hypothesis_id) or {}
+        )
     hypothesis_rules = {
         rule_id
         for item in hypotheses
@@ -1159,6 +1185,7 @@ def subject_reasoning_lineage(
         path_relations = [item for item in relations if item.get("ruleId") in rule_ids]
         path_rules = [item for item in rules if item.get("id") in rule_ids]
         path_traces = [item for item in traces if item.get("ruleId") in rule_ids]
+        ai_review = _mapping(hypothesis.get("aiReview"))
         scenarios.append({
             **hypothesis,
             "ruleIds": list(hypothesis.get("ruleIds") or []),
@@ -1168,6 +1195,7 @@ def subject_reasoning_lineage(
             "id": hypothesis.get("id") + ":lineage",
             "title": hypothesis.get("title"),
             "selected": bool(hypothesis.get("selected")),
+            "researchLead": bool(hypothesis.get("researchLead")),
             "selectionSource": hypothesis.get("selectionSource"),
             "eligibility": hypothesis.get("decisionEligibility") or "unknown",
             "nodes": [
@@ -1182,12 +1210,15 @@ def subject_reasoning_lineage(
                     "items": [{
                         "id": _text(ai_episode.get("episodeId")) or "ai-not-run",
                         "label": ai_status,
-                        "reason": ai_summary or (
+                        "reason": _text(ai_review.get("reasoning")) or ai_summary or (
                             "AI 모델 실행에 실패해 TypeDB 결과만 보존했습니다."
                             if ai_status == "typedb-fallback"
                             else "AI가 아직 이 추론 세대를 분석하지 않았습니다."
                         ),
                         "selectedHypothesisId": selected_hypothesis_id,
+                        "researchLeadHypothesisId": research_lead_hypothesis_id,
+                        "hypothesisId": hypothesis.get("id"),
+                        "hypothesisVerdict": _text(ai_review.get("verdict")),
                         "action": ai_action,
                         "publicationMode": publication_mode,
                         "aiAuthored": ai_authored,
@@ -1228,9 +1259,17 @@ def subject_reasoning_lineage(
         12,
     )
     comparison = {
-        "state": "typedb-and-ai" if ai_status == "ai-authored" else ai_status,
+        "state": (
+            "typedb-and-ai-research"
+            if ai_status == "ai-authored" and research_lead_hypothesis_id
+            else "typedb-and-ai"
+            if ai_status == "ai-authored"
+            else ai_status
+        ),
         "label": (
-            "TypeDB 추론과 AI 분석 연결 완료" if ai_status == "ai-authored"
+            "TypeDB 가설과 AI 연구 비교 완료"
+            if ai_status == "ai-authored" and research_lead_hypothesis_id
+            else "TypeDB 추론과 AI 분석 연결 완료" if ai_status == "ai-authored"
             else "AI 실패 · TypeDB 대체 해석" if ai_status == "typedb-fallback"
             else "TypeDB 추론만 완료" if ai_status == "not-run"
             else "AI 분석 계약 확인 필요"
@@ -1239,6 +1278,10 @@ def subject_reasoning_lineage(
         "typeDbCandidateActions": type_db_actions,
         "aiFinalAction": ai_action,
         "selectedHypothesisId": selected_hypothesis_id,
+        "researchLeadHypothesisId": research_lead_hypothesis_id,
+        "hypothesisComparisonState": _text(
+            ai_insight.get("hypothesisComparisonState")
+        ),
         "reason": ai_summary or (
             "AI가 작성한 분석이 아니므로 TypeDB 후보와 AI 의견을 동일하게 표시하지 않습니다."
             if ai_status == "typedb-fallback"
@@ -1349,6 +1392,7 @@ def subject_reasoning_lineage(
             ),
             "selectedRuleId": selected_rule_id,
             "selectedHypothesisId": selected_hypothesis_id,
+            "researchLeadHypothesisId": research_lead_hypothesis_id,
             "aiInsightEpisodeId": _text(ai_episode.get("episodeId")),
             "aiPromptReleaseId": _text(ai_episode.get("promptVersion")),
         },
@@ -1418,6 +1462,16 @@ def subject_reasoning_lineage(
             "promptVersion": _text(ai_episode.get("promptVersion")),
             "summary": ai_summary,
             "action": ai_action,
+            "hypothesisComparisonState": _text(
+                ai_insight.get("hypothesisComparisonState")
+            ),
+            "hypotheses": _safe_value(ai_hypothesis_reviews),
+            "researchLeadHypothesisId": research_lead_hypothesis_id,
+            "unresolvedQuestions": _safe_value(
+                ai_insight.get("unresolvedQuestions") or []
+            ),
+            "epistemicSummary": _text(ai_insight.get("epistemicSummary")),
+            "causalChain": _safe_value(ai_insight.get("causalChain") or []),
         },
         "traceRefs": {
             "subjectCaseId": _text(_first(subject, "subject_case_id", "subjectCaseId")),

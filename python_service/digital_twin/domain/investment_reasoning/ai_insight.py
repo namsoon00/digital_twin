@@ -299,8 +299,16 @@ def compact_ai_insight(value: Mapping[str, object]) -> Dict[str, object]:
             "invalidationCondition",
             "nextChecks",
             "selectedHypothesisId",
+            "researchLeadHypothesisId",
+            "hypothesisComparisonState",
             "reviewedHypothesisIds",
             "hypothesisReviews",
+            "hypotheses",
+            "unresolvedQuestions",
+            "epistemicSummary",
+            "decisionReadiness",
+            "causalChain",
+            "followUpConditions",
             "source",
         )
         if payload.get(key) not in (None, "", [], {})

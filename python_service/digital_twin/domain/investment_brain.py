@@ -2858,6 +2858,8 @@ def hypothesis_comparison_audit(
     candidates: Iterable[Dict[str, object]],
     ai_reviews: Iterable[Dict[str, object]] = None,
     requested_selected_hypothesis_id: object = "",
+    *,
+    allow_research_only: bool = False,
 ) -> HypothesisComparisonAudit:
     """Validate a bounded AI comparison against graph-owned candidates.
 
@@ -2870,7 +2872,14 @@ def hypothesis_comparison_audit(
     candidate_rows = [
         dict(item)
         for item in candidates or []
-        if isinstance(item, dict) and is_selectable_hypothesis_payload(item)
+        if isinstance(item, dict)
+        and (
+            is_selectable_hypothesis_payload(item)
+            or (
+                allow_research_only
+                and is_research_reviewable_hypothesis_payload(item)
+            )
+        )
     ]
     candidate_by_id = {
         str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip(): item
@@ -2930,10 +2939,25 @@ def hypothesis_comparison_audit(
         )
         invalid_evidence_ids.extend(invalid_supporting)
         invalid_evidence_ids.extend(invalid_counter)
+        verdict = known_state(
+            review.get("verdict"),
+            HYPOTHESIS_REVIEW_VERDICTS,
+            "unreviewed",
+        )
+        reasoning = str(review.get("reasoning") or "").strip()[:800]
+        evidence_state = str(
+            candidate.get("evidenceState")
+            or candidate.get("evidence_state")
+            or ""
+        ).strip().lower()
+        if allow_research_only and evidence_state == "blocked" and verdict == "supported":
+            verdict = "unresolved"
+            limitation = "필수 근거 상태가 blocked라 지지 가설로 확정할 수 없습니다."
+            reasoning = (reasoning + " " + limitation).strip()[:800]
         reviews.append(HypothesisReview(
             hypothesis_id=hypothesis_id,
-            verdict=known_state(review.get("verdict"), HYPOTHESIS_REVIEW_VERDICTS, "unreviewed"),
-            reasoning=str(review.get("reasoning") or "").strip()[:800],
+            verdict=verdict,
+            reasoning=reasoning,
             reviewed_supporting_evidence_ids=supporting,
             reviewed_counter_evidence_ids=counter,
         ))
@@ -3054,6 +3078,57 @@ def is_selectable_hypothesis_payload(candidate: Dict[str, object]) -> bool:
         or scope_state == SYSTEM_SAFETY_SCOPE
         or evidence_state in {"blocked", "quarantined"}
         or reference_only
+    )
+
+
+def is_research_reviewable_hypothesis_payload(candidate: Dict[str, object]) -> bool:
+    """Allow a graph-backed predictive hypothesis to be explained, never acted on.
+
+    Missing or blocked evidence is exactly what the research review must expose.
+    System guardrails, semantic reference rows, and quarantined hypotheses remain
+    outside the comparison set.
+    """
+
+    item = dict(candidate or {}) if isinstance(candidate, dict) else {}
+    hypothesis_id = str(
+        item.get("hypothesisId") or item.get("hypothesis_id") or ""
+    ).strip()
+    rule_ids = item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []
+    template_id = str(item.get("templateId") or item.get("template_id") or "")
+    approval_status = str(
+        item.get("approvalStatus") or item.get("approval_status") or ""
+    )
+    family_source = str(item.get("familySource") or item.get("family_source") or "")
+    scope_state = str(item.get("scopeState") or item.get("scope_state") or "")
+    knowledge_basis = item.get("knowledgeBasis") or item.get("knowledge_basis") or {}
+    knowledge_basis = dict(knowledge_basis or {}) if isinstance(knowledge_basis, dict) else {}
+    claim_contract = item.get("claimContract") or item.get("claim_contract") or {}
+    claim_contract = dict(claim_contract or {}) if isinstance(claim_contract, dict) else {}
+    qualification = item.get("qualification") or {}
+    qualification = dict(qualification or {}) if isinstance(qualification, dict) else {}
+    requires_hypothesis = (
+        knowledge_basis.get("requiresHypothesis")
+        if "requiresHypothesis" in knowledge_basis
+        else knowledge_basis.get("requires_hypothesis")
+    )
+    claim_type = str(
+        claim_contract.get("claimType") or claim_contract.get("claim_type") or ""
+    ).strip().lower()
+    qualification_status = str(qualification.get("status") or "").strip().lower()
+    explicit_research_only = bool(
+        item.get("researchOnly") or item.get("research_only")
+    )
+    return bool(
+        hypothesis_id
+        and rule_ids
+        and (requires_hypothesis is True or explicit_research_only)
+        and claim_type == "market-hypothesis"
+    ) and not (
+        template_id.startswith("hypothesis-template:system.")
+        or approval_status == "approved-safety-policy"
+        or family_source == "system-safety-policy"
+        or scope_state == SYSTEM_SAFETY_SCOPE
+        or qualification_status == "quarantined"
     )
 
 

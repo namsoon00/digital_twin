@@ -8,13 +8,13 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v16"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v15"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v17"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v16"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
 AI_DECISION_RESPONSE_SCHEMA = {
-    "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
+    "action": "NO_ACTION|BUY|ADD|HOLD|TRIM|SELL|AVOID",
     "summary": "현재 대응과 가장 중요한 이유를 쉬운 한국어 두 문장 이내로 설명",
     "currentActionPlan": "지금 할 일, 하지 말아야 할 일, 적용 범위를 한 문장으로 설명",
     "executionDecision": "현재 사용자가 할 일과 아직 하지 말아야 할 일을 한 문장으로 설명",
@@ -76,9 +76,11 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "reasoningLineage는 현재 종목의 불변 증거 경로다. identity의 종목·ABox 스냅샷·추론 세대와 proof의 ID가 일치하는 사실→관계→규칙→trace→가설 연결만 추론 근거로 사용한다.",
     "reasoningLineage.judgementEligible이 false이거나 integrity.state가 blocked이면 해당 계보를 행동 근거로 사용하지 말고 decisionReadiness를 insufficient로 제한한다. 다른 종목이나 다른 추론 세대의 근거를 결합하지 않는다.",
     "reasoningLineage의 규칙은 연결된 proof.facts의 실제 observedValue·source·asOf와 proof.traces가 있을 때만 설명한다. 내부 규칙명 대신 그 관측값과 투자 영향 경로를 사용자에게 설명한다.",
-    "notificationIntent가 context-observation이면 TypeDB의 NO_ACTION을 바꾸지 말고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
+    "notificationIntent가 context-observation 또는 review-observation이면 action을 NO_ACTION으로 쓰고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
     "reasoningTrigger가 있으면 왜 지금 다시 분석했는지를 실제 임계값·원문·근거 변화로 설명하고, relationLifecycle이 있으면 어떤 가설 관계가 새로 성립·강화·약화·해제됐는지 구분한다.",
     "가설이 qualification pending이면 관계 성립과 행동 검증 완료를 구분한다. 지금 확인된 투자 의미, 아직 금지된 매매 행동, 승격 또는 무효화에 필요한 실제 다음 데이터를 각각 명시한다.",
+    "hypothesisSet.comparisonMode이 research-only이면 모든 연구용 가설을 비교하고 selectedHypothesisId에는 현재 사실을 가장 잘 설명하는 연구 선두 가설을 쓰되, 이를 최종 투자 가설이나 행동 권한으로 승격하지 않는다. summary에는 선두 가설의 의미, 약점, 다음 반증 조건을 구체적으로 설명한다.",
+    "연구용 가설의 evidenceState가 blocked 또는 quarantined이면 supported로 판정하지 않는다. blocked는 누락되거나 검증되지 않은 필수 근거를 reasoning과 unresolvedQuestions에 명시하고 unresolved 또는 weakened로 판정한다.",
     "action만 사용자가 읽을 유일한 최종 행동이다. 정책·실행·품질 규칙이 선택 가설의 후보 행동을 제약하면 executionDecision과 disagreementReason에 검증 가능한 이유를 쓴다.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",

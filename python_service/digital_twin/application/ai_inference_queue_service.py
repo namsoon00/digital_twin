@@ -353,7 +353,7 @@ class NotificationAIRequestEnqueuer:
         narrative_only = review_mode == "context-narrative"
         context["notificationAiReviewMode"] = review_mode
         decision_case_id = subject_case_id or reasoning_case_id
-        if decision_case_id and self.reasoning_orchestrator is not None and not narrative_only:
+        if decision_case_id and self.reasoning_orchestrator is not None:
             context = self.reasoning_orchestrator.capture_ai_context(
                 decision_case_id,
                 context,
@@ -373,7 +373,11 @@ class NotificationAIRequestEnqueuer:
                 SUBJECT_SUPPRESSED,
             }
             captured_stage = str(captured_subject.get("stage") or "").strip().upper()
-            if captured_stage in terminal_stages:
+            narrative_source_stages = {SUBJECT_OBSERVATION, SUBJECT_REVIEW_ONLY}
+            if (
+                captured_stage in terminal_stages
+                and not (narrative_only and captured_stage in narrative_source_stages)
+            ):
                 reason = "종료된 투자 판단 건은 새 AI 판단 요청을 만들지 않습니다: " + captured_stage
                 suppress = getattr(self.queue, "suppress_source_notification", None)
                 if callable(suppress):

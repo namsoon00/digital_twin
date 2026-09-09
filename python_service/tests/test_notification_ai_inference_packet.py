@@ -86,6 +86,142 @@ def response_payload(view_id, support_id, next_id):
 
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
+    def _assert_research_compaction_preserves_each_rule_proof_path(self):
+        rule_ids = ["graph.research.rule:" + str(index) for index in range(4)]
+        required_evidence_ids = ["relation-evidence:" + str(index) for index in range(12)]
+        hypotheses = [
+            {
+                "hypothesisId": "hypothesis:research:" + str(index),
+                "familyId": "family:research:" + str(index),
+                "candidateAction": "ADD" if index == 1 else "HOLD",
+                "claim": "현재 관측을 설명하는 검증 대기 가설 " + str(index),
+                "supportingRuleIds": rule_ids[index:index + 2],
+                "supportingEvidenceIds": required_evidence_ids[index * 3:index * 3 + 3],
+                "counterEvidenceIds": required_evidence_ids[9:12],
+                "evidenceState": "blocked",
+                "claimContract": {
+                    "claimType": "market-hypothesis",
+                    "decisionAuthority": "conditional-investment-evidence",
+                },
+                "qualification": {
+                    "status": "shadow",
+                    "reason": "독립된 사후 결과가 부족합니다.",
+                },
+            }
+            for index in range(3)
+        ]
+        hypotheses[-1]["supportingRuleIds"] = [rule_ids[-1]]
+        ledger = [
+            {
+                "evidenceId": evidence_id,
+                "role": "counter" if index >= 9 else "support",
+                "kind": "ontology-assertion",
+                "label": "현재 세대 가설 근거 " + str(index),
+                "judgementEligible": False,
+            }
+            for index, evidence_id in enumerate(required_evidence_ids)
+        ] + [
+            {
+                "evidenceId": "context:" + str(index),
+                "role": "context",
+                "kind": "fact",
+                "label": "현재 상태 " + str(index),
+                "judgementEligible": True,
+            }
+            for index in range(8)
+        ]
+        core = {
+            "schemaVersion": "investment-ai-decision-core-v4",
+            "notificationIntent": "review-observation",
+            "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
+            "facts": {"currentPrice": 1775000, "volumeRatio": 0.84},
+            "decision": {
+                "actionEnvelope": {
+                    "executionAction": "NO_ACTION",
+                    "executionDisposition": "hypothesis-research-only",
+                },
+            },
+            "hypothesisSet": {
+                "subjectSymbol": "000660",
+                "inferenceGenerationId": "generation:research",
+                "comparisonMode": "research-only",
+                "hypotheses": hypotheses,
+            },
+            "reasoningLineage": {
+                "version": "subject-reasoning-lineage-v1",
+                "status": "ok",
+                "identity": {
+                    "symbol": "000660",
+                    "tboxReleaseId": "tbox:research",
+                    "ruleboxReleaseId": "rulebox:research",
+                    "sourceAboxSnapshotId": "abox:research",
+                    "inferenceGenerationId": "generation:research",
+                },
+                "integrity": {"state": "warning"},
+                "proof": {
+                    "sourceAboxSnapshotId": "abox:research",
+                    "inferenceGenerationId": "generation:research",
+                    "facts": [
+                        {
+                            "id": "fact:" + str(index),
+                            "conditionId": "condition:" + str(index),
+                            "kind": "model-signal",
+                            "observedValue": {"signal": "confirmed", "detail": "x" * 800},
+                            "source": "statistical-signal-pipeline",
+                            "ruleIds": [rule_id],
+                        }
+                        for index, rule_id in enumerate(rule_ids)
+                    ],
+                    "relations": [
+                        {
+                            "id": "relation:" + str(index),
+                            "type": "HAS_MODEL_SIGNAL",
+                            "ruleId": rule_id,
+                            "traceId": "trace:" + str(index),
+                        }
+                        for index, rule_id in enumerate(rule_ids)
+                    ],
+                    "rules": [
+                        {"id": rule_id, "decisionEligible": False}
+                        for rule_id in rule_ids
+                    ],
+                    "traces": [
+                        {
+                            "id": "trace:" + str(index),
+                            "ruleId": rule_id,
+                            "matched": True,
+                            "evidenceUsable": False,
+                        }
+                        for index, rule_id in enumerate(rule_ids)
+                    ],
+                },
+            },
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
+            "background": {"auditOnly": "원본 감사 자료 " * 5000},
+        }
+
+        fitted = fit_notification_ai_decision_core(core, 15_220)
+
+        proof = fitted["reasoningLineage"]["proof"]
+        self.assertEqual("minimum-research-review-contract", fitted["routingAudit"]["status"])
+        self.assertEqual(rule_ids, [item["id"] for item in proof["rules"]])
+        self.assertEqual(4, len(proof["facts"]))
+        self.assertEqual(4, len(proof["relations"]))
+        self.assertEqual(4, len(proof["traces"]))
+        self.assertEqual(
+            set(required_evidence_ids),
+            {
+                item["evidenceId"]
+                for item in fitted["evidenceLedger"]
+                if item["evidenceId"] in required_evidence_ids
+            },
+        )
+        self.assertLessEqual(
+            len(json.dumps(fitted, ensure_ascii=False, separators=(",", ":")).encode()),
+            15_220,
+        )
+
     def _assert_compaction_preserves_every_hypothesis_evidence_identifier(self):
         evidence_ids = ["evidence:" + str(index) for index in range(18)]
         hypotheses = [
@@ -161,6 +297,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertTrue(required_ids.issubset(retained_ids))
 
     def test_retry_budget_preserves_minimum_contract_for_large_live_shape(self):
+        self._assert_research_compaction_preserves_each_rule_proof_path()
         self._assert_compaction_preserves_every_hypothesis_evidence_identifier()
         self._assert_live_nested_audit_detail_cannot_block_ai_before_model_execution()
         ledger = [

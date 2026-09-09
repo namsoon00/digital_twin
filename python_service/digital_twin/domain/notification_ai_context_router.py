@@ -228,7 +228,8 @@ def _minimum_hypothesis_row(value: object) -> Dict[str, object]:
             "candidateAction", "horizon", "predictionTarget",
             "expectedDirection", "expectedOutcome", "outcomeMetric",
             "evidenceState", "verificationStatus", "approvalStatus",
-            "scopeState", "inferenceGenerationId",
+            "scopeState", "inferenceGenerationId", "decisionEligible",
+            "referenceOnly", "researchOnly",
         ),
     )
     row["claim"] = _sentence_text(item.get("claim"), 100)
@@ -387,6 +388,365 @@ def _minimum_reasoning_lineage(value: object, *, emergency: bool = False) -> Dic
                 ("id", "proofId", "ruleId", "label", "matched", "selected", "decisionEligible", "evidenceUsable", "matchedConditionIds", "evidenceRelationIds"),
                 1 if emergency else 2,
             ),
+        },
+    }
+
+
+def _minimum_research_reasoning_lineage(
+    value: object,
+    supporting_rule_ids: Iterable[object] = (),
+) -> Dict[str, object]:
+    """Keep each research hypothesis' compact TBox-to-ABox proof path."""
+
+    lineage = _mapping(value)
+    identity = _mapping(lineage.get("identity"))
+    integrity = _mapping(lineage.get("integrity"))
+    proof = _mapping(lineage.get("proof") or lineage.get("reasoning"))
+    requested_rule_ids = set(_unique_all(supporting_rule_ids))
+    raw_rules = [item for item in proof.get("rules") or [] if isinstance(item, dict)]
+    rules = [
+        item
+        for item in raw_rules
+        if not requested_rule_ids
+        or str(item.get("id") or item.get("ruleId") or "").strip()
+        in requested_rule_ids
+    ][:6]
+    if not rules:
+        rules = raw_rules[:3]
+    rule_ids = {
+        str(item.get("id") or item.get("ruleId") or "").strip()
+        for item in rules
+        if str(item.get("id") or item.get("ruleId") or "").strip()
+    }
+    traces = [
+        item
+        for item in proof.get("traces") or []
+        if isinstance(item, dict)
+        and (
+            not rule_ids
+            or str(item.get("ruleId") or "").strip() in rule_ids
+        )
+    ][:6]
+    trace_ids = {
+        str(item.get("id") or item.get("traceId") or "").strip()
+        for item in traces
+        if str(item.get("id") or item.get("traceId") or "").strip()
+    }
+    candidate_facts = [
+        item
+        for item in proof.get("facts") or []
+        if isinstance(item, dict)
+        and (
+            not rule_ids
+            or rule_ids.intersection(
+                str(rule_id or "").strip()
+                for rule_id in item.get("ruleIds") or []
+            )
+            or trace_ids.intersection(
+                str(trace_id or "").strip()
+                for trace_id in item.get("traceIds") or []
+            )
+        )
+    ]
+    facts = []
+    for rule_id in sorted(rule_ids):
+        matches = [
+            item
+            for item in candidate_facts
+            if rule_id in {
+                str(current or "").strip()
+                for current in item.get("ruleIds") or []
+            }
+        ]
+        matches.sort(key=lambda item: (
+            0 if str(item.get("kind") or "") == "model-signal" else 1,
+            str(item.get("conditionId") or item.get("id") or ""),
+        ))
+        selected = next((item for item in matches if item not in facts), None)
+        if selected is not None:
+            facts.append(selected)
+    if not facts:
+        facts = candidate_facts[:4]
+    facts = facts[:6]
+    fact_ids = {
+        str(item.get("id") or "").strip()
+        for item in facts
+        if str(item.get("id") or "").strip()
+    }
+    relations = [
+        item
+        for item in proof.get("relations") or []
+        if isinstance(item, dict)
+        and (
+            not rule_ids
+            or str(item.get("ruleId") or "").strip() in rule_ids
+            or str(item.get("traceId") or "").strip() in trace_ids
+            or str(item.get("source") or "").strip() in fact_ids
+        )
+    ][:6]
+    compact_facts = []
+    for item in facts:
+        row = _selected(
+            item,
+            (
+                "conditionId", "label", "kind", "field",
+                "observedValue", "expected", "source", "asOf",
+                "freshnessStatus",
+            ),
+        )
+        if "observedValue" in row:
+            row["observedValue"] = _bounded_detail_bytes(
+                row["observedValue"],
+                260,
+            )
+        if "expected" in row:
+            row["expected"] = _sentence_text(row["expected"], 100)
+        compact_facts.append(row)
+    compact_relations = [
+        _selected(
+            item,
+            (
+                "id", "type", "label", "source", "ruleId",
+                "polarity", "evidenceUsable",
+            ),
+        )
+        for item in relations
+    ]
+    compact_rules = []
+    for item in rules:
+        row = _selected(
+            item,
+            (
+                "id", "evidenceRole", "selected",
+                "decisionEligible", "candidateAction",
+            ),
+        )
+        compact_rules.append(row)
+    compact_traces = [
+        _selected(
+            item,
+            (
+                "id", "ruleId", "matched", "evidenceUsable",
+            ),
+        )
+        for item in traces
+    ]
+    return {
+        "version": lineage.get("version"),
+        "status": lineage.get("status"),
+        "judgementEligible": False,
+        "identity": _selected(
+            identity,
+            (
+                "subjectCaseId", "accountId", "symbol", "tboxReleaseId",
+                "tboxFingerprint", "ruleboxReleaseId", "ruleboxFingerprint",
+                "sourceAboxSnapshotId",
+                "inferenceGenerationId", "candidateSetId",
+                "candidateFingerprint",
+            ),
+        ),
+        "integrity": {
+            **_selected(integrity, ("state", "label")),
+            "issues": [
+                {
+                    **_selected(item, ("code", "state", "ruleId", "ruleIds")),
+                    "detail": _sentence_text(item.get("detail"), 100),
+                }
+                for item in list(integrity.get("issues") or [])[:3]
+                if isinstance(item, dict)
+            ],
+        },
+        "proof": {
+            **_selected(
+                proof,
+                (
+                    "sourceAboxSnapshotId", "inferenceGenerationId",
+                    "recordCompleteness",
+                ),
+            ),
+            "limitations": [
+                _sentence_text(item, 100)
+                for item in list(proof.get("limitations") or [])[:2]
+            ],
+            "facts": compact_facts,
+            "relations": compact_relations,
+            "rules": compact_rules,
+            "traces": compact_traces,
+        },
+    }
+
+
+def _minimum_research_review_core(value: object) -> Dict[str, object]:
+    """Remove execution-only duplication while preserving research provenance."""
+
+    core = _mapping(value)
+    hypothesis_set = _mapping(core.get("hypothesisSet"))
+    hypotheses = []
+    for item in hypothesis_set.get("hypotheses") or []:
+        if not isinstance(item, dict):
+            continue
+        qualification = _mapping(item.get("qualification"))
+        claim_contract = _mapping(item.get("claimContract"))
+        hypotheses.append({
+            **_selected(
+                item,
+                (
+                    "hypothesisId", "familyId", "stance", "candidateAction",
+                    "horizon", "evidenceState", "researchOnly",
+                ),
+            ),
+            "claim": _sentence_text(item.get("claim"), 120),
+            "supportingRuleIds": _unique_all(item.get("supportingRuleIds") or []),
+            "supportingEvidenceIds": _unique_all(
+                item.get("supportingEvidenceIds") or []
+            ),
+            "counterEvidenceIds": _unique_all(
+                item.get("counterEvidenceIds") or []
+            ),
+            "invalidationConditions": _unique(
+                [
+                    _sentence_text(value, 80)
+                    for value in item.get("invalidationConditions") or []
+                ],
+                1,
+            ),
+            "claimContract": _selected(
+                claim_contract,
+                ("claimType", "decisionAuthority"),
+            ),
+            "qualification": {
+                **_selected(
+                    qualification,
+                    (
+                        "status", "actionReturnAvailable",
+                        "decisiveOutcomeCount", "directionalHitRate",
+                        "averageActionAdjustedReturnPct",
+                    ),
+                ),
+                "reason": _sentence_text(qualification.get("reason"), 100),
+            },
+        })
+    required_evidence_ids = {
+        str(evidence_id or "").strip()
+        for hypothesis in hypotheses
+        for key in ("supportingEvidenceIds", "counterEvidenceIds")
+        for evidence_id in hypothesis.get(key) or []
+        if str(evidence_id or "").strip()
+    }
+    ledger = []
+    contextual_count = 0
+    for item in core.get("evidenceLedger") or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_id = str(item.get("evidenceId") or "").strip()
+        required = evidence_id in required_evidence_ids
+        if not required and contextual_count >= 4:
+            continue
+        if not required:
+            contextual_count += 1
+        row = _selected(
+            item,
+            (
+                "evidenceId", "role", "kind", "judgementEligible",
+            ),
+        )
+        row["label"] = _sentence_text(item.get("label"), 32)
+        ledger.append(row)
+    full_claim_contract = narrative_claim_evidence_contract(ledger)
+    full_allowed = _mapping(full_claim_contract.get("allowedEvidenceIdsBySection"))
+    observed_ids = [
+        str(item.get("evidenceId") or "")
+        for item in ledger
+        if str(item.get("evidenceId") or "")
+        and str(item.get("kind") or "") not in {"inference", "data-limit"}
+    ][:4]
+    limitation_ids = [
+        str(item.get("evidenceId") or "")
+        for item in ledger
+        if str(item.get("evidenceId") or "")
+        and (
+            str(item.get("role") or "") == "limitation"
+            or item.get("judgementEligible") is False
+        )
+    ][:4]
+    view_ids = observed_ids or list(full_allowed.get("view") or [])[:4]
+    claim_contract = {
+        "version": full_claim_contract.get("version"),
+        "allowedEvidenceIdsBySection": {
+            "view": view_ids,
+            "change": [],
+            "support": [],
+            "counter": [],
+            "next-condition": _unique([*view_ids, *limitation_ids], 6),
+            "limitation": limitation_ids,
+        },
+    }
+    decision = _mapping(core.get("decision"))
+    return {
+        "schemaVersion": core.get("schemaVersion"),
+        "notificationIntent": core.get("notificationIntent"),
+        "subject": core.get("subject"),
+        "question": core.get("question"),
+        "decision": {
+            "typeDbDecision": _selected(
+                decision.get("typeDbDecision"),
+                ("primaryAction", "judgementBlocked", "selectedRuleId"),
+            ),
+            "actionEnvelope": _selected(
+                decision.get("actionEnvelope"),
+                (
+                    "executionAction", "executionDisposition", "allowedActions",
+                    "blockedActions", "judgementBlocked", "selectedRuleId",
+                ),
+            ),
+            "readiness": _selected(
+                decision.get("readiness"),
+                (
+                    "state", "eligibleHypothesisCount", "eligibleFamilyCount",
+                    "referenceHypothesisCount",
+                ),
+            ),
+        },
+        "reasoningTrigger": _minimum_transition_detail(
+            core.get("reasoningTrigger") or {}
+        ),
+        "relationLifecycle": _minimum_transition_detail(
+            core.get("relationLifecycle") or {}
+        ),
+        "facts": _selected(core.get("facts"), CORE_FACT_KEYS),
+        "hypothesisSet": {
+            **_selected(
+                hypothesis_set,
+                (
+                    "subjectSymbol", "inferenceGenerationId", "comparisonMode",
+                ),
+            ),
+            "decisionEvidenceSummary": _selected(
+                hypothesis_set.get("decisionEvidenceSummary"),
+                (
+                    "totalHypothesisCount", "eligibleHypothesisCount",
+                    "eligibleFamilyCount", "referenceHypothesisCount",
+                ),
+            ),
+            "hypotheses": hypotheses,
+        },
+        "reasoningLineage": _minimum_research_reasoning_lineage(
+            core.get("reasoningLineage") or {},
+            [
+                rule_id
+                for hypothesis in hypotheses
+                for rule_id in hypothesis.get("supportingRuleIds") or []
+            ],
+        ),
+        "evidenceLedger": ledger,
+        "narrativeClaimContract": claim_contract,
+        "dataLimits": [
+            _bounded_detail_bytes(item, 260)
+            for item in list(core.get("dataLimits") or [])[:3]
+        ],
+        "routingAudit": {
+            "version": AI_DECISION_CONTEXT_ROUTE_VERSION,
+            "status": "minimum-research-review-contract",
         },
     }
 
@@ -627,6 +987,17 @@ def _active_rule_rows(inference: Dict[str, object], envelope: Dict[str, object])
 
 def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
     source = _mapping(inference.get("hypothesisSet"))
+    source_summary = _mapping(source.get("decisionEvidenceSummary"))
+    eligible_ids = set(_unique_all(
+        source.get("eligibleHypothesisIds")
+        or source_summary.get("eligibleHypothesisIds")
+        or []
+    ))
+    reference_ids = set(_unique_all(
+        source.get("referenceHypothesisIds")
+        or source_summary.get("referenceHypothesisIds")
+        or []
+    ))
     lineage = _mapping(inference.get("lineage"))
     lineage_proof = _mapping(lineage.get("proof") or lineage.get("reasoning"))
     lineage_rule_ids = {
@@ -688,6 +1059,12 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
                 row["supportingRuleIds"] = [template_rule_id]
         if not set(row.get("supportingRuleIds") or []).intersection(known_rule_ids):
             continue
+        hypothesis_id = str(row.get("hypothesisId") or "").strip()
+        row["decisionEligible"] = hypothesis_id in eligible_ids
+        row["referenceOnly"] = hypothesis_id in reference_ids
+        row["researchOnly"] = bool(
+            hypothesis_id in reference_ids and hypothesis_id not in eligible_ids
+        )
         rows.append(row)
         if len(rows) >= 12:
             break
@@ -700,23 +1077,31 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
         source,
         (
             "hypothesisSetId", "questionId", "subjectSymbol", "inferenceGenerationId",
-            "scopeVersion", "createdAt",
+            "scopeVersion", "createdAt", "comparisonMode", "reviewHypothesisIds",
+            "eligibleHypothesisIds", "referenceHypothesisIds",
         ),
     )
     metadata["comparisonRequired"] = bool(rows)
     metadata["minimumComparisonCount"] = min(required_minimum, available_count) if available_count else 0
     metadata["requiredMinimumComparisonCount"] = required_minimum
-    source_summary = _mapping(source.get("decisionEvidenceSummary"))
-    family_ids = {
-        str(item.get("familyId") or item.get("causalSignature") or item.get("hypothesisId") or "").strip()
+    retained_ids = {
+        str(item.get("hypothesisId") or "").strip()
         for item in rows
-        if str(item.get("familyId") or item.get("causalSignature") or item.get("hypothesisId") or "").strip()
+        if str(item.get("hypothesisId") or "").strip()
     }
+    retained_eligible_ids = sorted(retained_ids.intersection(eligible_ids))
+    retained_reference_ids = sorted(retained_ids.intersection(reference_ids))
     metadata["decisionEvidenceSummary"] = {
         "totalHypothesisCount": available_count,
-        "eligibleHypothesisCount": available_count,
-        "eligibleFamilyCount": len(family_ids),
-        "referenceHypothesisCount": int(source_summary.get("referenceHypothesisCount") or 0),
+        "eligibleHypothesisCount": len(retained_eligible_ids),
+        "eligibleFamilyCount": len({
+            str(item.get("familyId") or item.get("causalSignature") or item.get("hypothesisId") or "").strip()
+            for item in rows
+            if str(item.get("hypothesisId") or "").strip() in set(retained_eligible_ids)
+        }),
+        "referenceHypothesisCount": len(retained_reference_ids),
+        "eligibleHypothesisIds": retained_eligible_ids,
+        "referenceHypothesisIds": retained_reference_ids,
     }
     return metadata, rows
 
@@ -1315,6 +1700,15 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
 
     if _json_bytes(fitted) <= budget:
         return fitted
+    if (
+        str(_mapping(fitted.get("hypothesisSet")).get("comparisonMode") or "")
+        .strip()
+        .lower()
+        == "research-only"
+    ):
+        research_core = _minimum_research_review_core(fitted)
+        if _json_bytes(research_core) <= budget:
+            return research_core
     fitted.pop("background", None)
     compact_routing_audit = _mapping(fitted.get("routingAudit"))
     fitted["routingAudit"] = {
@@ -1363,7 +1757,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
                 "hypothesisId", "templateId", "familyId", "stance", "candidateAction",
                 "predictionTarget", "expectedDirection", "expectedOutcome", "outcomeMetric",
                 "evidenceState", "verificationStatus", "approvalStatus", "scopeState", "horizon",
-                "inferenceGenerationId",
+                "inferenceGenerationId", "decisionEligible", "referenceOnly", "researchOnly",
                 "claimContract", "qualification",
             )),
             "claim": _sentence_text(item.get("claim"), 140),
@@ -1475,7 +1869,8 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
                 "hypothesisSetId", "questionId", "subjectSymbol",
                 "inferenceGenerationId", "scopeVersion", "comparisonRequired",
                 "minimumComparisonCount", "requiredMinimumComparisonCount",
-                "decisionEvidenceSummary",
+                "decisionEvidenceSummary", "comparisonMode", "reviewHypothesisIds",
+                "eligibleHypothesisIds", "referenceHypothesisIds",
             ),
         ),
         "hypotheses": [
@@ -1564,6 +1959,15 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     }
     if _json_bytes(fitted) <= budget:
         return fitted
+    if (
+        str(_mapping(fitted.get("hypothesisSet")).get("comparisonMode") or "")
+        .strip()
+        .lower()
+        == "research-only"
+    ):
+        research_core = _minimum_research_review_core(fitted)
+        if _json_bytes(research_core) <= budget:
+            return research_core
     raise ValueError(
         "AI decision core cannot preserve TypeDB hypotheses within "
         + str(budget)

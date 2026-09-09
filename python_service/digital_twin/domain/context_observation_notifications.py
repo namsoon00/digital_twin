@@ -14,9 +14,9 @@ from .notification_ai_context import is_graph_backed_relation_context
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
 CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v4"
-REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v1"
+REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v2"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
-REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v4"
+REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v5"
 
 DELIVERY_POLICY_BLOCKING_DECISIONS = {
     "baseline",
@@ -281,9 +281,23 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         )
         if _text(item)
     ]
+    reference_hypothesis_ids = [
+        _text(item)
+        for item in (
+            synthesis.get("reference_hypothesis_ids")
+            or synthesis.get("referenceHypothesisIds")
+            or []
+        )
+        if _text(item)
+    ]
     qualification_pending = bool(
         action_authority == "originate"
         and disposition_code == "HYPOTHESIS_QUALIFICATION_PENDING"
+        and not execution_eligible_hypothesis_ids
+    )
+    research_only = bool(
+        disposition_code == "HYPOTHESIS_RESEARCH_ONLY"
+        and reference_hypothesis_ids
         and not execution_eligible_hypothesis_ids
     )
     if action_authority not in {"modify", "observe"} and not qualification_pending:
@@ -302,7 +316,13 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         )
         if _text(item)
     ]
-    if not selected_rule_id or not eligible_hypothesis_ids:
+    review_hypothesis_ids = list(dict.fromkeys([
+        *eligible_hypothesis_ids,
+        *reference_hypothesis_ids,
+    ]))
+    if not review_hypothesis_ids:
+        return {}
+    if not research_only and (not selected_rule_id or not eligible_hypothesis_ids):
         return {}
     subject = _mapping(relation.get("subject"))
     facts = _mapping(relation.get("facts"))
@@ -314,6 +334,8 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         "messageClass": (
             "typedb-hypothesis-qualification-review"
             if qualification_pending
+            else "typedb-hypothesis-research-review"
+            if research_only
             else "typedb-risk-or-constraint-review"
         ),
         "selectedRuleId": selected_rule_id,
@@ -331,7 +353,10 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         "market": _text(subject.get("market") or facts.get("market")).upper(),
         "eligibleHypothesisIds": eligible_hypothesis_ids,
         "executionEligibleHypothesisIds": execution_eligible_hypothesis_ids,
+        "referenceHypothesisIds": reference_hypothesis_ids,
+        "reviewHypothesisIds": review_hypothesis_ids,
         "qualificationPending": qualification_pending,
+        "researchOnly": research_only,
         "dispositionCode": disposition_code,
         "relationLifecycleTransition": lifecycle_transition,
         "graphSource": _text(relation.get("source")),

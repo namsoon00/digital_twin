@@ -195,6 +195,51 @@ class SubjectReasoningLineageTests(unittest.TestCase):
             [node["layer"] for node in lineage["explanation"]["causalPaths"][0]["nodes"]],
         )
 
+        research_episode = copy.deepcopy(fallback_ai_episode())
+        research_episode.update({
+            "publicationMode": "ai-authored",
+            "aiAuthored": True,
+            "publicationContractPassed": True,
+            "promptVersion": "investment-ai-judge-v17",
+            "insight": {
+                "action": "NO_ACTION",
+                "summary": "회복 가설이 현재 사실을 가장 잘 설명하지만 검증 표본은 부족합니다.",
+                "researchLeadHypothesisId": "hypothesis:sk:fundamental",
+                "hypothesisComparisonState": "research-reviewed",
+                "hypotheses": [{
+                    "hypothesisId": "hypothesis:sk:fundamental",
+                    "verdict": "supported",
+                    "reasoning": "매출과 가격 회복 근거가 함께 확인됐습니다.",
+                }],
+            },
+        })
+        research_subject = subject_case()
+        research_subject["synthesis"]["selectedRuleId"] = ""
+        research_subject["candidateSet"]["eligibleHypothesisIds"] = []
+        research_subject["candidateSet"]["referenceHypothesisIds"] = [
+            "hypothesis:sk:fundamental"
+        ]
+        research_lineage = subject_reasoning_lineage(
+            research_subject,
+            reasoning_case(),
+            research_episode,
+        )
+        scenario = research_lineage["scenarios"][0]
+        research_path = research_lineage["explanation"]["causalPaths"][0]
+        self.assertEqual("ai-authored", research_lineage["ai"]["status"])
+        self.assertEqual(
+            "hypothesis:sk:fundamental",
+            research_lineage["identity"]["researchLeadHypothesisId"],
+        )
+        self.assertTrue(scenario["researchLead"])
+        self.assertFalse(scenario["selected"])
+        self.assertEqual("supported", scenario["aiReview"]["verdict"])
+        self.assertTrue(research_path["researchLead"])
+        self.assertEqual(
+            "supported",
+            research_path["nodes"][-1]["items"][0]["hypothesisVerdict"],
+        )
+
     def test_ai_core_receives_same_immutable_proof_and_rejects_wrong_subject(self):
         lineage = subject_reasoning_lineage(
             subject_case(),

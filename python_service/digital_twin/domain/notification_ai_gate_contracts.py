@@ -101,6 +101,7 @@ class NotificationAIValidatedResponse:
     strategy_guide: Dict[str, object] = field(default_factory=dict)
     hypotheses: List[Dict[str, object]] = field(default_factory=list)
     selected_hypothesis_id: str = ""
+    research_lead_hypothesis_id: str = ""
     hypothesis_comparison_state: str = "unavailable"
     hypothesis_selection_source: str = "not-selected"
     decision_guardrails: List[Dict[str, object]] = field(default_factory=list)
@@ -173,6 +174,7 @@ class NotificationAIValidatedResponse:
             "validationWarnings": "validation_warnings",
             "strategyGuide": "strategy_guide",
             "selectedHypothesisId": "selected_hypothesis_id",
+            "researchLeadHypothesisId": "research_lead_hypothesis_id",
             "hypothesisComparisonState": "hypothesis_comparison_state",
             "hypothesisSelectionSource": "hypothesis_selection_source",
             "decisionGuardrails": "decision_guardrails",
@@ -251,6 +253,7 @@ class NotificationAIValidatedResponse:
         payload["validationWarnings"] = payload.pop("validation_warnings")
         payload["strategyGuide"] = payload.pop("strategy_guide")
         payload["selectedHypothesisId"] = payload.pop("selected_hypothesis_id")
+        payload["researchLeadHypothesisId"] = payload.pop("research_lead_hypothesis_id")
         payload["hypothesisComparisonState"] = payload.pop("hypothesis_comparison_state")
         payload["hypothesisSelectionSource"] = payload.pop("hypothesis_selection_source")
         payload["decisionGuardrails"] = payload.pop("decision_guardrails")

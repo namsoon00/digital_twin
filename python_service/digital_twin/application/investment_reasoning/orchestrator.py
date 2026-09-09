@@ -153,7 +153,12 @@ class _EphemeralSubjectDecisionCaseStore:
         return []
 
 
-def _prompt_hypotheses(subject_case: SubjectDecisionCase, relation: Mapping[str, object]):
+def _prompt_hypotheses(
+    subject_case: SubjectDecisionCase,
+    relation: Mapping[str, object],
+    *,
+    include_reference: bool = False,
+):
     brain = _mapping(_mapping(relation).get("investmentBrain"))
     display_set = _mapping(brain.get("hypothesisSet")) or _mapping(_mapping(relation).get("hypothesisSet"))
     display_rows = [
@@ -162,9 +167,11 @@ def _prompt_hypotheses(subject_case: SubjectDecisionCase, relation: Mapping[str,
         if isinstance(item, Mapping)
     ]
     eligible_ids = set(subject_case.candidate_set.eligible_hypothesis_ids)
+    reference_ids = set(subject_case.candidate_set.reference_hypothesis_ids)
+    prompt_ids = eligible_ids | reference_ids if include_reference else eligible_ids
     rows = []
     for hypothesis in subject_case.candidate_set.hypotheses:
-        if hypothesis.hypothesis_id not in eligible_ids:
+        if hypothesis.hypothesis_id not in prompt_ids:
             continue
         rule_ids = tuple(sorted(hypothesis.supporting_rule_ids))
         display = next(
@@ -217,6 +224,12 @@ def _prompt_hypotheses(subject_case: SubjectDecisionCase, relation: Mapping[str,
             "accountHypothesisOverlayId": hypothesis.account_hypothesis_overlay_id,
             "portfolioWorldId": hypothesis.portfolio_world_id,
             "decisionEligibilitySource": "subjectDecisionCase.candidateSet",
+            "decisionEligible": hypothesis.hypothesis_id in eligible_ids,
+            "referenceOnly": hypothesis.hypothesis_id in reference_ids,
+            "researchOnly": (
+                hypothesis.hypothesis_id in reference_ids
+                and hypothesis.hypothesis_id not in eligible_ids
+            ),
             "candidateFingerprint": subject_case.candidate_set.fingerprint,
         })
         if not str(row.get("stance") or "").strip():
@@ -521,15 +534,31 @@ class InvestmentReasoningOrchestrator:
         reasoning_case = self.required(subject_case.batch_case_id)
         relation = _mapping(enriched.get("ontologyRelationContext"))
         if relation:
-            prompt_hypotheses = _prompt_hypotheses(subject_case, relation)
+            narrative_only = str(
+                enriched.get("notificationAiReviewMode") or ""
+            ).strip().lower() == "context-narrative"
+            prompt_hypotheses = _prompt_hypotheses(
+                subject_case,
+                relation,
+                include_reference=narrative_only,
+            )
             brain = _mapping(relation.get("investmentBrain"))
             hypothesis_set = _mapping(brain.get("hypothesisSet")) or _mapping(relation.get("hypothesisSet"))
             hypothesis_set.update({
                 "hypotheses": prompt_hypotheses,
-                "eligibleHypothesisIds": [item["hypothesisId"] for item in prompt_hypotheses],
+                "eligibleHypothesisIds": list(
+                    subject_case.candidate_set.eligible_hypothesis_ids
+                ),
                 "executionEligibleHypothesisIds": list(
                     subject_case.candidate_set.execution_eligible_hypothesis_ids
                 ),
+                "referenceHypothesisIds": list(
+                    subject_case.candidate_set.reference_hypothesis_ids
+                ),
+                "reviewHypothesisIds": [
+                    item["hypothesisId"] for item in prompt_hypotheses
+                ],
+                "comparisonMode": "research-only" if narrative_only else "decision",
                 "candidateSetId": subject_case.candidate_set.candidate_set_id,
                 "candidateFingerprint": subject_case.candidate_set.fingerprint,
                 "accountId": subject_case.account_id,
@@ -1294,6 +1323,10 @@ class InvestmentReasoningOrchestrator:
             "executionEligibleHypothesisIds": list(
                 subject_case.candidate_set.execution_eligible_hypothesis_ids
             ),
+            "referenceHypothesisIds": list(
+                subject_case.candidate_set.reference_hypothesis_ids
+            ),
+            "dispositionCode": subject_case.candidate_set.disposition_code,
             "allowedActions": list(subject_case.candidate_set.allowed_actions),
             "blockedActions": list(subject_case.candidate_set.blocked_actions),
             "actionAuthority": subject_case.synthesis.action_authority,

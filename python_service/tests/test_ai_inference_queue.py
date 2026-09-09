@@ -13,6 +13,9 @@ from digital_twin.application.ai_inference_queue_service import (
     preserve_verified_ai_narrative,
     typedb_inference_fallback_response,
 )
+from digital_twin.application.notification_ai_gate_audit import (
+    context_with_validated_ai_response,
+)
 from digital_twin.application.notification.admission import NotificationAdmissionOutcome
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.ai_inference_queue import (
@@ -258,8 +261,10 @@ class AIInferenceQueueTests(unittest.TestCase):
 
         class Orchestrator:
             ai_queue_transitions = 0
+            capture_calls = 0
 
             def capture_ai_context(self, _subject_case_id, context):
+                self.capture_calls += 1
                 return dict(context)
 
             def ai_queued(self, *_args):
@@ -314,6 +319,32 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("context-narrative", queued_request.review_mode)
         self.assertTrue(queued_request.detached_from_notification)
         self.assertEqual(0, orchestrator.ai_queue_transitions)
+        self.assertEqual(1, orchestrator.capture_calls)
+
+        response = NotificationAIValidatedResponse(
+            action="ADD",
+            hypotheses=[{
+                "hypothesisId": "hypothesis:review-only",
+                "claim": "가격 회복이 이어질 수 있습니다.",
+                "verdict": "supported",
+                "reasoning": "가격과 수급 근거가 같은 방향입니다.",
+            }],
+            selected_hypothesis_id="hypothesis:review-only",
+            hypothesis_comparison_state="completed",
+            hypothesis_selection_source="ai",
+        )
+        validated = context_with_validated_ai_response(
+            {**job.context, "notificationAiReviewMode": "context-narrative"},
+            response,
+        )["notificationAiValidatedResponse"]
+        self.assertEqual("NO_ACTION", validated["action"])
+        self.assertEqual("", validated["selectedHypothesisId"])
+        self.assertEqual(
+            "hypothesis:review-only",
+            validated["researchLeadHypothesisId"],
+        )
+        self.assertEqual("research-reviewed", validated["hypothesisComparisonState"])
+        self.assertTrue(validated["hypotheses"][0]["researchOnly"])
 
     def assert_subject_decision_ai_exists_before_notification_and_promotes_after_completion(self):
         self.setUp()
@@ -853,7 +884,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v4", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v5", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v16", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-judge-v17", prompt_audit["promptRelease"]["version"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])

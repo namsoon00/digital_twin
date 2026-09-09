@@ -15,7 +15,11 @@ from .decision_evidence_contract import (
     temporal_evidence_summary,
 )
 from .decision_follow_up import normalize_follow_up_conditions
-from .investment_brain import hypothesis_comparison_audit, is_selectable_hypothesis_payload
+from .investment_brain import (
+    hypothesis_comparison_audit,
+    is_research_reviewable_hypothesis_payload,
+    is_selectable_hypothesis_payload,
+)
 from .investment_decision_history import previous_decision_episode_value
 from .investment_strategy_guidance import merge_strategy_context, strategy_guidance_context
 from .notification_ai import (
@@ -669,16 +673,30 @@ def normalized_hypothesis_comparison(
 ) -> Dict[str, object]:
     payload = payload if isinstance(payload, dict) else {}
     hypothesis_set = hypothesis_context_payload(context)
+    research_only = bool(
+        str(hypothesis_set.get("comparisonMode") or "").strip().lower()
+        == "research-only"
+        or str((context or {}).get("notificationAiReviewMode") or "").strip().lower()
+        == "context-narrative"
+    )
     candidates = [
         item
         for item in hypothesis_set.get("hypotheses") or []
-        if isinstance(item, dict) and is_selectable_hypothesis_payload(item)
+        if isinstance(item, dict)
+        and (
+            is_selectable_hypothesis_payload(item)
+            or (
+                research_only
+                and is_research_reviewable_hypothesis_payload(item)
+            )
+        )
     ]
     evidence_summary = hypothesis_set_evidence_summary(hypothesis_set)
     audit = hypothesis_comparison_audit(
         candidates,
         [item for item in payload.get("hypotheses") or [] if isinstance(item, dict)],
         payload.get("selectedHypothesisId") or payload.get("selected_hypothesis_id"),
+        allow_research_only=research_only,
     )
     review_by_id = {item.hypothesis_id: item for item in audit.reviews}
     reviews: List[Dict[str, object]] = []
@@ -1299,6 +1317,8 @@ def compact_hypothesis_set_for_ai(payload: object) -> Dict[str, object]:
         for key in [
             "hypothesisSetId", "questionId", "subjectSymbol", "inferenceGenerationId",
             "comparisonRequired", "minimumComparisonCount", "scopeVersion", "createdAt",
+            "comparisonMode", "reviewHypothesisIds", "eligibleHypothesisIds",
+            "referenceHypothesisIds",
         ]
         if hypothesis_set.get(key) not in (None, "", [], {})
     }
@@ -1314,11 +1334,18 @@ def compact_hypothesis_set_for_ai(payload: object) -> Dict[str, object]:
     }
     hypotheses: List[Dict[str, object]] = []
     reference_hypotheses: List[Dict[str, object]] = []
+    research_only = str(
+        hypothesis_set.get("comparisonMode") or ""
+    ).strip().lower() == "research-only"
     keys = [
         "hypothesisId", "familyId", "causalSignature", "templateId", "templateLabel",
         "claim", "stance", "scopeState", "marketHypothesisId", "accountHypothesisOverlayId",
         "approvalStatus", "verificationStatus", "supportingEvidenceIds", "counterEvidenceIds",
         "causalPathIds", "requiredEvidenceTypes", "assumptions", "invalidationConditions",
+        "candidateAction", "horizon", "predictionTarget", "expectedDirection",
+        "expectedOutcome", "outcomeMetric", "falsificationContract", "evidenceState",
+        "inferenceGenerationId", "claimContract", "qualification", "decisionEligible",
+        "referenceOnly", "researchOnly",
     ]
     for item in hypothesis_set.get("hypotheses") or []:
         if not isinstance(item, dict):
@@ -1332,7 +1359,13 @@ def compact_hypothesis_set_for_ai(payload: object) -> Dict[str, object]:
         for key in ["supportingEvidenceIds", "counterEvidenceIds", "causalPathIds"]:
             if key in row and isinstance(row[key], list):
                 row[key] = row[key][:6]
-        if is_selectable_hypothesis_payload(item):
+        if (
+            is_selectable_hypothesis_payload(item)
+            or (
+                research_only
+                and is_research_reviewable_hypothesis_payload(item)
+            )
+        ):
             if len(hypotheses) < 6:
                 hypotheses.append(row)
         elif len(reference_hypotheses) < 4:
@@ -2147,7 +2180,10 @@ def validated_response_from_payload(
         return fallback
 
     submitted_action = str(payload.get("action") or "").strip().upper()
-    action = submitted_action
+    narrative_only = str(
+        (context or {}).get("notificationAiReviewMode") or ""
+    ).strip().lower() == "context-narrative"
+    action = "HOLD" if narrative_only and submitted_action == "NO_ACTION" else submitted_action
     action_adjustment_reason = ""
     if action not in VALID_ACTIONS:
         warnings.append("지원하지 않는 action 값이라 로컬 판단으로 대체했습니다.")

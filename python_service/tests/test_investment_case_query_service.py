@@ -300,6 +300,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
                 "candidateFingerprint": "candidate:1",
                 "model": "gpt-5.6-sol",
                 "reasoningEffort": "max",
+                "promptVersion": "investment-ai-judge-v17",
                 "validationState": "conditional",
                 "createdAt": "2026-08-20T03:01:00Z",
                 "insight": {
@@ -308,6 +309,15 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
                     "summary": "가격 회복을 확인하되 TypeDB 행동 권한을 따릅니다.",
                     "nextChecks": ["다음 관측에서도 회복이 유지되는지 확인"],
                     "evidence": ["가격 회복 규칙이 성립했습니다."],
+                    "hypotheses": [{
+                        "hypothesisId": "hypothesis:2",
+                        "claim": "가격 회복이 이어집니다.",
+                        "verdict": "supported",
+                        "reasoning": "현재 세대의 가격 근거가 지지합니다.",
+                    }],
+                    "researchLeadHypothesisId": "hypothesis:2",
+                    "hypothesisComparisonState": "research-reviewed",
+                    "epistemicSummary": "가격 회복은 확인됐지만 지속 여부는 미확인입니다.",
                 },
                 "reconciliation": {
                     "notificationDecision": "suppress",
@@ -334,6 +344,9 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertTrue(insight["currentGeneration"])
         self.assertEqual("gpt-5.6-sol", insight["model"])
         self.assertEqual("max", insight["reasoningEffort"])
+        self.assertEqual("investment-ai-judge-v17", insight["promptVersion"])
+        self.assertEqual("hypothesis:2", insight["researchLeadHypothesisId"])
+        self.assertEqual("supported", insight["hypotheses"][0]["verdict"])
         self.assertEqual("suppress", insight["notificationDecision"])
         self.assertEqual("AI 해석", ai_dimension["label"])
         self.assertEqual("해석 완료", ai_dimension["stateLabel"])
@@ -360,6 +373,28 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual("previous-generation", projected["status"])
         self.assertFalse(projected["currentGeneration"])
         self.assertIn("이전", projected["reason"])
+
+        stale_only = InvestmentCaseQueryService(
+            FakeDecisionStore([episode()]),
+            subject_case_repository=FakeSubjectCaseStore([subject_case]),
+            ai_insight_repository=FakeAIInsightStore([{
+                "episodeId": "ai-insight:stale-only",
+                "subjectCaseId": "subject:previous",
+                "accountId": "default",
+                "symbol": "AAPL",
+                "inferenceGenerationId": "generation:previous",
+                "candidateFingerprint": "candidate:previous",
+                "insight": {"summary": "이전 세대 해석"},
+            }]),
+        ).list_cases()
+        stale_item = stale_only["items"][0]
+        stale_ai = stale_item["subjectDecisionCase"]["aiInsight"]
+        stale_dimension = next(
+            row for row in stale_item["statusDimensions"] if row["id"] == "ai"
+        )
+        self.assertEqual("not-run", stale_ai["status"])
+        self.assertEqual("warning", stale_dimension["state"])
+        self.assertNotIn("이전 AI 해석 있음", stale_item["phaseLabel"])
 
         fallback = InvestmentCaseQueryService._ai_insight_projection(
             {

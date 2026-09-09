@@ -847,7 +847,10 @@ class AIInferenceQueueRunner:
             prompt_limits = []
             for value in (preferred_prompt_limit, 15 * 1024, self.max_prompt_bytes):
                 bounded = min(self.max_prompt_bytes, max(12 * 1024, int(value or 0)))
-                if bounded not in prompt_limits:
+                if (
+                    bounded not in prompt_limits
+                    and (not prompt_limits or bounded > prompt_limits[-1])
+                ):
                     prompt_limits.append(bounded)
             for prompt_limit in prompt_limits:
                 try:

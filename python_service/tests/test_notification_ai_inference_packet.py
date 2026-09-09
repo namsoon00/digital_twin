@@ -132,6 +132,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         ]
         core = {
             "schemaVersion": "investment-ai-decision-core-v4",
+            "reviewMode": "context-narrative",
             "notificationIntent": "review-observation",
             "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
             "facts": {"currentPrice": 1775000, "volumeRatio": 0.84},
@@ -144,7 +145,6 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             "hypothesisSet": {
                 "subjectSymbol": "000660",
                 "inferenceGenerationId": "generation:research",
-                "comparisonMode": "research-only",
                 "hypotheses": hypotheses,
             },
             "reasoningLineage": {
@@ -205,6 +205,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
 
         proof = fitted["reasoningLineage"]["proof"]
         self.assertEqual("minimum-research-review-contract", fitted["routingAudit"]["status"])
+        self.assertEqual("context-narrative", fitted["reviewMode"])
         self.assertEqual(rule_ids, [item["id"] for item in proof["rules"]])
         self.assertEqual(4, len(proof["facts"]))
         self.assertEqual(4, len(proof["relations"]))

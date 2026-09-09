@@ -684,6 +684,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
     decision = _mapping(core.get("decision"))
     return {
         "schemaVersion": core.get("schemaVersion"),
+        "reviewMode": core.get("reviewMode"),
         "notificationIntent": core.get("notificationIntent"),
         "subject": core.get("subject"),
         "question": core.get("question"),
@@ -1514,6 +1515,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     )
     core = {
         "schemaVersion": AI_DECISION_CORE_VERSION,
+        "reviewMode": brief.get("reviewMode"),
         "notificationIntent": brief.get("notificationIntent"),
         "question": _selected(brief.get("question"), ("questionId", "intent", "horizon", "text")),
         "subject": _selected(brief.get("subject"), ("symbol", "name", "market", "targetRole", "referenceDate")),
@@ -1661,6 +1663,22 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     return core, route_audit
 
 
+def _is_research_review_core(value: object) -> bool:
+    core = _mapping(value)
+    comparison_mode = str(
+        _mapping(core.get("hypothesisSet")).get("comparisonMode") or ""
+    ).strip().lower()
+    review_mode = str(core.get("reviewMode") or "").strip().lower()
+    notification_intent = str(
+        core.get("notificationIntent") or ""
+    ).strip().lower()
+    return bool(
+        comparison_mode == "research-only"
+        or review_mode == "context-narrative"
+        or notification_intent in {"context-observation", "review-observation"}
+    )
+
+
 def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     """Reduce reference detail without truncating the hypothesis evidence contract."""
 
@@ -1700,12 +1718,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
 
     if _json_bytes(fitted) <= budget:
         return fitted
-    if (
-        str(_mapping(fitted.get("hypothesisSet")).get("comparisonMode") or "")
-        .strip()
-        .lower()
-        == "research-only"
-    ):
+    if _is_research_review_core(fitted):
         research_core = _minimum_research_review_core(fitted)
         if _json_bytes(research_core) <= budget:
             return research_core
@@ -1959,12 +1972,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     }
     if _json_bytes(fitted) <= budget:
         return fitted
-    if (
-        str(_mapping(fitted.get("hypothesisSet")).get("comparisonMode") or "")
-        .strip()
-        .lower()
-        == "research-only"
-    ):
+    if _is_research_review_core(fitted):
         research_core = _minimum_research_review_core(fitted)
         if _json_bytes(research_core) <= budget:
             return research_core

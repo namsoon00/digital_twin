@@ -481,6 +481,9 @@ def notification_ai_decision_brief(
         "schemaVersion": AI_DECISION_BRIEF_VERSION,
         "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
         "messageType": message_type,
+        "reviewMode": str(
+            merged.get("notificationAiReviewMode") or "investment-judgement"
+        ),
         "notificationIntent": (
             "context-observation"
             if str(merged.get("notificationDecisionMode") or "") == "typedb-context-observation"

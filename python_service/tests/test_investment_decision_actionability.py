@@ -346,6 +346,54 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         self.assertNotIn("무엇이 바뀌었나", message)
         self.assertIn("219,090원 이상", message)
 
+        values = context("shadow")
+        values.update({
+            "displayTarget": "SK하이닉스 / 000660",
+            "investmentSubjectDecisionCaseId": "subject-case:research",
+            "notificationAiReviewMode": "context-narrative",
+            "decisionPublication": {"outcomeKind": "REVIEW_ONLY"},
+        })
+        response = NotificationAIValidatedResponse.from_dict({
+            "action": "NO_ACTION",
+            "summary": "단기 가격 회복이 현재 상황을 가장 잘 설명하지만 주문 근거는 아닙니다.",
+            "currentActionPlan": "현재 보유 수량은 바꾸지 않습니다.",
+            "nextActionPlan": "다음 가격과 외국인 수급에서 회복 지속 여부를 확인합니다.",
+            "epistemicSummary": "회복 지속성과 펀더멘털 경로는 아직 확인되지 않았습니다.",
+            "researchLeadHypothesisId": "hypothesis:recovery",
+            "hypothesisComparisonState": "research-reviewed",
+            "hypotheses": [
+                {
+                    "hypothesisId": "hypothesis:fundamental",
+                    "claim": "SK하이닉스에서 TypeDB가 확인한 '매출·현금흐름 개선 + 가격 회복 → 펀더멘털 확인' 인과 경로가 현재 상황을 설명한다.",
+                    "verdict": "unresolved",
+                    "reasoning": "실제 매출과 현금흐름 값이 없어 아직 확인할 수 없습니다.",
+                },
+                {
+                    "hypothesisId": "hypothesis:recovery",
+                    "claim": "SK하이닉스에서 TypeDB가 확인한 '단기 회복 + 수급 확인 → 추가매수 후보' 인과 경로가 현재 상황을 설명한다.",
+                    "verdict": "unresolved",
+                    "reasoning": "가격과 수급 변화가 현재 상황에 가장 가깝습니다.",
+                },
+                {
+                    "hypothesisId": "hypothesis:event",
+                    "claim": "SK하이닉스에서 TypeDB가 확인한 '위험 이벤트 + 가격 방어 → 악재 흡수' 인과 경로가 현재 상황을 설명한다.",
+                    "verdict": "weakened",
+                    "reasoning": "사후 성과가 약해 설명력이 낮아졌습니다.",
+                },
+            ],
+        })
+
+        message = execution_telegram_message(values, response)
+
+        self.assertIn("AI 가설 비교", message)
+        self.assertIn("연구 선두 · 단기 회복 + 수급 확인", message)
+        self.assertIn("대안 · 매출·현금흐름 개선 + 가격 회복", message)
+        self.assertIn("대안 · 위험 이벤트 + 가격 방어", message)
+        self.assertIn("설명력 약화", message)
+        self.assertIn("현재 보유 수량은 바꾸지 않습니다", message)
+        self.assertNotIn("재판단 기준 없음", message)
+        self.assertNotIn("현재 신호는 확인했지만 실행 판단", message)
+
     def test_unqualified_executable_episode_cannot_become_continuity_baseline(self):
         old = {
             "episodeId": "episode:old-buy",

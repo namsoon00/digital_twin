@@ -517,6 +517,20 @@ class InvestmentCaseQueryService:
         ai_processing = ai_status == "pending"
         ai_fallback = ai_status == "fallback"
         ai_failed = ai_status == "contract-failed"
+        ai_research_review = bool(
+            ai_current
+            and text(ai_insight.get("hypothesisComparisonState")).lower()
+            == "research-reviewed"
+        )
+        if ai_current:
+            headline = text(
+                ai_insight.get("summary") or ai_insight.get("investmentView")
+            ) or headline
+            ai_next_action = text(ai_insight.get("nextActionPlan"))
+            if not ai_next_action:
+                ai_next_checks = list(ai_insight.get("nextChecks") or [])
+                ai_next_action = text(ai_next_checks[0] if ai_next_checks else "")
+            next_action = ai_next_action or next_action
         ai_state_label = (
             "해석 완료"
             if ai_current
@@ -558,7 +572,15 @@ class InvestmentCaseQueryService:
             "phase": "case",
             "phaseLabel": phase_label,
             "readinessState": readiness,
-            "readinessLabel": "판단 가능" if has_final else "최종 판단 전" if not blocked else "판단 보류",
+            "readinessLabel": (
+                "판단 가능"
+                if has_final else
+                "가설 비교 완료"
+                if ai_research_review else
+                "최종 판단 전"
+                if not blocked else
+                "판단 보류"
+            ),
             "headline": headline,
             "nextAction": next_action,
             "decidedAt": text(case.get("completedAt") or case.get("updatedAt")),
@@ -572,7 +594,13 @@ class InvestmentCaseQueryService:
                 "dataState": text(synthesis.get("data_state") or synthesis.get("dataState")) or "partial",
                 "validationState": "ready" if has_final else "conditional",
                 "state": readiness,
-                "stateLabel": "AI 최종 판단" if has_final else "TypeDB 후보",
+                "stateLabel": (
+                    "AI 최종 판단"
+                    if has_final else
+                    "AI 연구 해석"
+                    if ai_research_review else
+                    "TypeDB 후보"
+                ),
                 "dispositionCode": disposition_code,
                 "ruleCoverageState": rule_coverage_state,
             },
@@ -741,8 +769,13 @@ class InvestmentCaseQueryService:
         hypothesis_count = int(item_dict(reasoning.get("counts")).get("hypotheses") or 0)
         final = item_dict(subject_case.get("finalDecision") or subject_case.get("final_decision"))
         decision = item_dict(base.get("decision"))
+        subject_ai_insight = item_dict(
+            item_dict(base.get("subjectDecisionCase")).get("aiInsight")
+        )
         decision["requiredChecks"] = list(
-            item_dict(base.get("subjectDecisionCase")).get("nextChecks") or []
+            subject_ai_insight.get("nextChecks")
+            or item_dict(base.get("subjectDecisionCase")).get("nextChecks")
+            or []
         )
         decision["rationale"] = text(ai.get("summary")) or text(
             item_dict(explanation.get("primaryCause")).get("summary")

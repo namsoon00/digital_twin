@@ -235,6 +235,7 @@ class SubjectReasoningLineageTests(unittest.TestCase):
         self.assertFalse(scenario["selected"])
         self.assertEqual("supported", scenario["aiReview"]["verdict"])
         self.assertTrue(research_path["researchLead"])
+        self.assertEqual("ai-research-lead", research_path["selectionSource"])
         self.assertEqual(
             "supported",
             research_path["nodes"][-1]["items"][0]["hypothesisVerdict"],

@@ -307,6 +307,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
                     "action": "BUY",
                     "actionLabel": "매수 검토",
                     "summary": "가격 회복을 확인하되 TypeDB 행동 권한을 따릅니다.",
+                    "nextActionPlan": "다음 거래일 가격과 외국인 수급을 다시 비교합니다.",
                     "nextChecks": ["다음 관측에서도 회복이 유지되는지 확인"],
                     "evidence": ["가격 회복 규칙이 성립했습니다."],
                     "hypotheses": [{
@@ -351,6 +352,10 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual("AI 해석", ai_dimension["label"])
         self.assertEqual("해석 완료", ai_dimension["stateLabel"])
         self.assertIn("AI 해석 완료", item["phaseLabel"])
+        self.assertEqual(insight["summary"], item["headline"])
+        self.assertEqual(insight["nextActionPlan"], item["nextAction"])
+        self.assertEqual("AI 연구 해석", item["decision"]["stateLabel"])
+        self.assertEqual("가설 비교 완료", item["readinessLabel"])
         projected = InvestmentCaseQueryService._ai_insight_projection(
             {
                 "subjectCaseId": "subject:current",

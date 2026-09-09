@@ -105,8 +105,18 @@ HYPOTHESIS_VERDICT_LABELS = {
     "supported": "AI가 지지",
     "weakened": "AI가 약화로 판단",
     "rejected": "AI가 기각",
+    "unresolved": "AI가 아직 미확인",
     "unreviewed": "AI 검토 전",
     "inconclusive": "판단 보류",
+}
+
+RESEARCH_HYPOTHESIS_VERDICT_LABELS = {
+    "supported": "지지됨",
+    "weakened": "설명력 약화",
+    "rejected": "기각",
+    "unresolved": "아직 미확인",
+    "unreviewed": "검토 전",
+    "inconclusive": "결론 미정",
 }
 
 DATA_COLLECTION_TIME_KEYS = [
@@ -4672,12 +4682,180 @@ def _decision_first_reason_rows(
     return rows[:3]
 
 
+def _research_hypothesis_label(item: Dict[str, object]) -> str:
+    """Return a compact customer label without exposing graph identifiers."""
+
+    explicit = customer_visible_ai_text(
+        item.get("templateLabel") or item.get("label") or ""
+    )
+    if explicit:
+        return _text(explicit, 90)
+    claim = customer_visible_ai_text(item.get("claim") or "")
+    quoted = re.search(r"['‘“]([^'’”]+)['’”]", claim)
+    candidate = quoted.group(1) if quoted else claim
+    candidate = re.split(r"\s*(?:→|->)\s*", candidate, maxsplit=1)[0]
+    candidate = re.sub(
+        r"^.+?TypeDB가\s+확인한\s+",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    candidate = compact_sentence_count(candidate, 1)
+    return _text(candidate or "이름 없는 투자 가설", 90)
+
+
+def _research_hypothesis_comparison_rows(
+    response: NotificationAIValidatedResponse,
+    level: str,
+) -> List[str]:
+    lead_id = str(response.research_lead_hypothesis_id or "").strip()
+    hypotheses = [
+        item for item in response.hypotheses or []
+        if isinstance(item, dict)
+    ]
+    hypotheses.sort(
+        key=lambda item: str(item.get("hypothesisId") or "") != lead_id
+    )
+    rows: List[str] = []
+    for item in hypotheses[:3]:
+        hypothesis_id = str(item.get("hypothesisId") or "").strip()
+        role = "연구 선두" if lead_id and hypothesis_id == lead_id else "대안"
+        label = _research_hypothesis_label(item)
+        verdict = RESEARCH_HYPOTHESIS_VERDICT_LABELS.get(
+            str(item.get("verdict") or "").strip().lower(),
+            customer_visible_ai_text(item.get("verdictLabel") or item.get("verdict") or ""),
+        )
+        reasoning = compact_sentence_count(
+            customer_visible_ai_text(item.get("reasoning") or ""),
+            1,
+        )
+        detail = " · ".join(part for part in [verdict, reasoning] if part)
+        rows.append(_html_row(role + " · " + label, detail or "검토 결과 없음", level=level, max_len=420))
+    return [row for row in rows if row]
+
+
+def _is_research_narrative_response(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> bool:
+    return bool(
+        str(context.get("notificationAiReviewMode") or "").strip().lower()
+        == "context-narrative"
+        and response.hypotheses
+        and (
+            str(response.hypothesis_comparison_state or "").strip().lower()
+            == "research-reviewed"
+            or response.research_lead_hypothesis_id
+        )
+    )
+
+
+def research_narrative_telegram_message(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    detail_level: str = "concise",
+) -> str:
+    """Render AI research insight separately from an executable decision."""
+
+    level = delivery_level_from_context(context)
+    normalized_detail = normalize_notification_detail_level(detail_level)
+    target = str(context.get("displayTarget") or context.get("target") or "").strip()
+    target_name = target_name_for_headline(target)
+    headline = "🧠 " + (((target_name + " · ") if target_name else "") + "AI 가설 비교")
+    summary = compact_sentence_count(
+        customer_visible_ai_text(response.summary or response.investment_view or ""),
+        2,
+    )
+    action_plan = compact_sentence_count(
+        customer_visible_ai_text(response.current_action_plan or ""),
+        2,
+    ) or "이번 결과만으로 주문하지 않고 기존 보유 수량을 유지합니다."
+    next_plan = compact_sentence_count(
+        customer_visible_ai_text(response.next_action_plan or ""),
+        2,
+    )
+    if not next_plan and response.next_checks:
+        next_plan = compact_sentence_count(
+            customer_visible_ai_text(response.next_checks[0]),
+            1,
+        )
+    hypothesis_rows = _research_hypothesis_comparison_rows(response, level)
+    flow_limit = 5 if normalized_detail == "concise" else 6
+    flow_rows = [
+        item for item in compact_current_flow_rows(context)
+        if not str(item or "").startswith("현재 공급자 미지원:")
+    ][:flow_limit]
+    limitation = compact_sentence_count(
+        customer_visible_ai_text(response.epistemic_summary or ""),
+        2,
+    )
+    unresolved = ""
+    if response.unresolved_questions:
+        unresolved = compact_sentence_count(
+            customer_visible_ai_text(response.unresolved_questions[0]),
+            1,
+        )
+
+    parts = [
+        "<b>" + html.escape(headline, quote=False) + "</b>",
+        ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
+        "",
+        "<b>분석 범위</b>",
+        _html_bullet(
+            "매매 판단이 아니라 TypeDB가 만든 연구 가설의 설명력을 AI가 비교한 결과입니다.",
+            level,
+        ),
+    ]
+    if summary:
+        parts.extend(["", "<b>AI 결론</b>", _html_bullet(summary, level)])
+    if hypothesis_rows:
+        parts.extend(["", "<b>가설 비교</b>", *hypothesis_rows])
+    parts.extend(["", "<b>지금 할 일</b>", _html_bullet(action_plan, level)])
+    next_rows = []
+    if next_plan:
+        next_rows.append(_html_bullet(next_plan, level))
+    if unresolved and unresolved not in next_plan:
+        next_rows.append(_html_bullet("남은 질문: " + unresolved, level))
+    if next_rows:
+        parts.extend(["", "<b>다음 검증</b>", *next_rows[:2]])
+    if flow_rows:
+        parts.extend([
+            "",
+            "<b>현재 수치</b>",
+            *[_html_bullet(row, level) for row in flow_rows],
+        ])
+    if limitation:
+        parts.extend(["", "<b>해석 한계</b>", _html_bullet(limitation, level)])
+    link_row = _notification_detail_link_row(context, level)
+    if link_row:
+        parts.extend(["", link_row])
+    reference = response.reference_date or reference_date(context)
+    sent = str(context.get("sentTime") or "").strip()
+    footer = " · ".join(part for part in [
+        "기준 " + str(reference) if reference else "",
+        "발송 " + sent if sent else "",
+        "번호 " + str(context.get("notificationNumber")) if context.get("notificationNumber") else "",
+    ] if part)
+    if footer:
+        parts.extend(["", "<i>" + html.escape(footer, quote=False) + "</i>"])
+    return "\n".join(
+        part for part in parts if str(part).strip() or part == ""
+    ).strip()
+
+
 def execution_telegram_message_decision_first(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
     detail_level: str = "concise",
 ) -> str:
     """Render one customer decision contract; keep implementation audit on web."""
+
+    if _is_research_narrative_response(context, response):
+        return research_narrative_telegram_message(
+            context,
+            response,
+            detail_level,
+        )
 
     level = delivery_level_from_context(context)
     normalized_detail = normalize_notification_detail_level(detail_level)

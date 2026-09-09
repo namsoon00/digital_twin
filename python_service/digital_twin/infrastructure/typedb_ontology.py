@@ -21402,6 +21402,10 @@ relation ontology-assertion,
                 int(item.get("eliminatedModelSignalPolicyQueryCount") or 0)
                 for item in model_signal_subjects
             ),
+            "indexedEvidenceReadCount": sum(
+                int(item.get("indexedEvidenceReadCount") or 0)
+                for item in model_signal_subjects
+            ),
             "ignoredContractIds": sorted({
                 str(contract_id or "")
                 for item in model_signal_subjects
@@ -24204,6 +24208,11 @@ relation ontology-assertion,
                 "typedbModelSignalEliminatedPolicyQueryCount": int(
                     number_or_none(
                         model_signal_bridge_execution.get("eliminatedModelSignalPolicyQueryCount")
+                    ) or 0
+                ),
+                "typedbModelSignalIndexedEvidenceReadCount": int(
+                    number_or_none(
+                        model_signal_bridge_execution.get("indexedEvidenceReadCount")
                     ) or 0
                 ),
                 "typedbModelSignalIgnoredContractIds": list(

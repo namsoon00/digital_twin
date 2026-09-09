@@ -210,6 +210,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                     "status": "ok",
                     "sourceRowCount": 3,
                     "dispatchedMatchCount": 1,
+                    "indexedEvidenceReadCount": 1,
                     "matchedContractIds": ["graph.price.recovery.v1"],
                     "matchedSymbols": ["035720"],
                 },
@@ -231,6 +232,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         bridge = summary["ruleboxExecution"]["modelSignalBridgeExecution"]
         self.assertEqual(3, bridge["sourceRowCount"])
         self.assertEqual(1, bridge["dispatchedMatchCount"])
+        self.assertEqual(1, bridge["indexedEvidenceReadCount"])
         self.assertEqual(["035720"], bridge["matchedSymbols"])
 
     def assert_abox_runtime_modes_are_not_coerced_into_numeric_stages(self):

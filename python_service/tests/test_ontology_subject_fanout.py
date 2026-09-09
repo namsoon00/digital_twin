@@ -109,6 +109,10 @@ class OntologySubjectFanoutTests(unittest.TestCase):
                 "executedRuleWorkCount": 1,
                 "skippedRuleCount": 0,
                 "skippedRuleWorkCount": 0,
+                "modelSignalBridgeExecution": {
+                    "status": "ok",
+                    "indexedEvidenceReadCount": 1,
+                },
             }
 
         repository.match_typedb_native_rules = Mock(side_effect=subject_result)
@@ -136,6 +140,10 @@ class OntologySubjectFanoutTests(unittest.TestCase):
         self.assertEqual(2, merged["subjectRuleParallelism"])
         self.assertEqual(4, merged["totalReadParallelismCap"])
         self.assertEqual(4, merged["effectiveTotalReadParallelism"])
+        self.assertEqual(
+            2,
+            merged["modelSignalBridgeExecution"]["indexedEvidenceReadCount"],
+        )
 
     def test_repository_fanout_divides_global_read_cap_across_subjects(self):
         repository = TypeDBOntologyGraphRepository(

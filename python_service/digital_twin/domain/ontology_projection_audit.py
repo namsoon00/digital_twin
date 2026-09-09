@@ -954,6 +954,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
                     "constrainedPolicyCount",
                     "modelSignalBridgeReadCount",
                     "eliminatedModelSignalPolicyQueryCount",
+                    "indexedEvidenceReadCount",
                     "ignoredContractIds",
                     "sourceRowCount",
                     "dispatchedMatchCount",

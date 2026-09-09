@@ -2382,6 +2382,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                     "status": "ok",
                     "sourceRowCount": 4,
                     "dispatchedMatchCount": 2,
+                    "indexedEvidenceReadCount": 1,
                     "matchedContractIds": ["graph.price.recovery.v1"],
                     "matchedSymbols": ["000660"],
                 },
@@ -2399,6 +2400,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("missing-endpoint", patch["patchPlanViolations"][0]["code"])
         self.assertNotIn("privatePayload", patch["repairInputFallback"])
         self.assertEqual(4, compact["modelSignalBridgeExecution"]["sourceRowCount"])
+        self.assertEqual(1, compact["modelSignalBridgeExecution"]["indexedEvidenceReadCount"])
         self.assertEqual(
             ["graph.price.recovery.v1"],
             compact["modelSignalBridgeExecution"]["matchedContractIds"],

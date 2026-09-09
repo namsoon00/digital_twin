@@ -526,7 +526,9 @@ class InvestmentCaseQueryService:
             headline = text(
                 ai_insight.get("summary") or ai_insight.get("investmentView")
             ) or headline
-            ai_next_action = text(ai_insight.get("nextActionPlan"))
+            ai_next_action = text(ai_insight.get("invalidationCondition"))
+            if not ai_next_action:
+                ai_next_action = text(ai_insight.get("nextActionPlan"))
             if not ai_next_action:
                 ai_next_checks = list(ai_insight.get("nextChecks") or [])
                 ai_next_action = text(ai_next_checks[0] if ai_next_checks else "")
@@ -772,11 +774,17 @@ class InvestmentCaseQueryService:
         subject_ai_insight = item_dict(
             item_dict(base.get("subjectDecisionCase")).get("aiInsight")
         )
-        decision["requiredChecks"] = list(
+        required_checks = list(
             subject_ai_insight.get("nextChecks")
             or item_dict(base.get("subjectDecisionCase")).get("nextChecks")
             or []
         )
+        invalidation_condition = text(
+            subject_ai_insight.get("invalidationCondition")
+        )
+        if invalidation_condition and invalidation_condition not in required_checks:
+            required_checks.append(invalidation_condition)
+        decision["requiredChecks"] = required_checks
         decision["rationale"] = text(ai.get("summary")) or text(
             item_dict(explanation.get("primaryCause")).get("summary")
         )

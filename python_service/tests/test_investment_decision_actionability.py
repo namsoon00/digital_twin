@@ -358,6 +358,7 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
             "summary": "단기 가격 회복이 현재 상황을 가장 잘 설명하지만 주문 근거는 아닙니다.",
             "currentActionPlan": "현재 보유 수량은 바꾸지 않습니다.",
             "nextActionPlan": "다음 가격과 외국인 수급에서 회복 지속 여부를 확인합니다.",
+            "invalidationCondition": "현재가가 20일선 아래로 내려가거나 외국인이 순매도로 바뀌면 연구 선두에서 제외합니다.",
             "epistemicSummary": "회복 지속성과 펀더멘털 경로는 아직 확인되지 않았습니다.",
             "researchLeadHypothesisId": "hypothesis:recovery",
             "hypothesisComparisonState": "research-reviewed",
@@ -391,6 +392,8 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         self.assertIn("대안 · 위험 이벤트 + 가격 방어", message)
         self.assertIn("설명력 약화", message)
         self.assertIn("현재 보유 수량은 바꾸지 않습니다", message)
+        self.assertIn("선두 가설 해제 조건", message)
+        self.assertIn("20일선 아래", message)
         self.assertNotIn("재판단 기준 없음", message)
         self.assertNotIn("현재 신호는 확인했지만 실행 판단", message)
 

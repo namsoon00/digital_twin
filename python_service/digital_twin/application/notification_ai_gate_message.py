@@ -4779,6 +4779,12 @@ def research_narrative_telegram_message(
             customer_visible_ai_text(response.next_checks[0]),
             1,
         )
+    invalidation = compact_sentence_count(
+        customer_visible_ai_text(response.invalidation_condition or ""),
+        2,
+    )
+    if compact_reason_is_internal(invalidation):
+        invalidation = ""
     hypothesis_rows = _research_hypothesis_comparison_rows(response, level)
     flow_limit = 5 if normalized_detail == "concise" else 6
     flow_rows = [
@@ -4814,10 +4820,12 @@ def research_narrative_telegram_message(
     next_rows = []
     if next_plan:
         next_rows.append(_html_bullet(next_plan, level))
+    if invalidation and invalidation not in next_plan:
+        next_rows.append(_html_bullet("선두 가설 해제 조건: " + invalidation, level))
     if unresolved and unresolved not in next_plan:
         next_rows.append(_html_bullet("남은 질문: " + unresolved, level))
     if next_rows:
-        parts.extend(["", "<b>다음 검증</b>", *next_rows[:2]])
+        parts.extend(["", "<b>다음 검증</b>", *next_rows[:3]])
     if flow_rows:
         parts.extend([
             "",

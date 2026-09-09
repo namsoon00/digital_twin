@@ -37,6 +37,11 @@ FIELD_LABELS = {
     "correlation": "시장 상관계수",
 }
 
+CRYPTO_DISPLAY_NAMES = {
+    "BTC": "비트코인",
+    "ETH": "이더리움",
+}
+
 
 def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, Mapping) else {}
@@ -145,8 +150,42 @@ def _trigger_rows(context: Dict[str, object]) -> List[str]:
     trigger = _mapping(context.get("reasoningDeliveryTrigger")) or _mapping(
         _mapping(context.get("metadata")).get("reasoningDeliveryTrigger")
     )
-    rows = list(customer_delivery_explanation_lines(context))
     facts = _mapping(trigger.get("facts"))
+    rows: List[str] = []
+    crypto_transitions = facts.get("cryptoTransitions")
+    has_structured_crypto_transition = False
+    if isinstance(crypto_transitions, list):
+        transition_labels = {
+            "threshold-crossed": "처음 기준에 진입했습니다.",
+            "direction-changed": "직전 관찰과 상승·하락 방향이 바뀌었습니다.",
+            "severity-escalated": "직전보다 큰 변동 구간으로 확대됐습니다.",
+        }
+        for raw in crypto_transitions:
+            item = _mapping(raw)
+            symbol = str(item.get("symbol") or "").strip().upper()
+            change = _number(item.get("changePct"))
+            threshold = _number(item.get("thresholdPct"))
+            horizon = {
+                "24h": "24시간",
+                "7d": "7일",
+            }.get(str(item.get("horizon") or "").strip(), _text(item.get("horizon")))
+            direction = "상승" if str(item.get("direction") or "").lower() == "up" else "하락"
+            if symbol not in CRYPTO_DISPLAY_NAMES or change is None or threshold is None or not horizon:
+                continue
+            has_structured_crypto_transition = True
+            rows.append(
+                CRYPTO_DISPLAY_NAMES[symbol]
+                + " " + horizon + " 변동률이 " + signed_pct(change)
+                + "로 " + direction + " 알림 기준 " + signed_pct(abs(threshold))
+                + "에 도달해 "
+                + transition_labels.get(
+                    str(item.get("transition") or ""),
+                    "관찰 구간이 바뀌었습니다.",
+                )
+            )
+    if not rows:
+        rows.extend(trigger.get("reasons") or [])
+    rows.extend(customer_delivery_explanation_lines(context))
     changed_fields = [
         str(item or "").strip()
         for item in trigger.get("changedFields") or []
@@ -167,7 +206,12 @@ def _trigger_rows(context: Dict[str, object]) -> List[str]:
             + "입니다. 이 변화로 관계를 다시 계산했습니다.",
         )
 
-    for raw in trigger.get("matchedConditions") or []:
+    matched_conditions = (
+        []
+        if has_structured_crypto_transition
+        else trigger.get("matchedConditions") or []
+    )
+    for raw in matched_conditions:
         if isinstance(raw, Mapping):
             field = str(raw.get("field") or "").strip()
             observed = raw.get("observedValue")
@@ -305,6 +349,26 @@ def _flow_rows(context: Dict[str, object], limit: int) -> List[str]:
     current_price = _number(facts.get("currentPrice"))
     if current_price and current_price > 0:
         rows.append("현재가 " + price_money(current_price, currency))
+    if market == "CRYPTO":
+        trigger = _mapping(context.get("reasoningDeliveryTrigger")) or _mapping(
+            _mapping(context.get("metadata")).get("reasoningDeliveryTrigger")
+        )
+        transition_facts = _mapping(trigger.get("facts"))
+        for raw in transition_facts.get("cryptoTransitions") or []:
+            item = _mapping(raw)
+            change = _number(item.get("changePct"))
+            threshold = _number(item.get("thresholdPct"))
+            horizon = {
+                "24h": "24시간",
+                "7d": "7일",
+            }.get(str(item.get("horizon") or "").strip(), "")
+            if change is None or not horizon:
+                continue
+            row = horizon + " 변동 " + signed_pct(change)
+            if threshold is not None:
+                row += " · 알림 기준 " + signed_pct(abs(threshold))
+            rows.append(row)
+        return _unique(rows, limit)
     pnl = _number(facts.get("profitLossRate"))
     if pnl is not None:
         rows.append("수익률 " + signed_pct(pnl))
@@ -390,8 +454,10 @@ def typedb_observation_telegram_message(
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     label = _text(observation.get("selectedRuleLabel") or "관계 변화")
     headline = "🧩 TypeDB 추론"
-    if _target_name(target):
-        headline += " · " + _target_name(target)
+    symbol = str(observation.get("symbol") or context.get("symbol") or "").strip().upper()
+    target_name = CRYPTO_DISPLAY_NAMES.get(symbol) or _target_name(target)
+    if target_name:
+        headline += " · " + target_name
     if label and label not in headline:
         headline += " · " + label
     presentation = context_observation_evidence_presentation(context)

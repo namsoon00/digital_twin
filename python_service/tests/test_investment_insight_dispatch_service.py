@@ -333,6 +333,46 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assertEqual(PUBLISH_TYPEDB, observation.inference_dispatch_decision.route)
         self.assertEqual(HANDOFF_AI, actionable.inference_dispatch_decision.route)
 
+        crypto_context = context_observation(observation)
+        crypto_context["displayTarget"] = "이더리움 / ETH"
+        crypto_context["notificationDecisionOwner"] = "typedb"
+        crypto_context["inferenceDispatchDecision"] = {"route": PUBLISH_TYPEDB}
+        crypto_context["ontologyRelationContext"]["subject"] = {
+            "symbol": "ETH",
+            "market": "CRYPTO",
+        }
+        crypto_context["ontologyRelationContext"]["facts"].update({
+            "symbol": "ETH",
+            "market": "CRYPTO",
+            "currentPrice": 2496.8,
+        })
+        crypto_context["reasoningDeliveryTrigger"] = {
+            "material": True,
+            "userObservable": True,
+            "facts": {
+                "cryptoTransitions": [{
+                    "symbol": "ETH",
+                    "horizon": "7d",
+                    "direction": "up",
+                    "changePct": 4.0,
+                    "thresholdPct": 4.0,
+                    "transition": "threshold-crossed",
+                }],
+            },
+        }
+        crypto_message = execution_telegram_message(
+            crypto_context,
+            NotificationAIValidatedResponse(action="NO_ACTION"),
+        )
+        self.assertIn(
+            "이더리움 7일 변동률이 +4.0%로 상승 알림 기준 +4.0%에 도달해 처음 기준에 진입했습니다.",
+            crypto_message,
+        )
+        self.assertIn("7일 변동 +4.0% · 알림 기준 +4.0%", crypto_message)
+        self.assertNotIn("crypto-7d-up-threshold-crossed", crypto_message)
+        self.assertNotIn("수익률 0.0%", crypto_message)
+        self.assertNotIn("가격 흐름:", crypto_message)
+
         repeated = service.dispatch([
             alert(observation, context_observation(observation), "typedb-retry"),
         ])

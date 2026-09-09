@@ -41,6 +41,12 @@ VERIFIED_MARKET_TRANSITION_TRIGGER_IDS = frozenset({
     "insight_ma60_crossed_above",
 })
 
+AI_INSIGHT_DELIVERABLE_PUBLICATION_OUTCOMES = frozenset({
+    "FINAL_DECISION",
+    "REVIEW_ONLY",
+    "OBSERVATION",
+})
+
 
 def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, Mapping) else {}
@@ -168,6 +174,59 @@ def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -
         and (not execution_status or execution_status == "completed")
         and execution_status != "typedb-fallback"
         and (not writer or bool(writer.get("aiAuthored")))
+    )
+
+
+def final_ai_insight_delivery_is_authorized(context: Mapping[str, object]) -> bool:
+    """Honor a completed semantic send decision at final outbox admission.
+
+    Detached AI judgement reconciles the graph candidate and delivery policy
+    before creating a notification job.  The generic notification admission
+    layer must not reinterpret that completed decision as an initial graph
+    baseline.  This authorization is deliberately fail-closed and requires
+    the independently persisted execution, writer, publication-contract and
+    insight-transition proofs in addition to the reconciliation result.
+    """
+
+    context = _mapping(context)
+    reconciliation = _mapping(context.get("decisionReconciliation"))
+    delivery_policy = _mapping(reconciliation.get("deliveryPolicy"))
+    execution = _mapping(context.get("notificationAiExecutionAudit"))
+    fallback = _mapping(execution.get("fallback"))
+    provenance = _mapping(context.get("notificationAIInsightProvenance"))
+    writer = _mapping(context.get("notificationWriterProvenance"))
+    validated = _mapping(context.get("notificationAiValidatedResponse"))
+    assessment = _mapping(validated.get("insightAssessment"))
+    transition = _mapping(context.get("investmentInsightTransition"))
+    publication = _mapping(context.get("decisionPublication"))
+
+    semantic_decision = _text(
+        reconciliation.get("semanticNotificationDecision")
+        or reconciliation.get("notificationDecision")
+    ).lower()
+    policy_decision = _text(delivery_policy.get("decision")).lower()
+    policy_publication_outcome = _text(
+        delivery_policy.get("publicationOutcome")
+    ).upper()
+    execution_status = _text(execution.get("status")).lower()
+    publication_outcome = _text(publication.get("outcomeKind")).upper()
+    return bool(
+        _text(reconciliation.get("status")).lower() == "reconciled"
+        and semantic_decision == "send"
+        and policy_decision == "send"
+        and execution_status == "completed"
+        and fallback.get("used") is not True
+        and provenance.get("aiAuthored") is True
+        and provenance.get("publicationContractPassed") is True
+        and not _text(provenance.get("contractFailureCode"))
+        and writer.get("aiAuthored") is True
+        and assessment.get("publishable") is True
+        and transition.get("material") is True
+        and policy_publication_outcome in AI_INSIGHT_DELIVERABLE_PUBLICATION_OUTCOMES
+        and (
+            not publication_outcome
+            or publication_outcome == policy_publication_outcome
+        )
     )
 
 

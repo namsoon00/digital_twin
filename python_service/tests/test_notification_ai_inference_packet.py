@@ -80,10 +80,12 @@ def response_payload(view_id, support_id, next_id):
             {
                 "claimId": "claim:next",
                 "section": "next-condition",
-                "text": "다음 관측에서 같은 관계가 유지되는지 다시 확인합니다.",
+                "text": "현재가가 20일선 아래로 내려가면 현재 관점을 다시 검토합니다.",
                 "evidenceIds": [next_id],
             },
         ],
+        "counterEvidenceStatus": "none-found",
+        "invalidationCondition": "현재가가 20일선 아래로 내려가면 현재 관점을 다시 검토합니다.",
         "referenceDate": "2026-08-21 10:56 KST",
     }
 
@@ -855,6 +857,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                     }],
                     "selectedHypothesisId": hypothesis_id,
                     "decisionReadiness": "conditional",
+                    "counterEvidenceStatus": "none-found",
                     "insightAssessment": {
                         "direction": "negative",
                         "horizon": "short-term",
@@ -877,7 +880,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                     }, {
                         "claimId": "claim:next",
                         "section": "next-condition",
-                        "text": "현재가와 20일선 관계를 다시 확인합니다.",
+                        "text": "현재가가 20일선 위에서 유지되면 하방 관점을 무효화합니다.",
                         "evidenceIds": ["fact:currentPrice", "fact:ma20Distance"],
                     }],
                     "invalidationCondition": "현재가가 20일선 위에서 유지되면 하방 관점을 무효화합니다.",

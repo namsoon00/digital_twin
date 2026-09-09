@@ -2180,6 +2180,9 @@ def build_notification_ai_gate_prompt(
         "계정의 투자 성향은 " + strategy_label + "이다. " + str(strategy_guidance.get("stance") or "") + " " + str(strategy_guidance.get("response") or ""),
         "투자 성향은 행동의 경계 조건이다. 성향이 공격형이어도 자동 주문 지시처럼 쓰지 말고, 안정형이면 손실 제한·현금 여력·비중 한도를 먼저 확인한다.",
         "확인된 반대 근거, 결론에 실제 영향을 주는 자료 한계, 무효화 조건과 다음 확인 조건을 구분한다. 자료 한계를 알림의 중심 결론으로 만들지 않는다.",
+        "counterEvidenceStatus는 반대 근거 검사를 실제로 마친 결과다. 검증된 counter 문장과 근거 ID가 있으면 confirmed, 모든 입력 가설과 근거를 검토했지만 방향을 뒤집는 사실이 없을 때만 none-found를 쓴다. not-checked나 unavailable 상태는 최종 발행 계약을 통과하지 못한다.",
+        "invalidationCondition에는 가격·거래량·수급·실적·공시·금리·환율 중 실제 관측 대상과 방향 또는 임계값을 명시하고, narrativeClaims의 next-condition에 허용 근거 ID를 연결한다. '현재 근거가 사라지면', '반대 근거가 생기면', '다음 데이터에서 달라지면' 같은 일반문은 계약 실패다.",
+        "입력에 재현 가능한 수치형 observableFollowUpFields가 있으면 무효화·약화·전환 조건을 followUpConditions의 weaken, invalidate 또는 switch로 구조화한다. 입력에 없는 수치나 임계값은 만들지 않는다.",
         "strategyGuide에는 실제 대응 기준을 구조화한다. actionMode는 즉시 실행/정규장 확인/대기/분할 준비/소액 진입 검토 중 가장 가까운 표현으로 쓴다.",
         "strategyGuide.positionSizing에는 TypeDB 실행 계획이나 사용자가 제공한 비중·수량 기준이 있을 때만 그 값을 쓴다. 근거 없이 임의의 분할 수량·비율을 만들지 않는다.",
         "strategyGuide.riskPrice와 recoveryPrice에는 TypeDB 실행 계획 또는 제공된 관측값에 명시된 가격만 쓴다. 가격을 새로 추정하거나 고정 이동평균 규칙을 적용하지 않는다.",
@@ -2205,6 +2208,14 @@ def build_notification_ai_gate_prompt(
             "counterEvidenceStatus": "confirmed|none-found|not-checked|unavailable",
             "invalidationCondition": "string",
             "nextChecks": ["string"],
+            "followUpConditions": [{
+                "field": "observable input field",
+                "operator": ">|>=|<|<=|==|!=",
+                "threshold": "input-derived number",
+                "purpose": "strengthen|weaken|invalidate|switch",
+                "label": "string",
+                "onSatisfied": "string"
+            }],
             "missingDataImpact": ["string"],
             "hypotheses": [{
                 "hypothesisId": "input hypothesis id",
@@ -2339,6 +2350,11 @@ def validated_response_from_payload(
         )
     raw_counter = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("counterEvidence") or payload.get("counter_evidence") or [], 4))
     explicit_disagreement = str(payload.get("disagreementReason") or payload.get("disagreement_reason") or "").strip()
+    requested_counter_status = str(
+        payload.get("counterEvidenceStatus")
+        or payload.get("counter_evidence_status")
+        or ""
+    ).strip().lower()
     if envelope_disagreement_required(context, action):
         if not raw_counter and not explicit_disagreement:
             warnings.append("TypeDB 진입 조건을 낮추는 AI 의견에 반대 근거 또는 불일치 사유가 없어 진입 후보를 유지했습니다.")
@@ -2393,7 +2409,11 @@ def validated_response_from_payload(
     validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
         context,
         len(raw_evidence),
-        not bool(raw_counter or explicit_disagreement),
+        not bool(
+            raw_counter
+            or explicit_disagreement
+            or requested_counter_status == "none-found"
+        ),
         source_urls,
         source_labels,
         missing_labels,
@@ -2571,11 +2591,6 @@ def validated_response_from_payload(
         append_unique_text(counter, disagreement, 180)
         if not (payload.get("disagreementReason") or payload.get("disagreement_reason")):
             warnings.append("AI 판단이 사전 계산 후보와 달라 불일치 사유를 감사 로그에 기록했습니다.")
-    requested_counter_status = str(
-        payload.get("counterEvidenceStatus")
-        or payload.get("counter_evidence_status")
-        or ""
-    ).strip().lower()
     if raw_counter:
         counter_evidence_status = "confirmed"
     elif requested_counter_status in {"none-found", "not-checked", "unavailable"}:
@@ -2712,6 +2727,7 @@ def validated_response_from_payload(
         decision_readiness=decision_readiness,
         counter_evidence_status=counter_evidence_status,
         invalidation_condition=invalidation,
+        follow_up_conditions=follow_up_conditions,
     )
     response = NotificationAIValidatedResponse(
         action=action,

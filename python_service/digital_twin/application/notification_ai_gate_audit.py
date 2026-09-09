@@ -354,6 +354,7 @@ def context_with_validated_ai_response(
         decision_readiness=response.decision_readiness,
         counter_evidence_status=response.counter_evidence_status,
         invalidation_condition=response.invalidation_condition,
+        follow_up_conditions=response.follow_up_conditions,
     )
     enriched["investmentInsightTransition"] = investment_insight_transition(
         enriched.get("previousInvestmentAIInsightEpisode"),

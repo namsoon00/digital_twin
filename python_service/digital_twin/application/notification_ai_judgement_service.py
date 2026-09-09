@@ -251,6 +251,7 @@ def refresh_investment_insight_assessment(
         decision_readiness=response.decision_readiness,
         counter_evidence_status=response.counter_evidence_status,
         invalidation_condition=response.invalidation_condition,
+        follow_up_conditions=response.follow_up_conditions,
     )
 
 
@@ -609,6 +610,16 @@ def ai_contract_repair_prompt(
         "summary": "최종 결론",
         "currentActionPlan": "현재 대응",
         "nextActionPlan": "재관측 조건과 판단 변화",
+        "counterEvidenceStatus": "confirmed|none-found|not-checked|unavailable",
+        "invalidationCondition": "검증 근거가 연결된 구체적인 무효화 조건",
+        "followUpConditions": [{
+            "field": "관측 가능한 입력 필드",
+            "operator": ">|>=|<|<=|==|!=",
+            "threshold": "입력에서 재현 가능한 수치",
+            "purpose": "weaken|invalidate|switch",
+            "label": "조건 설명",
+            "onSatisfied": "성립 시 판단 변화",
+        }],
         "hypotheses": [{
             "hypothesisId": "입력 ID",
             "evidenceReviewStatus": "all-input-evidence-reviewed",
@@ -638,7 +649,7 @@ def ai_contract_repair_prompt(
         },
         "narrativeClaims": [{
             "claimId": "고유 ID",
-            "section": "view|mechanism|implication|catalyst|next-condition|limitation",
+            "section": "view|mechanism|implication|catalyst|counter|next-condition|limitation",
             "text": "표시 문장",
             "evidenceIds": ["섹션별 허용 근거 ID"],
         }],
@@ -648,8 +659,10 @@ def ai_contract_repair_prompt(
         "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
         "action은 actionEnvelope 안에서 선택하고 모든 입력 가설을 한 번씩 검토한다.",
         "각 가설의 입력 근거와 반대 근거를 모두 확인한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 근거 ID 배열을 응답에 복사하지 않는다.",
+        "반대 근거 검사를 마쳤으면 counterEvidenceStatus를 쓴다. confirmed에는 근거 ID가 연결된 counter 문장이 필요하고, 모든 입력을 검토했지만 반대 사실이 없을 때만 none-found를 쓴다. not-checked와 unavailable은 허용되지 않는다.",
         "narrativeClaims는 허용된 evidence ID만 연결하며 가설이 있으면 view, mechanism, implication과 next-condition 또는 limitation을 포함한다.",
         "insightAssessment에는 가장 근거가 강한 방향, 기간, 근거 강도, 지배 가설, 인과 경로, 투자 의미, 촉매, 반대 시나리오와 무효화 조건을 채운다.",
+        "무효화 조건은 관측 대상과 변화 방향 또는 입력 임계값을 구체적으로 쓰고 검증된 next-condition 근거와 연결한다. 일반적인 '근거가 사라지면 다시 본다' 문장은 쓰지 않는다.",
         "자료 한계는 conviction과 영향 범위를 낮추되, 가장 잘 지지되는 투자 결론 자체를 없애거나 양쪽 가능성 나열로 대체하지 않는다.",
         "currentActionPlan에는 지금 할 일과 보류할 일을, nextActionPlan에는 실제로 재관측할 가격·거래량·수급·실적·공시·금리·환율과 그 결과에 따른 판단 변화를 쓴다.",
         "BUY·ADD·TRIM·SELL은 decisionReadiness=ready, executionEligibility=eligible, qualification decisionUse=execution, 근거 ID가 있는 supported causalChain을 모두 만족할 때만 선택한다.",

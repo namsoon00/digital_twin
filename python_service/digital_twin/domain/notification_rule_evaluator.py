@@ -12,6 +12,7 @@ from .investment_reasoning.disposition import (
 )
 from .notification_ai_delivery import (
     VERIFIED_MARKET_TRANSITION_TRIGGER_IDS,
+    final_ai_insight_delivery_is_authorized,
     holding_review_baseline_is_deliverable,
 )
 from .ontology_relation_delivery import (
@@ -1195,6 +1196,29 @@ def apply_state_cooldown_rule(
         60,
     )
     severity = typedb_notification_severity(job_context)
+
+    # A detached AI insight reaches this layer only after graph/AI semantic
+    # reconciliation.  Preserve that final authority instead of reclassifying
+    # the same initial graph transition as a pre-AI baseline.
+    if final_ai_insight_delivery_is_authorized(job_context):
+        reason = "검증된 최종 AI 투자 인사이트의 발송 결정"
+        apply_delivery_cadence(decision, "material", material_minutes, reason)
+        decision.state_decision = (
+            "new-condition"
+            if decision.state_recent_sent_count <= 0
+            else "meaningful-change"
+        )
+        decision.state_suppressed = False
+        decision.state_reason = reason
+        decision.similarity_bypassed = True
+        decision.similarity_bypass_reason = reason
+        decision.should_send = True
+        decision.delivery_state = "send"
+        decision.gate_state = "eligible"
+        decision.gate_reason = reason
+        decision.suppression_reason = ""
+        decision.reasons.append("상태 정책: " + reason)
+        return decision
 
     # Store a first non-actionable TypeDB relation as a baseline before any
     # threshold cooldown bypass is considered.  Profit/loss threshold rules

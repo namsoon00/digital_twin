@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v18"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v17"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v19"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v18"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
@@ -22,13 +22,14 @@ AI_DECISION_RESPONSE_SCHEMA = {
     "nextActionPlan": "다음에 확인할 수치·사건·시점과 판단 결과를 한 문장으로 설명",
     "evidence": ["핵심 근거 최대 3개"],
     "counterEvidence": ["반대 근거 최대 2개"],
+    "counterEvidenceStatus": "confirmed|none-found|not-checked|unavailable",
     "narrativeClaims": [{
         "claimId": "응답 안에서 고유한 문장 ID",
         "section": "view|mechanism|implication|catalyst|change|support|counter|next-condition|limitation",
         "text": "사용자에게 보여줄 한 문장",
         "evidenceIds": ["DecisionCore.evidenceLedger의 근거 ID"],
     }],
-    "invalidationCondition": "현재 판단을 무효화할 조건",
+    "invalidationCondition": "검증 근거가 연결된 구체적인 현재 판단 무효화 조건",
     "nextChecks": ["판단을 바꿀 다음 확인 최대 2개"],
     "followUpConditions": [{
         "field": "facts.marketEvidenceProfile.observableFollowUpFields의 필드",
@@ -103,13 +104,14 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "previousInsight가 있으면 문구가 아니라 direction, horizon, conviction, thesisKey의 의미 변화를 비교한다. 의미 변화가 없으면 새 인사이트인 것처럼 과장하지 않는다.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
+    "반대 근거 검사를 마친 뒤 counterEvidenceStatus를 쓴다. confirmed는 근거 ID가 연결된 counter 문장이 있을 때, none-found는 모든 입력을 검토해 반대 사실이 없을 때만 쓴다. 나머지 상태는 발행 불가다.",
     "사용자에게 보여줄 투자 관점, 인과 경로, 투자 의미, 촉매, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
     "narrativeClaims는 section별 허용 ID만 쓰고, narrativeClaimContract.recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
+    "invalidationCondition은 관측 대상과 변화 방향을 명시하고 검증된 next-condition 근거와 연결한다. 수치형 observable 필드가 있으면 followUpConditions로 구조화하되 입력에 없는 임계값은 만들지 않는다. 일반적인 '근거가 사라지면' 문장은 금지한다.",
     "TypeDB 규칙을 인용할 때 narrativeClaimContract.evidenceBundlesByInference에 연결된 관찰 사실 ID도 함께 인용한다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",
     "확인된 사실은 명확히 말하고 가장 잘 지지되는 인과 해석을 결론으로 제시한다. 확인되지 않은 세부 원인이나 영향 규모만 limitation에 적고, 자료 한계를 알림의 중심 결론으로 만들지 않는다.",
     "narrativeClaims의 support는 role=support 근거만, counter는 role=counter 근거만 연결하고 context나 limitation을 행동 근거로 바꾸지 않는다.",
     "자료 부족은 limitation으로만 쓰고 counter 근거로 쓰지 않는다. 행동 결론 자체를 support 근거로 반복하지 않는다.",
-    "확인된 반대 사실이 없으면 counter 문장을 만들지 않는다. 확인되지 않은 내용을 채우기 위해 일반론을 만들지 않는다.",
     "system readiness가 conditional 또는 insufficient이면 실행 행동을 만들지 않는다.",
     "가설 qualification의 decisionUse가 execution이 아니면 그 가설은 비교·학습에만 사용하고 BUY, ADD, TRIM, SELL의 근거로 사용하지 않는다.",
     "causalChain이 검증된 근거 ID로 이어지지 않으면 BUY, ADD, TRIM, SELL을 선택하지 않는다.",

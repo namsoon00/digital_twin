@@ -93,7 +93,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # separately protect interpretation quality from execution authority;
         # structured insight recovery also prevents execution blocks from
         # suppressing evidence-verified research conclusions.
-        self.assertLessEqual(total, 990)
+        # Final AI delivery authority, counter-evidence and falsifiability
+        # checks, release-cohort health, and AI-direction outcome attribution
+        # independently protect the insight publication feedback loop.
+        self.assertLessEqual(total, 997)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

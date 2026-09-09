@@ -38,6 +38,7 @@ from ..domain.investment_reasoning.ai_insight import (
     reconciliation_after_delivery,
 )
 from ..domain.notifications import NotificationJob
+from ..domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_events import insert_domain_event_with_connection
 from .mysql_operational_helpers import _json_loads
@@ -1601,6 +1602,12 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ))))
         except (TypeError, ValueError):
             effectiveness_window_hours = 24
+        try:
+            current_cohort_minimum = max(1, min(100, int(float(
+                self.runtime_settings.get("notificationAiHealthMinimumSamples") or 10
+            ))))
+        except (TypeError, ValueError):
+            current_cohort_minimum = 10
         active_cutoff = (
             datetime.now(timezone.utc) - timedelta(minutes=active_window_minutes)
         ).isoformat().replace("+00:00", "Z")
@@ -1627,11 +1634,23 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             effectiveness_row = connection.execute(
                 "SELECT COUNT(*) AS eligible_count, "
                 "SUM(CASE WHEN result.ai_authored = 1 AND result.publication_contract_passed = 1 THEN 1 ELSE 0 END) AS authored_count, "
+                "SUM(CASE WHEN result.publication_contract_passed = 1 THEN 1 ELSE 0 END) AS contract_passed_count, "
                 "SUM(CASE WHEN result.publication_mode = 'typedb-fallback' THEN 1 ELSE 0 END) AS fallback_count, "
                 "MAX(result.created_at) AS latest_at "
                 "FROM ai_inference_results result JOIN ai_inference_requests request ON request.request_id = result.request_id "
                 "WHERE request.message_type = 'investmentInsight' AND result.created_at >= %s",
                 (effectiveness_cutoff,),
+            ).fetchone() or {}
+            current_effectiveness_row = connection.execute(
+                "SELECT COUNT(*) AS eligible_count, "
+                "SUM(CASE WHEN result.ai_authored = 1 AND result.publication_contract_passed = 1 THEN 1 ELSE 0 END) AS authored_count, "
+                "SUM(CASE WHEN result.publication_contract_passed = 1 THEN 1 ELSE 0 END) AS contract_passed_count, "
+                "SUM(CASE WHEN result.publication_mode = 'typedb-fallback' THEN 1 ELSE 0 END) AS fallback_count, "
+                "MAX(result.created_at) AS latest_at "
+                "FROM ai_inference_results result JOIN ai_inference_requests request ON request.request_id = result.request_id "
+                "WHERE request.message_type = 'investmentInsight' AND request.prompt_version = %s "
+                "AND result.created_at >= %s",
+                (AI_DECISION_PROMPT_VERSION, effectiveness_cutoff),
             ).fetchone() or {}
         states = {
             _clean(row.get("status")): {
@@ -1644,7 +1663,28 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         actionable_failed = int((active_failure_row or {}).get("count") or 0)
         eligible_count = int(effectiveness_row.get("eligible_count") or 0)
         authored_count = int(effectiveness_row.get("authored_count") or 0)
+        contract_passed_count = int(effectiveness_row.get("contract_passed_count") or 0)
         fallback_count = int(effectiveness_row.get("fallback_count") or 0)
+        current_eligible_count = int(current_effectiveness_row.get("eligible_count") or 0)
+        current_authored_count = int(current_effectiveness_row.get("authored_count") or 0)
+        current_contract_passed_count = int(
+            current_effectiveness_row.get("contract_passed_count") or 0
+        )
+        current_fallback_count = int(current_effectiveness_row.get("fallback_count") or 0)
+        historical_status = (
+            "critical" if eligible_count >= 10 and authored_count * 2 <= eligible_count
+            else "degraded" if eligible_count and authored_count < eligible_count
+            else "healthy"
+        )
+        current_status = (
+            "warming-up"
+            if current_eligible_count < current_cohort_minimum
+            else "critical"
+            if current_authored_count * 2 <= current_eligible_count
+            else "degraded"
+            if current_authored_count < current_eligible_count
+            else "healthy"
+        )
         return {
             "states": states,
             "pendingCount": int((states.get(AI_INFERENCE_PENDING) or {}).get("count") or 0),
@@ -1660,18 +1700,38 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "oldestActionableFailureAt": _clean(
                 (active_failure_row or {}).get("oldest_at")
             ),
-            "effectiveAiEligibleCount": eligible_count,
-            "effectiveAiAuthoredCount": authored_count,
-            "effectiveAiFallbackCount": fallback_count,
-            "effectiveAiAuthoredRate": round(authored_count / eligible_count, 4) if eligible_count else None,
+            "currentAiPromptVersion": AI_DECISION_PROMPT_VERSION,
+            "currentAiMinimumSamples": current_cohort_minimum,
+            "currentAiEligibleCount": current_eligible_count,
+            "currentAiAuthoredCount": current_authored_count,
+            "currentAiContractPassedCount": current_contract_passed_count,
+            "currentAiFallbackCount": current_fallback_count,
+            "currentAiAuthoredRate": round(
+                current_authored_count / current_eligible_count,
+                4,
+            ) if current_eligible_count else None,
+            "currentAiLatestAt": _clean(current_effectiveness_row.get("latest_at")),
+            "currentAiStatus": current_status,
+            "historicalAiEligibleCount": eligible_count,
+            "historicalAiAuthoredCount": authored_count,
+            "historicalAiContractPassedCount": contract_passed_count,
+            "historicalAiFallbackCount": fallback_count,
+            "historicalAiAuthoredRate": round(authored_count / eligible_count, 4) if eligible_count else None,
+            "historicalAiLatestAt": _clean(effectiveness_row.get("latest_at")),
+            "historicalAiStatus": historical_status,
+            "effectiveAiEligibleCount": current_eligible_count,
+            "effectiveAiAuthoredCount": current_authored_count,
+            "effectiveAiFallbackCount": current_fallback_count,
+            "effectiveAiAuthoredRate": round(
+                current_authored_count / current_eligible_count,
+                4,
+            ) if current_eligible_count else None,
             "effectiveAiWindowHours": effectiveness_window_hours,
-            "effectiveAiLatestAt": _clean(effectiveness_row.get("latest_at")),
-            "effectiveAiStatus": (
-                "critical" if eligible_count >= 10 and authored_count == 0
-                else "critical" if eligible_count >= 10 and authored_count * 2 <= eligible_count
-                else "degraded" if eligible_count and authored_count < eligible_count
-                else "healthy"
+            "effectiveAiLatestAt": _clean(
+                current_effectiveness_row.get("latest_at")
+                or effectiveness_row.get("latest_at")
             ),
+            "effectiveAiStatus": current_status,
         }
 
     def prune_terminal(self, retention_hours: int = 24, limit: int = 50) -> int:

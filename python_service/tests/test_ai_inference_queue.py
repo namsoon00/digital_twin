@@ -29,6 +29,7 @@ from digital_twin.domain.investment_reasoning.ai_insight import (
 )
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
+from digital_twin.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
 from digital_twin.domain.notifications import NotificationJob
 from mysql_fixtures import (
     TestAIInferenceQueueStore,
@@ -884,7 +885,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v4", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v5", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v18", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-judge-v19", prompt_audit["promptRelease"]["version"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])
@@ -1183,7 +1184,12 @@ class AIInferenceQueueTests(unittest.TestCase):
 
     def test_invalid_ai_contract_releases_typedb_fallback(self):
         job = self.create_job()
-        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
+        request = AIInferenceRequest.create(
+            job,
+            job.context,
+            reasoning_effort="high",
+            prompt_version=AI_DECISION_PROMPT_VERSION,
+        )
         self.queue.enqueue(job, request)
 
         class RejectingOrchestrator:
@@ -1221,11 +1227,24 @@ class AIInferenceQueueTests(unittest.TestCase):
             "UPDATE ai_inference_results SET created_at = %s WHERE request_id = %s",
             (two_hours_ago, request.request_id),
         )
+        self.queue.runtime_settings["notificationAiHealthMinimumSamples"] = 1
         summary = self.queue.summary()
         self.assertEqual(24, summary["effectiveAiWindowHours"])
         self.assertEqual(1, summary["effectiveAiEligibleCount"])
         self.assertEqual(1, summary["effectiveAiFallbackCount"])
-        self.assertEqual("degraded", summary["effectiveAiStatus"])
+        self.assertEqual("critical", summary["effectiveAiStatus"])
+        self.assertEqual(AI_DECISION_PROMPT_VERSION, summary["currentAiPromptVersion"])
+        self.assertEqual(1, summary["historicalAiFallbackCount"])
+
+        mysql_execute(
+            self.seed,
+            "UPDATE ai_inference_requests SET prompt_version = %s WHERE request_id = %s",
+            ("investment-ai-judge-v18", request.request_id),
+        )
+        historical_only = self.queue.summary()
+        self.assertEqual(0, historical_only["currentAiEligibleCount"])
+        self.assertEqual(1, historical_only["historicalAiFallbackCount"])
+        self.assertEqual("warming-up", historical_only["effectiveAiStatus"])
 
         unchanged = self.create_job(generation="generation-unchanged")
         duplicate = self.create_job(generation="generation-duplicate")

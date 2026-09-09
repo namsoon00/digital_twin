@@ -9,7 +9,7 @@ import re
 from typing import Dict, Iterable, Mapping, Tuple
 
 
-INVESTMENT_INSIGHT_ASSESSMENT_VERSION = "investment-insight-assessment-v1"
+INVESTMENT_INSIGHT_ASSESSMENT_VERSION = "investment-insight-assessment-v2"
 INVESTMENT_INSIGHT_TRANSITION_VERSION = "investment-insight-transition-v1"
 
 VALID_DIRECTIONS = {"positive", "balanced", "negative"}
@@ -17,6 +17,39 @@ VALID_HORIZONS = {
     "intraday", "short-term", "medium-term", "long-term", "multi-horizon",
 }
 VALID_CONVICTIONS = {"tentative", "moderate", "strong"}
+VALID_COUNTER_EVIDENCE_STATUSES = {"confirmed", "none-found", "not-checked", "unavailable"}
+
+GENERIC_INVALIDATION_MARKERS = (
+    "현재 근거가 사라지",
+    "현재 근거가 약해지",
+    "반대 근거가 새로",
+    "반대 근거가 확인",
+    "다음 데이터에서",
+    "다음 관측에서",
+    "같은 신호가 유지",
+    "조건이 성립하지 않",
+    "상황이 달라지",
+    "new contrary evidence",
+    "current evidence disappears",
+    "conditions no longer hold",
+)
+OBSERVABLE_INVALIDATION_TERMS = (
+    "가격", "현재가", "거래량", "체결강도", "순매수", "순매도", "수급",
+    "이동평균", "일선", "금리", "환율", "매출", "영업이익", "현금흐름",
+    "판매", "인도", "생산", "재고", "공시", "실적", "가이던스", "배당",
+    "price", "volume", "flow", "yield", "rate", "revenue", "margin",
+    "cash flow", "delivery", "production", "guidance",
+)
+CONDITIONAL_INVALIDATION_TERMS = (
+    "이탈", "하회", "상회", "아래", "위로", "전환", "증가", "감소", "둔화",
+    "악화", "회복", "유지", "중단", "확인", "발표", "갱신", "넘", "미달",
+    "break", "below", "above", "turn", "increase", "decrease", "weaken",
+    "recover", "remain", "report", "confirm", ">", "<", "=",
+)
+INVALIDATING_NEXT_CONDITION_TERMS = (
+    "이탈", "하회", "순매도", "감소", "둔화", "악화", "중단", "미달", "실패",
+    "break", "below", "sell", "decrease", "weaken", "deterior", "miss",
+)
 
 DIRECTION_LABELS = {
     "positive": "상승 요인 우세",
@@ -165,6 +198,60 @@ def _thesis_key(hypothesis: Mapping[str, object]) -> str:
     )
 
 
+def _specific_invalidation_text(value: object) -> bool:
+    text = _text(value)
+    normalized = text.casefold()
+    if len(text) < 12 or any(marker in normalized for marker in GENERIC_INVALIDATION_MARKERS):
+        return False
+    has_observable = any(term in normalized for term in OBSERVABLE_INVALIDATION_TERMS)
+    has_condition = any(term in normalized for term in CONDITIONAL_INVALIDATION_TERMS)
+    return bool(has_observable and has_condition)
+
+
+def _observable_invalidation_terms(value: object) -> set:
+    normalized = _text(value).casefold()
+    return {
+        term for term in OBSERVABLE_INVALIDATION_TERMS
+        if term in normalized
+    }
+
+
+def _invalidation_test_rows(value: Iterable[Mapping[str, object]]) -> list:
+    rows = []
+    for item in value or []:
+        condition = _mapping(item)
+        purpose = _text(condition.get("purpose"), 40).casefold()
+        if (
+            purpose not in {"weaken", "invalidate", "switch"}
+            or not condition.get("observable")
+            or not _text(condition.get("field"), 120)
+            or _text(condition.get("operator"), 8) not in {">", ">=", "<", "<=", "==", "!="}
+            or condition.get("threshold") in (None, "")
+        ):
+            continue
+        rows.append({
+            key: condition.get(key)
+            for key in (
+                "conditionId", "field", "operator", "threshold", "purpose",
+                "label", "onSatisfied",
+            )
+            if condition.get(key) not in (None, "")
+        })
+    return rows[:4]
+
+
+def _invalidation_text_from_test(condition: Mapping[str, object]) -> str:
+    row = _mapping(condition)
+    label = _text(row.get("label"), 240)
+    trigger = label or " ".join((
+        _text(row.get("field"), 120),
+        _text(row.get("operator"), 8),
+        _text(row.get("threshold"), 80),
+    )).strip()
+    consequence = _text(row.get("onSatisfied"), 240) or "현재 투자 관점을 다시 평가합니다."
+    return _text(trigger + " 조건이 충족되면 " + consequence)
+
+
 @dataclass(frozen=True)
 class InvestmentInsightAssessment:
     """A publishable interpretation can exist without an executable action."""
@@ -180,7 +267,11 @@ class InvestmentInsightAssessment:
     investment_implication: str = ""
     catalysts: Tuple[str, ...] = ()
     risks: Tuple[str, ...] = ()
+    counter_evidence_status: str = "not-checked"
+    counter_evidence_ids: Tuple[str, ...] = ()
     invalidation_condition: str = ""
+    invalidation_evidence_ids: Tuple[str, ...] = ()
+    invalidation_tests: Tuple[Dict[str, object], ...] = ()
     thesis_key: str = ""
     selected_hypothesis_id: str = ""
     evidence_ids: Tuple[str, ...] = ()
@@ -209,7 +300,11 @@ class InvestmentInsightAssessment:
             "investmentImplication": payload.pop("investment_implication"),
             "catalysts": list(payload.pop("catalysts")),
             "risks": list(payload.pop("risks")),
+            "counterEvidenceStatus": payload.pop("counter_evidence_status"),
+            "counterEvidenceIds": list(payload.pop("counter_evidence_ids")),
             "invalidationCondition": payload.pop("invalidation_condition"),
+            "invalidationEvidenceIds": list(payload.pop("invalidation_evidence_ids")),
+            "invalidationTests": list(payload.pop("invalidation_tests")),
             "thesisKey": payload.pop("thesis_key"),
             "selectedHypothesisId": payload.pop("selected_hypothesis_id"),
             "evidenceIds": list(payload.pop("evidence_ids")),
@@ -239,6 +334,7 @@ def investment_insight_assessment(
     decision_readiness: str = "conditional",
     counter_evidence_status: str = "not-checked",
     invalidation_condition: str = "",
+    follow_up_conditions: Iterable[Mapping[str, object]] = (),
 ) -> Dict[str, object]:
     """Normalize and verify one AI interpretation against its evidence claims."""
 
@@ -282,6 +378,57 @@ def investment_insight_assessment(
     risks = _unique(
         (_mapping(item).get("text") for item in claims.get("counter") or []),
         2,
+    )
+    counter_evidence_ids = _unique([
+        evidence_id
+        for item in claims.get("counter") or []
+        for evidence_id in _mapping(item).get("evidenceIds") or []
+    ], 16)
+    normalized_counter_status = _text(counter_evidence_status, 40).casefold()
+    if normalized_counter_status not in VALID_COUNTER_EVIDENCE_STATUSES:
+        normalized_counter_status = "not-checked"
+
+    next_condition_claims = [
+        _mapping(item)
+        for item in claims.get("next-condition") or []
+        if _specific_invalidation_text(_mapping(item).get("text"))
+    ]
+    invalidation_tests = _invalidation_test_rows(follow_up_conditions)
+    normalized_invalidation = _text(
+        invalidation_condition
+        or raw.get("invalidationCondition")
+        or raw.get("invalidation_condition")
+    )
+    if not _specific_invalidation_text(normalized_invalidation):
+        invalidating_claim = next((
+            item for item in next_condition_claims
+            if any(
+                term in _text(item.get("text")).casefold()
+                for term in INVALIDATING_NEXT_CONDITION_TERMS
+            )
+        ), {})
+        if invalidating_claim:
+            normalized_invalidation = _text(invalidating_claim.get("text"))
+        elif invalidation_tests:
+            normalized_invalidation = _invalidation_text_from_test(invalidation_tests[0])
+    invalidation_terms = _observable_invalidation_terms(normalized_invalidation)
+    linked_next_condition_claims = [
+        item for item in next_condition_claims
+        if _text(item.get("text")) == normalized_invalidation
+        or bool(
+            invalidation_terms.intersection(
+                _observable_invalidation_terms(item.get("text"))
+            )
+        )
+    ]
+    invalidation_evidence_ids = _unique([
+        evidence_id
+        for item in linked_next_condition_claims
+        for evidence_id in item.get("evidenceIds") or []
+    ], 16)
+    specific_invalidation = bool(
+        _specific_invalidation_text(normalized_invalidation)
+        and (invalidation_evidence_ids or invalidation_tests)
     )
 
     causal_rows = [
@@ -363,6 +510,16 @@ def investment_insight_assessment(
         validation_reasons.append("insufficient-distinct-evidence")
     if evidence_quality_limited:
         validation_reasons.append("evidence-quality-blocked")
+    if normalized_counter_status in {"not-checked", "unavailable"}:
+        validation_reasons.append("counter-evidence-not-verified")
+    elif normalized_counter_status == "confirmed" and not (
+        risks and counter_evidence_ids
+    ):
+        validation_reasons.append("missing-verified-counter-claim")
+    if direction == "balanced" and normalized_counter_status != "confirmed":
+        validation_reasons.append("balanced-view-without-verified-counter-claim")
+    if not specific_invalidation:
+        validation_reasons.append("missing-specific-invalidation-condition")
 
     publishable = not validation_reasons
     status = "ready" if publishable and conviction == "strong" else "conditional" if publishable else "invalid"
@@ -379,7 +536,11 @@ def investment_insight_assessment(
         "investmentImplication": investment_implication,
         "catalysts": catalysts,
         "risks": risks,
+        "counterEvidenceStatus": normalized_counter_status,
         "evidenceIds": evidence_ids,
+        "invalidationCondition": normalized_invalidation,
+        "invalidationEvidenceIds": invalidation_evidence_ids,
+        "invalidationTests": invalidation_tests,
     }
     assessment = InvestmentInsightAssessment(
         direction=direction,
@@ -393,11 +554,11 @@ def investment_insight_assessment(
         investment_implication=investment_implication,
         catalysts=tuple(catalysts),
         risks=tuple(risks),
-        invalidation_condition=_text(
-            invalidation_condition
-            or raw.get("invalidationCondition")
-            or raw.get("invalidation_condition")
-        ),
+        counter_evidence_status=normalized_counter_status,
+        counter_evidence_ids=tuple(counter_evidence_ids),
+        invalidation_condition=normalized_invalidation,
+        invalidation_evidence_ids=tuple(invalidation_evidence_ids),
+        invalidation_tests=tuple(invalidation_tests),
         thesis_key=thesis_key,
         selected_hypothesis_id=selected_id,
         evidence_ids=tuple(evidence_ids),

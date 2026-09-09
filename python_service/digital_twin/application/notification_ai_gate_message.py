@@ -4808,6 +4808,11 @@ def research_narrative_telegram_message(
         for item in assessment.get("risks") or []
         if customer_visible_ai_text(item)
     ][:2]
+    counter_status = str(
+        assessment.get("counterEvidenceStatus")
+        or response.counter_evidence_status
+        or ""
+    ).strip().lower()
     invalidation = compact_sentence_count(
         customer_visible_ai_text(
             assessment.get("invalidationCondition")
@@ -4859,6 +4864,15 @@ def research_narrative_telegram_message(
             "",
             "<b>반대 시나리오</b>",
             *[_html_bullet(item, level) for item in risks],
+        ])
+    elif counter_status == "none-found":
+        parts.extend([
+            "",
+            "<b>반대 근거 확인</b>",
+            _html_bullet(
+                "모든 후보 근거를 비교했으며, 현재 방향을 뒤집는 검증된 반대 사실은 확인되지 않았습니다.",
+                level,
+            ),
         ])
     if invalidation:
         parts.extend([
@@ -5082,6 +5096,19 @@ def execution_telegram_message_decision_first(
         parts.extend(["", "<b>판단 이유</b>", *[_html_bullet(row, level) for row in reason_rows]])
     if counter_rows:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    elif (
+        insight_publishable
+        and str(insight_assessment.get("counterEvidenceStatus") or "").strip().lower()
+        == "none-found"
+    ):
+        parts.extend([
+            "",
+            "<b>반대 근거 확인</b>",
+            _html_bullet(
+                "모든 후보 근거를 비교했으며, 현재 방향을 뒤집는 검증된 반대 사실은 확인되지 않았습니다.",
+                level,
+            ),
+        ])
     news_row = compact_news_impact_html_row(context, level)
     if news_row:
         parts.extend(["", "<b>관련 사건</b>", news_row])

@@ -881,6 +881,9 @@ def add_decision_performance_concepts(
         "byHypothesisFamilyAndHorizon": list(performance.get("byHypothesisFamilyAndHorizon") or []),
         "byPredictionTarget": list(performance.get("byPredictionTarget") or []),
         "byOutcomeMetric": list(performance.get("byOutcomeMetric") or []),
+        "investmentInsightPerformance": dict(
+            performance.get("investmentInsightPerformance") or {}
+        ),
         "automaticDeployment": False,
         "source": "DecisionEpisode+ObservedOutcome",
     })

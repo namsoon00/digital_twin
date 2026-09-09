@@ -14,6 +14,8 @@ CORROBORATION_STATES = (
     "more-contradicted",
     "more-corroborated",
 )
+INVESTMENT_INSIGHT_PERFORMANCE_VERSION = "investment-insight-performance-v1"
+DECISIVE_INSIGHT_DIRECTIONS = {"positive", "negative"}
 
 
 def number(value: object) -> float:
@@ -73,6 +75,11 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
             payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
             status = str(outcome.get("selectedHypothesisStatus") or "inconclusive")
             raw_return = number(outcome.get("priceChangeFromDecisionPct"))
+            excess_return = (
+                number(payload.get("excessReturnPct"))
+                if payload.get("excessReturnPct") not in (None, "")
+                else None
+            )
             stored_eligibility = str(payload.get("calibrationEligibility") or "legacy-unverified")
             calibration_eligibility = (
                 stored_eligibility
@@ -104,9 +111,83 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
                 "observationTiming": str(payload.get("observationTiming") or "legacy-unknown"),
                 "observationDelayMinutes": number(payload.get("observationDelayMinutes")),
                 "rawReturnPct": raw_return,
+                "excessReturnPct": excess_return,
                 "actionAdjustedReturnPct": action_adjusted_return(str(episode.get("action") or ""), raw_return),
                 "observedAt": str(outcome.get("observedAt") or ""),
             })
+    return observations
+
+
+def investment_insight_assessment_from_episode(
+    episode: Dict[str, object],
+) -> Dict[str, object]:
+    facts = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), dict) else {}
+    judgment = facts.get("aiJudgment") if isinstance(facts.get("aiJudgment"), dict) else {}
+    assessment = (
+        judgment.get("insight_assessment")
+        or judgment.get("insightAssessment")
+        or episode.get("insightAssessment")
+        or {}
+    )
+    return dict(assessment) if isinstance(assessment, dict) else {}
+
+
+def insight_direction_adjusted_return(direction: str, observed_return: float):
+    normalized = str(direction or "").strip().lower()
+    if normalized == "positive":
+        return observed_return
+    if normalized == "negative":
+        return -observed_return
+    return None
+
+
+def investment_insight_performance_observations(
+    episodes: Iterable[object],
+) -> List[Dict[str, object]]:
+    """Evaluate AI market direction separately from TypeDB action outcomes."""
+
+    episode_rows = [episode_payload(item) for item in episodes or []]
+    assessments = {
+        str(episode.get("episodeId") or ""): investment_insight_assessment_from_episode(episode)
+        for episode in episode_rows
+    }
+    observations = []
+    for item in performance_observations(episode_rows):
+        assessment = assessments.get(str(item.get("episodeId") or ""), {})
+        direction = str(assessment.get("direction") or "").strip().lower()
+        if assessment.get("publishable") is not True or direction not in (
+            DECISIVE_INSIGHT_DIRECTIONS | {"balanced"}
+        ):
+            continue
+        evaluation_return = (
+            number(item.get("excessReturnPct"))
+            if item.get("excessReturnPct") is not None
+            else number(item.get("rawReturnPct"))
+        )
+        adjusted_return = insight_direction_adjusted_return(direction, evaluation_return)
+        status = "inconclusive"
+        if adjusted_return is not None and adjusted_return > 0:
+            status = "directionally-corroborated"
+        elif adjusted_return is not None and adjusted_return < 0:
+            status = "directionally-contradicted"
+        observations.append({
+            **item,
+            "direction": direction,
+            "conviction": str(assessment.get("conviction") or "tentative").strip().lower(),
+            "insightHorizon": str(assessment.get("horizon") or "multi-horizon").strip().lower(),
+            "thesisKey": str(assessment.get("thesisKey") or "").strip(),
+            "insightAssessmentVersion": str(assessment.get("version") or ""),
+            "status": status,
+            "corroborated": status == "directionally-corroborated",
+            "decisive": status in DECISIVE_STATUSES,
+            "evaluationReturnPct": evaluation_return,
+            "evaluationReturnBasis": (
+                "benchmark-excess-return"
+                if item.get("excessReturnPct") is not None
+                else "instrument-return"
+            ),
+            "directionAdjustedReturnPct": adjusted_return,
+        })
     return observations
 
 
@@ -246,6 +327,94 @@ def metric_slice(
     }
 
 
+def investment_insight_metric_slice(
+    observations: Iterable[Dict[str, object]],
+    key: str = "",
+    label: str = "",
+    minimum_sample_count: int = 5,
+) -> Dict[str, object]:
+    rows = list(observations or [])
+    independent_rows = latest_independent_observations(rows)
+    eligible_rows = latest_independent_observations(
+        item for item in rows if item.get("calibrationEligible")
+    )
+    decisive = [item for item in eligible_rows if item.get("decisive")]
+    corroborated = [item for item in decisive if item.get("corroborated")]
+    contradicted = [item for item in decisive if not item.get("corroborated")]
+    adjusted = [
+        number(item.get("directionAdjustedReturnPct"))
+        for item in decisive
+        if item.get("directionAdjustedReturnPct") is not None
+    ]
+    enough_samples = len(decisive) >= max(1, int(minimum_sample_count or 1))
+    confidence = binomial_confidence_interval(len(corroborated), len(decisive))
+    return {
+        "key": str(key or "all"),
+        "label": str(label or key or "전체 AI 투자 관점"),
+        "outcomeCount": len(rows),
+        "independentEpisodeCount": len(independent_rows),
+        "eligibleEpisodeCount": len(eligible_rows),
+        "excludedOutcomeCount": len(rows) - len(eligible_rows),
+        "decisiveOutcomeCount": len(decisive),
+        "corroboratedCount": len(corroborated),
+        "contradictedCount": len(contradicted),
+        "inconclusiveCount": len([item for item in eligible_rows if not item.get("decisive")]),
+        "benchmarkAdjustedOutcomeCount": len([
+            item for item in eligible_rows
+            if item.get("evaluationReturnBasis") == "benchmark-excess-return"
+        ]),
+        "averageEvaluationReturnPct": round(
+            sum(number(item.get("evaluationReturnPct")) for item in eligible_rows)
+            / len(eligible_rows),
+            4,
+        ) if eligible_rows else 0.0,
+        "averageDirectionAdjustedReturnPct": round(
+            sum(adjusted) / len(adjusted),
+            4,
+        ) if adjusted else 0.0,
+        "minimumSampleCount": int(minimum_sample_count or 0),
+        "sampleStatus": "usable" if enough_samples else (
+            "awaiting-eligible-outcomes" if rows and not eligible_rows else "insufficient-history"
+        ),
+        "corroborationState": corroboration_state(
+            len(corroborated),
+            len(contradicted),
+            enough_samples,
+        ),
+        "directionalHitRate": confidence["rate"],
+        "directionalHitRateConfidence95": {
+            "lower": confidence["lower"],
+            "upper": confidence["upper"],
+        },
+        "automaticPromptChange": False,
+        "automaticRuleChange": False,
+        "governance": "human-review-required",
+    }
+
+
+def grouped_investment_insight_metrics(
+    observations: List[Dict[str, object]],
+    value_keys: Iterable[str],
+    minimum_sample_count: int,
+) -> List[Dict[str, object]]:
+    keys = list(value_keys or [])
+    grouped: Dict[str, List[Dict[str, object]]] = {}
+    for item in observations:
+        values = [str(item.get(value_key) or "").strip() for value_key in keys]
+        if not all(values):
+            continue
+        key = "|".join(values)
+        grouped.setdefault(key, []).append(item)
+    return sorted(
+        [
+            investment_insight_metric_slice(rows, key, " · ".join(key.split("|")), minimum_sample_count)
+            for key, rows in grouped.items()
+        ],
+        key=lambda item: (int(item.get("decisiveOutcomeCount") or 0), str(item.get("key") or "")),
+        reverse=True,
+    )
+
+
 def grouped_metrics(
     observations: List[Dict[str, object]],
     value_key: str,
@@ -359,6 +528,43 @@ def evaluate_decision_performance(
     calibration_observations = latest_independent_observations(item for item in observations if item.get("calibrationEligible"))
     coverage = (len(episodes_with_outcomes) / len(episode_rows) * 100.0) if episode_rows else 0.0
     by_rule = grouped_metrics(observations, "ruleIds", minimum_sample_count, multi_value=True)
+    insight_observations = investment_insight_performance_observations(episode_rows)
+    insight_performance = {
+        "version": INVESTMENT_INSIGHT_PERFORMANCE_VERSION,
+        "status": "ok" if insight_observations else "insufficient-data",
+        "outcomeCount": len(insight_observations),
+        "summary": investment_insight_metric_slice(
+            insight_observations,
+            "all",
+            "전체 AI 투자 관점",
+            minimum_sample_count,
+        ),
+        "byDirection": grouped_investment_insight_metrics(
+            insight_observations,
+            ("direction",),
+            minimum_sample_count,
+        ),
+        "byConviction": grouped_investment_insight_metrics(
+            insight_observations,
+            ("conviction",),
+            minimum_sample_count,
+        ),
+        "byHorizon": grouped_investment_insight_metrics(
+            insight_observations,
+            ("horizonMinutes",),
+            minimum_sample_count,
+        ),
+        "byDirectionAndHorizon": grouped_investment_insight_metrics(
+            insight_observations,
+            ("direction", "horizonMinutes"),
+            minimum_sample_count,
+        ),
+        "governance": {
+            "automaticPromptChange": False,
+            "automaticRuleChange": False,
+            "reviewScope": "ai-insight-direction-only",
+        },
+    }
     return {
         "status": "ok" if observations else "insufficient-data",
         "episodeCount": len(episode_rows),
@@ -379,6 +585,7 @@ def evaluate_decision_performance(
         "byHypothesisFamilyAndHorizon": grouped_family_horizon_metrics(observations, minimum_sample_count),
         "byPredictionTarget": grouped_metrics(observations, "predictionTarget", minimum_sample_count),
         "byOutcomeMetric": grouped_metrics(observations, "outcomeMetric", minimum_sample_count),
+        "investmentInsightPerformance": insight_performance,
         "governance": {
             "automaticDeployment": False,
             "promotionRequires": ["minimum-history", "more-corroborated-outcomes", "non-negative-action-adjusted-return", "human-review"],

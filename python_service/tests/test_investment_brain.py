@@ -605,6 +605,86 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(1, result["summary"]["corroboratedCount"])
         self.assertEqual(0, result["summary"]["contradictedCount"])
 
+    def test_ai_insight_direction_is_evaluated_at_1_5_and_20_days(self):
+        episode = {
+            "episodeId": "episode-ai-insight",
+            "accountId": "account-1",
+            "symbol": "TSLA",
+            "action": "HOLD",
+            "selectedHypothesisId": "hypothesis-demand-risk",
+            "factsAtDecision": {
+                "hypothesisOutcomeContract": governed_outcome_contract(
+                    "hypothesis-demand-risk",
+                    "rule:demand-risk",
+                    1440,
+                ),
+                "aiJudgment": {
+                    "insight_assessment": {
+                        "version": "investment-insight-assessment-v2",
+                        "publishable": True,
+                        "direction": "positive",
+                        "conviction": "moderate",
+                        "horizon": "multi-horizon",
+                        "thesisKey": "demand-recovery",
+                    },
+                },
+            },
+            "hypothesisSet": {"hypotheses": [{
+                "hypothesisId": "hypothesis-demand-risk",
+                "templateId": "template:demand-risk",
+                "familyId": "demand-risk",
+                "supportingRuleIds": ["rule:demand-risk"],
+            }]},
+            "outcomes": [
+                {
+                    "selectedHypothesisStatus": "inconclusive",
+                    "observedAt": "2026-09-02T00:00:00Z",
+                    "priceChangeFromDecisionPct": 3.0,
+                    "payload": {
+                        "horizonMinutes": 1440,
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "market-event:tsla",
+                        "excessReturnPct": -1.0,
+                    },
+                },
+                {
+                    "selectedHypothesisStatus": "inconclusive",
+                    "observedAt": "2026-09-06T00:00:00Z",
+                    "priceChangeFromDecisionPct": 2.0,
+                    "payload": {
+                        "horizonMinutes": 7200,
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "market-event:tsla",
+                        "excessReturnPct": 1.0,
+                    },
+                },
+                {
+                    "selectedHypothesisStatus": "inconclusive",
+                    "observedAt": "2026-09-21T00:00:00Z",
+                    "priceChangeFromDecisionPct": -4.0,
+                    "payload": {
+                        "horizonMinutes": 28800,
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "market-event:tsla",
+                        "excessReturnPct": None,
+                    },
+                },
+            ],
+        }
+
+        result = evaluate_decision_performance([episode], minimum_sample_count=1)
+        insight = result["investmentInsightPerformance"]
+        horizons = {item["key"]: item for item in insight["byHorizon"]}
+
+        self.assertEqual("ok", insight["status"])
+        self.assertEqual({"1440", "7200", "28800"}, set(horizons))
+        self.assertEqual(1, horizons["1440"]["contradictedCount"])
+        self.assertEqual(1, horizons["1440"]["benchmarkAdjustedOutcomeCount"])
+        self.assertEqual(1, horizons["7200"]["corroboratedCount"])
+        self.assertEqual(1, horizons["28800"]["contradictedCount"])
+        self.assertFalse(insight["governance"]["automaticPromptChange"])
+        self.assertFalse(insight["governance"]["automaticRuleChange"])
+
     def test_decision_performance_recommends_quarantine_without_auto_mutation(self):
         episodes = []
         for index in range(5):

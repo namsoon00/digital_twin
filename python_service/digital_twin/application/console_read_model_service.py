@@ -868,7 +868,11 @@ class ConsoleReadModelService:
             if ai_summary.get("actionableFailedCount") is not None
             else ai_summary.get("failedCount") or 0
         )
-        ai_effective_status = _text(ai_summary.get("effectiveAiStatus") or "healthy").lower()
+        ai_effective_status = _text(
+            ai_summary.get("currentAiStatus")
+            or ai_summary.get("effectiveAiStatus")
+            or "healthy"
+        ).lower()
         ai_effective_window_hours = int(ai_summary.get("effectiveAiWindowHours") or 24)
         notification_actionable_failures = int(
             notification_summary.get("actionable_failed")
@@ -1006,26 +1010,41 @@ class ConsoleReadModelService:
                 "label": "AI 판단 대기열",
                 "state": (
                     "critical" if ai_actionable_failures or ai_effective_status == "critical" or ai_oldest_age_seconds > 10 * 60
-                    else "warning" if ai_effective_status == "degraded"
+                    else "warning" if ai_effective_status in {"degraded", "warming-up"}
                     else "healthy"
                 ),
                 "dimension": "delivery",
                 "impact": "user",
                 "reasonCode": (
                     "ai-delivery-failed" if ai_actionable_failures or ai_oldest_age_seconds > 10 * 60
+                    else "ai-delivery-warming-up" if ai_effective_status == "warming-up"
                     else "ai-delivery-degraded" if ai_effective_status == "degraded"
                     else "ai-delivery-ready"
                 ),
                 "detail": (
                     f"대기 {int(ai_summary.get('pendingCount') or 0)}건 · 처리 {int(ai_summary.get('processingCount') or 0)}건"
-                    f" · 최근 {ai_effective_window_hours}시간 실효 AI {int(ai_summary.get('effectiveAiAuthoredCount') or 0)}/{int(ai_summary.get('effectiveAiEligibleCount') or 0)}건"
-                    f" · 폴백 {int(ai_summary.get('effectiveAiFallbackCount') or 0)}건 · 현재 실패 {ai_actionable_failures}건"
-                    f" · 누적 실패 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건"
+                    + (
+                        f" · 현재 {_text(ai_summary.get('currentAiPromptVersion'))} "
+                        f"실효 AI {int(ai_summary.get('currentAiAuthoredCount') or 0)}/{int(ai_summary.get('currentAiEligibleCount') or 0)}건"
+                        f" · 현재 폴백 {int(ai_summary.get('currentAiFallbackCount') or 0)}건"
+                        f" · 표본 기준 {int(ai_summary.get('currentAiMinimumSamples') or 10)}건"
+                        f" · 최근 {ai_effective_window_hours}시간 전체 폴백 {int(ai_summary.get('historicalAiFallbackCount') or 0)}건"
+                        if ai_summary.get("currentAiPromptVersion")
+                        else (
+                            f" · 최근 {ai_effective_window_hours}시간 실효 AI {int(ai_summary.get('effectiveAiAuthoredCount') or 0)}/{int(ai_summary.get('effectiveAiEligibleCount') or 0)}건"
+                            f" · 폴백 {int(ai_summary.get('effectiveAiFallbackCount') or 0)}건"
+                        )
+                    )
+                    + f" · 현재 실패 {ai_actionable_failures}건"
+                    + f" · 누적 실패 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건"
                     + (f" · 최장 {ai_oldest_age_seconds}초" if ai_oldest_age_seconds else "")
                 ),
-                "updatedAt": ai_oldest_at or _text(ai_summary.get("effectiveAiLatestAt")),
+                "updatedAt": ai_oldest_at or _text(
+                    ai_summary.get("currentAiLatestAt")
+                    or ai_summary.get("effectiveAiLatestAt")
+                ),
                 "action": (
-                    {} if not ai_actionable_failures and ai_effective_status != "degraded" and ai_oldest_age_seconds <= 10 * 60
+                    {} if not ai_actionable_failures and ai_effective_status not in {"degraded", "warming-up"} and ai_oldest_age_seconds <= 10 * 60
                     else {"id": "open-ai-queue", "label": "AI 대기열 확인", "view": "delivery"}
                 ),
             },

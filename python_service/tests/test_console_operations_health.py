@@ -82,5 +82,33 @@ class ConsoleOperationsHealthTests(unittest.TestCase):
         self.assertEqual("critical", component(result, "reasoning")["state"])
         self.assertEqual("critical", component(result, "ai")["state"])
 
+    def test_current_ai_release_warms_up_without_inheriting_old_fallbacks(self):
+        now = datetime.now(timezone.utc).isoformat()
+        result = ConsoleReadModelService().operations_health({
+            "realtime": {
+                "monitoring": {"snapshot": {"occurredAt": now}},
+                "aiInferenceQueue": {
+                    "states": {},
+                    "currentAiPromptVersion": "investment-ai-judge-v19",
+                    "currentAiStatus": "warming-up",
+                    "currentAiMinimumSamples": 10,
+                    "currentAiEligibleCount": 2,
+                    "currentAiAuthoredCount": 2,
+                    "currentAiFallbackCount": 0,
+                    "historicalAiFallbackCount": 26,
+                    "effectiveAiWindowHours": 24,
+                    "currentAiLatestAt": now,
+                },
+                "notificationJobs": {},
+            },
+            "reasoning": {"status": "healthy", "effectivePendingCount": 0, "processingCount": 0},
+        })
+
+        ai = component(result, "ai")
+        self.assertEqual("warning", ai["state"])
+        self.assertEqual("ai-delivery-warming-up", ai["reasonCode"])
+        self.assertIn("investment-ai-judge-v19 실효 AI 2/2건", ai["detail"])
+        self.assertIn("최근 24시간 전체 폴백 26건", ai["detail"])
+
 if __name__ == "__main__":
     unittest.main()

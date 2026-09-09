@@ -13,6 +13,9 @@ def grounded_assessment(
     *,
     include_causal_chain=True,
     validation_state="conditional",
+    counter_evidence_status="none-found",
+    invalidation_condition="20일선 이탈과 순매도 전환이 함께 나타나면 무효화합니다.",
+    follow_up_conditions=(),
 ):
     return investment_insight_assessment(
         {
@@ -67,8 +70,9 @@ def grounded_assessment(
         validation_state=validation_state,
         data_state="sufficient",
         decision_readiness="conditional",
-        counter_evidence_status="confirmed",
-        invalidation_condition="20일선 이탈과 순매도 전환이 함께 나타나면 무효화합니다.",
+        counter_evidence_status=counter_evidence_status,
+        invalidation_condition=invalidation_condition,
+        follow_up_conditions=follow_up_conditions,
     )
 
 
@@ -113,6 +117,56 @@ class InvestmentInsightAssessmentTests(unittest.TestCase):
             "missing-verified-implication-claim",
             assessment["validationReasons"],
         )
+
+    def test_counter_evidence_must_be_checked_before_publication(self):
+        assessment = grounded_assessment(counter_evidence_status="not-checked")
+
+        self.assertFalse(assessment["publishable"])
+        self.assertIn(
+            "counter-evidence-not-verified",
+            assessment["validationReasons"],
+        )
+
+    def test_confirmed_counter_evidence_requires_a_verified_counter_claim(self):
+        assessment = grounded_assessment(counter_evidence_status="confirmed")
+
+        self.assertFalse(assessment["publishable"])
+        self.assertIn(
+            "missing-verified-counter-claim",
+            assessment["validationReasons"],
+        )
+
+    def test_generic_invalidation_condition_blocks_publication(self):
+        assessment = grounded_assessment(
+            invalidation_condition=(
+                "다음 데이터에서 현재 근거가 사라지거나 반대 근거가 새로 확인되면 다시 봅니다."
+            ),
+        )
+
+        self.assertFalse(assessment["publishable"])
+        self.assertIn(
+            "missing-specific-invalidation-condition",
+            assessment["validationReasons"],
+        )
+
+    def test_observable_follow_up_replaces_generic_invalidation(self):
+        assessment = grounded_assessment(
+            invalidation_condition="현재 근거가 사라지면 다시 봅니다.",
+            follow_up_conditions=[{
+                "conditionId": "follow-up:ma20-break",
+                "field": "ma20Distance",
+                "operator": "<",
+                "threshold": 0,
+                "purpose": "invalidate",
+                "label": "현재가가 20일선 아래로 내려감",
+                "onSatisfied": "상방 관점을 무효화합니다.",
+                "observable": True,
+            }],
+        )
+
+        self.assertTrue(assessment["publishable"])
+        self.assertIn("20일선 아래", assessment["invalidationCondition"])
+        self.assertEqual("follow-up:ma20-break", assessment["invalidationTests"][0]["conditionId"])
 
     def test_transition_uses_meaning_not_wording(self):
         before = grounded_assessment(thesis="단기 회복 신호가 우세합니다.")

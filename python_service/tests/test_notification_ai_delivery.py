@@ -505,6 +505,106 @@ class FinalAIDeliveryTests(unittest.TestCase):
             fallback_decision.suppression_reason,
         )
 
+    def test_final_ai_watchlist_insight_is_not_revoked_by_initial_baseline_rule(self):
+        rule = default_notification_rule("investmentInsight")
+        context = watchlist_context()
+        context["ontologyRelationDiff"] = {
+            "material": False,
+            "decisionTransition": {
+                "kind": "initial",
+                "material": False,
+                "currentAction": "HOLD",
+            },
+        }
+        context["notificationAiValidatedResponse"] = {
+            "action": "HOLD",
+            "insightAssessment": {"publishable": True, "direction": "negative"},
+        }
+        context["investmentInsightTransition"] = {
+            "kind": "initial-insight",
+            "material": True,
+            "currentDirection": "negative",
+        }
+        context["notificationAiExecutionAudit"] = {
+            "status": "completed",
+            "adoptionState": "decision-and-narrative-adopted",
+            "fallback": {"used": False},
+        }
+        context["notificationWriterProvenance"] = {"aiAuthored": True}
+        context["notificationAIInsightProvenance"] = {
+            "aiAuthored": True,
+            "publicationContractPassed": True,
+            "contractFailureCode": "",
+        }
+        context["decisionPublication"] = {"outcomeKind": "REVIEW_ONLY"}
+        context["decisionReconciliation"] = {
+            "status": "reconciled",
+            "notificationDecision": "send",
+            "reasonCode": "initial-grounded-investment-insight",
+            "deliveryPolicy": {
+                "decision": "send",
+                "publicationOutcome": "REVIEW_ONLY",
+                "pushValueClass": "initial-grounded-investment-insight",
+            },
+        }
+        job = NotificationJob.create(
+            "TSLA 첫 근거 기반 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+
+        decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(job, rule),
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("new-condition", decision.state_decision)
+        self.assertTrue(decision.similarity_bypassed)
+        self.assertNotEqual("initial_graph_baseline", decision.suppression_reason)
+
+        context["notificationAIInsightProvenance"]["publicationContractPassed"] = False
+        fallback_job = NotificationJob.create(
+            "TSLA 미검증 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+        fallback_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(fallback_job, rule),
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=fallback_job,
+        )
+
+        self.assertFalse(fallback_decision.should_send)
+        self.assertEqual("initial_graph_baseline", fallback_decision.suppression_reason)
+
+        context["notificationAIInsightProvenance"]["publicationContractPassed"] = True
+        context["decisionPublication"]["outcomeKind"] = "ABSTAIN"
+        context["decisionReconciliation"]["deliveryPolicy"]["publicationOutcome"] = "ABSTAIN"
+        abstained_job = NotificationJob.create(
+            "TSLA 기권 결과",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+        abstained_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(abstained_job, rule),
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=abstained_job,
+        )
+
+        self.assertFalse(abstained_decision.should_send)
+        self.assertEqual("initial_graph_baseline", abstained_decision.suppression_reason)
+
     def test_typedb_fallback_never_sends_an_investment_push(self):
         self._assert_material_review_delivery_is_not_revoked_by_initial_baseline_rule()
         context = watchlist_context()

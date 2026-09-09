@@ -741,10 +741,10 @@ class AIInferenceQueueRunner:
             24 * 1024,
         )
         repair_effort = str(
-            self.settings.get("notificationAiComparisonRepairReasoningEffort") or "low"
+            self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
         ).strip().lower()
         self.comparison_repair_reasoning_effort = (
-            repair_effort if repair_effort in {"low", "medium", "high", "max"} else "low"
+            repair_effort if repair_effort in {"low", "medium", "high", "max"} else "max"
         )
         self.comparison_repair_timeout_seconds = _optional_seconds_setting(
             self.settings,
@@ -916,6 +916,7 @@ class AIInferenceQueueRunner:
         comparison_repair_error = ""
         comparison_repair_contract_error = ""
         comparison_repair_initial_contract_error = ""
+        comparison_repair_reasoning_effort = self.comparison_repair_reasoning_effort
         fallback_reason = ""
         ai_attempted = False
         judgement_outcome = None
@@ -945,6 +946,10 @@ class AIInferenceQueueRunner:
             comparison_repair_error = judgement_outcome.repair_error
             comparison_repair_contract_error = judgement_outcome.final_contract_error
             comparison_repair_initial_contract_error = judgement_outcome.initial_contract_error
+            comparison_repair_reasoning_effort = str(
+                judgement_outcome.execution_spans.get("repairReasoningEffort")
+                or comparison_repair_reasoning_effort
+            )
             if not judgement_outcome.publishable:
                 rejected_ai_response = response
                 raise NotificationAIContractError(
@@ -1086,7 +1091,7 @@ class AIInferenceQueueRunner:
                 "error": comparison_repair_error,
                 "initialContractError": comparison_repair_initial_contract_error,
                 "contractError": comparison_repair_contract_error,
-                "reasoningEffort": self.comparison_repair_reasoning_effort,
+                "reasoningEffort": comparison_repair_reasoning_effort,
                 "timeoutSeconds": int(self.comparison_repair_timeout_seconds or 0),
                 "finalState": str(response.hypothesis_comparison_state or ""),
                 "selectedHypothesisId": str(response.selected_hypothesis_id or ""),

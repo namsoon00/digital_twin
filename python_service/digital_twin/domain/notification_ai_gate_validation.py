@@ -352,6 +352,99 @@ def deterministic_current_action_plan(context: Dict[str, object], action: str) -
     return "지금은 매도·추가매수 없이 보유를 유지하며 다음 가격·수급 변화를 확인합니다."
 
 
+def normalized_ai_plan_text(value: object, plan_kind: str, limit: int = 360) -> str:
+    """Render model plan objects without leaking JSON or Python representations."""
+
+    if not isinstance(value, (dict, list, tuple)):
+        return user_friendly_ai_text(value, limit)
+
+    def values_text(item: object, item_limit: int = 4) -> str:
+        if isinstance(item, dict):
+            preferred = (
+                item.get("text")
+                or item.get("summary")
+                or item.get("condition")
+                or item.get("label")
+                or item.get("reason")
+            )
+            if preferred:
+                return values_text(preferred, item_limit)
+            candidates = list(item.values())
+        elif isinstance(item, (list, tuple)):
+            candidates = list(item)
+        else:
+            return user_friendly_ai_text(item, limit)
+        parts: List[str] = []
+        for candidate in candidates:
+            cleaned = values_text(candidate, item_limit)
+            if cleaned and cleaned not in parts:
+                parts.append(cleaned)
+            if len(parts) >= item_limit:
+                break
+        return " · ".join(parts)
+
+    if isinstance(value, (list, tuple)):
+        return user_friendly_ai_text(values_text(value), limit)
+
+    if plan_kind == "current":
+        do_now = values_text(value.get("doNow") or value.get("do_now"))
+        defer = values_text(
+            value.get("defer")
+            or value.get("deferred")
+            or value.get("doNot")
+            or value.get("do_not")
+        )
+        parts = []
+        if do_now:
+            parts.append("지금 할 일: " + do_now)
+        if defer:
+            parts.append("보류할 일: " + defer)
+        if not parts:
+            parts.append(values_text(value))
+        return user_friendly_ai_text(". ".join(part for part in parts if part), limit)
+
+    reobserve = values_text(
+        value.get("reobserve")
+        or value.get("nextChecks")
+        or value.get("next_checks")
+        or value.get("observe")
+    )
+    changes = value.get("decisionChanges") or value.get("decision_changes") or {}
+    change_labels = {
+        "invalidate": "무효화",
+        "weaken": "약화",
+        "strengthen": "강화",
+        "maintain": "유지",
+        "macroAdjustment": "거시환경 조정",
+        "macro_adjustment": "거시환경 조정",
+    }
+    change_parts: List[str] = []
+    if isinstance(changes, dict):
+        for key in (
+            "invalidate",
+            "weaken",
+            "strengthen",
+            "maintain",
+            "macroAdjustment",
+            "macro_adjustment",
+        ):
+            cleaned = values_text(changes.get(key))
+            if cleaned:
+                change_parts.append(change_labels[key] + ": " + cleaned)
+    else:
+        cleaned = values_text(changes)
+        if cleaned:
+            change_parts.append(cleaned)
+    parts = []
+    if reobserve:
+        parts.append("다음 확인: " + reobserve)
+    if change_parts:
+        parts.append("판단 변경 기준: " + " · ".join(change_parts))
+    if not parts:
+        parts.append(values_text(value))
+    return user_friendly_ai_text(". ".join(part for part in parts if part), limit)
+
+
 def normalized_action_for_action_envelope(context: Dict[str, object], action: str) -> str:
     """Honor TypeDB's materialized action envelope before validating AI text."""
 
@@ -2471,11 +2564,12 @@ def validated_response_from_payload(
     strategy_guide = normalized_strategy_guide_payload(context, payload)
     current_action_plan = soften_order_language(watchlist_friendly_text(
         context,
-        user_friendly_ai_text(
+        normalized_ai_plan_text(
             payload.get("currentActionPlan")
             or payload.get("current_action_plan")
             or opinion
             or summary,
+            "current",
             360,
         ),
     ))
@@ -2498,11 +2592,12 @@ def validated_response_from_payload(
         warnings.append("저장된 이전 AI 판단과 맞지 않는 첫 판단 표현을 결정 이력 기준으로 보정했습니다.")
     next_action_plan = soften_order_language(watchlist_friendly_text(
         context,
-        user_friendly_ai_text(
+        normalized_ai_plan_text(
             payload.get("nextActionPlan")
             or payload.get("next_action_plan")
             or strategy_guide.get("hypothesisNextCheck")
             or (next_checks[0] if next_checks else ""),
+            "next",
             360,
         ),
     ))

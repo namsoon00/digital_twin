@@ -483,14 +483,19 @@ class NotificationAIJudgementService:
         settings: Dict[str, object] = None,
         *,
         max_prompt_bytes: int = 0,
-        repair_reasoning_effort: str = "low",
+        repair_reasoning_effort: str = "max",
         repair_timeout_seconds: Optional[int] = 60,
         enforce_contract_for_typed_response: bool = True,
     ):
         self.reviewer = reviewer
         self.settings = dict(settings or {})
         self.max_prompt_bytes = int(max_prompt_bytes or 0)
-        self.repair_reasoning_effort = str(repair_reasoning_effort or "low")
+        normalized_repair_effort = str(repair_reasoning_effort or "max").strip().lower()
+        self.repair_reasoning_effort = (
+            normalized_repair_effort
+            if normalized_repair_effort in {"low", "medium", "high", "max"}
+            else "max"
+        )
         self.repair_timeout_seconds = (
             max(5, int(repair_timeout_seconds))
             if repair_timeout_seconds not in (None, "", 0, "0")
@@ -526,6 +531,8 @@ class NotificationAIJudgementService:
             context,
             timeout_seconds=current_timeout,
         )
+        if profile:
+            review_context["notificationAiExecutionProfile"] = dict(profile)
         initial_model_started = time.monotonic()
         response = self.reviewer.review(review_context)
         initial_model_ms = int((time.monotonic() - initial_model_started) * 1000)
@@ -566,6 +573,7 @@ class NotificationAIJudgementService:
         repair_error = ""
         repair_model_ms = 0
         repair_validation_ms = 0
+        repair_reasoning_effort = self.repair_reasoning_effort
         executed_prompt = prepared_packet.prompt
         if repair_attempted:
             executed_prompt = ai_contract_repair_prompt(
@@ -590,10 +598,18 @@ class NotificationAIJudgementService:
                 ),
             )
             repair_context["_notificationAiPreparedPrompt"] = executed_prompt
+            requested_profile = dict(
+                profile or context.get("notificationAiExecutionProfile") or {}
+            )
+            requested_effort = str(
+                requested_profile.get("reasoningEffort") or ""
+            ).strip().lower()
+            if requested_effort in {"low", "medium", "high", "max"}:
+                repair_reasoning_effort = requested_effort
             repair_context["notificationAiExecutionProfile"] = {
-                **dict(profile or context.get("notificationAiExecutionProfile") or {}),
+                **requested_profile,
                 "name": "contractRepair",
-                "reasoningEffort": self.repair_reasoning_effort,
+                "reasoningEffort": repair_reasoning_effort,
             }
             try:
                 if repair_error:
@@ -641,6 +657,7 @@ class NotificationAIJudgementService:
                 "initialValidationMs": initial_validation_ms,
                 "repairModelMs": repair_model_ms,
                 "repairValidationMs": repair_validation_ms,
+                "repairReasoningEffort": repair_reasoning_effort,
                 "structuredNarrativeRepair": structured_claim_repair,
                 "totalJudgementMs": int((time.monotonic() - total_started) * 1000),
                 "modelAttempts": list(getattr(self.reviewer, "execution_history", []) or []),

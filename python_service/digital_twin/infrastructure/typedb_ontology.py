@@ -20731,6 +20731,7 @@ relation ontology-assertion,
         imported,
         transaction_type,
         deadline: float,
+        evidence_read_index: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Execute one read per simple model-signal source-scope batch."""
 
@@ -20748,6 +20749,7 @@ relation ontology-assertion,
                 "dispatchedMatchCount": 0,
                 "matchedContractIds": [],
                 "matchedSymbols": [],
+                "indexedEvidenceReadCount": 0,
             }
         driver = self.open_native_rule_read_driver(
             imported,
@@ -20765,6 +20767,7 @@ relation ontology-assertion,
         source_row_count = 0
         matched_contract_ids: Set[str] = set()
         matched_symbols: Set[str] = set()
+        indexed_evidence_read_count = 0
         try:
             self.ensure_database(driver)
             for batch_index, batch in enumerate(batch_rows):
@@ -20779,6 +20782,7 @@ relation ontology-assertion,
                     # through the active scope pointers even when the source
                     # predicate itself came from a direct TypeQL query.
                     scoped_manifest_only=True,
+                    evidence_read_index=evidence_read_index,
                 )
                 if remaining_seconds <= 0.5 or not query_plan.get("query"):
                     status = (
@@ -20800,6 +20804,7 @@ relation ontology-assertion,
                             "candidateSymbols": list(entry.get("candidateSymbols") or []),
                             "sharedModelSignalBridgeBatch": True,
                             "bridgeSourceScope": str(batch.get("sourceScope") or ""),
+                            "indexedEvidenceQueryUsed": bool(query_plan.get("indexedEvidenceQuery")),
                             **typedb_rule_execution_profile_fields(entry),
                         })
                     continue
@@ -20848,9 +20853,12 @@ relation ontology-assertion,
                             "queryDurationMs": query_duration_ms,
                             "sharedModelSignalBridgeBatch": True,
                             "bridgeSourceScope": str(batch.get("sourceScope") or ""),
+                            "indexedEvidenceQueryUsed": bool(query_plan.get("indexedEvidenceQuery")),
                             **typedb_rule_execution_profile_fields(entry),
                         })
                     continue
+                if query_plan.get("indexedEvidenceQuery"):
+                    indexed_evidence_read_count += 1
                 dispatch = typedb_dispatch_model_signal_bridge_rows(batch, rows)
                 source_row_count += len(rows)
                 ignored_contract_ids.update(dispatch.get("ignoredContractIds") or [])
@@ -20928,7 +20936,7 @@ relation ontology-assertion,
                         "nativeRuleId": typedb_native_rule_id(rule_id),
                         "typeqlExecutionMode": "direct-typeql",
                         "queryMode": str(query_plan.get("queryMode") or ""),
-                        "indexedEvidenceQueryUsed": False,
+                        "indexedEvidenceQueryUsed": bool(query_plan.get("indexedEvidenceQuery")),
                         "modelSignalInterpretationPolicy": True,
                         "modelSignalInterpretationPolicyId": "model-signal-interpretation:" + rule_id,
                         "sharedModelSignalBridge": True,
@@ -20964,6 +20972,7 @@ relation ontology-assertion,
             "dispatchedMatchCount": len(dispatched_matches),
             "matchedContractIds": sorted(matched_contract_ids)[:80],
             "matchedSymbols": sorted(matched_symbols)[:80],
+            "indexedEvidenceReadCount": indexed_evidence_read_count,
         }
 
     @staticmethod
@@ -21953,6 +21962,7 @@ relation ontology-assertion,
                 imported=imported,
                 transaction_type=TransactionType,
                 deadline=native_execution_deadline,
+                evidence_read_index=evidence_read_index,
             )
             read_transaction_count += int(
                 bridge_batch_result.get("readTransactionCount") or 0
@@ -29486,6 +29496,9 @@ def typedb_model_signal_bridge_batch_plan_summary(
             execution_payload.get("matchedContractIds") or []
         )[:80],
         "matchedSymbols": list(execution_payload.get("matchedSymbols") or [])[:80],
+        "indexedEvidenceReadCount": int(
+            execution_payload.get("indexedEvidenceReadCount") or 0
+        ),
     }
 
 
@@ -29494,6 +29507,7 @@ def typedb_model_signal_bridge_batch_query(
     *,
     world_id: str = "",
     scoped_manifest_only: bool = True,
+    evidence_read_index: Dict[str, object] = None,
 ) -> Dict[str, object]:
     """Build one TypeDB read for all simple policies in one source scope."""
 
@@ -29520,7 +29534,38 @@ def typedb_model_signal_bridge_batch_query(
     first_payload = first_rule.to_dict() if hasattr(first_rule, "to_dict") else dict(first_rule or {})
     source_kind = str(first_payload.get("source_kind") or first_payload.get("sourceKind") or "stock")
     candidate_symbols = clean_symbols_from_payload(list(batch.get("candidateSymbols") or []))
-    clauses = [
+    verified_index = dict(evidence_read_index or {})
+    index = (
+        dict(verified_index.get("index") or {})
+        if str(verified_index.get("status") or "") == "verified"
+        else {}
+    )
+    source_ids_by_symbol = dict(index.get("sourceIdsBySymbol") or {})
+    source_storage_ids_by_source_id = dict(index.get("sourceStorageIdsBySourceId") or {})
+    relation_storage_ids_by_symbol_and_type = dict(
+        index.get("relationStorageIdsBySymbolAndType") or {}
+    )
+    source_storage_ids = sorted({
+        str(source_storage_ids_by_source_id.get(str(source_id or "")) or "").strip()
+        for symbol in candidate_symbols
+        for source_id in source_ids_by_symbol.get(symbol, []) or []
+        if str(source_storage_ids_by_source_id.get(str(source_id or "")) or "").strip()
+    })
+    signal_relation_storage_ids = sorted({
+        str(storage_id or "").strip()
+        for symbol in candidate_symbols
+        for storage_id in dict(
+            relation_storage_ids_by_symbol_and_type.get(symbol) or {}
+        ).get("HAS_MODEL_SIGNAL", []) or []
+        if str(storage_id or "").strip()
+    })
+    storage_identity_count = len({*source_storage_ids, *signal_relation_storage_ids})
+    indexed_evidence = bool(
+        source_storage_ids
+        and signal_relation_storage_ids
+        and storage_identity_count <= NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS
+    )
+    clauses = [] if indexed_evidence else [
         typedb_active_worldview_manifest_clause(
             "$activeManifestPointer",
             "$activeManifestId",
@@ -29528,15 +29573,25 @@ def typedb_model_signal_bridge_batch_query(
         ),
     ]
     clauses.extend([
-        typedb_scoped_manifest_member_clause(
-            "$source",
-            "modelSignalSource",
-            "$activeManifestId",
-            world_id,
-        ) if scoped_manifest_only else typedb_active_abox_member_clause(
-            "$source",
-            "modelSignalSource",
-            world_id,
+        (
+            typedb_value_match(
+                "$source",
+                "ontology-storage-id",
+                source_storage_ids,
+                "==",
+                "modelSignalSourceStorage",
+            )
+            if indexed_evidence
+            else typedb_scoped_manifest_member_clause(
+                "$source",
+                "modelSignalSource",
+                "$activeManifestId",
+                world_id,
+            ) if scoped_manifest_only else typedb_active_abox_member_clause(
+                "$source",
+                "modelSignalSource",
+                world_id,
+            )
         ),
         "$source isa " + typedb_entity_match_type(source_kind)
         + ", has ontology-kind " + typedb_string(source_kind) + ";",
@@ -29586,8 +29641,14 @@ def typedb_model_signal_bridge_batch_query(
         relation_prefix="modelSignalRelation",
         target_prefix="modelSignalEvidence",
         variable_scope="modelSignalBatch_",
-        manifest_id_variable="$activeManifestId" if scoped_manifest_only else "",
+        manifest_id_variable=(
+            "$activeManifestId" if scoped_manifest_only and not indexed_evidence else ""
+        ),
         world_id=world_id,
+        active_relation_storage_ids=(
+            signal_relation_storage_ids if indexed_evidence else None
+        ),
+        source_storage_indexed=indexed_evidence,
     )
     if signal_pattern.get("reason"):
         return {
@@ -29597,10 +29658,23 @@ def typedb_model_signal_bridge_batch_query(
         }
     clauses.extend(str(item) for item in signal_pattern.get("clauses") or [] if str(item or "").strip())
     signal_target = "$modelSignalEvidence0"
+    selected_contract_ids = sorted({
+        model_signal_interpretation_contract_id(rule)
+        for rule in rules
+        if model_signal_interpretation_contract_id(rule)
+    })
     clauses.extend([
         "$source has ontology-id $sourceId, has ontology-label $sourceLabel, has ontology-symbol $sourceSymbol;",
         signal_target + " has ontology-id $signalEvidenceId;",
     ])
+    if selected_contract_ids:
+        clauses.append(typedb_value_match(
+            signal_target,
+            "ontology-hypothesis-contract-id",
+            selected_contract_ids,
+            "==",
+            "selectedHypothesisContractId",
+        ))
     filter_keys = sorted({
         str(filter_key)
         for rule in rules
@@ -29632,7 +29706,15 @@ def typedb_model_signal_bridge_batch_query(
         "columns": list(dict.fromkeys(columns)),
         "evidenceColumns": [relation_id_column] if relation_id_column else [],
         "relationIdColumn": relation_id_column,
-        "queryMode": "typedb-shared-model-signal-bridge-direct-batch",
+        "queryMode": (
+            "typedb-manifest-evidence-index-model-signal-bridge"
+            if indexed_evidence
+            else "typedb-shared-model-signal-bridge-direct-batch"
+        ),
+        "indexedEvidenceQuery": indexed_evidence,
+        "storageIdentityCount": storage_identity_count,
+        "indexedRelationStorageCount": len(signal_relation_storage_ids),
+        "evidenceIndexFingerprint": str(verified_index.get("fingerprint") or ""),
         "sharedModelSignalBridge": True,
         "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION,
         "bridgeSourceScope": scope,

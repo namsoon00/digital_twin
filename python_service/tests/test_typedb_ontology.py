@@ -100,6 +100,8 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_evidence_read_index_for_execution,
     typedb_native_rule_evidence_read_allows_active_membership_recovery,
     typedb_native_rule_planner_topology_for_execution,
+    typedb_model_signal_bridge_batch_plan,
+    typedb_model_signal_bridge_batch_query,
     materialize_typedb_native_matches,
     typedb_projection_preflight_graph_for_execution,
     coordinated_typedb_projection_write,
@@ -141,6 +143,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(0, result["dispatchedMatchCount"])
         self.assertEqual([], result["matchedContractIds"])
         self.assertEqual([], result["matchedSymbols"])
+        self.assertEqual(0, result["indexedEvidenceReadCount"])
 
     def _assert_scoped_manifest_indexes_validate_complete_candidate_rows_against_merged_topology(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -395,6 +398,46 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_relation_endpoint_verification_reports_missing_physical_nodes(self):
         self._assert_empty_model_signal_bridge_reports_zero_coverage_telemetry()
+        model_rule = executable_catalog_rule(
+            "graph.company.market.forward_expectation.review.v1"
+        )
+        bridge_plan = typedb_model_signal_bridge_batch_plan(
+            [{"rule": model_rule, "candidateSymbols": ["066570"]}],
+            ["066570"],
+        )
+        bridge_query = typedb_model_signal_bridge_batch_query(
+            bridge_plan["batches"][0],
+            world_id="portfolio:default",
+            evidence_read_index={
+                "status": "verified",
+                "fingerprint": "index:current",
+                "index": {
+                    "sourceIdsBySymbol": {"066570": ["stock:066570"]},
+                    "sourceStorageIdsBySourceId": {
+                        "stock:066570": "node:stock:066570:current",
+                    },
+                    "relationStorageIdsBySymbolAndType": {
+                        "066570": {
+                            "HAS_MODEL_SIGNAL": [
+                                "relation:model-signal:066570:current",
+                            ],
+                        },
+                    },
+                },
+            },
+        )
+        self.assertTrue(bridge_query["indexedEvidenceQuery"])
+        self.assertEqual(
+            "typedb-manifest-evidence-index-model-signal-bridge",
+            bridge_query["queryMode"],
+        )
+        self.assertIn('"node:stock:066570:current"', bridge_query["query"])
+        self.assertIn('"relation:model-signal:066570:current"', bridge_query["query"])
+        self.assertIn(
+            '"graph.company.market.forward_expectation.review.v1"',
+            bridge_query["query"],
+        )
+        self.assertNotIn("worldview-manifest-active-pointer", bridge_query["query"])
         rows = [
             {
                 "source": "stock:MSTR",

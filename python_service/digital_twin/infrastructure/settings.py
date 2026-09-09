@@ -993,7 +993,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiAttemptWatchdogSeconds": "300",
     "notificationAiTypeDbFallbackEnabled": "1",
     "notificationAiFallbackOnFirstFailure": "0",
-    "notificationAiComparisonRepairReasoningEffort": "low",
+    "notificationAiComparisonRepairReasoningEffort": "max",
     "notificationAiComparisonRepairTimeoutSeconds": "60",
     "notificationAiQueueWorkerCount": "2",
     "localAiMaxConcurrentProcesses": "2",

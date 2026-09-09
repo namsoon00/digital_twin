@@ -156,6 +156,32 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual(["volumeRatio"], [item["field"] for item in response.follow_up_conditions])
         self.assertEqual(["foreignNetVolume"], [item["field"] for item in response.unsupported_follow_ups])
 
+        structured_plan = validated_response_from_payload(context, {
+            "action": "BUY",
+            "summary": "가격 회복은 유효하지만 거래량 확인이 더 필요합니다.",
+            "opinion": "소액 진입을 검토합니다.",
+            "evidence": ["가격 회복 관계가 성립했습니다."],
+            "counterEvidence": ["거래량은 평균보다 낮습니다."],
+            "currentActionPlan": {
+                "doNow": "소액 진입 후보로 유지합니다.",
+                "defer": "거래량 확인 전 큰 주문은 보류합니다.",
+            },
+            "nextActionPlan": {
+                "reobserve": ["다음 정규장 거래량", "20일선 유지 여부"],
+                "decisionChanges": {
+                    "strengthen": "평균 거래량을 회복하면 진입 근거를 강화합니다.",
+                    "invalidate": "20일선 아래로 내려가면 진입 설명을 무효화합니다.",
+                },
+            },
+        })
+
+        self.assertIn("지금 할 일:", structured_plan.current_action_plan)
+        self.assertIn("보류할 일:", structured_plan.current_action_plan)
+        self.assertIn("다음 확인:", structured_plan.next_action_plan)
+        self.assertIn("판단 변경 기준:", structured_plan.next_action_plan)
+        self.assertNotIn("{'", structured_plan.current_action_plan)
+        self.assertNotIn("decisionChanges", structured_plan.next_action_plan)
+
     def test_v2_execution_contract_requires_qualified_hypothesis_even_with_supported_path(self):
         context = entry_context()
         context["notificationAiDecisionContractVersion"] = "notification-ai-decision-contract-v2"

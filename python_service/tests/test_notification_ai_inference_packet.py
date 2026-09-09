@@ -676,9 +676,11 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
     def test_unknown_evidence_is_repaired_once_before_publication(self):
         class Reviewer:
             calls = 0
+            profiles = []
 
             def review(self, prepared):
                 self.calls += 1
+                self.profiles.append(dict(prepared.get("notificationAiExecutionProfile") or {}))
                 core = prepared["_notificationAiPreparedDecisionCore"]
                 support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
                 view_id = "relation-evidence:not-in-packet" if self.calls == 1 else "fact:currentPrice"
@@ -697,12 +699,22 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 )
 
         reviewer = Reviewer()
-        outcome = NotificationAIJudgementService(reviewer, {}).judge(investment_context())
+        outcome = NotificationAIJudgementService(
+            reviewer,
+            {},
+            repair_reasoning_effort="low",
+        ).judge(
+            investment_context(),
+            profile={"name": "deepResearch", "reasoningEffort": "max"},
+        )
 
         self.assertTrue(outcome.publishable)
         self.assertTrue(outcome.repair_attempted)
         self.assertTrue(outcome.repair_succeeded)
         self.assertEqual(2, reviewer.calls)
+        self.assertEqual("max", reviewer.profiles[0]["reasoningEffort"])
+        self.assertEqual("max", reviewer.profiles[1]["reasoningEffort"])
+        self.assertEqual("max", outcome.execution_spans["repairReasoningEffort"])
         self.assertEqual(0, outcome.response.rejected_claim_count)
         self.assertIn("unknown-evidence-id", outcome.executed_prompt)
         brief = build_investment_narrative_brief(

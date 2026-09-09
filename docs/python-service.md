@@ -355,7 +355,7 @@ The model-review worker processes that queue separately and enqueues a second no
 Configuration:
 
 - `MODEL_REVIEW_USE_CODEX`: defaults to `1`; when `codex` is available on PATH, the worker uses the read-only `gpt-5.6-sol` command with `model_reasoning_effort="max"`.
-- All application-owned AI paths use the fixed `gpt-5.6-sol` model. Asynchronous article, disclosure, research, hypothesis/rule, and model-review paths use `max`; the latency-bounded notification rewrite explicitly uses `low`. Legacy custom model-command settings are retained only for configuration compatibility and are ignored.
+- All application-owned AI paths use the fixed `gpt-5.6-sol` model. Asynchronous article, disclosure, research, hypothesis/rule, model-review, and investment contract-repair paths use `max`. An investment contract repair inherits the original judgement effort so a `max` judgement cannot be rewritten by a lower-effort pass. Legacy custom model-command settings are retained only for configuration compatibility and are ignored.
 - `MODEL_REVIEW_TIMEOUT_SECONDS`: defaults to `180`.
 - `MODEL_REVIEW_INTERVAL_SECONDS`: defaults to `300`.
 - `MODEL_REVIEW_BATCH_SIZE`: defaults to `1`.

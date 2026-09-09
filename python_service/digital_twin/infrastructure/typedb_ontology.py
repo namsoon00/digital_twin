@@ -2127,7 +2127,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v3"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v4"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -29160,6 +29160,16 @@ def typedb_native_indexed_evidence_match_query(
     relation_ids_by_symbol_type_field = dict(
         index.get("relationStorageIdsBySymbolAndTypeAndField") or {}
     )
+    relation_ids_by_symbol_type_target_kind = dict(
+        index.get("relationStorageIdsBySymbolAndTypeAndTargetKind") or {}
+    )
+    target_kind_index_available = bool(
+        str(index.get("version") or "") == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION
+        and isinstance(
+            index.get("relationStorageIdsBySymbolAndTypeAndTargetKind"),
+            dict,
+        )
+    )
     indexed_source_symbols = list(symbols)
     if not typedb_source_kind_uses_symbol_scope(source_kind):
         # The execution index has already been narrowed to the requested stock
@@ -29236,6 +29246,7 @@ def typedb_native_indexed_evidence_match_query(
             }
         if storage_ids:
             relation_storage_ids_by_type[relation_type] = storage_ids
+    selector_indexed_condition_ids: Set[str] = set()
     for condition in conditions:
         if (
             str(condition.get("kind") or "") != "relation"
@@ -29246,8 +29257,9 @@ def typedb_native_indexed_evidence_match_query(
         condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "").strip()
         if not relation_type or not condition_id:
             continue
+        base_storage_ids = set(relation_storage_ids_by_type.get(relation_type, []) or [])
         field_values = condition_field_values(condition)
-        field_storage_ids = sorted({
+        field_storage_ids = {
             str(storage_id or "").strip()
             for symbol in indexed_source_symbols
             for field_value in field_values
@@ -29255,7 +29267,21 @@ def typedb_native_indexed_evidence_match_query(
                 dict(relation_ids_by_symbol_type_field.get(symbol) or {}).get(relation_type, {})
             ).get(field_value, []) or []
             if str(storage_id or "").strip()
-        })
+        }
+        target_kind = str(
+            condition.get("target_kind") or condition.get("targetKind") or ""
+        ).strip()
+        target_kind_storage_ids = {
+            str(storage_id or "").strip()
+            for symbol in indexed_source_symbols
+            for storage_id in dict(
+                dict(relation_ids_by_symbol_type_target_kind.get(symbol) or {}).get(
+                    relation_type,
+                    {},
+                )
+            ).get(target_kind, []) or []
+            if str(storage_id or "").strip()
+        }
         role = normalized_condition_role(condition)
         if field_values and not field_storage_ids and role == "required":
             return {
@@ -29267,20 +29293,59 @@ def typedb_native_indexed_evidence_match_query(
                     "storage identities for required condition " + condition_id + "."
                 ),
             }
-        storage_ids = (
-            field_storage_ids
-            if field_values
-            else relation_storage_ids_by_type.get(relation_type, [])
-        )
+        if (
+            target_kind
+            and target_kind_index_available
+            and not target_kind_storage_ids
+            and role == "required"
+        ):
+            return {
+                "status": "not-eligible",
+                "ruleId": rule_id,
+                "query": "",
+                "reason": (
+                    "Active Manifest evidence index has no target-kind relation "
+                    "storage identities for required condition " + condition_id + "."
+                ),
+            }
+        storage_ids = set(base_storage_ids)
+        selector_applied = False
+        if field_values:
+            storage_ids.intersection_update(field_storage_ids)
+            selector_applied = True
+        if target_kind and target_kind_index_available:
+            storage_ids.intersection_update(target_kind_storage_ids)
+            selector_applied = True
         if storage_ids:
-            relation_storage_ids_by_condition[condition_id] = storage_ids
+            relation_storage_ids_by_condition[condition_id] = sorted(storage_ids)
+            if selector_applied:
+                selector_indexed_condition_ids.add(condition_id)
+    used_relation_storage_ids: Set[str] = set()
+    for condition in conditions:
+        if str(condition.get("kind") or "") != "relation":
+            continue
+        role = normalized_condition_role(condition)
+        if role not in {"required", "not", "any", "optional"}:
+            continue
+        condition_id = str(
+            condition.get("condition_id")
+            or condition.get("conditionId")
+            or ""
+        ).strip()
+        relation_type = str(
+            condition.get("relation_type") or condition.get("relationType") or ""
+        ).upper().strip()
+        if condition_id in selector_indexed_condition_ids:
+            used_relation_storage_ids.update(
+                relation_storage_ids_by_condition.get(condition_id, [])
+            )
+        else:
+            used_relation_storage_ids.update(
+                relation_storage_ids_by_type.get(relation_type, [])
+            )
     storage_identity_count = len({
         *source_storage_ids,
-        *[
-            storage_id
-            for values in relation_storage_ids_by_type.values()
-            for storage_id in values
-        ],
+        *used_relation_storage_ids,
     })
     if storage_identity_count > NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS:
         return {
@@ -29320,10 +29385,22 @@ def typedb_native_indexed_evidence_match_query(
         "storageIdentityCount": storage_identity_count,
         "activeEvidenceRelationTypes": indexed_relation_types,
         "activeEvidenceRelationStorageMode": (
-            "condition-field-index"
+            "condition-selector-index"
+            if selector_indexed_condition_ids
+            else "condition-field-index"
             if relation_ids_by_symbol_type_field
             else "relation-type-index"
         ),
+        "targetKindIndexedConditionCount": len([
+            condition_id
+            for condition_id in selector_indexed_condition_ids
+            if any(
+                str(item.get("condition_id") or item.get("conditionId") or "").strip()
+                == condition_id
+                and str(item.get("target_kind") or item.get("targetKind") or "").strip()
+                for item in conditions
+            )
+        ]),
     }
 
 

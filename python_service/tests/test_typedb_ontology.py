@@ -1778,6 +1778,99 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertNotIn("$anyConditionToken", plan["query"])
         self.assertNotIn("reduce $anyConditionCount", plan["query"])
         self._assert_required_filtered_relation_never_falls_back_to_another_metric()
+        self._assert_market_proxy_rule_uses_target_kind_evidence_index()
+        self._assert_required_target_kind_absence_does_not_expand_to_relation_type()
+
+    def _assert_market_proxy_rule_uses_target_kind_evidence_index(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.market_proxy.observation.risk_context.v1"
+        )
+        observation_ids = [
+            "ontology-storage:observation-" + str(index)
+            for index in range(60)
+        ]
+        market_proxy_ids = observation_ids[24:26]
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "version": "native-rule-evidence-read-index-v3",
+                "sourceIdsBySymbol": {"MSTR": ["stock:MSTR"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:MSTR": "ontology-storage:stock-mstr",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "MSTR": {"HAS_OBSERVATION": observation_ids},
+                },
+                "relationStorageIdsBySymbolAndTypeAndTargetKind": {
+                    "MSTR": {
+                        "HAS_OBSERVATION": {
+                            "market-proxy-observation": market_proxy_ids,
+                            "technical-metric": observation_ids[:24],
+                            "valuation-metric": observation_ids[26:],
+                        },
+                    },
+                },
+            },
+        }
+
+        plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["MSTR"],
+            evidence_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("ok", plan["status"])
+        self.assertTrue(plan["indexedEvidenceQuery"])
+        self.assertEqual("condition-selector-index", plan["activeEvidenceRelationStorageMode"])
+        self.assertEqual(1, plan["targetKindIndexedConditionCount"])
+        self.assertEqual(3, plan["storageIdentityCount"])
+        self.assertIn(market_proxy_ids[0], plan["query"])
+        self.assertIn(market_proxy_ids[1], plan["query"])
+        self.assertNotIn(observation_ids[0], plan["query"])
+        self.assertNotIn(observation_ids[-1], plan["query"])
+
+    def _assert_required_target_kind_absence_does_not_expand_to_relation_type(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.market_proxy.observation.risk_context.v1"
+        )
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "version": "native-rule-evidence-read-index-v3",
+                "sourceIdsBySymbol": {"005930": ["stock:005930"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:005930": "ontology-storage:stock-005930",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "005930": {
+                        "HAS_OBSERVATION": ["ontology-storage:technical-only"],
+                    },
+                },
+                "relationStorageIdsBySymbolAndTypeAndTargetKind": {
+                    "005930": {
+                        "HAS_OBSERVATION": {
+                            "technical-metric": ["ontology-storage:technical-only"],
+                        },
+                    },
+                },
+            },
+        }
+
+        plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["005930"],
+            evidence_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("not-eligible", plan["status"])
+        self.assertEqual("", plan["query"])
+        self.assertIn("market-proxy-risk-observation", plan["reason"])
 
     def _assert_required_filtered_relation_never_falls_back_to_another_metric(self):
         rule = executable_catalog_rule("graph.execution.capacity_safe.v1")

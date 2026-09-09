@@ -15851,6 +15851,8 @@
     var statusMeta = {
       completed: { label: "현재 세대 해석 완료", tone: "watch" },
       pending: { label: "AI 처리 중", tone: "hold" },
+      fallback: { label: "AI 실패 · TypeDB 대체", tone: "caution" },
+      "contract-failed": { label: "AI 결과 미채택", tone: "caution" },
       "previous-generation": { label: "이전 세대 해석", tone: "caution" },
       "not-run": { label: "현재 세대 미실행", tone: "hold" }
     }[status] || { label: status, tone: "hold" };
@@ -15873,12 +15875,35 @@
     var evidence = Array.isArray(ai.evidence) ? ai.evidence : [];
     var counterEvidence = Array.isArray(ai.counterEvidence) ? ai.counterEvidence : [];
     var nextChecks = Array.isArray(ai.nextChecks) ? ai.nextChecks : [];
+    var hypotheses = Array.isArray(ai.hypotheses) ? ai.hypotheses : [];
+    var researchLeadId = String(ai.researchLeadHypothesisId || "");
+    var verdictLabels = {
+      supported: "지지",
+      weakened: "약화",
+      rejected: "기각",
+      unresolved: "미해결",
+      unreviewed: "미검토"
+    };
     var interpretation = ai.summary || ai.investmentView || "AI 해석 요약이 저장되지 않았습니다.";
     var evidenceBody = evidence.length || counterEvidence.length ? [
       '<div class="oa-assurance-groups">',
       evidence.length ? '<section class="oa-assurance-group"><header><div><strong>AI가 사용한 근거</strong><p>TypeDB 후보 안에서 비교한 근거입니다.</p></div><span>' + escapeHtml(evidence.length) + '개</span></header><ul class="oa-decision-cause-list">' + evidence.map(function (item) { return '<li><span>' + escapeHtml(item) + '</span></li>'; }).join("") + '</ul></section>' : '',
       counterEvidence.length ? '<section class="oa-assurance-group"><header><div><strong>반대 근거</strong><p>현재 설명을 약화할 수 있는 근거입니다.</p></div><span>' + escapeHtml(counterEvidence.length) + '개</span></header><ul class="oa-decision-cause-list">' + counterEvidence.map(function (item) { return '<li><span>' + escapeHtml(item) + '</span></li>'; }).join("") + '</ul></section>' : '',
       '</div>'
+    ].join("") : '';
+    var hypothesisBody = hypotheses.length ? [
+      '<section class="oa-assurance-group"><header><div><strong>AI 가설 비교</strong><p>같은 TypeDB 추론 세대의 가설만 비교했습니다.</p></div><span>' + escapeHtml(hypotheses.length) + '개</span></header><div>',
+      hypotheses.map(function (item) {
+        var hypothesisId = String(item.hypothesisId || "");
+        var lead = Boolean(researchLeadId && hypothesisId === researchLeadId);
+        return [
+          '<article class="oa-assurance-row" data-flow-state="' + escapeHtml(item.verdict === "supported" ? "pass" : item.verdict === "rejected" ? "warning" : "pending") + '">',
+          '<div class="oa-assurance-row-main"><span>' + escapeHtml(lead ? "연구 선두 가설" : "비교 가설") + '</span><strong>' + escapeHtml(item.claim || item.templateLabel || "투자 가설") + '</strong><p>' + escapeHtml(item.reasoning || "가설별 분석 이유가 저장되지 않았습니다.") + '</p></div>',
+          '<div class="oa-assurance-row-side"><strong>' + escapeHtml(verdictLabels[item.verdict] || item.verdict || "미평가") + '</strong><span>' + escapeHtml(item.decisionEligible ? "판단 후보" : "연구용") + '</span></div>',
+          '</article>'
+        ].join("");
+      }).join(""),
+      '</div></section>'
     ].join("") : '';
     return [
       '<section class="oa-assurance-context" data-flow-state="' + escapeHtml(ai.currentGeneration ? "pass" : "warning") + '">',
@@ -15898,9 +15923,11 @@
       ai.currentActionPlan ? '<footer><span>현재 대응 설명</span><strong>' + escapeHtml(ai.currentActionPlan) + '</strong></footer>' : '',
       '</section>',
       evidenceBody,
+      hypothesisBody,
+      ai.epistemicSummary ? '<section class="oa-assurance-context"><span>KNOWN / UNKNOWN</span><strong>확인된 점과 남은 불확실성</strong><p>' + escapeHtml(ai.epistemicSummary) + '</p></section>' : '',
       ai.nextActionPlan || nextChecks.length ? '<section class="oa-assurance-context"><span>NEXT CHECK</span><strong>AI가 제안한 다음 확인</strong><p>' + escapeHtml(ai.nextActionPlan || nextChecks.join(" · ")) + '</p></section>' : '',
       ai.invalidationCondition ? '<section class="oa-assurance-context"><span>INVALIDATION</span><strong>이 해석이 무효가 되는 조건</strong><p>' + escapeHtml(ai.invalidationCondition) + '</p></section>' : '',
-      '<section class="oa-assurance-context"><span>AI TRACE</span><strong>분리 저장된 AI 인사이트</strong><p>' + escapeHtml([ai.episodeId, ai.inferenceGenerationId, ai.createdAt].filter(Boolean).join(" · ")) + '</p></section>'
+      '<section class="oa-assurance-context"><span>AI TRACE</span><strong>분리 저장된 AI 인사이트</strong><p>' + escapeHtml([ai.episodeId, ai.inferenceGenerationId, ai.promptVersion, ai.createdAt].filter(Boolean).join(" · ")) + '</p></section>'
     ].join("");
   }
 
@@ -26361,7 +26388,7 @@
       '<section class="oa-case-reasoning-compare" data-comparison-state="' + escapeHtml(comparisonState) + '"><header><strong>' + escapeHtml(comparison.label || "TypeDB와 AI 비교 상태") + '</strong>' + renderDecisionInfoButton("type-db-action-candidate", "TypeDB 행동 후보가 저장된 경우에만 AI 최종 의견과 직접 비교합니다.") + '</header>' + comparisonBody + '<p>' + escapeHtml(comparison.reason || "현재 추론 세대의 판단 참여 상태입니다.") + '</p></section>',
       '<section class="oa-reasoning-snapshot" data-snapshot-state="' + escapeHtml(reasoning.snapshotState || "unknown") + '"><div><strong>' + escapeHtml(reasoning.snapshotStateLabel || "추론 상세 연결 상태") + '</strong><p>' + escapeHtml(reasoning.snapshotReason || "이 판단에 연결된 사실·관계·규칙을 확인합니다.") + '</p>' + (limitations.length ? '<ul>' + limitations.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '') + '</div><dl><div><dt>사실</dt><dd>' + escapeHtml(counts.facts || 0) + '</dd></div><div><dt>관계</dt><dd>' + escapeHtml(counts.relations || 0) + '</dd></div><div><dt>규칙</dt><dd>' + escapeHtml(counts.rules || 0) + '</dd></div><div><dt>실행 기록</dt><dd>' + escapeHtml(counts.traces || 0) + '</dd></div></dl></section>',
       '<section class="oa-case-overview-section"><header><strong>사실에서 의견까지 연결</strong>' + renderDecisionInfoButton("reasoning-rule", "사실과 관계가 규칙을 통과해 가설과 최종 의견으로 이어지는 경로입니다.") + '</header>',
-      paths.length ? '<div class="oa-case-causal-paths">' + paths.map(function (path) { return '<article><header><strong>' + escapeHtml(path.title || "추론 경로") + '</strong><span>' + escapeHtml(path.selected ? "선택 경로" : "대안 경로") + '</span></header><ol>' + (Array.isArray(path.nodes) ? path.nodes : []).map(renderInvestmentReasoningNode).join("") + '</ol></article>'; }).join("") + '</div>' : '<p class="oa-decision-empty-note">사용자에게 설명할 수 있는 추론 경로가 아직 저장되지 않았습니다.</p>',
+      paths.length ? '<div class="oa-case-causal-paths">' + paths.map(function (path) { return '<article><header><strong>' + escapeHtml(path.title || "추론 경로") + '</strong><span>' + escapeHtml(path.selected ? "최종 선택 경로" : path.researchLead ? "AI 연구 선두" : "비교 경로") + '</span></header><ol>' + (Array.isArray(path.nodes) ? path.nodes : []).map(renderInvestmentReasoningNode).join("") + '</ol></article>'; }).join("") + '</div>' : '<p class="oa-decision-empty-note">사용자에게 설명할 수 있는 추론 경로가 아직 저장되지 않았습니다.</p>',
       '</section>',
       '<section class="oa-case-overview-section"><header><strong>전체 추론 상세</strong>' + renderDecisionInfoButton("reasoning-detail", "판단 당시 사용한 사실값, TypeDB 관계, 성립 규칙과 조건, 가설을 종류별로 확인합니다.") + '</header>' + renderInvestmentReasoningInventory(reasoning) + '</section>',
       '<section class="oa-case-overview-section"><header><strong>비교한 가설</strong>' + renderDecisionInfoButton("competing-hypothesis", "한 방향의 설명만 선택하지 않고 지지와 반박을 함께 비교합니다.") + '</header>' + renderInvestmentCaseScenarios(detail) + '</section>'
@@ -26371,10 +26398,12 @@
   function renderInvestmentCaseScenarios(detail) {
     var scenarios = Array.isArray(detail.scenarios) ? detail.scenarios : [];
     if (!scenarios.length) return renderConsoleEmpty("비교할 시나리오가 없습니다", "다음 추론 세대에서 경쟁 가설이 만들어지면 여기에 표시합니다.");
+    var verdictLabels = { supported: "지지", weakened: "약화", rejected: "기각", unresolved: "미해결", unreviewed: "미검토" };
     return '<div class="oa-case-scenario-list">' + scenarios.map(function (item) {
       var assumptions = Array.isArray(item.assumptions) ? item.assumptions : [];
       var invalidations = Array.isArray(item.invalidationConditions) ? item.invalidationConditions : [];
       var qualification = item.qualification && typeof item.qualification === "object" ? item.qualification : {};
+      var aiReview = item.aiReview && typeof item.aiReview === "object" ? item.aiReview : {};
       var qualificationMeta = investmentHypothesisQualificationMeta(qualification);
       var decisiveCount = Number(qualification.decisiveOutcomeCount || 0);
       var hitRate = qualification.directionalHitRate === undefined || qualification.directionalHitRate === null
@@ -26385,9 +26414,10 @@
         : "표본 없음";
       var observationCount = Number(((item.observationState || {}).sampleCount) || 0);
       return [
-        '<article class="oa-case-scenario' + (item.selected ? " selected" : "") + '">',
-        '<header><div><span>' + escapeHtml(item.selected ? "선택된 가설" : "비교 가설") + '</span><strong>' + escapeHtml(item.title || "투자 시나리오") + '</strong></div><b data-flow-state="' + escapeHtml(qualificationMeta.tone) + '">' + escapeHtml(qualificationMeta.label) + '</b></header>',
+        '<article class="oa-case-scenario' + (item.selected || item.researchLead ? " selected" : "") + '">',
+        '<header><div><span>' + escapeHtml(item.selected ? "최종 선택 가설" : item.researchLead ? "AI 연구 선두" : "비교 가설") + '</span><strong>' + escapeHtml(item.title || "투자 시나리오") + '</strong></div><b data-flow-state="' + escapeHtml(qualificationMeta.tone) + '">' + escapeHtml(qualificationMeta.label) + '</b></header>',
         '<p>' + escapeHtml(item.claim || "설명 문장이 없습니다.") + '</p>',
+        aiReview.reasoning ? '<p class="oa-case-scenario-qualification"><strong>AI 평가 · ' + escapeHtml(verdictLabels[aiReview.verdict] || aiReview.verdict || "미평가") + '</strong> ' + escapeHtml(aiReview.reasoning) + '</p>' : '',
         '<div class="oa-case-scenario-metrics"><span>지지 <strong>' + escapeHtml(item.supportCount || 0) + '</strong></span><span>반박 <strong>' + escapeHtml(item.counterCount || 0) + '</strong></span><span>독립 결과 <strong>' + escapeHtml(decisiveCount + "건") + '</strong></span><span>방향 적중 <strong>' + escapeHtml(hitRate) + '</strong></span><span>행동조정 수익 <strong>' + escapeHtml(adjustedReturn) + '</strong></span><span>추적 기록 <strong>' + escapeHtml(observationCount + "건") + '</strong></span></div>',
         qualification.reason ? '<p class="oa-case-scenario-qualification">' + escapeHtml(qualification.reason) + '</p>' : '',
         (assumptions.length || invalidations.length) ? '<details><summary>전제와 무효화 조건</summary>' + (assumptions.length ? '<strong>전제</strong><ul>' + assumptions.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + (invalidations.length ? '<strong>무효화 조건</strong><ul>' + invalidations.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + '</details>' : '',

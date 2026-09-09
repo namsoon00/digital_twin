@@ -837,6 +837,21 @@ class InvestmentBrainTest(unittest.TestCase):
             "displayTarget": "삼성전자",
             "ontologyRelationContext": relation_context(),
         }
+        context["ontologyRelationContext"]["activeRules"].append({
+            "ruleId": "graph.factor.position_crowding.v1",
+            "evidenceRole": "constraint",
+            "reviewLevel": "check",
+            "dataState": "sufficient",
+        })
+        context["ontologyRelationContext"]["graphStoreInference"]["relations"].append({
+            "id": "relation-policy-constraint",
+            "source": "stock:005930",
+            "target": "factor:korea-beta",
+            "type": "HAS_FACTOR_EXPOSURE",
+            "ruleId": "graph.factor.position_crowding.v1",
+            "polarity": "risk",
+            "evidenceRole": "constraint",
+        })
         brain = hypothesis_set_from_relation_context(context["ontologyRelationContext"])
         context["ontologyRelationContext"].update({
             "investmentBrain": brain,
@@ -844,6 +859,14 @@ class InvestmentBrainTest(unittest.TestCase):
             "researchPlan": brain["researchPlan"],
         })
         hypotheses = brain["hypothesisSet"]["hypotheses"]
+        self.assertNotIn(
+            "relation-policy-constraint",
+            {
+                evidence_id
+                for hypothesis in hypotheses
+                for evidence_id in hypothesis["counterEvidenceIds"]
+            },
+        )
         selected = hypotheses[0]["hypothesisId"]
         payload = {
             "action": "TRIM",

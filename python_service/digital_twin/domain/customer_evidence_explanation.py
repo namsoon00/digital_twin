@@ -111,6 +111,7 @@ def customer_safe_text(value: object) -> str:
         text,
     )
     text = re.sub(r"\bgraph\.[a-z0-9_.-]+\b", "", text, flags=re.IGNORECASE)
+    text = text.replace("모델 신호", "통계 검증 결과")
     text = re.sub(r"\s*·\s*모델 신호\s*$", "", text)
     text = text.replace("->", "→")
     left, separator, right = text.partition(":")

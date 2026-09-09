@@ -1226,6 +1226,14 @@ def build_investment_narrative_brief(
 
 
 def apply_narrative_brief_to_response(brief: InvestmentNarrativeBrief, response: object) -> None:
+    structured_next_action_plan = _text(
+        getattr(response, "next_action_plan", ""),
+        420,
+    )
+    structured_next_checks = _unique(
+        getattr(response, "next_checks", []) or [],
+        3,
+    )
     claims = list(brief.claims)
     views = _unique([item.get("text") for item in claims if item.get("section") == "view"], 1)
     changes = _unique([item.get("text") for item in claims if item.get("section") == "change"], 1)
@@ -1236,7 +1244,10 @@ def apply_narrative_brief_to_response(brief: InvestmentNarrativeBrief, response:
     response.evidence = support
     response.counter_evidence = counter
     response.missing_data_impact = limitations
-    response.next_checks = next_conditions
+    response.next_checks = _unique(
+        [*structured_next_checks, *next_conditions],
+        3,
+    )
     response.investment_view = views[0] if views else ""
     response.summary = views[0] if views else ""
     response.opinion = views[0] if views else ""
@@ -1244,7 +1255,7 @@ def apply_narrative_brief_to_response(brief: InvestmentNarrativeBrief, response:
     # Action plans are decisions, not factual narrative claims. They have
     # already passed the actionability contract and must not be erased while
     # projecting evidence-bound explanatory claims.
-    if next_conditions:
+    if not structured_next_action_plan and next_conditions:
         response.next_action_plan = next_conditions[0]
     response.writer_provenance = dict(brief.writer_provenance)
     response.claim_validation = {

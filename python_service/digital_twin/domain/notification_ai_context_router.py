@@ -180,6 +180,7 @@ def _minimum_transition_detail(value: object) -> Dict[str, object]:
             "previousState", "currentState", "occurredAt", "observedAt",
             "reason", "summary", "transitionReason", "hypothesisId",
             "sourceEventNames", "kinds", "reasons", "materialRevisionKeys",
+            "matchedConditions", "changedFields", "facts",
         ),
     )
     evidence_delta = _mapping(source.get("evidenceDelta"))

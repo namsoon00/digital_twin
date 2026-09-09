@@ -952,7 +952,7 @@ def subject_reasoning_lineage(
             research_lead_hypothesis_id
             and hypothesis_id == research_lead_hypothesis_id
         )
-        if hypothesis["researchLead"] and not hypothesis.get("selected"):
+        if hypothesis["researchLead"]:
             hypothesis["selectionSource"] = "ai-research-lead"
         hypothesis["aiReview"] = _safe_value(
             ai_reviews_by_id.get(hypothesis_id) or {}

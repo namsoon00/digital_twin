@@ -564,10 +564,36 @@ def compact_materiality_assessment_event_payload(value: object) -> Dict[str, obj
     facts = source.get("facts")
     if isinstance(facts, Mapping):
         compact_facts = {}
-        for key in ("eventType", "polarity", "readScope", "relationScope", "sourceTrustState", "validationState"):
+        for key in (
+            "eventType", "polarity", "readScope", "relationScope",
+            "sourceTrustState", "validationState", "priceChangePct",
+            "previousVolumeRatio", "volumeRatio", "volumeRatioThreshold",
+            "previousTradeStrength", "tradeStrength",
+            "tradeStrengthLowerThreshold", "tradeStrengthUpperThreshold",
+            "previousBidAskImbalance", "bidAskImbalance",
+            "bidAskImbalanceThreshold", "orderbookBidVolume",
+            "orderbookAskVolume", "ma20Distance", "ma60Distance",
+            "ma20DistanceChange", "ma60DistanceChange",
+            "foreignFlowPressurePct", "institutionFlowPressurePct",
+        ):
             text = _event_text(facts.get(key), 96)
             if text:
                 compact_facts[key] = text
+        confirmed_transitions = facts.get("confirmedSignalTransitions")
+        if isinstance(confirmed_transitions, (list, tuple)):
+            compact_facts["confirmedSignalTransitions"] = [
+                {
+                    key: transition.get(key)
+                    for key in (
+                        "signalId", "condition", "fromState", "toState",
+                        "observedValue", "confirmationCount",
+                        "requiredConfirmations", "immediate",
+                    )
+                    if transition.get(key) not in (None, "", [], {})
+                }
+                for transition in confirmed_transitions[:8]
+                if isinstance(transition, Mapping)
+            ]
         if compact_facts:
             compact["facts"] = compact_facts
     return compact

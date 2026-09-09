@@ -373,7 +373,7 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
                     "hypothesisId": "hypothesis:recovery",
                     "claim": "SK하이닉스에서 TypeDB가 확인한 '단기 회복 + 수급 확인 → 추가매수 후보' 인과 경로가 현재 상황을 설명한다.",
                     "verdict": "unresolved",
-                    "reasoning": "가격과 수급 변화가 현재 상황에 가장 가깝습니다.",
+                    "reasoning": "조건부 모델 신호의 연결은 확인됐습니다. 사후 5건의 방향 적중률은 40%여서 실행 근거로는 부족합니다.",
                 },
                 {
                     "hypothesisId": "hypothesis:event",
@@ -388,6 +388,9 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
 
         self.assertIn("AI 가설 비교", message)
         self.assertIn("연구 선두 · 단기 회복 + 수급 확인", message)
+        self.assertIn("조건부 통계 검증 결과", message)
+        self.assertIn("사후 5건의 방향 적중률은 40%", message)
+        self.assertNotIn("성립값이 부족", message)
         self.assertIn("대안 · 매출·현금흐름 개선 + 가격 회복", message)
         self.assertIn("대안 · 위험 이벤트 + 가격 방어", message)
         self.assertIn("설명력 약화", message)

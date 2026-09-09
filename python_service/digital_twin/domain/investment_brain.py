@@ -1784,15 +1784,33 @@ def hypothesis_from_inference_rule(
     )
     if not evidence_ids and causal_paths:
         evidence_ids = list(causal_paths)
-    opposite_rows = [
+    candidate_opposite_rows = [
         item for item in all_rows
         if row_rule_id(item) != rule_id
         and relation_polarity(item) in ({"support"} if stance == "risk" else {"risk"} if stance == "support" else {"risk", "support"})
     ]
-    opposite_rule_ids = unique_texts([row_rule_id(item) for item in opposite_rows], 32)
+    candidate_opposite_rule_ids = unique_texts(
+        [row_rule_id(item) for item in candidate_opposite_rows],
+        32,
+    )
+    opposite_rule_ids = [
+        candidate_rule_id
+        for candidate_rule_id in candidate_opposite_rule_ids
+        if rule_knowledge_basis_from_rows(
+            candidate_rule_id,
+            relations_for_rule(candidate_opposite_rows, candidate_rule_id),
+            traces_for_rule(all_traces or [], candidate_rule_id),
+        ).requires_hypothesis
+    ]
+    opposite_rule_id_set = set(opposite_rule_ids)
+    opposite_rows = [
+        item
+        for item in candidate_opposite_rows
+        if row_rule_id(item) in opposite_rule_id_set
+    ]
     opposite_traces = [
         item for item in (all_traces or [])
-        if row_rule_id(item) in set(opposite_rule_ids)
+        if row_rule_id(item) in opposite_rule_id_set
     ]
     counter_evidence_ids = trace_evidence_ids(opposite_traces) or relation_ids(opposite_rows)
     condition_ids = trace_condition_ids(traces)

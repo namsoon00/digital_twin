@@ -195,6 +195,12 @@ def reasoning_delivery_trigger(
         }
         event_fields = _mapping(payload.get("changedFieldsBySymbol")).get(clean_symbol) or []
         changed_fields.update(_text(item) for item in event_fields if _text(item))
+        for assessment in assessments:
+            changed_fields.update(
+                _text(item)
+                for item in assessment.get("changedFields") or []
+                if _text(item)
+            )
         revision = _text(
             _mapping(payload.get("factRevisionsBySymbol")).get(clean_symbol)
         )
@@ -223,6 +229,7 @@ def reasoning_delivery_trigger(
                 or event.get("occurred_at")
             ),
             "observationFollowup": observation_followup,
+            "facts": _mapping(assessments[-1].get("facts")) if assessments else {},
         })
     if not matched_rows:
         return {}
@@ -231,6 +238,9 @@ def reasoning_delivery_trigger(
         for item in matched_rows
         if _text(item.get("sourceRevision")) or _text(item.get("sourceEventId"))
     })
+    trigger_facts: Dict[str, object] = {}
+    for item in matched_rows:
+        trigger_facts.update(_mapping(item.get("facts")))
     return {
         "version": REASONING_DELIVERY_TRIGGER_VERSION,
         "status": "verified-material-transition",
@@ -246,6 +256,7 @@ def reasoning_delivery_trigger(
             if condition
         }),
         "changedFields": sorted(changed_fields),
+        "facts": trigger_facts,
         "materialRevisionKeys": revision_keys,
         "sourceEventIds": sorted({
             _text(item.get("sourceEventId"))

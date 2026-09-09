@@ -4727,7 +4727,7 @@ def _research_hypothesis_comparison_rows(
         )
         reasoning = compact_sentence_count(
             customer_visible_ai_text(item.get("reasoning") or ""),
-            1,
+            2 if role == "연구 선두" else 1,
         )
         detail = " · ".join(part for part in [verdict, reasoning] if part)
         rows.append(_html_row(role + " · " + label, detail or "검토 결과 없음", level=level, max_len=420))
@@ -4808,7 +4808,7 @@ def research_narrative_telegram_message(
         "",
         "<b>분석 범위</b>",
         _html_bullet(
-            "매매 판단이 아니라 TypeDB가 만든 연구 가설의 설명력을 AI가 비교한 결과입니다.",
+            "매매 판단이 아니라 TypeDB가 만든 연구 설명 후보를 AI가 비교한 결과입니다.",
             level,
         ),
     ]

@@ -156,6 +156,54 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertIn("ma20-cross", material.matched_conditions)
         self.assertIn("volume-confirmation", material.matched_conditions)
 
+        orderbook = market_change_materiality(
+            "AAPL",
+            {
+                "bidAskImbalance": 10,
+                "orderbookBidVolume": 1100,
+                "orderbookAskVolume": 900,
+            },
+            {
+                "bidAskImbalance": 25,
+                "orderbookBidVolume": 1500,
+                "orderbookAskVolume": 900,
+            },
+            {"fields": ["bidAskImbalance", "orderbookBidVolume"]},
+            {},
+        )
+        self.assertIn("orderbook-imbalance", orderbook.matched_conditions)
+        self.assertEqual(10, orderbook.facts["previousBidAskImbalance"])
+        self.assertEqual(25, orderbook.facts["bidAskImbalance"])
+        self.assertEqual(20, orderbook.facts["bidAskImbalanceThreshold"])
+        self.assertEqual(1500, orderbook.facts["orderbookBidVolume"])
+        self.assertEqual(900, orderbook.facts["orderbookAskVolume"])
+
+        confirmed_orderbook = market_change_materiality(
+            "AAPL",
+            {"bidAskImbalance": 10},
+            {"bidAskImbalance": 26},
+            {"fields": ["bidAskImbalance"]},
+            {"marketSignalOrderbookEnterPct": "25"},
+            {
+                "version": "market-signal-transition-policy-v1",
+                "confirmedConditions": ["orderbook-imbalance"],
+                "confirmedTransitions": [{
+                    "signalId": "orderbook",
+                    "condition": "orderbook-imbalance",
+                    "fromState": "neutral",
+                    "toState": "positive",
+                    "observedValue": 26,
+                    "confirmationCount": 2,
+                    "requiredConfirmations": 2,
+                }],
+            },
+        )
+        self.assertEqual(25, confirmed_orderbook.facts["bidAskImbalanceThreshold"])
+        self.assertEqual(
+            "orderbook",
+            confirmed_orderbook.facts["confirmedSignalTransitions"][0]["signalId"],
+        )
+
     def test_market_materiality_does_not_requeue_a_stable_trend_for_a_volume_refresh(self):
         assessment = market_change_materiality(
             "MSTR",

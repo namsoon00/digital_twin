@@ -211,6 +211,8 @@ def beginner_friendly_text(value: object) -> str:
     text = str(value or "")
     for before, after in BEGINNER_FRIENDLY_REPLACEMENTS:
         text = text.replace(before, after)
+    while "설명 설명" in text:
+        text = text.replace("설명 설명", "설명")
     return text
 
 

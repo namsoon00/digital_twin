@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List
 
 from .market_data import number
+from .market_signal_transitions import market_signal_transition_policies
 from . import news_analysis as news_domain
 
 
@@ -20,6 +21,8 @@ MARKET_FIELD_ALIASES = {
     "tradeStrength": ("tradeStrength", "trade_strength"),
     "orderbookImbalance": ("orderbookImbalance", "orderbook_imbalance"),
     "bidAskImbalance": ("bidAskImbalance", "bid_ask_imbalance"),
+    "orderbookBidVolume": ("orderbookBidVolume", "orderbook_bid_volume"),
+    "orderbookAskVolume": ("orderbookAskVolume", "orderbook_ask_volume"),
     "foreignBuyVolume": ("foreignBuyVolume", "foreign_buy_volume"),
     "foreignSellVolume": ("foreignSellVolume", "foreign_sell_volume"),
     "foreignNetVolume": ("foreignNetVolume", "foreign_net_volume"),
@@ -233,6 +236,36 @@ def market_change_materiality(
         0.0,
         100.0,
     )
+    stateful_transition_policy = bool(
+        isinstance(signal_transition_result, dict)
+        and str(signal_transition_result.get("version") or "").strip()
+        and signal_transition_result.get("enabled") is not False
+    )
+    transition_policies = (
+        market_signal_transition_policies(settings)
+        if stateful_transition_policy
+        else {}
+    )
+    effective_volume_threshold = (
+        transition_policies["volume"].enter_value
+        if transition_policies
+        else volume_threshold
+    )
+    effective_orderbook_threshold = (
+        transition_policies["orderbook"].enter_value
+        if transition_policies
+        else 20.0
+    )
+    effective_trade_strength_lower = (
+        100.0 - transition_policies["trade-strength"].enter_value
+        if transition_policies
+        else 80.0
+    )
+    effective_trade_strength_upper = (
+        100.0 + transition_policies["trade-strength"].enter_value
+        if transition_policies
+        else 120.0
+    )
     current_ma20 = number(market_field(current, "ma20Distance"))
     previous_ma20 = number(market_field(previous, "ma20Distance"))
     current_ma60 = number(market_field(current, "ma60Distance"))
@@ -241,12 +274,14 @@ def market_change_materiality(
     volume_ratio = number(market_field(current, "volumeRatio"))
     previous_trade_strength = number(market_field(previous, "tradeStrength"))
     trade_strength = number(market_field(current, "tradeStrength"))
-    previous_imbalance = abs(number(
+    previous_bid_ask_imbalance = number(
         market_field(previous, "orderbookImbalance") or market_field(previous, "bidAskImbalance")
-    ))
-    imbalance = abs(number(
+    )
+    bid_ask_imbalance = number(
         market_field(current, "orderbookImbalance") or market_field(current, "bidAskImbalance")
-    ))
+    )
+    previous_imbalance = abs(previous_bid_ask_imbalance)
+    imbalance = abs(bid_ask_imbalance)
     matched: List[str] = []
 
     if field_changed(changed_fields, "currentPrice", "changeRate") and abs(price_change) >= price_threshold:
@@ -316,11 +351,6 @@ def market_change_materiality(
     if field_changed(changed_fields, "freshnessStatus", "sourceTimestampState", "latencyStatus", "realTime"):
         matched.append("source-validity-state-change")
 
-    stateful_transition_policy = bool(
-        isinstance(signal_transition_result, dict)
-        and str(signal_transition_result.get("version") or "").strip()
-        and signal_transition_result.get("enabled") is not False
-    )
     confirmed_transitions = (
         list(signal_transition_result.get("confirmedTransitions") or [])
         if stateful_transition_policy
@@ -452,7 +482,18 @@ def market_change_materiality(
         matched,
         {
             "priceChangePct": round(price_change, 3),
+            "previousVolumeRatio": round(previous_volume_ratio, 3),
             "volumeRatio": round(volume_ratio, 3),
+            "volumeRatioThreshold": round(effective_volume_threshold, 3),
+            "previousTradeStrength": round(previous_trade_strength, 3),
+            "tradeStrength": round(trade_strength, 3),
+            "tradeStrengthLowerThreshold": round(effective_trade_strength_lower, 3),
+            "tradeStrengthUpperThreshold": round(effective_trade_strength_upper, 3),
+            "previousBidAskImbalance": round(previous_bid_ask_imbalance, 3),
+            "bidAskImbalance": round(bid_ask_imbalance, 3),
+            "bidAskImbalanceThreshold": round(effective_orderbook_threshold, 3),
+            "orderbookBidVolume": number(market_field(current, "orderbookBidVolume")),
+            "orderbookAskVolume": number(market_field(current, "orderbookAskVolume")),
             "ma20Distance": round(current_ma20, 3),
             "ma60Distance": round(current_ma60, 3),
             "ma20DistanceChange": round(current_ma20 - previous_ma20, 3),

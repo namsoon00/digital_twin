@@ -13,6 +13,8 @@ from digital_twin.domain.notification_ai_context_router import (
     fit_notification_ai_decision_core,
 )
 from digital_twin.domain.notification_narrative import (
+    apply_narrative_brief_to_response,
+    build_investment_narrative_brief,
     narrative_claim_evidence_contract,
 )
 from digital_twin.domain.notifications import NotificationJob
@@ -576,6 +578,24 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             "kinds": ["verified-market-observation-followup"],
             "reasons": ["verified-observation-followup"],
             "materialRevisionKeys": ["revision:naver:price:2"],
+            "changedFields": ["bidAskImbalance"],
+            "matchedConditions": ["orderbook-imbalance"],
+            "facts": {
+                "previousBidAskImbalance": 8.5,
+                "bidAskImbalance": 24.2,
+                "bidAskImbalanceThreshold": 20,
+                "orderbookBidVolume": 1500,
+                "orderbookAskVolume": 900,
+                "confirmedSignalTransitions": [{
+                    "signalId": "orderbook",
+                    "condition": "orderbook-imbalance",
+                    "fromState": "neutral",
+                    "toState": "positive",
+                    "observedValue": 24.2,
+                    "confirmationCount": 2,
+                    "requiredConfirmations": 2,
+                }],
+            },
             "observedAt": "2026-09-09T00:00:00Z",
         }
         context["relationLifecycleTransition"] = {
@@ -595,6 +615,18 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual(
             "verified-material-transition",
             enriched_packet.decision_core["reasoningTrigger"]["status"],
+        )
+        self.assertEqual(
+            ["orderbook-imbalance"],
+            enriched_packet.decision_core["reasoningTrigger"]["matchedConditions"],
+        )
+        self.assertEqual(
+            20,
+            enriched_packet.decision_core["reasoningTrigger"]["facts"]["bidAskImbalanceThreshold"],
+        )
+        self.assertEqual(
+            2,
+            enriched_packet.decision_core["reasoningTrigger"]["facts"]["confirmedSignalTransitions"][0]["confirmationCount"],
         )
         self.assertEqual(
             "strengthened",
@@ -651,6 +683,12 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
                 view_id = "relation-evidence:not-in-packet" if self.calls == 1 else "fact:currentPrice"
                 payload = response_payload(view_id, support_id, "fact:ma20Distance")
+                payload["nextActionPlan"] = (
+                    "현재가가 20일선 아래로 내려가면 현재 설명을 다시 검토합니다."
+                )
+                payload["nextChecks"] = [
+                    "다음 가격 갱신에서 현재가와 20일선을 비교합니다."
+                ]
                 return validated_response_from_payload(
                     prepared,
                     payload,
@@ -667,6 +705,13 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual(2, reviewer.calls)
         self.assertEqual(0, outcome.response.rejected_claim_count)
         self.assertIn("unknown-evidence-id", outcome.executed_prompt)
+        brief = build_investment_narrative_brief(
+            investment_context(),
+            outcome.response,
+        )
+        apply_narrative_brief_to_response(brief, outcome.response)
+        self.assertIn("20일선 아래", outcome.response.next_action_plan)
+        self.assertIn("현재가와 20일선", outcome.response.next_checks[0])
 
     def test_rule_only_view_uses_exact_observed_evidence_closure_without_second_ai_call(self):
         class Reviewer:

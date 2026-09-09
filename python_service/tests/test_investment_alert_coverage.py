@@ -20,6 +20,7 @@ from digital_twin.domain.investment_alert_coverage import (
     material_event_assessment,
     reasoning_delivery_trigger,
 )
+from digital_twin.domain.events import compact_materiality_assessment_event_payload
 
 
 class InvestmentAlertCoverageTests(unittest.TestCase):
@@ -61,14 +62,49 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
                 },
                 "factRevisionsBySymbol": {"028260": "revision:price:2"},
                 "sourceObservedAt": "2026-09-08T23:59:00Z",
+                "materialityAssessments": [{
+                    "subject": "028260",
+                    "passed": True,
+                    "changedFields": ["bidAskImbalance"],
+                    "matchedConditions": ["orderbook-imbalance"],
+                    "facts": {
+                        "previousBidAskImbalance": 8.5,
+                        "bidAskImbalance": 24.2,
+                        "bidAskImbalanceThreshold": 20,
+                        "orderbookBidVolume": 1500,
+                        "orderbookAskVolume": 900,
+                        "confirmedSignalTransitions": [{
+                            "signalId": "orderbook",
+                            "condition": "orderbook-imbalance",
+                            "fromState": "neutral",
+                            "toState": "positive",
+                            "observedValue": 24.2,
+                            "confirmationCount": 2,
+                            "requiredConfirmations": 2,
+                        }],
+                    },
+                }],
             },
         }], "028260")
         self.assertEqual("verified-material-transition", trigger["status"])
         self.assertTrue(trigger["observationFollowup"])
         self.assertEqual(["revision:price:2"], trigger["materialRevisionKeys"])
         self.assertEqual(
-            ["marketObservationFollowup"],
+            ["bidAskImbalance", "marketObservationFollowup"],
             trigger["changedFields"],
+        )
+        self.assertEqual("24.2", str(trigger["facts"]["bidAskImbalance"]))
+        self.assertEqual("20", str(trigger["facts"]["bidAskImbalanceThreshold"]))
+        compact = compact_materiality_assessment_event_payload({
+            "subject": "028260",
+            "passed": True,
+            "facts": trigger["facts"],
+        })
+        self.assertEqual("1500", str(compact["facts"]["orderbookBidVolume"]))
+        self.assertEqual("900", str(compact["facts"]["orderbookAskVolume"]))
+        self.assertEqual(
+            2,
+            compact["facts"]["confirmedSignalTransitions"][0]["confirmationCount"],
         )
         self.assertEqual({}, reasoning_delivery_trigger([{
             "eventId": "reasoning:event:quiet",

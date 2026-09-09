@@ -10,6 +10,7 @@ from digital_twin.domain.customer_evidence_explanation import (
     customer_data_limitation_text,
     customer_safe_text,
     customer_text_quality_issues,
+    enforce_customer_message_quality,
 )
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notifications import NotificationJob
@@ -118,6 +119,12 @@ class CustomerNotificationExplanationTests(unittest.TestCase):
         )
         self.assertIn("예상 EPS·적정가·목표 PER", limitation)
         self.assertFalse(customer_text_quality_issues(limitation))
+        research_reason = enforce_customer_message_quality(
+            "• 조건부 모델 신호는 연결됐지만 사후 5건의 적중률은 40%입니다."
+        )
+        self.assertIn("조건부 통계 검증 결과", research_reason)
+        self.assertIn("적중률은 40%", research_reason)
+        self.assertNotIn("성립값이 부족", research_reason)
 
     def test_review_only_message_explains_conflict_without_fake_hold(self):
         context = review_only_context()

@@ -252,6 +252,17 @@ class SubjectReasoningLineageTests(unittest.TestCase):
             research_path["nodes"][-1]["items"][0]["hypothesisVerdict"],
         )
 
+        research_subject["synthesis"]["selectedRuleId"] = RULE_ID
+        jointly_led_lineage = subject_reasoning_lineage(
+            research_subject,
+            reasoning_case(),
+            research_episode,
+        )
+        jointly_led_path = jointly_led_lineage["explanation"]["causalPaths"][0]
+        self.assertTrue(jointly_led_path["selected"])
+        self.assertTrue(jointly_led_path["researchLead"])
+        self.assertEqual("ai-research-lead", jointly_led_path["selectionSource"])
+
     def test_ai_core_receives_same_immutable_proof_and_rejects_wrong_subject(self):
         lineage = subject_reasoning_lineage(
             subject_case(),

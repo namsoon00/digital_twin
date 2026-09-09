@@ -39,6 +39,50 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class OntologyChangeImpactTests(unittest.TestCase):
+    def test_hypothesis_calibration_stays_in_state_scope_when_identity_contains_claim(self):
+        properties = {
+            "ontologyBox": "ABox",
+            "symbol": "000660",
+            "tboxClass": "HypothesisCalibration",
+            "calibrationIdentityType": "claim-contract",
+            "calibrationIdentity": "rule-claim:graph.temporal.risk-event.support.v1",
+        }
+        entity_id = (
+            "hypothesis-calibration:000660|claim-contract|"
+            "rule-claim:graph.temporal.risk-event.support.v1"
+        )
+
+        self.assertEqual(
+            "state",
+            family_for_entity("hypothesis-calibration", properties, entity_id),
+        )
+
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity(
+                    "stock:000660",
+                    "SK hynix",
+                    "stock",
+                    {"ontologyBox": "ABox", "symbol": "000660"},
+                ),
+                OntologyEntity(
+                    entity_id,
+                    "Hypothesis calibration",
+                    "hypothesis-calibration",
+                    properties,
+                ),
+            ],
+        )
+        result = apply_scoped_abox_identity(graph)
+        calibration = next(
+            item for item in graph.entities if item.entity_id == entity_id
+        )
+
+        self.assertEqual("state", calibration.properties["aboxScopeFamily"])
+        self.assertEqual("symbol:000660:state", calibration.properties["aboxScopeId"])
+        self.assertIn("symbol:000660:state", result["scopeGenerationIds"])
+
     def test_model_hypothesis_assessment_family_does_not_follow_hypothesis_name(self):
         self.assertEqual(
             "model-signal",

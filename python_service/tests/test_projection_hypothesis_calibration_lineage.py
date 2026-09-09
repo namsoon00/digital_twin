@@ -65,7 +65,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "v14-stable-hypothesis-calibration-identity",
+            "v15-hypothesis-calibration-state-scope",
             PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
         )
         self.assertEqual(

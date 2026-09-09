@@ -85,7 +85,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # graph-to-AI explanation boundary from silent relation loss.
         # Stable claim-identity calibration also proves that feedback reaches
         # a current hypothesis after its transient family shape changes.
-        self.assertLessEqual(total, 982)
+        # Hypothesis calibration scope ownership independently prevents a
+        # claim-contract identifier from reclassifying reasoning state as evidence.
+        self.assertLessEqual(total, 983)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -337,7 +337,13 @@ def family_for_field(field: object) -> str:
 def family_for_entity(kind: object, properties: Mapping[str, object] = None, entity_id: object = "") -> str:
     """Classify an ABox entity without looking at its current values."""
     props = dict(properties or {})
-    text = " ".join([_lower(kind), _lower(entity_id), _lower(props.get("tboxClass")), " ".join(_lower(item) for item in _list(props.get("tboxClasses")))])
+    normalized_kind = _lower(kind)
+    # Hypothesis calibration is durable reasoning state. Its stable identity
+    # may contain a claim-contract id, but that must not reclassify the entity
+    # as document evidence and exclude it from a subject state refresh.
+    if normalized_kind in {"hypothesis-calibration", "hypothesiscalibration"}:
+        return "state"
+    text = " ".join([normalized_kind, _lower(entity_id), _lower(props.get("tboxClass")), " ".join(_lower(item) for item in _list(props.get("tboxClasses")))])
     if _matches_any(text, ["market-proxy", "market-index"]):
         return "macro-market"
     if _matches_any(text, ["fx-rate", "fxpair", "currency-rate"]):

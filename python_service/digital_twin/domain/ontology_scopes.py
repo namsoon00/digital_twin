@@ -42,7 +42,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v13-static-reference-endpoints"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v14-hypothesis-calibration-state"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"

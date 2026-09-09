@@ -984,7 +984,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v14-stable-hypothesis-calibration-identity"
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v15-hypothesis-calibration-state-scope"
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = "projection-runtime-context-cache-v1"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 

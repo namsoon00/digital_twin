@@ -111,6 +111,14 @@ def subject_case():
 
 
 def reasoning_case():
+    incomplete_duplicate = rule_evaluation("000660", 1776000)
+    incomplete_duplicate["evaluationId"] = "evaluation:000660:incomplete-duplicate"
+    incomplete_duplicate["proof"].update({
+        "proofId": "proof:000660:incomplete-duplicate",
+        "traceId": "",
+        "evidenceIds": [],
+        "conditions": [],
+    })
     return {
         "caseId": "reasoning-case:batch",
         "deploymentId": "reasoning-deployment:production",
@@ -127,6 +135,7 @@ def reasoning_case():
         "inferenceResult": {
             "ruleEvaluations": [
                 rule_evaluation("000660", 1776000),
+                incomplete_duplicate,
                 rule_evaluation("005380", 291000),
             ],
         },
@@ -178,7 +187,9 @@ class SubjectReasoningLineageTests(unittest.TestCase):
         self.assertEqual("rulebox-release:test", lineage["identity"]["ruleboxReleaseId"])
         self.assertEqual(1, lineage["integrity"]["includedRuleEvaluationCount"])
         self.assertEqual(1, lineage["integrity"]["excludedForeignSubjectEvaluationCount"])
+        self.assertEqual(1, lineage["integrity"]["excludedDuplicateRuleEvaluationCount"])
         self.assertEqual(0, lineage["integrity"]["invalidRuleEvaluationCount"])
+        self.assertEqual("pass", lineage["integrity"]["state"])
         self.assertEqual([RULE_ID], [row["id"] for row in reasoning["rules"]])
         self.assertTrue(reasoning["rules"][0]["selected"])
         self.assertEqual(1776000, reasoning["facts"][0]["observedValue"])

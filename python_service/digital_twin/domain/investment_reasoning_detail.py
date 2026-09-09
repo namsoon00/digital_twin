@@ -1004,9 +1004,7 @@ def subject_reasoning_lineage(
                 "actual": actual,
             })
 
-    included = []
-    foreign_count = 0
-    invalid_count = 0
+    classified_evaluations = []
     for raw in inference.get("rule_evaluations") or inference.get("ruleEvaluations") or []:
         if not isinstance(raw, Mapping):
             continue
@@ -1021,10 +1019,25 @@ def subject_reasoning_lineage(
             source_abox_snapshot_id=source_abox_snapshot_id,
             inference_generation_id=inference_generation_id,
         )
+        classified_evaluations.append((evaluation, rule_id, state, reason))
+
+    included_rule_ids = {
+        rule_id
+        for _evaluation, rule_id, state, _reason in classified_evaluations
+        if state == "included" and rule_id
+    }
+    included = []
+    foreign_count = 0
+    invalid_count = 0
+    duplicate_count = 0
+    for evaluation, rule_id, state, reason in classified_evaluations:
         if state == "foreign":
             foreign_count += 1
             continue
         if state == "invalid":
+            if reason == "subject-lineage-unverifiable" and rule_id in included_rule_ids:
+                duplicate_count += 1
+                continue
             invalid_count += 1
             issues.append({
                 "code": "UNVERIFIABLE_RULE_PROOF",
@@ -1404,6 +1417,7 @@ def subject_reasoning_lineage(
             "issues": issues,
             "includedRuleEvaluationCount": len(included),
             "excludedForeignSubjectEvaluationCount": foreign_count,
+            "excludedDuplicateRuleEvaluationCount": duplicate_count,
             "invalidRuleEvaluationCount": invalid_count,
         },
         "reasoning": reasoning,

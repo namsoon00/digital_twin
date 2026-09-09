@@ -376,7 +376,7 @@ class HypothesisReviewTests(unittest.TestCase):
         self.assertEqual("context-only-not-action-selector", prompt_context["facts"]["hypothesisDecisionBrief"]["decisionEligibility"])
         self.assertIn("hypothesisDecisionBrief", prompt)
         self.assertIn("보유 유지", message)
-        self.assertIn("다음 정규장 거래량이 20일 평균 1배 이상", message)
+        self.assertIn("다음 정규장 거래량이 20일 평균 거래량의 1배 이상", message)
         self.assertNotIn("가설 변화와 검증", message)
         self.assertNotIn("TypeDB", message)
 

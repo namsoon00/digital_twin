@@ -419,11 +419,12 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
 
         message = execution_telegram_message(values, response)
 
+        self.assertIn("🧠 AI 투자 인사이트 · SK하이닉스 · 상승 요인 우세", message)
         self.assertIn("상승 요인 우세", message)
-        self.assertIn("핵심 판단", message)
+        self.assertIn("현재 판단", message)
         self.assertIn("단기 가격 회복", message)
-        self.assertIn("왜 그렇게 보나", message)
-        self.assertIn("투자 의미", message)
+        self.assertIn("근거 연결", message)
+        self.assertNotIn("투자 의미", message)
         self.assertNotIn("성립값이 부족", message)
         self.assertIn("현재 보유 수량은 바꾸지 않습니다", message)
         self.assertIn("판단이 바뀌는 조건", message)
@@ -432,6 +433,26 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         self.assertNotIn("사후 5건의 방향 적중률", message)
         self.assertNotIn("재판단 기준 없음", message)
         self.assertNotIn("현재 신호는 확인했지만 실행 판단", message)
+        self.assertNotIn("모든 후보 근거를 비교했으며", message)
+
+        legacy_response = NotificationAIValidatedResponse.from_dict({
+            "action": "NO_ACTION",
+            "summary": "가격 변화로 관계 신호가 유지에서 약화로 전환됐다.",
+            "currentActionPlan": "현재 보유 수량에는 새 주문을 내지 않는다.",
+            "nextChecks": ["다음 장중 가격과 외국인 순매수의 동행 여부"],
+            "hypothesisComparisonState": "research-reviewed",
+            "researchLeadHypothesisId": "hypothesis:recovery",
+            "hypotheses": [{
+                "hypothesisId": "hypothesis:recovery",
+                "claim": "가격 회복 관계를 다시 확인합니다.",
+                "verdict": "weakened",
+            }],
+        })
+        legacy_message = execution_telegram_message(values, legacy_response)
+        self.assertIn("🧠 AI 관계 해석 · SK하이닉스", legacy_message)
+        self.assertIn("약화로 전환됐습니다.", legacy_message)
+        self.assertIn("동행 여부를 확인합니다.", legacy_message)
+        self.assertNotIn("· 투자 관점", legacy_message)
 
     def test_unqualified_executable_episode_cannot_become_continuity_baseline(self):
         old = {

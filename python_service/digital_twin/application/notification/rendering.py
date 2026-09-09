@@ -72,6 +72,10 @@ class NotificationRenderingService:
         if rendered:
             context = dict(job.context or {})
             is_investment = str(job.message_type or "") == INVESTMENT_INSIGHT
+            original_rendered = rendered
+            original_quality_issues = (
+                customer_text_quality_issues(rendered) if is_investment else []
+            )
             if is_investment:
                 rendered = enforce_customer_message_quality(rendered)
             quality_issues = customer_text_quality_issues(rendered) if is_investment else []
@@ -107,9 +111,15 @@ class NotificationRenderingService:
                     (context.get("notificationNarrativeBrief") or {}).get("fingerprint") or ""
                 ),
                 "customerLanguageQuality": {
-                    "version": "customer-message-quality-v1",
-                    "status": "passed" if not quality_issues else "failed",
+                    "version": "customer-message-quality-v2-repair-first",
+                    "status": (
+                        "failed" if quality_issues
+                        else "repaired" if rendered != original_rendered
+                        else "passed"
+                    ),
                     "issues": quality_issues,
+                    "originalIssues": original_quality_issues,
+                    "repairApplied": rendered != original_rendered,
                 },
             }
             job.context = context

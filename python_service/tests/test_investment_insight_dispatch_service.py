@@ -3,6 +3,7 @@ import unittest
 from digital_twin.application.investment_insight_dispatch_service import (
     InvestmentInsightDispatchService,
 )
+from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.investment_reasoning import (
     ARCHIVE,
     HANDOFF_AI,
@@ -16,6 +17,7 @@ from digital_twin.domain.investment_reasoning import (
 )
 from digital_twin.domain.message_types import INVESTMENT_INSIGHT
 from digital_twin.domain.notifications import NotificationJob
+from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.portfolio import AlertEvent
 
 
@@ -72,6 +74,13 @@ def context_observation(case):
         "ruleId": "graph.benchmark.beta.context.v1",
         "label": "벤치마크 민감도 변화",
         "matched": True,
+        "matchedConditions": [{
+            "conditionId": "benchmark-beta",
+            "field": "beta",
+            "operator": ">=",
+            "expectedValue": 1.2,
+            "observedValue": 1.34,
+        }],
         "knowledgeBasis": {
             "owner": "ontology-semantic",
             "ruleKind": "context-observation",
@@ -83,6 +92,12 @@ def context_observation(case):
         "investmentSubjectDecisionCaseId": case.subject_case_id,
         "investmentSubjectDecisionCase": case.to_dict(),
         "decisionPublication": case.publication.to_dict(),
+        "reasoningDeliveryTrigger": {
+            "material": True,
+            "userObservable": True,
+            "changedFields": ["priceChangeRate"],
+            "facts": {"priceChangeRate": 2.35},
+        },
         "ontologyInsight": {
             "semanticComponents": {
                 "materialSourceEventKeys": ["market-observation:MSTR:beta:changed"],
@@ -96,7 +111,12 @@ def context_observation(case):
             "sourceAboxSnapshotId": case.source_abox_snapshot_id,
             "inferenceGenerationId": case.inference_generation_id,
             "subject": {"symbol": "MSTR", "market": "US"},
-            "facts": {"symbol": "MSTR", "currentPrice": 132.38},
+            "facts": {
+                "symbol": "MSTR",
+                "currentPrice": 132.38,
+                "volume": 178072,
+                "volumeRatio": 0.004,
+            },
             "activeRules": [rule],
             "matchedRules": [rule],
             "decision": {
@@ -224,6 +244,7 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assertEqual(first_dispatch.decision_id, retried_dispatch.decision_id)
 
         material_context["ontologyInsight"] = {"semanticComponents": {}}
+        material_context["reasoningDeliveryTrigger"] = {}
         self.assertEqual(
             ARCHIVE,
             inference_dispatch_decision(material_context, observation).route,
@@ -296,6 +317,19 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             ]["route"],
         )
         self.assertNotIn("notificationAiValidatedResponse", typedb_job.context)
+        typedb_job.context["displayTarget"] = "스트래티지 / MSTR"
+        typedb_message = execution_telegram_message(
+            typedb_job.context,
+            NotificationAIValidatedResponse(action="NO_ACTION"),
+        )
+        self.assertIn("🧩 TypeDB 추론 · 스트래티지 · 벤치마크 민감도 변화", typedb_message)
+        self.assertIn("이번 추론 계기", typedb_message)
+        self.assertIn("새 관측값은 가격 변화율 +2.4%입니다.", typedb_message)
+        self.assertIn("새로 확인한 관계", typedb_message)
+        self.assertIn("시장 민감도(베타)는 1.34이며, 성립 기준은 1.2 이상입니다.", typedb_message)
+        self.assertIn("현재가 $132.38", typedb_message)
+        self.assertIn("평균 대비 &lt;0.01배", typedb_message)
+        self.assertNotIn("AI 투자", typedb_message)
         self.assertEqual(PUBLISH_TYPEDB, observation.inference_dispatch_decision.route)
         self.assertEqual(HANDOFF_AI, actionable.inference_dispatch_decision.route)
 

@@ -909,7 +909,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v6", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v20", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-judge-v21-customer-delta", prompt_audit["promptRelease"]["version"])
         self.assertLessEqual(
             prompt_audit["inferencePacket"]["promptBudget"]["renderedPromptBytes"],
             prompt_audit["inferencePacket"]["promptBudget"]["maxPromptBytes"],

@@ -122,9 +122,23 @@ class CustomerNotificationExplanationTests(unittest.TestCase):
         research_reason = enforce_customer_message_quality(
             "• 조건부 모델 신호는 연결됐지만 사후 5건의 적중률은 40%입니다."
         )
-        self.assertIn("조건부 통계 검증 결과", research_reason)
+        self.assertIn("조건부 검증 신호", research_reason)
         self.assertIn("적중률은 40%", research_reason)
         self.assertNotIn("성립값이 부족", research_reason)
+        repaired = enforce_customer_message_quality(
+            "\n".join([
+                "<b>판단이 바뀌는 조건</b>",
+                "• ma20Distance가 9.443532746531403 미만이면 재검토합니다.",
+                "",
+                "<b>반대 근거 확인</b>",
+                "• 모든 후보 근거를 비교했으며, 현재 방향을 뒤집는 검증된 반대 사실은 확인되지 않았습니다.",
+            ])
+        )
+        self.assertIn("20일선 차이가 9.44% 미만", repaired)
+        self.assertNotIn("ma20Distance", repaired)
+        self.assertNotIn("반대 근거 확인", repaired)
+        self.assertNotIn("모든 후보 근거", repaired)
+        self.assertFalse(customer_text_quality_issues(repaired))
 
     def test_review_only_message_explains_conflict_without_fake_hold(self):
         context = review_only_context()
@@ -200,7 +214,8 @@ class CustomerNotificationExplanationTests(unittest.TestCase):
 
         self.assertNotIn("HAS_INFERRED_RISK", rendered)
         quality = job.context["notificationPresentationAudit"]["customerLanguageQuality"]
-        self.assertEqual("passed", quality["status"])
+        self.assertEqual("repaired", quality["status"])
+        self.assertTrue(quality["repairApplied"])
         self.assertEqual([], quality["issues"])
 
 

@@ -55,6 +55,21 @@ def compact_number(value: float) -> str:
     return format(rounded, ",")
 
 
+def compact_multiple(value: float, digits: int = 2) -> str:
+    amount = number(value)
+    if amount <= 0:
+        return "-"
+    precision = max(0, int(digits or 0))
+    smallest = 10 ** -precision
+    if amount < smallest:
+        return "<" + format(smallest, "." + str(precision) + "f") + "배"
+    rendered = format(
+        round(amount, precision),
+        "." + str(precision) + "f",
+    ).rstrip("0").rstrip(".")
+    return rendered + "배"
+
+
 def trade_strength_label(value: float) -> str:
     """Explain the KIS buy/sell execution ratio without implying a price forecast."""
 

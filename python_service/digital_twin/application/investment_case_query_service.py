@@ -533,6 +533,8 @@ class InvestmentCaseQueryService:
         grounded_insight = bool(
             ai_current and insight_assessment.get("publishable") is True
         )
+        dispatch_route = text(dispatch.get("route")).upper()
+        typedb_direct = dispatch_route == "PUBLISH_TYPEDB"
         if ai_current:
             headline = text(
                 insight_assessment.get("dominantThesis")
@@ -550,7 +552,9 @@ class InvestmentCaseQueryService:
                 ai_next_action = text(ai_next_checks[0] if ai_next_checks else "")
             next_action = ai_next_action or next_action
         ai_state_label = (
-            "해석 완료"
+            "TypeDB 직접 발행"
+            if typedb_direct
+            else "해석 완료"
             if ai_current
             else "TypeDB 대체 해석"
             if ai_fallback
@@ -562,7 +566,6 @@ class InvestmentCaseQueryService:
             if ai_status == "previous-generation"
             else "실행 생략"
         )
-        dispatch_route = text(dispatch.get("route")).upper()
         dispatch_labels = {
             "PUBLISH_TYPEDB": "TypeDB 직접 알림",
             "HANDOFF_AI": "AI 판단 전달",
@@ -584,7 +587,9 @@ class InvestmentCaseQueryService:
             else "과거 추론 기록에는 후속 처리 경로가 저장되지 않았습니다."
         )
         phase_label = (
-            "최신 TypeDB 추론 · AI 해석 완료"
+            "최신 TypeDB 추론 · 관계 사실 직접 발행"
+            if typedb_direct
+            else "최신 TypeDB 추론 · AI 해석 완료"
             if ai_current
             else "최신 TypeDB 추론 · AI 실패로 TypeDB 대체"
             if ai_fallback
@@ -612,7 +617,9 @@ class InvestmentCaseQueryService:
             "phaseLabel": phase_label,
             "readinessState": readiness,
             "readinessLabel": (
-                "판단 가능"
+                "관계 변화"
+                if typedb_direct
+                else "판단 가능"
                 if has_final else
                 "투자 인사이트"
                 if grounded_insight else
@@ -636,7 +643,9 @@ class InvestmentCaseQueryService:
                 "validationState": "ready" if has_final else "conditional",
                 "state": readiness,
                 "stateLabel": (
-                    "AI 최종 판단"
+                    "TypeDB 관계 추론"
+                    if typedb_direct
+                    else "AI 최종 판단"
                     if has_final else
                     "AI 투자 인사이트"
                     if grounded_insight else
@@ -660,9 +669,21 @@ class InvestmentCaseQueryService:
                 {
                     "id": "ai",
                     "label": "AI 해석",
-                    "state": "pending" if ai_processing else "pass" if ai_current else "warning",
+                    "state": (
+                        "pass"
+                        if typedb_direct
+                        else "pending"
+                        if ai_processing
+                        else "pass"
+                        if ai_current
+                        else "warning"
+                    ),
                     "stateLabel": ai_state_label,
-                    "reason": text(ai_insight.get("reason")),
+                    "reason": (
+                        "이 결과는 TypeDB가 직접 발행했으며 AI 투자 판단과 구분됩니다."
+                        if typedb_direct
+                        else text(ai_insight.get("reason"))
+                    ),
                 },
                 {"id": "decision", "label": "현재 의견", "state": readiness, "stateLabel": "확정" if has_final else "후보", "reason": headline},
                 {"id": "data", "label": "판단 자료", "state": "warning" if missing_data else "pass", "stateLabel": "일부 확인" if missing_data else "사용 가능", "reason": text(missing_data[0] if missing_data else "현재 가설 평가에 사용한 자료가 기록되어 있습니다.")},

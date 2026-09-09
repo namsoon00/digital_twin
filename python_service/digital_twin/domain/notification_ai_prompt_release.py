@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v20"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v19"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v21-customer-delta"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v20"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
 
@@ -238,6 +238,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "투자 인사이트와 매매 실행은 별도 결과다. 매매가 금지돼도 가설이 있으면 최선의 가설을 선택해 방향·인과 경로·투자 의미를 insightAssessment에 결론내린다. 불확실성은 conviction을 낮추되 결론을 없애지 않는다.",
     "direction은 근거의 순효과로 고르고 자료 부족만으로 balanced를 쓰지 않는다. 정말 대등한 상반 근거일 때만 balanced로 쓰고 균형을 깨는 조건을 밝힌다.",
     "dominantThesis·causalMechanism·investmentImplication은 narrativeClaims의 view·mechanism·implication과 같은 의미여야 하며, 사용 가능한 핵심 관측 수치 1~2개와 검증 근거 ID를 연결한다.",
+    "dominantThesis는 결론, causalMechanism은 그 결론까지의 원인 경로, investmentImplication은 사용자 대응 의미만 쓴다. 세 필드를 같은 주장의 바꿔쓰기로 채우지 않는다.",
     "previousInsight가 있으면 문구가 아니라 direction, horizon, conviction, thesisKey의 의미 변화를 비교한다. 의미 변화가 없으면 새 인사이트인 것처럼 과장하지 않는다.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
@@ -245,6 +246,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "사용자에게 보여줄 투자 관점, 인과 경로, 투자 의미, 촉매, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
     "narrativeClaims는 section별 허용 근거만 쓴다. narrativeClaimContract.encoding이 role-indexed-v1이면 sectionEvidenceRoles와 evidenceLedger의 role·kind를 조합하고 preferredObservedEvidenceIds를 우선 함께 인용한다. 전체 ID 목록이 있으면 recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
     "invalidationCondition은 관측 대상과 변화 방향을 명시하고 검증된 next-condition 근거와 연결한다. 수치형 observable 필드가 있으면 followUpConditions로 구조화하되 입력에 없는 임계값은 만들지 않는다. 일반적인 '근거가 사라지면' 문장은 금지한다.",
+    "invalidationCondition과 사용자 표시 문장에는 ma20Distance 같은 내부 필드명을 쓰지 말고 '20일선 차이'처럼 쉬운 한국어로 쓴다. 내부 필드와 수치는 followUpConditions에 별도로 구조화한다.",
     "TypeDB 규칙을 인용할 때 inference 근거와 같은 가설에 연결된 관찰 사실 ID도 함께 인용한다. evidenceBundlesByInference가 있으면 그 묶음을 따르고, 압축 계약이면 hypothesisSet의 근거 ID와 evidenceLedger를 따른다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",
     "확인된 사실은 명확히 말하고 가장 잘 지지되는 인과 해석을 결론으로 제시한다. 확인되지 않은 세부 원인이나 영향 규모만 limitation에 적고, 자료 한계를 알림의 중심 결론으로 만들지 않는다.",
     "narrativeClaims의 support는 role=support 근거만, counter는 role=counter 근거만 연결하고 context나 limitation을 행동 근거로 바꾸지 않는다.",
@@ -258,9 +260,11 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "externalEvidence에서 evidenceUse=action인 항목만 행동을 바꿀 근거로 사용하고 rule-scoped-reference는 확인 항목으로만 쓴다.",
     "continuityDelta는 직전 판단 이후 변화만 뜻하며 현재 TypeDB 근거보다 우선하지 않는다.",
     "같은 사실을 summary, evidence, narrativeClaims에 반복하지 않는다. summary는 결론, evidence는 근거 목록, narrativeClaims는 실제 표시 문장과 근거 ID 연결 역할만 가진다.",
+    "changeAnalysis는 직전 알림과 비교해 실제 관측값·방향·기간·근거 강도·행동 중 달라진 항목만 쓴다. '기존 판단 유지', '추가 확인 필요' 같은 상투문만으로 채우지 않는다.",
     "근거 3개, 반대 근거 2개, 다음 확인 2개 이내로 쓴다.",
     "입력에 없는 목표가, 손절가, 비중, 확률, 점수는 만들지 않는다.",
     "쉬운 한국어로 쓰고 내부 변수명과 TypeDB 식별자는 사용자 설명문에 노출하지 않는다.",
+    "사용자 표시 문장은 모두 존댓말 완결문으로 쓴다. '가설 관계', '행동 적격성', '시스템 준비 상태', '독립 결과' 같은 구현 용어 대신 실제 가격·수급·재무 변화와 그 의미를 직접 설명한다.",
     "currentActionPlan은 행동 코드나 '관찰한다'만 반복하지 말고 지금 할 일과 보류할 일을 명확히 쓴다. nextActionPlan은 '다음 추론에서 확인'처럼 쓰지 말고 실제로 관찰할 가격·거래량·수급·실적·공시·거시 지표와 판단 결과를 쓴다.",
     "설명 문장 없이 응답 스키마를 따르는 JSON 객체 하나만 출력한다.",
 )

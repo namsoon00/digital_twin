@@ -30,6 +30,7 @@ from digital_twin.infrastructure import news_sources
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text, news_article_identity_token
 from digital_twin.news_intelligence.domain.provenance import resolve_source_provenance
 from digital_twin.news_intelligence.domain.article_quality import inspect_article_body
+from digital_twin.news_intelligence.domain.eligibility import review_classification
 from digital_twin.news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 
@@ -72,6 +73,22 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertTrue(enqueuer.item_analysis_is_current(item))
         item["_newsAiAnalysisCurrent"] = False
         self.assertFalse(enqueuer.item_analysis_is_current(item))
+        state, reasons = review_classification({
+            "articleFacts": {
+                "bodyQualityIssues": [],
+                "decisionInlineReasonKo": "제목과 본문이 서로 달라 인라인 알림으로 사용할 수 없다.",
+            },
+            "aiAnalysis": {
+                "needsReview": True,
+                "decisionInlineEligible": False,
+                "reasoningLimitations": ["제목과 본문 간 사건 불일치"],
+                "contrastSignals": [
+                    "제목은 교육환경 개선이지만 본문은 자회사 나스닥 상장 추진을 다룸",
+                ],
+            },
+        })
+        self.assertEqual("content-invalid", state)
+        self.assertIn("ai-detected-content-mismatch", reasons)
 
     def test_reference_prompt_does_not_require_direct_decision_inline_permission(self):
         payload = {
@@ -103,6 +120,17 @@ class NewsCollectionQualityTests(unittest.TestCase):
 
         self.assertFalse(quality.passed)
         self.assertIn("body-truncated-at-cap", quality.issues)
+        contaminated = inspect_article_body(
+            "Google 검색에서 한국경제 기사를 더 자주 볼 수 있습니다. AI 채용이 늘고 있다... "
+            "[단독] LG전자 자회사 베어로보틱스, 나스닥 상장 도전... "
+            "LG전자 로봇 관절 액추에이터 공급 추진... 집 뒷마당에서 잭팟... "
+            "강남 아파트 집주인이 돌변한 이유...",
+            minimum_chars=120,
+            target_terms=["LG전자"],
+        )
+        self.assertFalse(contaminated.passed)
+        self.assertIn("publisher-navigation", contaminated.issues)
+        self.assertIn("headline-list-contamination", contaminated.issues)
         item = self.evidence({
             "relationScope": "direct",
             "articleText": "Apple changed its annual revenue guidance. " * 8,

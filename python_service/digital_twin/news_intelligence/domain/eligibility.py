@@ -7,7 +7,7 @@ from .entity_resolution import TargetEntityResolution, matched_aliases, resolve_
 from .provenance import annotate_source_provenance, resolve_source_provenance
 
 
-NEWS_ELIGIBILITY_VERSION = "news-eligibility-v2"
+NEWS_ELIGIBILITY_VERSION = "news-eligibility-v3-title-body-consistency"
 INVESTABLE_SCOPES = {"direct", "related_product", "peer", "sector", "market"}
 USABLE_ANALYSIS_STATUSES = {"ok", "complete", "completed"}
 HARD_BODY_ISSUES = {
@@ -21,7 +21,9 @@ HARD_BODY_ISSUES = {
     "embedded-instruction-text",
 }
 HARD_REVIEW_RE = re.compile(
-    r"본문\s*(?:오염|불일치)|다른\s*기사|무관한\s*(?:기사|본문)|기사\s*본문\s*대신|"
+    r"본문\s*(?:오염|불일치)|제목(?:과|·|/)\s*본문(?:\s*간|이|의)?[^.!?]{0,40}"
+    r"(?:불일치|다르|일치하지)|제목과\s*내용(?:이|의)?[^.!?]{0,30}(?:불일치|다르)|"
+    r"다른\s*기사|무관한\s*(?:기사|본문)|기사\s*본문\s*대신|"
     r"사이트\s*(?:메뉴|탐색)|source\s*content\s*contamination|body\s*contamination|"
     r"title\s*(?:and|/)\s*body\s*mismatch",
     re.IGNORECASE,
@@ -46,6 +48,21 @@ def _bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
     return _text(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _review_text_values(value: object) -> List[str]:
+    if isinstance(value, dict):
+        rows: List[str] = []
+        for item in value.values():
+            rows.extend(_review_text_values(item))
+        return rows
+    if isinstance(value, (list, tuple, set)):
+        rows = []
+        for item in value:
+            rows.extend(_review_text_values(item))
+        return rows
+    text = _text(value)
+    return [text] if text else []
 
 
 @dataclass(frozen=True)
@@ -106,11 +123,15 @@ def review_classification(payload: Dict[str, object]) -> tuple:
     reasons: List[str] = []
     if issues.intersection(HARD_BODY_ISSUES):
         reasons.append("content-quality-hard-failure")
-    review_text = " ".join([
-        *[_text(value) for value in analysis.get("reasoningLimitations") or []],
-        _text(analysis.get("validationReasonKo")),
-        _text(payload.get("analysisConflictReasonKo")),
-    ])
+    review_text = " ".join(_review_text_values([
+        analysis.get("reasoningLimitations"),
+        analysis.get("contrastSignals"),
+        analysis.get("riskSignals"),
+        analysis.get("validationReasonKo"),
+        analysis.get("decisionInlineReasonKo"),
+        facts.get("decisionInlineReasonKo"),
+        payload.get("analysisConflictReasonKo"),
+    ]))
     if HARD_REVIEW_RE.search(review_text):
         reasons.append("ai-detected-content-mismatch")
     reasons = list(dict.fromkeys(reasons))

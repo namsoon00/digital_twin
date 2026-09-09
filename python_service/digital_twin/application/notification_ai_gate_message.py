@@ -8,7 +8,7 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
     ZoneInfo = None
 
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
-from ..domain.alert_formatting import compact_number, price_money, signed_pct, trade_strength_label
+from ..domain.alert_formatting import compact_multiple, compact_number, price_money, signed_pct, trade_strength_label
 from ..domain.company_knowledge import active_company_valuation_rule_ids
 from ..domain.customer_evidence_explanation import (
     customer_evidence_rows,
@@ -62,6 +62,7 @@ from ..domain.notification_ai_gate_text import (
     append_unique_text,
     customer_visible_ai_text,
     reference_date,
+    user_friendly_ai_text,
 )
 from ..domain.notification_ai_gate_validation import (
     _driver_rows,
@@ -77,6 +78,7 @@ from ..domain.notification_start_badge import (
 from ..domain.notification_text_formatting import absolute_beginner_friendly_text, beginner_friendly_text
 from ..domain.notification_ontology_sections import relation_axis_summary_lines
 from .notification_message_metrics import _profit_loss_change_summary
+from .typedb_observation_message import typedb_observation_telegram_message
 
 
 MESSAGE_CONTEXT_ROW_LIMIT = 5
@@ -3992,7 +3994,15 @@ def compact_execution_flow_line(context: Dict[str, object]) -> str:
 def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
     facts = relation_facts(context or {})
     current_price = _number(facts.get("currentPrice"))
-    currency = str(facts.get("currency") or ("USD" if str(facts.get("market") or "").upper() == "US" else "KRW"))
+    relation = relation_context_value(context or {})
+    subject = relation.get("subject") if isinstance(relation.get("subject"), dict) else {}
+    market = str(
+        facts.get("market")
+        or subject.get("market")
+        or context.get("market")
+        or ""
+    ).upper()
+    currency = str(facts.get("currency") or ("USD" if market == "US" else "KRW"))
     current = price_money(current_price, currency) if current_price > 0 else _plain_value(context, "현재가")
     pnl = ""
     if not is_watchlist_context(context or {}):
@@ -4013,7 +4023,7 @@ def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
     if volume > 0:
         volume_row = "거래량 " + compact_number(volume)
         if volume_ratio > 0:
-            volume_row += " · 평균 대비 " + _compact_decimal(volume_ratio, 2) + "배"
+            volume_row += " · 평균 대비 " + compact_multiple(volume_ratio)
         rows.append(volume_row)
     investor = compact_investor_flow_line(context)
     if investor:
@@ -4359,7 +4369,12 @@ def compact_next_action_line(context: Dict[str, object], response: NotificationA
 
 
 def compact_invalidation_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    value = compact_sentence_count(_derived_invalidation_condition(context, response), 1)
+    value = compact_sentence_count(
+        customer_visible_ai_text(_derived_invalidation_condition(context, response)),
+        1,
+    )
+    value = value.replace("가설을 무효화", "관점을 취소")
+    value = value.replace("가설이 무효화", "관점이 취소")
     return value or "현재 근거가 사라지거나 반대 근거가 새로 확인되면 이 판단을 다시 봅니다."
 
 
@@ -4750,6 +4765,136 @@ def _is_research_narrative_response(
     )
 
 
+def _message_claim_key(value: object) -> set:
+    text = re.sub(r"<[^>]+>", " ", customer_visible_ai_text(value)).casefold()
+    return {
+        token
+        for token in re.findall(r"[0-9a-z가-힣]+", text)
+        if len(token) > 1
+        and token not in {"현재", "이번", "판단", "투자", "확인", "합니다", "됩니다"}
+    }
+
+
+def _polite_customer_text(value: object) -> str:
+    text = user_friendly_ai_text(value, 700)
+    replacements = (
+        (r"앞선다(?=[.!?]|$)", "앞섭니다"),
+        (r"됐다(?=[.!?]|$)", "됐습니다"),
+        (r"아니다(?=[.!?]|$)", "아닙니다"),
+        (r"필요하다(?=[.!?]|$)", "필요합니다"),
+        (r"되지 않는다(?=[.!?]|$)", "되지 않습니다"),
+        (r"하지 않는다(?=[.!?]|$)", "하지 않습니다"),
+        (r"않는다(?=[.!?]|$)", "않습니다"),
+        (r"한다(?=[.!?]|$)", "합니다"),
+        (r"된다(?=[.!?]|$)", "됩니다"),
+        (r"이다(?=[.!?]|$)", "입니다"),
+        (r"있다(?=[.!?]|$)", "있습니다"),
+        (r"없다(?=[.!?]|$)", "없습니다"),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+    if re.search(r"(?:습니다|입니다|합니다|됩니다|됐습니다|아닙니다)$", text):
+        text += "."
+    return text
+
+
+def _complete_next_check_row(value: object) -> str:
+    text = _polite_customer_text(value).strip()
+    if not text or text.endswith((".", "!", "?")):
+        return text
+    for ending, particle in (
+        ("여부", "를"),
+        ("변화", "를"),
+        ("방향", "을"),
+        ("상태", "를"),
+        ("수치", "를"),
+        ("시점", "을"),
+        ("값", "을"),
+    ):
+        if text.endswith(ending):
+            return text + particle + " 확인합니다."
+    return text
+
+
+def _complete_condition_row(value: object, consequence: str) -> str:
+    text = _polite_customer_text(value).strip()
+    if not text:
+        return ""
+    if text.endswith(("습니다.", "입니다.", "합니다.", "됩니다.", "아닙니다.")):
+        return text
+    clean = text.rstrip(".")
+    if clean.endswith(("경우", "때", "되면", "하면", "이면")):
+        return clean + ", " + consequence
+    return text
+
+
+def _same_message_claim(left: object, right: object) -> bool:
+    if _same_compact_message_text(left, right):
+        return True
+    left_tokens = _message_claim_key(left)
+    right_tokens = _message_claim_key(right)
+    if not left_tokens or not right_tokens:
+        return False
+    overlap = len(left_tokens & right_tokens)
+    return overlap >= 3 and overlap / min(len(left_tokens), len(right_tokens)) >= 0.72
+
+
+def _distinct_message_rows(values: List[object], limit: int = 3) -> List[str]:
+    rows: List[str] = []
+    for value in values or []:
+        text = compact_sentence_count(_polite_customer_text(value), 2)
+        if not text or compact_reason_is_internal(text):
+            continue
+        if any(_same_message_claim(text, existing) for existing in rows):
+            continue
+        rows.append(text)
+        if len(rows) >= max(1, int(limit or 1)):
+            break
+    return rows
+
+
+def _insight_transition_line(
+    context: Dict[str, object],
+    assessment: Dict[str, object],
+) -> str:
+    transition = (
+        dict(context.get("investmentInsightTransition") or {})
+        if isinstance(context.get("investmentInsightTransition"), dict)
+        else {}
+    )
+    kind = str(transition.get("kind") or "").strip().lower()
+    if kind == "initial-insight":
+        return "가격·수급·사건 근거를 함께 비교한 첫 AI 투자 관점입니다."
+    if transition.get("material") is not True:
+        return ""
+    changes = set(transition.get("changes") or [])
+    values = []
+    if "direction-changed" in changes and assessment.get("directionLabel"):
+        values.append("방향: " + customer_visible_ai_text(assessment.get("directionLabel")))
+    if "horizon-changed" in changes and assessment.get("horizonLabel"):
+        values.append("관찰 기간: " + customer_visible_ai_text(assessment.get("horizonLabel")))
+    if "conviction-changed" in changes and assessment.get("convictionLabel"):
+        values.append("근거 강도: " + customer_visible_ai_text(assessment.get("convictionLabel")))
+    if "dominant-thesis-changed" in changes:
+        thesis = compact_sentence_count(
+            _polite_customer_text(assessment.get("dominantThesis") or ""),
+            1,
+        )
+    else:
+        thesis = ""
+    if not values and not thesis:
+        return ""
+    rows = []
+    if values:
+        rows.append("이전 알림과 비교한 변경 항목: " + " · ".join(values) + ".")
+    if thesis:
+        rows.append(
+            ("새 핵심 설명입니다. " if values else "핵심 설명이 바뀌었습니다. ")
+            + thesis
+        )
+    return " ".join(rows)
+
+
 def research_narrative_telegram_message(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
@@ -4766,19 +4911,22 @@ def research_narrative_telegram_message(
         if isinstance(response.insight_assessment, dict)
         else {}
     )
-    direction = str(assessment.get("direction") or "balanced").strip().lower()
-    direction_icon = {"positive": "🟢", "negative": "🔴", "balanced": "⚖️"}.get(
-        direction,
-        "🧭",
+    direction = str(assessment.get("direction") or "").strip().lower()
+    direction_label = _polite_customer_text(
+        assessment.get("directionLabel")
+        or {
+            "positive": "상승 요인 우세",
+            "negative": "하락 위험 우세",
+            "balanced": "상·하방 근거 혼재",
+        }.get(direction, "")
     )
-    direction_label = customer_visible_ai_text(
-        assessment.get("directionLabel") or "투자 관점"
-    )
-    headline = direction_icon + " " + (
-        ((target_name + " · ") if target_name else "") + direction_label
-    )
+    headline = "🧠 AI 투자 인사이트" if assessment else "🧠 AI 관계 해석"
+    if target_name:
+        headline += " · " + target_name
+    if direction_label:
+        headline += " · " + direction_label
     thesis = compact_sentence_count(
-        customer_visible_ai_text(
+        _polite_customer_text(
             assessment.get("dominantThesis")
             or response.summary
             or response.investment_view
@@ -4787,58 +4935,82 @@ def research_narrative_telegram_message(
         2,
     )
     mechanism = compact_sentence_count(
-        customer_visible_ai_text(assessment.get("causalMechanism") or ""),
+        _polite_customer_text(assessment.get("causalMechanism") or ""),
         2,
     )
     implication = compact_sentence_count(
-        customer_visible_ai_text(assessment.get("investmentImplication") or ""),
+        _polite_customer_text(assessment.get("investmentImplication") or ""),
         2,
     )
     action_plan = compact_sentence_count(
-        customer_visible_ai_text(response.current_action_plan or response.execution_decision or ""),
-        2,
-    ) or "현재 관점은 참고하되 새 주문 신호로 사용하지 않습니다."
-    catalysts = [
-        compact_sentence_count(customer_visible_ai_text(item), 1)
-        for item in assessment.get("catalysts") or []
-        if customer_visible_ai_text(item)
-    ][:2]
-    risks = [
-        compact_sentence_count(customer_visible_ai_text(item), 1)
-        for item in assessment.get("risks") or []
-        if customer_visible_ai_text(item)
-    ][:2]
-    counter_status = str(
-        assessment.get("counterEvidenceStatus")
-        or response.counter_evidence_status
-        or ""
-    ).strip().lower()
-    invalidation = compact_sentence_count(
-        customer_visible_ai_text(
-            assessment.get("invalidationCondition")
-            or response.invalidation_condition
-            or ""
-        ),
+        _polite_customer_text(response.current_action_plan or response.execution_decision or ""),
         2,
     )
-    if compact_reason_is_internal(invalidation):
-        invalidation = ""
-    if not catalysts:
-        next_plan = compact_sentence_count(
-            customer_visible_ai_text(response.next_action_plan or ""),
-            1,
+    if not action_plan:
+        action_plan = (
+            "지금은 신규 주문 없이 아래 확인 조건을 기다립니다."
+            if is_watchlist_context(context)
+            else "지금은 보유 수량을 바꾸지 않고 아래 확인 조건을 기다립니다."
         )
-        if next_plan:
-            catalysts.append(next_plan)
+    catalysts = [
+        compact_sentence_count(_polite_customer_text(item), 1)
+        for item in assessment.get("catalysts") or []
+        if _polite_customer_text(item)
+    ][:2]
+    risks = [
+        compact_sentence_count(_polite_customer_text(item), 1)
+        for item in assessment.get("risks") or []
+        if _polite_customer_text(item)
+    ][:2]
     flow_limit = 4 if normalized_detail == "concise" else 6
     flow_rows = [
         item for item in compact_current_flow_rows(context)
         if not str(item or "").startswith("현재 공급자 미지원:")
     ][:flow_limit]
     meta = " · ".join(part for part in [
-        customer_visible_ai_text(assessment.get("horizonLabel") or ""),
-        customer_visible_ai_text(assessment.get("convictionLabel") or ""),
+        _polite_customer_text(assessment.get("horizonLabel") or ""),
+        _polite_customer_text(assessment.get("convictionLabel") or ""),
     ] if part)
+    judgment_rows = _distinct_message_rows([thesis, implication], 2)
+    mechanism_rows = _distinct_message_rows([mechanism], 1)
+    mechanism_rows = [
+        row for row in mechanism_rows
+        if not any(_same_message_claim(row, existing) for existing in judgment_rows)
+    ]
+    transition_line = _insight_transition_line(context, assessment)
+    follow_up_rows = customer_follow_up_rows(context, response, limit=3)
+    assessment_invalidation = compact_sentence_count(
+        _polite_customer_text(assessment.get("invalidationCondition") or ""),
+        1,
+    )
+    if (
+        assessment_invalidation
+        and is_concrete_observable_condition(assessment_invalidation)
+        and not compact_reason_is_internal(assessment_invalidation)
+    ):
+        append_unique_text(follow_up_rows, "판단 취소 조건: " + assessment_invalidation, 420)
+    follow_up_rows = _distinct_message_rows(follow_up_rows, 3)
+    next_check_rows = []
+    decision_change_rows = []
+    for row in follow_up_rows:
+        if row.startswith("다음 확인: "):
+            next_check_rows.append(
+                _complete_next_check_row(row[len("다음 확인: "):].strip())
+            )
+        else:
+            decision_change_rows.append(row)
+    catalysts = [
+        row for row in _distinct_message_rows(catalysts, 2)
+        if not any(_same_message_claim(row, existing) for existing in follow_up_rows)
+    ]
+    catalysts = [
+        _complete_condition_row(row, "현재 관점이 강해집니다.")
+        for row in catalysts
+    ]
+    risks = [
+        _complete_condition_row(row, "현재 관점이 약해집니다.")
+        for row in _distinct_message_rows(risks, 2)
+    ]
 
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
@@ -4846,39 +5018,36 @@ def research_narrative_telegram_message(
     ]
     if meta:
         parts.append("<i>" + html.escape(meta, quote=False) + "</i>")
-    if thesis:
-        parts.extend(["", "<b>핵심 판단</b>", _html_bullet(thesis, level)])
-    if mechanism:
-        parts.extend(["", "<b>왜 그렇게 보나</b>", _html_bullet(mechanism, level)])
-    if implication:
-        parts.extend(["", "<b>투자 의미</b>", _html_bullet(implication, level)])
-    parts.extend(["", "<b>현재 대응</b>", _html_bullet(action_plan, level)])
+    if transition_line:
+        parts.extend(["", "<b>이번에 달라진 점</b>", _html_bullet(transition_line, level)])
+    if judgment_rows:
+        parts.extend(["", "<b>현재 판단</b>", *[_html_bullet(row, level) for row in judgment_rows]])
+    if mechanism_rows:
+        parts.extend(["", "<b>근거 연결</b>", *[_html_bullet(row, level) for row in mechanism_rows]])
+    parts.extend(["", "<b>지금 할 일</b>", _html_bullet(action_plan, level)])
     if catalysts:
         parts.extend([
             "",
-            "<b>관점을 강화할 촉매</b>",
+            "<b>관점을 강화하는 조건</b>",
             *[_html_bullet(item, level) for item in catalysts],
+        ])
+    if next_check_rows:
+        parts.extend([
+            "",
+            "<b>다음 확인</b>",
+            *[_html_bullet(item, level) for item in next_check_rows],
         ])
     if risks:
         parts.extend([
             "",
-            "<b>반대 시나리오</b>",
+            "<b>판단을 약화할 조건</b>",
             *[_html_bullet(item, level) for item in risks],
         ])
-    elif counter_status == "none-found":
-        parts.extend([
-            "",
-            "<b>반대 근거 확인</b>",
-            _html_bullet(
-                "모든 후보 근거를 비교했으며, 현재 방향을 뒤집는 검증된 반대 사실은 확인되지 않았습니다.",
-                level,
-            ),
-        ])
-    if invalidation:
+    if decision_change_rows:
         parts.extend([
             "",
             "<b>판단이 바뀌는 조건</b>",
-            _html_bullet(invalidation, level),
+            *[_html_bullet(row, level) for row in decision_change_rows],
         ])
     if flow_rows:
         parts.extend(["", "<b>현재 수치</b>", *[
@@ -4907,6 +5076,20 @@ def execution_telegram_message_decision_first(
     detail_level: str = "concise",
 ) -> str:
     """Render one customer decision contract; keep implementation audit on web."""
+
+    dispatch = (
+        context.get("inferenceDispatchDecision")
+        if isinstance(context.get("inferenceDispatchDecision"), dict)
+        else {}
+    )
+    if (
+        is_typedb_context_observation_notification(context or {})
+        and (
+            str(context.get("notificationDecisionOwner") or "").strip().lower() == "typedb"
+            or str(dispatch.get("route") or "").strip().upper() == "PUBLISH_TYPEDB"
+        )
+    ):
+        return typedb_observation_telegram_message(context, response, detail_level)
 
     if _is_research_narrative_response(context, response):
         return research_narrative_telegram_message(
@@ -4941,11 +5124,17 @@ def execution_telegram_message_decision_first(
         else {}
     )
     review_only = str(actionability.get("status") or "") == "review-only"
+    target_name = target_name_for_headline(target)
     if review_only:
-        target_name = target_name_for_headline(target)
-        headline = "🔎 " + (((target_name + " · ") if target_name else "") + "판단 보류")
+        headline = "🧠 AI 투자 검토"
+        if target_name:
+            headline += " · " + target_name
+        headline += " · 판단 보류"
     else:
-        headline = execution_headline(context, response)
+        headline = "🧠 AI 투자 판단"
+        if target_name:
+            headline += " · " + target_name
+        headline += " · " + action_headline(response, context)
     evidence_rows = full_decision_evidence_rows(context, response)
     reason_rows = _decision_first_reason_rows(context, response, evidence_rows)[
         :limits["reason"]
@@ -5060,17 +5249,29 @@ def execution_telegram_message_decision_first(
         ] if part)
         if insight_meta:
             parts.append("<i>" + html.escape(insight_meta, quote=False) + "</i>")
-        for title, key in (
-            ("핵심 투자 관점", "dominantThesis"),
-            ("왜 그렇게 보나", "causalMechanism"),
-            ("투자 의미", "investmentImplication"),
-        ):
-            text = compact_sentence_count(
-                customer_visible_ai_text(insight_assessment.get(key) or ""),
-                2,
-            )
-            if text:
-                parts.extend(["", "<b>" + title + "</b>", _html_bullet(text, level)])
+        judgment_rows = _distinct_message_rows([
+            insight_assessment.get("dominantThesis"),
+            insight_assessment.get("investmentImplication"),
+        ], 2)
+        mechanism_rows = _distinct_message_rows([
+            insight_assessment.get("causalMechanism"),
+        ], 1)
+        mechanism_rows = [
+            row for row in mechanism_rows
+            if not any(_same_message_claim(row, existing) for existing in judgment_rows)
+        ]
+        transition_line = _insight_transition_line(context, insight_assessment)
+        if transition_line:
+            parts.extend(["", "<b>이번에 달라진 점</b>", _html_bullet(transition_line, level)])
+        if judgment_rows:
+            parts.extend(["", "<b>현재 판단</b>", *[_html_bullet(row, level) for row in judgment_rows]])
+        if mechanism_rows:
+            parts.extend(["", "<b>근거 연결</b>", *[_html_bullet(row, level) for row in mechanism_rows]])
+        used_insight_rows = [*judgment_rows, *mechanism_rows]
+        reason_rows = [
+            row for row in reason_rows
+            if not any(_same_message_claim(row, used) for used in used_insight_rows)
+        ]
     parts.extend(["", "<b>지금 할 일</b>", _html_bullet(action_line, level)])
     transition = compact_decision_transition(context, response)
     transition_state = ai_decision_transition_from_context(context)
@@ -5096,19 +5297,6 @@ def execution_telegram_message_decision_first(
         parts.extend(["", "<b>판단 이유</b>", *[_html_bullet(row, level) for row in reason_rows]])
     if counter_rows:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
-    elif (
-        insight_publishable
-        and str(insight_assessment.get("counterEvidenceStatus") or "").strip().lower()
-        == "none-found"
-    ):
-        parts.extend([
-            "",
-            "<b>반대 근거 확인</b>",
-            _html_bullet(
-                "모든 후보 근거를 비교했으며, 현재 방향을 뒤집는 검증된 반대 사실은 확인되지 않았습니다.",
-                level,
-            ),
-        ])
     news_row = compact_news_impact_html_row(context, level)
     if news_row:
         parts.extend(["", "<b>관련 사건</b>", news_row])

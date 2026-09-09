@@ -54,6 +54,16 @@ INTERNAL_VARIABLE_TEXT_REPLACEMENTS = [
     ("weakenConditions", "의견이 약해지는 조건"),
 ]
 USER_FRIENDLY_REPLACEMENTS = [
+    ("연구 선두 가설", "현재 우선 관점"),
+    ("연구 가설", "현재 관점"),
+    ("가설 관계", "관계 신호"),
+    ("설명 관계", "관계 신호"),
+    ("행동 적격성", "주문 판단 요건"),
+    ("시스템 준비 상태", "필수 데이터 상태"),
+    ("행동 검증", "주문 판단 검증"),
+    ("조건부 통계 검증 결과", "조건부 검증 신호"),
+    ("통계 검증 결과", "검증 신호"),
+    ("독립 결과", "독립 근거"),
     ("손실 보유 + 기준선 이탈 -> 손실 관리", "손실이 커지고 주요 평균선 아래에 있어 손실 관리"),
     ("추세 훼손 + 하락 가속 -> 리스크 강화", "주요 평균선 아래에서 하락 속도가 빨라져 위험 증가"),
     ("보유 종목 + 추세 훼손 -> 추가매수 보류", "보유 종목의 가격 흐름이 약해져 추가매수 보류"),
@@ -135,13 +145,14 @@ def customer_visible_ai_text(value: object) -> str:
             flags=re.IGNORECASE,
         )
     result = INTERNAL_METADATA_TAIL_PATTERN.sub("", result).strip(" ·,;/: ")
-    if any(field in result for field in ("expectedEPS", "fairValue", "targetPER")):
-        from .customer_evidence_explanation import customer_data_limitation_text
+    from .customer_evidence_explanation import FIELD_LABELS, customer_safe_text
 
-        result = customer_data_limitation_text(result)
-    if re.search(r"\b(?:HAS|MATCHES|BLOCKS|MITIGATES)_[A-Z0-9_]+\b", result):
-        from .customer_evidence_explanation import customer_safe_text
-
+    if (
+        any(field in result for field in FIELD_LABELS)
+        or re.search(r"\b(?:HAS|MATCHES|BLOCKS|MITIGATES)_[A-Z0-9_]+\b", result)
+        or re.search(r"\bevent-[a-z0-9_.-]+\b", result, flags=re.IGNORECASE)
+        or re.search(r"(?<![\d.])-?\d+\.\d{5,}(?!\d)", result)
+    ):
         result = customer_safe_text(result)
     if INTERNAL_IDENTIFIER_ONLY_PATTERN.match(result):
         return ""

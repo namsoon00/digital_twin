@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, List
 
 
-ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v5-completeness"
+ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v6-feed-contamination"
 CONTAMINATION_PATTERNS = (
     ("publisher-navigation", re.compile(r"\b(?:continue reading|read more|more from|recommended stor(?:y|ies))\b", re.IGNORECASE)),
     ("investment-promotion", re.compile(r"\b(?:is now the time to buy|missed nvidia|top \d+ stocks to buy)\b", re.IGNORECASE)),
@@ -11,6 +11,7 @@ CONTAMINATION_PATTERNS = (
     ("related-news-tail", re.compile(r"(?:관련\s*뉴스|함께\s*본\s*뉴스|추천\s*기사|많이\s*본\s*기사|S&P\s*500\s*기업\s*중)", re.IGNORECASE)),
     ("live-widget", re.compile(r"\[\s*스팟\s*Live\s*\]", re.IGNORECASE)),
     ("publisher-navigation", re.compile(r"(?:최신\s*뉴스|주요\s*뉴스|실시간\s*인기|기사\s*더보기|다음\s*기사|what are you looking for)", re.IGNORECASE)),
+    ("publisher-navigation", re.compile(r"Google\s*검색에서[^.!?]{0,100}(?:기사|뉴스)", re.IGNORECASE)),
     ("publisher-navigation", re.compile(r"\b(?:view on|open in app|continue on)\b", re.IGNORECASE)),
     ("investment-promotion", re.compile(r"\b(?:don['’]?t wait|act now|limited time)\b", re.IGNORECASE)),
 )
@@ -72,7 +73,13 @@ def inspect_article_body(
         issues.append("embedded-instruction-text")
     for issue, pattern in CONTAMINATION_PATTERNS:
         match = pattern.search(text)
-        if match and (match.start() >= 80 or issue in {"investment-promotion", "live-widget"}):
+        if match and (
+            match.start() >= 80
+            or issue in {
+                "publisher-navigation", "related-news-tail", "investment-promotion",
+                "advertising-block", "live-widget",
+            }
+        ):
             issues.append(issue)
     sentences = [part.strip().casefold() for part in SENTENCE_SPLIT_RE.split(text) if len(part.strip()) >= 24]
     if len(sentences) >= 3 and len(set(sentences)) / len(sentences) < 0.72:
@@ -88,6 +95,8 @@ def inspect_article_body(
         if any(re.search(re.escape(alias), line, re.IGNORECASE) for alias in aliases)
     ])
     if len(lines) >= 6 and len(headline_like) >= 4 and len(headline_like) / len(lines) >= 0.55:
+        issues.append("headline-list-contamination")
+    if len(lines) <= 2 and text.count("...") >= 3:
         issues.append("headline-list-contamination")
     if aliases and len(lines) >= 6 and target_line_count <= 1 and len(headline_like) >= 4:
         issues.append("target-context-diluted")

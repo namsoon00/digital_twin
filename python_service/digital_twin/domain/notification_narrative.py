@@ -766,10 +766,20 @@ def narrative_claim_evidence_contract(
     }
 
 
-def compact_narrative_claim_evidence_contract() -> Dict[str, object]:
+def compact_narrative_claim_evidence_contract(
+    evidence_ledger: Iterable[Mapping[str, object]] = (),
+) -> Dict[str, object]:
     """Represent section permissions by ledger role without repeating IDs."""
 
-    return {
+    rows = [dict(item) for item in evidence_ledger or [] if isinstance(item, Mapping)]
+    preferred_observed_ids = _unique([
+        item.get("evidenceId")
+        for kind_group in ({"fact", "derived"}, {"model-signal"})
+        for item in rows
+        if str(item.get("kind") or "") in kind_group
+        and bool(item.get("judgementEligible", True))
+    ], 6)
+    contract = {
         "version": NARRATIVE_CLAIM_CONTRACT_VERSION,
         "encoding": ROLE_INDEXED_CLAIM_CONTRACT_ENCODING,
         "sectionEvidenceRoles": {
@@ -793,6 +803,9 @@ def compact_narrative_claim_evidence_contract() -> Dict[str, object]:
             "unverifiedClaimsAreNotPublished": True,
         },
     }
+    if preferred_observed_ids:
+        contract["preferredObservedEvidenceIds"] = preferred_observed_ids
+    return contract
 
 
 def resolved_narrative_claim_evidence_contract(
@@ -804,7 +817,19 @@ def resolved_narrative_claim_evidence_contract(
     value = _mapping(contract)
     if _mapping(value.get("allowedEvidenceIdsBySection")):
         return value
-    return narrative_claim_evidence_contract(evidence_ledger)
+    resolved = narrative_claim_evidence_contract(evidence_ledger)
+    preferred = _unique(value.get("preferredObservedEvidenceIds") or [], 6)
+    if preferred:
+        allowed = _mapping(resolved.get("allowedEvidenceIdsBySection"))
+        recommended = _mapping(resolved.get("recommendedEvidenceIdsBySection"))
+        for section in ("view", "mechanism", "implication", "catalyst", "next-condition"):
+            allowed_ids = set(allowed.get(section) or [])
+            recommended[section] = _unique([
+                *[evidence_id for evidence_id in preferred if evidence_id in allowed_ids],
+                *(recommended.get(section) or []),
+            ], 4)
+        resolved["recommendedEvidenceIdsBySection"] = recommended
+    return resolved
 
 
 def normalize_narrative_claims(

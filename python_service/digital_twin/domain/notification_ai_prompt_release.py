@@ -243,7 +243,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
     "반대 근거 검사를 마친 뒤 counterEvidenceStatus를 쓴다. confirmed는 근거 ID가 연결된 counter 문장이 있을 때, none-found는 모든 입력을 검토해 반대 사실이 없을 때만 쓴다. 나머지 상태는 발행 불가다.",
     "사용자에게 보여줄 투자 관점, 인과 경로, 투자 의미, 촉매, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
-    "narrativeClaims는 section별 허용 근거만 쓴다. narrativeClaimContract.encoding이 role-indexed-v1이면 sectionEvidenceRoles와 evidenceLedger의 role·kind를 조합하고, 전체 ID 목록이 있으면 recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
+    "narrativeClaims는 section별 허용 근거만 쓴다. narrativeClaimContract.encoding이 role-indexed-v1이면 sectionEvidenceRoles와 evidenceLedger의 role·kind를 조합하고 preferredObservedEvidenceIds를 우선 함께 인용한다. 전체 ID 목록이 있으면 recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
     "invalidationCondition은 관측 대상과 변화 방향을 명시하고 검증된 next-condition 근거와 연결한다. 수치형 observable 필드가 있으면 followUpConditions로 구조화하되 입력에 없는 임계값은 만들지 않는다. 일반적인 '근거가 사라지면' 문장은 금지한다.",
     "TypeDB 규칙을 인용할 때 inference 근거와 같은 가설에 연결된 관찰 사실 ID도 함께 인용한다. evidenceBundlesByInference가 있으면 그 묶음을 따르고, 압축 계약이면 hypothesisSet의 근거 ID와 evidenceLedger를 따른다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",
     "확인된 사실은 명확히 말하고 가장 잘 지지되는 인과 해석을 결론으로 제시한다. 확인되지 않은 세부 원인이나 영향 규모만 limitation에 적고, 자료 한계를 알림의 중심 결론으로 만들지 않는다.",

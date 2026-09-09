@@ -552,13 +552,28 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         for evidence_id in hypothesis.get(key) or []
         if str(evidence_id or "").strip()
     }
+    source_ledger = [
+        item for item in core.get("evidenceLedger") or []
+        if isinstance(item, dict)
+    ]
+    available_evidence_ids = {
+        str(item.get("evidenceId") or "").strip()
+        for item in source_ledger
+        if str(item.get("evidenceId") or "").strip()
+    }
+    related_evidence_ids = {
+        str(related_id or "").strip()
+        for item in source_ledger
+        if str(item.get("evidenceId") or "").strip() in required_evidence_ids
+        for related_id in item.get("relatedEvidenceIds") or []
+        if str(related_id or "").strip() in available_evidence_ids
+    }
+    retained_evidence_ids = required_evidence_ids | related_evidence_ids
     ledger = []
     contextual_count = 0
-    for item in core.get("evidenceLedger") or []:
-        if not isinstance(item, dict):
-            continue
+    for item in source_ledger:
         evidence_id = str(item.get("evidenceId") or "").strip()
-        required = evidence_id in required_evidence_ids
+        required = evidence_id in retained_evidence_ids
         if not required and contextual_count >= 4:
             continue
         if not required:
@@ -566,16 +581,24 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         row = _selected(
             item,
             (
-                "evidenceId", "role", "kind", "judgementEligible",
+                "evidenceId", "role", "kind", "source", "sourceAsOf",
+                "freshness", "judgementEligible",
             ),
         )
-        row["label"] = _sentence_text(item.get("label"), 32)
-        if (
-            str(row.get("kind") or "") in {"fact", "derived"}
-            and item.get("value") not in (None, "")
-            and not isinstance(item.get("value"), (dict, list, tuple))
-        ):
-            row["value"] = item.get("value")
+        row["label"] = _sentence_text(item.get("label"), 140)
+        if item.get("value") not in (None, ""):
+            row["value"] = (
+                item.get("value")
+                if not isinstance(item.get("value"), (dict, list, tuple))
+                else _bounded_detail_bytes(item.get("value"), 360)
+            )
+        related_ids = [
+            str(value or "").strip()
+            for value in item.get("relatedEvidenceIds") or []
+            if str(value or "").strip() in retained_evidence_ids
+        ][:4]
+        if related_ids:
+            row["relatedEvidenceIds"] = related_ids
         ledger.append(row)
     retained_observed_fact_count = len([
         item for item in ledger
@@ -601,7 +624,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             retained_observed_fact_count += 1
             if retained_observed_fact_count >= 2:
                 break
-    claim_contract = compact_narrative_claim_evidence_contract()
+    claim_contract = compact_narrative_claim_evidence_contract(ledger)
     decision = _mapping(core.get("decision"))
     return {
         "schemaVersion": core.get("schemaVersion"),
@@ -1888,7 +1911,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         compact_ledger(3),
         max(3, len(required_evidence_ids)),
     )
-    fitted["narrativeClaimContract"] = compact_narrative_claim_evidence_contract()
+    fitted["narrativeClaimContract"] = compact_narrative_claim_evidence_contract(
+        fitted["evidenceLedger"]
+    )
     fitted["routingAudit"] = {
         "status": "minimum-decision-contract",
     }

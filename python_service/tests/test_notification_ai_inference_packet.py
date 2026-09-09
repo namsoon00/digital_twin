@@ -142,6 +142,23 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             }
             for index in range(8)
         ]
+        ledger[0].update({
+            "kind": "model-signal",
+            "value": {
+                "signalType": "price-trend-continuation-support",
+                "strengthBand": "strong",
+            },
+            "source": "statistical-signal-pipeline",
+            "relatedEvidenceIds": ["fact:currentPrice"],
+        })
+        ledger.append({
+            "evidenceId": "fact:currentPrice",
+            "role": "context",
+            "kind": "fact",
+            "label": "현재가",
+            "value": 1775000,
+            "judgementEligible": True,
+        })
         core = {
             "schemaVersion": "investment-ai-decision-core-v4",
             "reviewMode": "context-narrative",
@@ -234,6 +251,10 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         )
         claim_contract = fitted["narrativeClaimContract"]
         self.assertEqual("role-indexed-v1", claim_contract["encoding"])
+        self.assertEqual(
+            ["fact:currentPrice", "fact:volumeRatio"],
+            claim_contract["preferredObservedEvidenceIds"][:2],
+        )
         expanded_contract = resolved_narrative_claim_evidence_contract(
             claim_contract,
             fitted["evidenceLedger"],
@@ -249,6 +270,14 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         }
         self.assertEqual(1775000, ledger_by_id["fact:currentPrice"]["value"])
         self.assertEqual(0.84, ledger_by_id["fact:volumeRatio"]["value"])
+        self.assertEqual(
+            "strong",
+            ledger_by_id[required_evidence_ids[0]]["value"]["strengthBand"],
+        )
+        self.assertEqual(
+            ["fact:currentPrice"],
+            ledger_by_id[required_evidence_ids[0]]["relatedEvidenceIds"],
+        )
         self.assertLessEqual(
             len(json.dumps(fitted, ensure_ascii=False, separators=(",", ":")).encode()),
             15_220,

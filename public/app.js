@@ -16120,7 +16120,7 @@
     var candidate = decisionActionMeta(detail.candidateAction, detail.candidateAction);
     var dispatch = detail.dispatch || {};
     var dispatchLabel = dispatch.label || "연결 경로 미기록";
-    var dispatchReason = dispatch.deliveryReason || dispatch.reason || "과거 추론 기록에는 후속 처리 경로가 저장되지 않았습니다.";
+    var dispatchReason = dispatch.reason || dispatch.deliveryReason || "과거 추론 기록에는 후속 처리 경로가 저장되지 않았습니다.";
     var hypothesisBody = hypotheses.length ? '<div class="oa-assurance-groups"><section class="oa-assurance-group"><header><div><strong>경쟁 가설</strong><p>같은 TypeDB 세대에서 성립한 대안을 비교합니다.</p></div><span>' + escapeHtml(hypotheses.length) + '개</span></header><div>' + hypotheses.map(function (item) {
       var rules = Array.isArray(item.supportingRuleIds) ? item.supportingRuleIds : [];
       var evidence = Array.isArray(item.supportingEvidenceIds) ? item.supportingEvidenceIds : [];

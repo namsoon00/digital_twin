@@ -577,12 +577,11 @@ class InvestmentCaseQueryService:
             if not dispatch_route
             else "pass"
         )
-        dispatch_reason = text(
-            case.get("deliveryReason") or dispatch.get("reason")
-        ) or (
-            "과거 추론 기록에는 후속 처리 경로가 저장되지 않았습니다."
-            if not dispatch_route
-            else "현재 TypeDB 결과의 후속 처리 경로가 기록되어 있습니다."
+        dispatch_reason = (
+            text(dispatch.get("reason"))
+            or "현재 TypeDB 결과의 후속 처리 경로가 기록되어 있습니다."
+            if dispatch_route
+            else "과거 추론 기록에는 후속 처리 경로가 저장되지 않았습니다."
         )
         phase_label = (
             "최신 TypeDB 추론 · AI 해석 완료"

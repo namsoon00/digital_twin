@@ -398,6 +398,14 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             "suppressed",
             item["subjectDecisionCase"]["dispatch"]["deliveryState"],
         )
+        self.assertEqual(
+            "TypeDB 행동 후보를 AI 판단 단계로 전달했습니다.",
+            item["subjectDecisionCase"]["dispatch"]["reason"],
+        )
+        self.assertEqual(
+            "중요 상태 변화가 없어 웹 이력에만 저장합니다.",
+            item["subjectDecisionCase"]["dispatch"]["deliveryReason"],
+        )
         self.assertIn("AI 해석 완료", item["phaseLabel"])
         self.assertEqual(
             insight["insightAssessment"]["dominantThesis"],

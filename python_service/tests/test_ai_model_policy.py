@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -62,6 +63,11 @@ class AiModelPolicyTests(unittest.TestCase):
         disclosure_command.assert_called_once_with("medium")
         self.assertEqual("high", notification_command.call_args_list[0].kwargs["reasoning_effort"])
         self.assertEqual("max", notification_command.call_args_list[-1].kwargs["reasoning_effort"])
+        schema_path = notification_command.call_args_list[0].kwargs["output_schema_path"]
+        self.assertTrue(schema_path.is_file())
+        output_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertIn("action", output_schema["properties"])
+        self.assertEqual(False, output_schema["additionalProperties"])
 
         _CODEX_PREFLIGHT_CACHE.clear()
         fake_stat = type("Stat", (), {"st_mtime_ns": 1, "st_size": 2})()

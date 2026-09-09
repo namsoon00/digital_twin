@@ -130,14 +130,18 @@ def background_ai_runtime_dir() -> Path:
     return path
 
 
-def codex_process_arguments(reasoning_effort: str = "", working_directory: Path = None) -> list:
+def codex_process_arguments(
+    reasoning_effort: str = "",
+    working_directory: Path = None,
+    output_schema_path: Path = None,
+) -> list:
     """Build direct Codex argv without the cross-process guard wrapper."""
 
     executable = healthy_codex_executable()
     if not executable:
         return []
     runtime_dir = Path(working_directory or ROOT_DIR)
-    return [
+    arguments = [
         executable,
         *codex_cli_arguments(reasoning_effort),
         "-a",
@@ -149,8 +153,11 @@ def codex_process_arguments(reasoning_effort: str = "", working_directory: Path 
         "exec",
         "--skip-git-repo-check",
         "--ephemeral",
-        "-",
     ]
+    if output_schema_path:
+        arguments.extend(["--output-schema", str(Path(output_schema_path))])
+    arguments.append("-")
+    return arguments
 
 
 def background_codex_process_arguments(reasoning_effort: str = "max") -> list:

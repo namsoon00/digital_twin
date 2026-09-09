@@ -397,6 +397,8 @@ class DecisionContinuityTests(unittest.TestCase):
         )
         self.assertEqual("high", standard["reasoningEffort"])
         self.assertEqual("max", deep["reasoningEffort"])
+        self.assertEqual(24 * 1024, standard["maxPromptBytes"])
+        self.assertEqual(48 * 1024, deep["maxPromptBytes"])
 
     def test_notification_trace_states_quantity_change_without_claiming_causality(self):
         packet = DecisionContinuityService(EpisodeStore(prior_episode()), DomainStore()).build(

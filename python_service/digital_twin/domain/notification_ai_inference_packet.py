@@ -8,9 +8,10 @@ import json
 from typing import Dict, Iterable, Mapping, Tuple
 
 from .notification_ai_decision_brief import build_notification_ai_prompt_bundle
+from .notification_narrative import resolved_narrative_claim_evidence_contract
 
 
-AI_INFERENCE_PACKET_VERSION = "notification-ai-inference-packet-v1"
+AI_INFERENCE_PACKET_VERSION = "notification-ai-inference-packet-v2"
 
 
 def _json(value: object) -> str:
@@ -50,6 +51,7 @@ class NotificationAIInferencePacket:
     decision_brief_json: str
     context_routing_json: str
     prompt_release_json: str
+    prompt_budget_json: str
 
     @property
     def decision_core(self) -> Dict[str, object]:
@@ -66,6 +68,10 @@ class NotificationAIInferencePacket:
     @property
     def prompt_release(self) -> Dict[str, object]:
         return _load(self.prompt_release_json)
+
+    @property
+    def prompt_budget(self) -> Dict[str, object]:
+        return _load(self.prompt_budget_json)
 
     def bind_context(
         self,
@@ -85,8 +91,10 @@ class NotificationAIInferencePacket:
     def to_audit_dict(self, *, include_payload: bool = False) -> Dict[str, object]:
         release = self.prompt_release
         core = self.decision_core
-        contract = core.get("narrativeClaimContract")
-        contract = dict(contract or {}) if isinstance(contract, dict) else {}
+        contract = resolved_narrative_claim_evidence_contract(
+            core.get("narrativeClaimContract"),
+            core.get("evidenceLedger") or [],
+        )
         payload = {
             "version": AI_INFERENCE_PACKET_VERSION,
             "packetId": self.packet_id,
@@ -99,6 +107,7 @@ class NotificationAIInferencePacket:
             "decisionContractVersion": str(release.get("contractVersion") or ""),
             "promptReleaseFingerprint": str(release.get("fingerprint") or ""),
             "claimContract": contract,
+            "promptBudget": self.prompt_budget,
         }
         if include_payload:
             payload.update({
@@ -150,4 +159,5 @@ def build_notification_ai_inference_packet(
         decision_brief_json=_json(bundle.get("decisionBrief") or {}),
         context_routing_json=_json(bundle.get("contextRouting") or {}),
         prompt_release_json=_json(prompt_release),
+        prompt_budget_json=_json(bundle.get("promptBudget") or {}),
     )

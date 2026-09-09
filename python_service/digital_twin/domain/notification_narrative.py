@@ -23,6 +23,7 @@ from .notification_ai_context import relation_context_value
 NOTIFICATION_NARRATIVE_VERSION = "investment-notification-narrative-v1"
 NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v2"
 NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v2"
+ROLE_INDEXED_CLAIM_CONTRACT_ENCODING = "role-indexed-v1"
 
 CLAIM_SECTIONS = {
     "view", "mechanism", "implication", "catalyst", "change", "support",
@@ -765,6 +766,47 @@ def narrative_claim_evidence_contract(
     }
 
 
+def compact_narrative_claim_evidence_contract() -> Dict[str, object]:
+    """Represent section permissions by ledger role without repeating IDs."""
+
+    return {
+        "version": NARRATIVE_CLAIM_CONTRACT_VERSION,
+        "encoding": ROLE_INDEXED_CLAIM_CONTRACT_ENCODING,
+        "sectionEvidenceRoles": {
+            "view": ["support", "counter", "context"],
+            "mechanism": ["support", "counter", "context"],
+            "implication": ["support", "counter", "context"],
+            "catalyst": ["support", "counter", "context"],
+            "change": ["decision-transition"],
+            "support": ["support"],
+            "counter": ["counter"],
+            "next-condition": ["support", "counter", "context", "limitation"],
+            "limitation": ["limitation"],
+        },
+        "requirements": {
+            "allClaimsNeedEvidence": True,
+            "actionClaimsNeedJudgementEligibleEvidence": True,
+            "viewNeedsObservedState": True,
+            "mechanismNeedsObservedState": True,
+            "implicationNeedsObservedState": True,
+            "nextConditionNeedsObservableEvidence": True,
+            "unverifiedClaimsAreNotPublished": True,
+        },
+    }
+
+
+def resolved_narrative_claim_evidence_contract(
+    contract: object,
+    evidence_ledger: Iterable[Mapping[str, object]],
+) -> Dict[str, object]:
+    """Expand a compact prompt contract for deterministic post-AI validation."""
+
+    value = _mapping(contract)
+    if _mapping(value.get("allowedEvidenceIdsBySection")):
+        return value
+    return narrative_claim_evidence_contract(evidence_ledger)
+
+
 def normalize_narrative_claims(
     context: Mapping[str, object],
     payload: Mapping[str, object],
@@ -780,7 +822,10 @@ def normalize_narrative_claims(
         for item in ledger
         if isinstance(item, Mapping) and str(item.get("evidenceId") or "")
     }
-    claim_contract = _mapping(prepared.get("narrativeClaimContract"))
+    claim_contract = resolved_narrative_claim_evidence_contract(
+        prepared.get("narrativeClaimContract"),
+        ledger,
+    )
     allowed_by_section = _mapping(claim_contract.get("allowedEvidenceIdsBySection"))
     requested = payload.get("narrativeClaims") or payload.get("narrative_claims") or []
     narrative_only = bool(typedb_context_observation_contract(context or {}))

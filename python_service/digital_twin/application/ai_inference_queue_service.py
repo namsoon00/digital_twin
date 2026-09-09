@@ -754,9 +754,9 @@ class AIInferenceQueueRunner:
         self.max_prompt_bytes = _int_setting(
             self.settings,
             "notificationAiQueueMaxPromptBytes",
-            24 * 1024,
+            48 * 1024,
             12 * 1024,
-            24 * 1024,
+            64 * 1024,
         )
         repair_effort = str(
             self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
@@ -1082,6 +1082,7 @@ class AIInferenceQueueRunner:
             "decisionCore": decision_core,
             "contextRouting": context_routing,
             "promptRelease": prompt_release,
+            "promptBudget": packet.prompt_budget,
             "decisionContinuity": {
                 "contractVersion": str(continuity_packet.get("contractVersion") or ""),
                 "packetId": str(continuity_packet.get("packetId") or ""),

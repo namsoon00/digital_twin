@@ -8,9 +8,10 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v19"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v18"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v20"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v19"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
+AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
 
 
 AI_DECISION_RESPONSE_SCHEMA = {
@@ -85,13 +86,149 @@ AI_DECISION_RESPONSE_SCHEMA = {
 }
 
 
+def _object_schema(properties: Dict[str, object], required: List[str] = None) -> Dict[str, object]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(required or properties),
+        "additionalProperties": False,
+    }
+
+
+AI_DECISION_OUTPUT_JSON_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Orbit Alpha investment AI decision",
+    **_object_schema({
+        "action": {
+            "type": "string",
+            "enum": ["NO_ACTION", "BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID"],
+        },
+        "summary": {"type": "string"},
+        "currentActionPlan": {"type": "string"},
+        "executionDecision": {"type": "string"},
+        "changeAnalysis": {"type": "string"},
+        "nextActionPlan": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+        "counterEvidence": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+        "counterEvidenceStatus": {
+            "type": "string",
+            "enum": ["confirmed", "none-found", "not-checked", "unavailable"],
+        },
+        "narrativeClaims": {
+            "type": "array",
+            "items": _object_schema({
+                "claimId": {"type": "string"},
+                "section": {
+                    "type": "string",
+                    "enum": [
+                        "view", "mechanism", "implication", "catalyst", "change",
+                        "support", "counter", "next-condition", "limitation",
+                    ],
+                },
+                "text": {"type": "string"},
+                "evidenceIds": {"type": "array", "items": {"type": "string"}},
+            }),
+        },
+        "invalidationCondition": {"type": "string"},
+        "nextChecks": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+        "followUpConditions": {
+            "type": "array",
+            "items": _object_schema({
+                "field": {"type": "string"},
+                "operator": {"type": "string", "enum": [">", ">=", "<", "<=", "==", "!="]},
+                "threshold": {"type": "number"},
+                "purpose": {
+                    "type": "string",
+                    "enum": ["strengthen", "weaken", "invalidate", "switch"],
+                },
+                "label": {"type": "string"},
+                "onSatisfied": {"type": "string"},
+            }),
+        },
+        "missingDataImpact": {"type": "array", "items": {"type": "string"}},
+        "hypotheses": {
+            "type": "array",
+            "items": _object_schema({
+                "hypothesisId": {"type": "string"},
+                "templateId": {"type": "string"},
+                "claim": {"type": "string"},
+                "stance": {"type": "string", "enum": ["risk", "support", "uncertain", "context"]},
+                "evidenceReviewStatus": {
+                    "type": "string",
+                    "enum": ["all-input-evidence-reviewed"],
+                },
+                "verdict": {
+                    "type": "string",
+                    "enum": ["supported", "weakened", "rejected", "unresolved"],
+                },
+                "reasoning": {"type": "string"},
+            }),
+        },
+        "selectedHypothesisId": {"type": "string"},
+        "unresolvedQuestions": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+        "decisionReadiness": {
+            "type": "string",
+            "enum": ["ready", "conditional", "insufficient"],
+        },
+        "causalChain": {
+            "type": "array",
+            "items": _object_schema({
+                "driver": {"type": "string"},
+                "channel": {
+                    "type": "string",
+                    "enum": ["revenue", "cost", "cash-flow", "valuation", "flow", "risk"],
+                },
+                "expectedEffect": {"type": "string"},
+                "evidenceIds": {"type": "array", "items": {"type": "string"}},
+                "status": {
+                    "type": "string",
+                    "enum": ["supported", "contested", "unresolved"],
+                },
+            }),
+        },
+        "insightAssessment": _object_schema({
+            "direction": {"type": "string", "enum": ["positive", "balanced", "negative"]},
+            "directionLabel": {"type": "string"},
+            "horizon": {
+                "type": "string",
+                "enum": ["intraday", "short-term", "medium-term", "long-term", "multi-horizon"],
+            },
+            "horizonLabel": {"type": "string"},
+            "conviction": {"type": "string", "enum": ["tentative", "moderate", "strong"]},
+            "convictionLabel": {"type": "string"},
+            "dominantThesis": {"type": "string"},
+            "causalMechanism": {"type": "string"},
+            "investmentImplication": {"type": "string"},
+            "catalysts": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+            "risks": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+            "invalidationCondition": {"type": "string"},
+            "thesisKey": {"type": "string"},
+        }),
+        "alternativeAction": _object_schema({
+            "action": {
+                "type": "string",
+                "enum": ["BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID"],
+            },
+            "whyNotSelected": {"type": "string"},
+            "switchCondition": {"type": "string"},
+        }),
+        "epistemicSummary": {"type": "string"},
+        "disagreementReason": {"type": "string"},
+        "referenceDate": {"type": "string"},
+    }),
+}
+
+
+AI_DECISION_REQUIRED_RESPONSE_FIELDS = tuple(AI_DECISION_RESPONSE_SCHEMA)
+
+
 BASE_AI_DECISION_INSTRUCTIONS = (
     "너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는 최종 투자 판단 AI다.",
     "도구, 셸, 파일, 저장소, 웹을 사용하지 말고 제공된 DecisionCore만 읽어서 답한다.",
     "DecisionCore에 포함된 현재 사실, 행동 범위, 규칙, 가설, 직전 판단 변화만 사용한다.",
-    "reasoningLineage는 현재 종목의 불변 증거 경로다. identity의 종목·ABox 스냅샷·추론 세대와 proof의 ID가 일치하는 사실→관계→규칙→trace→가설 연결만 추론 근거로 사용한다.",
+    "reasoningLineage는 현재 종목의 검증된 증거 경로 또는 그 경로의 압축 증명이다. identity의 종목·ABox 스냅샷·추론 세대와 proof의 ID가 일치하는 사실→관계→규칙→trace→가설 연결만 추론 근거로 사용한다.",
     "reasoningLineage.judgementEligible이 false이거나 integrity.state가 blocked이면 해당 계보를 행동 근거로 사용하지 말고 decisionReadiness를 insufficient로 제한한다. 다른 종목이나 다른 추론 세대의 근거를 결합하지 않는다.",
-    "reasoningLineage의 규칙은 연결된 proof.facts의 실제 observedValue·source·asOf와 proof.traces가 있을 때만 설명한다. 내부 규칙명 대신 그 관측값과 투자 영향 경로를 사용자에게 설명한다.",
+    "reasoningLineage.proof.evidencePathAttested가 true인 압축 증명에서는 proof의 규칙·trace·관계 ID와 evidenceLedger의 실제 관측값을 함께 사용한다. 전체 proof가 있으면 연결된 proof.facts의 observedValue·source·asOf도 확인한다. 내부 규칙명 대신 관측값과 투자 영향 경로를 설명한다.",
     "notificationIntent가 context-observation 또는 review-observation이면 action을 NO_ACTION으로 쓰고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
     "reasoningTrigger가 있으면 왜 지금 다시 분석했는지를 실제 임계값·원문·근거 변화로 설명하고, relationLifecycle이 있으면 어떤 가설 관계가 새로 성립·강화·약화·해제됐는지 구분한다.",
     "가설이 qualification pending이면 관계 성립과 행동 검증 완료를 구분한다. 지금 확인된 투자 의미, 아직 금지된 매매 행동, 승격 또는 무효화에 필요한 실제 다음 데이터를 각각 명시한다.",
@@ -106,9 +243,9 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
     "반대 근거 검사를 마친 뒤 counterEvidenceStatus를 쓴다. confirmed는 근거 ID가 연결된 counter 문장이 있을 때, none-found는 모든 입력을 검토해 반대 사실이 없을 때만 쓴다. 나머지 상태는 발행 불가다.",
     "사용자에게 보여줄 투자 관점, 인과 경로, 투자 의미, 촉매, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
-    "narrativeClaims는 section별 허용 ID만 쓰고, narrativeClaimContract.recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
+    "narrativeClaims는 section별 허용 근거만 쓴다. narrativeClaimContract.encoding이 role-indexed-v1이면 sectionEvidenceRoles와 evidenceLedger의 role·kind를 조합하고, 전체 ID 목록이 있으면 recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
     "invalidationCondition은 관측 대상과 변화 방향을 명시하고 검증된 next-condition 근거와 연결한다. 수치형 observable 필드가 있으면 followUpConditions로 구조화하되 입력에 없는 임계값은 만들지 않는다. 일반적인 '근거가 사라지면' 문장은 금지한다.",
-    "TypeDB 규칙을 인용할 때 narrativeClaimContract.evidenceBundlesByInference에 연결된 관찰 사실 ID도 함께 인용한다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",
+    "TypeDB 규칙을 인용할 때 inference 근거와 같은 가설에 연결된 관찰 사실 ID도 함께 인용한다. evidenceBundlesByInference가 있으면 그 묶음을 따르고, 압축 계약이면 hypothesisSet의 근거 ID와 evidenceLedger를 따른다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",
     "확인된 사실은 명확히 말하고 가장 잘 지지되는 인과 해석을 결론으로 제시한다. 확인되지 않은 세부 원인이나 영향 규모만 limitation에 적고, 자료 한계를 알림의 중심 결론으로 만들지 않는다.",
     "narrativeClaims의 support는 role=support 근거만, counter는 role=counter 근거만 연결하고 context나 limitation을 행동 근거로 바꾸지 않는다.",
     "자료 부족은 limitation으로만 쓰고 counter 근거로 쓰지 않는다. 행동 결론 자체를 support 근거로 반복하지 않는다.",
@@ -155,6 +292,8 @@ class NotificationAIPromptRelease:
     policy_flags: Dict[str, object]
     instructions: List[str]
     response_schema: Dict[str, object]
+    output_schema: Dict[str, object]
+    output_schema_fingerprint: str
     fingerprint: str
 
     def to_public_dict(self) -> Dict[str, object]:
@@ -169,6 +308,8 @@ class NotificationAIPromptRelease:
             "policyFlags": dict(self.policy_flags),
             "instructionCount": len(self.instructions),
             "responseFieldCount": len(self.response_schema),
+            "outputSchemaVersion": AI_DECISION_OUTPUT_SCHEMA_VERSION,
+            "outputSchemaFingerprint": self.output_schema_fingerprint,
             "instructions": list(self.instructions),
             "responseSchema": dict(self.response_schema),
             "status": "active",
@@ -183,10 +324,19 @@ def active_notification_ai_prompt_release(settings: Dict[str, object] = None) ->
         "contractVersion": AI_DECISION_CONTRACT_VERSION,
         "instructions": list(BASE_AI_DECISION_INSTRUCTIONS),
         "responseSchema": AI_DECISION_RESPONSE_SCHEMA,
+        "outputSchema": AI_DECISION_OUTPUT_JSON_SCHEMA,
         "policyFlags": flags,
     }
     fingerprint = hashlib.sha256(
         json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    output_schema_fingerprint = hashlib.sha256(
+        json.dumps(
+            AI_DECISION_OUTPUT_JSON_SCHEMA,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
     return NotificationAIPromptRelease(
         version=AI_DECISION_PROMPT_VERSION,
@@ -194,5 +344,7 @@ def active_notification_ai_prompt_release(settings: Dict[str, object] = None) ->
         policy_flags=flags,
         instructions=list(BASE_AI_DECISION_INSTRUCTIONS),
         response_schema=dict(AI_DECISION_RESPONSE_SCHEMA),
+        output_schema=dict(AI_DECISION_OUTPUT_JSON_SCHEMA),
+        output_schema_fingerprint=output_schema_fingerprint,
         fingerprint=fingerprint,
     )

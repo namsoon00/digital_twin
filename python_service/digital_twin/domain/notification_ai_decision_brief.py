@@ -33,7 +33,9 @@ from .notification_ai_context_router import (
 )
 from .notification_ai_prompt_release import (
     AI_DECISION_CONTRACT_VERSION,
+    AI_DECISION_OUTPUT_SCHEMA_VERSION,
     AI_DECISION_PROMPT_VERSION,
+    AI_DECISION_REQUIRED_RESPONSE_FIELDS,
     active_notification_ai_prompt_release,
 )
 from .notification_decision_policy import (
@@ -182,16 +184,16 @@ def notification_ai_execution_profile(
             fixed_effort or settings.get("notificationAiDeepReasoningEffort"),
             "max",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 24 * 1024, 12 * 1024, 24 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 48 * 1024, 12 * 1024, 64 * 1024)
     else:
         effort = _reasoning_effort(
             fixed_effort or settings.get("notificationAiStandardReasoningEffort"),
             "high",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 24 * 1024, 12 * 1024, 24 * 1024)
-    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 24 * 1024, 12 * 1024, 24 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 24 * 1024, 12 * 1024, 32 * 1024)
+    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 48 * 1024, 12 * 1024, 64 * 1024)
     return {
-        "version": "notification-ai-execution-profile-v3",
+        "version": "notification-ai-execution-profile-v4",
         "name": profile,
         "reasoningEffort": effort,
         "maxPromptBytes": min(prompt_bytes, queue_limit),
@@ -2222,16 +2224,36 @@ def build_notification_ai_prompt_bundle(
             "contractVersion": release.contract_version,
             "fingerprint": release.fingerprint,
         }, ensure_ascii=False, separators=(",", ":")),
-        "응답 스키마: " + json.dumps(release.response_schema, ensure_ascii=False, separators=(",", ":")),
+        "응답 계약: Codex 외부 JSON Schema "
+        + AI_DECISION_OUTPUT_SCHEMA_VERSION
+        + "로 형식을 강제한다. 다음 필드를 모두 채운다: "
+        + ",".join(AI_DECISION_REQUIRED_RESPONSE_FIELDS),
         "DecisionCore:",
     ])
     instruction_bytes = len("\n".join(instructions).encode("utf-8")) + 1
+    decision_core_bytes = len(
+        json.dumps(
+            decision_core,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    )
+    payload_budget_bytes = max(6 * 1024, maximum - instruction_bytes)
     payload = fit_notification_ai_decision_core(
         decision_core,
-        max(6 * 1024, maximum - instruction_bytes),
+        payload_budget_bytes,
     )
     rendered = "\n".join([*instructions, json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)])
     rendered_bytes = len(rendered.encode("utf-8"))
+    fitted_core_bytes = len(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    )
     if rendered_bytes > maximum:
         raise ValueError(
             "AI decision prompt exceeded its hard limit: "
@@ -2246,6 +2268,17 @@ def build_notification_ai_prompt_bundle(
         "decisionBrief": brief,
         "contextRouting": routing_audit,
         "promptRelease": release.to_public_dict(),
+        "promptBudget": {
+            "version": "notification-ai-prompt-budget-v1",
+            "profile": str(execution_profile.get("name") or ""),
+            "maxPromptBytes": maximum,
+            "instructionBytes": instruction_bytes,
+            "payloadBudgetBytes": payload_budget_bytes,
+            "originalDecisionCoreBytes": decision_core_bytes,
+            "fittedDecisionCoreBytes": fitted_core_bytes,
+            "renderedPromptBytes": rendered_bytes,
+            "compacted": decision_core_bytes != fitted_core_bytes,
+        },
     }
 
 

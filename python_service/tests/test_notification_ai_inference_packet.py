@@ -17,6 +17,7 @@ from digital_twin.domain.notification_narrative import (
     build_investment_narrative_brief,
     narrative_claim_evidence_contract,
     normalize_narrative_claims,
+    resolved_narrative_claim_evidence_contract,
 )
 from digital_twin.domain.notifications import NotificationJob
 
@@ -92,8 +93,14 @@ def response_payload(view_id, support_id, next_id):
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
     def _assert_research_compaction_preserves_each_rule_proof_path(self):
-        rule_ids = ["graph.research.rule:" + str(index) for index in range(4)]
-        required_evidence_ids = ["relation-evidence:" + str(index) for index in range(12)]
+        rule_ids = [
+            "graph.company.capital.research.rule:" + str(index) + ":" + ("r" * 36)
+            for index in range(4)
+        ]
+        required_evidence_ids = [
+            "relation-evidence:subject-generation:" + str(index) + ":" + ("e" * 36)
+            for index in range(16)
+        ]
         hypotheses = [
             {
                 "hypothesisId": "hypothesis:research:" + str(index),
@@ -102,7 +109,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 "claim": "현재 관측을 설명하는 검증 대기 가설 " + str(index),
                 "supportingRuleIds": rule_ids[index:index + 2],
                 "supportingEvidenceIds": required_evidence_ids[index * 3:index * 3 + 3],
-                "counterEvidenceIds": required_evidence_ids[9:12],
+                "counterEvidenceIds": required_evidence_ids[12:16],
                 "evidenceState": "blocked",
                 "claimContract": {
                     "claimType": "market-hypothesis",
@@ -113,13 +120,13 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                     "reason": "독립된 사후 결과가 부족합니다.",
                 },
             }
-            for index in range(3)
+            for index in range(4)
         ]
         hypotheses[-1]["supportingRuleIds"] = [rule_ids[-1]]
         ledger = [
             {
                 "evidenceId": evidence_id,
-                "role": "counter" if index >= 9 else "support",
+                "role": "counter" if index >= 12 else "support",
                 "kind": "ontology-assertion",
                 "label": "현재 세대 가설 근거 " + str(index),
                 "judgementEligible": False,
@@ -211,10 +218,12 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         proof = fitted["reasoningLineage"]["proof"]
         self.assertEqual("minimum-research-review-contract", fitted["routingAudit"]["status"])
         self.assertEqual("context-narrative", fitted["reviewMode"])
-        self.assertEqual(rule_ids, [item["id"] for item in proof["rules"]])
-        self.assertEqual(4, len(proof["facts"]))
-        self.assertEqual(4, len(proof["relations"]))
-        self.assertEqual(4, len(proof["traces"]))
+        self.assertEqual(4, len(fitted["hypothesisSet"]["hypotheses"]))
+        self.assertEqual(rule_ids, proof["ruleIds"])
+        self.assertEqual(4, proof["factCount"])
+        self.assertEqual(4, proof["relationCount"])
+        self.assertEqual(4, proof["traceCount"])
+        self.assertTrue(proof["evidencePathAttested"])
         self.assertEqual(
             set(required_evidence_ids),
             {
@@ -224,12 +233,17 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             },
         )
         claim_contract = fitted["narrativeClaimContract"]
-        allowed_sections = claim_contract["allowedEvidenceIdsBySection"]
-        recommended_sections = claim_contract["recommendedEvidenceIdsBySection"]
+        self.assertEqual("role-indexed-v1", claim_contract["encoding"])
+        expanded_contract = resolved_narrative_claim_evidence_contract(
+            claim_contract,
+            fitted["evidenceLedger"],
+        )
+        allowed_sections = expanded_contract["allowedEvidenceIdsBySection"]
+        recommended_sections = expanded_contract["recommendedEvidenceIdsBySection"]
         for section in ("view", "mechanism", "implication", "catalyst"):
             self.assertTrue(allowed_sections[section])
             self.assertTrue(recommended_sections[section])
-            self.assertLessEqual(len(recommended_sections[section]), 3)
+            self.assertLessEqual(len(recommended_sections[section]), 4)
         ledger_by_id = {
             item["evidenceId"]: item for item in fitted["evidenceLedger"]
         }
@@ -459,7 +473,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             for index, evidence_id in enumerate(evidence_ids)
         ]
         core = {
-            "schemaVersion": "investment-ai-decision-core-v4",
+            "schemaVersion": "investment-ai-decision-core-v5",
             "notificationIntent": "context-observation",
             "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
             "facts": {"currentPrice": 1776000, "market": "KR", "currency": "KRW"},
@@ -515,7 +529,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             },
             "evidenceLedger": ledger,
             "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
-            "routingAudit": {"version": "notification-ai-context-route-v5"},
+            "routingAudit": {"version": "notification-ai-context-route-v6"},
         }
 
         fitted = fit_notification_ai_decision_core(core, 15_884)
@@ -552,6 +566,12 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual(first.packet_id, second.packet_id)
         self.assertEqual(first.prompt_hash, second.prompt_hash)
         self.assertEqual(first.evidence_fingerprint, second.evidence_fingerprint)
+        self.assertNotIn("응답 스키마:", first.prompt)
+        self.assertEqual(
+            first.prompt_bytes,
+            first.prompt_budget["renderedPromptBytes"],
+        )
+        self.assertLessEqual(first.prompt_bytes, first.prompt_budget["maxPromptBytes"])
         contract = first.decision_core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]
         self.assertIn("rule:graph.holding.guard.v1", contract["support"])
         self.assertNotIn("fact:currentPrice", contract["support"])

@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 import subprocess
@@ -7,6 +8,7 @@ from typing import Dict
 
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from ..domain.notification_ai_decision_brief import build_notification_ai_decision_prompt
+from ..domain.notification_ai_prompt_release import active_notification_ai_prompt_release
 from ..domain.notification_ai_gate_validation import (
     local_validated_ai_response,
     validated_response_from_text,
@@ -31,6 +33,32 @@ def optional_timeout_seconds(value: object, fallback: object = None):
     return number if number > 0 else None
 
 
+def materialize_notification_ai_output_schema(runtime_directory=None):
+    """Write the versioned structured-output contract outside the repository."""
+
+    runtime_dir = runtime_directory or notification_ai_runtime_dir()
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    release = active_notification_ai_prompt_release()
+    serialized = json.dumps(
+        release.output_schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    target = runtime_dir / (
+        "investment-decision-" + release.output_schema_fingerprint[:20] + ".schema.json"
+    )
+    if target.exists() and target.read_text(encoding="utf-8") == serialized:
+        return target
+    temporary = runtime_dir / (target.name + "." + str(os.getpid()) + ".tmp")
+    try:
+        temporary.write_text(serialized, encoding="utf-8")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
 class NotificationAIReviewer:
     def review(self, context: Dict[str, object]) -> NotificationAIValidatedResponse:
         raise NotImplementedError
@@ -47,7 +75,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         command,
         timeout_seconds=None,
         source: str = "AI",
-        max_prompt_bytes: int = 24 * 1024,
+        max_prompt_bytes: int = 48 * 1024,
         command_factory=None,
         settings: Dict[str, object] = None,
         capacity_lock_dir=None,
@@ -59,7 +87,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         self.command = command
         self.timeout_seconds = optional_timeout_seconds(timeout_seconds)
         self.source = source
-        self.max_prompt_bytes = max(12 * 1024, min(24 * 1024, int(max_prompt_bytes or 24 * 1024)))
+        self.max_prompt_bytes = max(12 * 1024, min(64 * 1024, int(max_prompt_bytes or 48 * 1024)))
         self.command_factory = command_factory
         self.settings = dict(settings or {})
         self.last_prompt_bytes = 0
@@ -296,13 +324,18 @@ def notification_ai_reviewer_from_settings(
             settings.get("notificationAiDeepPromptMaxBytes")
             or os.environ.get("NOTIFICATION_AI_DEEP_PROMPT_MAX_BYTES")
             or settings.get("notificationAiQueueMaxPromptBytes")
-            or 24 * 1024
+            or 48 * 1024
         )
     except (TypeError, ValueError):
-        max_prompt_bytes = 24 * 1024
+        max_prompt_bytes = 48 * 1024
     if use_codex:
         runtime_dir = notification_ai_runtime_dir()
-        command = codex_process_arguments(reasoning_effort=reasoning_effort, working_directory=runtime_dir)
+        output_schema_path = materialize_notification_ai_output_schema(runtime_dir)
+        command = codex_process_arguments(
+            reasoning_effort=reasoning_effort,
+            working_directory=runtime_dir,
+            output_schema_path=output_schema_path,
+        )
         if command:
             try:
                 maximum = max(1, min(8, int(settings.get("localAiMaxConcurrentProcesses") or os.environ.get("ORBIT_LOCAL_AI_MAX_CONCURRENT") or 2)))
@@ -324,6 +357,7 @@ def notification_ai_reviewer_from_settings(
                 command_factory=lambda reasoning_effort="": codex_process_arguments(
                     reasoning_effort=reasoning_effort,
                     working_directory=runtime_dir,
+                    output_schema_path=output_schema_path,
                 ),
                 settings=settings,
                 capacity_lock_dir=data_dir() / "local-ai-capacity",

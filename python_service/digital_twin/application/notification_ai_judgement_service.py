@@ -18,7 +18,10 @@ from ..domain.notification_ai_inference_packet import (
     NotificationAIInferencePacket,
     build_notification_ai_inference_packet,
 )
-from ..domain.notification_narrative import normalize_narrative_claims
+from ..domain.notification_narrative import (
+    normalize_narrative_claims,
+    resolved_narrative_claim_evidence_contract,
+)
 
 
 class NotificationAIContractError(ValueError):
@@ -260,8 +263,10 @@ def _structured_claim_evidence_ids(
     packet: NotificationAIInferencePacket,
     section: str,
 ) -> list:
-    claim_contract = prepared_core.get("narrativeClaimContract")
-    claim_contract = claim_contract if isinstance(claim_contract, dict) else {}
+    claim_contract = resolved_narrative_claim_evidence_contract(
+        prepared_core.get("narrativeClaimContract"),
+        prepared_core.get("evidenceLedger") or [],
+    )
     recommended = claim_contract.get("recommendedEvidenceIdsBySection")
     recommended = recommended if isinstance(recommended, dict) else {}
     allowed = claim_contract.get("allowedEvidenceIdsBySection")
@@ -450,8 +455,10 @@ def recover_structured_next_condition_claim(
 
     prepared_core = context.get("_notificationAiPreparedDecisionCore")
     prepared_core = prepared_core if isinstance(prepared_core, dict) else packet.decision_core
-    claim_contract = prepared_core.get("narrativeClaimContract")
-    claim_contract = claim_contract if isinstance(claim_contract, dict) else {}
+    claim_contract = resolved_narrative_claim_evidence_contract(
+        prepared_core.get("narrativeClaimContract"),
+        prepared_core.get("evidenceLedger") or [],
+    )
     recommended = claim_contract.get("recommendedEvidenceIdsBySection")
     recommended = recommended if isinstance(recommended, dict) else {}
     allowed = claim_contract.get("allowedEvidenceIdsBySection")

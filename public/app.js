@@ -12,6 +12,8 @@
   var appServiceWorkerRegistration = null;
   var serviceWorkerReloadPending = false;
   var pendingTabTransition = false;
+  var pendingScrollableTabReveal = null;
+  var scrollableTabRevealFrame = 0;
   var appShellStatus = {
     online: typeof navigator === "undefined" || navigator.onLine !== false,
     installAvailable: false,
@@ -3402,6 +3404,153 @@
 
   function currentTabBar() {
     return app && app.querySelector ? app.querySelector(".tab-bar") : null;
+  }
+
+  function scrollableTabContainerSelector() {
+    return [
+      "[role='tablist']",
+      ".tab-bar",
+      ".app-nav-tabs",
+      ".market-workspace-tabs",
+      ".ontology-catalog-tabs",
+      ".cws-tabs"
+    ].join(",");
+  }
+
+  function scrollableTabContainers() {
+    if (!app || !app.querySelectorAll) return [];
+    return Array.prototype.slice.call(app.querySelectorAll(scrollableTabContainerSelector()));
+  }
+
+  function scrollableTabContext(button) {
+    if (!button || !button.closest) return null;
+    var container = button.closest(scrollableTabContainerSelector());
+    if (!container || !app.contains(container)) return null;
+    var containers = scrollableTabContainers();
+    var buttons = Array.prototype.slice.call(container.querySelectorAll("button"));
+    return {
+      container: container,
+      containerIndex: containers.indexOf(container),
+      containerClass: String(container.className || ""),
+      containerLabel: String(container.getAttribute("aria-label") || ""),
+      buttonIndex: buttons.indexOf(button)
+    };
+  }
+
+  function restoredScrollableTabContainer(context) {
+    if (!context) return null;
+    if (context.container && context.container.isConnected && app.contains(context.container)) return context.container;
+    var containers = scrollableTabContainers();
+    var exact = containers.filter(function (container) {
+      return String(container.className || "") === context.containerClass
+        && String(container.getAttribute("aria-label") || "") === context.containerLabel;
+    });
+    if (exact.length) return exact[0];
+    return containers[context.containerIndex] || null;
+  }
+
+  function activeScrollableTabButton(container, fallbackIndex) {
+    var buttons = Array.prototype.slice.call(container.querySelectorAll("button")).filter(function (button) {
+      return !button.hidden && !button.disabled;
+    });
+    var active = buttons.filter(function (button) {
+      return button.getAttribute("aria-selected") === "true"
+        || button.getAttribute("aria-current") === "page"
+        || button.classList.contains("active");
+    })[0] || buttons[Math.max(0, Number(fallbackIndex || 0))] || null;
+    return { buttons: buttons, active: active };
+  }
+
+  function scrollableTabTargetLeft(container, active, next) {
+    var clientWidth = Math.max(0, Number(container.clientWidth || 0));
+    var maxScroll = Math.max(0, Number(container.scrollWidth || 0) - clientWidth);
+    if (!active || !clientWidth || !maxScroll) return Number(container.scrollLeft || 0);
+    var containerRect = container.getBoundingClientRect();
+    var activeRect = active.getBoundingClientRect();
+    var nextRect = next ? next.getBoundingClientRect() : activeRect;
+    var currentLeft = Math.max(0, Number(container.scrollLeft || 0));
+    var padding = Math.min(12, Math.max(6, clientWidth * 0.03));
+    var activeLeft = currentLeft + activeRect.left - containerRect.left;
+    var activeRight = currentLeft + activeRect.right - containerRect.left;
+    var nextLeft = currentLeft + nextRect.left - containerRect.left;
+    var nextRight = currentLeft + nextRect.right - containerRect.left;
+    var desiredRight = next
+      ? (nextRight - activeLeft <= clientWidth - padding * 2
+        ? nextRight
+        : Math.min(nextRight, nextLeft + Math.min(44, Math.max(24, nextRect.width))))
+      : activeRight;
+    var minimumLeft = desiredRight + padding - clientWidth;
+    var maximumLeft = activeLeft - padding;
+    var targetLeft = Math.min(Math.max(currentLeft, minimumLeft), maximumLeft);
+    return Math.max(0, Math.min(targetLeft, maxScroll));
+  }
+
+  function revealPendingScrollableTab() {
+    var context = pendingScrollableTabReveal;
+    pendingScrollableTabReveal = null;
+    var container = restoredScrollableTabContainer(context);
+    if (!container || container.scrollWidth <= container.clientWidth + 1) return;
+    var selection = activeScrollableTabButton(container, context && context.buttonIndex);
+    if (!selection.active) return;
+    var activeIndex = selection.buttons.indexOf(selection.active);
+    var next = activeIndex >= 0 ? selection.buttons[activeIndex + 1] || null : null;
+    var targetLeft = scrollableTabTargetLeft(container, selection.active, next);
+    if (Math.abs(Number(container.scrollLeft || 0) - targetLeft) < 1) return;
+    if (container.scrollTo) {
+      try {
+        container.scrollTo({ left: targetLeft, behavior: reducedMotionPreferred() ? "auto" : "smooth" });
+      } catch (error) {
+        container.scrollLeft = targetLeft;
+      }
+    } else {
+      container.scrollLeft = targetLeft;
+    }
+    if (container.classList.contains("tab-bar")) state.tabBarScrollLeft = targetLeft;
+  }
+
+  function scheduleScrollableTabReveal() {
+    if (scrollableTabRevealFrame) return;
+    var frame = window.requestAnimationFrame || function (callback) { return window.setTimeout(callback, 16); };
+    scrollableTabRevealFrame = frame(function () {
+      scrollableTabRevealFrame = frame(function () {
+        scrollableTabRevealFrame = 0;
+        revealPendingScrollableTab();
+      });
+    });
+  }
+
+  function queueScrollableTabReveal(button) {
+    var context = scrollableTabContext(button);
+    if (!context) return;
+    pendingScrollableTabReveal = context;
+    scheduleScrollableTabReveal();
+  }
+
+  function bindScrollableTabReveal() {
+    if (!app || !app.addEventListener) return;
+    var pointerStart = null;
+    var touchStart = null;
+    var targetButton = function (event) {
+      var button = event.target && event.target.closest && event.target.closest("button");
+      return button && app.contains(button) ? button : null;
+    };
+    app.addEventListener("pointerdown", function (event) {
+      pointerStart = activePointerPoint(event);
+    }, { passive: true, capture: true });
+    app.addEventListener("pointerup", function (event) {
+      if (!isTapMovement(pointerStart, event)) return;
+      queueScrollableTabReveal(targetButton(event));
+    }, { passive: true, capture: true });
+    app.addEventListener("touchstart", function (event) {
+      touchStart = activePointerPoint(event);
+    }, { passive: true, capture: true });
+    app.addEventListener("touchend", function (event) {
+      if (!isTapMovement(touchStart, event)) return;
+      queueScrollableTabReveal(targetButton(event));
+    }, { passive: true, capture: true });
+    app.addEventListener("click", function (event) {
+      queueScrollableTabReveal(targetButton(event));
+    }, { capture: true });
   }
 
   function rememberTabBarPosition() {
@@ -37292,6 +37441,7 @@
   bindNetworkActivityControls();
   bindDelegatedConsoleActions();
   bindRenderedScrollActivity();
+  bindScrollableTabReveal();
   applyAppTheme();
   syncAppViewportHeight();
   if (window.visualViewport) {

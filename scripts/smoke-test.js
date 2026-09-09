@@ -2339,6 +2339,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
+    assertOk(code.indexOf("bindScrollableTabReveal") >= 0 && code.indexOf("scrollableTabTargetLeft") >= 0 && code.indexOf("activeIndex + 1") >= 0, "가로 탭 선택 시 다음 탭까지 노출하는 공통 스크롤 로직이 없습니다.");
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "주 네비게이션 탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(/function scrollKeyForTab\(tab\)\s*\{\s*return normalizeTabId\(tab \|\| state\.activeTab\);\s*\}/.test(code), "내부 섹션 탭이 현재 페이지와 다른 스크롤 키를 사용합니다.");
     assertOk(code.indexOf('"[role=\'tablist\']"') >= 0 && code.indexOf('".ontology-catalog-tabs"') >= 0 && code.indexOf('".cws-tabs"') >= 0, "가로 내부 탭의 현재 스크롤 위치를 보존하지 않습니다.");

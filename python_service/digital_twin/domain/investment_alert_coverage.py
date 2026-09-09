@@ -187,6 +187,12 @@ def reasoning_delivery_trigger(
             and _matched_symbol(item, clean_symbol)
             and bool(item.get("passed"))
         ]
+        crypto_assessment = next((
+            item for item in assessments
+            if _text(item.get("trigger")) == "crypto-market-transition"
+        ), {})
+        if crypto_assessment:
+            reason = _text(crypto_assessment.get("reason")) or reason
         matched_conditions = {
             _text(condition)
             for assessment in assessments

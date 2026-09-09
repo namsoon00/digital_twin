@@ -634,6 +634,24 @@ def compact_materiality_assessment_event_payload(value: object) -> Dict[str, obj
                 for transition in confirmed_transitions[:8]
                 if isinstance(transition, Mapping)
             ]
+        crypto_transitions = facts.get("cryptoTransitions")
+        if isinstance(crypto_transitions, (list, tuple)):
+            compact_facts["cryptoTransitions"] = [
+                {
+                    key: transition.get(key)
+                    for key in (
+                        "symbol", "coinId", "name", "horizon", "direction",
+                        "severity", "changePct", "thresholdPct", "previousBand",
+                        "currentBand", "transition", "observedAt", "signature",
+                    )
+                    if transition.get(key) not in (None, "", [], {})
+                }
+                for transition in crypto_transitions[:4]
+                if isinstance(transition, Mapping)
+            ]
+        target = _event_text(facts.get("cryptoTransitionTarget"), 96)
+        if target:
+            compact_facts["cryptoTransitionTarget"] = target
         if compact_facts:
             compact["facts"] = compact_facts
     return compact

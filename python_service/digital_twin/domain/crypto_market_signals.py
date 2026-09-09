@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Mapping
 
 from .external_signal_quality import parse_iso_datetime
 from .instrument_profiles import BTC_SENSITIVE_SYMBOLS
+from .materiality import MaterialityAssessment
 from .market_data import known_stock, number
 from .portfolio import Position
 
@@ -458,3 +459,103 @@ def crypto_transition_targets(transitions: Iterable[Mapping[str, object]], posit
         if symbol in CRYPTO_ALERT_SYMBOLS and symbol not in direct:
             direct.append(symbol)
     return direct + [symbol for symbol in crypto_sensitive_symbols(positions) if symbol not in direct]
+
+
+def crypto_transition_materiality_assessment(
+    target_symbol: str,
+    transitions: Iterable[Mapping[str, object]],
+) -> MaterialityAssessment:
+    """Preserve why a crypto transition warrants reasoning and delivery.
+
+    This is scheduling provenance only. It never assigns an investment action
+    to the crypto asset or to a linked security.
+    """
+
+    target = _clean_symbol(target_symbol)
+    rows = [
+        {
+            key: item.get(key)
+            for key in (
+                "symbol",
+                "coinId",
+                "name",
+                "horizon",
+                "direction",
+                "severity",
+                "changePct",
+                "thresholdPct",
+                "previousBand",
+                "currentBand",
+                "transition",
+                "observedAt",
+                "signature",
+            )
+            if item.get(key) not in (None, "")
+        }
+        for item in transitions or []
+        if isinstance(item, Mapping)
+        and _clean_symbol(item.get("symbol")) in CRYPTO_ALERT_SYMBOLS
+    ]
+    transition_labels = {
+        "threshold-crossed": "설정 기준을 처음 넘었습니다",
+        "direction-changed": "상승과 하락 방향이 바뀌었습니다",
+        "severity-escalated": "변동 폭이 큰 변동 구간으로 확대됐습니다",
+    }
+    reasons = []
+    matched_conditions = []
+    for item in rows:
+        source_symbol = _clean_symbol(item.get("symbol"))
+        name = str(item.get("name") or known_stock(source_symbol).get("name") or source_symbol)
+        horizon = str(item.get("horizon") or "").strip()
+        direction = "상승" if str(item.get("direction") or "").lower() == "up" else "하락"
+        change = number(item.get("changePct"))
+        threshold = abs(number(item.get("thresholdPct")))
+        transition = str(item.get("transition") or "state-changed").strip()
+        prefix = "" if target == source_symbol else "연결 자산 "
+        reasons.append(
+            prefix
+            + name
+            + "의 "
+            + horizon
+            + " 변동률 "
+            + ("+" if change > 0 else "")
+            + str(round(change, 2))
+            + "%가 "
+            + direction
+            + " 기준 "
+            + str(round(threshold, 2))
+            + "%에 도달해 "
+            + transition_labels.get(transition, "관찰 구간이 바뀌었습니다")
+            + "."
+        )
+        matched_conditions.append(
+            "crypto-"
+            + horizon
+            + "-"
+            + str(item.get("direction") or "unknown")
+            + "-"
+            + transition
+        )
+    return MaterialityAssessment(
+        subject=target,
+        trigger="crypto-market-transition",
+        review_level="check",
+        passed=bool(rows),
+        reason=" ".join(reasons[:3]) if rows else "검증된 코인 임계값 전환이 없습니다.",
+        changed_fields=["external.cryptoMarkets", "cryptoMarketTransition"] if rows else [],
+        matched_conditions=matched_conditions[:6],
+        facts={
+            "eventType": "verified-crypto-market-transition",
+            "sourceTrustState": "verified-source-boundary",
+            "validationState": "verified",
+            "cryptoTransitionTarget": target,
+            "cryptoTransitions": rows[:4],
+        } if rows else {},
+        data_state="sufficient" if rows else "partial",
+        change_state=(
+            "direction-changed"
+            if any(str(item.get("transition")) == "direction-changed" for item in rows)
+            else "new-condition"
+        ),
+        evidence_role="context",
+    )

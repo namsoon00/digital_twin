@@ -27,6 +27,7 @@ from .fact_changes import changed_fields, fact_revision_id, fact_signature
 from .crypto_market_signals import (
     CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
     crypto_market_transitions,
+    crypto_transition_materiality_assessment,
     crypto_transition_targets,
 )
 from .investment_research import research_evidence_from_payload
@@ -933,6 +934,9 @@ def verified_monitor_snapshot_reasoning_event(
             changed_symbols.append(symbol)
         all_fact_types.add("MarketQuote")
         fact_types_by_symbol[symbol] = ["MarketQuote"]
+        materiality_assessments[symbol + ":crypto-transition"] = (
+            crypto_transition_materiality_assessment(symbol, applicable).to_dict()
+        )
         revisions[symbol] = fact_revision_id(
             "VerifiedCryptoMarketTransition",
             symbol,

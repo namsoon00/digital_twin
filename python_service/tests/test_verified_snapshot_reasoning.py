@@ -23,6 +23,7 @@ from digital_twin.domain.crypto_market_signals import (
     CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
     crypto_transition_baseline,
 )
+from digital_twin.domain.investment_alert_coverage import reasoning_delivery_trigger
 from digital_twin.domain.ontology_reasoning_queue import (
     OBSERVATION_FOLLOWUP_PRIORITY_HINT,
     REALTIME_LATEST_STATE_SLOT,
@@ -715,6 +716,28 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             "kind:stock:field:cryptomarkets",
             contract["dependencyKeys"],
         )
+        crypto_assessments = [
+            item for item in event.payload["materialityAssessments"]
+            if item.get("trigger") == "crypto-market-transition"
+        ]
+        self.assertEqual(
+            ["BTC", "MSTR"],
+            sorted(item["subject"] for item in crypto_assessments),
+        )
+        self.assertTrue(all(item["passed"] for item in crypto_assessments))
+        btc_trigger = reasoning_delivery_trigger([event.to_dict()], "BTC")
+        self.assertTrue(btc_trigger["material"])
+        self.assertTrue(btc_trigger["userObservable"])
+        self.assertIn(
+            "crypto-24h-down-threshold-crossed",
+            btc_trigger["matchedConditions"],
+        )
+        self.assertEqual(
+            "BTC:24h:down:watch",
+            btc_trigger["facts"]["cryptoTransitions"][0]["signature"],
+        )
+        mstr_trigger = reasoning_delivery_trigger([event.to_dict()], "MSTR")
+        self.assertIn("연결 자산", mstr_trigger["reasons"][0])
         event.payload["verifiedSourceSnapshot"] = {
             "snapshotId": "reasoning-source:btc",
             "generatedAt": current.generated_at,

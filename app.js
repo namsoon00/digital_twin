@@ -15690,7 +15690,7 @@
 
   function renderDecisionConsoleRow(row) {
     var detailType = row.detailType === "subject-decision-case"
-      ? "subject-decision-case"
+      ? "investment-case"
       : (row.caseId || row.decisionEpisodeId ? "investment-case" : "investment-action");
     var detailKey = row.subjectCaseId || row.caseId || row.decisionEpisodeId || row.key;
     var readinessTone = row.attentionState === "action" ? "watch" : investmentFlowStateTone(row.readinessState || (row.blocked ? "blocked" : "warning"));
@@ -26013,7 +26013,7 @@
     return !state.serverSettingsLocked && !isStaticPreviewHost();
   }
 
-  function renderInvestmentCaseDetailTabs(key, active) {
+  function renderInvestmentCaseDetailTabs(key, active, detail) {
     var tabs = [
       ["summary", "요약"],
       ["current", "판단 당시·현재"],
@@ -26022,6 +26022,8 @@
       ["history", "변화·결과"]
     ];
     if (investmentCaseOperatorAccess()) tabs.push(["trace", "기술 계보"]);
+    var available = Array.isArray((detail || {}).availableViews) ? detail.availableViews : [];
+    if (available.length) tabs = tabs.filter(function (item) { return available.indexOf(item[0]) >= 0; });
     return '<nav class="oa-case-detail-tabs" role="tablist" aria-label="투자 케이스 상세 보기">' + tabs.map(function (item) {
       var selected = active === item[0];
       return '<button type="button" role="tab" data-investment-case-tab="' + item[0] + '" data-investment-case-key="' + escapeHtml(key) + '" aria-selected="' + (selected ? "true" : "false") + '"' + (selected ? ' class="active"' : '') + '>' + escapeHtml(item[1]) + '</button>';
@@ -26351,7 +26353,8 @@
       '<div><dt>ABox 스냅샷</dt><dd>' + escapeHtml(trace.sourceAboxSnapshotId || "연결 필요") + '</dd></div>',
       '<div><dt>InferenceBox 세대</dt><dd>' + escapeHtml(trace.inferenceGenerationId || "연결 필요") + '</dd></div>',
       '<div><dt>추론 배포</dt><dd>' + escapeHtml(modelRelease.deploymentId || modelRelease.reasoningEngineVersion || "연결 필요") + '</dd></div>',
-      '<div><dt>RuleBox 릴리스</dt><dd>' + escapeHtml(modelRelease.ruleboxFingerprint || "연결 필요") + '</dd></div>',
+      '<div><dt>TBox 릴리스</dt><dd>' + escapeHtml([modelRelease.tboxReleaseId, modelRelease.tboxFingerprint].filter(Boolean).join(" · ") || "연결 필요") + '</dd></div>',
+      '<div><dt>RuleBox 릴리스</dt><dd>' + escapeHtml([modelRelease.ruleboxReleaseId, modelRelease.ruleboxFingerprint].filter(Boolean).join(" · ") || "연결 필요") + '</dd></div>',
       '<div><dt>선택 가설</dt><dd>' + escapeHtml(trace.selectedHypothesisId || "선택 없음") + '</dd></div>',
       '<div><dt>적용 규칙·관계</dt><dd>' + escapeHtml((Array.isArray(trace.ruleIds) ? trace.ruleIds : []).join(" · ") || "연결 필요") + '</dd></div>',
       '</dl></details>'
@@ -26406,12 +26409,14 @@
     var decision = detail.decision || {};
     var action = decisionActionMeta(decision.action, decision.action);
     var active = normalizeInvestmentCaseDetailTab(state.investmentCaseDetailTabs[key]);
+    var availableViews = Array.isArray(detail.availableViews) ? detail.availableViews : [];
+    if (availableViews.length && availableViews.indexOf(active) < 0) active = "summary";
     var content = renderInvestmentCaseTabContent(key, active, detail);
     return {
       kicker: "Investment Case",
       title: detail.name || detail.symbol || "투자 케이스 상세",
       meta: [detail.symbol, action.label, detail.accountId, detail.readinessLabel].filter(Boolean).join(" · "),
-      body: renderInvestmentCaseDetailTabs(key, active) + '<div class="oa-case-detail-content" role="tabpanel" data-work-detail-region="investment-case-content" data-investment-case-panel-key="' + escapeHtml(key) + '" data-investment-case-panel-tab="' + escapeHtml(active) + '">' + content + '</div>'
+      body: renderInvestmentCaseDetailTabs(key, active, detail) + '<div class="oa-case-detail-content" role="tabpanel" data-work-detail-region="investment-case-content" data-investment-case-panel-key="' + escapeHtml(key) + '" data-investment-case-panel-tab="' + escapeHtml(active) + '">' + content + '</div>'
     };
   }
 

@@ -114,6 +114,7 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertTrue(event.payload["factRevisionsBySymbol"]["AAPL"])
         self._assert_monitor_source_fact_lineage(current, event)
         self._assert_source_fact_payload_is_bounded()
+        self._assert_ungrounded_required_condition_is_never_judgement_evidence()
         self._assert_news_request_derives_bounded_document_fact()
         self._assert_reasoning_request_does_not_truncate_twenty_facts()
 
@@ -202,6 +203,68 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertNotIn("rawHtml", compact)
         self.assertNotIn("apiKey", compact)
         self.assertEqual({}, compact.get("headers", {}))
+
+    def _assert_ungrounded_required_condition_is_never_judgement_evidence(self):
+        current = snapshot()
+        graph = build_portfolio_ontology(
+            current.positions,
+            current.portfolio,
+            include_tbox=False,
+            include_presentation=False,
+        )
+        stock = next(item for item in graph.entities if item.entity_id == "stock:AAPL")
+        rule = GraphInferenceRule(
+            rule_id="test.required-proof-completeness",
+            label="required proof completeness",
+            version="v1",
+            source_kind="stock",
+            conditions=[
+                GraphRuleCondition(
+                    condition_id="price",
+                    kind="subject_property",
+                    description="price exists",
+                    field="currentPrice",
+                    operator=">",
+                    value=0,
+                ),
+                GraphRuleCondition(
+                    condition_id="required-relation",
+                    kind="relation",
+                    description="required relation exists",
+                    relation_type="HAS_UNAVAILABLE_TEST_EVIDENCE",
+                    target_kind="test-evidence",
+                ),
+            ],
+            derivations=[],
+            action_group="observe",
+            action_level="observe",
+            prompt_hint="",
+        )
+
+        grounded = grounded_inference_context(
+            graph,
+            rule,
+            stock,
+            {
+                "matchedConditions": [
+                    {"conditionId": "price", "kind": "subject_property"},
+                    {
+                        "conditionId": "required-relation",
+                        "kind": "relation",
+                        "role": "required",
+                        "matched": False,
+                    },
+                ],
+            },
+        )
+
+        self.assertFalse(grounded["requiredConditionProofComplete"])
+        self.assertEqual(
+            ["required-relation"],
+            grounded["ungroundedRequiredConditionIds"],
+        )
+        self.assertFalse(grounded["evidenceUsableForJudgement"])
+        self.assertIn("판단 근거에서 제외", grounded["freshnessGateReason"])
 
     def _assert_news_request_derives_bounded_document_fact(self):
         collected = research_evidence_collected_event({

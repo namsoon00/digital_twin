@@ -1734,6 +1734,44 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("ontology-storage:observation-005930", plan["query"])
         self.assertNotIn("$anyConditionToken", plan["query"])
         self.assertNotIn("reduce $anyConditionCount", plan["query"])
+        self._assert_required_filtered_relation_never_falls_back_to_another_metric()
+
+    def _assert_required_filtered_relation_never_falls_back_to_another_metric(self):
+        rule = executable_catalog_rule("graph.execution.capacity_safe.v1")
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "sourceIdsBySymbol": {"000660": ["stock:000660"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:000660": "ontology-storage:stock-000660",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "000660": {
+                        "HAS_EXECUTION_METRIC": ["ontology-storage:position-to-value"],
+                    },
+                },
+                "relationStorageIdsBySymbolAndTypeAndField": {
+                    "000660": {
+                        "HAS_EXECUTION_METRIC": {
+                            "positionToTradingValuePct": [
+                                "ontology-storage:position-to-value"
+                            ],
+                        },
+                    },
+                },
+            },
+        }
+
+        plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["000660"],
+            evidence_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("not-eligible", plan["status"])
+        self.assertEqual("", plan["query"])
+        self.assertIn("execution-capacity-safe-sellable-ratio", plan["reason"])
 
     def test_pending_abox_recovery_blocks_empty_targets_when_a_predecessor_exists(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

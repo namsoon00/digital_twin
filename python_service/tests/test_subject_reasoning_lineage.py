@@ -145,6 +145,7 @@ def fallback_ai_episode():
         "publicationMode": "typedb-fallback",
         "aiAuthored": False,
         "publicationContractPassed": False,
+        "promptVersion": "investment-ai-judge-v16",
         "insight": {
             "action": "HOLD",
             "summary": "AI 실행 실패로 TypeDB 결과를 보존했다.",
@@ -183,6 +184,11 @@ class SubjectReasoningLineageTests(unittest.TestCase):
         self.assertEqual(1776000, reasoning["facts"][0]["observedValue"])
         self.assertNotIn("005380", str(lineage))
         self.assertEqual("typedb-fallback", lineage["ai"]["status"])
+        self.assertEqual("investment-ai-judge-v16", lineage["ai"]["promptVersion"])
+        self.assertEqual(
+            "investment-ai-judge-v16",
+            lineage["traceRefs"]["modelRelease"]["aiPromptReleaseId"],
+        )
         self.assertEqual(1, lineage["scenarios"][0]["observationState"]["sampleCount"])
         self.assertEqual(
             ["fact", "relation", "rule", "hypothesis", "decision"],

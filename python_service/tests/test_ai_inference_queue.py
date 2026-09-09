@@ -366,11 +366,12 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertIsNotNone(self.notifications.get(job.job_id))
         row = mysql_fetchone(
             self.seed,
-            "SELECT model, reasoning_effort, notification_job_id "
+            "SELECT model, reasoning_effort, notification_job_id, payload_json "
             "FROM investment_ai_insight_episodes WHERE request_id = %s",
             (request.request_id,),
         )
-        self.assertEqual(("gpt-5.6-sol", "max", job.job_id), tuple(row))
+        self.assertEqual(("gpt-5.6-sol", "max", job.job_id), tuple(row[:3]))
+        self.assertEqual(request.prompt_version, json.loads(row[3])["promptVersion"])
         repeat_job, repeat = self.create_detached_request("subject:detached:completed-repeat")
         repeat_outcome = self.queue.enqueue_subject_decision(repeat_job, repeat)
         self.assertEqual("coalesced-material", repeat_outcome["status"])
@@ -850,8 +851,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("gpt-5.6-sol", prompt_audit["model"])
         self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는"))
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
-        self.assertEqual("investment-ai-decision-core-v3", prompt_audit["decisionCore"]["schemaVersion"])
-        self.assertEqual("notification-ai-context-route-v4", prompt_audit["contextRouting"]["version"])
+        self.assertEqual("investment-ai-decision-core-v4", prompt_audit["decisionCore"]["schemaVersion"])
+        self.assertEqual("notification-ai-context-route-v5", prompt_audit["contextRouting"]["version"])
         self.assertEqual("investment-ai-judge-v16", prompt_audit["promptRelease"]["version"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])

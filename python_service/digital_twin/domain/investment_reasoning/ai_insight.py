@@ -11,7 +11,7 @@ from ..portfolio import utc_now_iso
 
 
 AI_INSIGHT_HANDOFF_VERSION = "investment-ai-insight-handoff-v1"
-AI_INSIGHT_EPISODE_VERSION = "investment-ai-insight-episode-v2"
+AI_INSIGHT_EPISODE_VERSION = "investment-ai-insight-episode-v3"
 DECISION_RECONCILIATION_VERSION = "investment-decision-reconciliation-v1"
 SUBJECT_DECISION_ORIGIN = "subject-decision"
 
@@ -322,6 +322,7 @@ class AIInsightEpisode:
     model: str
     reasoning_effort: str
     validation_state: str
+    prompt_version: str = ""
     publication_mode: str = ""
     ai_authored: bool = False
     publication_contract_passed: bool = False
@@ -361,6 +362,7 @@ class AIInsightEpisode:
             model=_text(getattr(request, "model", "")),
             reasoning_effort=_text(getattr(request, "reasoning_effort", "")),
             validation_state=_text(getattr(result, "validation_state", "")),
+            prompt_version=_text(getattr(request, "prompt_version", "")),
             publication_mode=_text(provenance.get("publicationMode")),
             ai_authored=bool(provenance.get("aiAuthored")),
             publication_contract_passed=bool(
@@ -389,6 +391,7 @@ class AIInsightEpisode:
             "model": payload["model"],
             "reasoningEffort": payload["reasoning_effort"],
             "validationState": payload["validation_state"],
+            "promptVersion": payload["prompt_version"],
             "publicationMode": payload["publication_mode"],
             "aiAuthored": payload["ai_authored"],
             "publicationContractPassed": payload["publication_contract_passed"],

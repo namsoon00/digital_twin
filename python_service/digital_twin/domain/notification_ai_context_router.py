@@ -17,8 +17,8 @@ from .notification_narrative import (
 from .prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v4"
-AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v3"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v5"
+AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v4"
 
 
 CORE_FACT_KEYS = (
@@ -103,6 +103,171 @@ def _json_bytes(value: object) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
 
 
+def _bounded_detail(
+    value: object,
+    *,
+    string_limit: int = 160,
+    list_limit: int = 6,
+    dict_limit: int = 16,
+) -> object:
+    """Bound audit detail without changing decision-contract identifiers."""
+
+    if isinstance(value, dict):
+        return {
+            str(key): _bounded_detail(
+                current,
+                string_limit=string_limit,
+                list_limit=list_limit,
+                dict_limit=dict_limit,
+            )
+            for key, current in list(value.items())[: max(1, int(dict_limit or 1))]
+            if current not in (None, "", [], {})
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [
+            _bounded_detail(
+                current,
+                string_limit=string_limit,
+                list_limit=list_limit,
+                dict_limit=dict_limit,
+            )
+            for current in list(value)[: max(1, int(list_limit or 1))]
+        ]
+    if isinstance(value, str):
+        return value[: max(1, int(string_limit or 1))]
+    return value
+
+
+def _bounded_detail_bytes(value: object, maximum_bytes: int) -> object:
+    """Fit non-contract audit detail to a measured UTF-8 budget."""
+
+    budget = max(96, int(maximum_bytes or 96))
+    for string_limit, list_limit, dict_limit in (
+        (120, 6, 12),
+        (72, 4, 8),
+        (40, 3, 5),
+        (24, 2, 3),
+    ):
+        candidate = _bounded_detail(
+            value,
+            string_limit=string_limit,
+            list_limit=list_limit,
+            dict_limit=dict_limit,
+        )
+        if _json_bytes(candidate) <= budget:
+            return candidate
+    if isinstance(value, dict):
+        return {
+            "retainedKeys": [str(key) for key in list(value)[:4]],
+            "detailOmitted": True,
+        }
+    if isinstance(value, (list, tuple, set)):
+        return {
+            "itemCount": len(value),
+            "detailOmitted": True,
+        }
+    return _clean(value, max(12, budget // 3))
+
+
+def _minimum_transition_detail(value: object) -> Dict[str, object]:
+    source = _mapping(value)
+    if not source:
+        return {}
+    row = _selected(
+        source,
+        (
+            "version", "status", "material", "userObservable", "changeKind",
+            "previousState", "currentState", "occurredAt", "observedAt",
+            "reason", "summary", "transitionReason", "hypothesisId",
+            "sourceEventNames", "kinds", "reasons", "materialRevisionKeys",
+        ),
+    )
+    evidence_delta = _mapping(source.get("evidenceDelta"))
+    if evidence_delta:
+        row["evidenceDelta"] = _bounded_detail_bytes(evidence_delta, 420)
+    return _bounded_detail_bytes(row, 900)
+
+
+def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    for item in value or []:
+        if not isinstance(item, dict):
+            continue
+        row = _selected(
+            item,
+            (
+                "evidenceId", "role", "kind", "label", "value", "source",
+                "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
+                "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
+                "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
+                "featureSummary", "judgementEligible",
+            ),
+        )
+        for key in (
+            "ruleIds", "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
+            "modelEvidenceIds",
+        ):
+            if key in row:
+                row[key] = _unique_all(row.get(key) or [])[:8]
+        for key in ("value", "featureSummary"):
+            if key in row:
+                row[key] = _bounded_detail_bytes(row[key], 420)
+        if row:
+            rows.append(row)
+        if len(rows) >= max(1, int(limit or 1)):
+            break
+    return rows
+
+
+def _minimum_hypothesis_row(value: object) -> Dict[str, object]:
+    item = _mapping(value)
+    row = _selected(
+        item,
+        (
+            "hypothesisId", "templateId", "familyId", "stance",
+            "candidateAction", "horizon", "predictionTarget",
+            "expectedDirection", "expectedOutcome", "outcomeMetric",
+            "evidenceState", "verificationStatus", "approvalStatus",
+            "scopeState", "inferenceGenerationId",
+        ),
+    )
+    row["claim"] = _sentence_text(item.get("claim"), 100)
+    for key in (
+        "supportingRuleIds", "supportingEvidenceIds", "counterEvidenceIds",
+    ):
+        values = _unique_all(item.get(key) or [])
+        if values:
+            row[key] = values
+    invalidation = _unique(item.get("invalidationConditions") or [], 1)
+    if invalidation:
+        row["invalidationConditions"] = invalidation
+    claim_contract = _selected(
+        item.get("claimContract"),
+        (
+            "claimContractId", "claimType", "expectedDirection",
+            "decisionAuthority",
+        ),
+    )
+    if claim_contract:
+        row["claimContract"] = claim_contract
+    qualification = _selected(
+        item.get("qualification"),
+        (
+            "status", "decisionAuthority", "reason", "actionReturnAvailable",
+            "decisiveOutcomeCount", "directionalHitRate",
+            "averageActionAdjustedReturnPct",
+        ),
+    )
+    if qualification:
+        if qualification.get("reason"):
+            qualification["reason"] = _sentence_text(
+                qualification.get("reason"),
+                120,
+            )
+        row["qualification"] = qualification
+    return row
+
+
 def _lineage_rows(value: object, fields: Iterable[str], limit: int) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     for item in value or []:
@@ -165,6 +330,23 @@ def _minimum_reasoning_lineage(value: object, *, emergency: bool = False) -> Dic
         or str(item.get("traceId") or "").strip() in retained_trace_ids
         or str(item.get("source") or "").strip() in retained_fact_ids
     ][:1 if emergency else 3]
+    fact_rows = _lineage_rows(
+        retained_facts,
+        (
+            "id", "conditionId", "label", "kind", "field", "relationType",
+            "role", "observedValue", "expected", "result", "source", "asOf",
+            "freshnessStatus", "targetId", "sourceFactIds", "evidenceIds",
+            "ruleIds", "traceIds", "targetProperties",
+        ),
+        2 if emergency else 4,
+    )
+    for item in fact_rows:
+        for key in ("observedValue", "targetProperties"):
+            if key in item:
+                item[key] = _bounded_detail_bytes(item[key], 520)
+        for key in ("sourceFactIds", "evidenceIds", "ruleIds", "traceIds"):
+            if key in item:
+                item[key] = _unique_all(item.get(key) or [])[:8]
     return {
         "version": lineage.get("version"),
         "status": lineage.get("status"),
@@ -189,16 +371,7 @@ def _minimum_reasoning_lineage(value: object, *, emergency: bool = False) -> Dic
         },
         "proof": {
             **_selected(proof, ("sourceAboxSnapshotId", "inferenceGenerationId", "recordCompleteness")),
-            "facts": _lineage_rows(
-                retained_facts,
-                (
-                    "id", "conditionId", "label", "kind", "field", "relationType",
-                    "role", "observedValue", "expected", "result", "source", "asOf",
-                    "freshnessStatus", "targetId", "sourceFactIds", "evidenceIds",
-                    "ruleIds", "traceIds", "targetProperties",
-                ),
-                2 if emergency else 4,
-            ),
+            "facts": fact_rows,
             "relations": _lineage_rows(
                 retained_relations,
                 ("id", "type", "label", "source", "target", "ruleId", "traceId", "polarity", "evidenceUsable"),
@@ -1209,7 +1382,11 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         )
         item["qualification"] = _selected(
             _mapping(item.get("qualification")),
-            ("status", "decisionAuthority", "reason"),
+            (
+                "status", "decisionAuthority", "reason", "actionReturnAvailable",
+                "decisiveOutcomeCount", "directionalHitRate",
+                "averageActionAdjustedReturnPct",
+            ),
         )
     fitted["evidenceLedger"] = compact_ledger(4)
     fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
@@ -1302,17 +1479,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
             ),
         ),
         "hypotheses": [
-            {
-                **_selected(
-                    item,
-                    (
-                        "hypothesisId", "templateId", "familyId", "stance",
-                        "candidateAction", "horizon", "supportingRuleIds",
-                        "supportingEvidenceIds", "counterEvidenceIds",
-                    ),
-                ),
-                "claim": _sentence_text(item.get("claim"), 80),
-            }
+            _minimum_hypothesis_row(item)
             for item in list(hypothesis_set.get("hypotheses") or [])
             if isinstance(item, dict)
         ],
@@ -1338,27 +1505,57 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         for item in list(fitted.get("rules") or [])[:3]
         if isinstance(item, dict)
     ]
-    fitted["externalEvidence"] = list(fitted.get("externalEvidence") or [])[:1]
-    fitted["decisionDrivers"] = list(fitted.get("decisionDrivers") or [])[:2]
-    fitted["dataLimits"] = list(fitted.get("dataLimits") or [])[:2]
+    fitted["reasoningTrigger"] = _minimum_transition_detail(
+        fitted.get("reasoningTrigger") or {},
+    )
+    fitted["relationLifecycle"] = _minimum_transition_detail(
+        fitted.get("relationLifecycle") or {},
+    )
+    temporal = _mapping(fitted.get("temporalEvidence"))
+    fitted["temporalEvidence"] = {
+        **_selected(
+            temporal,
+            (
+                "loadedWindowCount", "matchedWindowCount", "matchedWindowKeys",
+                "evidenceRole",
+            ),
+        ),
+        "windows": [
+            _bounded_detail_bytes(item, 600)
+            for item in list(temporal.get("windows") or [])[:3]
+            if isinstance(item, dict)
+        ],
+    }
+    fitted["companyEvidence"] = _bounded_detail_bytes(
+        fitted.get("companyEvidence") or {},
+        1200,
+    )
+    fitted["externalEvidence"] = [
+        _bounded_detail_bytes(item, 1200)
+        for item in list(fitted.get("externalEvidence") or [])[:1]
+        if isinstance(item, dict)
+    ]
+    fitted["decisionDrivers"] = [
+        _bounded_detail_bytes(item, 700)
+        for item in list(fitted.get("decisionDrivers") or [])[:2]
+        if isinstance(item, dict)
+    ]
+    fitted["dataLimits"] = [
+        _bounded_detail_bytes(item, 420)
+        for item in list(fitted.get("dataLimits") or [])[:2]
+    ]
+    fitted["portfolioPolicy"] = _bounded_detail_bytes(
+        fitted.get("portfolioPolicy") or {},
+        1000,
+    )
     fitted["reasoningLineage"] = _minimum_reasoning_lineage(
         fitted.get("reasoningLineage"),
         emergency=True,
     )
-    fitted["evidenceLedger"] = [
-        _selected(
-            item,
-            (
-                "evidenceId", "role", "kind", "label", "value", "source",
-                "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
-                "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
-                "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
-                "featureSummary", "judgementEligible",
-            ),
-        )
-        for item in compact_ledger(3)
-        if isinstance(item, dict)
-    ]
+    fitted["evidenceLedger"] = _minimum_evidence_ledger_rows(
+        compact_ledger(3),
+        max(3, len(required_evidence_ids)),
+    )
     fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
         fitted["evidenceLedger"]
     )

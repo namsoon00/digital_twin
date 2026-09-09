@@ -2127,7 +2127,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v2"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v3"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -29237,7 +29237,22 @@ def typedb_native_indexed_evidence_match_query(
             ).get(field_value, []) or []
             if str(storage_id or "").strip()
         })
-        storage_ids = field_storage_ids or relation_storage_ids_by_type.get(relation_type, [])
+        role = normalized_condition_role(condition)
+        if field_values and not field_storage_ids and role == "required":
+            return {
+                "status": "not-eligible",
+                "ruleId": rule_id,
+                "query": "",
+                "reason": (
+                    "Active Manifest evidence index has no field-specific relation "
+                    "storage identities for required condition " + condition_id + "."
+                ),
+            }
+        storage_ids = (
+            field_storage_ids
+            if field_values
+            else relation_storage_ids_by_type.get(relation_type, [])
+        )
         if storage_ids:
             relation_storage_ids_by_condition[condition_id] = storage_ids
     storage_identity_count = len({

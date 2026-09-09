@@ -1350,6 +1350,7 @@ def subject_reasoning_lineage(
             "selectedRuleId": selected_rule_id,
             "selectedHypothesisId": selected_hypothesis_id,
             "aiInsightEpisodeId": _text(ai_episode.get("episodeId")),
+            "aiPromptReleaseId": _text(ai_episode.get("promptVersion")),
         },
         "integrity": {
             "state": integrity_state,
@@ -1414,6 +1415,7 @@ def subject_reasoning_lineage(
             "episodeId": _text(ai_episode.get("episodeId")),
             "model": _text(ai_episode.get("model")),
             "reasoningEffort": _text(ai_episode.get("reasoningEffort")),
+            "promptVersion": _text(ai_episode.get("promptVersion")),
             "summary": ai_summary,
             "action": ai_action,
         },
@@ -1448,6 +1450,7 @@ def subject_reasoning_lineage(
                 "promptReleaseId": _text(
                     _first(release_manifest, "prompt_release_id", "promptReleaseId")
                 ),
+                "aiPromptReleaseId": _text(ai_episode.get("promptVersion")),
                 "lineageLabel": "TBox → ABox → RuleBox → InferenceBox → 가설 → AI",
             },
         },

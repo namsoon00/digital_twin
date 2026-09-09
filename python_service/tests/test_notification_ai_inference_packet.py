@@ -162,6 +162,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
 
     def test_retry_budget_preserves_minimum_contract_for_large_live_shape(self):
         self._assert_compaction_preserves_every_hypothesis_evidence_identifier()
+        self._assert_live_nested_audit_detail_cannot_block_ai_before_model_execution()
         ledger = [
             {
                 "evidenceId": "evidence:" + str(index),
@@ -253,6 +254,140 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual("HOLD", fitted["decision"]["actionEnvelope"]["executionAction"])
         self.assertEqual(1.0, fitted["facts"]["currentPrice"])
         self.assertLessEqual(len(fitted["evidenceLedger"]), 3)
+
+    def _assert_live_nested_audit_detail_cannot_block_ai_before_model_execution(self):
+        evidence_ids = ["ontology-assertion:" + str(index) for index in range(4)]
+        oversized_detail = {
+            "field" + str(index): "감사 원본 상세 " * 80
+            for index in range(180)
+        }
+        hypotheses = [
+            {
+                "hypothesisId": "hypothesis:" + str(index),
+                "templateId": "hypothesis-template:rule:" + str(index),
+                "familyId": "hypothesis-family:" + str(index),
+                "candidateAction": "HOLD",
+                "claim": "현재 가격 경로가 위험 사건을 흡수하고 있다는 검증 가능한 가설",
+                "supportingRuleIds": ["rule:" + str(index)],
+                "supportingEvidenceIds": [evidence_ids[index]],
+                "counterEvidenceIds": [evidence_ids[index + 2]],
+                "invalidationConditions": ["다음 관측에서 가격 방어가 사라지면 무효화"],
+                "claimContract": {
+                    "claimContractId": "rule-claim:rule:" + str(index),
+                    "claimType": "market-hypothesis",
+                    "decisionAuthority": "conditional-investment-evidence",
+                },
+                "qualification": {
+                    "status": "observed" if index == 0 else "shadow",
+                    "decisionAuthority": "conditional-investment-evidence",
+                    "decisiveOutcomeCount": 4 if index == 0 else 0,
+                    "directionalHitRate": 0.25 if index == 0 else 0,
+                    "averageActionAdjustedReturnPct": -0.1031 if index == 0 else 0,
+                    "reason": "사후 결과를 현재 판단과 분리해 검토합니다.",
+                },
+            }
+            for index in range(2)
+        ]
+        ledger = [
+            {
+                "evidenceId": evidence_id,
+                "role": "support" if index < 2 else "counter",
+                "kind": "ontology-assertion",
+                "label": "현재 세대 근거 " + str(index),
+                "value": oversized_detail,
+                "featureSummary": oversized_detail,
+                "source": "TypeDB",
+                "sourceFactIds": ["source-fact:" + str(index)],
+                "modelEvidenceIds": ["model-evidence:" + str(index)],
+                "judgementEligible": True,
+            }
+            for index, evidence_id in enumerate(evidence_ids)
+        ]
+        core = {
+            "schemaVersion": "investment-ai-decision-core-v4",
+            "notificationIntent": "context-observation",
+            "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
+            "facts": {"currentPrice": 1776000, "market": "KR", "currency": "KRW"},
+            "decision": {
+                "actionEnvelope": {
+                    "status": "HYPOTHESIS_QUALIFICATION_PENDING",
+                    "allowedActions": ["HOLD"],
+                    "blockedActions": ["ADD"],
+                },
+            },
+            "reasoningTrigger": {
+                "status": "verified-material-transition",
+                "materialRevisionKeys": list(oversized_detail),
+                "audit": oversized_detail,
+            },
+            "relationLifecycle": {
+                "changeKind": "strengthened",
+                "evidenceDelta": oversized_detail,
+            },
+            "hypothesisSet": {
+                "hypothesisSetId": "hypothesis-set:000660",
+                "inferenceGenerationId": "inference-generation:current",
+                "hypotheses": hypotheses,
+            },
+            "rules": [
+                {"ruleId": "rule:" + str(index), "label": "가설 규칙 " + str(index)}
+                for index in range(2)
+            ],
+            "reasoningLineage": {
+                "status": "complete",
+                "judgementEligible": True,
+                "identity": {
+                    "symbol": "000660",
+                    "sourceAboxSnapshotId": "abox-manifest:current",
+                    "inferenceGenerationId": "inference-generation:current",
+                    "selectedRuleId": "rule:0",
+                },
+                "integrity": {"state": "pass"},
+                "proof": {
+                    "sourceAboxSnapshotId": "abox-manifest:current",
+                    "inferenceGenerationId": "inference-generation:current",
+                    "rules": [{"id": "rule:0", "selected": True}],
+                    "traces": [{"id": "trace:0", "ruleId": "rule:0"}],
+                    "relations": [],
+                    "facts": [{
+                        "id": "source-fact:0",
+                        "observedValue": oversized_detail,
+                        "targetProperties": oversized_detail,
+                        "ruleIds": ["rule:0"],
+                        "traceIds": ["trace:0"],
+                    }],
+                },
+            },
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
+            "routingAudit": {"version": "notification-ai-context-route-v5"},
+        }
+
+        fitted = fit_notification_ai_decision_core(core, 15_884)
+
+        rendered_bytes = len(json.dumps(
+            fitted,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode())
+        self.assertLessEqual(rendered_bytes, 15_884)
+        fitted_hypotheses = fitted["hypothesisSet"]["hypotheses"]
+        self.assertEqual(
+            evidence_ids,
+            sorted({
+                evidence_id
+                for item in fitted_hypotheses
+                for key in ("supportingEvidenceIds", "counterEvidenceIds")
+                for evidence_id in item[key]
+            }),
+        )
+        self.assertEqual("observed", fitted_hypotheses[0]["qualification"]["status"])
+        self.assertEqual(4, fitted_hypotheses[0]["qualification"]["decisiveOutcomeCount"])
+        self.assertEqual(0.25, fitted_hypotheses[0]["qualification"]["directionalHitRate"])
+        self.assertEqual(
+            set(evidence_ids),
+            {item["evidenceId"] for item in fitted["evidenceLedger"]},
+        )
 
     def test_packet_is_stable_and_declares_section_evidence(self):
         first = build_notification_ai_inference_packet(investment_context(), {})

@@ -749,6 +749,13 @@ def grounded_inference_context(
     ]
     required_count = len(required_conditions)
     grounded_required_count = sum(1 for item in required_conditions if condition_is_grounded(item))
+    ungrounded_required_condition_ids = [
+        str(item.get("conditionId") or "")
+        for item in grounded_conditions
+        if str(item.get("role") or "required").strip().lower() == "required"
+        and not condition_is_grounded(item)
+    ]
+    required_condition_proof_complete = not ungrounded_required_condition_ids
     if blocked_temporal_conditions:
         data_state = "unavailable" if grounded_required_count <= len(blocked_temporal_conditions) else "partial"
     elif required_count and grounded_required_count < required_count:
@@ -757,8 +764,17 @@ def grounded_inference_context(
         data_state = "sufficient"
     else:
         data_state = "insufficient"
-    evidence_usable = data_state in {"sufficient", "partial"} and not blocked_temporal_conditions
-    if data_state == "insufficient":
+    evidence_usable = bool(
+        data_state in {"sufficient", "partial"}
+        and not blocked_temporal_conditions
+        and required_condition_proof_complete
+    )
+    if not required_condition_proof_complete:
+        freshness_gate_reason = (
+            "TypeDB 성립 기록의 필수 조건이 현재 ABox 관측값에 모두 연결되지 않아 "
+            "판단 근거에서 제외합니다."
+        )
+    elif data_state == "insufficient":
         freshness_gate_reason = "성립 조건의 실제 관측값이 충분하지 않습니다."
     elif blocked_temporal_conditions:
         freshness_gate_reason = str(
@@ -775,6 +791,8 @@ def grounded_inference_context(
         "conditionDetailSource": "typedb-match+abox-grounding",
         "requiredConditionCount": required_count,
         "groundedConditionCount": grounded_required_count,
+        "requiredConditionProofComplete": required_condition_proof_complete,
+        "ungroundedRequiredConditionIds": ungrounded_required_condition_ids,
         "dataState": data_state,
         "dataStateLabel": DATA_STATE_LABELS[data_state],
         "freshnessStatus": freshness_status,
@@ -1145,10 +1163,16 @@ def inferred_time_sensitive_observation(properties: Dict[str, object]) -> bool:
 
 
 def condition_is_grounded(condition: Dict[str, object]) -> bool:
+    if condition.get("matched") is False:
+        return False
     return bool(
         condition.get("observedValue") not in (None, "")
         or str(condition.get("relationId") or "").strip()
         or condition.get("absenceSatisfied")
+        or (
+            str(condition.get("kind") or "").strip() == "any-condition-group"
+            and condition.get("matchedByTypeDB") is True
+        )
     )
 
 

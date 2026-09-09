@@ -26030,6 +26030,100 @@
     }).join("") + '</nav>';
   }
 
+  function investmentHypothesisQualificationMeta(value) {
+    var qualification = value && typeof value === "object" ? value : {};
+    var status = String(qualification.status || "shadow").toLowerCase();
+    var labels = {
+      active: "운영 근거로 사용",
+      "limited-active": "제한적으로 사용",
+      observed: "성과 검증 중",
+      shadow: "표본 수집 중",
+      quarantined: "행동 근거에서 제외",
+      "active-reference": "참고 근거",
+      "active-guardrail": "안전 제한"
+    };
+    var tones = {
+      active: "pass",
+      "limited-active": "warning",
+      observed: "warning",
+      shadow: "pending",
+      quarantined: "blocked",
+      "active-reference": "hold",
+      "active-guardrail": "hold"
+    };
+    return {
+      status: status,
+      label: labels[status] || "검증 상태 확인",
+      tone: tones[status] || "warning"
+    };
+  }
+
+  function renderInvestmentCaseLineageChain(detail) {
+    var lineage = detail.reasoningLineage && typeof detail.reasoningLineage === "object" ? detail.reasoningLineage : {};
+    var identity = lineage.identity && typeof lineage.identity === "object" ? lineage.identity : {};
+    var reasoning = detail.reasoning && typeof detail.reasoning === "object" ? detail.reasoning : {};
+    var counts = reasoning.counts && typeof reasoning.counts === "object" ? reasoning.counts : {};
+    var ai = lineage.ai && typeof lineage.ai === "object" ? lineage.ai : {};
+    var modelRelease = detail.traceRefs && detail.traceRefs.modelRelease ? detail.traceRefs.modelRelease : {};
+    var scenarios = Array.isArray(detail.scenarios) ? detail.scenarios : [];
+    var qualifiedCount = scenarios.filter(function (item) {
+      return ["active", "limited-active"].indexOf(String(((item || {}).qualification || {}).status || "").toLowerCase()) >= 0;
+    }).length;
+    var observedCount = scenarios.filter(function (item) {
+      return String(((item || {}).qualification || {}).status || "").toLowerCase() === "observed";
+    }).length;
+    var aiAuthored = ai.status === "ai-authored" && ai.aiAuthored === true && ai.publicationContractPassed === true;
+    var stages = [
+      {
+        label: "TBox",
+        title: "개념·계약",
+        detail: modelRelease.tboxReleaseId || identity.tboxReleaseId || "릴리스 연결 필요",
+        state: modelRelease.tboxReleaseId || identity.tboxReleaseId ? "pass" : "blocked"
+      },
+      {
+        label: "ABox",
+        title: "판단 당시 사실",
+        detail: Number(counts.facts || 0) + "개 관측값",
+        state: Number(counts.facts || 0) > 0 ? "pass" : "blocked"
+      },
+      {
+        label: "RuleBox",
+        title: "성립한 규칙",
+        detail: Number(counts.rules || 0) + "개 규칙",
+        state: Number(counts.rules || 0) > 0 ? "pass" : "blocked"
+      },
+      {
+        label: "InferenceBox",
+        title: "관계 추론",
+        detail: Number(counts.relations || 0) + "개 관계 · " + Number(counts.traces || 0) + "개 실행",
+        state: Number(counts.traces || 0) > 0 ? "pass" : "blocked"
+      },
+      {
+        label: "가설",
+        title: "경쟁 설명 비교",
+        detail: scenarios.length + "개 · 운영 " + qualifiedCount + " · 검증 중 " + observedCount,
+        state: scenarios.length ? (qualifiedCount ? "pass" : "warning") : "blocked"
+      },
+      {
+        label: "AI",
+        title: aiAuthored ? "독립 분석 완료" : "AI 분석 미완료",
+        detail: aiAuthored ? [ai.model, ai.reasoningEffort, ai.promptVersion].filter(Boolean).join(" · ") : (ai.contractFailureCode || ai.status || "실행 대기"),
+        state: aiAuthored ? "pass" : (ai.status === "not-run" ? "pending" : "warning")
+      }
+    ];
+    return [
+      '<section class="oa-case-lineage-chain" data-lineage-state="' + escapeHtml(aiAuthored ? "complete" : "partial") + '">',
+      '<header><div><span>REASONING LINEAGE</span><strong>사실에서 투자 해석까지</strong><p>각 단계는 같은 종목, ABox 스냅샷과 추론 세대로 연결됩니다.</p></div><b>' + escapeHtml(aiAuthored ? "전체 연결" : "AI 단계 확인 필요") + '</b></header>',
+      '<ol>',
+      stages.map(function (stage) {
+        return '<li data-flow-state="' + escapeHtml(stage.state) + '"><span>' + escapeHtml(stage.label) + '</span><strong>' + escapeHtml(stage.title) + '</strong><em title="' + escapeHtml(stage.detail) + '">' + escapeHtml(stage.detail) + '</em></li>';
+      }).join(""),
+      '</ol>',
+      '<footer><code>' + escapeHtml(identity.sourceAboxSnapshotId || "ABox 연결 필요") + '</code><code>' + escapeHtml(identity.inferenceGenerationId || "InferenceBox 연결 필요") + '</code></footer>',
+      '</section>'
+    ].join("");
+  }
+
   function renderInvestmentCaseSummary(detail, key) {
     var decision = detail.decision || {};
     var outcome = detail.outcome || {};
@@ -26060,6 +26154,7 @@
       renderRecordChangedAt(detail),
       '</section>',
       '<section class="oa-case-record-contract" data-flow-state="' + escapeHtml(integrity.state || "warning") + '"><div><span>판단 기준 시각</span><strong>' + escapeHtml(formatClock(freshness.decisionAsOf || detail.decidedAt) || "기록 없음") + '</strong><em>원천 ' + escapeHtml(formatClock(freshness.sourceAsOf) || "기준 시각 미기록") + ' · 추론 ' + escapeHtml(formatClock(freshness.inferenceAsOf) || "기준 시각 미기록") + '</em></div><div><span>기록 무결성</span><strong>' + escapeHtml(integrity.label || "확인 필요") + '</strong><em>' + escapeHtml(integrityIssues.length ? integrityIssues[0].detail : "판단 당시 사실과 추론 상세가 연결되어 있습니다.") + '</em></div></section>',
+      renderInvestmentCaseLineageChain(detail),
       renderInvestmentDecisionRationale(detail, false),
       '<section class="oa-case-overview-section"><header><strong>처리 상태와 영향</strong>' + renderDecisionInfoButton("decision-readiness", "자료 부족, 관계 추론, AI 비교와 결과 관측을 분리해 각각의 이유를 표시합니다.") + '</header>' + renderDecisionStatusDimensions(detail.statusDimensions, false) + '</section>',
       '<div class="oa-case-cause-columns"><section><header><strong>' + escapeHtml(supportTitle) + '</strong>' + renderDecisionInfoButton("reasoning-rule", "성립한 관계와 규칙 중 현재 투자 의견에 실제로 채택된 근거입니다.") + '</header>' + renderDecisionCauseList(support, supportEmpty) + '</section><section><header><strong>반대 근거와 제한</strong>' + renderDecisionInfoButton("competing-hypothesis", "다른 결론을 지지하거나 현재 의견의 강도를 낮춘 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 기록된 반대 근거나 제한 조건이 없습니다.") + '</section></div>',
@@ -26279,11 +26374,22 @@
     return '<div class="oa-case-scenario-list">' + scenarios.map(function (item) {
       var assumptions = Array.isArray(item.assumptions) ? item.assumptions : [];
       var invalidations = Array.isArray(item.invalidationConditions) ? item.invalidationConditions : [];
+      var qualification = item.qualification && typeof item.qualification === "object" ? item.qualification : {};
+      var qualificationMeta = investmentHypothesisQualificationMeta(qualification);
+      var decisiveCount = Number(qualification.decisiveOutcomeCount || 0);
+      var hitRate = qualification.directionalHitRate === undefined || qualification.directionalHitRate === null
+        ? "기록 없음"
+        : (Number(qualification.directionalHitRate) * 100).toLocaleString("ko-KR", { maximumFractionDigits: 1 }) + "%";
+      var adjustedReturn = qualification.actionReturnAvailable === true
+        ? ((Number(qualification.averageActionAdjustedReturnPct || 0) > 0 ? "+" : "") + Number(qualification.averageActionAdjustedReturnPct || 0).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "%")
+        : "표본 없음";
+      var observationCount = Number(((item.observationState || {}).sampleCount) || 0);
       return [
         '<article class="oa-case-scenario' + (item.selected ? " selected" : "") + '">',
-        '<header><div><span>' + escapeHtml(item.selected ? "SELECTED CASE" : "ALTERNATIVE") + '</span><strong>' + escapeHtml(item.title || "투자 시나리오") + '</strong></div><b>' + escapeHtml(item.stateLabel || "확인 중") + '</b></header>',
+        '<header><div><span>' + escapeHtml(item.selected ? "선택된 가설" : "비교 가설") + '</span><strong>' + escapeHtml(item.title || "투자 시나리오") + '</strong></div><b data-flow-state="' + escapeHtml(qualificationMeta.tone) + '">' + escapeHtml(qualificationMeta.label) + '</b></header>',
         '<p>' + escapeHtml(item.claim || "설명 문장이 없습니다.") + '</p>',
-        '<div class="oa-case-scenario-metrics"><span>지지 <strong>' + escapeHtml(item.supportCount || 0) + '</strong></span><span>반박 <strong>' + escapeHtml(item.counterCount || 0) + '</strong></span><span>규칙 <strong>' + escapeHtml(Array.isArray(item.ruleIds) ? item.ruleIds.length : 0) + '</strong></span><span>검증 <strong>' + escapeHtml(item.verificationStatus || "확인 중") + '</strong></span></div>',
+        '<div class="oa-case-scenario-metrics"><span>지지 <strong>' + escapeHtml(item.supportCount || 0) + '</strong></span><span>반박 <strong>' + escapeHtml(item.counterCount || 0) + '</strong></span><span>독립 결과 <strong>' + escapeHtml(decisiveCount + "건") + '</strong></span><span>방향 적중 <strong>' + escapeHtml(hitRate) + '</strong></span><span>행동조정 수익 <strong>' + escapeHtml(adjustedReturn) + '</strong></span><span>추적 기록 <strong>' + escapeHtml(observationCount + "건") + '</strong></span></div>',
+        qualification.reason ? '<p class="oa-case-scenario-qualification">' + escapeHtml(qualification.reason) + '</p>' : '',
         (assumptions.length || invalidations.length) ? '<details><summary>전제와 무효화 조건</summary>' + (assumptions.length ? '<strong>전제</strong><ul>' + assumptions.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + (invalidations.length ? '<strong>무효화 조건</strong><ul>' + invalidations.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + '</details>' : '',
         '</article>'
       ].join("");

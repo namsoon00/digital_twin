@@ -96,7 +96,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Final AI delivery authority, counter-evidence and falsifiability
         # checks, release-cohort health, and AI-direction outcome attribution
         # independently protect the insight publication feedback loop.
-        self.assertLessEqual(total, 997)
+        # Immutable TypeDB dispatch routing and TypeDB/AI fan-out isolation add
+        # two independent contracts at the inference publication boundary.
+        self.assertLessEqual(total, 999)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

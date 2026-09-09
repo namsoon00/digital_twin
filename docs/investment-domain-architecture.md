@@ -61,13 +61,15 @@ TypeDB is not the account, ledger, order, or delivery source of truth. Projectio
 5. Direct TypeQL rules join exact model evidence with semantic, private account, policy, quality, and execution facts and materialize one immutable InferenceBox generation.
 6. The investment brain builds competing hypotheses from exact contracts, active TypeDB traces, and explicit counter-evidence.
 7. The decision-continuity assembler loads the immediately prior decision plus its bounded follow-up, observed outcome, account-activity, execution, and review facts.
-8. A per-account, per-symbol `SubjectDecisionCase` freezes the candidate set. `READY` means AI handoff is pending; it is never a durable investment opinion.
-9. AI receives the bounded graph packet and `DecisionContinuityPacket` and selects a hypothesis and categorical action inside the action envelope.
-10. The selected hypothesis must carry a complete point-in-time outcome contract: observation horizons, required domains, result criteria, invalidation criteria, lineage, and an exact fingerprint. An incomplete contract produces `ABSTAINED`, not a synthetic `HOLD` or an unverifiable final opinion.
-11. A `DecisionEpisode`, its `DecisionOutcomeTarget` rows, and the canonical decision publication are persisted atomically. Every new final opinion can therefore be checked later.
-12. Notification admission runs only after investment meaning exists. Cooldown, quiet hours, similarity, and channel failure change delivery state but never the decision stage.
-13. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
-14. Due outcome targets load point-in-time observations, create `ObservedOutcome`, attribution, and `DecisionReview`, then project verified learning facts into the next ABox generation. Learning changes remain review-only proposals.
+8. A per-account, per-symbol `SubjectDecisionCase` freezes the candidate set. `READY` means downstream routing is pending; it is never a durable investment opinion.
+9. One immutable `InferenceDispatchDecision` routes that exact candidate fingerprint to `PUBLISH_TYPEDB`, `HANDOFF_AI`, `ARCHIVE`, or `INVALID`. The route cannot be replaced by a delivery result.
+10. A material reference-only observation may publish a deterministic TypeDB message without AI. An actionable or review hypothesis goes to the independent AI queue. A result with no new user value remains in web history.
+11. AI receives the bounded graph packet and `DecisionContinuityPacket` and selects a hypothesis and categorical action inside the action envelope.
+12. The selected hypothesis must carry a complete point-in-time outcome contract: observation horizons, required domains, result criteria, invalidation criteria, lineage, and an exact fingerprint. An incomplete contract produces `ABSTAINED`, not a synthetic `HOLD` or an unverifiable final opinion.
+13. A `DecisionEpisode`, its `DecisionOutcomeTarget` rows, and the canonical decision publication are persisted atomically. Every new final opinion can therefore be checked later.
+14. Notification admission runs only after investment meaning exists. Cooldown, quiet hours, similarity, and channel failure change delivery state but never the decision or dispatch route.
+15. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
+16. Due outcome targets load point-in-time observations, create `ObservedOutcome`, attribution, and `DecisionReview`, then project verified learning facts into the next ABox generation. Learning changes remain review-only proposals.
 
 Statistical signals have no implicit action authority. All predictive rules use
 the production model-contract path, but only exact `hypothesisContractId`
@@ -86,7 +88,10 @@ The trace key chain is:
 sourceEventId
   -> aboxSnapshotId
   -> inferenceGenerationId
-  -> decisionEpisodeId
+  -> candidateFingerprint
+  -> inferenceDispatchDecisionId
+  -> [typedbNotificationJobId | aiInsightHandoffId]
+  -> decisionEpisodeId (AI final opinion only)
   -> actionPlanId
   -> executionEpisodeId
   -> providerExecutionId
@@ -100,7 +105,7 @@ The subject decision and its customer delivery are separate state machines.
 
 | State | Meaning | Terminal |
 | --- | --- | --- |
-| `READY` | Immutable candidate set exists and is waiting for AI handoff | No |
+| `READY` | Immutable candidate set exists and is waiting for downstream routing | No |
 | `AI_PENDING` | One durable AI request owns the candidate fingerprint | No |
 | `VALIDATED` | AI selected an allowed hypothesis and a complete outcome contract exists | No |
 | `ABSTAINED` | No final investment opinion was created; the reason is explicit | Yes |
@@ -113,6 +118,14 @@ The subject decision and its customer delivery are separate state machines.
 and an outcome contract. A `READY` case older than the configured recovery
 window is converted to an explicit abstention because current facts may no
 longer match its point-in-time snapshot.
+
+Dispatch and delivery are also separate. `PUBLISH_TYPEDB` authorizes a
+deterministic TypeDB observation message, while `HANDOFF_AI` authorizes model
+interpretation of the frozen candidate set. `ARCHIVE` ends in web history and
+`INVALID` records a contract failure. A later `queued`, `suppressed`,
+`delivered`, or `failed` state records transport progress without rewriting that
+route. The AI queue store persists a prepared outbox job atomically, but the
+application projection service owns whether an AI result becomes that job.
 
 ## Operational Closed Loop
 

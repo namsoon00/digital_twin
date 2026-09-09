@@ -266,6 +266,17 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             "sourceAboxSnapshotId": "abox:2",
             "inferenceGenerationId": "generation:2",
             "updatedAt": "2026-08-20T03:00:00Z",
+            "inferenceDispatchDecision": {
+                "decisionId": "dispatch:subject:1",
+                "route": "HANDOFF_AI",
+                "reasonCode": "actionable-candidate-ai-judgement",
+                "reason": "TypeDB 행동 후보를 AI 판단 단계로 전달했습니다.",
+                "sourceEventId": "event:inference:subject:1",
+                "createdAt": "2026-08-20T03:00:01Z",
+            },
+            "deliveryState": "suppressed",
+            "deliveryReason": "중요 상태 변화가 없어 웹 이력에만 저장합니다.",
+            "deliveryEligible": False,
             "candidateSet": {
                 "fingerprint": "candidate:1",
                 "eligibleHypothesisIds": ["hypothesis:2"],
@@ -354,6 +365,9 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         item = result["items"][0]
         insight = item["subjectDecisionCase"]["aiInsight"]
         ai_dimension = next(row for row in item["statusDimensions"] if row["id"] == "ai")
+        dispatch_dimension = next(
+            row for row in item["statusDimensions"] if row["id"] == "dispatch"
+        )
         self.assertEqual("subject-decision-case", item["detailType"])
         self.assertEqual("insight", item["attention"]["state"])
         self.assertTrue(item["attention"]["userReviewable"])
@@ -375,6 +389,15 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual("initial-insight", insight["insightTransition"]["kind"])
         self.assertEqual("AI 해석", ai_dimension["label"])
         self.assertEqual("해석 완료", ai_dimension["stateLabel"])
+        self.assertEqual("AI 판단 전달", dispatch_dimension["stateLabel"])
+        self.assertEqual(
+            "HANDOFF_AI",
+            item["subjectDecisionCase"]["dispatch"]["route"],
+        )
+        self.assertEqual(
+            "suppressed",
+            item["subjectDecisionCase"]["dispatch"]["deliveryState"],
+        )
         self.assertIn("AI 해석 완료", item["phaseLabel"])
         self.assertEqual(
             insight["insightAssessment"]["dominantThesis"],

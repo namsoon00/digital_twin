@@ -8,7 +8,10 @@ import json
 from typing import List, Optional
 
 from ..domain.investment_reasoning import SubjectDecisionCase
-from ..domain.events import investment_inference_episode_completed_event
+from ..domain.events import (
+    investment_inference_dispatch_decided_event,
+    investment_inference_episode_completed_event,
+)
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_events import insert_domain_event_with_connection
 from .mysql_operational_helpers import _json_loads
@@ -44,10 +47,12 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
     def save_with_connection(connection, subject_case: SubjectDecisionCase) -> None:
         candidate = subject_case.candidate_set
         existing_subject = connection.execute(
-            "SELECT subject_case_id FROM investment_subject_decision_cases "
+            "SELECT subject_case_id, payload_json FROM investment_subject_decision_cases "
             "WHERE subject_case_id = %s",
             (subject_case.subject_case_id,),
         ).fetchone()
+        existing_payload = _json_loads(existing_subject.get("payload_json"), {}) if existing_subject else {}
+        existing_dispatch = dict(existing_payload.get("inferenceDispatchDecision") or {})
         existing_candidate = connection.execute(
             "SELECT fingerprint FROM decision_candidate_snapshots WHERE candidate_set_id = %s",
             (candidate.candidate_set_id,),
@@ -170,6 +175,11 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
                 connection,
                 investment_inference_episode_completed_event(subject_case),
             )
+        if subject_case.inference_dispatch_decision and not existing_dispatch:
+            insert_domain_event_with_connection(
+                connection,
+                investment_inference_dispatch_decided_event(subject_case),
+            )
 
     @staticmethod
     def save_audit_entry_with_connection(connection, subject_case: SubjectDecisionCase) -> None:
@@ -210,6 +220,10 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
             "finalDecision": decision.to_dict() if decision else {},
             "abstention": abstention.to_dict() if abstention else {},
             "publication": publication.to_dict() if publication else {},
+            "inferenceDispatchDecision": (
+                getattr(subject_case, "inference_dispatch_decision").to_dict()
+                if getattr(subject_case, "inference_dispatch_decision", None) else {}
+            ),
             "notificationJobId": subject_case.notification_job_id,
             "deliveryState": getattr(subject_case, "delivery_state", "not-requested"),
             "deliveryReason": getattr(subject_case, "delivery_reason", ""),

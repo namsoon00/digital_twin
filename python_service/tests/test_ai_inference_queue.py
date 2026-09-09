@@ -13,6 +13,9 @@ from digital_twin.application.ai_inference_queue_service import (
     preserve_verified_ai_narrative,
     typedb_inference_fallback_response,
 )
+from digital_twin.application.ai_insight_notification_projection import (
+    AIInsightNotificationProjectionService,
+)
 from digital_twin.application.notification_ai_gate_audit import (
     context_with_validated_ai_response,
 )
@@ -170,6 +173,17 @@ class AIInferenceQueueTests(unittest.TestCase):
             reasoning_effort="max",
         )
         return job, request
+
+    def complete_detached(self, request, worker_id, result, context):
+        projector = AIInsightNotificationProjectionService()
+        return self.queue.complete(
+            request,
+            worker_id,
+            result,
+            context,
+            delivery_projection=lambda completed: projector.prepare(request, completed),
+            after_complete=lambda _connection, outcome: projector.reconcile(context, outcome),
+        )
 
     def assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist(self):
         diagnostic = ai_failure_diagnostic(
@@ -388,14 +402,24 @@ class AIInferenceQueueTests(unittest.TestCase):
         }
 
         self.assertTrue(
-            self.queue.complete(
+            self.complete_detached(
                 claimed,
                 "worker-detached",
                 result,
                 completed_context,
             )
         )
-        self.assertIsNotNone(self.notifications.get(job.job_id))
+        queued_notification = self.notifications.get(job.job_id)
+        self.assertIsNotNone(queued_notification)
+        self.assertEqual(
+            "notification-queued",
+            queued_notification.context["aiInsightNotificationProjection"]["status"],
+        )
+        self.assertTrue(
+            queued_notification.context["decisionReconciliation"]["deliveryOutcome"][
+                "queued"
+            ]
+        )
         row = mysql_fetchone(
             self.seed,
             "SELECT model, reasoning_effort, notification_job_id, payload_json "
@@ -453,7 +477,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         }
 
         self.assertTrue(
-            self.queue.complete(
+            self.complete_detached(
                 claimed,
                 "worker-web-only",
                 result,
@@ -521,7 +545,7 @@ class AIInferenceQueueTests(unittest.TestCase):
             side_effect=reject_delivery,
         ):
             self.assertTrue(
-                self.queue.complete(
+                self.complete_detached(
                     claimed,
                     "worker-admission",
                     result,
@@ -1541,6 +1565,13 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(1, runner.run_once(limit=1))
         self.assertTrue(enqueuer.called)
         self.assertEqual([], rendered)
+
+        typedb_direct_job = self.create_job()
+        typedb_direct_job.context.update({
+            "inferenceDispatchDecision": {"route": "PUBLISH_TYPEDB"},
+            "notificationAiBypass": {"status": "typedb-direct"},
+        })
+        self.assertFalse(runner.should_defer_ai_inference(typedb_direct_job))
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ from ...domain.context_observation_notifications import (
 from ...domain.disclosure_analysis import local_disclosure_analysis
 from ...domain.investment_brain import decision_episode_from_context
 from ...domain.investment_flow import INVESTMENT_FLOW_VERSION, investment_flow_id
+from ...domain.investment_reasoning import PUBLISH_TYPEDB
 from ...domain.message_types import (
     INVESTMENT_INSIGHT,
     OPERATOR_REASONING_REPORT,
@@ -683,7 +684,23 @@ class NotificationQueueRunner:
     def should_defer_ai_inference(self, job: NotificationJob) -> bool:
         if self.dry_run or self.ai_request_enqueuer is None:
             return False
-        observation = typedb_narrative_only_contract(job.context or {})
+        context = dict(job.context or {})
+        dispatch = (
+            context.get("inferenceDispatchDecision")
+            if isinstance(context.get("inferenceDispatchDecision"), dict)
+            else {}
+        )
+        ai_bypass = (
+            context.get("notificationAiBypass")
+            if isinstance(context.get("notificationAiBypass"), dict)
+            else {}
+        )
+        if (
+            str(dispatch.get("route") or "").strip().upper() == PUBLISH_TYPEDB
+            or str(ai_bypass.get("status") or "").strip().lower() == "typedb-direct"
+        ):
+            return False
+        observation = typedb_narrative_only_contract(context)
         if observation and not bool(observation.get("requiresAiNarrative")):
             return False
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):

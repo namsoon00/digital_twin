@@ -83,6 +83,15 @@ from .ai_insight import (
     decision_reconciliation,
     reconciliation_after_delivery,
 )
+from .dispatch import (
+    ARCHIVE,
+    HANDOFF_AI,
+    INFERENCE_DISPATCH_VERSION,
+    INVALID,
+    PUBLISH_TYPEDB,
+    InferenceDispatchDecision,
+    inference_dispatch_decision,
+)
 from ..semantic_fact_plane import (
     FactEnvelope,
     FactRevisionVector,
@@ -163,6 +172,13 @@ __all__ = [
     "ai_insight_handoff",
     "decision_reconciliation",
     "reconciliation_after_delivery",
+    "ARCHIVE",
+    "HANDOFF_AI",
+    "INFERENCE_DISPATCH_VERSION",
+    "INVALID",
+    "PUBLISH_TYPEDB",
+    "InferenceDispatchDecision",
+    "inference_dispatch_decision",
     "FactEnvelope",
     "FactRevisionVector",
     "FactSlice",

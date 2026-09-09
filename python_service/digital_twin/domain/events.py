@@ -31,6 +31,7 @@ AI_INFERENCE_REQUESTED = "ai_inference.requested"
 AI_INFERENCE_COMPLETED = "ai_inference.completed"
 AI_INFERENCE_SUPERSEDED = "ai_inference.superseded"
 INVESTMENT_INFERENCE_EPISODE_COMPLETED = "investment.inference_episode_completed"
+INVESTMENT_INFERENCE_DISPATCH_DECIDED = "investment.inference_dispatch_decided"
 INVESTMENT_AI_INSIGHT_REQUESTED = "investment.ai_insight_requested"
 INVESTMENT_AI_INSIGHT_COMPLETED = "investment.ai_insight_completed"
 INVESTMENT_AI_INSIGHT_FAILED = "investment.ai_insight_failed"
@@ -204,6 +205,45 @@ def investment_inference_episode_completed_event(subject_case) -> DomainEvent:
             ),
             "stage": str(payload.get("stage") or ""),
             "source": "typedb-subject-decision-case",
+        },
+        correlation_id=str(payload.get("batchCaseId") or subject_case_id)[:191],
+    )
+
+
+def investment_inference_dispatch_decided_event(subject_case) -> DomainEvent:
+    """Publish the immutable route chosen after one TypeDB subject result."""
+
+    payload = (
+        subject_case.to_dict()
+        if callable(getattr(subject_case, "to_dict", None))
+        else dict(subject_case or {})
+    )
+    decision = dict(payload.get("inferenceDispatchDecision") or {})
+    subject_case_id = str(payload.get("subjectCaseId") or "")
+    fingerprint = str(
+        decision.get("candidateFingerprint")
+        or dict(payload.get("candidateSet") or {}).get("fingerprint")
+        or ""
+    )
+    return DomainEvent(
+        name=INVESTMENT_INFERENCE_DISPATCH_DECIDED,
+        aggregate_id=("inference-dispatch:" + subject_case_id)[:191],
+        event_id=_stable_reasoning_event_id(
+            INVESTMENT_INFERENCE_DISPATCH_DECIDED,
+            decision.get("decisionId"),
+            subject_case_id,
+            fingerprint,
+        ),
+        payload={
+            **decision,
+            "subjectCaseId": subject_case_id,
+            "batchCaseId": str(payload.get("batchCaseId") or ""),
+            "accountId": str(payload.get("accountId") or ""),
+            "symbol": str(payload.get("symbol") or "").upper(),
+            "sourceAboxSnapshotId": str(payload.get("sourceAboxSnapshotId") or ""),
+            "inferenceGenerationId": str(payload.get("inferenceGenerationId") or ""),
+            "candidateFingerprint": fingerprint,
+            "source": "typedb-inference-dispatch",
         },
         correlation_id=str(payload.get("batchCaseId") or subject_case_id)[:191],
     )

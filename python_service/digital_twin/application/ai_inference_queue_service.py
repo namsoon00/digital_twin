@@ -62,6 +62,7 @@ from .notification.quality import (
     apply_ontology_quality_gate_to_response,
     ontology_quality_gate_context,
 )
+from .ai_insight_notification_projection import AIInsightNotificationProjectionService
 
 
 def _int_setting(settings: Dict[str, object], key: str, fallback: int, minimum: int, maximum: int) -> int:
@@ -695,6 +696,7 @@ class AIInferenceQueueRunner:
         continuity_service=None,
         action_planning_service=None,
         reasoning_orchestrator=None,
+        insight_notification_projection=None,
         worker_id: str = "",
     ):
         self.queue = queue
@@ -704,6 +706,9 @@ class AIInferenceQueueRunner:
         self.continuity_service = continuity_service
         self.action_planning_service = action_planning_service
         self.reasoning_orchestrator = reasoning_orchestrator
+        self.insight_notification_projection = (
+            insight_notification_projection or AIInsightNotificationProjectionService()
+        )
         self.worker_label = str(worker_id or "notification-ai")
         self.worker_id = self.worker_label + ":" + uuid.uuid4().hex[:10]
         self.lease_seconds = _int_setting(self.settings, "notificationAiQueueLeaseSeconds", 360, 60, 3600)
@@ -1318,11 +1323,17 @@ class AIInferenceQueueRunner:
             def record_subject_delivery(connection, delivery_outcome):
                 if not detached_subject_insight:
                     return
+                context_update = self.insight_notification_projection.reconcile(
+                    enriched,
+                    delivery_outcome,
+                )
+                enriched.update(context_update)
                 self.reasoning_orchestrator.decision_delivery_reconciled(
                     enriched,
                     delivery_outcome,
                     connection=connection,
                 )
+                return context_update
 
             published = self.storage_call_with_retry(
                 lambda: self.queue.complete(
@@ -1331,12 +1342,48 @@ class AIInferenceQueueRunner:
                     result,
                     enriched,
                     before_complete=publish_subject_with_queue,
+                    delivery_projection=lambda completed_context: (
+                        self.insight_notification_projection.prepare(
+                            request,
+                            completed_context,
+                        )
+                    ),
                     after_complete=record_subject_delivery,
                 )
             )
         else:
+            def reconcile_detached_delivery(connection, delivery_outcome):
+                context_update = self.insight_notification_projection.reconcile(
+                    enriched,
+                    delivery_outcome,
+                )
+                enriched.update(context_update)
+                if canonical_subject_publication:
+                    self.reasoning_orchestrator.decision_delivery_reconciled(
+                        enriched,
+                        delivery_outcome,
+                        connection=connection,
+                    )
+                return context_update
+
             published = self.storage_call_with_retry(
-                lambda: self.queue.complete(request, self.worker_id, result, enriched)
+                lambda: self.queue.complete(
+                    request,
+                    self.worker_id,
+                    result,
+                    enriched,
+                    delivery_projection=(
+                        lambda completed_context: self.insight_notification_projection.prepare(
+                            request,
+                            completed_context,
+                        )
+                        if detached_subject_insight
+                        else None
+                    ),
+                    after_complete=(
+                        reconcile_detached_delivery if detached_subject_insight else None
+                    ),
+                )
             )
         if not published:
             return request.request_id[:8] + " superseded-before-publish"
@@ -1561,11 +1608,17 @@ class AIInferenceQueueRunner:
             def record_review_delivery(connection, delivery_outcome):
                 if not request.detached_from_notification:
                     return
+                context_update = self.insight_notification_projection.reconcile(
+                    enriched,
+                    delivery_outcome,
+                )
+                enriched.update(context_update)
                 self.reasoning_orchestrator.decision_delivery_reconciled(
                     enriched,
                     delivery_outcome,
                     connection=connection,
                 )
+                return context_update
 
             published = self.storage_call_with_retry(
                 lambda: self.queue.complete(
@@ -1574,12 +1627,50 @@ class AIInferenceQueueRunner:
                     result,
                     enriched,
                     before_complete=publish_review_with_queue,
+                    delivery_projection=lambda completed_context: (
+                        self.insight_notification_projection.prepare(
+                            request,
+                            completed_context,
+                        )
+                    ),
                     after_complete=record_review_delivery,
                 )
             )
         else:
+            def reconcile_detached_review_delivery(connection, delivery_outcome):
+                context_update = self.insight_notification_projection.reconcile(
+                    enriched,
+                    delivery_outcome,
+                )
+                enriched.update(context_update)
+                if canonical_subject_publication:
+                    self.reasoning_orchestrator.decision_delivery_reconciled(
+                        enriched,
+                        delivery_outcome,
+                        connection=connection,
+                    )
+                return context_update
+
             published = self.storage_call_with_retry(
-                lambda: self.queue.complete(request, self.worker_id, result, enriched)
+                lambda: self.queue.complete(
+                    request,
+                    self.worker_id,
+                    result,
+                    enriched,
+                    delivery_projection=(
+                        lambda completed_context: self.insight_notification_projection.prepare(
+                            request,
+                            completed_context,
+                        )
+                        if request.detached_from_notification
+                        else None
+                    ),
+                    after_complete=(
+                        reconcile_detached_review_delivery
+                        if request.detached_from_notification
+                        else None
+                    ),
+                )
             )
         if not published:
             return request.request_id[:8] + " superseded-before-publish"

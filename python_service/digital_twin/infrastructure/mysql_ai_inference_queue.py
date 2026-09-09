@@ -35,7 +35,6 @@ from ..domain.investment_reasoning.ai_insight import (
     AIInsightEpisode,
     SUBJECT_DECISION_ORIGIN,
     ai_insight_handoff,
-    reconciliation_after_delivery,
 )
 from ..domain.notifications import NotificationJob
 from ..domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
@@ -979,6 +978,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         result: AIInferenceResult,
         notification_context: Dict[str, object],
         before_complete=None,
+        delivery_projection=None,
         after_complete=None,
     ) -> bool:
         stamp = utc_now()
@@ -1168,23 +1168,19 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "queued": True,
             }
             if detached:
-                reconciliation = dict(completed_context.get("decisionReconciliation") or {})
                 delivery_outcome = {
                     "status": "web-only",
                     "notificationJobId": "",
                     "queued": False,
-                    "reason": str(reconciliation.get("reason") or ""),
+                    "reason": "",
                 }
-                if str(reconciliation.get("notificationDecision") or "").lower() == "send":
-                    handoff = ai_insight_handoff(completed_context)
-                    draft = dict(handoff.notification_draft if handoff else {})
-                    delivery_job = NotificationJob.from_dict({
-                        **draft,
-                        "jobId": request.notification_job_id,
-                        "context": completed_context,
-                        "status": "pending",
-                        "updatedAt": stamp,
-                    })
+                projection = (
+                    dict(delivery_projection(completed_context) or {})
+                    if callable(delivery_projection)
+                    else {}
+                )
+                delivery_job = projection.get("notificationJob")
+                if isinstance(delivery_job, NotificationJob):
                     accepted = self.notification_store.enqueue_with_connection(
                         connection,
                         delivery_job,
@@ -1194,15 +1190,15 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                         "status": "notification-queued" if accepted else "notification-suppressed",
                         "notificationJobId": delivery_job.job_id,
                         "queued": bool(accepted),
-                        "reason": str(delivery_job.last_error or reconciliation.get("reason") or ""),
+                        "reason": str(
+                            delivery_job.last_error or projection.get("reason") or ""
+                        ),
                     }
-                completed_context["decisionReconciliation"] = reconciliation_after_delivery(
-                    reconciliation,
-                    delivery_outcome,
-                )
-                notification_context["decisionReconciliation"] = dict(
-                    completed_context["decisionReconciliation"]
-                )
+                elif projection:
+                    delivery_outcome.update({
+                        "status": str(projection.get("status") or "web-only"),
+                        "reason": str(projection.get("reason") or ""),
+                    })
                 updated = True
             else:
                 updated = self.set_notification_status_with_connection(
@@ -1223,6 +1219,21 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     (AI_INFERENCE_SUPERSEDED, stamp, stamp, request.request_id),
                 )
                 return False
+            if callable(after_complete):
+                context_update = after_complete(connection, delivery_outcome)
+                if isinstance(context_update, Mapping):
+                    completed_context.update(dict(context_update))
+                    notification_context.update(dict(context_update))
+                    if (
+                        detached
+                        and isinstance(delivery_job, NotificationJob)
+                        and bool(delivery_outcome.get("queued"))
+                    ):
+                        delivery_job.context.update(dict(context_update))
+                        self.notification_store.upsert_job_with_connection(
+                            connection,
+                            delivery_job,
+                        )
             if detached:
                 insight_episode = AIInsightEpisode.create(
                     request,
@@ -1264,8 +1275,6 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                         insight_episode.created_at,
                     ),
                 )
-            if callable(after_complete):
-                after_complete(connection, delivery_outcome)
             insert_domain_event_with_connection(
                 connection,
                 ai_inference_event(

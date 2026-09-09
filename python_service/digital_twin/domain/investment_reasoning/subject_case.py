@@ -9,9 +9,10 @@ import json
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 from .contracts import AIJudgmentResult, DataGap, DecisionSynthesis, FinalDecision, HypothesisRecord
+from .dispatch import InferenceDispatchDecision
 
 
-SUBJECT_CASE_VERSION = "investment-subject-decision-case-v3"
+SUBJECT_CASE_VERSION = "investment-subject-decision-case-v4"
 CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v3"
 PUBLICATION_VERSION = "investment-decision-publication-v1"
 
@@ -329,6 +330,7 @@ class SubjectDecisionCase:
     final_decision: Optional[FinalDecision] = None
     abstention: Optional[DecisionAbstention] = None
     publication: Optional[DecisionPublication] = None
+    inference_dispatch_decision: Optional[InferenceDispatchDecision] = None
     delivery_state: str = "not-requested"
     delivery_reason: str = ""
     delivery_eligible: Optional[bool] = None
@@ -430,6 +432,24 @@ class SubjectDecisionCase:
         self.updated_at = stamp
         self.version += 1
 
+    def record_inference_dispatch(self, decision: InferenceDispatchDecision) -> None:
+        """Attach the immutable TypeDB-to-consumer routing decision once."""
+
+        if decision.subject_case_id != self.subject_case_id:
+            raise ValueError("Inference dispatch subject does not match the decision case.")
+        if decision.inference_generation_id != self.inference_generation_id:
+            raise ValueError("Inference dispatch generation does not match the decision case.")
+        if decision.candidate_fingerprint != self.candidate_set.fingerprint:
+            raise ValueError("Inference dispatch candidate fingerprint does not match the decision case.")
+        if self.inference_dispatch_decision is not None:
+            if self.inference_dispatch_decision.decision_id != decision.decision_id:
+                raise ValueError("A subject decision case cannot replace its inference dispatch route.")
+            return
+        self.inference_dispatch_decision = decision
+        stamp = _now()
+        self.updated_at = stamp
+        self.version += 1
+
     def to_dict(self) -> Dict[str, object]:
         return {
             "subjectCaseId": self.subject_case_id,
@@ -452,6 +472,10 @@ class SubjectDecisionCase:
             "finalDecision": self.final_decision.to_dict() if self.final_decision else {},
             "abstention": self.abstention.to_dict() if self.abstention else {},
             "publication": self.publication.to_dict() if self.publication else {},
+            "inferenceDispatchDecision": (
+                self.inference_dispatch_decision.to_dict()
+                if self.inference_dispatch_decision else {}
+            ),
             "deliveryState": self.delivery_state,
             "deliveryReason": self.delivery_reason,
             "deliveryEligible": self.delivery_eligible,
@@ -473,6 +497,7 @@ class SubjectDecisionCase:
         decision = payload.get("finalDecision") or {}
         abstention = payload.get("abstention") or {}
         publication = payload.get("publication") or {}
+        dispatch_decision = payload.get("inferenceDispatchDecision") or {}
         delivery_eligible = payload.get("deliveryEligible")
         if not isinstance(delivery_eligible, bool):
             delivery_eligible = None
@@ -499,6 +524,10 @@ class SubjectDecisionCase:
             final_decision=FinalDecision.from_dict(decision) if decision else None,
             abstention=DecisionAbstention.from_dict(abstention) if abstention else None,
             publication=DecisionPublication.from_dict(publication) if publication else None,
+            inference_dispatch_decision=(
+                InferenceDispatchDecision.from_dict(dispatch_decision)
+                if dispatch_decision else None
+            ),
             delivery_state=str(payload.get("deliveryState") or "not-requested"),
             delivery_reason=str(payload.get("deliveryReason") or ""),
             delivery_eligible=delivery_eligible,

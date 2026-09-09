@@ -1337,6 +1337,7 @@ class V2ReasoningEngine:
         reasoning_orchestrator=None,
         shared_inference_service=None,
         ai_insight_handoff_service=None,
+        insight_dispatch_service=None,
     ):
         self._descriptor = descriptor
         self.input_assembler = input_assembler
@@ -1349,6 +1350,9 @@ class V2ReasoningEngine:
         self.reasoning_orchestrator = reasoning_orchestrator
         self.shared_inference_service = shared_inference_service
         self.ai_insight_handoff_service = ai_insight_handoff_service
+        self.insight_dispatch_service = (
+            insight_dispatch_service or ai_insight_handoff_service
+        )
         self.last_result = None
         self.results_by_request_id = {}
 
@@ -1650,11 +1654,31 @@ class V2ReasoningEngine:
         delivery_authorized = bool(self.delivery_authorized_provider())
         delivery_events = []
         ai_handoff_status = "shadow-delivery-blocked"
-        if delivery_authorized and self.ai_insight_handoff_service is not None:
+        insight_dispatch_status = "shadow-delivery-blocked"
+        insight_dispatch_routes = {}
+        if delivery_authorized and self.insight_dispatch_service is not None:
             delivery_started = time.perf_counter()
-            handoff = self.ai_insight_handoff_service.enqueue(ready_events)
+            dispatch = getattr(self.insight_dispatch_service, "dispatch", None)
+            handoff = (
+                dispatch(ready_events)
+                if callable(dispatch)
+                else self.insight_dispatch_service.enqueue(ready_events)
+            )
+            handoff = dict(handoff or {})
             delivery_events = list(handoff.get("queuedEvents") or [])
-            if int(handoff.get("queuedCount") or 0):
+            insight_dispatch_status = str(handoff.get("status") or "web-only")
+            insight_dispatch_routes = dict(handoff.get("routeCounts") or {})
+            typedb_published_count = int(handoff.get("typedbPublishedCount") or 0)
+            ai_queued_count = int(
+                handoff.get("aiQueuedCount")
+                if handoff.get("aiQueuedCount") is not None
+                else handoff.get("queuedCount") or 0
+            )
+            if typedb_published_count and ai_queued_count:
+                ai_handoff_status = "typedb-and-ai-queue-enqueued"
+            elif typedb_published_count:
+                ai_handoff_status = "typedb-publication-enqueued"
+            elif ai_queued_count:
                 ai_handoff_status = "ai-insight-queue-enqueued"
             elif ready_events:
                 ai_handoff_status = "ai-insight-web-only"
@@ -1663,6 +1687,7 @@ class V2ReasoningEngine:
             stages["aiInsightHandoffMs"] = int(
                 (time.perf_counter() - delivery_started) * 1000
             )
+            stages["insightDispatchMs"] = stages["aiInsightHandoffMs"]
         elif delivery_authorized and self.cycle_recorder is not None:
             delivery_started = time.perf_counter()
             cycle = self.cycle_recorder.record_cycle(
@@ -1675,13 +1700,17 @@ class V2ReasoningEngine:
             delivery_events = list(getattr(cycle, "delivered_events", None) or ready_events)
             if int(getattr(cycle, "queued", 0) or 0):
                 ai_handoff_status = "notification-queue-enqueued"
+                insight_dispatch_status = "legacy-notification-queued"
             elif ready_events:
                 ai_handoff_status = "notification-admission-suppressed"
+                insight_dispatch_status = "legacy-notification-suppressed"
             else:
                 ai_handoff_status = "no-delivery-candidate"
+                insight_dispatch_status = "no-decision-candidate"
             stages["deliveryHandoffMs"] = int((time.perf_counter() - delivery_started) * 1000)
         elif delivery_authorized:
             ai_handoff_status = "delivery-recorder-unavailable"
+            insight_dispatch_status = "delivery-recorder-unavailable"
 
         retry_policies = {
             account_id: projection_retry_policy(projection_results.get(account_id))
@@ -1748,6 +1777,8 @@ class V2ReasoningEngine:
                 or ai_handoff_status not in {
                     "notification-queue-enqueued",
                     "ai-insight-queue-enqueued",
+                    "typedb-publication-enqueued",
+                    "typedb-and-ai-queue-enqueued",
                 }
             ):
                 if not delivery_authorized:
@@ -1771,9 +1802,16 @@ class V2ReasoningEngine:
                     source=completion_source,
                 )
             else:
+                completion_reason = (
+                    "TypeDB 관찰 발행과 AI 판단 전달을 각각의 독립 처리 경계로 넘겼습니다."
+                    if ai_handoff_status == "typedb-and-ai-queue-enqueued"
+                    else "TypeDB 관찰을 AI 없이 독립 알림 발행 경계로 넘겼습니다."
+                    if ai_handoff_status == "typedb-publication-enqueued"
+                    else "종목별 TypeDB 판단 케이스가 독립 AI 인사이트 처리 경계로 전달됐습니다."
+                )
                 reasoning_case = self.reasoning_orchestrator.batch_handoff_completed(
                     reasoning_case.case_id,
-                    "종목별 TypeDB 판단 케이스가 독립 AI 인사이트 처리 경계로 전달됐습니다.",
+                    completion_reason,
                 )
         source_ids = tuple(
             value["sourceAboxSnapshotId"] for value in identities.values()
@@ -1805,6 +1843,8 @@ class V2ReasoningEngine:
             delivery_events=tuple(alert_event_payload(event) for event in delivery_events),
             delivery_authorized=delivery_authorized,
             ai_handoff_status=ai_handoff_status,
+            insight_dispatch_status=insight_dispatch_status,
+            insight_dispatch_routes=insight_dispatch_routes,
             trace_complete=bool(identities) and all(
                 value["verified"] and value["sourceAboxSnapshotId"] and value["inferenceGenerationId"]
                 for value in identities.values()

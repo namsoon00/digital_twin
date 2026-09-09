@@ -394,6 +394,7 @@ class InvestmentCaseQueryService:
         synthesis = item_dict(case.get("synthesis"))
         candidate_set = item_dict(case.get("candidateSet"))
         final = item_dict(case.get("finalDecision"))
+        dispatch = item_dict(case.get("inferenceDispatchDecision"))
         stage = text(case.get("stage")).upper() or "READY"
         symbol = text(case.get("symbol")).upper()
         disposition_code = text(
@@ -561,6 +562,28 @@ class InvestmentCaseQueryService:
             if ai_status == "previous-generation"
             else "실행 생략"
         )
+        dispatch_route = text(dispatch.get("route")).upper()
+        dispatch_labels = {
+            "PUBLISH_TYPEDB": "TypeDB 직접 알림",
+            "HANDOFF_AI": "AI 판단 전달",
+            "ARCHIVE": "웹 기록",
+            "INVALID": "연결 계약 오류",
+        }
+        dispatch_label = dispatch_labels.get(dispatch_route, "연결 경로 미기록")
+        dispatch_state = (
+            "blocked"
+            if dispatch_route == "INVALID"
+            else "warning"
+            if not dispatch_route
+            else "pass"
+        )
+        dispatch_reason = text(
+            case.get("deliveryReason") or dispatch.get("reason")
+        ) or (
+            "과거 추론 기록에는 후속 처리 경로가 저장되지 않았습니다."
+            if not dispatch_route
+            else "현재 TypeDB 결과의 후속 처리 경로가 기록되어 있습니다."
+        )
         phase_label = (
             "최신 TypeDB 추론 · AI 해석 완료"
             if ai_current
@@ -629,6 +652,13 @@ class InvestmentCaseQueryService:
             "statusDimensions": [
                 {"id": "inference", "label": "관계 추론", "state": "pass", "stateLabel": "완료", "reason": "현재 TypeDB 세대의 관계와 가설을 저장했습니다."},
                 {
+                    "id": "dispatch",
+                    "label": "연결 경로",
+                    "state": dispatch_state,
+                    "stateLabel": dispatch_label,
+                    "reason": dispatch_reason,
+                },
+                {
                     "id": "ai",
                     "label": "AI 해석",
                     "state": "pending" if ai_processing else "pass" if ai_current else "warning",
@@ -672,6 +702,20 @@ class InvestmentCaseQueryService:
                 "ruleCoverageState": rule_coverage_state,
                 "nextChecks": next_checks[:8],
                 "hypotheses": hypotheses,
+                "dispatch": {
+                    "decisionId": text(dispatch.get("decisionId")),
+                    "route": dispatch_route,
+                    "label": dispatch_label,
+                    "reasonCode": text(dispatch.get("reasonCode")),
+                    "reason": text(dispatch.get("reason")) or dispatch_reason,
+                    "sourceEventId": text(dispatch.get("sourceEventId")),
+                    "createdAt": text(dispatch.get("createdAt")),
+                    "deliveryState": text(case.get("deliveryState")) or "not-requested",
+                    "deliveryReason": text(case.get("deliveryReason")),
+                    "deliveryEligible": case.get("deliveryEligible"),
+                    "deliveryReasonCode": text(case.get("deliveryReasonCode")),
+                    "deliveryUpdatedAt": text(case.get("deliveryUpdatedAt")),
+                },
                 "aiInsight": ai_insight,
             },
         }

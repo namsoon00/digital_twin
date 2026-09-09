@@ -27,6 +27,7 @@ from ..application.operational_storage_capacity_service import (
 )
 from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_ai_insight_service import InvestmentAIInsightHandoffService
+from ..application.investment_insight_dispatch_service import InvestmentInsightDispatchService
 from ..application.independent_reasoning_engine import (
     IndependentReasoningInputAssembler,
     IndependentReasoningJobRunner,
@@ -2803,12 +2804,21 @@ def build_v2_reasoning_engine(
         continuity_service=decision_continuity,
         reasoning_orchestrator=subject_decision_orchestrator,
     )
+    insight_notification_ingress = NotificationIngressService(
+        template_renderer=stores.notification_template_store(store_settings).render,
+        settings=candidate_settings,
+    )
+    insight_notification_queue = stores.notification_job_store(store_settings)
     ai_insight_handoff_service = InvestmentAIInsightHandoffService(
-        NotificationIngressService(
-            template_renderer=stores.notification_template_store(store_settings).render,
-            settings=candidate_settings,
-        ),
+        insight_notification_ingress,
         detached_ai_enqueuer,
+        account_repository=account_repository,
+    )
+    insight_dispatch_service = InvestmentInsightDispatchService(
+        insight_notification_ingress,
+        insight_notification_queue,
+        ai_insight_handoff_service,
+        subject_decision_orchestrator,
         account_repository=account_repository,
     )
 
@@ -2847,6 +2857,7 @@ def build_v2_reasoning_engine(
         reasoning_orchestrator=subject_decision_orchestrator,
         shared_inference_service=shared_inference_service,
         ai_insight_handoff_service=ai_insight_handoff_service,
+        insight_dispatch_service=insight_dispatch_service,
     )
 
 

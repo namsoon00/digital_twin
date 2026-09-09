@@ -17,7 +17,7 @@ from .semantic_fact_plane import semantic_change_set
 
 
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
-INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v4"
+INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v5"
 
 
 def _texts(values: object, uppercase: bool = False) -> Tuple[str, ...]:
@@ -513,6 +513,8 @@ class IndependentReasoningResult:
     delivery_events: Tuple[Dict[str, object], ...] = ()
     delivery_authorized: bool = False
     ai_handoff_status: str = "not-requested"
+    insight_dispatch_status: str = "not-requested"
+    insight_dispatch_routes: Dict[str, int] = field(default_factory=dict)
     trace_complete: bool = False
     retryable: bool = False
     retry_after_seconds: int = 0

@@ -52,6 +52,7 @@
 
     {"file": "test_portfolio_lifecycle_service.py", "tier": "contract", "core": true},
     {"file": "test_investment_case_query_service.py", "tier": "contract", "core": true},
+    {"file": "test_investment_insight_dispatch_service.py", "tier": "contract", "core": true},
     {"file": "test_subject_reasoning_lineage.py", "tier": "contract", "core": true},
     {"file": "test_subject_decision_recovery.py", "tier": "contract", "core": true},
     {"file": "test_decision_episode_reconciliation_service.py", "tier": "contract", "core": true},

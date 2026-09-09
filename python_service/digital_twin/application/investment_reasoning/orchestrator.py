@@ -31,6 +31,7 @@ from ...domain.investment_reasoning import (
     ReasoningCase,
     DecisionSynthesis,
     DecisionAbstention,
+    InferenceDispatchDecision,
     SubjectDecisionCase,
     publication_for_subject_case,
     FINAL_DECISION,
@@ -38,6 +39,10 @@ from ...domain.investment_reasoning import (
     ABSTAIN,
     OBSERVATION,
     SUPPRESSED,
+    ARCHIVE,
+    HANDOFF_AI,
+    INVALID,
+    PUBLISH_TYPEDB,
     rule_evaluation_records_from_projection_results,
 )
 from ...domain.investment_reasoning.subject_case import (
@@ -98,6 +103,10 @@ def _mark_subject_delivery(
     state: str,
     reason: str = "",
     context: Mapping[str, object] = None,
+    *,
+    eligible: Optional[bool] = None,
+    reason_code: str = "",
+    value_class: str = "",
 ) -> None:
     values = _mapping(context)
     publication = subject_case.publication
@@ -117,6 +126,12 @@ def _mark_subject_delivery(
     )
     subject_case.delivery_reason_code = str(eligibility.get("reasonCode") or "")
     subject_case.delivery_value_class = str(eligibility.get("pushValueClass") or "")
+    if isinstance(eligible, bool):
+        subject_case.delivery_eligible = eligible
+    if reason_code:
+        subject_case.delivery_reason_code = str(reason_code or "")
+    if value_class:
+        subject_case.delivery_value_class = str(value_class or "")
 
 
 class _EphemeralSubjectDecisionCaseStore:
@@ -445,6 +460,27 @@ class InvestmentReasoningOrchestrator:
                     )
             else:
                 subject_case = candidate
+                if subject_case.stage == SUBJECT_BLOCKED:
+                    dispatch = InferenceDispatchDecision.create(
+                        subject_case,
+                        INVALID,
+                        "candidate-scope-invalid",
+                        "TypeDB 후보의 계정·종목·세대 범위가 일치하지 않아 후속 처리를 차단했습니다.",
+                        details={
+                            "validationErrors": list(
+                                subject_case.candidate_set.validation_errors
+                            ),
+                        },
+                    )
+                    subject_case.record_inference_dispatch(dispatch)
+                    _mark_subject_delivery(
+                        subject_case,
+                        "failed",
+                        dispatch.reason,
+                        eligible=False,
+                        reason_code=dispatch.reason_code,
+                        value_class="invalid-inference-contract",
+                    )
                 self._persist_subject(subject_case)
             shadow_episodes = shadow_hypothesis_observation_episodes(
                 reasoning_case,
@@ -516,6 +552,12 @@ class InvestmentReasoningOrchestrator:
             if subject_case:
                 metadata["investmentSubjectDecisionCaseId"] = subject_case.subject_case_id
                 metadata["investmentSubjectDecisionCase"] = self.compact_subject_context(subject_case)
+                if subject_case.publication:
+                    metadata["decisionPublication"] = subject_case.publication.to_dict()
+                if subject_case.inference_dispatch_decision:
+                    metadata["inferenceDispatchDecision"] = (
+                        subject_case.inference_dispatch_decision.to_dict()
+                    )
             relation = _mapping(metadata.get("ontologyRelationContext"))
             if relation:
                 relation["investmentReasoningCaseId"] = reasoning_case.case_id
@@ -806,7 +848,7 @@ class InvestmentReasoningOrchestrator:
         *,
         connection=None,
     ) -> Optional[SubjectDecisionCase]:
-        """Record post-AI delivery disposition without changing the decision."""
+        """Record post-dispatch delivery disposition without changing the decision."""
 
         subject_case_id = self.subject_case_id_from_context(context)
         if not subject_case_id:
@@ -826,6 +868,38 @@ class InvestmentReasoningOrchestrator:
             },
         )
         self._persist_subject(subject_case, connection=connection)
+        return subject_case
+
+    def record_inference_dispatch(
+        self,
+        subject_case_id: str,
+        decision: InferenceDispatchDecision,
+        *,
+        delivery_state: str = "",
+        delivery_reason: str = "",
+    ) -> SubjectDecisionCase:
+        """Persist one immutable route independently from notification transport."""
+
+        subject_case = self.required_subject(subject_case_id)
+        subject_case.record_inference_dispatch(decision)
+        if delivery_state:
+            _mark_subject_delivery(
+                subject_case,
+                delivery_state,
+                delivery_reason or decision.reason,
+                eligible=delivery_state in {"queued", "delivered"},
+                reason_code=decision.reason_code,
+                value_class=(
+                    "typedb-material-observation"
+                    if decision.route == PUBLISH_TYPEDB
+                    else "web-history"
+                    if decision.route == ARCHIVE
+                    else "ai-judgement-handoff"
+                    if decision.route == HANDOFF_AI
+                    else "invalid-inference-contract"
+                ),
+            )
+        self._persist_subject(subject_case)
         return subject_case
 
     def context_observation_validated(
@@ -1142,6 +1216,24 @@ class InvestmentReasoningOrchestrator:
                     **disposition_details,
                 },
             )
+            dispatch = subject_case.inference_dispatch_decision
+            if dispatch is None:
+                dispatch = InferenceDispatchDecision.create(
+                    subject_case,
+                    ARCHIVE,
+                    str(source or "typedb") + "-web-history",
+                    str(reason or "TypeDB 결과를 웹 이력에 저장합니다."),
+                    details=disposition_details,
+                )
+                subject_case.record_inference_dispatch(dispatch)
+            _mark_subject_delivery(
+                subject_case,
+                "archived",
+                str(reason or dispatch.reason),
+                eligible=False,
+                reason_code=str(source or "typedb") + "-web-history",
+                value_class="web-history",
+            )
             self._persist_subject(subject_case)
         if reasoning_case.stage in {
             CASE_HYPOTHESES_READY,
@@ -1339,6 +1431,19 @@ class InvestmentReasoningOrchestrator:
                 subject_case.synthesis.hypothesis_qualification_reasons
             ),
             "decisionEffect": subject_case.synthesis.decision_effect,
+            "publication": (
+                subject_case.publication.to_dict()
+                if subject_case.publication else {}
+            ),
+            "inferenceDispatchDecision": (
+                subject_case.inference_dispatch_decision.to_dict()
+                if subject_case.inference_dispatch_decision else {}
+            ),
+            "deliveryState": subject_case.delivery_state,
+            "deliveryReason": subject_case.delivery_reason,
+            "deliveryEligible": subject_case.delivery_eligible,
+            "deliveryReasonCode": subject_case.delivery_reason_code,
+            "deliveryValueClass": subject_case.delivery_value_class,
             "contractVersion": subject_case.contract_version,
         }
 

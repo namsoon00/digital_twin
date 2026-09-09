@@ -185,7 +185,8 @@ def _trigger_rows(context: Dict[str, object]) -> List[str]:
             )
     if not rows:
         rows.extend(trigger.get("reasons") or [])
-    rows.extend(customer_delivery_explanation_lines(context))
+    if not has_structured_crypto_transition:
+        rows.extend(customer_delivery_explanation_lines(context))
     changed_fields = [
         str(item or "").strip()
         for item in trigger.get("changedFields") or []

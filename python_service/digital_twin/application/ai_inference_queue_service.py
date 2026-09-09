@@ -749,7 +749,7 @@ class AIInferenceQueueRunner:
         self.comparison_repair_timeout_seconds = _optional_seconds_setting(
             self.settings,
             "notificationAiComparisonRepairTimeoutSeconds",
-            60,
+            0,
         )
         self.judgement_service = NotificationAIJudgementService(
             reviewer,

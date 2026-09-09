@@ -203,7 +203,7 @@ class NotificationAIValidatedGateEnricher:
                     self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
                 ),
                 repair_timeout_seconds=int(
-                    self.settings.get("notificationAiComparisonRepairTimeoutSeconds") or 60
+                    self.settings.get("notificationAiComparisonRepairTimeoutSeconds") or 0
                 ),
                 enforce_contract_for_typed_response=False,
             )

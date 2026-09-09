@@ -484,7 +484,7 @@ class NotificationAIJudgementService:
         *,
         max_prompt_bytes: int = 0,
         repair_reasoning_effort: str = "max",
-        repair_timeout_seconds: Optional[int] = 60,
+        repair_timeout_seconds: Optional[int] = None,
         enforce_contract_for_typed_response: bool = True,
     ):
         self.reviewer = reviewer

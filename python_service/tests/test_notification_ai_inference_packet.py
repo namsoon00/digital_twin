@@ -677,10 +677,12 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         class Reviewer:
             calls = 0
             profiles = []
+            timeouts = []
 
             def review(self, prepared):
                 self.calls += 1
                 self.profiles.append(dict(prepared.get("notificationAiExecutionProfile") or {}))
+                self.timeouts.append(prepared.get("_notificationAiTimeoutSecondsOverride"))
                 core = prepared["_notificationAiPreparedDecisionCore"]
                 support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
                 view_id = "relation-evidence:not-in-packet" if self.calls == 1 else "fact:currentPrice"
@@ -705,6 +707,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             repair_reasoning_effort="low",
         ).judge(
             investment_context(),
+            timeout_seconds=180,
             profile={"name": "deepResearch", "reasoningEffort": "max"},
         )
 
@@ -714,6 +717,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual(2, reviewer.calls)
         self.assertEqual("max", reviewer.profiles[0]["reasoningEffort"])
         self.assertEqual("max", reviewer.profiles[1]["reasoningEffort"])
+        self.assertEqual([180, 180], reviewer.timeouts)
         self.assertEqual("max", outcome.execution_spans["repairReasoningEffort"])
         self.assertEqual(0, outcome.response.rejected_claim_count)
         self.assertIn("unknown-evidence-id", outcome.executed_prompt)

@@ -994,7 +994,8 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiTypeDbFallbackEnabled": "1",
     "notificationAiFallbackOnFirstFailure": "0",
     "notificationAiComparisonRepairReasoningEffort": "max",
-    "notificationAiComparisonRepairTimeoutSeconds": "60",
+    # Zero shares the remaining attempt-watchdog budget with contract repair.
+    "notificationAiComparisonRepairTimeoutSeconds": "0",
     "notificationAiQueueWorkerCount": "2",
     "localAiMaxConcurrentProcesses": "2",
     "localAiInvestmentReservedProcesses": "1",

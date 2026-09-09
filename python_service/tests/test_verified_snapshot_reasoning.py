@@ -691,11 +691,21 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual("down", event.payload["verifiedSourceSnapshot"]["cryptoTransitions"][0]["direction"])
         contract = event.payload["factChangeContract"]
         self.assertEqual(
-            ["kind:crypto-exposure", "kind:crypto-market-signal"],
+            [
+                "kind:crypto-exposure",
+                "kind:crypto-market-signal",
+                "kind:market-event",
+                "relation:has-observation",
+            ],
             contract["dependencyKeysBySymbol"]["BTC"],
         )
         self.assertEqual(
-            ["kind:crypto-exposure", "kind:crypto-market-signal"],
+            [
+                "kind:crypto-exposure",
+                "kind:crypto-market-signal",
+                "kind:market-event",
+                "relation:has-observation",
+            ],
             contract["dependencyKeysBySymbol"]["MSTR"],
         )
         self.assertNotIn(

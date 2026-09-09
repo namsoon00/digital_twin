@@ -1002,7 +1002,12 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
         self.assertTrue(request.context["eventDependencyBoundaryAuthoritative"])
         self.assertEqual(
-            ["kind:crypto-exposure", "kind:crypto-market-signal"],
+            [
+                "kind:crypto-exposure",
+                "kind:crypto-market-signal",
+                "kind:market-event",
+                "relation:has-observation",
+            ],
             request.context["requestedDependencyKeysBySymbol"]["BTC"],
         )
         self.assertNotIn(

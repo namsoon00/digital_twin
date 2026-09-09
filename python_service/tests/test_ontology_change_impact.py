@@ -1,5 +1,6 @@
 import unittest
 
+from digital_twin.domain.fact_changes import fact_change_contract
 from digital_twin.domain.ontology_change_impact import (
     CHANGE_IMPACT_VERSION,
     DEPENDENCY_FINGERPRINT_VERSION,
@@ -239,6 +240,33 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertIn(
             "graph.notification.profit_policy_threshold.v1",
             production_cross_family_plan["candidateRuleIds"],
+        )
+
+        # A crypto threshold transition is persisted as a market-event
+        # observation. Its event contract must select the native crypto rule,
+        # not only the per-instrument crypto-exposure rules.
+        contract = fact_change_contract(
+            ["MarketQuote"],
+            {"ETH": ["MarketQuote"]},
+            {"ETH": ["external.cryptoMarkets", "cryptoMarketTransition"]},
+        )
+
+        plan = build_dynamic_inference_preflight(
+            rules=default_graph_inference_rules(),
+            target_symbols=["ETH"],
+            requested_fact_families=contract["scopeFamilies"],
+            requested_fact_families_by_symbol=contract["scopeFamiliesBySymbol"],
+            requested_dependency_keys=contract["dependencyKeys"],
+            requested_dependency_keys_by_symbol=contract["dependencyKeysBySymbol"],
+            event_fact_boundary_authoritative=True,
+            event_dependency_boundary_authoritative=True,
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertTrue(plan["exactDependencyRoutingUsed"])
+        self.assertIn(
+            "graph.crypto.market.7d.up.watch.v1",
+            plan["candidateRuleIds"],
         )
 
     def scope_graph(self):

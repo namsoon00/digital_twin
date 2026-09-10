@@ -3047,6 +3047,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     FROM reasoning_engine_jobs candidate
                     INNER JOIN reasoning_engine_jobs baseline
                       ON baseline.source_event_id = candidate.source_event_id
+                     AND baseline.scope_key = candidate.scope_key
+                     AND baseline.source_snapshot_id = candidate.source_snapshot_id
+                     AND baseline.source_snapshot_at = candidate.source_snapshot_at
+                     AND baseline.source_payload_hash = candidate.source_payload_hash
                      AND baseline.deployment_id = %s
                      AND baseline.job_status = 'completed'
                     WHERE candidate.deployment_id = %s
@@ -3070,6 +3074,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                      AND baseline_source.source_event_id = candidate_source.source_event_id
                     INNER JOIN reasoning_engine_jobs baseline
                       ON baseline.job_id = baseline_source.survivor_job_id
+                     AND baseline.scope_key = candidate.scope_key
+                     AND baseline.source_snapshot_id = candidate.source_snapshot_id
+                     AND baseline.source_snapshot_at = candidate.source_snapshot_at
+                     AND baseline.source_payload_hash = candidate.source_payload_hash
                      AND baseline.deployment_id = %s
                      AND baseline.job_status = 'completed'
                     WHERE candidate.deployment_id = %s
@@ -3081,6 +3089,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                           WHERE direct_baseline.deployment_id = %s
                             AND direct_baseline.job_status = 'completed'
                             AND direct_baseline.source_event_id = candidate.source_event_id
+                            AND direct_baseline.scope_key = candidate.scope_key
+                            AND direct_baseline.source_snapshot_id = candidate.source_snapshot_id
+                            AND direct_baseline.source_snapshot_at = candidate.source_snapshot_at
+                            AND direct_baseline.source_payload_hash = candidate.source_payload_hash
                       )
                     """ + lineage_source_filter + """
                 ) pair
@@ -3089,6 +3101,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     WHERE comparison_row.baseline_deployment_id = %s
                       AND comparison_row.candidate_deployment_id = %s
                       AND comparison_row.candidate_release_fingerprint = pair.candidate_release_fingerprint
+                      AND JSON_UNQUOTE(JSON_EXTRACT(comparison_row.payload_json, '$.sourceInput.contractVersion')) = 'reasoning-comparison-input-v2'
                       AND (
                           (
                               JSON_UNQUOTE(JSON_EXTRACT(
@@ -3523,6 +3536,7 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
             str(candidate_deployment_id or ""),
             str(values.get("candidateReleaseFingerprint") or ""),
             comparison_subject,
+            str(source_input.get("contractVersion") or "legacy"),
         ])
         comparison_id = "reasoning-comparison:" + uuid.uuid5(
             uuid.NAMESPACE_URL,

@@ -4,6 +4,7 @@ from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 from .hypothesis_review import outcome_assessments_from_episodes
 from .hypothesis_outcome_contract import outcome_contract_completeness
+from .hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
 from .decision_performance import (
     action_adjusted_return,
     action_return_state,
@@ -1006,12 +1007,15 @@ def add_hypothesis_calibration_concepts(
             or claim_contract_id
             or ""
         ).strip()
-        calibration_identity = claim_contract_id or family_id or template_id
-        calibration_identity_type = (
-            "claim-contract" if claim_contract_id
-            else "family" if family_id
-            else "template"
-        )
+        claim_fingerprint = claim_validation_fingerprint(claim_contract)
+        frozen_fingerprint = str(episode_contract.get("claimContractFingerprint") or "")
+        if claim_fingerprint and frozen_fingerprint and claim_fingerprint != frozen_fingerprint:
+            continue
+        claim_fingerprint = claim_fingerprint or frozen_fingerprint
+        calibration_identity = claim_revision_identity(claim_contract_id, claim_fingerprint)
+        if not calibration_identity:
+            continue
+        calibration_identity_type = "claim-revision"
         episode_id = str(episode.get("episodeId") or "").strip()
         latest_payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
         latest_adjusted_return = action_adjusted_return(
@@ -1028,6 +1032,7 @@ def add_hypothesis_calibration_concepts(
             "templateId": template_id,
             "familyId": family_id,
             "claimContractId": claim_contract_id,
+            "claimContractFingerprint": claim_fingerprint,
             "calibrationIdentity": calibration_identity,
             "calibrationIdentityType": calibration_identity_type,
             "templateLabel": str(selected.get("templateLabel") or template_id),
@@ -1111,6 +1116,7 @@ def add_hypothesis_calibration_concepts(
             "templateId": template_id,
             "familyId": str(row.get("familyId") or ""),
             "claimContractId": str(row.get("claimContractId") or ""),
+            "claimContractFingerprint": str(row.get("claimContractFingerprint") or ""),
             "calibrationIdentity": calibration_identity,
             "calibrationIdentityType": calibration_identity_type,
             "templateLabel": str(row["templateLabel"]),

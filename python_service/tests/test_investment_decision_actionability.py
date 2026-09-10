@@ -1,4 +1,6 @@
 import unittest
+from digital_twin.domain.ai_inference_queue import notification_ai_action_eligibility
+from digital_twin.domain.graph_action_authorization import GraphActionAuthorization
 
 from digital_twin.domain.decision_evidence_contract import hypothesis_decision_eligibility
 from digital_twin.domain.investment_decision_actionability import (
@@ -187,6 +189,27 @@ def ai_payload(qualification_status="active"):
 
 
 class InvestmentDecisionActionabilityTests(unittest.TestCase):
+    def test_graph_ai_authorization_survives_empty_general_policy(self):
+        relation = relation_context()
+        relation["actionEnvelope"].update({"allowedActions": [], "aiAllowedActions": ["BUY"]})
+        synthesis = decision_synthesis_from_relation_context("account:main", relation)
+        self.assertEqual(("BUY",), synthesis.allowed_actions)
+        self.assertFalse(synthesis.judgement_blocked)
+        self.assertTrue(notification_ai_action_eligibility({"v2DecisionSynthesis": synthesis.to_dict()})["eligible"])
+
+    def test_empty_graph_authorization_cannot_fall_back_to_broader_policy(self):
+        relation = relation_context()
+        relation["actionEnvelope"]["aiAllowedActions"] = []
+        synthesis = decision_synthesis_from_relation_context("account:main", relation)
+        self.assertEqual((), synthesis.allowed_actions)
+        self.assertTrue(synthesis.judgement_blocked)
+        self.assertFalse(notification_ai_action_eligibility({
+            "v2DecisionSynthesis": synthesis.to_dict(),
+            "investmentSubjectDecisionCase": {"candidateSet": {"allowedActions": ["BUY"]}},
+        })["eligible"])
+        self.assertFalse(GraphActionAuthorization.from_actions([], []).allows("HOLD"))
+        self.assertFalse(GraphActionAuthorization.from_actions(["BUY"], ["BUY"]).allows("BUY"))
+
     def test_hypothesis_qualification_separates_comparison_from_execution(self):
         shadow = hypothesis_decision_eligibility(hypothesis("shadow"))
         limited = hypothesis_decision_eligibility(hypothesis("limited-active"))

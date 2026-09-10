@@ -7,6 +7,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 
 from ..context_observation_notifications import typedb_context_observation_contract
 from ..decision_evidence_contract import hypothesis_decision_eligibility
+from ..graph_action_authorization import GraphActionAuthorization
 from ..investment_brain import is_research_reviewable_hypothesis_payload
 from .contracts import ActionAlternative, DataGap, DecisionSynthesis
 
@@ -47,12 +48,7 @@ def _action_is_admissible(
     allowed_actions: Iterable[str],
     blocked_actions: Iterable[str],
 ) -> bool:
-    candidate = str(action or "").upper().strip()
-    if candidate in {"", "UNSPECIFIED", "NO_ACTION"}:
-        return False
-    allowed = set(allowed_actions or ())
-    blocked = set(blocked_actions or ())
-    return candidate not in blocked and (not allowed or candidate in allowed)
+    return GraphActionAuthorization.from_actions(allowed_actions, blocked_actions).allows(action)
 
 
 def _hypotheses(relation_context: Mapping[str, object]) -> Tuple[Dict[str, object], ...]:
@@ -284,20 +280,10 @@ def decision_synthesis_from_relation_context(
         or ""
     ).lower().strip()
     decision_disposition = str(envelope.get("decisionDisposition") or "").lower().strip()
-    allowed_actions = _texts(
-        relation.get("allowedActions")
-        or decision.get("allowedActions")
-        or envelope.get("allowedActions"),
-        uppercase=True,
-    )
-    blocked_actions = _texts(
-        relation.get("blockedActions")
-        or decision.get("blockedActions")
-        or envelope.get("blockedActions"),
-        uppercase=True,
-    )
-    overlap = tuple(action for action in allowed_actions if action in set(blocked_actions))
-    allowed_actions = tuple(action for action in allowed_actions if action not in set(blocked_actions))
+    authorization = GraphActionAuthorization.from_sources(envelope, relation, decision)
+    allowed_actions = authorization.allowed
+    blocked_actions = authorization.blocked
+    overlap = authorization.conflicts
     raw_comparison_required = bool(
         opinion_assessment.get("actionConflict")
         and len(_texts(opinion_assessment.get("candidateActions"), uppercase=True)) > 1
@@ -462,8 +448,7 @@ def decision_synthesis_from_relation_context(
     candidate_contract_conflict = bool(
         investment_view_action
         and (
-            investment_view_action in set(blocked_actions)
-            or (allowed_actions and investment_view_action not in set(allowed_actions))
+            not authorization.allows(investment_view_action)
         )
     )
     graph_trace_complete = bool(

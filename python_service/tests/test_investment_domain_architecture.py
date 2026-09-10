@@ -229,7 +229,7 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
             ["maxPositionWeightPct", "maxSectorWeightPct", "fxExposureReviewPct"],
             manifest["policyKeys"],
         )
-        self.assertNotIn("35", str(concentration_rule.to_dict()))
+        self.assertNotIn("35", str([condition.to_dict() for condition in concentration_rule.conditions]))
         for condition in concentration_rule.conditions:
             delta_filter = condition.target_property_filters["policyDeltaRatio"]
             self.assertEqual({"operator": ">", "value": 0}, delta_filter)

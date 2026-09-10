@@ -92,6 +92,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             },
         }
         common = {
+            "scopeKey": "reasoning-slot:acct:NVDA",
             "sourceEventId": "event:NVDA:1",
             "sourceSnapshotId": "snapshot:acct:1",
             "sourceSnapshotAt": "2026-09-10T00:00:00Z",
@@ -259,6 +260,33 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         ])
         self.assertEqual(1, summary["sampleCount"])
         self.assertEqual(1, summary["warmupSampleCount"])
+        normal = {
+            "status": "equivalent", "factParityPct": 100, "ruleSlotCoveragePct": 100,
+            "payload": comparison_store.values[0],
+        }
+        summary = reasoning_comparison_summary([normal, deepcopy(normal), {
+            "status": "equivalent", "payload": {}, "shadowDeliveryCount": 1,
+        }])
+        self.assertEqual(1, summary["sampleCount"])
+        self.assertEqual(1, summary["duplicateExecutionSampleCount"])
+        self.assertEqual(1, summary["excludedInputSampleCount"])
+        self.assertEqual(1, summary["shadowDeliveryCount"])
+        failed_duplicate = {**deepcopy(normal), "status": "unexplained-difference", "unexplainedDecisionDifferenceCount": 1}
+        failed_duplicate["payload"]["symbols"] = ["MSTR"]
+        mixed = reasoning_comparison_summary([normal, failed_duplicate])
+        self.assertEqual(1, mixed["sampleCount"])
+        self.assertEqual(1, mixed["unexplainedDecisionDifferenceCount"])
+        self.assertEqual(0, mixed["equivalentCount"])
+
+        for key, value in (("scopeKey", "reasoning-slot:acct:MSTR"), ("sourceSnapshotAt", "2026-09-11T00:00:00Z"), ("sourcePayloadHash", "changed-input")):
+            changed = deepcopy(candidate_job)
+            changed[key] = value
+            with self.subTest(key=key), patch.object(Jobs, "completed_comparison_pairs", return_value=[{
+                "sourceEventId": "event:NVDA:1", "baseline": baseline_job, "candidate": changed,
+            }]):
+                result = IndependentReasoningComparisonService(Jobs(), Comparisons(), Registry()).reconcile()
+                self.assertEqual(0, result["recordedCount"])
+                self.assertEqual(1, result["rejectedPairCount"])
 
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock

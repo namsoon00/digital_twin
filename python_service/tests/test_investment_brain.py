@@ -1,5 +1,7 @@
 from copy import deepcopy
 import unittest
+import copy
+from digital_twin.domain.hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
 
 from digital_twin.application.hypothesis_proposal_service import (
     HypothesisProposalQueueRunner,
@@ -1524,11 +1526,11 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("usable", calibration.properties["calibrationStatus"])
         self.assertFalse(calibration.properties["automaticDeployment"])
         self.assertEqual(
-            selected["claimContract"]["claimContractId"],
+            claim_revision_identity(selected["claimContract"]["claimContractId"], claim_validation_fingerprint(selected["claimContract"])),
             calibration.properties["calibrationIdentity"],
         )
         self.assertEqual(
-            "claim-contract",
+            "claim-revision",
             calibration.properties["calibrationIdentityType"],
         )
         self.assertEqual(
@@ -1643,6 +1645,7 @@ class InvestmentBrainTest(unittest.TestCase):
                 "templateId": "hypothesis-family:historical-shape",
                 "familyId": "hypothesis-family:historical-shape",
                 "claimContractId": claim_id,
+                "claimContractFingerprint": claim_validation_fingerprint(hypothesis["claimContract"]),
                 "calibrationIdentity": claim_id,
                 "calibrationIdentityType": "claim-contract",
                 "aboxSnapshotId": snapshot_id,
@@ -1681,13 +1684,39 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("observed", calibrated["qualification"]["status"])
         self.assertEqual(4, calibrated["qualification"]["decisiveOutcomeCount"])
         self.assertEqual(
-            "claim-contract",
+            "claim-revision",
             calibrated["historicalCalibration"]["matchedIdentityType"],
         )
         self.assertEqual(
-            claim_id,
+            claim_revision_identity(claim_id, claim_validation_fingerprint(hypothesis["claimContract"])),
             calibrated["historicalCalibration"]["matchedIdentity"],
         )
+        for mutation in ("claim-id", "statement", "outcome", "policy", "missing-fingerprint"):
+            with self.subTest(mutation=mutation):
+                changed_brain = copy.deepcopy(brain)
+                changed_snapshot = copy.deepcopy(snapshot)
+                current = changed_brain["hypothesisSet"]["hypotheses"][0]
+                history = changed_snapshot["calibrations"][0]
+                history["familyId"] = current["familyId"]
+                history["templateId"] = current["templateId"]
+                if mutation == "claim-id":
+                    current["claimContract"]["claimContractId"] = "rule-claim:unvalidated-other-rule"
+                elif mutation == "statement":
+                    current["claimContract"]["statement"] += " revised claim"
+                elif mutation == "outcome":
+                    current["claimContract"]["outcomeContract"]["criteria"][0]["threshold"] += 1
+                elif mutation == "policy":
+                    current["claimContract"]["qualificationPolicy"]["activeFloor"] += 1
+                else:
+                    history.pop("claimContractFingerprint")
+                result = attach_abox_hypothesis_calibrations(
+                    changed_brain, changed_snapshot, subject_symbol="005930",
+                    inference_generation_id="generation-current",
+                    inference_generation_at="2026-09-01T01:00:00Z",
+                    source_abox_snapshot_id=snapshot_id, generation_aligned=True,
+                )
+                self.assertEqual("no-exact-history", result["hypothesisCalibration"]["status"])
+                self.assertFalse(result["hypothesisSet"]["hypotheses"][0].get("historicalCalibration"))
 
 
 if __name__ == "__main__":

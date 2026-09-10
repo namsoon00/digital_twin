@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, Mapping
 
 from .notification_ai_gate_contracts import NOTIFICATION_AI_GATE_VERSION
+from .graph_action_authorization import GraphActionAuthorization
 from .context_observation_notifications import typedb_narrative_only_contract
 from .hypothesis_lifecycle import (
     material_delta_values,
@@ -85,14 +86,8 @@ def notification_ai_action_eligibility(context: Mapping[str, object]) -> Dict[st
         or _mapping(subject.get("candidateSet")).get("executionEligibleHypothesisIds")
         or []
     )
-    allowed_actions = [
-        value.upper() for value in _texts(
-            synthesis.get("allowed_actions")
-            or synthesis.get("allowedActions")
-            or _mapping(subject.get("candidateSet")).get("allowedActions")
-            or []
-        )
-    ]
+    authorization = GraphActionAuthorization.from_sources(synthesis, _mapping(subject.get("candidateSet")))
+    allowed_actions = list(authorization.allowed)
     candidate_action = _clean(
         synthesis.get("graph_candidate_action") or synthesis.get("graphCandidateAction")
     ).upper()

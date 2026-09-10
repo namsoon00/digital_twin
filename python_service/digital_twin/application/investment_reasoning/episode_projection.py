@@ -16,7 +16,9 @@ from ...domain.hypothesis_outcome_contract import (
     HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
     outcome_contract_completeness,
     outcome_contract_fingerprint,
+    resolve_market_outcome_benchmarks,
 )
+from ...domain.hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
 from ...domain.investment_decision_actionability import investment_decision_actionability
 from ...domain.hypothesis_observation import (
     ShadowHypothesisObservationEpisode,
@@ -101,6 +103,7 @@ def _hypothesis_payload(hypothesis) -> Dict[str, object]:
     )
     return {
         "hypothesisId": hypothesis.hypothesis_id,
+        "observationBaseline": dict(hypothesis.observation_baseline),
         "templateId": hypothesis.family_id or hypothesis.hypothesis_id,
         "templateLabel": hypothesis.label or hypothesis.family_id or "TypeDB hypothesis",
         "claim": hypothesis.label or hypothesis.family_id or hypothesis.hypothesis_id,
@@ -234,11 +237,8 @@ def frozen_hypothesis_outcome_contract(
     generation_id = _text(inference_generation_id)
     if not generation_id:
         return {}, {"eligible": False, "reason": "inference-generation-missing"}
-    independence_identity = (
-        claim.evidence_independence_key
-        or hypothesis.family_id
-        or hypothesis.hypothesis_id
-    )
+    claim_fingerprint = claim_validation_fingerprint(hypothesis.claim_contract)
+    independence_identity = claim_revision_identity(claim.claim_contract_id, claim_fingerprint)
     independence_event = _text(source_fact_independence_key) or generation_id
     contract = {
         **claim.outcome_contract.to_dict(),
@@ -248,6 +248,8 @@ def frozen_hypothesis_outcome_contract(
         "selectedHypothesisId": hypothesis.hypothesis_id,
         "hypothesisContractId": claim.claim_contract_id,
         "claimContractId": claim.claim_contract_id,
+        "claimContractFingerprint": claim_fingerprint,
+        "observationBaseline": dict(hypothesis.observation_baseline),
         "sourceRuleIds": rule_ids,
         "inferenceGenerationId": generation_id,
         "sourceFactIndependenceKey": independence_event,
@@ -270,6 +272,7 @@ def frozen_hypothesis_outcome_contract(
             claim.falsification_contract or hypothesis.falsification_contract
         ),
     }
+    contract = resolve_market_outcome_benchmarks(contract, hypothesis.subject_symbol)
     contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
     completeness = outcome_contract_completeness(contract)
     if not completeness.get("complete"):
@@ -334,11 +337,8 @@ def shadow_hypothesis_observation_episodes(
             outcome_contract = preliminary_contract
             readiness = preliminary_readiness
         claim = RuleClaimContract.from_dict(hypothesis.claim_contract)
-        claim_identity = (
-            claim.claim_contract_id
-            or hypothesis.causal_signature
-            or hypothesis.family_id
-            or hypothesis.hypothesis_id
+        claim_identity = claim_revision_identity(
+            claim.claim_contract_id, claim_validation_fingerprint(hypothesis.claim_contract)
         )
         payload = _hypothesis_payload(hypothesis)
         stance = str(payload.get("stance") or "context")

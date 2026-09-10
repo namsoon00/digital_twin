@@ -3191,11 +3191,6 @@ def select_target_scoped_manifest_patch(
                 | selected
             ) - retired_scope_set
             for relation_scope_id in sorted(final_scope_ids):
-                if (
-                    not source_graph_complete
-                    and not is_target_owned_scope(relation_scope_id)
-                ):
-                    continue
                 relation_entry = prospective_scope_entry(relation_scope_id)
                 if (
                     _scope_type(relation_scope_id) != "link"

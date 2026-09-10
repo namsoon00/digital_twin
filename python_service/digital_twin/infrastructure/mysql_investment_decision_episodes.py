@@ -1900,7 +1900,8 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             rows = connection.execute(
                 "SELECT outcomes.episode_id, outcomes.observed_at, outcomes.payload_json AS outcome_json, "
                 "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
-                "episodes.selected_hypothesis_id, episodes.decided_at "
+                "episodes.selected_hypothesis_id, episodes.decided_at, "
+                "JSON_EXTRACT(episodes.payload_json, '$.hypothesisSet.hypotheses') AS hypotheses_json "
                 "FROM investment_decision_outcomes AS outcomes JOIN ("
                 "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
                 "FROM investment_decision_outcomes"
@@ -1928,6 +1929,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 or row.get("selected_hypothesis_id")
                 or ""
             )
+            original_hypotheses = _json_loads(row.get("hypotheses_json"), [])
+            original_hypothesis = next((
+                item for item in original_hypotheses if isinstance(item, dict)
+                and str(item.get("hypothesisId") or "") == selected_hypothesis_id
+            ), {}) if isinstance(original_hypotheses, list) else {}
             episode = grouped.setdefault(episode_id, {
                 "episodeId": episode_id,
                 "accountId": str(row.get("account_id") or ""),
@@ -1938,6 +1944,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 "decidedAt": canonical_investment_timestamp(row.get("decided_at")),
                 "hypothesisSet": {
                     "hypotheses": [{
+                        "claimContract": dict(original_hypothesis.get("claimContract") or {}),
                         "hypothesisId": selected_hypothesis_id,
                         "templateId": str(payload.get("hypothesisTemplateId") or ""),
                         "templateLabel": str(payload.get("hypothesisTemplateLabel") or ""),

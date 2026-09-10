@@ -20,7 +20,9 @@ const rootDir = path.resolve(__dirname, "..");
 // /api/bootstrap request. Keep that cold-start check bounded, but allow the
 // local MySQL DDL path enough headroom under concurrent worker load.
 const requestTimeoutMs = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS || 60000);
-const flowLensReadyTimeoutMs = Math.max(1000, Number(process.env.FLOW_LENS_SMOKE_READY_TIMEOUT_MS || 30000) || 30000);
+// The live fixture initializes additional stores in its background refresh;
+// this cold-schema allowance is separate from the production API latency SLO.
+const flowLensReadyTimeoutMs = Math.max(1000, Number(process.env.FLOW_LENS_SMOKE_READY_TIMEOUT_MS || 180000) || 180000);
 
 function randomPort() {
   return 43000 + (crypto.randomBytes(2).readUInt16BE(0) % 1000);
@@ -2926,6 +2928,10 @@ async function withServer(extraEnv, callback) {
     EXTERNAL_SEC_ENABLED: "0",
     EXTERNAL_NEWS_ENABLED: "0",
     EXTERNAL_YFINANCE_ENABLED: "0",
+    EXTERNAL_PUBLIC_DATA_STOCK_ENABLED: "0",
+    EXTERNAL_PUBLIC_DATA_REFERENCE_ENABLED: "0",
+    EXTERNAL_FX_RATE_ENABLED: "0",
+    FX_RATES: "KRW=1\nUSD=1400",
     EXTERNAL_CRYPTO_IDS: "",
     SETTINGS_PATH: settingsPath,
     DIGITAL_TWIN_DATA_DIR: dataDir
@@ -3536,10 +3542,14 @@ async function checkShareMode(port) {
 }
 
 async function checkLiveTossMode(port) {
+  // Initialize the isolated database before timing the async provider read model.
+  const bootstrap = await request(port, "/api/bootstrap");
+  assertOk(bootstrap.statusCode === 200, "live 테스트 DB 초기화에 실패했습니다.");
   const tossLens = await requestReadyFlowLens(port, "/api/flow-lens");
   assertOk(tossLens.statusCode === 200, "live 토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);
   const payload = JSON.parse(tossLens.body);
-  assertOk(payload.toss && payload.toss.mode === "live", "토스 live 모드가 아닙니다.");
+  assertOk(!payload.readModel || payload.readModel.ready, "토스 조회 읽기 모델 준비 시간이 초과되었습니다.");
+  assertOk(payload.toss && payload.toss.mode === "live", "토스 live 모드가 아닙니다: " + String(payload.toss && payload.toss.status || "상태 없음"));
   assertOk(Array.isArray(payload.toss.positions), "토스 live 보유 종목 배열이 없습니다.");
   assertOk(payload.toss.positions.length === 1, "토스 live 보유 종목 수가 맞지 않습니다.");
   const position = payload.toss.positions[0];
@@ -3564,7 +3574,8 @@ async function main() {
     await withServer({
       TOSS_API_BASE_URL: baseUrl,
       TOSS_CLIENT_ID: "fake-client-id",
-      TOSS_CLIENT_SECRET: "fake-client-secret"
+      TOSS_CLIENT_SECRET: "fake-client-secret",
+      TOSS_ACCOUNT_SEQ: "1"
     }, checkLiveTossMode);
   });
   await withServer({

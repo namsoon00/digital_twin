@@ -9,7 +9,9 @@ qualification policy.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from typing import Dict, Iterable, List, Mapping
 
 from .hypothesis_catalog import hypothesis_family_definition
@@ -21,7 +23,7 @@ from .hypothesis_outcome_contract import (
 from .ontology_rule_knowledge import RuleKnowledgeBasis, resolved_rule_knowledge_basis
 
 
-RULE_CLAIM_CONTRACT_VERSION = "rule-claim-contract-v2"
+RULE_CLAIM_CONTRACT_VERSION = "rule-claim-contract-v3"
 HYPOTHESIS_QUALIFICATION_POLICY_VERSION = "hypothesis-auto-qualification-v1"
 
 CLAIM_TYPES = frozenset({
@@ -170,6 +172,7 @@ class RuleClaimContract:
     outcome_contract: HypothesisOutcomeContract = field(default_factory=HypothesisOutcomeContract)
     source: str = "rulebox-governed-contract"
     version: str = RULE_CLAIM_CONTRACT_VERSION
+    rule_fingerprint: str = ""
 
     @property
     def is_predictive(self) -> bool:
@@ -198,6 +201,7 @@ class RuleClaimContract:
             "qualificationPolicy": self.qualification_policy.to_dict() if self.is_predictive else {},
             "outcomeContract": self.outcome_contract.to_dict(),
             "source": self.source,
+            **({"ruleFingerprint": self.rule_fingerprint} if self.rule_fingerprint else {}),
         }
 
     @staticmethod
@@ -225,6 +229,7 @@ class RuleClaimContract:
             outcome_contract=HypothesisOutcomeContract.from_dict(item.get("outcomeContract") or item.get("outcome_contract")),
             source=_text(item.get("source")) or "rulebox-governed-contract",
             version=_text(item.get("version")) or RULE_CLAIM_CONTRACT_VERSION,
+            rule_fingerprint=_text(item.get("ruleFingerprint") or item.get("rule_fingerprint")),
         )
 
 
@@ -246,18 +251,23 @@ FAMILY_OUTCOME_PROFILES = {
 }
 
 
-def predictive_outcome_contract(thesis_family: str, direction: str) -> HypothesisOutcomeContract:
+def predictive_outcome_contract(thesis_family: str, direction: str, rule_id: str = "") -> HypothesisOutcomeContract:
     horizons, material_move, domains = FAMILY_OUTCOME_PROFILES.get(
         thesis_family,
         ([1440, 10080], 0.75, ("quote", "trend")),
     )
     risk = _text(direction).lower() == "risk"
+    relative = thesis_family in {
+        "trend-continuation", "trend-break", "event-support", "event-risk",
+        "cross-asset-support", "cross-asset-risk",
+    }
     criteria = [
         HypothesisOutcomeCriterion(
             criterion_id=thesis_family + ":expected-direction",
             label="사전 정의한 방향의 유의한 가격 반응",
             role="result",
-            metric="instrumentReturnPct",
+            metric="excessReturnPct" if relative else "instrumentReturnPct",
+            benchmark_symbol="$MARKET" if relative else "",
             operator="<=" if risk else ">=",
             threshold=-abs(material_move) if risk else abs(material_move),
             # Zero means this pre-registered material-move test applies to
@@ -273,7 +283,8 @@ def predictive_outcome_contract(thesis_family: str, direction: str) -> Hypothesi
             criterion_id=thesis_family + ":opposite-direction",
             label="가설과 반대인 유의한 가격 반응",
             role="invalidation",
-            metric="instrumentReturnPct",
+            metric="excessReturnPct" if relative else "instrumentReturnPct",
+            benchmark_symbol="$MARKET" if relative else "",
             operator=">=" if risk else "<=",
             threshold=abs(material_move) if risk else -abs(material_move),
             horizon_minutes=0,
@@ -282,13 +293,33 @@ def predictive_outcome_contract(thesis_family: str, direction: str) -> Hypothesi
             source_policy=["point-in-time-market-observation"],
         ),
     ]
+    premise_specs = {
+        "mean-reversion": [("ma20DistanceChangePp", ">", 0, "trend")],
+        "failed-recovery": [("ma20DistanceChangePp", "<", 0, "trend")],
+        "flow-accumulation": [("smartMoneyNetVolume", ">", 0, "flow")],
+        "flow-distribution": [("smartMoneyNetVolume", "<", 0, "flow")],
+    }.get(thesis_family, [])
+    # Company premises are rule-specific; a valuation rule is not an earnings forecast.
+    premise_specs = {
+        "graph.company.market.fundamental_confirmation.support.v1": [("revenueGrowthPct", ">=", 3, "fundamental"), ("freeCashFlowMarginPct", ">=", 3, "fundamental")],
+        "graph.company.capital.dilution.risk.v1": [("shareCountChangePct", ">=", 5, "fundamental"), ("freeCashFlowChangePct", "<", 0, "fundamental")],
+        "graph.company.market.value_trap.risk.v1": [("operatingIncomeGrowthPct", "<=", 0, "fundamental")],
+        "graph.company.market.unsupported_rerating.risk.v1": [("revenueGrowthPct", "<=", 0, "fundamental")],
+    }.get(rule_id, premise_specs)
+    if any(domain == "fundamental" for _metric, _operator, _threshold, domain in premise_specs):
+        horizons = [90 * 1440, 180 * 1440]
+    for metric, operator, threshold, domain in premise_specs:
+        criteria.append(HypothesisOutcomeCriterion(
+            criterion_id=thesis_family + ":premise:" + metric,
+            label="후속 원천 자료의 투자 전제 확인: " + metric,
+            role="cause", metric=metric, operator=operator, threshold=threshold,
+            required=True, required_observation_domains=[domain],
+            source_policy=["new-financial-period"] if domain == "fundamental" else [],
+            failure_outcome="contradicted",
+        ))
     return HypothesisOutcomeContract(
         outcome_horizon_minutes=list(horizons),
-        # The causal evidence domains are frozen at decision time. A later
-        # result only requires a point-in-time quote so outcome collection is
-        # not blocked when flow or research providers do not publish again at
-        # the exact review horizon.
-        required_observation_domains=["quote"],
+        required_observation_domains=sorted({"quote", *(domain for _metric, _operator, _threshold, domain in premise_specs)}),
         minimum_independent_episodes=5,
         maximum_observation_delay_minutes=180,
         verification_focus=[
@@ -296,6 +327,9 @@ def predictive_outcome_contract(thesis_family: str, direction: str) -> Hypothesi
             "point-in-time-source-alignment",
             "corroboration-versus-contradiction",
             "decision-evidence-domains:" + ",".join(domains),
+            "prediction-performance-separate-from-premise-validation",
+            "premise-continuity" if premise_specs else "prediction-only",
+            "causal-attribution-not-established",
         ],
         evaluation_scope="market-and-account-separated",
         criteria=criteria,
@@ -343,15 +377,17 @@ def resolved_rule_claim_contract(
         explicit.claim_contract_id
         and explicit.rule_id == rule_id
         and explicit.claim_type == expected_type
-        and explicit.version == RULE_CLAIM_CONTRACT_VERSION
+        and explicit.version in {"rule-claim-contract-v2", RULE_CLAIM_CONTRACT_VERSION}
     ):
+        if explicit.version == RULE_CLAIM_CONTRACT_VERSION:
+            return replace(explicit, rule_fingerprint=_rule_semantic_fingerprint(rule) or explicit.rule_fingerprint)
         return explicit
 
     family = hypothesis_family_definition(basis.thesis_family)
     direction = family.expected_direction if family else "context"
     predictive = expected_type == "market-hypothesis"
     outcome_contract = (
-        predictive_outcome_contract(basis.thesis_family, direction)
+        predictive_outcome_contract(basis.thesis_family, direction, rule_id)
         if predictive
         else HypothesisOutcomeContract()
     )
@@ -379,7 +415,19 @@ def resolved_rule_claim_contract(
         qualification_policy=HypothesisQualificationPolicy(),
         outcome_contract=outcome_contract,
         source="rulebox-governed-contract",
+        rule_fingerprint=_rule_semantic_fingerprint(rule),
     )
+
+
+def _rule_semantic_fingerprint(rule: object) -> str:
+    source = dict(rule) if isinstance(rule, Mapping) else asdict(rule) if is_dataclass(rule) else {}
+    if not source.get("conditions"):
+        return ""
+    semantics = {key: source.get(key) for key in (
+        "rule_id", "version", "source_kind", "conditions", "derivations",
+        "any_condition_min_count", "model_input_contract",
+    )}
+    return "sha256:" + hashlib.sha256(json.dumps(semantics, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def rule_claim_contract_violations(contract: RuleClaimContract, rule_id: str = "") -> List[str]:
@@ -516,5 +564,7 @@ def hypothesis_qualification(
         "directionalHitRateConfidence95": {"lower": lower, "upper": upper},
         "averageActionAdjustedReturnPct": adjusted_return,
         "actionReturnAvailable": return_available,
+        "validationScope": "prediction-and-premise-continuity" if any(item.role == "cause" for item in contract.outcome_contract.criteria) else "prediction-performance-only",
+        "causalAttribution": "not-established",
         "policy": policy.to_dict(),
     }

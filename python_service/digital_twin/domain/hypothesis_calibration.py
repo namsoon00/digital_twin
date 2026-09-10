@@ -1,8 +1,8 @@
 """Bounded, ABox-backed outcome context for current hypothesis comparison.
 
-This module deliberately does not rank actions or change a TypeDB rule result.
-It only makes an already materialized ``HypothesisCalibration`` fact available
-to the AI comparison for the same account, symbol, and hypothesis template.
+This module does not rank actions or change a TypeDB rule result. It derives
+qualification only from a materialized calibration for the exact claim revision.
+Family and template resemblance never transfers empirical qualification.
 """
 
 import json
@@ -10,11 +10,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from .decision_evidence_contract import hypothesis_set_evidence_summary
+from .hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
 from .decision_performance import binomial_confidence_interval, number
 from .rule_claim_contract import RuleClaimContract, hypothesis_qualification
 
 
-HYPOTHESIS_CALIBRATION_CONTEXT_VERSION = "hypothesis-calibration-context-v1"
+HYPOTHESIS_CALIBRATION_CONTEXT_VERSION = "hypothesis-calibration-context-v2"
 HYPOTHESIS_CALIBRATION_SOURCE = "typedb-abox-hypothesis-calibration"
 
 
@@ -40,7 +41,7 @@ def hypothesis_calibration_snapshot_from_abox_rows(
         "sourceAboxSnapshotId": source_snapshot_id,
         "generationAligned": bool(generation_aligned),
         "activeAboxMembershipValidated": bool(active_membership_verified),
-        "scope": "same-account-symbol-template",
+        "scope": "same-account-symbol-claim-revision",
         "decisionEligibility": "historical-review-only",
         "automaticDeployment": False,
         "symbols": sorted(clean_symbols),
@@ -93,13 +94,7 @@ def attach_abox_hypothesis_calibrations(
     source_abox_snapshot_id: str = "",
     generation_aligned: bool = False,
 ) -> Dict[str, object]:
-    """Attach exact historical context without changing the candidate set.
-
-    The graph-derived candidates remain immutable in meaning: this function
-    only adds audit context to candidates whose template and symbol exactly
-    match an active ABox calibration. A missing, stale, or future result is
-    excluded instead of being treated as evidence.
-    """
+    """Attach exact-revision history and derive its governed qualification."""
     enriched = dict(brain or {})
     hypothesis_set = enriched.get("hypothesisSet") if isinstance(enriched.get("hypothesisSet"), dict) else {}
     hypotheses = [dict(item) for item in hypothesis_set.get("hypotheses") or [] if isinstance(item, dict)]
@@ -112,7 +107,7 @@ def attach_abox_hypothesis_calibrations(
         "version": HYPOTHESIS_CALIBRATION_CONTEXT_VERSION,
         "status": "not-applied",
         "source": str(snapshot.get("source") or HYPOTHESIS_CALIBRATION_SOURCE),
-        "scope": "same-account-symbol-template",
+        "scope": "same-account-symbol-claim-revision",
         "decisionEligibility": "historical-review-only",
         "automaticDeployment": False,
         "generationAligned": aligned,
@@ -287,6 +282,7 @@ def normalized_hypothesis_calibration_row(
         "templateId": template_id or calibration_identity,
         "familyId": family_id,
         "claimContractId": claim_contract_id,
+        "claimContractFingerprint": str(payload.get("claimContractFingerprint") or ""),
         "calibrationIdentity": calibration_identity,
         "calibrationIdentityType": calibration_identity_type,
         "templateLabel": str(payload.get("templateLabel") or template_id or calibration_identity),
@@ -326,6 +322,10 @@ def normalized_hypothesis_calibration_row(
 def calibration_identity_keys(calibration: Dict[str, object]) -> List[tuple]:
     """Return typed identities carried by one materialized calibration fact."""
 
+    claim_id = str(calibration.get("claimContractId") or "").strip()
+    if claim_id:
+        revision = claim_revision_identity(claim_id, str(calibration.get("claimContractFingerprint") or ""))
+        return [("claim-revision", revision)] if revision else []
     result: List[tuple] = []
     explicit_type = str(calibration.get("calibrationIdentityType") or "").strip()
     explicit_id = str(calibration.get("calibrationIdentity") or "").strip()
@@ -351,6 +351,10 @@ def hypothesis_identity_keys(hypothesis: Dict[str, object]) -> List[tuple]:
         if isinstance(hypothesis.get("claimContract"), dict)
         else {}
     )
+    claim_id = str(claim_contract.get("claimContractId") or "").strip()
+    if claim_id:
+        revision = claim_revision_identity(claim_id, claim_validation_fingerprint(claim_contract))
+        return [("claim-revision", revision)] if revision else []
     candidates = (
         ("claim-contract", claim_contract.get("claimContractId")),
         ("family", hypothesis.get("familyId")),

@@ -9,6 +9,7 @@ from ..domain.reasoning_shadow import (
     compare_engine_outcomes,
     independent_reasoning_outcome_packet,
 )
+from ..domain.reasoning_comparison_identity import comparison_input_contract
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -131,6 +132,7 @@ class IndependentReasoningComparisonService:
         )
         validation_started_at = _timestamp(candidate_health.get("validationStartedAt"))
         recorded = []
+        rejected = []
         latest_candidate_release = {}
         for pair in pairs:
             baseline_job = _mapping(_mapping(pair).get("baseline"))
@@ -141,6 +143,10 @@ class IndependentReasoningComparisonService:
                 or ""
             ).strip()
             if not baseline_job or not candidate_job or not source_event_id:
+                continue
+            input_contract = comparison_input_contract(baseline_job, candidate_job)
+            if not input_contract["eligible"]:
+                rejected.append(input_contract)
                 continue
             baseline_job["comparisonSourceEventId"] = source_event_id
             candidate_job["comparisonSourceEventId"] = source_event_id
@@ -184,6 +190,7 @@ class IndependentReasoningComparisonService:
                     "sourcePayloadHash": str(candidate_job.get("sourcePayloadHash") or ""),
                 },
             }
+            source_input_comparison.update(input_contract)
             comparison = compare_engine_outcomes(
                 independent_reasoning_outcome_packet(baseline_job),
                 independent_reasoning_outcome_packet(candidate_job),
@@ -265,6 +272,8 @@ class IndependentReasoningComparisonService:
         result = {
             "status": "recorded" if recorded else "idle",
             "recordedCount": len(recorded),
+            "rejectedPairCount": len(rejected),
+            "rejectedPairs": rejected[:20],
             "baselineDeploymentId": baseline_id,
             "candidateDeploymentId": candidate_id,
             "sourceEventIds": [

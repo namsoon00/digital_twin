@@ -38,6 +38,7 @@ from digital_twin.infrastructure.mysql_schema_tuning import (
     MYSQL_OPERATIONAL_COLUMN_WIDTHS,
     ensure_mysql_column_widths,
 )
+from digital_twin.infrastructure.mysql_outcome_evidence import MySQLOutcomeEvidenceSource
 
 
 class RecordingConnection:
@@ -389,6 +390,7 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         claim_contract = {
             "claimContractId": "claim:trend:1",
             "ruleId": "graph.trend.test.v1",
+            "statement": "The observed trend predicts a positive return.",
             "claimType": "market-hypothesis",
             "decisionAuthority": "conditional-investment-evidence",
             "evidenceIndependenceKey": "trend-price-path",
@@ -783,6 +785,58 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         self.assertEqual("directionally-corroborated", result["selectedHypothesisStatus"])
         self.assertEqual([], result["missingRequiredMetricIds"])
 
+    def test_financial_evidence_reader_batches_as_of_immutable_history(self):
+        source = MySQLOutcomeEvidenceSource({})
+        connection = QueryRowsConnection([{
+            "request_id": "request:1", "generated_at": "2026-08-25T01:00:00Z",
+            "company_json": json.dumps({"financials": {"quarterly": [{"period": "2026-06-30"}]}}),
+        }])
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        source.connect = connect
+        result = source.load_outcome_evidence("account:1", [
+            {"requestId": "request:1", "symbol": "NVDA", "observedAt": "2026-08-25T10:00:00+09:00"},
+            {"requestId": "request:2", "symbol": "MSTR", "observedAt": "2026-08-25T01:01:00Z"},
+        ])
+        self.assertEqual(1, len(connection.statements))
+        sql, params = connection.statements[0]
+        self.assertIn("candidate.generated_at <= request.cutoff_at", sql)
+        self.assertIn("candidate.generated_at >= request.floor_at", sql)
+        self.assertIn("UNION ALL", sql)
+        self.assertIn("2026-08-25T01:00:00Z", params)
+        self.assertEqual("2026-08-25T01:00:00Z", result["request:1"]["evidenceSnapshotAt"])
+
+    def test_financial_evidence_enrichment_uses_quote_time_not_current_snapshot(self):
+        class Store:
+            def pending_outcome_targets(self, *_args, **_kwargs):
+                return [{"requestId": "r", "episodeId": "e", "symbol": "NVDA", "horizonMinutes": 60,
+                         "hypothesisOutcomeContract": {"requiredObservationDomains": ["fundamental"],
+                                                       "observationBaseline": {"financialPeriods": {"quarterly": "20260331"}}}}]
+
+            def record_outcome_observations(self, _account, records):
+                self.records = records
+                return []
+
+        class Evidence:
+            def load_outcome_evidence(self, _account, requests):
+                self.requests = requests
+                return {"r": {"companyContext": {"financials": {"quarterly": [{"period": "2026-06-30", "revenueGrowthPct": 8}]}},
+                              "evidenceSnapshotAt": "2026-08-25T01:00:00Z"}}
+
+        store, evidence = Store(), Evidence()
+        timeseries = SimpleNamespace(load_outcome_observations=lambda *_a, **_kw: {
+            "r": {"currentPrice": 100, "sourceAsOf": "2026-08-25T01:00:05Z"}
+        })
+        service = InvestmentOutcomeObservationService(store, timeseries, outcome_evidence_source=evidence)
+        service.observe_snapshot(SimpleNamespace(account_id="account:1", generated_at="2026-08-26T00:00:00Z",
+                                                 positions=[], watchlist=[], has_live_account_data=lambda: True))
+        self.assertEqual("2026-08-25T01:00:05Z", evidence.requests[0]["observedAt"])
+        self.assertTrue(store.records[0]["facts"]["newFinancialPeriod"])
+        self.assertEqual(8, store.records[0]["facts"]["revenueGrowthPct"])
+
     def test_performance_loader_keeps_observed_episodes_outside_recent_window(self):
         store = self.store()
         connection = QueryRowsConnection([{
@@ -791,6 +845,7 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
             "symbol": "NVDA",
             "action": "HOLD",
             "selected_hypothesis_id": "hypothesis:trend:1",
+            "hypotheses_json": '[{"hypothesisId":"hypothesis:trend:1","claimContract":{"claimContractId":"claim:original"}}]',
             "observed_at": "2026-08-25T01:00:00Z",
             "outcome_json": '{"outcomeId":"outcome:1","observedAt":"2026-08-25T01:00:00Z","payload":{}}',
         }])
@@ -808,6 +863,7 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         )
 
         self.assertEqual(["episode:historical"], [item["episodeId"] for item in rows])
+        self.assertEqual("claim:original", rows[0]["hypothesisSet"]["hypotheses"][0]["claimContract"]["claimContractId"])
         self.assertIn("SELECT episode_id, MAX(observed_at)", connection.statements[0][0])
         self.assertEqual(2, connection.statements[0][0].count("observed_at <= %s"))
         self.assertEqual(

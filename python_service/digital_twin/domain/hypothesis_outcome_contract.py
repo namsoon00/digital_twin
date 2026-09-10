@@ -23,10 +23,26 @@ SUPPORTED_OBSERVATION_DOMAINS = (
     "research",
     "portfolio",
     "static",
+    "fundamental",
 )
 SUPPORTED_OUTCOME_CRITERION_ROLES = ("cause", "result", "invalidation", "context")
 SUPPORTED_OUTCOME_CRITERION_OPERATORS = (">", ">=", "<", "<=", "==", "!=")
 SUPPORTED_OUTCOME_CRITERION_FAILURE_OUTCOMES = ("contradicted", "inconclusive")
+
+
+def resolve_market_outcome_benchmarks(contract: Mapping[str, object], symbol: str) -> Dict[str, object]:
+    """Resolve the authored market benchmark without benchmarking a symbol to itself."""
+    clean_symbol = str(symbol or "").upper()
+    market_benchmark = "KOSPI" if clean_symbol.isdigit() and len(clean_symbol) == 6 else "BTC" if clean_symbol in {"BTC", "ETH", "SOL", "XRP"} else "SPY"
+    criteria = [dict(item) for item in contract.get("criteria") or []]
+    for criterion in criteria:
+        if criterion.get("benchmarkSymbol") == "$MARKET":
+            criterion["benchmarkSymbol"] = market_benchmark if market_benchmark != clean_symbol else ""
+            if market_benchmark == clean_symbol:
+                criterion["metric"] = "instrumentReturnPct"
+    return {**contract, "criteria": criteria}
+
+
 SUPPORTED_OUTCOME_CRITERION_METRICS = (
     "instrumentReturnPct",
     "benchmarkReturnPct",
@@ -39,6 +55,12 @@ SUPPORTED_OUTCOME_CRITERION_METRICS = (
     "individualNetVolume",
     "shareCountChangePct",
     "freeCashFlowChangePct",
+    "netIncomeGrowthPct",
+    "operatingIncomeGrowthPct",
+    "revenueGrowthPct",
+    "freeCashFlowMarginPct",
+    "ma20DistanceChangePp",
+    "smartMoneyNetVolume",
     "verifiedEventCount",
     "counterEvidenceCount",
 )
@@ -519,6 +541,7 @@ def observation_domain_status(
         "research": has_value("researchEvidence", "verifiedClaims", "disclosureIds"),
         "portfolio": has_value("profitLossRate", "quantity", "averagePrice"),
         "static": True,
+        "fundamental": has_value("financialPeriod") and source.get("newFinancialPeriod") is True,
     }
     missing = [domain for domain in required if not availability.get(domain, False)]
     return {

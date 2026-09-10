@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
 from .portfolio_ontology_catalog import OPERATIONAL_PIPELINES, SETTING_CONCEPT_TYPES
+from .reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION
 
 
 REASONING_SHADOW_CONTRACT_VERSION = "reasoning-shadow-comparison-v2"
@@ -825,25 +826,59 @@ def reasoning_comparison_summary(
         for row in all_items
         if bool(_mapping(row.get("payload")).get("candidateWarmup"))
     ]
-    items = [
+    validation_items = [
         row
         for row in all_items
         if not bool(_mapping(row.get("payload")).get("candidateWarmup"))
     ]
+    items, excluded_items, duplicate_items = [], [], []
+    execution_rows = {}
+    severity = {status: index for index, status in enumerate((
+        "equivalent", "explained-input-difference", "input-parity-gap",
+        "reasoning-parity-gap", "unexplained-difference", "candidate-failed", "delivery-violation",
+    ))}
+    for row in validation_items:
+        source = _mapping(_mapping(row.get("payload")).get("sourceInput"))
+        if source.get("contractVersion") != COMPARISON_INPUT_CONTRACT_VERSION or source.get("eligible") is not True:
+            excluded_items.append(row)
+            continue
+        identity = source.get("independentExecutionKey")
+        if not identity:
+            excluded_items.append(row)
+        elif identity in execution_rows:
+            duplicate_items.append(row)
+            retained = execution_rows[identity]
+            if severity.get(str(row.get("status")), 99) > severity.get(str(retained.get("status")), 99):
+                retained["status"] = row.get("status")
+            for key in ("factParityPct", "ruleSlotCoveragePct"):
+                retained[key] = min(float(retained.get(key) or 0), float(row.get(key) or 0))
+            retained["unexplainedDecisionDifferenceCount"] = max(
+                int(retained.get("unexplainedDecisionDifferenceCount") or 0),
+                int(row.get("unexplainedDecisionDifferenceCount") or 0),
+            )
+            payload, incoming = _mapping(retained.get("payload")), _mapping(row.get("payload"))
+            for key in ("symbols", "marketClasses", "candidateActions", "candidateMatchedRuleIds"):
+                payload[key] = sorted(set(payload.get(key) or []) | set(incoming.get(key) or []))
+            for key in ("subjectCount", "candidateNativeMatchedRuleCount", "baselineDurationMs", "candidateDurationMs", "queueWaitMs"):
+                payload[key] = max(int(payload.get(key) or 0), int(incoming.get(key) or 0))
+            retained["payload"] = payload
+        else:
+            execution_rows[identity] = row
+            items.append(row)
     status_counts: Dict[str, int] = {}
     symbols, markets, actions, matched_rule_ids = set(), set(), set(), set()
     fact_values, rule_values, baseline_durations, candidate_durations, queue_waits = [], [], [], [], []
     candidate_end_to_end_durations = []
     baseline_stage_values: Dict[str, list] = {}
     candidate_stage_values: Dict[str, list] = {}
-    unexplained = shadow_deliveries = nonempty_decisions = nonempty_native = decision_subjects = 0
+    unexplained = nonempty_decisions = nonempty_native = decision_subjects = 0
+    shadow_deliveries = sum(int(row.get("shadowDeliveryCount") or 0) for row in all_items)
     for row in items:
         status = str(row.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
         fact_values.append(float(row.get("factParityPct") or 0.0))
         rule_values.append(float(row.get("ruleSlotCoveragePct") or 0.0))
         unexplained += int(row.get("unexplainedDecisionDifferenceCount") or 0)
-        shadow_deliveries += int(row.get("shadowDeliveryCount") or 0)
         payload = _mapping(row.get("payload"))
         row_symbols = _strings(payload.get("symbols") or [])
         symbols.update(row_symbols)
@@ -877,6 +912,9 @@ def reasoning_comparison_summary(
         "candidateReleaseFingerprint": str(candidate_release_fingerprint or ""),
         "validationCohortId": str(validation_cohort_id or ""),
         "sampleCount": len(items),
+        "excludedInputSampleCount": len(excluded_items),
+        "duplicateExecutionSampleCount": len(duplicate_items),
+        "comparisonInputContractVersion": COMPARISON_INPUT_CONTRACT_VERSION,
         "warmupSampleCount": len(warmup_items),
         "statusCounts": status_counts,
         "equivalentCount": int(status_counts.get("equivalent") or 0),

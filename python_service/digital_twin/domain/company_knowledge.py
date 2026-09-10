@@ -984,7 +984,10 @@ def company_prompt_context(
         "operatingCashFlow",
         "capitalExpenditure",
         "freeCashFlow",
+        "freeCashFlowGrowthPct",
+        "freeCashFlowMarginPct",
         "sharesOutstanding",
+        "sharesOutstandingGrowthPct",
         "sharesGrowthPct",
     )
     for frequency in ("annual", "interim", "quarterly"):

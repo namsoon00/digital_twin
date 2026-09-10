@@ -139,6 +139,15 @@ class ABoxLifecycleContractTests(unittest.TestCase):
             "relation-endpoint-missing-from-final-scope",
             [item["code"] for item in blocked["patchPlanViolations"]],
         )
+        self.assertFalse(blocked["requiresCompleteSource"])
+        partial = finalize_manifest_patch_plan(
+            {**self.selection([self.evidence_scope, self.link_scope]), "sourceGraphComplete": False},
+            ABoxChangeSet.from_inputs(["035420"], source_graph_complete=False),
+            missing_endpoint_plan,
+            self.active,
+        )
+        self.assertTrue(partial["requiresCompleteSource"])
+        self.assertFalse(partial["applied"])
         self._assert_complete_source_selector_replaces_every_changed_derived_companion()
         self._assert_complete_source_retires_omitted_derived_quality_companion()
         self._assert_complete_source_retires_orphaned_relation_binding()
@@ -353,6 +362,19 @@ class ABoxLifecycleContractTests(unittest.TestCase):
             ["NVDA"],
             source_graph_complete=True,
         )
+
+        partial = plan_target_scoped_manifest_patch(
+            graph,
+            {
+                "status": "ok", "scopePlan": active,
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            },
+            ["NVDA"], source_graph_complete=False,
+        )
+        self.assertFalse(partial["applied"])
+        self.assertEqual("changed-link-endpoint-requires-complete-source", partial["fallbackReason"])
+        self.assertIn(episode_scope, partial["missingEndpointScopeIds"])
 
         self.assertEqual("ready", result["status"])
         self.assertIn(old_link_scope, result["retiredScopeIds"])

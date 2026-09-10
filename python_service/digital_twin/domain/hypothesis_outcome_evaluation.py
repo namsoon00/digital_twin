@@ -1,6 +1,7 @@
 """Deterministic, review-only evaluation of frozen hypothesis criteria."""
 
 from typing import Dict, Iterable, Mapping, Optional, Tuple
+import math
 
 from .hypothesis_outcome_contract import HypothesisOutcomeContract, text
 
@@ -13,7 +14,8 @@ def optional_number(value: object) -> Optional[float]:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 
@@ -52,6 +54,16 @@ def metric_value(
         if benchmark is None:
             return None, "benchmark-return-missing"
         return round(float(instrument_return_pct) - benchmark, 6), "instrument-return-minus-" + benchmark_basis
+    if metric == "smartMoneyNetVolume":
+        coverage = facts.get("marketSignalCoverage") or {}
+        investor = coverage.get("investor") or {} if isinstance(coverage, Mapping) else {}
+        if not investor or investor.get("usableForJudgement") is not True:
+            return None, "investor-flow-unavailable"
+        foreign, _ = first_number(source, ["foreignNetVolume"])
+        institution, _ = first_number(source, ["institutionNetVolume"])
+        if foreign is None or institution is None:
+            return None, "investor-flow-missing"
+        return foreign + institution, "foreign-and-institution-net-volume"
     if metric == "verifiedEventCount":
         for key in ["verifiedEvents", "verifiedClaims", "researchEvidence", "disclosureIds"]:
             if key in source:
@@ -69,8 +81,8 @@ def metric_value(
         "foreignNetVolume": ["foreignNetVolume"],
         "institutionNetVolume": ["institutionNetVolume"],
         "individualNetVolume": ["individualNetVolume"],
-        "shareCountChangePct": ["shareCountChangePct", "dilutedShareCountChangePct"],
-        "freeCashFlowChangePct": ["freeCashFlowChangePct", "fcfChangePct"],
+        "shareCountChangePct": ["shareCountChangePct", "sharesOutstandingGrowthPct", "dilutedShareCountChangePct"],
+        "freeCashFlowChangePct": ["freeCashFlowChangePct", "freeCashFlowGrowthPct", "fcfChangePct"],
     }
     return first_number(source, aliases.get(metric, [metric]))
 
@@ -79,6 +91,8 @@ def source_policy_status(criterion, facts: Mapping[str, object]) -> Tuple[bool, 
     required = {text(item).lower() for item in criterion.source_policy if text(item)}
     if not required:
         return True, ""
+    if "new-financial-period" in required:
+        return (True, "") if facts.get("newFinancialPeriod") is True else (False, "new-financial-period-not-observed")
     observed = {
         text(value).lower()
         for value in [
@@ -179,6 +193,8 @@ def evaluate_hypothesis_outcome(
     for criterion in criteria:
         value, basis = metric_value(criterion.metric, facts, instrument_return_pct)
         source_usable, source_reason = source_policy_status(criterion, facts)
+        if criterion.metric == "excessReturnPct" and criterion.benchmark_symbol and text(facts.get("benchmarkSymbol")).upper() != criterion.benchmark_symbol:
+            source_usable, source_reason = False, "benchmark-symbol-mismatch"
         if value is None or not source_usable:
             state = "unknown"
             passed = None
@@ -241,4 +257,24 @@ def evaluate_hypothesis_outcome(
         "failedCriterionCount": sum(1 for item in assessments if item.get("state") == "failed"),
         "unknownCriterionCount": sum(1 for item in assessments if item.get("state") == "unknown"),
         "missingRequiredMetricIds": missing_required,
+        "predictionStatus": _axis_status([item for item in assessments if item.get("role") in {"result", "invalidation"}]),
+        "thesisValidationStatus": _axis_status([item for item in assessments if item.get("role") == "cause"]),
+        "thesisValidationScope": "premise-continuity",
+        "causalAttribution": "not-established",
     }
+
+
+def _axis_status(assessments):
+    required = [item for item in assessments if item.get("required")]
+    if not required:
+        return "not-measured"
+    if any(item["state"] == "passed" and item["role"] == "invalidation" for item in required):
+        return "contradicted"
+    if any(item["state"] == "unknown" for item in required):
+        return "unavailable"
+    support = [item for item in required if item["role"] != "invalidation"]
+    if support and all(item["state"] == "passed" for item in support):
+        return "corroborated"
+    if any(item["state"] == "failed" and item.get("failureOutcome") != "inconclusive" for item in support):
+        return "contradicted"
+    return "inconclusive"

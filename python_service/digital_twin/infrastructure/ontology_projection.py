@@ -3408,7 +3408,10 @@ class PortfolioOntologyProjectionRecorder:
                 if (
                     not applied_target_patch.get("applied")
                     and str(graph_input.get("mode") or "") == "target-scoped"
-                    and not str(applied_target_patch.get("status") or "").startswith("blocked-")
+                    and (
+                        not str(applied_target_patch.get("status") or "").startswith("blocked-")
+                        or applied_target_patch.get("requiresCompleteSource") is True
+                    )
                 ):
                     # A scoped source can legitimately omit a shared endpoint
                     # that is retained by the active Manifest. Reassemble the

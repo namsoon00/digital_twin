@@ -100,7 +100,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # two independent contracts at the inference publication boundary.
         # Data-source recovery, completed-session candle admission, and shared
         # ontology projection recovery add independent production boundaries.
-        self.assertLessEqual(total, 1025)
+        # Exact claim revisions, prediction/premise outcomes, PIT financial
+        # reads, explicit action denial, and independent comparison cohorts
+        # each need positive and negative contract regression coverage.
+        self.assertLessEqual(total, 1040)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

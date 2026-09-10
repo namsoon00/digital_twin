@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .contracts import HypothesisRecord
+from ..hypothesis_outcome_facts import freeze_outcome_baseline
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -37,6 +38,7 @@ def _hypothesis_payloads(value: object) -> List[Dict[str, object]]:
         ).strip():
             continue
         payload = dict(item)
+        payload["observationBaseline"] = freeze_outcome_baseline(_mapping(relation.get("facts")))
         payload.setdefault("accountId", relation.get("accountId") or "")
         payload.setdefault("subjectSymbol", subject.get("symbol") or hypothesis_set.get("subjectSymbol") or "")
         payload.setdefault(

@@ -19,7 +19,7 @@ FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v3"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v7"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v8"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -166,6 +166,7 @@ class HypothesisRecord:
     falsification_contract: str = ""
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
     claim_contract: Dict[str, object] = field(default_factory=dict)
+    observation_baseline: Dict[str, object] = field(default_factory=dict)
     qualification: Dict[str, object] = field(default_factory=dict)
     evidence_state: str = ""
     approval_status: str = ""
@@ -321,6 +322,7 @@ class HypothesisRecord:
                 or ""
             ),
             account_id=str(payload.get("accountId") or payload.get("account_id") or ""),
+            observation_baseline=dict(payload.get("observationBaseline") or payload.get("observation_baseline") or {}),
             subject_symbol=str(payload.get("subjectSymbol") or payload.get("subject_symbol") or "").upper(),
             inference_generation_id=str(
                 payload.get("inferenceGenerationId")

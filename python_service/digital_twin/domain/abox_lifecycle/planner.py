@@ -43,11 +43,22 @@ def finalize_manifest_patch_plan(
     if validation.valid or not plan.applied:
         raw["manifestPatchContract"] = contract
         return raw
+    violations = validation.to_dict()["violations"]
+    # Incomplete input may omit shared endpoints still owned by other subjects.
+    # Reassemble the same source once; never waive the invariant or commit it.
+    repairable = not change_set.source_graph_complete and bool(violations) and all(
+        item["code"] in {
+            "relation-endpoint-missing-from-final-scope",
+            "relation-endpoint-scope-missing-from-final-manifest",
+        }
+        for item in violations
+    )
     return {
         **raw,
         "status": "blocked-invalid-manifest-patch-plan",
         "applied": False,
         "fallbackReason": "manifest-patch-invariant-violation",
         "manifestPatchContract": contract,
-        "patchPlanViolations": validation.to_dict()["violations"],
+        "patchPlanViolations": violations,
+        "requiresCompleteSource": repairable,
     }

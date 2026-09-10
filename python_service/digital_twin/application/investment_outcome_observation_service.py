@@ -5,6 +5,7 @@ from ..domain.investment_brain import canonical_investment_timestamp
 from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution
 from ..domain.market_evidence_profiles import market_evidence_profile
 from ..domain.portfolio import AccountSnapshot
+from ..domain.hypothesis_outcome_facts import premise_observation_facts
 
 
 def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int, upper: int) -> int:
@@ -30,11 +31,13 @@ class InvestmentOutcomeObservationService:
         market_time_series_store=None,
         settings: Dict[str, object] = None,
         investment_domain_store=None,
+        outcome_evidence_source=None,
     ):
         self.decision_episode_store = decision_episode_store
         self.market_time_series_store = market_time_series_store
         self.settings = dict(settings or {})
         self.investment_domain_store = investment_domain_store
+        self.outcome_evidence_source = outcome_evidence_source
 
     def enabled(self) -> bool:
         return bool(
@@ -155,6 +158,8 @@ class InvestmentOutcomeObservationService:
             max_delay_minutes=self.max_delay_minutes(),
         ) if benchmark_end_requests else {}
         records = []
+        evidence_requests = []
+        targets_by_id = {str(item.get("requestId") or ""): item for item in targets}
         historical_count = 0
         snapshot_fallback_count = 0
         missing_count = 0
@@ -208,12 +213,26 @@ class InvestmentOutcomeObservationService:
                     facts["benchmarkStartAsOf"] = start.get("sourceAsOf") or start.get("generatedAt") or ""
                     facts["benchmarkEndAsOf"] = end.get("sourceAsOf") or end.get("generatedAt") or ""
             records.append({
+                "requestId": request_id,
                 "episodeId": target.get("episodeId"),
                 "episodeKind": target.get("episodeKind") or "decision",
                 "horizonMinutes": target.get("horizonMinutes"),
                 "observedAt": facts.get("sourceAsOf") or facts.get("generatedAt") or facts.get("updatedAt") or observed_at,
                 "facts": facts,
             })
+            contract = target.get("hypothesisOutcomeContract") or {}
+            facts.update(premise_observation_facts(contract.get("observationBaseline") or {}, facts))
+            if "fundamental" in (contract.get("requiredObservationDomains") or []):
+                evidence_requests.append({"requestId": request_id, "symbol": symbol, "observedAt": records[-1]["observedAt"]})
+        evidence_loader = getattr(self.outcome_evidence_source, "load_outcome_evidence", None)
+        evidence = evidence_loader(snapshot.account_id, evidence_requests) if evidence_requests and callable(evidence_loader) else {}
+        for record in records:
+            request_id = record["requestId"]
+            contract = (targets_by_id.get(request_id) or {}).get("hypothesisOutcomeContract") or {}
+            record["facts"].update(premise_observation_facts(
+                contract.get("observationBaseline") or {},
+                {**record["facts"], **dict(evidence.get(request_id) or {})},
+            ))
         outcomes = self.decision_episode_store.record_outcome_observations(snapshot.account_id, records)
         review_result = self.review_outcomes(outcomes)
         contract_data_gap_count = sum(
@@ -399,6 +418,7 @@ class InvestmentOutcomeObservationService:
                 "individualNetVolume": getattr(position, "individual_net_volume", 0),
                 "smartMoneyNetVolume": foreign_net + institution_net,
                 "marketEvidenceProfile": market_evidence_profile(position, self.settings),
+                "marketSignalCoverage": dict(getattr(position, "market_signal_coverage", {}) or {}),
                 "observedAt": observed_at,
                 "updatedAt": observed_at,
                 "sourceAsOf": getattr(position, "source_as_of", "") or getattr(position, "updated_at", "") or observed_at,

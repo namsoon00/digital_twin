@@ -95,8 +95,6 @@ def reasoning_failure_recovery_allowed(
         "reasoningexecutionfailed",
     }:
         return True
-    if normalized_reason != "reasoningexecutionblocked":
-        return False
     recoverable_statuses = {
         "target-scope-repair-required",
         "blocked-pending-abox-activation",
@@ -115,6 +113,10 @@ def reasoning_failure_recovery_allowed(
         for item in dict((result or {}).get("projection_results") or {}).values()
         if isinstance(item, Mapping)
     }
+    if normalized_reason == "targetscoperepairexhausted":
+        return "target-scope-repair-required" in projection_statuses
+    if normalized_reason != "reasoningexecutionblocked":
+        return False
     return bool(projection_statuses.intersection(recoverable_statuses))
 
 

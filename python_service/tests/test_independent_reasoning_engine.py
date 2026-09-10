@@ -286,6 +286,22 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 },
             },
         ))
+        self.assertTrue(reasoning_failure_recovery_allowed(
+            "target-scope-repair-exhausted",
+            {
+                "projection_results": {
+                    "default": {"status": "target-scope-repair-required"},
+                },
+            },
+        ))
+        self.assertFalse(reasoning_failure_recovery_allowed(
+            "target-scope-repair-exhausted",
+            {
+                "projection_results": {
+                    "default": {"status": "candidate-validation-failed"},
+                },
+            },
+        ))
         self.assertFalse(reasoning_failure_recovery_allowed(
             "reasoning-execution-blocked",
             {

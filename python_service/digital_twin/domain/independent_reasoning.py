@@ -70,9 +70,30 @@ def canonical_fact_change_contract(payload: Mapping[str, object]) -> Dict[str, o
         for field in (changed or [])
     }
     stored_dependency_keys = set(_texts(stored_contract.get("dependencyKeys") or []))
+    current_contract = fact_change_contract(fact_types, by_symbol, fields)
+    stored_unclassified = set(_texts(stored_contract.get("unclassifiedFactTypes") or []))
+    stored_unclassified_by_symbol = stored_contract.get("unclassifiedFactTypesBySymbol")
+    stored_unclassified_by_symbol = (
+        dict(stored_unclassified_by_symbol)
+        if isinstance(stored_unclassified_by_symbol, Mapping)
+        else {}
+    )
+    for values_by_symbol in stored_unclassified_by_symbol.values():
+        stored_unclassified.update(_texts(values_by_symbol or []))
+    current_unclassified = set(_texts(current_contract.get("unclassifiedFactTypes") or []))
+    current_unclassified_by_symbol = current_contract.get("unclassifiedFactTypesBySymbol")
+    current_unclassified_by_symbol = (
+        dict(current_unclassified_by_symbol)
+        if isinstance(current_unclassified_by_symbol, Mapping)
+        else {}
+    )
+    for values_by_symbol in current_unclassified_by_symbol.values():
+        current_unclassified.update(_texts(values_by_symbol or []))
+    newly_classified_fact_type = bool(stored_unclassified - current_unclassified)
     requires_domain_routing_upgrade = bool(
         {"externalcryptomarkets", "cryptomarkettransition"} & changed_tokens
         or "kind:stock:field:cryptomarkets" in stored_dependency_keys
+        or newly_classified_fact_type
     )
     if (
         stored_contract
@@ -85,7 +106,7 @@ def canonical_fact_change_contract(payload: Mapping[str, object]) -> Dict[str, o
         # transport name that the current generic classifier does not know.
         # Preserve it unless a declared migration applies.
         return stored_contract
-    return fact_change_contract(fact_types, by_symbol, fields)
+    return current_contract
 
 
 def _event(value: object) -> DomainEvent:

@@ -62,7 +62,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v9-decision-follow-up-routing"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v10-disclosure-filing-routing"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},
@@ -79,6 +79,7 @@ FACT_TYPE_SCOPE_FAMILIES = {
     "evidencelifecycle": {"evidence"},
     "disclosure": {"evidence"},
     "disclosureevent": {"evidence"},
+    "disclosurefiling": {"evidence"},
     "verifiedclaim": {"evidence"},
     "verificationrun": {"evidence"},
     "earningscalendarevent": {"temporal", "evidence"},
@@ -128,6 +129,7 @@ FACT_TYPE_DEPENDENCY_KEYS = {
     "evidencelifecycle": {"kind:research-evidence", "kind:verified-claim"},
     "disclosure": {"kind:disclosure-filing"},
     "disclosureevent": {"kind:disclosure-filing"},
+    "disclosurefiling": {"kind:disclosure-filing"},
     "earningscalendarevent": {"kind:earnings-calendar-event"},
     "investmentcalendarevent": {"kind:investment-calendar-event"},
     "verifiedclaim": {"kind:verified-claim"},

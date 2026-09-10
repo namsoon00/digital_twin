@@ -19,6 +19,7 @@ from digital_twin.application.investment_reasoning.decision_synthesis import (
 )
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import (
+    canonical_fact_change_contract,
     independent_reasoning_request,
     merge_reasoning_events,
     reasoning_event_scope,
@@ -976,6 +977,63 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             "market-revision:42",
             change["factSlices"][0]["revisionVector"]["revisions"]["market-observation"],
         )
+
+    def test_disclosure_filing_has_complete_evidence_routing(self):
+        contract = fact_change_contract(
+            ["ResearchEvidence", "DisclosureFiling", "VerifiedClaim"],
+            {
+                "000660": [
+                    "ResearchEvidence",
+                    "DisclosureFiling",
+                    "VerifiedClaim",
+                ],
+            },
+            {"000660": ["external.officialDocument", "external.researchEvidence"]},
+        )
+
+        self.assertEqual("ready", contract["status"])
+        self.assertEqual(["evidence"], contract["scopeFamiliesBySymbol"]["000660"])
+        self.assertTrue(contract["dependencyKeysCompleteBySymbol"]["000660"])
+        self.assertIn(
+            "kind:disclosure-filing",
+            contract["dependencyKeysBySymbol"]["000660"],
+        )
+
+    def test_stale_unclassified_disclosure_contract_is_rebuilt(self):
+        contract = canonical_fact_change_contract({
+            "factTypes": ["ResearchEvidence", "DisclosureFiling", "VerifiedClaim"],
+            "factTypesBySymbol": {
+                "000660": [
+                    "ResearchEvidence",
+                    "DisclosureFiling",
+                    "VerifiedClaim",
+                ],
+            },
+            "changedFieldsBySymbol": {
+                "000660": ["external.officialDocument", "external.researchEvidence"],
+            },
+            "factChangeContract": {
+                "version": "fact-change-contract-v9-decision-follow-up-routing",
+                "status": "blocked-unclassified",
+                "scopeFamilies": ["evidence"],
+                "scopeFamiliesBySymbol": {"000660": ["evidence"]},
+                "dependencyKeys": ["kind:research-evidence", "kind:verified-claim"],
+                "dependencyKeysBySymbol": {
+                    "000660": ["kind:research-evidence", "kind:verified-claim"],
+                },
+                "dependencyKeysComplete": False,
+                "dependencyKeysCompleteBySymbol": {"000660": False},
+                "unclassifiedFactTypes": ["DisclosureFiling"],
+                "unclassifiedFactTypesBySymbol": {
+                    "000660": ["DisclosureFiling"],
+                },
+            },
+        })
+
+        self.assertEqual("ready", contract["status"])
+        self.assertEqual([], contract["unclassifiedFactTypes"])
+        self.assertTrue(contract["dependencyKeysComplete"])
+        self.assertIn("kind:disclosure-filing", contract["dependencyKeys"])
 
     def _assert_replayed_crypto_event_upgrades_stale_dependency_contract(self):
         event = source_event("BTC", ["MarketQuote"])

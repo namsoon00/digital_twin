@@ -5716,6 +5716,10 @@
       watchlistSymbols: currentSettings.watchlistSymbols || defaultSettings.watchlistSymbols,
       messageDeliveryLevel: "absoluteBeginner",
       notificationDetailLevel: "concise",
+      quietHoursEnabled: true,
+      quietHoursStart: "22:00",
+      quietHoursEnd: "05:00",
+      quietHoursTimezone: currentSettings.appTimezone || defaultSettings.appTimezone || "Asia/Seoul",
       enabled: true
     };
   }
@@ -5787,6 +5791,10 @@
       watchlistSymbols: Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(",") : String(account.watchlistSymbols || ""),
       messageDeliveryLevel: normalizeMessageDeliveryLevel(account.messageDeliveryLevel),
       notificationDetailLevel: normalizeNotificationDetailLevel(account.notificationDetailLevel),
+      quietHoursEnabled: account.quietHoursEnabled !== false,
+      quietHoursStart: String(account.quietHoursStart || "22:00"),
+      quietHoursEnd: String(account.quietHoursEnd || "05:00"),
+      quietHoursTimezone: String(account.quietHoursTimezone || currentAppTimezone()),
       enabled: account.enabled !== false
     };
   }
@@ -5802,6 +5810,10 @@
       watchlistSymbols: normalizeSymbols(draft.watchlistSymbols || "").join(","),
       messageDeliveryLevel: normalizeMessageDeliveryLevel(draft.messageDeliveryLevel),
       notificationDetailLevel: normalizeNotificationDetailLevel(draft.notificationDetailLevel),
+      quietHoursEnabled: draft.quietHoursEnabled !== false,
+      quietHoursStart: String(draft.quietHoursStart || "22:00"),
+      quietHoursEnd: String(draft.quietHoursEnd || "05:00"),
+      quietHoursTimezone: String(draft.quietHoursTimezone || currentAppTimezone()),
       enabled: draft.enabled !== false
     };
     if (String(draft.clientId || "").trim()) payload.clientId = String(draft.clientId || "").trim();
@@ -16550,11 +16562,11 @@
     var context = [
       '<div class="settings-account-context">',
       '<label><span>현재 관리 계정</span><select data-settings-account-select' + (accounts.length ? '' : ' disabled') + '>' + accountOptions + '</select></label>',
-      '<div><span class="settings-scope-chip account">계정별</span><strong>' + escapeHtml(activeAccount ? (activeAccount.label || accountIdOf(activeAccount)) : "계정을 먼저 등록하세요") + '</strong><em>' + escapeHtml(activeAccount ? accountIdOf(activeAccount) + " · 관심 " + accountWatchlistSymbols(activeAccount).length + "개" : "계정마다 인증, 관심 종목, 알림 표현을 따로 관리합니다.") + '</em></div>',
+      '<div><span class="settings-scope-chip account">계정별</span><strong>' + escapeHtml(activeAccount ? (activeAccount.label || accountIdOf(activeAccount)) : "계정을 먼저 등록하세요") + '</strong><em>' + escapeHtml(activeAccount ? accountIdOf(activeAccount) + " · 관심 " + accountWatchlistSymbols(activeAccount).length + "개 · " + accountQuietHoursSummary(activeAccount) : "계정마다 인증, 관심 종목, 알림 표현을 따로 관리합니다.") + '</em></div>',
       '</div>'
     ].join("");
     var items = [
-      { title: "계정 목록과 식별 정보", description: "계정 이름, 증권사, API 자격 정보, 관심 종목", scope: "계정별", tone: "account", detailType: "account-identity-board", action: "관리" },
+      { title: "계정 목록과 수신 설정", description: "계정 이름, 증권사, API 자격 정보, 관심 종목, 방해 금지 시간", scope: "계정별", tone: "account", detailType: "account-identity-board", action: "관리" },
       { title: "증권사 연결과 데이터 출처", description: "Toss 연결 가능성, 실제·캐시·mock 데이터 품질", scope: "계정별", tone: "account", detailType: "account-connections-board", action: "점검" },
       { title: "자산 원장 검증", description: "현금, 환율, 평가액과 보유 수량 산식", scope: "계정별", tone: "account", detailType: "account-balance-board", action: "검증" },
       { title: "계정 데이터 이력", description: "스냅샷 생성 시각, 캐시와 데이터 신선도", scope: "계정별", tone: "account", detailType: "account-history-board", action: "확인" }
@@ -16575,7 +16587,7 @@
     var boundary = [
       '<div class="settings-boundary-list">',
       '<div><span>이 화면에서 변경</span><strong>테마 · 시간대 · 캘린더 기본 시각 · 투자 알림 수신</strong></div>',
-      '<div><span>계정에서 변경</span><strong>증권 인증 · 관심 종목 · 계정 알림 표현</strong></div>',
+      '<div><span>계정에서 변경</span><strong>증권 인증 · 관심 종목 · 계정 알림 표현 · 방해 금지 시간</strong></div>',
       '<div><span>운영 관리에서 변경</span><strong>API 키 · 워커 · 추론 · 데이터 신선도 정책</strong></div>',
       '</div>'
     ].join("");
@@ -25170,6 +25182,54 @@
     ].join("");
   }
 
+  function accountQuietHoursSummary(account) {
+    account = account || {};
+    if (account.quietHoursEnabled === false) return "시간 제한 없음";
+    var start = String(account.quietHoursStart || "22:00");
+    var end = String(account.quietHoursEnd || "05:00");
+    var timezone = String(account.quietHoursTimezone || currentAppTimezone());
+    return start + "-" + end + " · " + appTimezoneLabel(timezone) + " 기준";
+  }
+
+  function accountQuietHoursTimezoneOptions() {
+    var draft = state.accountDraft || defaultAccountDraft();
+    var selected = String(draft.quietHoursTimezone || currentAppTimezone());
+    var options = appTimezoneOptions().slice();
+    if (!options.some(function (item) { return item.value === selected; })) {
+      options.push({ value: selected, label: selected });
+    }
+    return options;
+  }
+
+  function renderAccountQuietHoursSettings() {
+    var draft = state.accountDraft || defaultAccountDraft();
+    return [
+      '<section class="account-quiet-hours-settings" data-account-quiet-hours-enabled="' + (draft.quietHoursEnabled !== false ? 'true' : 'false') + '">',
+      '<div class="account-quiet-hours-heading">',
+      '<div><span>NOTIFICATION SCHEDULE</span><strong>방해 금지 시간</strong><p>수면 중이거나 알림을 받고 싶지 않은 시간을 이 계정에만 적용합니다.</p></div>',
+      '<em data-account-quiet-hours-summary>' + escapeHtml(accountQuietHoursSummary(draft)) + '</em>',
+      '</div>',
+      '<label class="admin-check-field account-quiet-hours-toggle">',
+      '<input data-account-field="quietHoursEnabled" type="checkbox"' + (draft.quietHoursEnabled !== false ? ' checked' : '') + ' />',
+      '<span>이 계정에 방해 금지 시간 적용</span>',
+      '</label>',
+      '<div class="account-quiet-hours-fields">',
+      renderAccountField("quietHoursStart", "시작", "time", "22:00"),
+      renderAccountField("quietHoursEnd", "종료", "time", "05:00"),
+      renderAccountSelectField("quietHoursTimezone", "기준 시간대", accountQuietHoursTimezoneOptions()),
+      '</div>',
+      '<p class="account-quiet-hours-note">해당 시간의 투자·뉴스 알림은 앱 알림함에 사유와 함께 기록되지만 외부 채널로 전송하지 않습니다. 시간이 지난 알림을 종료 후 몰아서 보내지 않으며, 운영 완료와 운영자 보고는 예외입니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function updateAccountQuietHoursDraftSummary() {
+    var summary = app.querySelector("[data-account-quiet-hours-summary]");
+    var section = app.querySelector(".account-quiet-hours-settings");
+    if (summary) summary.textContent = accountQuietHoursSummary(state.accountDraft || defaultAccountDraft());
+    if (section) section.setAttribute("data-account-quiet-hours-enabled", (state.accountDraft || {}).quietHoursEnabled !== false ? "true" : "false");
+  }
+
   function renderAdminAccountPanel() {
     var accounts = state.serviceAccounts || [];
     var draft = state.accountDraft || defaultAccountDraft();
@@ -25228,6 +25288,7 @@
       '<span>이 계정을 모니터링에 사용</span>',
       '</label>',
       '</div>',
+      renderAccountQuietHoursSettings(),
       '<div class="settings-actions">',
       '<button class="text-button primary" type="submit"' + (locked ? ' disabled' : '') + '>계정 저장</button>',
       '<button class="text-button" type="button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
@@ -25302,6 +25363,7 @@
       renderAccountExposureItem("토스 API", account.clientId && account.clientSecret ? "연결" : "확인", account.clientId && account.clientSecret ? "ok" : "warn"),
       renderAccountExposureItem("계좌 seq", account.accountSeq ? String(account.accountSeq) : "선택 안함", account.accountSeq ? "ok" : "warn"),
       renderAccountExposureItem("관심종목", symbols.length + "개", symbols.length ? "ok" : "neutral"),
+      renderAccountExposureItem("알림 수신", accountQuietHoursSummary(account), account.quietHoursEnabled === false ? "neutral" : "ok"),
       renderAccountExposureItem("사용 상태", account.enabled === false ? "중지" : "사용", account.enabled === false ? "warn" : "ok"),
       '</div>'
     ].join("");
@@ -36112,11 +36174,13 @@
         if (!name) return;
         state.accountDraft[name] = field.type === "checkbox" ? field.checked : field.value;
         state.accountSaved = false;
+        if (name.indexOf("quietHours") === 0) updateAccountQuietHoursDraftSummary();
       });
       field.addEventListener("change", function () {
         var name = field.getAttribute("data-account-field");
         if (!name) return;
         state.accountDraft[name] = field.type === "checkbox" ? field.checked : field.value;
+        if (name.indexOf("quietHours") === 0) updateAccountQuietHoursDraftSummary();
       });
     });
 

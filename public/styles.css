@@ -39226,6 +39226,98 @@ html[data-theme="dark"] :where(
   }
 }
 
+.account-quiet-hours-settings {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.account-quiet-hours-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.account-quiet-hours-heading > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-quiet-hours-heading span {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.account-quiet-hours-heading strong {
+  color: var(--ink);
+  font-size: 17px;
+}
+
+.account-quiet-hours-heading p,
+.account-quiet-hours-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.account-quiet-hours-heading > em {
+  flex: 0 0 auto;
+  max-width: 46%;
+  color: var(--ink);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.account-quiet-hours-toggle {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.account-quiet-hours-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-quiet-hours-settings[data-account-quiet-hours-enabled="false"] .account-quiet-hours-fields {
+  opacity: 0.66;
+}
+
+.account-quiet-hours-note {
+  padding-left: 10px;
+  border-left: 3px solid var(--line-strong);
+}
+
+@media (max-width: 720px) {
+  .account-quiet-hours-heading {
+    display: grid;
+    gap: 8px;
+  }
+
+  .account-quiet-hours-heading > em {
+    max-width: none;
+    text-align: left;
+  }
+
+  .account-quiet-hours-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-quiet-hours-fields .setting-field:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
 /* Runtime performance: long ledgers paint only when they approach the viewport. */
 @supports (content-visibility: auto) {
   [data-console-keyed-list] > *,

@@ -777,7 +777,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertEqual("stale", decision.status)
 
-    def test_notification_runner_allows_stale_investment_insight_and_requests_refresh(self):
+    def test_notification_runner_applies_freshness_and_account_quiet_hours(self):
         job = NotificationJob.create(
             "오래된 투자 알림",
             account_id="main",
@@ -833,6 +833,62 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(job.context["notificationFreshnessAdvisory"]["blockingDisabled"])
         self.assertNotIn("deliverySuppressionReason", job.context)
         self.assertEqual("stale", job.context["dataFreshnessStatus"])
+
+        observed_at = datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc)
+        accounts = [
+            AccountConfig(
+                "seoul", "서울 계정", "toss", "https://example.test", "", "", "", ["005930"],
+                quiet_hours_timezone="Asia/Seoul",
+            ),
+            AccountConfig(
+                "new-york", "뉴욕 계정", "toss", "https://example.test", "", "", "", ["AAPL"],
+                quiet_hours_timezone="America/New_York",
+            ),
+        ]
+        self.assertTrue(accounts[0].quiet_hours_active(observed_at, "newsDigest"))
+        self.assertFalse(accounts[1].quiet_hours_active(observed_at, "newsDigest"))
+
+        quiet_jobs = [
+            NotificationJob.create("서울 알림", account_id="seoul", message_type="notification"),
+            NotificationJob.create("뉴욕 알림", account_id="new-york", message_type="notification"),
+        ]
+
+        class AccountQueue:
+            def pending(self, limit=10):
+                return [item for item in quiet_jobs if item.status == "pending"][:limit]
+
+            def mark_processing(self, target):
+                target.status = "processing"
+
+            def mark_suppressed(self, target, reason):
+                target.status = "suppressed"
+                target.last_error = reason
+
+            def mark_failed(self, target, reason):
+                target.status = "failed"
+                target.last_error = reason
+
+            def mark_done(self, target):
+                target.status = "done"
+                target.last_error = ""
+
+        sent = []
+        account_runner = NotificationQueueRunner(
+            AccountQueue(),
+            SimpleNamespace(load_all=lambda: accounts),
+            lambda account: SimpleNamespace(
+                send=lambda message: sent.append((account.account_id, message))
+                or SimpleNamespace(delivered=True, reason="", label="test")
+            ),
+            now_provider=lambda: observed_at,
+        )
+
+        self.assertEqual(2, account_runner.run_once(limit=10))
+        self.assertEqual("suppressed", quiet_jobs[0].status)
+        self.assertTrue(quiet_jobs[0].context["quietHoursSuppressed"])
+        self.assertIn("22:00-05:00", quiet_jobs[0].last_error)
+        self.assertEqual("done", quiet_jobs[1].status)
+        self.assertEqual([("new-york", "뉴욕 알림")], sent)
 
     def test_threshold_summary_keeps_full_detected_and_configured_values(self):
         detected = "비트코인 24시간 +1.2%, 7일 +5.0%로 최근 일주일 상승 흐름이 이어지고 있으며 실제 보유 종목의 가격 반응을 함께 확인해야 합니다"

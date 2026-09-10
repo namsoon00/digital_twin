@@ -1506,6 +1506,10 @@ function checkFrontendAdminRender() {
           accountSeq: "1",
           enabled: true,
           watchlistSymbols: ["NVDA", "005930"],
+          quietHoursEnabled: true,
+          quietHoursStart: "23:15",
+          quietHoursEnd: "06:30",
+          quietHoursTimezone: "America/New_York",
           notifyProvider: "telegram",
           notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
           clientId: true,
@@ -2423,8 +2427,12 @@ function checkFrontendAdminRender() {
     assertOk(accountHtml.indexOf("account-credential-grid") >= 0, "계정 보안 상태 요약이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("Secret 설정됨") >= 0, "토스 secret 설정 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf("저장됨 - 새 값 입력 시 교체") >= 0, "저장된 API 값의 교체 안내가 표시되지 않습니다.");
-    assertOk(accountHtml.indexOf("Telegram Bot Token") < 0 && accountHtml.indexOf("Bot token 설정됨") < 0 && accountHtml.indexOf("알림 금지") < 0 && accountHtml.indexOf("메시지 전달 수준") < 0, "계정 탭에 알림 채널/전달 정책 UI가 남아 있습니다.");
+    assertOk(accountHtml.indexOf("Telegram Bot Token") < 0 && accountHtml.indexOf("Bot token 설정됨") < 0 && accountHtml.indexOf("메시지 전달 수준") < 0, "계정 탭에 사용자 채널 또는 시스템 전달 정책 UI가 남아 있습니다.");
     assertOk(accountResultsHtml.indexOf("Telegram Bot Token") < 0 && accountResultsHtml.indexOf("Bot token 설정됨") < 0 && accountResultsHtml.indexOf("알림 금지") < 0 && accountResultsHtml.indexOf("메시지 전달 수준") < 0, "계정 결과 탭에 알림 채널/전달 정책 UI가 남아 있습니다.");
+    assertOk(accountHtml.indexOf("방해 금지 시간") >= 0 && accountHtml.indexOf('data-account-field="quietHoursEnabled"') >= 0, "계정별 방해 금지 설정이 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf('data-account-field="quietHoursStart"') >= 0 && accountHtml.indexOf('value="23:15"') >= 0 && accountHtml.indexOf('data-account-field="quietHoursEnd"') >= 0 && accountHtml.indexOf('value="06:30"') >= 0, "계정별 방해 금지 시작·종료 시각이 편집 폼에 복원되지 않았습니다.");
+    assertOk(accountHtml.indexOf('data-account-field="quietHoursTimezone"') >= 0 && accountHtml.indexOf('value="America/New_York" selected') >= 0, "계정별 방해 금지 시간대가 편집 폼에 복원되지 않았습니다.");
+    assertOk(styles.indexOf(".account-quiet-hours-fields") >= 0 && styles.indexOf('.account-quiet-hours-settings[data-account-quiet-hours-enabled="false"]') >= 0, "계정별 방해 금지 설정의 반응형 상태 스타일이 없습니다.");
     assertOk(code.indexOf('notifyProvider: String(draft.notifyProvider') < 0 && code.indexOf("if (String(draft.telegramBotToken") < 0, "계정 저장 payload가 알림 채널 secret을 전송합니다.");
     assertOk(code.indexOf("function createNewAccountDraft") >= 0, "새 계정 전용 draft 생성 로직이 없습니다.");
     assertOk(code.indexOf("state.accountDraft = createNewAccountDraft();") >= 0, "새 계정 버튼이 새 draft 생성 로직과 연결되지 않았습니다.");
@@ -3267,7 +3275,11 @@ async function checkNormalMode(port, context) {
         notifyProvider: "telegram",
         telegramBotToken: "telegram-secret",
         telegramChatId: "9876",
-        notifyLinkUrl: "http://127.0.0.1:3000"
+        notifyLinkUrl: "http://127.0.0.1:3000",
+        quietHoursEnabled: true,
+        quietHoursStart: "21:45",
+        quietHoursEnd: "06:10",
+        quietHoursTimezone: "Asia/Seoul"
       }
     })
   });
@@ -3275,12 +3287,14 @@ async function checkNormalMode(port, context) {
   const savedAccountPayload = JSON.parse(savedAccount.body);
   assertOk(savedAccountPayload.account && savedAccountPayload.account.clientSecret === true, "계정 DB 저장 응답이 토스 secret 설정 상태를 내려주지 않습니다.");
   assertOk(savedAccountPayload.account.telegramBotToken === true, "계정 DB 저장 응답이 텔레그램 토큰 설정 상태를 내려주지 않습니다.");
+  assertOk(savedAccountPayload.account.quietHoursEnabled === true && savedAccountPayload.account.quietHoursStart === "21:45" && savedAccountPayload.account.quietHoursEnd === "06:10" && savedAccountPayload.account.quietHoursTimezone === "Asia/Seoul", "계정 DB 저장 응답이 계정별 방해 금지 설정을 보존하지 않습니다.");
   const eventStatusAfterAccount = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterAccount.events["account.saved"] >= 1, "계정 저장 이벤트가 이벤트 로그에 없습니다.");
 
   const accountList = await request(port, "/api/service-accounts");
   const accountListPayload = JSON.parse(accountList.body);
   assertOk(accountListPayload.accounts.some(function (account) { return account.id === "db-test"; }), "계정 DB 목록에 저장한 계정이 없습니다.");
+  assertOk(accountListPayload.accounts.some(function (account) { return account.id === "db-test" && account.quietHoursStart === "21:45" && account.quietHoursEnd === "06:10"; }), "계정 DB 목록에서 계정별 방해 금지 설정을 다시 읽지 못했습니다.");
 
   const accountWatchlist = await request(port, "/api/service-accounts/db-test/watchlist");
   assertOk(accountWatchlist.statusCode === 200, "계정별 관심종목 API 응답 코드가 200이 아닙니다: " + accountWatchlist.statusCode);

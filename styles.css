@@ -38090,6 +38090,104 @@ html[data-theme="dark"] :where(
   gap: 8px;
 }
 
+.notification-feedback-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.notification-feedback-actions > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.notification-feedback-actions .text-button.selected {
+  border-color: var(--blue);
+  background: var(--panel-soft);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.investment-model-evolution {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.investment-model-evolution > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.investment-model-evolution > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.investment-model-evolution > header > em,
+.investment-model-evolution-metrics em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.investment-model-evolution-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.investment-model-evolution-metrics > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  background: var(--panel);
+}
+
+.investment-model-evolution-metrics span,
+.investment-model-evolution-stages,
+.investment-model-evolution > p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.investment-model-evolution-stages {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.investment-model-evolution-stages span {
+  min-width: 0;
+  padding: 8px 4px;
+  background: var(--panel-soft);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.investment-model-evolution > p {
+  margin: 0;
+}
+
+@media (max-width: 860px) {
+  .investment-model-evolution-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .investment-model-evolution-stages {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 .notification-decision-detail[data-notification-detail-mode="full"] .notification-detail-tabs {
   position: sticky;
   z-index: 8;

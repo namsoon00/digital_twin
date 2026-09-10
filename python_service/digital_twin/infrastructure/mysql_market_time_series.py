@@ -534,7 +534,13 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 if column in {"account_id", "symbol", "granularity", "bucket_at"}:
                     continue
                 if column == "observed_at" and preserve_first_observed:
-                    assignments.append("observed_at = LEAST(observed_at, VALUES(observed_at))")
+                    assignments.append(
+                        "observed_at = IF("
+                        "observed_at < VALUES(source_as_of), "
+                        "VALUES(observed_at), "
+                        "LEAST(observed_at, VALUES(observed_at))"
+                        ")"
+                    )
                 else:
                     assignments.append(column + " = VALUES(" + column + ")")
             update_clause = " ON DUPLICATE KEY UPDATE " + ", ".join(assignments)

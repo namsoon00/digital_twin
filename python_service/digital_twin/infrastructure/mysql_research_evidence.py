@@ -317,6 +317,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 "sourceRevisionUpdatedCount": 0,
                 "authoritativePersistedCount": 0,
                 "authoritativeRestoredCount": 0,
+                "summaryRestoredCount": 0,
                 "provisionalCount": 0,
                 "changedCount": 0,
             }
@@ -356,19 +357,28 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                         payload = apply_enrichment_snapshot(payload, snapshot)
                         item.raw_payload = payload
                         result["authoritativeRestoredCount"] += 1
-                if payload != original_payload:
+                authoritative_summary = news_domain.compact_text(payload.get("articleSummaryKo") or "", 520)
+                summary_changed = bool(
+                    authoritative_summary
+                    and authoritative_enrichment(payload)
+                    and authoritative_summary != str(row.get("summary") or "").strip()
+                )
+                if summary_changed:
+                    result["summaryRestoredCount"] += 1
+                if payload != original_payload or summary_changed:
                     result["changedCount"] += 1
                     if not dry_run:
                         states = news_domain.news_state_payload(payload)
                         connection.execute(
                             """
                             UPDATE research_evidence
-                            SET source_trust_state = %s, materiality_state = %s,
+                            SET summary = %s, source_trust_state = %s, materiality_state = %s,
                                 data_state = %s, validation_state = %s,
                                 payload_json = %s
                             WHERE evidence_id = %s AND payload_json = %s
                             """,
                             (
+                                authoritative_summary if summary_changed else str(row.get("summary") or ""),
                                 states["sourceTrustState"],
                                 states["materialityState"],
                                 states["dataState"],

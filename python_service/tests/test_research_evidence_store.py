@@ -353,6 +353,19 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertIsNotNone(exact)
             self.assertEqual("ok", exact.raw_payload["aiAnalysis"]["status"])
 
+            mysql_execute(
+                test_store_seed(temp),
+                "UPDATE research_evidence SET summary = ? WHERE evidence_id = ?",
+                ("실적과 이익 전망 변화가 핵심", original.evidence_id),
+            )
+            preview = store.repair_news_enrichment_revisions(dry_run=True)
+            self.assertEqual(1, preview["summaryRestoredCount"])
+            self.assertEqual("실적과 이익 전망 변화가 핵심", store.get(original.evidence_id).summary)
+
+            applied = store.repair_news_enrichment_revisions(dry_run=False)
+            self.assertEqual(1, applied["summaryRestoredCount"])
+            self.assertEqual(original.summary, store.get(original.evidence_id).summary)
+
     def test_news_enrichment_revisions_are_immutable_and_head_tracks_latest(self):
         store = TestResearchEvidenceStore(self.seed)
         original = self.direct_news_evidence("research:005930:news:immutable")

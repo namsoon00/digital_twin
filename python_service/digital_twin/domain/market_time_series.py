@@ -68,6 +68,23 @@ def iso_utc(value: object) -> str:
     return parsed.isoformat().replace("+00:00", "Z")
 
 
+def preserved_daily_observed_at(
+    existing_observed_at: object,
+    incoming_observed_at: object,
+    incoming_source_as_of: object,
+) -> str:
+    """Mirror the daily upsert clock rule for downstream projections."""
+
+    existing = parse_timestamp(existing_observed_at)
+    incoming = parse_timestamp(incoming_observed_at)
+    source_as_of = parse_timestamp(incoming_source_as_of)
+    if not incoming:
+        return ""
+    if not existing or (source_as_of and existing < source_as_of):
+        return iso_utc(incoming)
+    return iso_utc(min(existing, incoming))
+
+
 def market_timestamp(value: object, market: object = "", currency: object = "") -> str:
     text = str(value or "").strip()
     if len(text) == 10 and text[4:5] == "-" and text[7:8] == "-":

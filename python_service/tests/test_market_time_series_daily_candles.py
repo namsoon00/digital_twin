@@ -1,6 +1,9 @@
 import unittest
 
-from digital_twin.domain.market_time_series import MarketTimeSeriesObservation
+from digital_twin.domain.market_time_series import (
+    MarketTimeSeriesObservation,
+    preserved_daily_observed_at,
+)
 from digital_twin.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
 
 
@@ -109,6 +112,26 @@ class MarketTimeSeriesDailyCandleTests(unittest.TestCase):
             "observed_at = IF(observed_at < VALUES(source_as_of), "
             "VALUES(observed_at), LEAST(observed_at, VALUES(observed_at)))",
             connection.sql,
+        )
+
+    def test_projection_preserves_existing_close_time_for_historical_daily_row(self):
+        self.assertEqual(
+            "2026-09-09T20:00:00Z",
+            preserved_daily_observed_at(
+                "2026-09-09T20:00:00Z",
+                "2026-09-10T04:07:57Z",
+                "2026-09-09T20:00:00Z",
+            ),
+        )
+
+    def test_projection_replaces_observation_that_precedes_daily_close(self):
+        self.assertEqual(
+            "2026-09-10T04:07:57Z",
+            preserved_daily_observed_at(
+                "2026-09-09T19:00:00Z",
+                "2026-09-10T04:07:57Z",
+                "2026-09-09T20:00:00Z",
+            ),
         )
 
 

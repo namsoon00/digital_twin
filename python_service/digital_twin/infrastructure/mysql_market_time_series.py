@@ -18,6 +18,7 @@ from ..domain.market_time_series import (
     limit_temporal_rows,
     market_session_date,
     parse_timestamp,
+    preserved_daily_observed_at,
     required_session_count,
     snapshot_safe_granularity_preferences,
     temporal_observation_payload,
@@ -282,7 +283,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         projected_rows = []
         received_at = utc_now_iso()
         with self.transaction() as connection:
-            latest_buckets = self.latest_daily_buckets_with_connection(connection, candles_by_symbol.keys())
+            latest_states = self.latest_daily_states_with_connection(connection, candles_by_symbol.keys())
             for symbol, candles in dict(candles_by_symbol or {}).items():
                 metadata = metadata_by_symbol.get(str(symbol or "").upper()) or {}
                 observations = [
@@ -301,10 +302,18 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 for observation in sorted(observations, key=lambda item: item.bucket_at):
                     if not observation.valid():
                         continue
-                    latest_bucket = str(latest_buckets.get(observation.symbol) or "")
+                    latest_state = dict(latest_states.get(observation.symbol) or {})
+                    latest_bucket = str(latest_state.get("bucketAt") or "")
                     if latest_bucket and observation.bucket_at < latest_bucket:
                         skipped += 1
                         continue
+                    projected_row = observation.to_row()
+                    if latest_bucket == observation.bucket_at:
+                        projected_row["observed_at"] = preserved_daily_observed_at(
+                            latest_state.get("observedAt"),
+                            observation.observed_at,
+                            observation.source_as_of,
+                        )
                     if self.insert_observation_with_connection(
                         connection,
                         observation,
@@ -313,8 +322,12 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     ):
                         saved += 1
                         symbols.add(observation.symbol)
-                        projected_rows.append(observation.to_row())
-                    latest_buckets[observation.symbol] = max(latest_bucket, observation.bucket_at)
+                        projected_rows.append(projected_row)
+                    latest_states[observation.symbol] = {
+                        "bucketAt": max(latest_bucket, observation.bucket_at),
+                        "observedAt": projected_row.get("observed_at") or observation.observed_at,
+                        "sourceAsOf": observation.source_as_of,
+                    }
         return {
             "enabled": True,
             "savedCount": saved,
@@ -500,21 +513,33 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         account_rows = grouped.get(str(account_id or ""), [])
         return list((global_rows or account_rows)[-row_limit:])
 
-    def latest_daily_buckets_with_connection(self, connection, symbols: Iterable[str]) -> Dict[str, str]:
+    def latest_daily_states_with_connection(self, connection, symbols: Iterable[str]) -> Dict[str, Dict[str, str]]:
         clean_symbols = sorted({str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()})
         if not clean_symbols:
             return {}
         placeholders = ",".join(["%s"] * len(clean_symbols))
         rows = connection.execute(
+            "SELECT observations.symbol, observations.bucket_at AS latest_bucket, "
+            "observations.observed_at AS latest_observed_at, "
+            "observations.source_as_of AS latest_source_as_of "
+            "FROM market_time_series_observations observations "
+            "INNER JOIN ("
             "SELECT symbol, MAX(bucket_at) AS latest_bucket "
             "FROM market_time_series_observations "
             "WHERE account_id = %s AND granularity = '1d' AND symbol IN ("
             + placeholders
-            + ") GROUP BY symbol",
-            [GLOBAL_MARKET_ACCOUNT_ID, *clean_symbols],
+            + ") GROUP BY symbol"
+            ") latest ON latest.symbol = observations.symbol "
+            "AND latest.latest_bucket = observations.bucket_at "
+            "WHERE observations.account_id = %s AND observations.granularity = '1d'",
+            [GLOBAL_MARKET_ACCOUNT_ID, *clean_symbols, GLOBAL_MARKET_ACCOUNT_ID],
         ).fetchall()
         return {
-            str(row.get("symbol") or "").upper(): str(row.get("latest_bucket") or "")
+            str(row.get("symbol") or "").upper(): {
+                "bucketAt": str(row.get("latest_bucket") or ""),
+                "observedAt": str(row.get("latest_observed_at") or ""),
+                "sourceAsOf": str(row.get("latest_source_as_of") or ""),
+            }
             for row in rows
         }
 

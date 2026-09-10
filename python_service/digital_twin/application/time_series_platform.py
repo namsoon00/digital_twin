@@ -166,6 +166,29 @@ class TimeSeriesBackendPlatformService:
         )
         return {"status": "candidate", "backendId": backend_id, "control": next_control}
 
+    def repair_candidate_backend(self, backend_id: str) -> Dict[str, object]:
+        """Rebuild a disposable non-active backend without touching canonical data."""
+
+        backend_id = str(backend_id or "")
+        if backend_id not in self.adapters or backend_id == "mysql-primary":
+            raise ValueError("Only a registered replica backend can be repaired")
+        control = self.registry.control()
+        if backend_id == str(control.get("activeBackendId") or ""):
+            raise ValueError("The active time-series backend cannot be rebuilt")
+        rebuild = getattr(self.adapters[backend_id], "rebuild_derived_storage", None)
+        if not callable(rebuild):
+            raise ValueError("The selected backend does not support derived-storage rebuild")
+        cancelled = int(self.outbox.cancel_backend_pending(backend_id, "candidate-rebuild") or 0)
+        result = dict(rebuild() or {})
+        health = dict(result.get("health") or self.adapters[backend_id].health())
+        self.registry.update_health(backend_id, health)
+        return {
+            **result,
+            "backendId": backend_id,
+            "cancelledProjectionCount": cancelled,
+            "repairId": "repair-" + utc_now_iso().replace(":", "").replace(".", ""),
+        }
+
     def compare(self, backend_id, account_id, symbols, definitions, as_of="") -> Dict[str, object]:
         control = self.registry.control()
         active = str(control.get("activeBackendId") or "mysql-primary")
@@ -758,12 +781,19 @@ class TimeSeriesProjectionRunner:
         max_rows: int = 0,
         batch_size: int = 500,
         observed_after: str = "",
+        dedupe_namespace: str = "",
+        granularities: Iterable[str] = (),
     ) -> Dict[str, object]:
         if backend_id not in self.adapters or backend_id == "mysql-primary":
             raise ValueError("Backfill target must be a registered non-MySQL backend")
         configured_limit = max(10, min(100, int(float(self.settings.get("timeSeriesProjectionPayloadRows") or 50))))
         bounded_batch = max(10, min(configured_limit, int(batch_size or configured_limit)))
         bounded_max = max(0, int(max_rows or 0))
+        selected_granularities = sorted({
+            str(value or "").strip().lower()
+            for value in granularities or []
+            if str(value or "").strip()
+        })
         after_key = {}
         queued = 0
         source_rows = 0
@@ -773,6 +803,7 @@ class TimeSeriesProjectionRunner:
                 limit=request_limit,
                 after_key=after_key,
                 observed_after=str(observed_after or ""),
+                granularities=selected_granularities,
             )
             if not rows:
                 break
@@ -783,12 +814,13 @@ class TimeSeriesProjectionRunner:
                 for key in ["account_id", "symbol", "granularity", "bucket_at"]
             }
             payload = {"contractVersion": "time-series-storage-contract-v1", "observations": rows}
+            namespace = str(dedupe_namespace or "").strip()
             queued += int(self.outbox.enqueue(
                 backend_id=backend_id,
                 operation_name="write-observations",
                 payload=payload,
                 source_observed_at=max(str(row.get("observed_at") or "") for row in rows),
-                dedupe_key=backend_id + ":backfill:" + payload_fingerprint(rows),
+                dedupe_key=backend_id + ":backfill:" + ((namespace + ":") if namespace else "") + payload_fingerprint(rows),
             ))
             if len(rows) < request_limit:
                 break
@@ -799,6 +831,7 @@ class TimeSeriesProjectionRunner:
             "queuedBatchCount": queued,
             "batchSize": bounded_batch,
             "observedAfter": str(observed_after or ""),
+            "granularities": selected_granularities,
         }
 
     def watch(self) -> None:

@@ -254,6 +254,22 @@ class ExternalDataCollectionService:
             }
         try:
             observation = adapter.fetch(job, self.settings)
+            quality = observation.quality if isinstance(observation.quality, dict) else {}
+            if (
+                descriptor.completion_mode == "once"
+                and not observation.empty_result
+                and quality.get("dataUsable") is False
+            ):
+                quality_state = str(
+                    quality.get("documentState")
+                    or quality.get("availability")
+                    or "unusable-payload"
+                ).strip()
+                raise RuntimeError(
+                    descriptor.dataset_id
+                    + " returned an unusable one-time payload: "
+                    + quality_state
+                )
             previous = self.store.current_fact(observation.dataset_id, observation.subject_key)
             no_data = bool(observation.empty_result)
             transition = (
@@ -330,7 +346,15 @@ class ExternalDataCollectionService:
                 str(job.subject.subject_key or job.partition_key),
             )
             previous_payload = previous_fact.get("payload") if isinstance(previous_fact, dict) else None
-            has_usable_previous_fact = isinstance(previous_payload, dict) and bool(previous_payload)
+            previous_quality = previous_fact.get("quality") if isinstance(previous_fact, dict) else None
+            has_usable_previous_fact = (
+                isinstance(previous_payload, dict)
+                and bool(previous_payload)
+                and not (
+                    isinstance(previous_quality, dict)
+                    and previous_quality.get("dataUsable") is False
+                )
+            )
             failure_delay = min(
                 descriptor.resolved_cadence_seconds(self.settings),
                 max(60, 30 * (2 ** min(6, max(0, job.attempt_count - 1)))),

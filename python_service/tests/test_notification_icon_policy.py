@@ -186,6 +186,14 @@ class NotificationIconPolicyTests(unittest.TestCase):
             "⏸️ NVIDIA",
             notification_title_with_context_icon("investmentInsight", "NVIDIA", legacy_context),
         )
+        self.assertEqual(
+            "⏸️ NVIDIA · AI 종합 점검",
+            notification_title_with_context_icon(
+                "investmentInsight",
+                "⚠️ 🔎 NVIDIA · AI 종합 점검",
+                context,
+            ),
+        )
 
     def test_structured_title_shows_the_final_action_transition(self):
         context = investment_context("HOLD", "BUY", "ENTRY_ELIGIBLE")

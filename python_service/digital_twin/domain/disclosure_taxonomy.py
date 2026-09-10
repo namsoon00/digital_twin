@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, Iterable
 
 
-DISCLOSURE_TAXONOMY_VERSION = "disclosure-taxonomy-v2"
+DISCLOSURE_TAXONOMY_VERSION = "disclosure-taxonomy-v3-title-first"
 
 
 def _text(*values: object) -> str:
@@ -44,6 +44,57 @@ def classify_disclosure(
         materiality = "material" if body else "notable"
         category = "listing-transaction"
         reason = "listing-or-ipo-transaction-update"
+    elif form in {"3", "4", "5", "DEF 14A", "DEF14A"} or _contains(header, [
+        "임원ㆍ주요주주", "임원·주요주주", "주식등의대량보유", "최대주주등소유주식변동",
+        "주주총회", "대표이사변경",
+    ]):
+        event_type = "capital_policy"
+        materiality = "notable"
+        category = "ownership-governance"
+        reason = "ownership-or-governance-update"
+    elif _contains(header, [
+        "특수관계인에대한", "대규모내부거래", "관계회사와의거래",
+        "동일인등출자계열회사와의상품ㆍ용역거래", "동일인등출자계열회사와의상품·용역거래",
+    ]):
+        event_type = "capital_policy"
+        materiality = "notable"
+        category = "related-party-transaction"
+        reason = "related-party-transaction-update"
+    elif _contains(header, ["기업가치제고계획", "밸류업계획", "value-up plan"]):
+        event_type = "capital_policy"
+        materiality = "notable"
+        category = "shareholder-value-plan"
+        reason = "shareholder-value-plan-update"
+    elif _contains(header, ["기업설명회", "ir개최", "investor relations presentation"]):
+        event_type = "general"
+        materiality = "context"
+        category = "scheduled-communication"
+        reason = "scheduled-investor-communication"
+    elif _contains(header, ["장래사업ㆍ경영계획", "장래사업·경영계획", "경영계획(공정공시)"]):
+        event_type = "guidance"
+        materiality = "notable"
+        category = "business-plan"
+        reason = "forward-business-plan-update"
+    elif _contains(header, ["조회공시요구", "풍문또는보도", "해명공시", "답변(미확정)"]):
+        event_type = "regulation"
+        materiality = "notable"
+        category = "clarification"
+        reason = "rumor-or-report-clarification"
+    elif _contains(header, [
+        "소송", "제재", "압수수색", "조사", "불성실공시", "상장폐지",
+        "관리종목", "회생", "파산", "litigation", "investigation", "antitrust",
+    ]):
+        event_type = "regulation"
+        materiality = "material"
+        category = "legal-regulatory"
+        reason = "legal-regulatory-or-listing-risk"
+    elif _contains(header, [
+        "생산중단", "생산재개", "영업정지", "시설투자", "단일판매", "공급계약", "수주",
+    ]):
+        event_type = "supply_chain"
+        materiality = "material"
+        category = "operations-contract"
+        reason = "material-operating-or-contract-event"
     elif _contains(header, [
         "유상증자", "무상증자", "전환사채", "신주인수권", "교환사채", "감자",
         "자기주식", "자사주", "주식소각", "배당", "주식분할", "주식병합", "합병", "회사분할",
@@ -101,14 +152,6 @@ def classify_disclosure(
         materiality = "notable"
         category = "current-report"
         reason = "current-report-needs-document-level-classification"
-    elif form in {"3", "4", "5", "DEF 14A", "DEF14A"} or _contains(combined, [
-        "임원ㆍ주요주주", "임원·주요주주", "주식등의대량보유", "주주총회", "대표이사변경",
-    ]):
-        event_type = "capital_policy"
-        materiality = "notable"
-        category = "ownership-governance"
-        reason = "ownership-or-governance-update"
-
     return {
         "version": DISCLOSURE_TAXONOMY_VERSION,
         "eventType": event_type,

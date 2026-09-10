@@ -607,6 +607,45 @@ class QuestDBTimeSeriesAdapter:
                 self.execute("ALTER TABLE " + table_name + " SET TTL " + str(expected_days) + " DAYS")
             QuestDBTimeSeriesAdapter._schema_ready.add(cache_key)
 
+    def rebuild_derived_storage(self) -> Dict[str, object]:
+        """Recreate this disposable replica after an unrecoverable WAL gap."""
+
+        health_before = self.health()
+        if str(health_before.get("status") or "").lower() in {"ready", "healthy"}:
+            return {
+                "status": "already-healthy",
+                "backendId": self.backend_id,
+                "recreatedTables": [],
+                "recreatedGranularities": [],
+                "health": health_before,
+            }
+        expected_tables = set(self.expected_ttl_days())
+        suspended_tables = {
+            clean_text(item.get("table"))
+            for item in health_before.get("suspendedTables") or []
+            if isinstance(item, dict) and clean_text(item.get("table")) in expected_tables
+        }
+        table_names = sorted(suspended_tables or expected_tables)
+        for table_name in table_names:
+            self.execute("DROP TABLE IF EXISTS " + table_name)
+        QuestDBTimeSeriesAdapter._schema_ready.discard((self.base_url, self.backend_id))
+        self.ensure_schema()
+        health = self.health()
+        if str(health.get("status") or "").lower() not in {"ready", "healthy"}:
+            raise RuntimeError("QuestDB rebuild did not restore a healthy replica: " + str(health)[:500])
+        return {
+            "status": "rebuilt",
+            "backendId": self.backend_id,
+            "recreatedTables": table_names,
+            "recreatedGranularities": sorted({
+                granularity
+                for granularity, table_name in GRANULARITY_TABLES.items()
+                if table_name in table_names
+            } | ({"3m"} if "portfolio_marks" in table_names else set())),
+            "healthBefore": health_before,
+            "health": health,
+        }
+
     def market_values(self, raw: Mapping[str, object]) -> List[str]:
         event_at = source_value(raw, "bucket_at", "bucketAt") or source_value(raw, "observed_at", "observedAt")
         observed_at = source_value(raw, "observed_at", "observedAt") or event_at

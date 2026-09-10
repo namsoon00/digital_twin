@@ -220,6 +220,12 @@ def notification_title_with_context_icon(
     icon = investment_notification_icon(message_type, context) or news_digest_notification_icon(message_type, context)
     if not icon:
         return text
+    leading_icons = re.match(
+        r"^((?:\[[^\]]+\]\s+)?)(?:(?:[^\w\s])+\s+)+(.*)$",
+        text,
+    )
+    if leading_icons:
+        return leading_icons.group(1) + icon + " " + leading_icons.group(2)
     previous = str(_context_value(context or {}, "titleIcon") or "").strip()
     if previous and previous in text:
         return text.replace(previous, icon, 1)

@@ -98,7 +98,7 @@ def news_ai_analyzer_from_settings(settings: Dict[str, str] = None) -> NewsAiAna
     use_codex = str(configured.get("newsAiAnalysisUseCodex") or os.environ.get("NEWS_AI_ANALYSIS_USE_CODEX") or "1").strip() not in {"0", "false", "no", "off"}
     timeout = int(configured.get("newsAiAnalysisTimeoutSeconds") or os.environ.get("NEWS_AI_ANALYSIS_TIMEOUT_SECONDS") or 90)
     if use_codex:
-        command = background_codex_process_arguments("medium")
+        command = background_codex_process_arguments("max")
         if command:
-            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")", configured))
+            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI (" + codex_model_label("max") + ")", configured))
     return LocalNewsAiAnalyzer()

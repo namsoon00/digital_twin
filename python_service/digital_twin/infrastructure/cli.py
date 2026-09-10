@@ -1155,6 +1155,25 @@ def time_series_platform_command(args) -> int:
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0
+    if args.time_series_action == "repair":
+        platform = build_time_series_backend_platform(configured)
+        repair = platform.repair_candidate_backend(args.backend_id)
+        granularities = list(repair.get("recreatedGranularities") or [])
+        if granularities:
+            source = stores.raw_mysql_market_time_series_store(configured)
+            backfill = runner.enqueue_backfill(
+                source,
+                args.backend_id,
+                args.max_rows,
+                args.batch_size,
+                args.observed_after,
+                dedupe_namespace=str(repair.get("repairId") or ""),
+                granularities=granularities,
+            )
+        else:
+            backfill = {"status": "not-required", "backendId": args.backend_id, "sourceRowCount": 0}
+        print(json.dumps({"repair": repair, "backfill": backfill}, ensure_ascii=False))
+        return 0
     if args.time_series_action == "capital-flow-rebuild":
         from .time_series_factory import build_versioned_time_series_store
 
@@ -2578,6 +2597,11 @@ def build_parser() -> argparse.ArgumentParser:
     time_series_backfill.add_argument("--batch-size", type=int, default=50)
     time_series_backfill.add_argument("--max-rows", type=int, default=0)
     time_series_backfill.add_argument("--observed-after", default="")
+    time_series_repair = time_series_actions.add_parser("repair")
+    time_series_repair.add_argument("--backend-id", default="questdb-shadow")
+    time_series_repair.add_argument("--batch-size", type=int, default=50)
+    time_series_repair.add_argument("--max-rows", type=int, default=0)
+    time_series_repair.add_argument("--observed-after", default="")
     capital_flow_rebuild = time_series_actions.add_parser("capital-flow-rebuild")
     capital_flow_rebuild.add_argument("--limit", type=int, default=50000)
     capital_flow_quality = time_series_actions.add_parser("capital-flow-quality")

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from digital_twin.domain.disclosure_analysis import build_disclosure_analysis_prompt
+from digital_twin.domain.disclosure_analysis import build_disclosure_analysis_prompt, local_disclosure_analysis
 from digital_twin.domain.disclosure_taxonomy import classify_disclosure
 from digital_twin.domain.disclosure_quality import assess_disclosure_document, normalize_official_document_text
 from digital_twin.domain.investment_research import disclosure_evidence_payload, research_evidence_from_facts
@@ -93,6 +93,60 @@ class DisclosureTaxonomyTests(unittest.TestCase):
 
         self.assertEqual("capital_policy", classified["eventType"])
         self.assertIn("회사 구조", payload["disclosureAnalysis"]["summary"])
+
+    def test_title_specific_analysis_ignores_unrelated_template_terms(self):
+        ownership = local_disclosure_analysis({
+            "reportName": "임원ㆍ주요주주특정증권등소유상황보고서",
+            "officialDocumentText": "양식 안내에는 공급계약과 유상증자 기재 항목이 포함됩니다. " * 5,
+            "analysisReady": True,
+        })
+        periodic = local_disclosure_analysis({
+            "reportName": "반기보고서",
+            "officialDocumentText": "주요 계약과 공급계약 현황, 자기주식 변동을 함께 기재합니다. " * 5,
+            "analysisReady": True,
+        })
+        acquisition = local_disclosure_analysis({
+            "reportName": "주요사항보고서(자기주식취득결정)",
+            "officialDocumentText": "계약 체결 및 매출액 관련 표준 양식 문구입니다. " * 5,
+            "analysisReady": True,
+        })
+
+        self.assertIn("보유 주식 변동", ownership.lines[0])
+        self.assertIn("희석을 뜻하지는 않습니다", ownership.lines[1])
+        self.assertIn("정기적으로 보고", periodic.lines[0])
+        self.assertIn("자기주식을 취득", acquisition.lines[0])
+        self.assertNotIn("계약 또는 수주", acquisition.lines[0])
+
+    def test_title_taxonomy_outranks_body_template_contamination(self):
+        classified = classify_disclosure(
+            "임원ㆍ주요주주특정증권등소유상황보고서",
+            "",
+            "OpenDART",
+            "유상증자와 공급계약 관련 표준 양식 문구 " * 8,
+        )
+
+        self.assertEqual("ownership-governance", classified["disclosureCategory"])
+        self.assertEqual("notable", classified["materialityState"])
+
+    def test_operational_and_governance_titles_keep_their_specific_meaning(self):
+        cases = [
+            ("[기재정정]장래사업ㆍ경영계획(공정공시)", "business-plan", "앞으로 추진할 사업"),
+            ("최대주주등소유주식변동신고서", "ownership-governance", "보유 주식 변동"),
+            ("동일인등출자계열회사와의상품ㆍ용역거래변경", "related-party-transaction", "주요 관계자와의 거래"),
+            ("[기재정정]생산중단", "operations-contract", "운영 차질"),
+            ("생산재개(자율공시)", "operations-contract", "다시 시작"),
+            ("소송등의제기ㆍ신청(일정금액이상의청구)", "legal-regulatory", "법적 분쟁"),
+        ]
+        contaminated_body = "유상증자 공급계약 매출액 자기주식 표준 양식 문구 " * 10
+        for title, expected_category, expected_summary in cases:
+            classified = classify_disclosure(title, "", "OpenDART", contaminated_body)
+            analysis = local_disclosure_analysis({
+                "reportName": title,
+                "officialDocumentText": contaminated_body,
+                "analysisReady": True,
+            })
+            self.assertEqual(expected_category, classified["disclosureCategory"], title)
+            self.assertIn(expected_summary, analysis.lines[0], title)
 
     def test_structured_facts_downrank_contact_rows_and_filter_noise_numbers(self):
         payload = disclosure_evidence_payload(

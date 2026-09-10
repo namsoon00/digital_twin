@@ -6695,6 +6695,84 @@ class PortfolioOntologyProjectionRecorder:
                             or "SharedPremiseWorld activation recovery must complete before a new projection."
                         )[:220],
                     }
+            else:
+                pending_reader = getattr(self.repository, "pending_abox_activation", None)
+                pending = (
+                    self.repository_world_call(
+                        "pending_abox_activation",
+                        world_id=shared_world.world_id,
+                    )
+                    if callable(pending_reader)
+                    else {"status": "empty"}
+                )
+                pending = dict(pending or {}) if isinstance(pending, dict) else {"status": "error"}
+                pending_status = str(pending.get("status") or "empty")
+                if pending_status == "pending":
+                    candidate_id = str(pending.get("candidateAboxSnapshotId") or "").strip()
+                    activation_status = str(pending.get("activationStatus") or "").strip()
+                    activator = getattr(self.repository, "activate_scoped_abox_manifest", None)
+                    if not candidate_id or activation_status != "staged-native-inference" or not callable(activator):
+                        return {
+                            **world_metadata(shared_world),
+                            "status": "deferred-" + status_prefix + "-activation-recovery",
+                            "saved": False,
+                            "preservedActiveGeneration": True,
+                            "projectionKind": kind,
+                            "retryable": True,
+                            "recommendedRetryAfterSeconds": 10,
+                            "pendingAboxActivationRecovery": pending,
+                            "reason": "완료되지 않은 공용 월드 활성화 상태를 안전하게 복구할 수 없습니다.",
+                        }
+                    recovered_activation = self.repository_world_call(
+                        "activate_scoped_abox_manifest",
+                        candidate_id,
+                        pending_activation=False,
+                        world_id=shared_world.world_id,
+                    )
+                    recovered_activation = (
+                        dict(recovered_activation or {})
+                        if isinstance(recovered_activation, dict)
+                        else {"status": "error"}
+                    )
+                    if str(recovered_activation.get("status") or "") != "ok":
+                        return {
+                            **world_metadata(shared_world),
+                            "status": "deferred-" + status_prefix + "-activation-recovery",
+                            "saved": False,
+                            "preservedActiveGeneration": True,
+                            "projectionKind": kind,
+                            "retryable": True,
+                            "recommendedRetryAfterSeconds": 10,
+                            "pendingAboxActivationRecovery": pending,
+                            "activation": recovered_activation,
+                            "reason": str(
+                                recovered_activation.get("reason")
+                                or "공용 월드의 중단된 활성화를 완료하지 못했습니다."
+                            )[:220],
+                        }
+                    pending_activation_recovery = {
+                        "status": "finalized",
+                        "recoveryMode": "activate-interrupted-shared-world-manifest",
+                        "candidateAboxSnapshotId": candidate_id,
+                        "activation": recovered_activation,
+                    }
+                elif pending_status == "empty":
+                    pending_activation_recovery = {"status": "skipped"}
+                else:
+                    return {
+                        **world_metadata(shared_world),
+                        "status": "deferred-" + status_prefix + "-activation-recovery",
+                        "saved": False,
+                        "preservedActiveGeneration": True,
+                        "projectionKind": kind,
+                        "retryable": True,
+                        "recommendedRetryAfterSeconds": 10,
+                        "pendingAboxActivationRecovery": pending,
+                        "reason": str(
+                            pending.get("reason")
+                            or "공용 월드의 중단된 활성화 상태를 읽지 못했습니다."
+                        )[:220],
+                    }
             observed_at = str(
                 (update.worldview or {}).get("sourceObservedAt")
                 or (update.worldview or {}).get("marketObservedAt")

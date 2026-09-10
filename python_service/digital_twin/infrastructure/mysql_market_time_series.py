@@ -23,7 +23,7 @@ from ..domain.market_time_series import (
     temporal_observation_payload,
     temporal_session_count,
 )
-from ..domain.portfolio import AccountSnapshot
+from ..domain.portfolio import AccountSnapshot, utc_now_iso
 from ..domain.portfolio_ontology_temporal_concepts import (
     trim_to_recent_sessions,
     window_rows,
@@ -280,6 +280,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         skipped = 0
         symbols = set()
         projected_rows = []
+        received_at = utc_now_iso()
         with self.transaction() as connection:
             latest_buckets = self.latest_daily_buckets_with_connection(connection, candles_by_symbol.keys())
             for symbol, candles in dict(candles_by_symbol or {}).items():
@@ -293,6 +294,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                         currency=str(metadata.get("currency") or ""),
                         provider=provider,
                         name=str(metadata.get("name") or symbol),
+                        received_at=received_at,
                     )
                     for candle in candles or []
                 ]
@@ -303,7 +305,12 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     if latest_bucket and observation.bucket_at < latest_bucket:
                         skipped += 1
                         continue
-                    if self.insert_observation_with_connection(connection, observation, replace=True):
+                    if self.insert_observation_with_connection(
+                        connection,
+                        observation,
+                        replace=True,
+                        preserve_first_observed=True,
+                    ):
                         saved += 1
                         symbols.add(observation.symbol)
                         projected_rows.append(observation.to_row())
@@ -516,16 +523,21 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         connection,
         observation: MarketTimeSeriesObservation,
         replace: bool = False,
+        preserve_first_observed: bool = False,
     ) -> bool:
         row = observation.to_row()
         insert_mode = "INSERT" if replace else "INSERT IGNORE"
         update_clause = ""
         if replace:
-            update_clause = " ON DUPLICATE KEY UPDATE " + ", ".join(
-                column + " = VALUES(" + column + ")"
-                for column in OBSERVATION_COLUMNS
-                if column not in {"account_id", "symbol", "granularity", "bucket_at"}
-            )
+            assignments = []
+            for column in OBSERVATION_COLUMNS:
+                if column in {"account_id", "symbol", "granularity", "bucket_at"}:
+                    continue
+                if column == "observed_at" and preserve_first_observed:
+                    assignments.append("observed_at = LEAST(observed_at, VALUES(observed_at))")
+                else:
+                    assignments.append(column + " = VALUES(" + column + ")")
+            update_clause = " ON DUPLICATE KEY UPDATE " + ", ".join(assignments)
         cursor = connection.execute(
             insert_mode
             + " INTO market_time_series_observations ("

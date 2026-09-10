@@ -59,8 +59,8 @@ class AiModelPolicyTests(unittest.TestCase):
             planning_command,
         ]:
             command.assert_called_once_with()
-        news_command.assert_called_once_with("medium")
-        disclosure_command.assert_called_once_with("medium")
+        news_command.assert_called_once_with("max")
+        disclosure_command.assert_called_once_with("max")
         self.assertEqual("high", notification_command.call_args_list[0].kwargs["reasoning_effort"])
         self.assertEqual("max", notification_command.call_args_list[-1].kwargs["reasoning_effort"])
         schema_path = notification_command.call_args_list[0].kwargs["output_schema_path"]

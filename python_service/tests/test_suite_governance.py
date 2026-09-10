@@ -98,7 +98,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # independently protect the insight publication feedback loop.
         # Immutable TypeDB dispatch routing and TypeDB/AI fan-out isolation add
         # two independent contracts at the inference publication boundary.
-        self.assertLessEqual(total, 999)
+        # Data-source recovery, completed-session candle admission, and shared
+        # ontology projection recovery add independent production boundaries.
+        self.assertLessEqual(total, 1025)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

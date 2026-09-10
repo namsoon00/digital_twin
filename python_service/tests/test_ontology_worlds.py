@@ -465,6 +465,28 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertFalse(second["saved"])
         self.assertEqual(1, len(repository.activations))
 
+    def test_shared_knowledge_world_recovers_interrupted_manifest_before_next_update(self):
+        repository = self.FakeRepository()
+        repository.pending_abox_activation_payload = {
+            "status": "pending",
+            "activationStatus": "staged-native-inference",
+            "candidateAboxSnapshotId": "abox-manifest:interrupted",
+        }
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        world = knowledge_world("kr", "tenant-a")
+
+        result = recorder.project_shared_world_update(sample_graph("005930"), world, "knowledge")
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("finalized", result["pendingAboxActivationRecovery"]["status"])
+        self.assertEqual(
+            (world.world_id, "abox-manifest:interrupted", False),
+            repository.activations[0],
+        )
+
     def test_shared_world_releases_coordinator_when_world_lease_lookup_raises(self):
         class LeaseFailureRepository(self.FakeRepository):
             def __init__(self):

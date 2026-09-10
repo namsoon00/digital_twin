@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 import sys
+import tempfile
 from unittest import mock
 import urllib.error
 import urllib.parse
@@ -98,3 +99,36 @@ class TossTokenCacheTests(unittest.TestCase):
         self.assertEqual(["Bearer token-1", "Bearer token-2"], account_calls)
         self.assertEqual(2, len(token_calls))
         self.assertEqual(1, provider.diagnostics_payload()["toss"]["authRefreshes"])
+
+    def test_reuses_persisted_token_across_worker_process_caches(self):
+        token_calls = []
+
+        def fake_http_json(method, url, headers, body=None, timeout=12):
+            token_calls.append(url)
+            return {"access_token": "shared-token", "expires_in": 3600}
+
+        with tempfile.TemporaryDirectory() as root:
+            cache_path = Path(root) / "toss-token-cache.json"
+            first = TossProvider(
+                self.account(),
+                quote_cache={},
+                settings={"externalApiRetryAttempts": "1"},
+                token_cache={},
+                token_cache_path=cache_path,
+                now_fn=lambda: 1000.0,
+            )
+            second = TossProvider(
+                self.account(),
+                quote_cache={},
+                settings={"externalApiRetryAttempts": "1"},
+                token_cache={},
+                token_cache_path=cache_path,
+                now_fn=lambda: 1001.0,
+            )
+            with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
+                    mock.patch("digital_twin.infrastructure.toss_snapshots.runtime_settings", return_value=first.settings):
+                self.assertEqual("shared-token", first.fetch_access_token())
+                self.assertEqual("shared-token", second.fetch_access_token())
+
+            self.assertEqual(1, len(token_calls))
+            self.assertEqual(0o600, cache_path.stat().st_mode & 0o777)

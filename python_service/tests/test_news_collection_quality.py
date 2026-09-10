@@ -15,6 +15,7 @@ from digital_twin.application.news_collection_service import NewsCollectionRunne
 from digital_twin.application.news_digest_service import NewsDigestEnqueuer
 from digital_twin.domain.data_pipeline_health import evaluate_news_collection_health
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.domain.investment_evidence_governance import article_claim_sentences
 from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_text_parts, local_news_ai_analysis
 from digital_twin.domain.news_analysis import article_analysis_facts, article_quality_gate
@@ -114,6 +115,59 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertTrue(admission.prompt_eligible)
         self.assertFalse(admission.decision_eligible)
         self.assertEqual("reference", admission.usage)
+
+    def test_verified_article_quality_allows_reference_without_claim_corroboration(self):
+        payload = {
+            "kind": "news",
+            "publishedAt": "2026-08-28T00:00:00Z",
+            "validationState": "ready",
+            "dataState": "sufficient",
+            "articleAiAnalysisVersion": NEWS_AI_ANALYSIS_VERSION,
+            "articleSummaryQuality": {"state": "ready"},
+            "evidenceGovernance": {"investmentJudgmentEligible": False},
+            "newsEligibility": {"reasoningEligible": False, "alertEligible": True, "displayEligible": True},
+            "aiAnalysis": {
+                "version": NEWS_AI_ANALYSIS_VERSION,
+                "status": "ok",
+                "sourceTextHash": "source-hash",
+                "decisionInlineEligible": False,
+            },
+        }
+
+        admission = assess_prompt_evidence(payload, now="2026-08-28T01:00:00Z", directly_linked=True)
+
+        self.assertTrue(admission.reference_eligible)
+        self.assertTrue(admission.prompt_eligible)
+        self.assertFalse(admission.decision_eligible)
+        self.assertIn("news-reference-only-unverified", admission.reason_codes)
+
+    def test_claim_extraction_drops_unrelated_article_tail(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        evidence = ResearchEvidence(
+            "research:000660:news:claim-filter",
+            "000660",
+            "news",
+            "YTN",
+            "SK하이닉스가 차세대 메모리 투자를 확대한다",
+            "",
+            "https://example.test/skhynix",
+            "2026-09-10T00:00:00Z",
+            "support",
+            published_at="2026-09-10T00:00:00Z",
+            raw_payload={
+                "articleText": (
+                    "SK하이닉스는 차세대 메모리 생산 투자를 확대한다고 밝혔습니다. "
+                    "SK하이닉스의 신규 생산라인은 내년 가동될 예정입니다. "
+                    "트럼프 대통령은 이란 정책에 관한 별도 성명을 발표했습니다."
+                ),
+            },
+        )
+
+        claims = article_claim_sentences(evidence, target)
+
+        self.assertEqual(2, len(claims))
+        self.assertTrue(all("SK하이닉스" in claim for claim in claims))
+        self.assertTrue(all("트럼프" not in claim for claim in claims))
 
     def test_body_at_storage_cap_is_not_treated_as_complete(self):
         quality = inspect_article_body("A" * 5000)

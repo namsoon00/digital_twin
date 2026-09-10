@@ -76,7 +76,7 @@ def disclosure_analyzer_from_settings(settings: Dict[str, str] = None) -> Disclo
     settings = settings or runtime_settings()
     timeout = int_setting(settings, "dartDisclosureAiTimeoutSeconds", int_setting(settings, "modelReviewTimeoutSeconds", 90))
     if enabled_setting(settings, "dartDisclosureAiUseCodex", str(settings.get("modelReviewUseCodex") or "1")):
-        command = background_codex_process_arguments("medium")
+        command = background_codex_process_arguments("max")
         if command:
-            return FallbackDisclosureAnalyzer(CommandDisclosureAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")", settings))
+            return FallbackDisclosureAnalyzer(CommandDisclosureAnalyzer(command, timeout, "Codex AI (" + codex_model_label("max") + ")", settings))
     return LocalDisclosureAnalyzer()

@@ -57,6 +57,19 @@ def payload_hash(payload: Dict[str, object]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+EMPTY_DOCUMENT_HASH = hashlib.sha256(b"").hexdigest()
+RETRYABLE_DOCUMENT_DATASETS = {"opendart.document", "sec.document"}
+
+
+def completed_followup_needs_retry(dataset_id: str, job_status: str, watermark: Dict[str, object]) -> bool:
+    """Identify one-time document jobs incorrectly completed with an empty body."""
+    return (
+        str(dataset_id or "") in RETRYABLE_DOCUMENT_DATASETS
+        and str(job_status or "") == "completed"
+        and str((watermark or {}).get("documentHash") or "") in {"", EMPTY_DOCUMENT_HASH}
+    )
+
+
 class MySQLExternalDataStore(MySQLOperationalConnection):
     """Durable work, provider budget, current facts, and collection telemetry."""
 
@@ -173,7 +186,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         return int(self.transaction_with_deadlock_retry("external-data-sync-partitions", mutation) or 0)
 
     def enqueue_followups(self, plans: Iterable[tuple], now: datetime = None) -> int:
-        """Insert immutable document work once; normal leases own retries."""
+        """Insert immutable document work and recover false empty completions."""
         current = now or utc_now()
         stamp = iso(current)
         rows = list(plans or [])
@@ -202,6 +215,44 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                         stamp,
                         stamp,
                         stamp,
+                    ),
+                )
+                inserted = int(cursor.rowcount or 0)
+                saved += inserted
+                if inserted or descriptor.dataset_id not in RETRYABLE_DOCUMENT_DATASETS:
+                    continue
+                existing = connection.execute(
+                    """
+                    SELECT job_status, watermark_json
+                    FROM external_dataset_state
+                    WHERE dataset_id = %s AND partition_key = %s
+                    FOR UPDATE
+                    """,
+                    (descriptor.dataset_id, str(request.partition_key or "")[:191]),
+                ).fetchone() or {}
+                if not completed_followup_needs_retry(
+                    descriptor.dataset_id,
+                    existing.get("job_status"),
+                    _json_loads(existing.get("watermark_json"), {}),
+                ):
+                    continue
+                cursor = connection.execute(
+                    """
+                    UPDATE external_dataset_state
+                    SET subject_json = %s, watermark_json = %s, priority = %s,
+                        active = 1, job_status = 'pending', next_due_at = %s,
+                        lease_owner = '', lease_until = '', attempt_count = 0,
+                        consecutive_failures = 0, last_error = '', updated_at = %s
+                    WHERE dataset_id = %s AND partition_key = %s
+                    """,
+                    (
+                        json_dumps(request.subject.to_dict()),
+                        json_dumps(request.watermark),
+                        int(request.priority or descriptor.priority),
+                        stamp,
+                        stamp,
+                        descriptor.dataset_id,
+                        str(request.partition_key or "")[:191],
                     ),
                 )
                 saved += int(cursor.rowcount or 0)

@@ -96,6 +96,58 @@ def market_timezone(market: object, currency: object = "") -> ZoneInfo:
     return ZoneInfo("UTC")
 
 
+def completed_daily_candle_times(
+    value: object,
+    market: object = "",
+    currency: object = "",
+    received_at: object = "",
+) -> tuple:
+    """Separate a completed market session from its local availability time."""
+
+    received = parse_timestamp(received_at) or datetime.now(timezone.utc)
+    text = str(value or "").strip()
+    market_zone = market_timezone(market, currency)
+    if len(text) == 10 and text[4:5] == "-" and text[7:8] == "-":
+        try:
+            session_day = datetime.strptime(text, "%Y-%m-%d").date()
+        except ValueError:
+            return "", "", ""
+    else:
+        source = parse_timestamp(value)
+        if not source:
+            return "", "", ""
+        session_day = source.astimezone(market_zone).date()
+
+    zone_name = getattr(market_zone, "key", str(market_zone))
+    if zone_name == "Asia/Seoul":
+        close_hour, close_minute = 15, 30
+    elif zone_name == "America/New_York":
+        close_hour, close_minute = 16, 0
+    else:
+        close_hour, close_minute = 23, 59
+    session_close = datetime(
+        session_day.year,
+        session_day.month,
+        session_day.day,
+        close_hour,
+        close_minute,
+        tzinfo=market_zone,
+    ).astimezone(timezone.utc)
+    if session_close > received:
+        return "", "", ""
+    session_start = datetime(
+        session_day.year,
+        session_day.month,
+        session_day.day,
+        tzinfo=market_zone,
+    ).astimezone(timezone.utc)
+    return (
+        session_start.isoformat().replace("+00:00", "Z"),
+        received.isoformat().replace("+00:00", "Z"),
+        session_close.isoformat().replace("+00:00", "Z"),
+    )
+
+
 def bucket_start(value: object, granularity: str, market: object = "", currency: object = "") -> str:
     parsed = parse_timestamp(value)
     if not parsed:
@@ -242,9 +294,15 @@ class MarketTimeSeriesObservation:
         currency: str = "",
         provider: str = "",
         name: str = "",
+        received_at: str = "",
     ):
         stamp = first_value(candle, ["timestamp", "date", "tradingDate", "tradeDate", "time", "updatedAt"])
-        observed_at = market_timestamp(stamp, market, currency)
+        bucket_at, observed_at, source_as_of = completed_daily_candle_times(
+            stamp,
+            market,
+            currency,
+            received_at,
+        )
         close = number(first_value(candle, ["closePrice", "close", "currentPrice", "price", "lastPrice"]))
         open_price = number(first_value(candle, ["openPrice", "open"])) or close
         high_price = number(first_value(candle, ["highPrice", "high"])) or max(open_price, close)
@@ -253,9 +311,9 @@ class MarketTimeSeriesObservation:
             account_id=str(account_id or ""),
             symbol=str(symbol or "").upper().strip(),
             granularity="1d",
-            bucket_at=bucket_start(observed_at, "1d", market, currency),
+            bucket_at=bucket_at,
             observed_at=observed_at,
-            source_as_of=observed_at,
+            source_as_of=source_as_of,
             provider=str(provider or ""),
             source_role="market-history",
             name=str(name or symbol or ""),

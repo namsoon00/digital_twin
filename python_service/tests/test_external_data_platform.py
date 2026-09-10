@@ -56,6 +56,10 @@ from digital_twin.infrastructure.external_api.adapters.yfinance import (
     YFinanceProfileAdapter,
     unusable_modules_error_message,
 )
+from digital_twin.infrastructure.external_api.mysql_stores import (
+    EMPTY_DOCUMENT_HASH,
+    completed_followup_needs_retry,
+)
 from digital_twin.infrastructure.schedulers import external_data_failure_requires_alert
 
 
@@ -163,6 +167,29 @@ class FollowupSourceAdapter(StaticAdapter):
             watermark={"revision": "document-1"},
             priority=60,
         )]
+
+
+class UnusableOnceAdapter(StaticAdapter):
+    descriptor = DatasetDescriptor(
+        dataset_id="test.document",
+        provider_id="test-provider",
+        capability="document",
+        cadence_seconds=600,
+        freshness_seconds=900,
+        completion_mode="once",
+    )
+
+    def fetch(self, job, _settings):
+        return SourceObservation(
+            dataset_id=self.descriptor.dataset_id,
+            provider_id=self.descriptor.provider_id,
+            subject_key=job.subject.subject_key,
+            source_revision="empty-document",
+            source_as_of="2026-08-16T00:00:00Z",
+            fetched_at="2026-08-16T00:00:01Z",
+            payload={"document": {"text": ""}},
+            quality={"dataUsable": False, "documentState": "document-rejected"},
+        )
 
 
 class MemoryCollectionStore:
@@ -741,6 +768,45 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("test.document", store.followups[0][0].dataset_id)
         self.assertEqual("NVDA:document-1", store.followups[0][1].partition_key)
         self.assertNotIn("test.document", registry.static_dataset_ids({}))
+
+    def test_unusable_one_time_payload_remains_retryable(self):
+        store = MemoryCollectionStore()
+        store.current = {
+            "payload": {"document": {"text": ""}},
+            "quality": {"dataUsable": False},
+        }
+        service = ExternalDataCollectionService(
+            {},
+            ExternalDatasetRegistry([UnusableOnceAdapter()]),
+            store,
+            worker_id="test-worker",
+            now_provider=lambda: NOW,
+        )
+
+        result = service.run_once()
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual([], store.completed)
+        self.assertEqual(1, result["failureCount"])
+        self.assertFalse(result["results"][0]["hasUsablePreviousFact"])
+        self.assertIn("unusable one-time payload", result["results"][0]["error"])
+
+    def test_empty_completed_official_document_is_requeued_only_for_document_datasets(self):
+        self.assertTrue(completed_followup_needs_retry(
+            "opendart.document",
+            "completed",
+            {"documentHash": EMPTY_DOCUMENT_HASH},
+        ))
+        self.assertFalse(completed_followup_needs_retry(
+            "opendart.document",
+            "pending",
+            {"documentHash": EMPTY_DOCUMENT_HASH},
+        ))
+        self.assertFalse(completed_followup_needs_retry(
+            "test.document",
+            "completed",
+            {"documentHash": EMPTY_DOCUMENT_HASH},
+        ))
 
     def test_collection_service_executes_vendor_fetch_outside_request_path(self):
         store = MemoryCollectionStore()

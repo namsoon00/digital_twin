@@ -723,7 +723,7 @@ def claim_policy(settings: Dict[str, object] = None) -> Dict[str, object]:
             "officialVerificationEnabled": claim_bool(raw.get("officialVerificationEnabled"), True),
             "minimumIndependentSources": max(2, min(5, int(claim_number(raw.get("minimumIndependentSources"), 2)))),
             "crossSourceWindowHours": max(1, min(24 * 30, int(claim_number(raw.get("crossSourceWindowHours"), 72)))),
-            "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("similarityThreshold"), 0.72))),
+            "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("similarityThreshold"), 0.48))),
             "sourceRegistry": registry_value if isinstance(registry_value, dict) else source_registry(registry_value),
         }
     return {
@@ -731,7 +731,7 @@ def claim_policy(settings: Dict[str, object] = None) -> Dict[str, object]:
         "officialVerificationEnabled": claim_bool(raw.get("researchClaimOfficialVerificationEnabled"), True),
         "minimumIndependentSources": max(2, min(5, int(claim_number(raw.get("researchClaimMinimumIndependentSources"), 2)))),
         "crossSourceWindowHours": max(1, min(24 * 30, int(claim_number(raw.get("researchClaimCrossSourceWindowHours"), 72)))),
-        "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("researchClaimSimilarityThreshold"), 0.72))),
+        "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("researchClaimSimilarityThreshold"), 0.48))),
         "sourceRegistry": source_registry(raw.get("researchClaimSourceRegistry")),
     }
 
@@ -903,7 +903,21 @@ def source_origin_for_evidence(item: ResearchEvidence, registry: Dict[str, Dict[
     }
 
 
-def article_claim_sentences(item: ResearchEvidence) -> List[str]:
+def _claim_mentions_alias(value: object, aliases: Iterable[object]) -> bool:
+    text = str(value or "")
+    for raw_alias in aliases or []:
+        alias = str(raw_alias or "").strip()
+        if not alias:
+            continue
+        if re.search(r"[A-Za-z0-9]", alias):
+            if re.search(r"(?<![A-Za-z0-9])" + re.escape(alias) + r"(?![A-Za-z0-9])", text, re.IGNORECASE):
+                return True
+        elif alias in text:
+            return True
+    return False
+
+
+def article_claim_sentences(item: ResearchEvidence, target: NewsCollectionTarget = None) -> List[str]:
     """Return short source-backed sentences, never an AI-only paraphrase."""
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
@@ -916,6 +930,11 @@ def article_claim_sentences(item: ResearchEvidence) -> List[str]:
     if not body and str(item.kind or "").lower() not in OFFICIAL_EVIDENCE_KINDS:
         values.extend([facts.get("feedSummaryPreview"), item.summary, item.title])
     rows: List[str] = []
+    candidate_limit = (
+        20
+        if target is not None and str(item.kind or "").lower() not in OFFICIAL_EVIDENCE_KINDS
+        else 5
+    )
     for value in values:
         for part in re.split(r"(?<=[.!?。！？])\s+|[\r\n]+", str(value or "")):
             text = re.sub(r"\s+", " ", part).strip(" -•·\t")
@@ -923,8 +942,23 @@ def article_claim_sentences(item: ResearchEvidence) -> List[str]:
                 continue
             if text not in rows:
                 rows.append(text[:600])
-            if len(rows) >= 5:
-                return rows
+            if len(rows) >= candidate_limit:
+                break
+        if len(rows) >= candidate_limit:
+            break
+    if (
+        rows
+        and target is not None
+        and str(item.kind or "").lower() not in OFFICIAL_EVIDENCE_KINDS
+    ):
+        aliases = target_aliases(target)
+        targeted = [row for row in rows if _claim_mentions_alias(row, aliases)]
+        if targeted:
+            return targeted[:5]
+        title = str(item.title or "").strip()
+        if title and _claim_mentions_alias(title, aliases):
+            return [title[:600]]
+        return []
     if rows:
         return rows
     if str(item.kind or "").lower() in OFFICIAL_EVIDENCE_KINDS:
@@ -990,7 +1024,7 @@ def extracted_claims_for_evidence(
         re.sub(r"\s+", " ", source_text.casefold())[:12000],
     ) if source_text else ""
     rows: List[Dict[str, object]] = []
-    for index, statement in enumerate(article_claim_sentences(item)):
+    for index, statement in enumerate(article_claim_sentences(item, target)):
         tokens = claim_tokens(statement)
         if not tokens:
             continue

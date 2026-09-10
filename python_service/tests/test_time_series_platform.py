@@ -206,6 +206,7 @@ class FakeAdapter:
     def __init__(self, fail=False):
         self.fail = fail
         self.rows = []
+        self.rebuild_count = 0
 
     def write_observations(self, rows):
         if self.fail:
@@ -218,6 +219,12 @@ class FakeAdapter:
 
     def watermark(self):
         return TimeSeriesWatermark("fake", "2026-08-15T00:00:00Z")
+
+    def rebuild_derived_storage(self):
+        self.rebuild_count += 1
+        self.fail = False
+        self.rows = []
+        return {"status": "rebuilt", "health": {"status": "ready"}}
 
 
 class SnapshotStore:
@@ -396,6 +403,33 @@ class SuspendedWalQuestDB(SchemaQuestDB):
 
 
 class TimeSeriesPlatformTests(unittest.TestCase):
+    def test_candidate_repair_never_rebuilds_the_active_backend(self):
+        replica = FakeAdapter(fail=True)
+        registry = SwitchingRegistry()
+        outbox = FakeOutbox([{"backendId": "questdb-shadow"}])
+        service = TimeSeriesBackendPlatformService(
+            {"mysql-primary": FakeBaseline(), "questdb-shadow": replica},
+            registry,
+            outbox,
+            snapshot_service=None,
+        )
+
+        result = service.repair_candidate_backend("questdb-shadow")
+
+        self.assertEqual("rebuilt", result["status"])
+        self.assertEqual(1, result["cancelledProjectionCount"])
+        self.assertEqual(1, replica.rebuild_count)
+        self.assertEqual("ready", registry.health["questdb-shadow"]["status"])
+
+        active_service = TimeSeriesBackendPlatformService(
+            {"mysql-primary": FakeBaseline(), "questdb-shadow": replica},
+            ActiveQuestDBRegistry(),
+            FakeOutbox(),
+            snapshot_service=None,
+        )
+        with self.assertRaisesRegex(ValueError, "active time-series backend"):
+            active_service.repair_candidate_backend("questdb-shadow")
+
     def test_questdb_schema_skips_redundant_ttl_metadata_writes(self):
         adapter = SchemaQuestDB()
 

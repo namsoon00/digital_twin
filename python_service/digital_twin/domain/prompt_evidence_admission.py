@@ -5,7 +5,7 @@ from typing import Dict, List
 from .data_freshness import parse_datetime
 
 
-PROMPT_EVIDENCE_ADMISSION_VERSION = "prompt-evidence-admission-v2-reference-decision"
+PROMPT_EVIDENCE_ADMISSION_VERSION = "prompt-evidence-admission-v3-conditional-news-reference"
 NEWS_KINDS = {"news"}
 OFFICIAL_KINDS = {"disclosure", "filing", "sec-filing"}
 DEFAULT_MAX_AGE_MINUTES = {
@@ -190,13 +190,19 @@ def assess_prompt_evidence(
         reference_ready = bool(
             active
             and fresh
-            and reasoning_state is True
-            and governance_eligible
+            and alert_state is True
             and analysis_current
             and validation not in {"blocked", ""}
             and data_state not in {"insufficient", "unavailable", ""}
         )
-        decision_ready = bool(reference_ready and inline_state is True)
+        decision_ready = bool(
+            reference_ready
+            and reasoning_state is True
+            and governance_eligible
+            and inline_state is True
+        )
+        if reference_ready and not decision_ready:
+            reasons.append("news-reference-only-unverified")
         prompt_ready = reference_ready
     elif kind_group == "official":
         document_verified = _explicit_bool(row.get("documentVerified")) is True

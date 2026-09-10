@@ -1,12 +1,20 @@
 import json
 import hashlib
+import os
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional, Tuple
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the production runtime is macOS/Linux.
+    fcntl = None
 
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import combine_quality, freshness_record, int_setting, parse_datetime
@@ -39,7 +47,7 @@ from .external_signals import ExternalSignalProvider
 from .external_signal_utils import guarded_external_call, root_api_error
 from .kis_market_signals import KISMarketSignalProvider
 from .operational_store import market_quote_cache, symbol_universe_store
-from .settings import currency_rates, runtime_settings
+from .settings import currency_rates, data_dir, read_json, runtime_settings, write_private_json
 
 
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
@@ -569,12 +577,22 @@ def demo_positions() -> List[Position]:
 
 
 class TossProvider:
-    def __init__(self, account: AccountConfig, quote_cache=None, settings: Dict[str, str] = None, token_cache=None, now_fn=None):
+    def __init__(
+        self,
+        account: AccountConfig,
+        quote_cache=None,
+        settings: Dict[str, str] = None,
+        token_cache=None,
+        now_fn=None,
+        token_cache_path=None,
+    ):
         self.account = account
         self.base_url = account.base_url.rstrip("/")
         self.quote_cache = quote_cache if quote_cache is not None else market_quote_cache(runtime_settings())
         self.settings = dict(settings or runtime_settings())
         self.token_cache = token_cache if token_cache is not None else TOSS_TOKEN_CACHE
+        self.shared_token_cache = token_cache is None or token_cache_path is not None
+        self.token_cache_path = Path(token_cache_path) if token_cache_path else data_dir() / "toss-token-cache.json"
         self.now_fn = now_fn or time.time
         self.api_guard_state: Dict[str, object] = {}
         self.stage_failures: Dict[str, Dict[str, object]] = {}
@@ -618,6 +636,37 @@ class TossProvider:
     def token_cache_key(self) -> str:
         source = self.base_url + "\n" + str(self.account.client_id or "")
         return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    @contextmanager
+    def token_cache_guard(self):
+        """Serialize token issuance across every local worker process."""
+
+        with TOSS_TOKEN_CACHE_LOCK:
+            if not self.shared_token_cache:
+                yield
+                return
+            self.token_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = self.token_cache_path.with_name(self.token_cache_path.name + ".lock")
+            with lock_path.open("a+", encoding="utf-8") as lock_handle:
+                try:
+                    os.chmod(lock_path, 0o600)
+                except OSError:
+                    pass
+                if fcntl is not None:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    persisted = read_json(self.token_cache_path, {})
+                    if isinstance(persisted, dict) and persisted:
+                        self.token_cache.clear()
+                        self.token_cache.update(persisted)
+                    yield
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+    def persist_token_cache(self) -> None:
+        if self.shared_token_cache and isinstance(self.token_cache, dict):
+            write_private_json(self.token_cache_path, self.token_cache)
 
     def token_refresh_skew_seconds(self) -> int:
         return int_setting(self.settings, "tossTokenRefreshSkewSeconds", 60, 5, 600)
@@ -706,7 +755,7 @@ class TossProvider:
     def fetch_access_token(self, force_refresh: bool = False, stale_token: str = "") -> str:
         if not self.account.client_id or not self.account.client_secret:
             raise RuntimeError("토스 credentials 미설정")
-        with TOSS_TOKEN_CACHE_LOCK:
+        with self.token_cache_guard():
             cached = self.cached_access_token(force_refresh=force_refresh, stale_token=stale_token)
             if cached:
                 return cached
@@ -737,6 +786,7 @@ class TossProvider:
                     "expiresAt": expires_at,
                     "refreshAt": refresh_at,
                 }
+                self.persist_token_cache()
                 self.token_expires_at = str(expires_at)
             return token
 

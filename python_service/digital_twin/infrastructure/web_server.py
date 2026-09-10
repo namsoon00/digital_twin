@@ -1831,7 +1831,9 @@ def investment_case_api_payload(
 
 def _investment_model_source_payload() -> Dict[str, object]:
     loaders = {
-        "platform": reasoning_engine_platform_status_payload,
+        "platform": lambda: reasoning_engine_platform_status_payload({
+            "historical": ["1"],
+        }),
         "timeSeries": time_series_platform_status_payload,
         "rulebox": ontology_rulebox_summary_payload,
         "catalog": lambda: ontology_catalog_api_payload("summary", {}),

@@ -90,6 +90,80 @@ class InvestmentProductReadinessTests(unittest.TestCase):
         self.assertFalse(result["evolution"]["promotion"]["automatic"])
         self.assert_runtime_failover_blocks_a_release_that_declares_a_different_backend()
         self.assert_tbox_fingerprint_drift_blocks_model_release_readiness()
+        self.assert_candidate_release_management_drives_validation_projection()
+
+    def assert_candidate_release_management_drives_validation_projection(self):
+        result = investment_model_projection(
+            {
+                "status": "ready",
+                "control": {
+                    "activeDeploymentId": "ontology-v2-production-r110",
+                    "deliveryDeploymentId": "ontology-v2-production-r110",
+                    "candidateDeploymentId": "ontology-v2-production-r113",
+                },
+                "activeDeployment": {
+                    "deploymentId": "ontology-v2-production-r110",
+                    "status": "active",
+                },
+                "candidateDeployment": {
+                    "deploymentId": "ontology-v2-production-r113",
+                    "status": "shadow",
+                },
+                "releaseManagement": {
+                    "control": {
+                        "active_deployment_id": "ontology-v2-production-r110",
+                        "delivery_deployment_id": "ontology-v2-production-r110",
+                        "candidate_deployment_id": "ontology-v2-production-r113",
+                    },
+                    "deployments": [
+                        {
+                            "deploymentId": "ontology-v2-production-r110",
+                            "status": "active",
+                        },
+                        {
+                            "deploymentId": "ontology-v2-production-r113",
+                            "status": "shadow",
+                            "releaseBundle": {
+                                "release_id": "ontology-v2-release-r113",
+                                "runtime_revision": "revision-r113",
+                            },
+                            "health": {
+                                "candidateReleaseFingerprint": "fingerprint-r113",
+                                "validationCohortId": "cohort-r113",
+                                "ruleInventoryReleaseReady": True,
+                            },
+                        },
+                    ],
+                    "comparisonSummary": {
+                        "sampleCount": 1,
+                        "statusCounts": {"reasoning-parity-gap": 1},
+                    },
+                    "promotionReadiness": {
+                        "ready": False,
+                        "blockers": ["reasoning-rule-slot-parity-gap"],
+                        "comparison": {
+                            "sampleCount": 1,
+                            "statusCounts": {"reasoning-parity-gap": 1},
+                        },
+                    },
+                },
+            },
+            {"ruleInventory": {"releaseReady": True}},
+            {},
+            {},
+            {},
+        )
+
+        self.assertEqual("ontology-v2-release-r113", result["candidate"]["releaseId"])
+        self.assertEqual("fingerprint-r113", result["candidate"]["releaseFingerprint"])
+        self.assertEqual("revision-r113", result["candidate"]["runtimeRevision"])
+        self.assertEqual("cohort-r113", result["validation"]["cohortId"])
+        self.assertEqual(1, result["evolution"]["validation"]["comparisonSampleCount"])
+        self.assertEqual(
+            1,
+            result["productReadiness"]["metrics"]["comparisonSampleCount"],
+        )
+        self.assertIn("reasoning-rule-slot-parity-gap", result["validation"]["blockers"])
 
     def assert_runtime_failover_blocks_a_release_that_declares_a_different_backend(self):
         result = investment_model_projection(

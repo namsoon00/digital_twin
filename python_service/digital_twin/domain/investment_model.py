@@ -123,14 +123,25 @@ def investment_model_projection(
     experiments = _mapping(experiments_value)
     settings = _mapping(settings_value)
     learning = _mapping(learning_value)
-    control = _mapping(platform.get("control"))
-    promotion = _mapping(platform.get("promotionReadiness"))
+    release_management = _mapping(platform.get("releaseManagement"))
+    control = (
+        _mapping(release_management.get("control"))
+        or _mapping(platform.get("control"))
+    )
+    promotion = (
+        _mapping(release_management.get("promotionReadiness"))
+        or _mapping(platform.get("promotionReadiness"))
+    )
     promotion_health = _mapping(promotion.get("health"))
     active_id = _text(control.get("active_deployment_id") or control.get("activeDeploymentId"))
     candidate_id = _text(control.get("candidate_deployment_id") or control.get("candidateDeploymentId"))
     deployments = [
         _mapping(item)
-        for item in platform.get("deployments") or []
+        for item in (
+            release_management.get("deployments")
+            or platform.get("deployments")
+            or []
+        )
         if isinstance(item, Mapping)
     ]
     active = next((
@@ -147,7 +158,10 @@ def investment_model_projection(
     }
     active_release = _mapping(active.get("releaseBundle"))
     active_capabilities = _mapping(active.get("capabilities"))
-    candidate_health = _mapping(candidate.get("health"))
+    candidate_health = {
+        **candidate,
+        **_mapping(candidate.get("health")),
+    }
     candidate_release = _mapping(candidate.get("releaseBundle"))
     candidate_relation = (
         "older" if _release_revision(candidate_id) and _release_revision(active_id) and _release_revision(candidate_id) < _release_revision(active_id)
@@ -206,7 +220,18 @@ def investment_model_projection(
     inventory = _mapping(rulebox.get("ruleInventory")) or reasoning_rule_inventory([
         item for item in rulebox.get("rules") or [] if isinstance(item, Mapping)
     ])
-    comparison = _mapping(promotion.get("comparison")) or _mapping(active_health.get("comparisonSummary"))
+    comparison = (
+        _mapping(promotion.get("comparison"))
+        or _mapping(release_management.get("comparisonSummary"))
+        or _mapping(platform.get("comparisonSummary"))
+        or _mapping(candidate_health.get("comparisonSummary"))
+        or _mapping(active_health.get("comparisonSummary"))
+    )
+    validation_health = (
+        candidate_health
+        if candidate_id and candidate_relation == "newer"
+        else active_health
+    )
     readiness_health = {
         **active_health,
         "queue": (
@@ -310,9 +335,12 @@ def investment_model_projection(
             "label": "운영 릴리스 통과" if promotion_ready else "운영 승격 점검 필요",
             "promotionReady": promotion_ready,
             "blockers": blockers,
-            "cohortId": _text(active_health.get("validationCohortId") or promotion_health.get("validationCohortId")),
+            "cohortId": _text(
+                validation_health.get("validationCohortId")
+                or promotion_health.get("validationCohortId")
+            ),
             "ruleInventoryReady": bool(
-                active_health.get("ruleInventoryReleaseReady")
+                validation_health.get("ruleInventoryReleaseReady")
                 or promotion_health.get("ruleInventoryReleaseReady")
                 or inventory.get("releaseReady")
             ),
@@ -370,11 +398,22 @@ def investment_model_projection(
         },
         "candidate": {
             "deploymentId": candidate_id,
-            "releaseId": _text(candidate_release.get("release_id") or candidate_health.get("candidateReleaseId")),
+            "releaseId": _text(
+                candidate_release.get("release_id")
+                or candidate_health.get("releaseId")
+                or candidate_health.get("candidateReleaseId")
+            ),
             "count": sum(1 for item in deployments if _text(item.get("status")) == "candidate"),
             "engineVersion": _text(candidate.get("engineVersion") or candidate_health.get("engineVersion")),
-            "releaseFingerprint": _text(candidate_health.get("releaseFingerprint")),
-            "runtimeRevision": _text(candidate_release.get("runtime_revision") or candidate_health.get("candidateRuntimeRevision")),
+            "releaseFingerprint": _text(
+                candidate_health.get("releaseFingerprint")
+                or candidate_health.get("candidateReleaseFingerprint")
+            ),
+            "runtimeRevision": _text(
+                candidate_release.get("runtime_revision")
+                or candidate_health.get("runtimeRevision")
+                or candidate_health.get("candidateRuntimeRevision")
+            ),
             "updatedAt": _text(candidate.get("updatedAt") or candidate_health.get("lastRunAt")),
             "relationToActive": candidate_relation,
             "role": "rollback-reference" if candidate_relation == "older" else "promotion-candidate" if candidate_id else "none",

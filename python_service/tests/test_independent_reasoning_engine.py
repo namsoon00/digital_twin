@@ -838,11 +838,18 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 self.health = dict(health)
 
         registry = Registry()
+        comparison_calls = []
+
+        def reconcile_comparisons(**kwargs):
+            comparison_calls.append(dict(kwargs))
+            return {"status": "recorded", "recordedCount": 1}
+
         runner = IndependentReasoningJobRunner(
             Queue(),
             object(),
             registry,
             deployment_role="candidate",
+            comparison_reconciler=reconcile_comparisons,
         )
 
         first = runner.ensure_candidate_validation_window("release:candidate")
@@ -864,6 +871,17 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             ],
             registry.transitions,
         )
+        first_comparison = runner.reconcile_engine_comparisons()
+        throttled_comparison = runner.reconcile_engine_comparisons()
+        forced_comparison = runner.reconcile_engine_comparisons(
+            ["event:NVDA"],
+            force=True,
+        )
+        self.assertEqual("recorded", first_comparison["status"])
+        self.assertEqual(first_comparison, throttled_comparison)
+        self.assertEqual("recorded", forced_comparison["status"])
+        self.assertEqual(2, len(comparison_calls))
+        self.assertEqual(["event:NVDA"], comparison_calls[-1]["source_event_ids"])
 
     def test_candidate_validation_window_waits_for_one_abox_bootstrap_run(self):
         class Queue:

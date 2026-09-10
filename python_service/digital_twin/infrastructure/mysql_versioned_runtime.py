@@ -600,6 +600,28 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
                 (canonical_json(merged_health), iso_utc(), clean_deployment_id),
             )
 
+    def patch_health(self, deployment_id: str, health: Mapping[str, object]) -> None:
+        """Atomically merge a bounded diagnostic patch into worker health."""
+
+        clean_deployment_id = str(deployment_id or "").strip()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT last_health_json FROM reasoning_engine_deployments "
+                "WHERE deployment_id = %s FOR UPDATE",
+                (clean_deployment_id,),
+            ).fetchone() or {}
+            if not row:
+                raise ValueError(
+                    "Unknown reasoning engine deployment: " + clean_deployment_id
+                )
+            merged_health = json_value(row.get("last_health_json"), {})
+            merged_health.update(dict(health or {}))
+            connection.execute(
+                "UPDATE reasoning_engine_deployments SET last_health_json = %s, "
+                "updated_at = %s WHERE deployment_id = %s",
+                (canonical_json(merged_health), iso_utc(), clean_deployment_id),
+            )
+
     def update_capabilities(
         self,
         deployment_id: str,
@@ -2975,6 +2997,135 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         index = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * percentile + 0.999999)))
         return ordered[index]
 
+    def completed_comparison_pairs(
+        self,
+        baseline_deployment_id: str,
+        candidate_deployment_id: str,
+        source_event_ids: Iterable[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, object]]:
+        """Return unrecorded completed pairs sharing one durable source event."""
+
+        baseline_id = str(baseline_deployment_id or "").strip()
+        candidate_id = str(candidate_deployment_id or "").strip()
+        if not baseline_id or not candidate_id or baseline_id == candidate_id:
+            return []
+        selected_source_ids = sorted({
+            str(value or "").strip()
+            for value in source_event_ids or []
+            if str(value or "").strip()
+        })[:200]
+        direct_source_filter = ""
+        lineage_source_filter = ""
+        direct_source_params = ()
+        lineage_source_params = ()
+        if selected_source_ids:
+            placeholders = ",".join(["%s"] * len(selected_source_ids))
+            direct_source_filter = " AND candidate.source_event_id IN (" + placeholders + ")"
+            lineage_source_filter = " AND candidate_source.source_event_id IN (" + placeholders + ")"
+            direct_source_params = tuple(selected_source_ids)
+            lineage_source_params = tuple(selected_source_ids)
+        bounded = max(1, min(200, int(limit or 20)))
+        with self.connect() as connection:
+            pairs = connection.execute(
+                """
+                SELECT pair.candidate_job_id, pair.baseline_job_id,
+                       pair.comparison_source_event_id,
+                       pair.candidate_release_fingerprint,
+                       pair.candidate_completed_at
+                FROM (
+                    SELECT candidate.job_id AS candidate_job_id,
+                           baseline.job_id AS baseline_job_id,
+                           candidate.source_event_id AS comparison_source_event_id,
+                           candidate.release_fingerprint AS candidate_release_fingerprint,
+                           candidate.completed_at AS candidate_completed_at
+                    FROM reasoning_engine_jobs candidate
+                    INNER JOIN reasoning_engine_jobs baseline
+                      ON baseline.source_event_id = candidate.source_event_id
+                     AND baseline.deployment_id = %s
+                     AND baseline.job_status = 'completed'
+                    WHERE candidate.deployment_id = %s
+                      AND candidate.job_status = 'completed'
+                      AND candidate.release_fingerprint <> ''
+                      AND candidate.source_event_id <> ''
+                    """ + direct_source_filter + """
+                    UNION DISTINCT
+                    SELECT candidate.job_id AS candidate_job_id,
+                           baseline.job_id AS baseline_job_id,
+                           candidate_source.source_event_id AS comparison_source_event_id,
+                           candidate.release_fingerprint AS candidate_release_fingerprint,
+                           candidate.completed_at AS candidate_completed_at
+                    FROM reasoning_engine_jobs candidate
+                    INNER JOIN reasoning_engine_job_sources candidate_source
+                      ON candidate_source.deployment_id = candidate.deployment_id
+                     AND candidate_source.survivor_job_id = candidate.job_id
+                    INNER JOIN reasoning_engine_job_sources baseline_source
+                      ON baseline_source.deployment_id = %s
+                     AND baseline_source.source_event_id = candidate_source.source_event_id
+                    INNER JOIN reasoning_engine_jobs baseline
+                      ON baseline.job_id = baseline_source.survivor_job_id
+                     AND baseline.deployment_id = %s
+                     AND baseline.job_status = 'completed'
+                    WHERE candidate.deployment_id = %s
+                      AND candidate.job_status = 'completed'
+                      AND candidate.release_fingerprint <> ''
+                      AND candidate_source.source_event_id <> ''
+                    """ + lineage_source_filter + """
+                ) pair
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM reasoning_engine_comparisons comparison_row
+                    WHERE comparison_row.baseline_deployment_id = %s
+                      AND comparison_row.candidate_deployment_id = %s
+                      AND comparison_row.candidate_release_fingerprint = pair.candidate_release_fingerprint
+                      AND comparison_row.source_event_id = pair.comparison_source_event_id
+                )
+                ORDER BY pair.candidate_completed_at, pair.comparison_source_event_id
+                LIMIT %s
+                """,
+                (
+                    baseline_id,
+                    candidate_id,
+                    *direct_source_params,
+                    baseline_id,
+                    baseline_id,
+                    candidate_id,
+                    *lineage_source_params,
+                    baseline_id,
+                    candidate_id,
+                    bounded,
+                ),
+            ).fetchall()
+            job_ids = sorted({
+                str(row.get(key) or "")
+                for row in pairs or []
+                for key in ("candidate_job_id", "baseline_job_id")
+                if str(row.get(key) or "")
+            })
+            if not job_ids:
+                return []
+            placeholders = ",".join(["%s"] * len(job_ids))
+            jobs = connection.execute(
+                "SELECT * FROM reasoning_engine_jobs WHERE job_id IN ("
+                + placeholders
+                + ")",
+                tuple(job_ids),
+            ).fetchall()
+        jobs_by_id = {
+            str(row.get("job_id") or ""): self.row_payload(row)
+            for row in jobs or []
+            if str(row.get("job_id") or "")
+        }
+        return [
+            {
+                "sourceEventId": str(row.get("comparison_source_event_id") or ""),
+                "baseline": jobs_by_id.get(str(row.get("baseline_job_id") or ""), {}),
+                "candidate": jobs_by_id.get(str(row.get("candidate_job_id") or ""), {}),
+            }
+            for row in pairs or []
+            if jobs_by_id.get(str(row.get("baseline_job_id") or ""))
+            and jobs_by_id.get(str(row.get("candidate_job_id") or ""))
+        ]
+
     def summary(
         self,
         deployment_id: str = "",
@@ -3295,6 +3446,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "runtimeRevision": str(values.get("runtime_revision") or ""),
             "reasoningLane": str(values.get("reasoning_lane") or ""),
             "heartbeatAt": str(values.get("heartbeat_at") or ""),
+            "claimedAt": str(values.get("claimed_at") or ""),
             "currentStage": str(values.get("current_stage") or ""),
             "stageStartedAt": str(values.get("stage_started_at") or ""),
             "stageUpdatedAt": str(values.get("stage_updated_at") or ""),
@@ -3316,7 +3468,16 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
         comparison: Mapping[str, object],
     ) -> Dict[str, object]:
         values = dict(comparison or {})
-        comparison_id = "reasoning-comparison:" + uuid.uuid4().hex
+        comparison_identity = "|".join([
+            str(baseline_deployment_id or ""),
+            str(candidate_deployment_id or ""),
+            str(values.get("candidateReleaseFingerprint") or ""),
+            str(source_event_id or ""),
+        ])
+        comparison_id = "reasoning-comparison:" + uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            comparison_identity,
+        ).hex
         stamp = iso_utc()
         with self.connect() as connection:
             connection.execute(
@@ -3330,6 +3491,18 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
                     rule_slot_coverage_pct, unexplained_decision_difference_count,
                     shadow_delivery_count, payload_json, created_at, updated_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    baseline_release_id = VALUES(baseline_release_id),
+                    candidate_release_id = VALUES(candidate_release_id),
+                    validation_cohort_id = VALUES(validation_cohort_id),
+                    candidate_runtime_revision = VALUES(candidate_runtime_revision),
+                    comparison_status = VALUES(comparison_status),
+                    fact_parity_pct = VALUES(fact_parity_pct),
+                    rule_slot_coverage_pct = VALUES(rule_slot_coverage_pct),
+                    unexplained_decision_difference_count = VALUES(unexplained_decision_difference_count),
+                    shadow_delivery_count = VALUES(shadow_delivery_count),
+                    payload_json = VALUES(payload_json),
+                    updated_at = VALUES(updated_at)
                 """,
                 (
                     comparison_id,
@@ -3351,7 +3524,17 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
                     stamp,
                 ),
             )
-        return {"comparisonId": comparison_id, "createdAt": stamp, **values}
+            stored = connection.execute(
+                "SELECT created_at, updated_at FROM reasoning_engine_comparisons "
+                "WHERE comparison_id = %s",
+                (comparison_id,),
+            ).fetchone() or {}
+        return {
+            "comparisonId": comparison_id,
+            "createdAt": str(stored.get("created_at") or stamp),
+            "updatedAt": str(stored.get("updated_at") or stamp),
+            **values,
+        }
 
     def latest(
         self,

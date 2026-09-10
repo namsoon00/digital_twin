@@ -1903,6 +1903,7 @@ class IndependentReasoningJobRunner:
         background_graph_tasks=None,
         market_observation_completion_recorder=None,
         market_observation_completion_reconciler=None,
+        comparison_reconciler=None,
     ):
         import os
         import socket
@@ -1919,6 +1920,7 @@ class IndependentReasoningJobRunner:
         self.graph_writer_guard = graph_writer_guard
         self.market_observation_completion_recorder = market_observation_completion_recorder
         self.market_observation_completion_reconciler = market_observation_completion_reconciler
+        self.comparison_reconciler = comparison_reconciler
         self.background_graph_tasks = [
             {
                 **dict(task or {}),
@@ -1955,6 +1957,11 @@ class IndependentReasoningJobRunner:
         self._last_market_anchor_reconciliation: Dict[str, object] = {
             "status": "not-run",
             "completedCount": 0,
+        }
+        self._last_comparison_reconciliation_at = 0.0
+        self._last_comparison_reconciliation: Dict[str, object] = {
+            "status": "not-run",
+            "recordedCount": 0,
         }
 
     def enabled(self) -> bool:
@@ -2094,6 +2101,54 @@ class IndependentReasoningJobRunner:
             }
         return dict(self._last_market_anchor_reconciliation)
 
+    def reconcile_engine_comparisons(
+        self,
+        source_event_ids=None,
+        force: bool = False,
+    ) -> Dict[str, object]:
+        selected = sorted({
+            str(value or "").strip()
+            for value in source_event_ids or []
+            if str(value or "").strip()
+        })
+        interval = _int_setting(
+            self.settings,
+            "reasoningEngineV2ComparisonReconcileSeconds",
+            30,
+            5,
+            3600,
+        )
+        now_monotonic = time.monotonic()
+        if (
+            not force
+            and not selected
+            and self._last_comparison_reconciliation_at
+            and now_monotonic - self._last_comparison_reconciliation_at < interval
+        ):
+            return dict(self._last_comparison_reconciliation)
+        self._last_comparison_reconciliation_at = now_monotonic
+        if not callable(self.comparison_reconciler):
+            self._last_comparison_reconciliation = {
+                "status": "not-configured",
+                "recordedCount": 0,
+            }
+            return dict(self._last_comparison_reconciliation)
+        try:
+            self._last_comparison_reconciliation = dict(
+                self.comparison_reconciler(
+                    source_event_ids=selected or None,
+                    limit=max(20, len(selected)),
+                )
+                or {}
+            )
+        except Exception as error:  # Comparison must never invalidate completed inference.
+            self._last_comparison_reconciliation = {
+                "status": "error",
+                "recordedCount": 0,
+                "reason": str(error)[:220],
+            }
+        return dict(self._last_comparison_reconciliation)
+
     def run_once(self) -> Dict[str, object]:
         ownership = self.acquire_graph_writer_ownership()
         if not bool(ownership.get("acquired")):
@@ -2152,6 +2207,7 @@ class IndependentReasoningJobRunner:
         market_anchor_reconciliation = self.reconcile_market_observation_completions()
         case_expiry = self.expire_stale_reasoning_cases()
         route_reconciliation = self.reconcile_ingress_route()
+        comparison_reconciliation = self.reconcile_engine_comparisons()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
         self.recover_transient_failures(descriptor.deployment_id)
@@ -2189,6 +2245,7 @@ class IndependentReasoningJobRunner:
                 "reasoningCaseExpiry": case_expiry,
                 "marketObservationAnchorReconciliation": market_anchor_reconciliation,
                 "candidateValidationWindow": validation_window,
+                "engineComparisonReconciliation": comparison_reconciliation,
             }
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
@@ -2233,6 +2290,7 @@ class IndependentReasoningJobRunner:
                 "reasoningCaseExpiry": case_expiry,
                 "marketObservationAnchorReconciliation": market_anchor_reconciliation,
                 "candidateValidationWindow": validation_window,
+                "engineComparisonReconciliation": comparison_reconciliation,
             }
         runtime_excluded_jobs = []
         runtime_eligible_jobs = []
@@ -2574,6 +2632,15 @@ class IndependentReasoningJobRunner:
                         self.record_market_observation_completions(completion_jobs)
                     )
                 outcome = "completed" if completion_job_ids else "excluded"
+                if completion_job_ids:
+                    comparison_reconciliation = self.reconcile_engine_comparisons(
+                        [
+                            str(job.get("sourceEventId") or "")
+                            for job in completion_jobs
+                            if str(job.get("sourceEventId") or "")
+                        ],
+                        force=True,
+                    )
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
             health.update(self.engine.health())
             health.update({
@@ -2609,6 +2676,7 @@ class IndependentReasoningJobRunner:
                 health.pop("dependencyStatus", None)
                 health.pop("dependencyReasonCode", None)
             health["routeReconciliation"] = route_reconciliation
+            health["engineComparisonReconciliation"] = comparison_reconciliation
             self.registry.update_health(descriptor.deployment_id, health)
             return {
                 "status": outcome,
@@ -2624,6 +2692,7 @@ class IndependentReasoningJobRunner:
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
                 "marketObservationAnchorReconciliation": market_anchor_reconciliation,
+                "engineComparisonReconciliation": comparison_reconciliation,
             }
         except Exception as error:  # noqa: BLE001 - durable retry owns recovery.
             retries = [

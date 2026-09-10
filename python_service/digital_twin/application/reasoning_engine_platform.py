@@ -1461,6 +1461,7 @@ class ReasoningEnginePlatformService:
         )
         blockers = []
         warnings = []
+        comparison_summary = {}
         if str(row.get("status") or "") not in {"shadow", "candidate"}:
             blockers.append("engine-not-shadow-or-candidate")
         if str(health.get("status") or "").lower() not in {"ready", "healthy"}:
@@ -1499,6 +1500,62 @@ class ReasoningEnginePlatformService:
             blockers.append("independent-execution-failures")
         if int(summary.get("shadowDeliveryAuthorizedRunCount") or 0) > 0:
             blockers.append("shadow-delivery-detected")
+
+        minimum_comparisons = self.int_setting(
+            "reasoningEngineV2PromotionMinimumComparisons",
+            minimum_runs,
+            1,
+            10000,
+        )
+        if self.comparison_store is not None:
+            try:
+                comparison_summary = dict(self.comparison_store.summary(
+                    deployment_id,
+                    limit=self.int_setting(
+                        "reasoningEnginePromotionComparisonLookback",
+                        200,
+                        1,
+                        2000,
+                    ),
+                    candidate_release_fingerprint=str(
+                        release.get("releaseFingerprint") or ""
+                    ),
+                    validation_cohort_id=str(
+                        release.get("validationCohortId") or ""
+                    ),
+                ) or {})
+            except Exception as error:  # Promotion must fail closed when evidence is unreadable.
+                comparison_summary = {
+                    "status": "unavailable",
+                    "sampleCount": 0,
+                    "reason": str(error)[:180],
+                }
+                blockers.append("independent-comparison-unavailable")
+            if int(comparison_summary.get("sampleCount") or 0) < minimum_comparisons:
+                blockers.append("insufficient-independent-comparisons")
+            if (
+                int(comparison_summary.get("sampleCount") or 0) > 0
+                and float(comparison_summary.get("minimumFactParityPct") or 0.0) < 100.0
+            ):
+                blockers.append("independent-fact-parity-incomplete")
+            if (
+                int(comparison_summary.get("sampleCount") or 0) > 0
+                and float(comparison_summary.get("minimumRuleSlotCoveragePct") or 0.0) < 100.0
+            ):
+                blockers.append("independent-rule-slot-coverage-incomplete")
+            if int(
+                comparison_summary.get("unexplainedDecisionDifferenceCount") or 0
+            ) > 0:
+                blockers.append("independent-unexplained-decision-differences")
+            if int(comparison_summary.get("shadowDeliveryCount") or 0) > 0:
+                blockers.append("independent-shadow-delivery-detected")
+            comparison_status_counts = dict(
+                comparison_summary.get("statusCounts") or {}
+            )
+            if int(comparison_status_counts.get("candidate-failed") or 0) > 0:
+                blockers.append("independent-comparison-execution-failures")
+            if int(comparison_status_counts.get("delivery-violation") or 0) > 0:
+                blockers.append("independent-comparison-delivery-violation")
 
         candidate_p95 = int(summary.get("durationP95Ms") or 0)
         maximum_candidate_p95 = self.int_setting(
@@ -1559,6 +1616,28 @@ class ReasoningEnginePlatformService:
         )
         if age_seconds is None or age_seconds > maximum_age:
             blockers.append("independent-run-window-stale")
+        comparison_latest = self.timestamp(
+            comparison_summary.get("latestComparisonAt")
+        )
+        comparison_age_seconds = (
+            max(
+                0,
+                int(
+                    (datetime.now(timezone.utc) - comparison_latest).total_seconds()
+                ),
+            )
+            if comparison_latest
+            else None
+        )
+        if (
+            self.comparison_store is not None
+            and int(comparison_summary.get("sampleCount") or 0) > 0
+            and (
+                comparison_age_seconds is None
+                or comparison_age_seconds > maximum_age
+            )
+        ):
+            blockers.append("independent-comparison-window-stale")
         if oldest_pending_age_seconds > max(
             1, maximum_queue_wait_p95 // 1000
         ):
@@ -1574,11 +1653,14 @@ class ReasoningEnginePlatformService:
             "release": release,
             "minimumSuccessfulRuns": minimum_runs,
             "minimumDecisionSynthesisRuns": minimum_decision_synthesis_runs,
+            "minimumComparisons": minimum_comparisons,
+            "comparisonEvidence": comparison_summary,
             "maximumCandidateP95Ms": maximum_candidate_p95,
             "maximumQueueWaitP95Ms": maximum_queue_wait_p95,
             "endToEndP95Ms": end_to_end_p95,
             "maximumEndToEndP95Ms": maximum_end_to_end_p95,
             "latestRunAgeSeconds": age_seconds,
+            "latestComparisonAgeSeconds": comparison_age_seconds,
             "maximumRunAgeSeconds": maximum_age,
             "recoveredQueueWaitOverrideApplied": recovered_queue_wait,
         }

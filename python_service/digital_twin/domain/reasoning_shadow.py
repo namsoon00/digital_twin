@@ -158,9 +158,24 @@ def _rounded(value: object, fallback: float = 0.0) -> float:
         return fallback
 
 
+def _first_value(values: Mapping[str, object], *names: str, fallback: object = "") -> object:
+    source = _mapping(values)
+    for name in names:
+        if name in source and source.get(name) not in (None, ""):
+            return source.get(name)
+    return fallback
+
+
 def _event_field(event: object, name: str, fallback: object = "") -> object:
     if isinstance(event, Mapping):
-        return event.get(name, fallback)
+        aliases = {
+            "account_id": "accountId",
+            "account_label": "accountLabel",
+            "generated_at": "generatedAt",
+        }
+        if name in event:
+            return event.get(name, fallback)
+        return event.get(aliases.get(name, ""), fallback)
     return getattr(event, name, fallback)
 
 
@@ -169,6 +184,7 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
 
     metadata = _mapping(_event_field(event, "metadata", {}))
     context = _mapping(metadata.get("ontologyRelationContext"))
+    synthesis = _mapping(metadata.get("v2DecisionSynthesis"))
     decision = _mapping(context.get("decision"))
     envelope = _mapping(context.get("actionEnvelope"))
     state = _mapping(context.get("decisionState"))
@@ -207,10 +223,22 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
         list(context.get("evidenceIds") or [])
         + list(context.get("counterEvidenceIds") or [])
         + [item.get("evidenceId") for item in traces]
+        + [
+            evidence_id
+            for alternative in synthesis.get("alternatives") or []
+            if isinstance(alternative, Mapping)
+            for evidence_id in (
+                list(_first_value(alternative, "supporting_evidence_ids", "supportingEvidenceIds", fallback=[]) or [])
+                + list(_first_value(alternative, "counter_evidence_ids", "counterEvidenceIds", fallback=[]) or [])
+                + list(_first_value(alternative, "evidence_conflict_ids", "evidenceConflictIds", fallback=[]) or [])
+            )
+        ]
     )
     selected_rule_id = str(
         decision.get("selectedRuleId")
         or envelope.get("selectedRuleId")
+        or _first_value(synthesis, "selected_rule_id", "selectedRuleId")
+        or metadata.get("selectedRuleId")
         or ""
     ).strip()
     candidate_action = str(
@@ -218,30 +246,128 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
         or decision.get("candidateAction")
         or envelope.get("candidateAction")
         or envelope.get("selectedDecisionEffect")
+        or _first_value(
+            synthesis,
+            "graph_candidate_action",
+            "graphCandidateAction",
+            "investment_view_action",
+            "investmentViewAction",
+            "execution_action",
+            "executionAction",
+        )
         or ""
     ).strip()
+    synthesis_rule_ids = _strings(
+        [selected_rule_id]
+        + list(metadata.get("matchedRuleIds") or [])
+        + list(_first_value(synthesis, "portfolio_constraint_rule_ids", "portfolioConstraintRuleIds", fallback=[]) or [])
+        + list(_first_value(synthesis, "execution_constraint_rule_ids", "executionConstraintRuleIds", fallback=[]) or [])
+        + list(_first_value(synthesis, "data_quality_rule_ids", "dataQualityRuleIds", fallback=[]) or [])
+        + [
+            rule_id
+            for alternative in synthesis.get("alternatives") or []
+            if isinstance(alternative, Mapping)
+            for rule_id in _first_value(
+                alternative,
+                "supporting_rule_ids",
+                "supportingRuleIds",
+                fallback=[],
+            ) or []
+        ]
+    )
+    if synthesis_rule_ids:
+        rule_ids = _strings([*rule_ids, *synthesis_rule_ids])
+    synthesis_relation_slots = {
+        "|".join([
+            str(_first_value(alternative, "action") or ""),
+            str(rule_id or ""),
+            str(_first_value(synthesis, "decision_disposition", "decisionDisposition") or ""),
+            str(_first_value(synthesis, "decision_effect", "decisionEffect") or ""),
+        ])
+        for alternative in synthesis.get("alternatives") or []
+        if isinstance(alternative, Mapping)
+        for rule_id in _first_value(
+            alternative,
+            "supporting_rule_ids",
+            "supportingRuleIds",
+            fallback=[],
+        ) or [selected_rule_id]
+        if str(_first_value(alternative, "action") or rule_id or "").strip()
+    }
+    relation_slots = sorted(set(relation_slots).union(synthesis_relation_slots))
     packet = {
-        "accountId": str(_event_field(event, "account_id", "") or ""),
-        "symbol": str(_event_field(event, "symbol", "") or "").upper().strip(),
+        "accountId": str(
+            _event_field(event, "account_id", "")
+            or _first_value(synthesis, "account_id", "accountId")
+            or ""
+        ),
+        "symbol": str(
+            _event_field(event, "symbol", "")
+            or _first_value(synthesis, "symbol")
+            or ""
+        ).upper().strip(),
         "messageType": str(_event_field(event, "rule", "") or ""),
         "candidateAction": candidate_action,
         "selectedRuleId": selected_rule_id,
-        "decisionStage": str(decision.get("decisionStage") or "").strip(),
+        "decisionStage": str(
+            decision.get("decisionStage")
+            or _first_value(synthesis, "execution_disposition", "executionDisposition")
+            or ""
+        ).strip(),
         "decisionEffect": str(
             decision.get("decisionEffect")
             or envelope.get("selectedDecisionEffect")
+            or _first_value(synthesis, "decision_effect", "decisionEffect")
             or ""
         ).strip(),
-        "actionGroup": str(decision.get("actionGroup") or "").strip(),
-        "judgementBlocked": bool(decision.get("judgementBlocked")),
-        "reviewLevel": str(state.get("reviewLevel") or context.get("reviewLevel") or "").strip(),
-        "dataState": str(state.get("dataState") or context.get("dataState") or "").strip(),
-        "validationState": str(state.get("validationState") or context.get("validationState") or "").strip(),
+        "actionGroup": str(
+            decision.get("actionGroup")
+            or _first_value(synthesis, "action_authority", "actionAuthority")
+            or ""
+        ).strip(),
+        "judgementBlocked": bool(
+            decision.get("judgementBlocked")
+            or _first_value(synthesis, "judgement_blocked", "judgementBlocked", fallback=False)
+        ),
+        "reviewLevel": str(
+            state.get("reviewLevel")
+            or context.get("reviewLevel")
+            or _first_value(synthesis, "review_level", "reviewLevel")
+            or metadata.get("reviewLevel")
+            or ""
+        ).strip(),
+        "dataState": str(
+            state.get("dataState")
+            or context.get("dataState")
+            or _first_value(synthesis, "data_state", "dataState")
+            or metadata.get("dataState")
+            or ""
+        ).strip(),
+        "validationState": str(
+            state.get("validationState")
+            or context.get("validationState")
+            or _first_value(
+                synthesis,
+                "hypothesis_qualification_state",
+                "hypothesisQualificationState",
+            )
+            or metadata.get("validationState")
+            or ""
+        ).strip(),
         "confidence": _rounded(context.get("confidence") or context.get("confidenceScore")),
         "ruleIds": list(rule_ids),
         "relationSlots": relation_slots,
         "evidenceIds": list(evidence_ids),
-        "factsHash": payload_hash(_mapping(context.get("facts"))),
+        "factsHash": payload_hash(
+            _mapping(context.get("facts"))
+            or {
+                "allowedActions": list(_first_value(synthesis, "allowed_actions", "allowedActions", fallback=[]) or []),
+                "blockedActions": list(_first_value(synthesis, "blocked_actions", "blockedActions", fallback=[]) or []),
+                "eligibleHypothesisIds": list(_first_value(synthesis, "eligible_hypothesis_ids", "eligibleHypothesisIds", fallback=[]) or []),
+                "executionEligibleHypothesisIds": list(_first_value(synthesis, "execution_eligible_hypothesis_ids", "executionEligibleHypothesisIds", fallback=[]) or []),
+                "referenceHypothesisIds": list(_first_value(synthesis, "reference_hypothesis_ids", "referenceHypothesisIds", fallback=[]) or []),
+            }
+        ),
         "graphStore": str(context.get("graphStore") or ""),
         "graphStoreUsed": bool(context.get("graphStoreUsed")),
     }
@@ -262,11 +388,12 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
 
 def projection_receipt_packet(account_id: str, projection: Mapping[str, object]) -> Dict[str, object]:
     values = _mapping(projection)
-    inference = _mapping(values.get("inferenceBox"))
-    runtime = _mapping(values.get("runtimeStages"))
+    inference = _mapping(values.get("inferenceBox")) or values
+    runtime = _mapping(values.get("runtimeStages")) or _mapping(values.get("stages"))
     comparison_scope = _mapping(values.get("comparisonScope"))
     persisted_scope = _mapping(values.get("persistedComparisonScope"))
     execution = _mapping(values.get("ruleboxExecution"))
+    model_signal_execution = _mapping(values.get("modelSignalBridgeExecution"))
     native_stage_values = _mapping(
         execution.get("typedbNativeStageTimings")
         or execution.get("nativeStageTimings")
@@ -286,9 +413,18 @@ def projection_receipt_packet(account_id: str, projection: Mapping[str, object])
         if str(key) and isinstance(value, (int, float))
     }
     matched_rule_ids = _strings(
-        execution.get("typedbNativeRuleMatchedRuleIds")
-        or execution.get("matchedRuleIds")
-        or []
+        list(execution.get("typedbNativeRuleMatchedRuleIds") or [])
+        + list(execution.get("matchedRuleIds") or [])
+        + list(model_signal_execution.get("matchedContractIds") or [])
+        + [
+            item.get("ruleId") or item.get("rule_id")
+            for item in values.get("ruleEvaluations") or []
+            if isinstance(item, Mapping)
+            and (
+                bool(item.get("matched"))
+                or str(item.get("status") or "").lower() == "matched"
+            )
+        ]
     )
     return {
         "accountId": str(account_id or ""),
@@ -316,6 +452,7 @@ def projection_receipt_packet(account_id: str, projection: Mapping[str, object])
         "nativeMatchedRuleCount": int(_rounded(
             execution.get("typedbNativeRuleMatchedCount")
             or inference.get("typedbNativeRuleMatchedCount")
+            or len(matched_rule_ids)
         )),
         "nativeMatchedRuleIds": list(matched_rule_ids),
         "nativeExecutedRuleIds": list(_strings(
@@ -400,6 +537,170 @@ def engine_outcome_packet(
     return packet
 
 
+def independent_reasoning_outcome_packet(job: Mapping[str, object]) -> Dict[str, object]:
+    """Adapt one durable independent V2 result to the shared comparison contract.
+
+    The independent queue intentionally stores compact projection receipts. Its
+    immutable source boundaries therefore own fact parity, while candidate and
+    rule packets own decision parity. Graph-local ABox and inference IDs are
+    provenance and must not create false differences between isolated stores.
+    """
+
+    values = _mapping(job)
+    result = _mapping(values.get("result"))
+    source_event = _mapping(values.get("sourceEvent"))
+    source_payload = _mapping(source_event.get("payload"))
+    boundaries = [
+        _mapping(item)
+        for item in values.get("sourceBoundaries") or []
+        if isinstance(item, Mapping)
+    ]
+    if not boundaries and str(values.get("sourceSnapshotId") or ""):
+        boundaries = [{
+            "snapshotId": str(values.get("sourceSnapshotId") or ""),
+            "generatedAt": str(values.get("sourceSnapshotAt") or ""),
+        }]
+    scope_manifest = {
+        str(item.get("snapshotId") or "boundary:" + str(index)): payload_hash({
+            "snapshotId": str(item.get("snapshotId") or ""),
+            "generatedAt": str(item.get("generatedAt") or ""),
+            "accountId": str(item.get("accountId") or ""),
+            "symbols": list(_strings(item.get("symbols") or [])),
+            "fingerprint": str(item.get("fingerprint") or ""),
+        })
+        for index, item in enumerate(boundaries)
+    }
+    source_event_id = str(values.get("comparisonSourceEventId") or values.get("sourceEventId") or "")
+    if source_event_id:
+        scope_manifest["source-event:" + source_event_id] = payload_hash({
+            "sourceEventId": source_event_id,
+            "sourceSnapshotId": str(values.get("sourceSnapshotId") or ""),
+            "sourceSnapshotAt": str(values.get("sourceSnapshotAt") or ""),
+            "sourcePayloadHash": str(values.get("sourcePayloadHash") or ""),
+        })
+    source_scope_fingerprint = payload_hash(scope_manifest)
+    account_ids = _strings(
+        source_payload.get("accountIds")
+        or result.get("account_ids")
+        or result.get("accountIds")
+        or [
+            item.get("accountId")
+            for item in boundaries
+            if item.get("accountId")
+        ]
+    )
+    symbols = list(_strings(
+        source_payload.get("affectedSymbols")
+        or source_payload.get("symbols")
+        or result.get("evaluated_symbols")
+        or result.get("evaluatedSymbols")
+        or result.get("symbols")
+        or []
+    ))
+    projections = []
+    for account_id, projection in sorted(
+        _mapping(result.get("projection_results") or result.get("projectionResults")).items()
+    ):
+        receipt = projection_receipt_packet(str(account_id or ""), _mapping(projection))
+        receipt.update({
+            "comparisonScopeFingerprint": source_scope_fingerprint,
+            "comparisonScopeCount": len(scope_manifest),
+            "comparisonScopeManifest": dict(scope_manifest),
+            "persistedComparisonScopeFingerprint": source_scope_fingerprint,
+            "persistedComparisonScopeCount": len(scope_manifest),
+            "materialFingerprint": source_scope_fingerprint,
+            "targetSymbols": symbols,
+        })
+        projections.append(receipt)
+    decision_syntheses = [
+        _mapping(item)
+        for item in result.get("decision_syntheses") or result.get("decisionSyntheses") or []
+        if isinstance(item, Mapping)
+    ]
+    candidate_sources = (
+        [
+            {
+                "accountId": _first_value(item, "account_id", "accountId"),
+                "symbol": _first_value(item, "symbol"),
+                "rule": "decisionSynthesis",
+                "metadata": {"v2DecisionSynthesis": item},
+            }
+            for item in decision_syntheses
+        ]
+        if decision_syntheses
+        else list(result.get("candidate_events") or result.get("candidateEvents") or [])
+    )
+    candidate_sources = [
+        item
+        for item in candidate_sources
+        if isinstance(item, Mapping)
+        and (
+            not account_ids
+            or str(
+                _event_field(item, "account_id", "")
+                or _first_value(
+                    _mapping(_mapping(item).get("metadata")).get("v2DecisionSynthesis") or {},
+                    "account_id",
+                    "accountId",
+                )
+                or ""
+            ) in account_ids
+        )
+        and (
+            not symbols
+            or str(
+                _event_field(item, "symbol", "")
+                or _first_value(
+                    _mapping(_mapping(item).get("metadata")).get("v2DecisionSynthesis") or {},
+                    "symbol",
+                )
+                or ""
+            ).upper() in symbols
+        )
+    ]
+    candidates = sorted(
+        [graph_candidate_packet(event) for event in candidate_sources],
+        key=lambda item: (
+            str(item.get("accountId") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("messageType") or ""),
+            str(item.get("selectedRuleId") or ""),
+        ),
+    )
+    source_snapshot_id = str(values.get("sourceSnapshotId") or "")
+    packet = {
+        "contractVersion": REASONING_SHADOW_CONTRACT_VERSION,
+        "deploymentId": str(values.get("deploymentId") or result.get("deployment_id") or ""),
+        "durationMs": max(0, int(values.get("durationMs") or result.get("duration_ms") or 0)),
+        "deliveryCount": len(
+            result.get("delivery_events") or result.get("deliveryEvents") or []
+        ) if bool(result.get("delivery_authorized") or result.get("deliveryAuthorized")) else 0,
+        "sourceSnapshotIds": {
+            account_id: source_snapshot_id for account_id in account_ids
+        },
+        "sourceScopeFingerprint": source_scope_fingerprint,
+        "candidates": candidates,
+        "projections": projections,
+    }
+    packet["outcomeHash"] = payload_hash({
+        "candidates": candidates,
+        "projections": [
+            {
+                key: item.get(key)
+                for key in [
+                    "accountId", "status", "materialFingerprint", "inferenceStatus",
+                    "nativeInferenceOutcome", "generationAligned",
+                    "nativeTypeDbReasoningCompleted", "targetSymbols",
+                    "comparisonScopeFingerprint", "comparisonScopeCount",
+                    "comparisonScopeManifest",
+                ]
+            }
+            for item in projections
+        ],
+    })
+    return packet
+
+
 def _candidate_groups(outcome: Mapping[str, object]) -> Dict[str, Sequence[Dict[str, object]]]:
     grouped: Dict[str, list] = {}
     for item in _mapping(outcome).get("candidates") or []:
@@ -462,7 +763,17 @@ def reasoning_comparison_summary(
 ) -> Dict[str, object]:
     """Aggregate only one immutable validation cohort into promotion evidence."""
 
-    items = [dict(row) for row in rows or [] if isinstance(row, Mapping)]
+    all_items = [dict(row) for row in rows or [] if isinstance(row, Mapping)]
+    warmup_items = [
+        row
+        for row in all_items
+        if bool(_mapping(row.get("payload")).get("candidateWarmup"))
+    ]
+    items = [
+        row
+        for row in all_items
+        if not bool(_mapping(row.get("payload")).get("candidateWarmup"))
+    ]
     status_counts: Dict[str, int] = {}
     symbols, markets, actions, matched_rule_ids = set(), set(), set(), set()
     fact_values, rule_values, baseline_durations, candidate_durations, queue_waits = [], [], [], [], []
@@ -470,7 +781,7 @@ def reasoning_comparison_summary(
     baseline_stage_values: Dict[str, list] = {}
     candidate_stage_values: Dict[str, list] = {}
     unexplained = shadow_deliveries = nonempty_decisions = nonempty_native = decision_subjects = 0
-    for index, row in enumerate(items):
+    for row in items:
         status = str(row.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
         fact_values.append(float(row.get("factParityPct") or 0.0))
@@ -494,24 +805,23 @@ def reasoning_comparison_summary(
         decision_subjects += subject_count
         nonempty_decisions += int(subject_count > 0)
         nonempty_native += int(native_count > 0)
-        warmup = bool(payload.get("candidateWarmup")) or (len(items) > 1 and index == len(items) - 1)
-        if not warmup:
-            baseline_durations.append(int(payload.get("baselineDurationMs") or 0))
-            candidate_durations.append(int(payload.get("candidateDurationMs") or 0))
-            queue_waits.append(int(payload.get("queueWaitMs") or 0))
-            candidate_end_to_end_durations.append(
-                int(payload.get("candidateDurationMs") or 0)
-                + int(payload.get("queueWaitMs") or 0)
-            )
-            for stage, value in _mapping(payload.get("baselinePhaseDurationsMs")).items():
-                baseline_stage_values.setdefault(str(stage), []).append(value)
-            for stage, value in _mapping(payload.get("candidatePhaseDurationsMs")).items():
-                candidate_stage_values.setdefault(str(stage), []).append(value)
+        baseline_durations.append(int(payload.get("baselineDurationMs") or 0))
+        candidate_durations.append(int(payload.get("candidateDurationMs") or 0))
+        queue_waits.append(int(payload.get("queueWaitMs") or 0))
+        candidate_end_to_end_durations.append(
+            int(payload.get("candidateDurationMs") or 0)
+            + int(payload.get("queueWaitMs") or 0)
+        )
+        for stage, value in _mapping(payload.get("baselinePhaseDurationsMs")).items():
+            baseline_stage_values.setdefault(str(stage), []).append(value)
+        for stage, value in _mapping(payload.get("candidatePhaseDurationsMs")).items():
+            candidate_stage_values.setdefault(str(stage), []).append(value)
     return {
         "candidateDeploymentId": str(candidate_deployment_id or ""),
         "candidateReleaseFingerprint": str(candidate_release_fingerprint or ""),
         "validationCohortId": str(validation_cohort_id or ""),
         "sampleCount": len(items),
+        "warmupSampleCount": len(warmup_items),
         "statusCounts": status_counts,
         "equivalentCount": int(status_counts.get("equivalent") or 0),
         "equivalentPct": round(100.0 * int(status_counts.get("equivalent") or 0) / len(items), 3) if items else 0.0,

@@ -34,6 +34,9 @@ from ..application.independent_reasoning_engine import (
     ScopedTypeDBInferenceExecutor,
     V2ReasoningEngine,
 )
+from ..application.independent_reasoning_comparison_service import (
+    IndependentReasoningComparisonService,
+)
 from ..application.investment_reasoning import (
     InvestmentReasoningOrchestrator,
     V2GraphDecisionCandidateBuilder,
@@ -2997,8 +3000,14 @@ def build_v2_reasoning_job_runner(
     market_observation_anchor_store = stores.market_observation_reasoning_anchor_store(
         store_settings
     )
+    reasoning_job_store = stores.reasoning_engine_job_store(configured)
+    comparison_service = IndependentReasoningComparisonService(
+        job_store=reasoning_job_store,
+        comparison_store=stores.reasoning_engine_comparison_store(store_settings),
+        registry=registry,
+    )
     return IndependentReasoningJobRunner(
-        queue=stores.reasoning_engine_job_store(configured),
+        queue=reasoning_job_store,
         engine=build_v2_reasoning_engine(
             configured,
             deployment_id=selected_deployment_id,
@@ -3022,6 +3031,7 @@ def build_v2_reasoning_job_runner(
                 selected_deployment_id
             )
         ),
+        comparison_reconciler=comparison_service.reconcile,
     )
 
 

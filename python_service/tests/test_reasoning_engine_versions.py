@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from digital_twin.application.independent_reasoning_comparison_service import (
+    IndependentReasoningComparisonService,
+)
 from digital_twin.application.reasoning_engine_platform import ReasoningEnginePlatformService
 from digital_twin.domain.reasoning_engine_versions import (
     EngineControlState,
@@ -17,6 +20,11 @@ from digital_twin.domain.reasoning_engine_versions import (
 from digital_twin.infrastructure.mysql_versioned_runtime import (
     MySQLReasoningEngineJobStore,
     merge_reasoning_deployment_health,
+)
+from digital_twin.domain.reasoning_shadow import (
+    compare_engine_outcomes,
+    independent_reasoning_outcome_packet,
+    reasoning_comparison_summary,
 )
 
 
@@ -33,6 +41,199 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def _assert_independent_results_feed_the_comparison_ledger(self):
+        source_event = {
+            "eventId": "event:NVDA:1",
+            "occurredAt": "2026-09-10T00:00:00Z",
+            "payload": {
+                "accountIds": ["acct"],
+                "affectedSymbols": ["NVDA"],
+            },
+        }
+        result = {
+            "status": "ok",
+            "account_ids": ["acct"],
+            "evaluated_symbols": ["NVDA"],
+            "projection_results": {
+                "acct": {
+                    "status": "ok",
+                    "saved": True,
+                    "nativeTypeDbReasoningCompleted": True,
+                    "generationAligned": True,
+                    "stages": {"totalMs": 100},
+                    "ruleEvaluations": [{
+                        "rule_id": "graph.price.recovery.v1",
+                        "matched": True,
+                    }],
+                }
+            },
+            "decision_syntheses": [{
+                "account_id": "acct",
+                "symbol": "NVDA",
+                "graph_candidate_action": "HOLD",
+                "execution_action": "HOLD",
+                "selected_rule_id": "graph.price.recovery.v1",
+                "allowed_actions": ["HOLD"],
+                "eligible_hypothesis_ids": ["hypothesis:recovery"],
+                "execution_eligible_hypothesis_ids": ["hypothesis:recovery"],
+                "alternatives": [{
+                    "action": "HOLD",
+                    "supporting_rule_ids": ["graph.price.recovery.v1"],
+                    "supporting_evidence_ids": ["evidence:price"],
+                }],
+                "review_level": "check",
+                "data_state": "sufficient",
+            }],
+            "delivery_events": [],
+            "delivery_authorized": False,
+            "release_identity": {
+                "releaseId": "release-active",
+                "releaseFingerprint": "active-fingerprint",
+            },
+        }
+        common = {
+            "sourceEventId": "event:NVDA:1",
+            "sourceSnapshotId": "snapshot:acct:1",
+            "sourceSnapshotAt": "2026-09-10T00:00:00Z",
+            "sourcePayloadHash": "source-payload-hash",
+            "sourceBoundaries": [{
+                "snapshotId": "snapshot:acct:1",
+                "accountId": "acct",
+                "generatedAt": "2026-09-10T00:00:00Z",
+                "fingerprint": "snapshot-fingerprint",
+            }],
+            "sourceEvent": source_event,
+            "status": "completed",
+            "claimedAt": "2026-09-10T00:01:00Z",
+            "completedAt": "2026-09-10T00:01:01Z",
+            "queueWaitMs": 10,
+            "durationMs": 100,
+        }
+        baseline_job = {
+            **common,
+            "jobId": "job:active",
+            "deploymentId": "active-v2",
+            "releaseFingerprint": "active-fingerprint",
+            "result": deepcopy(result),
+        }
+        candidate_result = deepcopy(result)
+        candidate_result["release_identity"] = {
+            "releaseId": "release-candidate",
+            "releaseFingerprint": "candidate-fingerprint",
+            "validationCohortId": "cohort:candidate",
+            "runtimeRevision": "revision:candidate",
+        }
+        candidate_job = {
+            **common,
+            "jobId": "job:candidate",
+            "deploymentId": "candidate-v2",
+            "releaseFingerprint": "candidate-fingerprint",
+            "validationCohortId": "cohort:candidate",
+            "runtimeRevision": "revision:candidate",
+            "result": candidate_result,
+        }
+
+        baseline_packet = independent_reasoning_outcome_packet(baseline_job)
+        candidate_packet = independent_reasoning_outcome_packet(candidate_job)
+        equivalent = compare_engine_outcomes(baseline_packet, candidate_packet)
+
+        self.assertEqual("equivalent", equivalent.status)
+        self.assertEqual(100.0, equivalent.fact_parity_pct)
+        self.assertEqual(
+            ["graph.price.recovery.v1"],
+            candidate_packet["projections"][0]["nativeMatchedRuleIds"],
+        )
+        self.assertEqual("HOLD", candidate_packet["candidates"][0]["candidateAction"])
+
+        changed_job = deepcopy(candidate_job)
+        changed_job["result"]["decision_syntheses"][0]["graph_candidate_action"] = "ADD"
+        changed = compare_engine_outcomes(
+            baseline_packet,
+            independent_reasoning_outcome_packet(changed_job),
+        )
+        self.assertEqual("unexplained-difference", changed.status)
+        self.assertEqual(1, changed.unexplained_decision_difference_count)
+
+        class Jobs:
+            @staticmethod
+            def completed_comparison_pairs(*_args, **_kwargs):
+                return [{
+                    "sourceEventId": "event:NVDA:1",
+                    "baseline": baseline_job,
+                    "candidate": candidate_job,
+                }]
+
+        class Comparisons:
+            def __init__(self):
+                self.values = []
+
+            def record(self, _baseline, _candidate, source_event_id, comparison):
+                value = {
+                    "comparisonId": "comparison:1",
+                    "createdAt": "2026-09-10T00:01:02Z",
+                    "sourceEventId": source_event_id,
+                    **dict(comparison),
+                }
+                self.values.append(value)
+                return value
+
+        class Registry:
+            def __init__(self):
+                self.patches = []
+
+            @staticmethod
+            def control():
+                return EngineControlState("active-v2", "active-v2", "candidate-v2", 1)
+
+            @staticmethod
+            def get(_deployment_id):
+                return {
+                    "health": {
+                        "validationStartedAt": "2026-09-10T00:00:30Z",
+                    }
+                }
+
+            def patch_health(self, deployment_id, health):
+                self.patches.append((deployment_id, dict(health)))
+
+            def update_health(self, _deployment_id, _health):
+                raise AssertionError("Comparison diagnostics must use an atomic health patch")
+
+        comparison_store = Comparisons()
+        registry = Registry()
+        reconciled = IndependentReasoningComparisonService(
+            Jobs(),
+            comparison_store,
+            registry,
+        ).reconcile()
+
+        self.assertEqual("recorded", reconciled["status"])
+        self.assertEqual(1, reconciled["recordedCount"])
+        self.assertEqual("equivalent", comparison_store.values[0]["status"])
+        self.assertFalse(comparison_store.values[0]["candidateWarmup"])
+        self.assertEqual("candidate-v2", registry.patches[0][0])
+        self.assertEqual(
+            "candidate-fingerprint",
+            registry.patches[0][1]["candidateReleaseFingerprint"],
+        )
+        summary = reasoning_comparison_summary([
+            {
+                "status": "equivalent",
+                "factParityPct": 100,
+                "ruleSlotCoveragePct": 100,
+                "payload": {**comparison_store.values[0], "candidateWarmup": True},
+            },
+            {
+                "status": "equivalent",
+                "factParityPct": 100,
+                "ruleSlotCoveragePct": 100,
+                "payload": comparison_store.values[0],
+                "createdAt": "2026-09-10T00:01:02Z",
+            },
+        ])
+        self.assertEqual(1, summary["sampleCount"])
+        self.assertEqual(1, summary["warmupSampleCount"])
+
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock
 
@@ -951,6 +1152,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual([("v2-active", 20)], Jobs.completion_calls)
 
     def test_history_gate_requires_coverage_freshness_and_zero_delivery(self):
+        self._assert_independent_results_feed_the_comparison_ledger()
+
         class Registry:
             def get(self, deployment_id):
                 return {
@@ -1107,6 +1310,23 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "oldestPendingAgeSeconds": 0,
                 }
 
+        class Comparisons:
+            def __init__(self, sample_count=5):
+                self.sample_count = sample_count
+
+            def summary(self, _deployment_id, **_kwargs):
+                return {
+                    "sampleCount": self.sample_count,
+                    "minimumFactParityPct": 100.0 if self.sample_count else 0.0,
+                    "minimumRuleSlotCoveragePct": 100.0 if self.sample_count else 0.0,
+                    "unexplainedDecisionDifferenceCount": 0,
+                    "shadowDeliveryCount": 0,
+                    "statusCounts": {"equivalent": self.sample_count},
+                    "latestComparisonAt": (
+                        "2099-01-01T00:00:00Z" if self.sample_count else ""
+                    ),
+                }
+
         readiness = ReasoningEnginePlatformService(
             Registry(),
             {"reasoningEngineV2IndependentEnabled": "1"},
@@ -1116,6 +1336,32 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertTrue(readiness["ready"])
         self.assertEqual(3, readiness["independentExecution"]["decisionSynthesisRunCount"])
         self.assertEqual(0, readiness["independentExecution"]["candidateEventRunCount"])
+
+        governed = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "reasoningEngineV2IndependentEnabled": "1",
+                "reasoningEngineV2PromotionMinimumComparisons": "5",
+            },
+            independent_job_store=Jobs(),
+            comparison_store=Comparisons(),
+        ).promotion_readiness("ontology-v2-shadow")
+        self.assertTrue(governed["ready"])
+        self.assertEqual(5, governed["comparisonEvidence"]["sampleCount"])
+
+        missing_comparisons = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "reasoningEngineV2IndependentEnabled": "1",
+                "reasoningEngineV2PromotionMinimumComparisons": "5",
+            },
+            independent_job_store=Jobs(),
+            comparison_store=Comparisons(0),
+        ).promotion_readiness("ontology-v2-shadow")
+        self.assertIn(
+            "insufficient-independent-comparisons",
+            missing_comparisons["blockers"],
+        )
 
     def test_current_status_exposes_only_active_v2_and_unique_run_metrics(self):
         platform = ReasoningEnginePlatformService(object(), {

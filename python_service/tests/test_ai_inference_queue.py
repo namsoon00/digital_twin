@@ -742,6 +742,29 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertTrue(lease_state.lost)
         self.assertTrue(reviewer.stopped)
 
+        shutdown_order = []
+
+        class StopQueue:
+            def release_worker_leases(self, *_args):
+                shutdown_order.append("lease-released")
+                return {"status": "released", "releasedCount": 1}
+
+        class StopReviewer:
+            def stop(self):
+                shutdown_order.append("model-stopped")
+
+        stopping_runner = AIInferenceQueueRunner(
+            StopQueue(),
+            StopReviewer(),
+            worker_id="worker-order",
+        )
+        stopping_runner.stop()
+        self.assertEqual(
+            ["lease-released", "model-stopped"],
+            shutdown_order,
+        )
+        self.assertEqual(1, stopping_runner.stop_recovery["releasedCount"])
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()

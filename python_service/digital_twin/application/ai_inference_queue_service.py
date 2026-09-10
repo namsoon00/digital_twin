@@ -788,9 +788,10 @@ class AIInferenceQueueRunner:
 
     def stop(self) -> None:
         self.stopping = True
-        stopper = getattr(self.reviewer, "stop", None)
-        if callable(stopper):
-            stopper()
+        # Return the durable lease before waiting for a long-running model
+        # subprocess to terminate. The service manager has a bounded shutdown
+        # grace period; reversing this order could leave killed workers marked
+        # as processing until their leases expired.
         release = getattr(self.queue, "release_worker_leases", None)
         if callable(release):
             try:
@@ -799,6 +800,9 @@ class AIInferenceQueueRunner:
                 )
             except Exception as error:  # noqa: BLE001 - shutdown must still complete.
                 self.stop_recovery = {"status": "failed", "reason": str(error)[:240]}
+        stopper = getattr(self.reviewer, "stop", None)
+        if callable(stopper):
+            stopper()
 
     def run_once(self, limit: int = 1) -> int:
         self.last_run_details = []

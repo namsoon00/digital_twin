@@ -3030,7 +3030,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             pairs = connection.execute(
                 """
                 SELECT pair.candidate_job_id, pair.baseline_job_id,
-                       pair.comparison_source_event_id,
+                       COALESCE(
+                           MIN(CASE WHEN pair.source_priority = 0
+                                    THEN pair.comparison_source_event_id END),
+                           MIN(pair.comparison_source_event_id)
+                       ) AS comparison_source_event_id,
                        pair.candidate_release_fingerprint,
                        pair.candidate_completed_at
                 FROM (
@@ -3038,7 +3042,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                            baseline.job_id AS baseline_job_id,
                            candidate.source_event_id AS comparison_source_event_id,
                            candidate.release_fingerprint AS candidate_release_fingerprint,
-                           candidate.completed_at AS candidate_completed_at
+                           candidate.completed_at AS candidate_completed_at,
+                           0 AS source_priority
                     FROM reasoning_engine_jobs candidate
                     INNER JOIN reasoning_engine_jobs baseline
                       ON baseline.source_event_id = candidate.source_event_id
@@ -3054,7 +3059,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                            baseline.job_id AS baseline_job_id,
                            candidate_source.source_event_id AS comparison_source_event_id,
                            candidate.release_fingerprint AS candidate_release_fingerprint,
-                           candidate.completed_at AS candidate_completed_at
+                           candidate.completed_at AS candidate_completed_at,
+                           1 AS source_priority
                     FROM reasoning_engine_jobs candidate
                     INNER JOIN reasoning_engine_job_sources candidate_source
                       ON candidate_source.deployment_id = candidate.deployment_id
@@ -3070,6 +3076,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                       AND candidate.job_status = 'completed'
                       AND candidate.release_fingerprint <> ''
                       AND candidate_source.source_event_id <> ''
+                      AND NOT EXISTS (
+                          SELECT 1 FROM reasoning_engine_jobs direct_baseline
+                          WHERE direct_baseline.deployment_id = %s
+                            AND direct_baseline.job_status = 'completed'
+                            AND direct_baseline.source_event_id = candidate.source_event_id
+                      )
                     """ + lineage_source_filter + """
                 ) pair
                 WHERE NOT EXISTS (
@@ -3077,9 +3089,38 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     WHERE comparison_row.baseline_deployment_id = %s
                       AND comparison_row.candidate_deployment_id = %s
                       AND comparison_row.candidate_release_fingerprint = pair.candidate_release_fingerprint
-                      AND comparison_row.source_event_id = pair.comparison_source_event_id
+                      AND (
+                          (
+                              JSON_UNQUOTE(JSON_EXTRACT(
+                                  comparison_row.payload_json,
+                                  '$.sourceInput.baselineJobId'
+                              )) = pair.baseline_job_id
+                              AND JSON_UNQUOTE(JSON_EXTRACT(
+                                  comparison_row.payload_json,
+                                  '$.sourceInput.candidateJobId'
+                              )) = pair.candidate_job_id
+                          )
+                          OR (
+                              COALESCE(JSON_UNQUOTE(JSON_EXTRACT(
+                                  comparison_row.payload_json,
+                                  '$.sourceInput.baselineJobId'
+                              )), '') = ''
+                              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(
+                                  comparison_row.payload_json,
+                                  '$.sourceInput.candidateJobId'
+                              )), '') = ''
+                              AND comparison_row.source_event_id = pair.comparison_source_event_id
+                          )
+                      )
                 )
-                ORDER BY pair.candidate_completed_at, pair.comparison_source_event_id
+                GROUP BY pair.candidate_job_id, pair.baseline_job_id,
+                         pair.candidate_release_fingerprint, pair.candidate_completed_at
+                ORDER BY pair.candidate_completed_at,
+                         COALESCE(
+                             MIN(CASE WHEN pair.source_priority = 0
+                                      THEN pair.comparison_source_event_id END),
+                             MIN(pair.comparison_source_event_id)
+                         )
                 LIMIT %s
                 """,
                 (
@@ -3089,6 +3130,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     baseline_id,
                     baseline_id,
                     candidate_id,
+                    baseline_id,
                     *lineage_source_params,
                     baseline_id,
                     candidate_id,
@@ -3468,11 +3510,19 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
         comparison: Mapping[str, object],
     ) -> Dict[str, object]:
         values = dict(comparison or {})
+        source_input = dict(values.get("sourceInput") or {})
+        baseline_job_id = str(source_input.get("baselineJobId") or "").strip()
+        candidate_job_id = str(source_input.get("candidateJobId") or "").strip()
+        comparison_subject = (
+            "jobs|" + baseline_job_id + "|" + candidate_job_id
+            if baseline_job_id and candidate_job_id
+            else "event|" + str(source_event_id or "")
+        )
         comparison_identity = "|".join([
             str(baseline_deployment_id or ""),
             str(candidate_deployment_id or ""),
             str(values.get("candidateReleaseFingerprint") or ""),
-            str(source_event_id or ""),
+            comparison_subject,
         ])
         comparison_id = "reasoning-comparison:" + uuid.uuid5(
             uuid.NAMESPACE_URL,

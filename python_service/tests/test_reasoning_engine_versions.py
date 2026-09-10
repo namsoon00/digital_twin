@@ -154,14 +154,39 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("unexplained-difference", changed.status)
         self.assertEqual(1, changed.unexplained_decision_difference_count)
 
+        missing_constraint_job = deepcopy(candidate_job)
+        missing_constraint_job["result"]["decision_syntheses"][0][
+            "portfolio_constraint_rule_ids"
+        ] = []
+        baseline_with_constraint = deepcopy(baseline_job)
+        baseline_with_constraint["result"]["decision_syntheses"][0][
+            "portfolio_constraint_rule_ids"
+        ] = ["graph.position.concentration.guard.v1"]
+        missing_constraint = compare_engine_outcomes(
+            independent_reasoning_outcome_packet(baseline_with_constraint),
+            independent_reasoning_outcome_packet(missing_constraint_job),
+        )
+        self.assertEqual("reasoning-parity-gap", missing_constraint.status)
+        self.assertLess(missing_constraint.rule_slot_coverage_pct, 100.0)
+        self.assertEqual(
+            ["graph.position.concentration.guard.v1"],
+            missing_constraint.payload["baselineOnlyDecisionRuleIds"],
+        )
+        self.assertEqual(0, missing_constraint.unexplained_decision_difference_count)
+
         class Jobs:
             @staticmethod
             def completed_comparison_pairs(*_args, **_kwargs):
-                return [{
+                canonical = {
                     "sourceEventId": "event:NVDA:1",
                     "baseline": baseline_job,
                     "candidate": candidate_job,
-                }]
+                }
+                lineage_duplicate = {
+                    **canonical,
+                    "sourceEventId": "reasoning-shard:NVDA:1",
+                }
+                return [lineage_duplicate, canonical]
 
         class Comparisons:
             def __init__(self):
@@ -209,6 +234,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
         self.assertEqual("recorded", reconciled["status"])
         self.assertEqual(1, reconciled["recordedCount"])
+        self.assertEqual(["event:NVDA:1"], reconciled["sourceEventIds"])
         self.assertEqual("equivalent", comparison_store.values[0]["status"])
         self.assertFalse(comparison_store.values[0]["candidateWarmup"])
         self.assertEqual("candidate-v2", registry.patches[0][0])

@@ -47,6 +47,40 @@ def _release_value(job: Mapping[str, object], *names: str) -> str:
     return ""
 
 
+def _job_id(job: Mapping[str, object]) -> str:
+    values = _mapping(job)
+    return str(values.get("jobId") or values.get("job_id") or "").strip()
+
+
+def _canonical_pairs(pairs: Iterable[Mapping[str, object]]):
+    """Keep one comparison per durable baseline/candidate execution pair."""
+
+    selected = {}
+    for pair in pairs or []:
+        values = _mapping(pair)
+        baseline_job = _mapping(values.get("baseline"))
+        candidate_job = _mapping(values.get("candidate"))
+        baseline_job_id = _job_id(baseline_job)
+        candidate_job_id = _job_id(candidate_job)
+        source_event_id = str(
+            values.get("sourceEventId")
+            or candidate_job.get("sourceEventId")
+            or ""
+        ).strip()
+        if not baseline_job_id or not candidate_job_id or not source_event_id:
+            continue
+        identity = (baseline_job_id, candidate_job_id)
+        current = selected.get(identity)
+        direct_source_event_id = str(candidate_job.get("sourceEventId") or "").strip()
+        preference = (
+            0 if source_event_id == direct_source_event_id else 1,
+            source_event_id,
+        )
+        if current is None or preference < current[0]:
+            selected[identity] = (preference, values)
+    return [item[1] for item in selected.values()]
+
+
 class IndependentReasoningComparisonService:
     """Create immutable active/candidate comparisons from durable V2 jobs."""
 
@@ -86,7 +120,7 @@ class IndependentReasoningComparisonService:
                 "baselineDeploymentId": baseline_id,
                 "candidateDeploymentId": candidate_id,
             }
-        pairs = list(pair_reader(
+        pairs = _canonical_pairs(pair_reader(
             baseline_id,
             candidate_id,
             source_event_ids=source_event_ids,

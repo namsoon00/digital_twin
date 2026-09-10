@@ -295,6 +295,57 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
         if str(_first_value(alternative, "action") or rule_id or "").strip()
     }
     relation_slots = sorted(set(relation_slots).union(synthesis_relation_slots))
+    semantic_decision_facts = {
+        "allowedActions": list(_strings(
+            _first_value(synthesis, "allowed_actions", "allowedActions", fallback=[]) or []
+        )),
+        "blockedActions": list(_strings(
+            _first_value(synthesis, "blocked_actions", "blockedActions", fallback=[]) or []
+        )),
+        "dataGaps": list(_strings(
+            list(_first_value(synthesis, "data_gaps", "dataGaps", fallback=[]) or [])
+            + list(_first_value(synthesis, "missing_data", "missingData", fallback=[]) or [])
+        )),
+        "decisionDisposition": str(
+            _first_value(synthesis, "decision_disposition", "decisionDisposition") or ""
+        ),
+        "executionDisposition": str(
+            _first_value(synthesis, "execution_disposition", "executionDisposition") or ""
+        ),
+        "alternatives": sorted(
+            [
+                {
+                    "action": str(_first_value(alternative, "action") or ""),
+                    "decisionEligible": bool(_first_value(
+                        alternative,
+                        "decision_eligible",
+                        "decisionEligible",
+                        fallback=False,
+                    )),
+                    "executionEligible": bool(_first_value(
+                        alternative,
+                        "execution_eligible",
+                        "executionEligible",
+                        fallback=False,
+                    )),
+                    "supportingRuleIds": list(_strings(_first_value(
+                        alternative,
+                        "supporting_rule_ids",
+                        "supportingRuleIds",
+                        fallback=[],
+                    ) or [])),
+                }
+                for alternative in synthesis.get("alternatives") or []
+                if isinstance(alternative, Mapping)
+            ],
+            key=lambda item: (
+                item["action"],
+                item["supportingRuleIds"],
+                item["decisionEligible"],
+                item["executionEligible"],
+            ),
+        ),
+    }
     packet = {
         "accountId": str(
             _event_field(event, "account_id", "")
@@ -358,6 +409,7 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
         "ruleIds": list(rule_ids),
         "relationSlots": relation_slots,
         "evidenceIds": list(evidence_ids),
+        "semanticFactsHash": payload_hash(semantic_decision_facts),
         "factsHash": payload_hash(
             _mapping(context.get("facts"))
             or {
@@ -377,11 +429,15 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
             "candidateAction", "selectedRuleId", "decisionStage", "decisionEffect",
             "actionGroup", "judgementBlocked", "reviewLevel", "dataState",
             "validationState", "ruleIds", "relationSlots",
+            "semanticFactsHash",
         ]
     })
     packet["evidenceSignature"] = payload_hash({
-        "evidenceIds": packet["evidenceIds"],
-        "factsHash": packet["factsHash"],
+        # Isolated TypeDB graphs generate different assertion IDs for the
+        # same evidence. Compare the evidence semantics, never storage IDs.
+        "semanticFactsHash": packet["semanticFactsHash"],
+        "ruleIds": packet["ruleIds"],
+        "relationSlots": packet["relationSlots"],
     })
     return packet
 
@@ -886,6 +942,7 @@ def compare_engine_outcomes(
     keys = sorted(set(baseline_groups) | set(candidate_groups))
     differences = []
     baseline_rule_slots, candidate_rule_slots = [], []
+    baseline_decision_rule_ids, candidate_decision_rule_ids = [], []
     baseline_evidence, candidate_evidence = [], []
     for key in keys:
         left = list(baseline_groups.get(key) or [])
@@ -893,10 +950,22 @@ def compare_engine_outcomes(
         left_signatures = [str(item.get("decisionSignature") or "") for item in left]
         right_signatures = [str(item.get("decisionSignature") or "") for item in right]
         baseline_rule_slots.extend(
-            slot for item in left for slot in item.get("relationSlots") or []
+            "relation:" + str(slot)
+            for item in left for slot in item.get("relationSlots") or []
         )
         candidate_rule_slots.extend(
-            slot for item in right for slot in item.get("relationSlots") or []
+            "relation:" + str(slot)
+            for item in right for slot in item.get("relationSlots") or []
+        )
+        baseline_decision_rule_ids.extend(
+            str(rule_id)
+            for item in left for rule_id in item.get("ruleIds") or []
+            if str(rule_id or "")
+        )
+        candidate_decision_rule_ids.extend(
+            str(rule_id)
+            for item in right for rule_id in item.get("ruleIds") or []
+            if str(rule_id or "")
         )
         baseline_evidence.extend(
             str(item.get("evidenceSignature") or "") for item in left
@@ -1012,9 +1081,21 @@ def compare_engine_outcomes(
             })
     parity_checks = temporal_equal + projection_equal
     fact_parity = round(100.0 * sum(1 for value in parity_checks if value) / len(parity_checks), 3) if parity_checks else 0.0
+    baseline_rule_slots.extend(
+        "rule:" + rule_id for rule_id in baseline_decision_rule_ids
+    )
+    candidate_rule_slots.extend(
+        "rule:" + rule_id for rule_id in candidate_decision_rule_ids
+    )
     rule_coverage = _coverage(baseline_rule_slots, candidate_rule_slots)
     evidence_parity = _coverage(baseline_evidence, candidate_evidence)
-    unexplained = len(differences) if fact_parity == 100.0 else 0
+    unexplained = (
+        len(differences)
+        if fact_parity == 100.0
+        and rule_coverage == 100.0
+        and evidence_parity == 100.0
+        else 0
+    )
     shadow_delivery_count = int(_mapping(candidate).get("deliveryCount") or 0)
     candidate_projection_ready = bool(candidate_projections) and all(
         bool(item.get("nativeTypeDbReasoningCompleted")) and bool(item.get("generationAligned"))
@@ -1024,14 +1105,14 @@ def compare_engine_outcomes(
         status = "candidate-failed"
     elif shadow_delivery_count:
         status = "delivery-violation"
-    elif unexplained:
-        status = "unexplained-difference"
-    elif differences:
+    elif differences and fact_parity < 100.0:
         status = "explained-input-difference"
     elif fact_parity < 100.0:
         status = "input-parity-gap"
     elif rule_coverage < 100.0 or evidence_parity < 100.0:
         status = "reasoning-parity-gap"
+    elif unexplained:
+        status = "unexplained-difference"
     else:
         status = "equivalent"
     symbols = _strings(
@@ -1066,6 +1147,8 @@ def compare_engine_outcomes(
         for rows in candidate_groups.values()
         for item in rows
     )
+    baseline_decision_rule_id_set = set(baseline_decision_rule_ids)
+    candidate_decision_rule_id_set = set(candidate_decision_rule_ids)
 
     def phase_totals(projections: Mapping[str, Mapping[str, object]]) -> Dict[str, int]:
         totals: Dict[str, int] = {}
@@ -1090,6 +1173,14 @@ def compare_engine_outcomes(
         "nonEmptyNativeInference": candidate_native_count > 0,
         "baselineMatchedRuleIds": list(baseline_native_rule_ids),
         "candidateMatchedRuleIds": list(candidate_native_rule_ids),
+        "baselineDecisionRuleIds": sorted(baseline_decision_rule_id_set),
+        "candidateDecisionRuleIds": sorted(candidate_decision_rule_id_set),
+        "baselineOnlyDecisionRuleIds": sorted(
+            baseline_decision_rule_id_set - candidate_decision_rule_id_set
+        ),
+        "candidateOnlyDecisionRuleIds": sorted(
+            candidate_decision_rule_id_set - baseline_decision_rule_id_set
+        ),
         "candidateActions": list(candidate_actions),
         "marketClasses": sorted({_market_class(symbol) for symbol in symbols if _market_class(symbol)}),
         "baselinePhaseDurationsMs": phase_totals(baseline_projections),

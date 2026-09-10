@@ -53,6 +53,7 @@ from .settings import currency_rates, data_dir, read_json, runtime_settings, wri
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
 TOSS_TOKEN_CACHE: Dict[str, Dict[str, object]] = {}
 TOSS_TOKEN_CACHE_LOCK = Lock()
+TOSS_API_REQUEST_LOCK = Lock()
 
 
 def market_proxy_quote_context(
@@ -260,6 +261,94 @@ def toss_json(
 
 def form_body(payload: Dict[str, str]) -> bytes:
     return urllib.parse.urlencode(payload).encode("utf-8")
+
+
+@contextmanager
+def toss_api_request_guard(
+    stage: str,
+    settings: Dict[str, str],
+    state_path=None,
+    sleep_fn=None,
+    now_fn=None,
+):
+    """Serialize and pace Toss calls shared by monitor and market workers."""
+
+    if state_path is None:
+        yield
+        return
+    sleep_fn = sleep_fn or time.sleep
+    now_fn = now_fn or time.time
+    global_interval = int_setting(
+        settings or {},
+        "tossApiMinimumRequestIntervalMilliseconds",
+        300,
+        0,
+        5000,
+    ) / 1000.0
+    account_interval = int_setting(
+        settings or {},
+        "tossApiAccountRequestIntervalMilliseconds",
+        1200,
+        0,
+        10000,
+    ) / 1000.0
+    cooldown_seconds = int_setting(
+        settings or {},
+        "tossApiRateLimitCooldownSeconds",
+        5,
+        1,
+        300,
+    )
+    normalized_stage = str(stage or "request").strip().lower()
+    stage_interval = (
+        account_interval
+        if normalized_stage in {"token", "accounts", "holdings", "buying-power"}
+        else global_interval
+    )
+    path = Path(state_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    with TOSS_API_REQUEST_LOCK:
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            try:
+                os.chmod(lock_path, 0o600)
+            except OSError:
+                pass
+            if fcntl is not None:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                state = read_json(path, {})
+                if not isinstance(state, dict):
+                    state = {}
+                last_by_stage = state.get("lastRequestByStage")
+                if not isinstance(last_by_stage, dict):
+                    last_by_stage = {}
+                current = float(now_fn())
+                wait_until = max(
+                    number(state.get("lastRequestAtEpoch")) + global_interval,
+                    number(last_by_stage.get(normalized_stage)) + stage_interval,
+                    number(state.get("blockedUntilEpoch")),
+                )
+                if wait_until > current:
+                    sleep_fn(wait_until - current)
+                    current = float(now_fn())
+                last_by_stage[normalized_stage] = current
+                state.update({
+                    "lastRequestAtEpoch": current,
+                    "lastRequestByStage": last_by_stage,
+                })
+                write_private_json(path, state)
+                try:
+                    yield
+                except Exception as error:
+                    root = root_api_error(error)
+                    if int(getattr(root, "code", 0) or 0) == 429:
+                        state["blockedUntilEpoch"] = float(now_fn()) + cooldown_seconds
+                        write_private_json(path, state)
+                    raise
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 def normalize_accounts(payload: Dict[str, object]) -> List[Dict[str, object]]:
@@ -585,6 +674,7 @@ class TossProvider:
         token_cache=None,
         now_fn=None,
         token_cache_path=None,
+        request_guard_path=None,
     ):
         self.account = account
         self.base_url = account.base_url.rstrip("/")
@@ -593,6 +683,13 @@ class TossProvider:
         self.token_cache = token_cache if token_cache is not None else TOSS_TOKEN_CACHE
         self.shared_token_cache = token_cache is None or token_cache_path is not None
         self.token_cache_path = Path(token_cache_path) if token_cache_path else data_dir() / "toss-token-cache.json"
+        self.request_guard_path = (
+            Path(request_guard_path)
+            if request_guard_path
+            else self.token_cache_path.with_name("toss-api-request-state.json")
+            if self.shared_token_cache
+            else None
+        )
         self.now_fn = now_fn or time.time
         self.api_guard_state: Dict[str, object] = {}
         self.stage_failures: Dict[str, Dict[str, object]] = {}
@@ -735,7 +832,8 @@ class TossProvider:
         body: bytes = None,
     ) -> Tuple[Dict[str, object], str]:
         try:
-            payload = toss_json(stage, method, url, self.auth_headers(token, extra_headers), body=body, guard_state=self.api_guard_state)
+            with toss_api_request_guard(stage, self.settings, self.request_guard_path):
+                payload = toss_json(stage, method, url, self.auth_headers(token, extra_headers), body=body, guard_state=self.api_guard_state)
             return payload, token
         except TossAPIError as error:
             if error.http_status != 401:
@@ -745,7 +843,8 @@ class TossProvider:
             refreshed = self.fetch_access_token(force_refresh=True, stale_token=token)
             self.auth_refreshes += 1
             try:
-                payload = toss_json(stage, method, url, self.auth_headers(refreshed, extra_headers), body=body, guard_state=self.api_guard_state)
+                with toss_api_request_guard(stage, self.settings, self.request_guard_path):
+                    payload = toss_json(stage, method, url, self.auth_headers(refreshed, extra_headers), body=body, guard_state=self.api_guard_state)
                 self.record_stage_failure(stage, error, recovered=True)
                 return payload, refreshed
             except TossAPIError as retry_error:
@@ -760,18 +859,19 @@ class TossProvider:
             if cached:
                 return cached
             try:
-                token_payload = toss_json(
-                    "token",
-                    "POST",
-                    self.base_url + "/oauth2/token",
-                    {"Content-Type": "application/x-www-form-urlencoded"},
-                    form_body({
-                        "grant_type": "client_credentials",
-                        "client_id": self.account.client_id,
-                        "client_secret": self.account.client_secret,
-                    }),
-                    guard_state=self.api_guard_state,
-                )
+                with toss_api_request_guard("token", self.settings, self.request_guard_path):
+                    token_payload = toss_json(
+                        "token",
+                        "POST",
+                        self.base_url + "/oauth2/token",
+                        {"Content-Type": "application/x-www-form-urlencoded"},
+                        form_body({
+                            "grant_type": "client_credentials",
+                            "client_id": self.account.client_id,
+                            "client_secret": self.account.client_secret,
+                        }),
+                        guard_state=self.api_guard_state,
+                    )
             except TossAPIError as error:
                 self.record_stage_failure("token", error)
                 raise

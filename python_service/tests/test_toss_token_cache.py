@@ -9,10 +9,60 @@ import urllib.parse
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.accounts import AccountConfig
-from digital_twin.infrastructure.toss_snapshots import TossProvider
+from digital_twin.infrastructure.toss_snapshots import TossProvider, toss_api_request_guard
 
 
 class TossTokenCacheTests(unittest.TestCase):
+    def test_cross_process_request_guard_paces_account_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "request-state.json"
+            clock = [100.0]
+            sleeps = []
+
+            def sleep(seconds):
+                sleeps.append(seconds)
+                clock[0] += seconds
+
+            settings = {
+                "tossApiMinimumRequestIntervalMilliseconds": "300",
+                "tossApiAccountRequestIntervalMilliseconds": "1200",
+            }
+            with toss_api_request_guard("accounts", settings, state_path, sleep, lambda: clock[0]):
+                pass
+            clock[0] += 0.1
+            with toss_api_request_guard("accounts", settings, state_path, sleep, lambda: clock[0]):
+                pass
+
+            self.assertEqual(1, len(sleeps))
+            self.assertAlmostEqual(1.1, sleeps[0], places=6)
+            self.assertEqual(0o600, state_path.stat().st_mode & 0o777)
+
+    def test_cross_process_request_guard_honors_shared_429_cooldown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "request-state.json"
+            clock = [200.0]
+            sleeps = []
+
+            def sleep(seconds):
+                sleeps.append(seconds)
+                clock[0] += seconds
+
+            settings = {"tossApiRateLimitCooldownSeconds": "5"}
+            with self.assertRaises(urllib.error.HTTPError):
+                with toss_api_request_guard("accounts", settings, state_path, sleep, lambda: clock[0]):
+                    raise urllib.error.HTTPError(
+                        "https://example.test",
+                        429,
+                        "Too Many Requests",
+                        {},
+                        None,
+                    )
+            clock[0] += 0.1
+            with toss_api_request_guard("prices", settings, state_path, sleep, lambda: clock[0]):
+                pass
+
+            self.assertAlmostEqual(4.9, sleeps[-1], places=6)
+
     def account(self):
         return AccountConfig("main", "메인", "toss", "https://example.test", "client-id", "secret", "", [])
 

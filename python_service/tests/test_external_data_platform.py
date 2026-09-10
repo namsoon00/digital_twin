@@ -808,6 +808,20 @@ class ExternalDataPlatformTest(unittest.TestCase):
             {"documentHash": EMPTY_DOCUMENT_HASH},
         ))
 
+    def test_unusable_legacy_document_is_requeued_even_with_a_nonempty_hash(self):
+        self.assertTrue(completed_followup_needs_retry(
+            "opendart.document",
+            "completed",
+            {"documentHash": "nonempty-document-hash"},
+            {"dataUsable": False, "documentState": "document-rejected"},
+        ))
+        self.assertFalse(completed_followup_needs_retry(
+            "opendart.document",
+            "completed",
+            {"documentHash": "nonempty-document-hash"},
+            {"dataUsable": True, "documentState": "document-verified"},
+        ))
+
     def test_collection_service_executes_vendor_fetch_outside_request_path(self):
         store = MemoryCollectionStore()
         service = ExternalDataCollectionService(

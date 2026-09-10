@@ -71,6 +71,63 @@ def _elapsed_seconds(value: object, now: datetime) -> int:
     return max(0, int((now - parsed).total_seconds()))
 
 
+def active_reasoning_lease_count(state: Mapping[str, object]):
+    """Read active leases from both legacy mailboxes and the V2 queue."""
+
+    values = dict(state or {}) if isinstance(state, Mapping) else {}
+    sources = [values]
+    for key in ("mailbox", "activeReasoningEngineQueue"):
+        nested = values.get(key)
+        if isinstance(nested, Mapping):
+            sources.append(dict(nested))
+    for key in ("queuesByDeployment", "queues"):
+        nested = values.get(key)
+        if not isinstance(nested, Mapping):
+            continue
+        sources.extend(dict(item) for item in nested.values() if isinstance(item, Mapping))
+    counts = []
+    for source in sources:
+        for key in ("processingCount", "runningEntryCount"):
+            if key not in source:
+                continue
+            try:
+                counts.append(max(0, int(float(source.get(key) or 0))))
+            except (TypeError, ValueError):
+                continue
+    return max(counts) if counts else None
+
+
+def background_queue_backlog(summary: Mapping[str, object]) -> Dict[str, object]:
+    """Include reclaimable processing and retry leases in background backlog."""
+
+    values = dict(summary or {}) if isinstance(summary, Mapping) else {}
+    states = values.get("states") if isinstance(values.get("states"), Mapping) else {}
+    total = 0
+    oldest_values = []
+    for state_name, count_key in (
+        ("pending", "pendingCount"),
+        ("queued", "queuedCount"),
+        ("processing", "processingCount"),
+        ("retry", "retryCount"),
+        ("retrying", "retryingCount"),
+    ):
+        state = states.get(state_name) if isinstance(states.get(state_name), Mapping) else {}
+        raw_count = values.get(count_key) if count_key in values else state.get("count")
+        total += max(0, _integer(raw_count))
+        oldest = _text(state.get("oldestAt"))
+        if oldest and _timestamp(oldest):
+            oldest_values.append(oldest)
+    direct_oldest = _text(values.get("oldestPendingAt"))
+    if direct_oldest and _timestamp(direct_oldest):
+        oldest_values.append(direct_oldest)
+    oldest_at = min(oldest_values, key=lambda value: _timestamp(value)) if oldest_values else ""
+    return {
+        "pendingCount": total,
+        "oldestAt": oldest_at,
+        "summaryStatus": _text(values.get("status")) or "ok",
+    }
+
+
 def bounded_background_work_fairness(
     *,
     reasoning_pending_count: object,

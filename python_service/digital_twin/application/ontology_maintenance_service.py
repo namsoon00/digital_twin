@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List
 
 from ..domain.events import DomainEvent
 from ..domain.ontology_runtime_operations import (
+    active_reasoning_lease_count,
     bounded_background_work_fairness,
     scoped_abox_maintenance_health,
     scoped_abox_maintenance_policy,
@@ -620,17 +621,7 @@ class OntologyMaintenanceRunner:
 
     @staticmethod
     def active_reasoning_count(state: Dict[str, object]):
-        values = dict(state or {}) if isinstance(state, dict) else {}
-        mailbox = values.get("mailbox") if isinstance(values.get("mailbox"), dict) else {}
-        counts = []
-        for source in (values, mailbox):
-            if "runningEntryCount" not in source:
-                continue
-            try:
-                counts.append(max(0, int(float(source.get("runningEntryCount") or 0))))
-            except (TypeError, ValueError):
-                continue
-        return max(counts) if counts else None
+        return active_reasoning_lease_count(state)
 
     def clear_reasoning_deferral_state(self, state: Dict[str, object]) -> None:
         if not text((state or {}).get("reasoningQueueDeferredSinceAt")):

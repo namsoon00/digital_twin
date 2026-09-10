@@ -21,6 +21,10 @@ from digital_twin.domain.market_world_projection import (
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_runtime_operations import (
+    active_reasoning_lease_count,
+    background_queue_backlog,
+)
 from digital_twin.domain.ontology_world_routing import route_world_impact
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_to_payload
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -78,6 +82,28 @@ def sample_graph(symbol="005930", source_observed_at=""):
 
 
 class OntologyWorldContractTests(unittest.TestCase):
+    def test_background_workers_read_v2_processing_leases_and_reclaimable_work(self):
+        self.assertEqual(2, active_reasoning_lease_count({
+            "processingCount": 2,
+            "mailbox": {"runningEntryCount": 0},
+        }))
+        self.assertEqual(0, active_reasoning_lease_count({"processingCount": 0}))
+        self.assertIsNone(active_reasoning_lease_count({"pendingCount": 3}))
+
+        backlog = background_queue_backlog({
+            "states": {
+                "pending": {"count": 1, "oldestAt": "2026-09-10T04:00:00Z"},
+                "processing": {"count": 1, "oldestAt": "2026-09-10T02:00:00Z"},
+                "retry": {"count": 2, "oldestAt": "2026-09-10T03:00:00Z"},
+            },
+            "pendingCount": 1,
+            "processingCount": 1,
+            "retryCount": 2,
+        })
+
+        self.assertEqual(4, backlog["pendingCount"])
+        self.assertEqual("2026-09-10T02:00:00Z", backlog["oldestAt"])
+
     def test_company_fact_changes_route_only_the_affected_instrument_knowledge_partition(self):
         routed = route_world_impact({
             "changedScopeFamilies": ["fundamental", "governance", "capital"],

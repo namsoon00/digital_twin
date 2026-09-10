@@ -13,7 +13,11 @@ import time
 import uuid
 from typing import Dict, List, Mapping, Tuple
 
-from ..domain.ontology_runtime_operations import bounded_background_work_fairness
+from ..domain.ontology_runtime_operations import (
+    active_reasoning_lease_count,
+    background_queue_backlog,
+    bounded_background_work_fairness,
+)
 
 
 SUCCESS_STATUSES = {"ok", "empty"}
@@ -170,28 +174,10 @@ class OntologyInferenceDetailRunner:
 
     @staticmethod
     def active_reasoning_count(state: Mapping[str, object]):
-        values = dict(state or {}) if isinstance(state, Mapping) else {}
-        mailbox = values.get("mailbox") if isinstance(values.get("mailbox"), Mapping) else {}
-        counts = []
-        for source in (values, mailbox):
-            if "runningEntryCount" not in source:
-                continue
-            try:
-                counts.append(max(0, int(float(source.get("runningEntryCount") or 0))))
-            except (TypeError, ValueError):
-                continue
-        return max(counts) if counts else None
+        return active_reasoning_lease_count(state)
 
     def pending_background_work(self, summary: Mapping[str, object]) -> Dict[str, object]:
-        values = dict(summary or {}) if isinstance(summary, Mapping) else {}
-        states = values.get("states") if isinstance(values.get("states"), Mapping) else {}
-        pending_state = states.get("pending") if isinstance(states.get("pending"), Mapping) else {}
-        pending_count = self.nonnegative(values.get("pendingCount") or pending_state.get("count"))
-        return {
-            "pendingCount": pending_count,
-            "oldestAt": str(pending_state.get("oldestAt") or values.get("oldestPendingAt") or "").strip(),
-            "summaryStatus": str(values.get("status") or "ok").strip() or "ok",
-        }
+        return background_queue_backlog(summary)
 
     def background_fairness_decision(
         self,

@@ -61,12 +61,20 @@ EMPTY_DOCUMENT_HASH = hashlib.sha256(b"").hexdigest()
 RETRYABLE_DOCUMENT_DATASETS = {"opendart.document", "sec.document"}
 
 
-def completed_followup_needs_retry(dataset_id: str, job_status: str, watermark: Dict[str, object]) -> bool:
-    """Identify one-time document jobs incorrectly completed with an empty body."""
+def completed_followup_needs_retry(
+    dataset_id: str,
+    job_status: str,
+    watermark: Dict[str, object],
+    quality: Dict[str, object] = None,
+) -> bool:
+    """Identify legacy one-time document jobs completed without a usable body."""
     return (
         str(dataset_id or "") in RETRYABLE_DOCUMENT_DATASETS
         and str(job_status or "") == "completed"
-        and str((watermark or {}).get("documentHash") or "") in {"", EMPTY_DOCUMENT_HASH}
+        and (
+            str((watermark or {}).get("documentHash") or "") in {"", EMPTY_DOCUMENT_HASH}
+            or dict(quality or {}).get("dataUsable") is False
+        )
     )
 
 
@@ -221,19 +229,39 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 saved += inserted
                 if inserted or descriptor.dataset_id not in RETRYABLE_DOCUMENT_DATASETS:
                     continue
+                revision_identity = str(
+                    (request.watermark or {}).get("receiptNo")
+                    or (request.watermark or {}).get("accessionNumber")
+                    or ""
+                ).strip()
                 existing = connection.execute(
                     """
-                    SELECT job_status, watermark_json
-                    FROM external_dataset_state
-                    WHERE dataset_id = %s AND partition_key = %s
+                    SELECT state.job_status, state.watermark_json,
+                        (
+                            SELECT revision.quality_json
+                            FROM external_fact_revision revision
+                            WHERE revision.dataset_id = state.dataset_id
+                                AND revision.subject_key = %s
+                                AND revision.source_revision LIKE %s
+                            ORDER BY revision.fetched_at DESC, revision.created_at DESC
+                            LIMIT 1
+                        ) AS latest_quality_json
+                    FROM external_dataset_state state
+                    WHERE state.dataset_id = %s AND state.partition_key = %s
                     FOR UPDATE
                     """,
-                    (descriptor.dataset_id, str(request.partition_key or "")[:191]),
+                    (
+                        str(request.subject.subject_key or "")[:191],
+                        revision_identity + ":%",
+                        descriptor.dataset_id,
+                        str(request.partition_key or "")[:191],
+                    ),
                 ).fetchone() or {}
                 if not completed_followup_needs_retry(
                     descriptor.dataset_id,
                     existing.get("job_status"),
                     _json_loads(existing.get("watermark_json"), {}),
+                    _json_loads(existing.get("latest_quality_json"), {}),
                 ):
                     continue
                 cursor = connection.execute(

@@ -13,7 +13,11 @@ from ....application.external_data.contracts import (
 )
 from ....domain.disclosure_quality import assess_disclosure_document
 from ....domain.disclosure_taxonomy import classify_disclosure
-from ...external_signal_utils import dart_document_text, symbol_assignments
+from ...external_signal_utils import (
+    dart_document_permanently_unavailable,
+    dart_document_text,
+    symbol_assignments,
+)
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of
 
 
@@ -226,9 +230,30 @@ class OpenDartDocumentAdapter:
             "document:" + job.subject.symbol + ":" + receipt,
             lambda: provider.fetch_bytes(url, {"Accept": "application/zip,application/xml"}),
         )
+        metadata = dict(job.watermark.get("metadata") or {})
+        if dart_document_permanently_unavailable(raw):
+            return observation(
+                self.descriptor,
+                job.subject.symbol,
+                {},
+                preferred_revision=receipt + ":official-file-unavailable",
+                preferred_source_as_of=str(metadata.get("receiptDate") or ""),
+                watermark={
+                    "receiptNo": receipt,
+                    "terminalUnavailable": True,
+                    "unavailableReason": "official-file-not-found",
+                },
+                quality={
+                    "dataUsable": False,
+                    "provider": "opendart",
+                    "documentState": "document-unavailable",
+                    "terminalUnavailable": True,
+                },
+                empty_result=True,
+                retain_previous=True,
+            )
         text = dart_document_text(raw, bounded_int(settings.get("externalDartDocumentTextMaxChars"), 6000, 500, 20000))
         assessment = assess_disclosure_document(text, "body")
-        metadata = dict(job.watermark.get("metadata") or {})
         metadata.update({
             "provider": "OpenDART",
             "receiptNo": receipt,

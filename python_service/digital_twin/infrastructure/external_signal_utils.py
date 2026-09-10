@@ -120,6 +120,19 @@ def dart_document_text(raw: object, limit: int) -> str:
     return " ".join(fragments)[:max(500, min(20000, int(limit or 6000)))]
 
 
+def dart_document_permanently_unavailable(raw: object) -> bool:
+    """Whether OpenDART explicitly says the requested filing file is absent."""
+
+    data = bytes(raw or b"")
+    if not data or zipfile.is_zipfile(io.BytesIO(data)):
+        return False
+    text = data[:2000].decode("utf-8", errors="replace")
+    return bool(
+        re.search(r"<\s*status\s*>\s*014\s*<\s*/\s*status\s*>", text, re.IGNORECASE)
+        and "파일이 존재하지 않습니다" in text
+    )
+
+
 def parse_iso(value: str):
     try:
         return datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))

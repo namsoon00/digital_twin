@@ -68,6 +68,8 @@ def completed_followup_needs_retry(
     quality: Dict[str, object] = None,
 ) -> bool:
     """Identify legacy one-time document jobs completed without a usable body."""
+    if bool(dict(watermark or {}).get("terminalUnavailable")):
+        return False
     return (
         str(dataset_id or "") in RETRYABLE_DOCUMENT_DATASETS
         and str(job_status or "") == "completed"
@@ -668,6 +670,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
     ) -> Dict[str, object]:
         """Complete a valid no-data poll without erasing the last usable fact."""
         stamp = iso(utc_now())
+        terminal_unavailable = bool((observation.watermark or {}).get("terminalUnavailable"))
 
         def mutation(connection):
             previous = connection.execute(
@@ -682,13 +685,15 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             connection.execute(
                 """
                 UPDATE external_dataset_state
-                SET job_status = 'pending', next_due_at = %s, last_success_at = %s,
+                SET active = %s, job_status = %s, next_due_at = %s, last_success_at = %s,
                     source_as_of = %s, watermark_json = %s, lease_owner = '', lease_until = '',
                     attempt_count = 0, consecutive_failures = 0, last_error = '', updated_at = %s
                 WHERE dataset_id = %s AND partition_key = %s AND lease_owner = %s
                 """,
                 (
-                    next_due_at,
+                    0 if terminal_unavailable else 1,
+                    "completed" if terminal_unavailable else "pending",
+                    "" if terminal_unavailable else next_due_at,
                     stamp,
                     str(observation.source_as_of or "")[:80],
                     json_dumps(observation.watermark),

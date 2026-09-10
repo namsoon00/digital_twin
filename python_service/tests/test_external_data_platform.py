@@ -60,6 +60,7 @@ from digital_twin.infrastructure.external_api.mysql_stores import (
     EMPTY_DOCUMENT_HASH,
     completed_followup_needs_retry,
 )
+from digital_twin.infrastructure.external_signal_utils import dart_document_permanently_unavailable
 from digital_twin.infrastructure.schedulers import external_data_failure_requires_alert
 
 
@@ -820,6 +821,23 @@ class ExternalDataPlatformTest(unittest.TestCase):
             "completed",
             {"documentHash": "nonempty-document-hash"},
             {"dataUsable": True, "documentState": "document-verified"},
+        ))
+
+    def test_officially_missing_document_is_terminal_and_not_requeued(self):
+        unavailable = (
+            b'<?xml version="1.0" encoding="UTF-8"?>'
+            b'<result><status>014</status>'
+            + "<message>파일이 존재하지 않습니다.</message>".encode("utf-8")
+            + b'</result>'
+        )
+
+        self.assertTrue(dart_document_permanently_unavailable(unavailable))
+        self.assertFalse(dart_document_permanently_unavailable(b"<result><status>000</status></result>"))
+        self.assertFalse(completed_followup_needs_retry(
+            "opendart.document",
+            "completed",
+            {"terminalUnavailable": True, "receiptNo": "20260824000219"},
+            {"dataUsable": False, "documentState": "document-unavailable"},
         ))
 
     def test_collection_service_executes_vendor_fetch_outside_request_path(self):

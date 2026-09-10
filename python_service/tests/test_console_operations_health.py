@@ -105,10 +105,34 @@ class ConsoleOperationsHealthTests(unittest.TestCase):
         })
 
         ai = component(result, "ai")
-        self.assertEqual("warning", ai["state"])
+        self.assertEqual("healthy", ai["state"])
         self.assertEqual("ai-delivery-warming-up", ai["reasonCode"])
+        self.assertEqual({}, ai["action"])
         self.assertIn("investment-ai-judge-v19 실효 AI 2/2건", ai["detail"])
         self.assertIn("최근 24시간 전체 폴백 26건", ai["detail"])
+
+        max_review = ConsoleReadModelService().operations_health({
+            "realtime": {
+                "monitoring": {"snapshot": {"occurredAt": now}},
+                "aiInferenceQueue": {
+                    "states": {"processing": {
+                        "count": 2,
+                        "oldestAt": (
+                            datetime.now(timezone.utc) - timedelta(minutes=20)
+                        ).isoformat(),
+                    }},
+                    "currentAiStatus": "warming-up",
+                    "activeWorkCriticalAgeSeconds": 2100,
+                },
+                "notificationJobs": {},
+            },
+            "reasoning": {
+                "status": "healthy",
+                "effectivePendingCount": 0,
+                "processingCount": 0,
+            },
+        })
+        self.assertEqual("healthy", component(max_review, "ai")["state"])
 
 if __name__ == "__main__":
     unittest.main()

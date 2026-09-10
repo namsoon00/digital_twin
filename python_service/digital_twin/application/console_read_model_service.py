@@ -926,6 +926,10 @@ class ConsoleReadModelService:
         )
         ai_oldest_epoch = _iso_timestamp(ai_oldest_at)
         ai_oldest_age_seconds = max(0, int(now_epoch - ai_oldest_epoch)) if ai_oldest_epoch else 0
+        ai_critical_age_seconds = max(
+            10 * 60,
+            int(ai_summary.get("activeWorkCriticalAgeSeconds") or 10 * 60),
+        )
         notification_suppression_categories = _mapping(notification_summary.get("suppression_categories"))
         suppression_parts = []
         for key, label in (
@@ -1009,14 +1013,14 @@ class ConsoleReadModelService:
                 "id": "ai",
                 "label": "AI 판단 대기열",
                 "state": (
-                    "critical" if ai_actionable_failures or ai_effective_status == "critical" or ai_oldest_age_seconds > 10 * 60
-                    else "warning" if ai_effective_status in {"degraded", "warming-up"}
+                    "critical" if ai_actionable_failures or ai_effective_status == "critical" or ai_oldest_age_seconds > ai_critical_age_seconds
+                    else "warning" if ai_effective_status == "degraded"
                     else "healthy"
                 ),
                 "dimension": "delivery",
                 "impact": "user",
                 "reasonCode": (
-                    "ai-delivery-failed" if ai_actionable_failures or ai_oldest_age_seconds > 10 * 60
+                    "ai-delivery-failed" if ai_actionable_failures or ai_oldest_age_seconds > ai_critical_age_seconds
                     else "ai-delivery-warming-up" if ai_effective_status == "warming-up"
                     else "ai-delivery-degraded" if ai_effective_status == "degraded"
                     else "ai-delivery-ready"
@@ -1044,7 +1048,7 @@ class ConsoleReadModelService:
                     or ai_summary.get("effectiveAiLatestAt")
                 ),
                 "action": (
-                    {} if not ai_actionable_failures and ai_effective_status not in {"degraded", "warming-up"} and ai_oldest_age_seconds <= 10 * 60
+                    {} if not ai_actionable_failures and ai_effective_status != "degraded" and ai_oldest_age_seconds <= ai_critical_age_seconds
                     else {"id": "open-ai-queue", "label": "AI 대기열 확인", "view": "delivery"}
                 ),
             },

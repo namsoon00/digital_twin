@@ -1691,6 +1691,34 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             }
             for row in rows or []
         }
+        active_work_count = sum(
+            int((states.get(status) or {}).get("count") or 0)
+            for status in (
+                AI_INFERENCE_PENDING,
+                AI_INFERENCE_RETRY,
+                AI_INFERENCE_PROCESSING,
+            )
+        )
+        try:
+            worker_count = max(1, min(8, int(float(
+                self.runtime_settings.get("notificationAiQueueWorkerCount") or 2
+            ))))
+        except (TypeError, ValueError):
+            worker_count = 2
+        try:
+            max_effort_attempt_seconds = max(900, min(3600, int(float(
+                self.runtime_settings.get("notificationAiAttemptWatchdogSeconds") or 300
+            ))))
+        except (TypeError, ValueError):
+            max_effort_attempt_seconds = 900
+        active_batches = max(
+            1,
+            (active_work_count + worker_count - 1) // worker_count,
+        )
+        active_work_critical_age_seconds = max(
+            20 * 60,
+            active_batches * max_effort_attempt_seconds + 5 * 60,
+        )
         historical_failed = int((states.get(AI_INFERENCE_FAILED) or {}).get("count") or 0)
         actionable_failed = int((active_failure_row or {}).get("count") or 0)
         eligible_count = int(effectiveness_row.get("eligible_count") or 0)
@@ -1722,6 +1750,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "pendingCount": int((states.get(AI_INFERENCE_PENDING) or {}).get("count") or 0),
             "retryCount": int((states.get(AI_INFERENCE_RETRY) or {}).get("count") or 0),
             "processingCount": int((states.get(AI_INFERENCE_PROCESSING) or {}).get("count") or 0),
+            "activeWorkCount": active_work_count,
+            "workerCount": worker_count,
+            "maxEffortAttemptSeconds": max_effort_attempt_seconds,
+            "activeWorkCriticalAgeSeconds": active_work_critical_age_seconds,
             # ``failedCount`` remains for API compatibility. Health readers
             # use actionableFailedCount so retained audit rows cannot keep a
             # recovered runtime in a permanent critical state.

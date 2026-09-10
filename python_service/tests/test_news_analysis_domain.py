@@ -347,13 +347,17 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             "impactLabelKo": "중립",
             "confidence": 0.76,
             "materialityScore": 55,
-            "summary": {"briefKo": "주가 방향을 정할 근거가 부족합니다."},
+            "summary": {
+                "oneLineKo": "삼성전자가 정기 운영 업데이트를 발표했습니다.",
+                "briefKo": "주가 방향을 정할 근거가 부족합니다.",
+            },
         })
 
         facts = updated.raw_payload["articleFacts"]
         self.assertEqual("context", updated.polarity)
         self.assertEqual("context", facts["stockImpactPolarity"])
         self.assertEqual("중립", facts["stockImpactLabel"])
+        self.assertEqual("삼성전자가 정기 운영 업데이트를 발표했습니다", facts["eventTakeaway"])
         self.assertEqual("risk", facts["preAiStockImpactPolarity"])
         self.assertTrue(updated.raw_payload["analysisConflict"])
 

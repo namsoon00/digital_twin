@@ -158,6 +158,15 @@ def authoritative_enrichment(payload: Dict[str, object]) -> bool:
     return status in AUTHORITATIVE_ANALYSIS_STATUSES and translation_ready
 
 
+def authoritative_event_takeaway(payload: Dict[str, object]) -> str:
+    values = dict(payload or {})
+    if not authoritative_enrichment(values):
+        return ""
+    analysis = _mapping(values.get("aiAnalysis"))
+    summary = _mapping(analysis.get("summary"))
+    return _text(summary.get("oneLineKo"))[:260]
+
+
 def enrichment_payload_snapshot(payload: Dict[str, object]) -> Dict[str, object]:
     source = dict(payload or {})
     snapshot = {

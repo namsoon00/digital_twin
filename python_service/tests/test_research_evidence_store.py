@@ -319,6 +319,9 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
                     "status": "ok",
                     "version": "news-ai-analysis-test",
                     "sourceTextHash": "stable-source-hash",
+                    "summary": {
+                        "oneLineKo": "삼성전자가 HBM 수요와 연간 전망을 발표했습니다.",
+                    },
                 },
             })
             original.summary = "삼성전자가 HBM 수요와 연간 전망을 발표했습니다."
@@ -360,11 +363,17 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             )
             preview = store.repair_news_enrichment_revisions(dry_run=True)
             self.assertEqual(1, preview["summaryRestoredCount"])
+            self.assertEqual(1, preview["eventTakeawayRestoredCount"])
             self.assertEqual("실적과 이익 전망 변화가 핵심", store.get(original.evidence_id).summary)
 
             applied = store.repair_news_enrichment_revisions(dry_run=False)
             self.assertEqual(1, applied["summaryRestoredCount"])
+            self.assertEqual(1, applied["eventTakeawayRestoredCount"])
             self.assertEqual(original.summary, store.get(original.evidence_id).summary)
+            self.assertEqual(
+                "삼성전자가 HBM 수요와 연간 전망을 발표했습니다.",
+                store.get(original.evidence_id).raw_payload["articleFacts"]["eventTakeaway"],
+            )
 
     def test_news_enrichment_revisions_are_immutable_and_head_tracks_latest(self):
         store = TestResearchEvidenceStore(self.seed)

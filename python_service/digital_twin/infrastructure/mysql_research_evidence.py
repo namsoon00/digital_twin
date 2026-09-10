@@ -24,6 +24,7 @@ from ..news_intelligence.domain.article import (
     article_enrichment_revision,
     article_source_revision,
     authoritative_enrichment,
+    authoritative_event_takeaway,
     enrichment_payload_snapshot,
 )
 from ..news_intelligence.domain.story import event_episode_identity, news_event_fingerprint
@@ -317,6 +318,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 "sourceRevisionUpdatedCount": 0,
                 "authoritativePersistedCount": 0,
                 "authoritativeRestoredCount": 0,
+                "eventTakeawayRestoredCount": 0,
                 "summaryRestoredCount": 0,
                 "provisionalCount": 0,
                 "changedCount": 0,
@@ -342,9 +344,6 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     if existing_snapshot:
                         payload = apply_enrichment_snapshot(payload, existing_snapshot)
                         item.raw_payload = payload
-                    if not dry_run:
-                        self._persist_news_enrichment_with_connection(connection, item, stamp)
-                        payload = dict(item.raw_payload or {})
                 else:
                     result["provisionalCount"] += 1
                     snapshot = self._news_enrichment_snapshot_with_connection(
@@ -357,6 +356,19 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                         payload = apply_enrichment_snapshot(payload, snapshot)
                         item.raw_payload = payload
                         result["authoritativeRestoredCount"] += 1
+                event_takeaway = authoritative_event_takeaway(payload)
+                facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+                event_takeaway_changed = bool(
+                    event_takeaway
+                    and event_takeaway != str(facts.get("eventTakeaway") or "").strip()
+                )
+                if event_takeaway_changed:
+                    payload["articleFacts"] = {**facts, "eventTakeaway": event_takeaway}
+                    item.raw_payload = payload
+                    result["eventTakeawayRestoredCount"] += 1
+                if not dry_run and authoritative_enrichment(payload):
+                    self._persist_news_enrichment_with_connection(connection, item, stamp)
+                    payload = dict(item.raw_payload or {})
                 authoritative_summary = news_domain.compact_text(payload.get("articleSummaryKo") or "", 520)
                 summary_changed = bool(
                     authoritative_summary
@@ -365,7 +377,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 )
                 if summary_changed:
                     result["summaryRestoredCount"] += 1
-                if payload != original_payload or summary_changed:
+                if payload != original_payload or summary_changed or event_takeaway_changed:
                     result["changedCount"] += 1
                     if not dry_run:
                         states = news_domain.news_state_payload(payload)

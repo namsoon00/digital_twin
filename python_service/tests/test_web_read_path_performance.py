@@ -176,6 +176,23 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         self.assertEqual(document["headline"], payload["title"])
         self.assertEqual("ai-judgement", payload["customerInvestmentDocument"]["role"])
 
+        summary_payload = web_server.notification_job_public_payload(
+            job,
+            detail=False,
+            stale_minutes=2,
+            settings={"_skipOperationalSchemaBootstrap": "1"},
+            include_customer_document=True,
+        )
+        list_payload = web_server.notification_job_public_payload(
+            job,
+            detail=False,
+            stale_minutes=2,
+            settings={"_skipOperationalSchemaBootstrap": "1"},
+        )
+        self.assertEqual(document, summary_payload["customerInvestmentDocument"])
+        self.assertNotIn("reasoningTrace", summary_payload)
+        self.assertNotIn("customerInvestmentDocument", list_payload)
+
     def test_bootstrap_app_store_uses_read_only_operational_settings(self):
         marker = object()
         settings = {"_skipOperationalSchemaBootstrap": "1"}

@@ -3506,6 +3506,7 @@ def notification_job_public_payload(
     detail: bool = False,
     stale_minutes: int = None,
     settings: Dict[str, object] = None,
+    include_customer_document: bool = False,
 ) -> Dict[str, object]:
     context = job.context or {}
     configured_settings = settings
@@ -3707,11 +3708,12 @@ def notification_job_public_payload(
         "quietHoursEnd": context.get("quietHoursEnd") or "",
         "quietHoursTimezone": context.get("quietHoursTimezone") or "",
     }
+    if detail or include_customer_document:
+        payload["customerInvestmentDocument"] = customer_document
+        payload["customerInvestmentDocumentQuality"] = customer_document_quality
     if detail:
         configured_settings = configured_settings or operational_read_settings()
         payload["fullText"] = full_notification_text(customer_text)
-        payload["customerInvestmentDocument"] = customer_document
-        payload["customerInvestmentDocumentQuality"] = customer_document_quality
         payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this
         # job, never from the currently active graph generation.
@@ -4063,6 +4065,7 @@ def notification_job_detail_payload(
         job,
         detail=include_full_reasoning,
         settings=configured,
+        include_customer_document=True,
     )
     if not include_full_reasoning:
         customer_text = notification_customer_text(job)

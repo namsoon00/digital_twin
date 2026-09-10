@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
 from .accounts import AccountConfig
-from .fact_changes import fact_change_contract
+from .fact_changes import fact_change_contract, follow_up_field_fact_types
 from .portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from .reasoning_source_facts import (
     compact_reasoning_source_fact_payload,
@@ -87,6 +87,7 @@ INVESTMENT_DECISION_REVIEWED = "investment.decision_reviewed"
 INVESTMENT_PERFORMANCE_ATTRIBUTED = "investment.performance_attributed"
 INVESTMENT_DECISION_CHANGED = "investment.decision_changed"
 INVESTMENT_VALIDATION_CHANGED = "investment.validation_changed"
+INVESTMENT_FOLLOW_UP_TRANSITIONED = "investment.follow_up_transitioned"
 
 
 @dataclass(frozen=True)
@@ -1684,6 +1685,97 @@ def investment_validation_changed_event(
             "changedAt": str(after.get("decidedAt") or after.get("decided_at") or ""),
         },
         correlation_id=(flow_id or episode_id or (account_id + ":" + symbol))[:191],
+    )
+
+
+def investment_follow_up_transitioned_event(
+    account_id: str,
+    transitions: Iterable[Mapping[str, object]],
+    observed_at: str,
+    *,
+    source_snapshot_id: str = "",
+) -> DomainEvent:
+    """Record verified condition edges that require a fresh graph judgement."""
+
+    clean_transitions = []
+    symbols = set()
+    for raw in transitions or []:
+        if not isinstance(raw, Mapping):
+            continue
+        item = dict(raw)
+        symbol = str(item.get("symbol") or "").upper().strip()
+        condition_id = str(item.get("conditionId") or "").strip()
+        transition_id = str(item.get("transitionId") or "").strip()
+        if not symbol or not condition_id or not transition_id:
+            continue
+        symbols.add(symbol)
+        clean_transitions.append({
+            "conditionId": condition_id[:191],
+            "sourceConditionId": str(item.get("sourceConditionId") or "")[:191],
+            "episodeId": str(item.get("episodeId") or "")[:191],
+            "symbol": symbol[:64],
+            "field": str(item.get("field") or "")[:96],
+            "operator": str(item.get("operator") or "")[:8],
+            "threshold": item.get("threshold"),
+            "purpose": str(item.get("purpose") or "")[:32],
+            "previousValue": item.get("previousValue"),
+            "currentValue": item.get("currentValue"),
+            "previousStatus": str(item.get("previousStatus") or "pending")[:32],
+            "status": str(item.get("status") or "")[:32],
+            "transitionKind": str(item.get("transitionKind") or "")[:64],
+            "transitionId": transition_id[:191],
+            "transitionAt": str(item.get("transitionAt") or observed_at or "")[:40],
+            "label": str(item.get("label") or "")[:240],
+            "onSatisfied": str(item.get("onSatisfied") or "")[:240],
+            "transitionVerified": bool(item.get("transitionVerified")),
+        })
+        if len(clean_transitions) >= 40:
+            break
+    transition_ids = sorted(
+        str(item.get("transitionId") or "") for item in clean_transitions
+    )
+    fact_types_by_symbol = {
+        symbol: [
+            "DecisionFollowUpCondition",
+            *follow_up_field_fact_types(
+                item.get("field")
+                for item in clean_transitions
+                if item.get("symbol") == symbol
+            ),
+        ]
+        for symbol in sorted(symbols)
+    }
+    fact_types = sorted({
+        fact_type
+        for values in fact_types_by_symbol.values()
+        for fact_type in values
+    })
+    identity = hashlib.sha256("|".join(transition_ids).encode("utf-8")).hexdigest()[:24]
+    return DomainEvent(
+        name=INVESTMENT_FOLLOW_UP_TRANSITIONED,
+        aggregate_id=("investment-follow-up:" + str(account_id or "default") + ":" + identity)[:191],
+        payload={
+            "accountId": str(account_id or "default")[:191],
+            "symbols": sorted(symbols),
+            "observedAt": str(observed_at or "")[:40],
+            "sourceSnapshotId": str(source_snapshot_id or "")[:191],
+            "transitionCount": len(clean_transitions),
+            "transitions": clean_transitions,
+            "factTypes": fact_types,
+            "factTypesBySymbol": fact_types_by_symbol,
+            "changedFieldsBySymbol": {
+                symbol: sorted({
+                    "followUpStatus",
+                    *[
+                        str(item.get("field") or "")
+                        for item in clean_transitions
+                        if item.get("symbol") == symbol and str(item.get("field") or "")
+                    ],
+                })
+                for symbol in sorted(symbols)
+            },
+        },
+        correlation_id=(str(source_snapshot_id or "") or identity)[:191],
     )
 
 

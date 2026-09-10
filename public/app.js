@@ -27660,20 +27660,72 @@
     ].join("");
   }
 
+  function notificationCustomerDocument(job) {
+    return job && job.customerInvestmentDocument && typeof job.customerInvestmentDocument === "object"
+      ? job.customerInvestmentDocument
+      : {};
+  }
+
+  function renderNotificationCustomerDocument(job, compact) {
+    var customerDocument = notificationCustomerDocument(job);
+    if (!Object.keys(customerDocument).length) return "";
+    var customerSections = Array.isArray(customerDocument.sections) ? customerDocument.sections : [];
+    var customerLinks = Array.isArray(customerDocument.links) ? customerDocument.links : [];
+    if (compact) {
+      var compactKeys = customerDocument.role === "typedb-observation"
+        ? ["change", "importance", "tracking", "next-update"]
+        : ["change", "action", "reasons", "counter", "tracking", "next-update"];
+      customerSections = customerSections.filter(function (section) {
+        return compactKeys.indexOf(String((section || {}).key || "")) >= 0;
+      }).slice(0, compactKeys.length);
+    }
+    return [
+      '<section class="notification-detail-section primary notification-customer-document">',
+      '<div class="notification-reasoning-head"><div><strong>' + escapeHtml(customerDocument.headline || "투자 인사이트") + '</strong><span>' + escapeHtml(customerDocument.roleLabel || "") + '</span></div></div>',
+      customerDocument.lead ? '<div class="notification-detail-reasons"><p><b>한눈에 보기</b> ' + escapeHtml(customerDocument.lead) + '</p></div>' : '',
+      customerSections.map(function (section) {
+        var rows = Array.isArray(section.rows) ? section.rows : [];
+        if (!rows.length) return "";
+        if (compact) rows = rows.slice(0, 2);
+        return '<div class="notification-detail-reasons"><strong>' + escapeHtml(section.title || "상세") + '</strong>'
+          + rows.map(function (row) { return '<p>' + escapeHtml(row) + '</p>'; }).join("")
+          + '</div>';
+      }).join(""),
+      customerLinks.length ? '<div class="notification-detail-reasons"><strong>원문</strong>'
+        + customerLinks.map(function (link) {
+          var url = String((link || {}).url || "");
+          if (!/^https?:\/\//i.test(url)) return "";
+          return '<p><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml((link || {}).label || "원문 보기") + '</a></p>';
+        }).join("")
+        + '</div>' : '',
+      '</section>'
+    ].join("");
+  }
+
   function renderNotificationSummaryTab(job, context) {
     context = context || {};
+    var customerDocument = notificationCustomerDocument(job);
+    var hasCustomerDocument = Boolean(Object.keys(customerDocument).length);
+    var customerDocumentBody = renderNotificationCustomerDocument(job, false);
     return [
+      hasCustomerDocument ? '' :
       '<div class="notification-detail-metrics notification-summary-metrics">',
+      hasCustomerDocument ? '' :
       renderNotificationDetailMetric("지금 행동", context.currentAction, context.actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold"),
+      hasCustomerDocument ? '' :
       renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted"),
+      hasCustomerDocument ? '' :
       renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone),
+      hasCustomerDocument ? '' :
       renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)),
+      hasCustomerDocument ? '' :
       '</div>',
-      '<section class="notification-detail-section primary">',
+      customerDocumentBody || '<section class="notification-detail-section primary">',
+      customerDocumentBody ? '' :
       '<strong>판단 요약</strong>',
-      '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || context.payload.fullText || context.payload.preview) + '</p>',
-      '</section>',
-      renderNotificationActionFlow(job),
+      customerDocumentBody ? '' : '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || context.payload.fullText || context.payload.preview) + '</p>',
+      customerDocumentBody ? '' : '</section>',
+      customerDocumentBody ? '' : renderNotificationActionFlow(job),
       context.relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([context.relatedDecision.name || context.relatedDecision.symbol, context.relatedDecision.actionLabel, context.relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", context.relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
       renderNotificationDetailDisclosure("전체 메시지와 식별 정보", "원문 메시지와 중복 판단 키", context.messageDetails, "notification-summary-disclosure", "notification-job:" + context.jobId + ":summary:message"),
       renderNotificationDetailDisclosure("연결된 원문과 출처", "종목에 연결된 최신 뉴스·공시 근거", context.researchDetails, "notification-summary-disclosure", "notification-job:" + context.jobId + ":summary:research")
@@ -27700,6 +27752,7 @@
     var relatedDecision = relatedDecisionForNotification(job);
     var actionFlow = job.actionFlow && typeof job.actionFlow === "object" ? job.actionFlow : {};
     var currentAction = actionFlow.currentActionLabel || notificationActionFlowActionLabel(actionFlow.currentAction);
+    var customerDocumentBody = renderNotificationCustomerDocument(job, true);
     var messageDetails = !compact ? [
       payload.fullText && payload.fullText !== payload.preview ? '<section class="notification-detail-section"><strong>전체 메시지</strong><pre class="notification-full-message">' + escapeHtml(payload.fullText) + '</pre></section>' : '',
       fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : ''
@@ -27728,9 +27781,9 @@
       compact ? '<div class="notification-detail-head"><div><p class="label">Decision Report</p><h3>' + escapeHtml(payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단") + '</h3><span>' + escapeHtml([payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · ")) + '</span></div><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span></div>' : '',
       compact ? receiptActions : '<div class="notification-detail-toolbar"><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>' + receiptActions + '</div>',
       compact ? '' : renderNotificationDetailTabs(jobId, activeDetailTab),
-      compact ? '<div class="notification-detail-metrics">' + renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone) + renderNotificationDetailMetric("지금 행동", currentAction, actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold") + renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted") + renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)) + '</div>' : '',
-      compact ? '<section class="notification-detail-section primary"><strong>판단 요약</strong><p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p></section>' : '',
-      compact ? renderNotificationActionFlow(job) : '',
+      compact && !customerDocumentBody ? '<div class="notification-detail-metrics">' + renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone) + renderNotificationDetailMetric("지금 행동", currentAction, actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold") + renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted") + renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)) + '</div>' : '',
+      compact ? (customerDocumentBody || '<section class="notification-detail-section primary"><strong>판단 요약</strong><p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p></section>') : '',
+      compact && !customerDocumentBody ? renderNotificationActionFlow(job) : '',
       compact && relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([relatedDecision.name || relatedDecision.symbol, relatedDecision.actionLabel, relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
       compact ? deliveryOverview : '',
       compact ? '<p class="data-refresh-status">전체 메시지, 전체 근거, 중복 키는 상세 리포트에서 확인합니다.</p>' : '',

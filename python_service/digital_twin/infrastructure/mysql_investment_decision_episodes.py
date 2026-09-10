@@ -162,6 +162,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     stamp,
                 ),
             )
+            self.supersede_prior_follow_ups_for_current(
+                connection,
+                episode.account_id,
+                episode.symbol,
+                episode.episode_id,
+                stamp,
+            )
             connection.execute(
                 """
                 INSERT INTO investment_flow_heads (
@@ -268,6 +275,87 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     investment_validation_changed_event(previous_payload, payload),
                 )
         return episode
+
+    @staticmethod
+    def supersede_prior_follow_ups_for_current(
+        connection,
+        account_id: str,
+        symbol: str,
+        episode_id: str,
+        stamp: str,
+    ) -> int:
+        """Keep history immutable while giving one decision ownership of tracking."""
+
+        current = connection.execute(
+            "SELECT decision_episode_id FROM investment_flow_current "
+            "WHERE account_id = %s AND symbol = %s LIMIT 1",
+            (str(account_id or ""), str(symbol or "").upper()),
+        ).fetchone()
+        if str((current or {}).get("decision_episode_id") or "") != str(episode_id or ""):
+            return 0
+        rows = connection.execute(
+            "SELECT condition_id, payload_json FROM investment_decision_follow_ups "
+            "WHERE account_id = %s AND symbol = %s AND episode_id <> %s "
+            "AND status = 'pending' ORDER BY updated_at, condition_id LIMIT 500",
+            (str(account_id or ""), str(symbol or "").upper(), str(episode_id or "")),
+        ).fetchall()
+        changed = 0
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            payload.update({
+                "status": "superseded",
+                "trackingStatus": "stopped-newer-decision",
+                "supersededByEpisodeId": str(episode_id or ""),
+                "supersededAt": str(stamp or ""),
+            })
+            cursor = connection.execute(
+                "UPDATE investment_decision_follow_ups SET status = 'superseded', "
+                "payload_json = %s, updated_at = %s WHERE condition_id = %s "
+                "AND status = 'pending'",
+                (json_dumps(payload), stamp, str(row.get("condition_id") or "")),
+            )
+            changed += max(0, int(getattr(cursor, "rowcount", 0) or 0))
+        return changed
+
+    def supersede_noncurrent_follow_ups(self, limit: int = 5000) -> Dict[str, object]:
+        """One-time repair for conditions created before single-owner tracking."""
+
+        maximum = max(1, min(50000, int(limit or 5000)))
+        stamp = utc_now_iso()
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT follow_up.condition_id, follow_up.episode_id, follow_up.payload_json, "
+                "current_flow.decision_episode_id AS current_episode_id "
+                "FROM investment_decision_follow_ups follow_up "
+                "JOIN investment_flow_current current_flow "
+                "ON current_flow.account_id = follow_up.account_id "
+                "AND current_flow.symbol = follow_up.symbol "
+                "WHERE follow_up.status = 'pending' "
+                "AND follow_up.episode_id <> current_flow.decision_episode_id "
+                "ORDER BY follow_up.updated_at, follow_up.condition_id LIMIT %s",
+                (maximum,),
+            ).fetchall()
+            changed = 0
+            for row in rows or []:
+                payload = _json_loads(row.get("payload_json"), {})
+                payload.update({
+                    "status": "superseded",
+                    "trackingStatus": "stopped-newer-decision",
+                    "supersededByEpisodeId": str(row.get("current_episode_id") or ""),
+                    "supersededAt": stamp,
+                })
+                cursor = connection.execute(
+                    "UPDATE investment_decision_follow_ups SET status = 'superseded', "
+                    "payload_json = %s, updated_at = %s WHERE condition_id = %s "
+                    "AND status = 'pending'",
+                    (json_dumps(payload), stamp, str(row.get("condition_id") or "")),
+                )
+                changed += max(0, int(getattr(cursor, "rowcount", 0) or 0))
+        return {
+            "status": "repaired",
+            "candidateCount": len(rows or []),
+            "supersededCount": changed,
+        }
 
     def quarantine_invalid_legacy_outcomes(self, limit: int = 5000) -> Dict[str, object]:
         """Remove operational observations from active decision continuity.
@@ -2212,11 +2300,16 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT condition_id, payload_json
-                FROM investment_decision_follow_ups
-                WHERE account_id = %s AND symbol = %s
-                  AND status = 'pending' AND observable = 1
-                ORDER BY updated_at ASC, condition_id ASC
+                SELECT follow_up.condition_id, follow_up.episode_id,
+                       follow_up.account_id, follow_up.symbol, follow_up.payload_json
+                FROM investment_decision_follow_ups follow_up
+                JOIN investment_flow_current current_flow
+                  ON current_flow.account_id = follow_up.account_id
+                 AND current_flow.symbol = follow_up.symbol
+                 AND current_flow.decision_episode_id = follow_up.episode_id
+                WHERE follow_up.account_id = %s AND follow_up.symbol = %s
+                  AND follow_up.status = 'pending' AND follow_up.observable = 1
+                ORDER BY follow_up.updated_at ASC, follow_up.condition_id ASC
                 LIMIT 80
                 """,
                 (str(account_id or ""), str(symbol or "").upper()),
@@ -2224,6 +2317,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         transitions: List[Dict[str, object]] = []
         for row in rows or []:
             payload = _json_loads(row.get("payload_json"), {})
+            payload.update({
+                "episodeId": str(row.get("episode_id") or ""),
+                "accountId": str(row.get("account_id") or account_id or ""),
+                "symbol": str(row.get("symbol") or symbol or "").upper(),
+                "trackingOwner": "system",
+                "trackingCadence": "each-live-snapshot",
+                "trackingStatus": "active",
+                "notificationOnTransition": True,
+            })
             updated, material = evaluate_follow_up_conditions([payload], facts, observed_at)
             if not updated or updated[0] == payload:
                 continue

@@ -12,6 +12,10 @@ from digital_twin.domain.customer_evidence_explanation import (
     customer_text_quality_issues,
     enforce_customer_message_quality,
 )
+from digital_twin.domain.customer_investment_document import (
+    customer_follow_up_condition_clause,
+    customer_investment_text,
+)
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_ai_gate_text import user_friendly_ai_text
 from digital_twin.domain.notifications import NotificationJob
@@ -108,7 +112,87 @@ def review_only_context():
 
 
 class CustomerNotificationExplanationTests(unittest.TestCase):
-    def test_internal_evidence_and_missing_field_names_are_not_customer_text(self):
+    def test_customer_boundary_translates_conditions_and_hides_internal_terms(self):
+        moving_average = customer_follow_up_condition_clause(
+            "ma20Distance",
+            "<=",
+            0,
+            current=10.76,
+        )
+        volume = customer_follow_up_condition_clause(
+            "volumeRatio",
+            ">=",
+            1.5,
+            current=0.06,
+        )
+
+        self.assertEqual(
+            "현재가가 20일 평균 가격 이하로 내려가면 (현재 20일 평균보다 10.76% 위)",
+            moving_average,
+        )
+        self.assertEqual(
+            "최근 평균 대비 거래량이 1.5배 이상이면 (현재 0.06배)",
+            volume,
+        )
+        self.assertNotIn("ma20Distance", moving_average)
+        self.assertNotIn("20일선 차이", moving_average)
+
+        text = customer_investment_text(
+            "TypeDB 가설 관계의 인과 경로에서 외국인 수급과 단기 추세, "
+            "밸류에이션과 펀더멘털을 함께 관측해 무효화 임계값을 정했습니다."
+        )
+
+        self.assertIn("외국인 매매 흐름", text)
+        self.assertIn("가격 흐름", text)
+        self.assertIn("현재 가격 수준", text)
+        self.assertIn("실적과 재무 상태", text)
+        for internal in (
+            "TypeDB", "가설", "인과 경로", "수급", "추세", "밸류에이션",
+            "펀더멘털", "관측", "무효화", "임계값",
+        ):
+            self.assertNotIn(internal, text)
+
+        legacy_ai = customer_investment_text(
+            "위험 방향은 부정적이지만 관계 근거가 weakened 상태이므로 현재 행동은 "
+            "주문 없는 NO_ACTION입니다. qualification이 shadow이고 "
+            "reasoningLineage도 judgementEligible이 아닙니다."
+        )
+        self.assertIn("지금은 보유 수량을 바꾸지 않습니다", legacy_ai)
+        for internal in (
+            "weakened", "NO_ACTION", "qualification", "shadow",
+            "reasoningLineage", "judgementEligible",
+        ):
+            self.assertNotIn(internal, legacy_ai)
+
+        catalyst = customer_investment_text(
+            "다음 공시의 발행주식수 증가 확인이 핵심 촉매입니다."
+        )
+        self.assertIn("주가에 영향을 줄 핵심 사건", catalyst)
+        self.assertNotIn("상승 계기", catalyst)
+
+        monitored_filing = customer_investment_text(
+            "다음 공시에서 주식수와 현금흐름 방향을 확인한 뒤 행동 변경을 검토하셔야 합니다."
+        )
+        self.assertEqual(
+            "다음 공시에서 주식수와 현금흐름 방향이 확인되면 시스템이 행동 변경 여부를 다시 판단합니다.",
+            monitored_filing,
+        )
+        malformed_legacy = customer_investment_text(
+            "강한 확인된 신호가 0% 아래로 내려감되고 일부 매도 여부으로 전환하되, "
+            "두 조건이 모두 확인하면 실적과 재무 상태 반대 가능성가 약해집니다. "
+            "기간 히스토리 부족과 최근 기간 현재 수치 부족도 확인됐습니다."
+        )
+        self.assertIn("강하게 확인된 신호가 0% 아래로 내려가고", malformed_legacy)
+        self.assertIn("일부 매도 여부를 다시 판단하되", malformed_legacy)
+        self.assertIn("두 조건이 모두 확인되면", malformed_legacy)
+        self.assertIn("실적과 재무 상태가 양호하다는 반대 근거가", malformed_legacy)
+        self.assertIn("과거 데이터 부족과 최근 데이터 부족", malformed_legacy)
+        for malformed in (
+            "강한 확인된", "내려감되고", "여부으로", "모두 확인하면",
+            "반대 가능성가", "히스토리", "현재 수치 부족",
+        ):
+            self.assertNotIn(malformed, malformed_legacy)
+
         raw = (
             "상대가치 부담 신호: 상대가치 부담 신호 / HAS_INFERRED_RISK / "
             "LS네트웍스 · 모델 신호"
@@ -177,13 +261,14 @@ class CustomerNotificationExplanationTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertIn("지금은 주문하지 않습니다.", message)
-        self.assertIn("매수·매도 판단에는 사용하지 않았습니다.", message)
-        self.assertIn("<b>판단 이유</b>", message)
+        self.assertIn("5일·20일·60일 평균 가격을 모두 웃돌아", message)
+        self.assertIn("기존 행동을 바꿀 근거가 한쪽으로 우세하지 않습니다.", message)
+        self.assertIn("<b>왜 이렇게 봤나요</b>", message)
         self.assertIn("위험 쪽: 재무 위험 모델은 이번 반등이 이어지지 못할 가능성을 감지했습니다.", message)
-        self.assertIn("5일선보다 0.9% 높음", message)
+        self.assertIn("5일 평균 가격보다 0.9% 높음", message)
         self.assertIn("거래량 48,156 · 평균 대비 0.49배", message)
         self.assertIn("현금흐름과 부채의 실제 수치", message)
-        self.assertIn("예상 EPS·적정가·목표 PER", message)
+        self.assertNotIn("예상 EPS·적정가·목표 PER", message)
         self.assertNotIn("판단 유지", message)
         self.assertNotIn("이전 AI 최종 판단과 같은 관심 유지", message)
         self.assertNotIn("TypeDB 검토 가설", message)
@@ -191,6 +276,8 @@ class CustomerNotificationExplanationTests(unittest.TestCase):
         self.assertNotIn("graph.", message)
         self.assertNotIn("expectedEPS", message)
         self.assertNotIn("모델 신호", message)
+        self.assertNotIn("TypeDB", message)
+        self.assertNotIn("가설", message)
 
     def test_customer_projection_keeps_observed_fields_and_missing_proof_separate(self):
         rows = build_customer_evidence_explanations(review_only_context())

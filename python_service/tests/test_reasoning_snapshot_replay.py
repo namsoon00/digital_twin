@@ -7,6 +7,10 @@ from unittest.mock import patch
 
 from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
+from digital_twin.domain.events import (
+    INVESTMENT_FOLLOW_UP_TRANSITIONED,
+    ONTOLOGY_REASONING_REQUESTED,
+)
 from digital_twin.domain.ontology_projection_audit import projection_source_snapshot
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AlertEvent, AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
@@ -18,6 +22,7 @@ from digital_twin.infrastructure.mysql_monitoring_stores import (
 )
 from digital_twin.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
+from digital_twin.infrastructure.event_bus import EventBus
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from digital_twin.infrastructure.service_factory import (
     ActiveDeploymentWorldProjectionSink,
@@ -407,8 +412,31 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
                     "targetCount": 1,
                     "savedOutcomeCount": 1,
                     "generatedAt": observed_snapshot.generated_at,
+                    "observedAt": observed_snapshot.generated_at,
+                    "followUpObservation": {
+                        "status": "transitioned",
+                        "transitionCount": 1,
+                        "transitions": [{
+                            "conditionId": "decision-follow-up:1",
+                            "sourceConditionId": "follow-up:ma20",
+                            "episodeId": "decision-episode:1",
+                            "symbol": "AAPL",
+                            "field": "ma20Distance",
+                            "operator": ">=",
+                            "threshold": 0,
+                            "purpose": "strengthen",
+                            "previousValue": -0.1,
+                            "currentValue": 0.2,
+                            "status": "satisfied",
+                            "transitionKind": "false-to-true",
+                            "transitionId": "follow-up-transition:1",
+                            "transitionAt": observed_snapshot.generated_at,
+                            "transitionVerified": True,
+                        }],
+                    },
                 }
 
+        event_bus = EventBus()
         runner = MonitorRunner(
             [account()],
             store=SnapshotStore(monitor_state()),
@@ -417,12 +445,42 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
             event_sender=lambda *_args, **_kwargs: None,
             cycle_recorder=Recorder(),
             investment_outcome_observer=OutcomeObserver(),
+            event_publisher=event_bus,
         )
 
         runner.run_once()
 
         self.assertEqual(["source-commit", "outcome-observation"], order)
         self.assertEqual("observed", runner.last_investment_outcome_results["acct"]["status"])
+        self.assertEqual(
+            [INVESTMENT_FOLLOW_UP_TRANSITIONED, ONTOLOGY_REASONING_REQUESTED],
+            [event.name for event in event_bus.published],
+        )
+        request = event_bus.published[-1]
+        self.assertEqual("decision-follow-up-transition", request.payload["trigger"])
+        self.assertEqual(["AAPL"], request.payload["symbols"])
+        self.assertEqual(
+            "DecisionFollowUpCondition",
+            request.payload["sourceFacts"][0]["factType"],
+        )
+        self.assertEqual(
+            ["DecisionFollowUpCondition", "TechnicalIndicator"],
+            request.payload["factTypes"],
+        )
+        dependency_keys = request.payload["factChangeContract"][
+            "dependencyKeysBySymbol"
+        ]["AAPL"]
+        self.assertIn("kind:decision-follow-up-condition", dependency_keys)
+        self.assertIn("kind:stock:field:ma20distance", dependency_keys)
+        self.assertTrue(
+            request.payload["factChangeContract"][
+                "dependencyKeysCompleteBySymbol"
+            ]["AAPL"]
+        )
+        self.assertEqual(
+            "reasoning-requested",
+            runner.last_investment_outcome_results["acct"]["followUpReasoning"]["status"],
+        )
 
 
 if __name__ == "__main__":

@@ -62,7 +62,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v8-crypto-event-dependency-routing"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v9-decision-follow-up-routing"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},
@@ -109,6 +109,7 @@ FACT_TYPE_SCOPE_FAMILIES = {
     "governancechange": {"governance"},
     "capitalstructurechange": {"capital"},
     "valuationobservation": {"company-valuation"},
+    "decisionfollowupcondition": {"episode"},
 }
 
 # Exact RuleBox-readable ABox kinds carried by event-style source facts.  A
@@ -131,6 +132,7 @@ FACT_TYPE_DEPENDENCY_KEYS = {
     "investmentcalendarevent": {"kind:investment-calendar-event"},
     "verifiedclaim": {"kind:verified-claim"},
     "verificationrun": {"kind:verification-run"},
+    "decisionfollowupcondition": {"kind:decision-follow-up-condition"},
 }
 
 # These source facts are projected onto stock properties. Their exact RuleBox
@@ -144,6 +146,36 @@ FIELD_ROUTED_FACT_TYPES = {
     "executionflow",
     "investorflow",
     "orderbook",
+}
+
+FOLLOW_UP_FIELD_FACT_TYPES = {
+    "currentprice": "MarketQuote",
+    "pricechangerate": "MarketQuote",
+    "pricechangepct": "MarketQuote",
+    "ma5distance": "TechnicalIndicator",
+    "ma20distance": "TechnicalIndicator",
+    "ma60distance": "TechnicalIndicator",
+    "ma5slope": "TechnicalIndicator",
+    "ma20slope": "TechnicalIndicator",
+    "ma60slope": "TechnicalIndicator",
+    "volume": "TradeFlow",
+    "volumeratio": "TradeFlow",
+    "timeadjustedvolumeratio": "TradeFlow",
+    "buyvolume": "ExecutionFlow",
+    "sellvolume": "ExecutionFlow",
+    "tradestrength": "ExecutionFlow",
+    "bidaskimbalance": "OrderBook",
+    "orderbookimbalance": "OrderBook",
+    "foreignnetvolume": "InvestorFlow",
+    "institutionnetvolume": "InvestorFlow",
+    "usdkrw": "FXRate",
+    "usdkrwrate": "FXRate",
+    "usdkrwdeltapct": "FXRate",
+    "us10yyield": "InterestRate",
+    "krbaserate": "InterestRate",
+    "macrodgs10": "InterestRate",
+    "macrodgs2": "InterestRate",
+    "macrodff": "InterestRate",
 }
 
 FIELD_DEPENDENCY_ALIASES = {
@@ -216,6 +248,17 @@ KNOWN_SCOPE_FAMILIES = {
 
 def normalized_fact_type(value: object) -> str:
     return "".join(character for character in str(value or "").lower() if character.isalnum())
+
+
+def follow_up_field_fact_types(fields: Iterable[object]) -> List[str]:
+    """Return the original fact families that a tracked field re-observed."""
+
+    return sorted({
+        FOLLOW_UP_FIELD_FACT_TYPES[token]
+        for value in fields or []
+        for token in [_field_token(value)]
+        if token in FOLLOW_UP_FIELD_FACT_TYPES
+    })
 
 
 def scope_families_for_fact_types(fact_types: Iterable[object]) -> List[str]:

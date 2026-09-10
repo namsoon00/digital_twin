@@ -11,12 +11,20 @@ from ..domain.context_observation_notifications import (
     context_observation_evidence_presentation,
     typedb_context_observation_contract,
 )
+from ..domain.customer_investment_document import (
+    CustomerInvestmentDocument,
+    CustomerInvestmentSection,
+    customer_follow_up_condition_clause,
+    customer_investment_document_quality,
+    normalized_customer_investment_document,
+)
 from ..domain.customer_evidence_explanation import customer_evidence_rows, customer_safe_text
 from ..domain.notification_ai import relation_context_value
 from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from ..domain.notification_ai_gate_text import reference_date
 from ..domain.notification_delivery_explanation import customer_delivery_explanation_lines
+from .customer_investment_message import render_customer_investment_document
 
 
 FIELD_LABELS = {
@@ -184,13 +192,13 @@ def _lifecycle_relation_rows(context: Dict[str, object]) -> List[str]:
         rule_ids = snapshot.get("sourceRuleIds") or transition.get("sourceRuleIds") or []
         state = str(transition.get("currentState") or "").strip().lower()
         ending = {
-            "strengthened": "관계의 근거가 강해졌습니다.",
-            "weakened": "관계의 근거가 약해졌습니다.",
-            "invalidated": "관계가 더 이상 성립하지 않습니다.",
-            "expired": "관계의 유효기간이 끝났습니다.",
-            "maintained": "관계가 유지됐습니다.",
-            "observed": "관계가 새로 확인됐습니다.",
-        }.get(state, "관계 상태가 바뀌었습니다.")
+            "strengthened": "쪽 근거가 강해졌습니다.",
+            "weakened": "쪽 근거가 약해졌습니다.",
+            "invalidated": "신호가 더 이상 확인되지 않습니다.",
+            "expired": "신호의 확인 기간이 끝났습니다.",
+            "maintained": "신호가 유지됐습니다.",
+            "observed": "신호가 새로 확인됐습니다.",
+        }.get(state, "신호 상태가 바뀌었습니다.")
         for rule_id in rule_ids:
             label = _rule_relation_label(context, str(rule_id or "").strip())
             if label:
@@ -655,6 +663,9 @@ def _follow_up_rows(context: Dict[str, object]) -> List[str]:
     rows = []
     for item in continuity.get("followUpConditions") or []:
         condition = _mapping(item)
+        status = str(condition.get("status") or "pending").strip().lower()
+        if status in {"superseded", "canceled", "expired", "unobservable", "legacy-unverified"}:
+            continue
         field = str(condition.get("field") or "").strip()
         operator = str(condition.get("operator") or "").strip()
         if not field or operator not in {">", ">=", "<", "<=", "==", "!="}:
@@ -662,19 +673,28 @@ def _follow_up_rows(context: Dict[str, object]) -> List[str]:
         threshold = condition.get("threshold")
         if threshold in (None, ""):
             continue
-        value = _threshold_text(field, threshold, context)
-        comparison = {
-            ">": value + " 초과", ">=": value + " 이상",
-            "<": value + " 미만", "<=": value + " 이하",
-            "==": value + "일 때", "!=": value + "이 아닐 때",
-        }[operator]
         purpose = {
-            "strengthen": "관계 강화", "weaken": "관계 약화",
-            "invalidate": "관계 해제", "switch": "관계 전환",
-        }.get(str(condition.get("purpose") or "").lower(), "재확인")
+            "strengthen": "현재 해석을 더 뒷받침",
+            "weaken": "현재 해석을 약하게 봄",
+            "invalidate": "현재 해석을 취소",
+            "switch": "다른 대응을 다시 비교",
+        }.get(str(condition.get("purpose") or "").lower(), "다시 판단")
         label = _text(condition.get("label")) or FIELD_LABELS.get(field, "확인 지표")
         outcome = _text(condition.get("onSatisfied"))
-        row = purpose + ": " + label + " " + comparison
+        facts = relation_facts(context)
+        market = str(facts.get("market") or "").upper()
+        clause = customer_follow_up_condition_clause(
+            field,
+            operator,
+            threshold,
+            current=condition.get("currentValue"),
+            currency=str(facts.get("currency") or ("USD" if market == "US" else "KRW")),
+            label=label,
+        )
+        if not clause:
+            continue
+        prefix = "조건 도달" if status in {"satisfied", "invalidated"} else "자동 추적 중"
+        row = prefix + " · " + clause + " → " + purpose
         if outcome:
             row += " → " + outcome
         rows.append(row)
@@ -690,15 +710,11 @@ def typedb_observation_telegram_message(
 
     observation = typedb_context_observation_contract(context)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
-    relation_label = _text(observation.get("selectedRuleLabel") or "관계 변화")
+    relation_label = _text(observation.get("selectedRuleLabel") or "중요한 변화")
     label = _notification_intent_label(context) or relation_label
-    headline = "🧩 TypeDB 추론"
     symbol = str(observation.get("symbol") or context.get("symbol") or "").strip().upper()
     target_name = CRYPTO_DISPLAY_NAMES.get(symbol) or _target_name(target)
-    if target_name:
-        headline += " · " + target_name
-    if label and label not in headline:
-        headline += " · " + label
+    headline = "🔎 " + ((target_name + " · ") if target_name else "") + "중요한 변화 감지"
     presentation = context_observation_evidence_presentation(context)
     projected_rows = customer_evidence_rows(
         context, include_limitations=False, limit=4
@@ -722,36 +738,60 @@ def typedb_observation_telegram_message(
         if notification_intent_rule_ids
         else []
     )
+    trigger_rows = _trigger_rows(context)
     flow_rows = _flow_rows(context, 3 if detail_level == "concise" else 5)
     follow_up_rows = _follow_up_rows(context)
-    parts = [
-        "<b>" + html.escape(headline, quote=False) + "</b>",
-        ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
-    ]
-    for title, rows in (
-        ("이번 추론 계기", _trigger_rows(context)),
-        ("알림 기준", notification_condition_rows),
-        ("관계 변화", _relation_rows(context, observation)),
-        ("성립 근거", evidence_rows),
-        ("확인 한계", limitation_rows),
-        ("관측값", flow_rows),
-        ("다음 관찰 조건", follow_up_rows),
-    ):
-        if rows:
-            parts.extend(["", "<b>" + title + "</b>", *[_bullet(row) for row in rows]])
+    relation_rows = _relation_rows(context, observation)
+    lead = (
+        trigger_rows[0]
+        if trigger_rows
+        else label + "이 확인됐습니다."
+        if label
+        else relation_rows[0] if relation_rows
+        else "가격·수급·뉴스를 연결해 볼 중요한 변화가 확인됐습니다."
+    )
     detail_url = str(context.get("notificationDetailUrl") or "").strip()
-    if detail_url:
-        parts.extend([
-            "",
-            "• <a href=\"" + html.escape(detail_url, quote=True) + "\">웹에서 전체 근거 보기</a>",
-        ])
     reference = response.reference_date or reference_date(context)
     sent = str(context.get("sentTime") or "").strip()
-    footer = " · ".join(part for part in [
-        "기준 " + str(reference) if reference else "",
-        "발송 " + sent if sent else "",
-        "번호 " + str(context.get("notificationNumber")) if context.get("notificationNumber") else "",
-    ] if part)
-    if footer:
-        parts.extend(["", "<i>" + html.escape(footer, quote=False) + "</i>"])
-    return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
+    delivery_profile = _mapping(context.get("messageDeliveryProfile"))
+    level = str(
+        delivery_profile.get("level")
+        or context.get("messageDeliveryLevel")
+        or "beginner"
+    ).strip()
+    document = CustomerInvestmentDocument(
+        role="typedb-observation",
+        headline=headline,
+        target=target,
+        role_label="규칙 기반 변화 감지 · 가격·수급·뉴스의 연결이 달라질 때 보냅니다.",
+        lead=lead,
+        sections=tuple(
+            CustomerInvestmentSection(key, title, tuple(rows))
+            for key, title, rows in (
+                ("change", "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
+                ("importance", "왜 중요한가요", [*notification_condition_rows, *evidence_rows]),
+                ("tracking", "시스템이 추적 중", follow_up_rows),
+                (
+                    "next-update",
+                    "다음 알림",
+                    [
+                        "추적 조건에 도달하면 최신 가격·수급·뉴스를 다시 연결해 결과를 알려드립니다."
+                    ] if follow_up_rows else [
+                        "이 변화가 투자 행동을 바꿀 수준이면 AI 종합 판단이 별도 알림으로 이어집니다."
+                    ],
+                ),
+                ("current", "현재 상황", flow_rows),
+                ("limitations", "자료 참고", limitation_rows[:1]),
+            )
+            if rows
+        ),
+        detail_url=detail_url,
+        reference_at=str(reference or ""),
+        sent_at=sent,
+        notification_number=str(context.get("notificationNumber") or ""),
+        language_level=level,
+    )
+    normalized = normalized_customer_investment_document(document)
+    context["customerInvestmentDocument"] = normalized.to_dict()
+    context["customerInvestmentDocumentQuality"] = customer_investment_document_quality(normalized)
+    return render_customer_investment_document(normalized)

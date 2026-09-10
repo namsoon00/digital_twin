@@ -76,7 +76,12 @@ class NotificationRenderingService:
             original_quality_issues = (
                 customer_text_quality_issues(rendered) if is_investment else []
             )
-            if is_investment:
+            document_quality = (
+                context.get("customerInvestmentDocumentQuality")
+                if isinstance(context.get("customerInvestmentDocumentQuality"), dict)
+                else {}
+            )
+            if is_investment and document_quality.get("status") != "passed":
                 rendered = enforce_customer_message_quality(rendered)
             quality_issues = customer_text_quality_issues(rendered) if is_investment else []
             job.text = rendered
@@ -140,7 +145,14 @@ class NotificationRenderingService:
         except Exception:  # noqa: BLE001 - malformed legacy context must remain readable.
             return original
         rendered = str((snapshot.context or {}).get("telegramMessage") or snapshot.text or "").strip()
-        return enforce_customer_message_quality(rendered) if rendered else original
+        quality = (
+            (snapshot.context or {}).get("customerInvestmentDocumentQuality")
+            if isinstance((snapshot.context or {}).get("customerInvestmentDocumentQuality"), dict)
+            else {}
+        )
+        if not rendered:
+            return original
+        return rendered if quality.get("status") == "passed" else enforce_customer_message_quality(rendered)
 
     @staticmethod
     def apply_investment_presentation_contract(job: NotificationJob) -> None:

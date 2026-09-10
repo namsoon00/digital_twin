@@ -14,7 +14,7 @@ from .market_evidence_profiles import observable_follow_up_fields
 FOLLOW_UP_CONDITION_VERSION = "decision-follow-up-condition-v2"
 FOLLOW_UP_STATUSES = {
     "pending", "satisfied", "invalidated", "expired", "unobservable",
-    "legacy-unverified",
+    "legacy-unverified", "superseded", "canceled",
 }
 FOLLOW_UP_PURPOSES = {"strengthen", "weaken", "invalidate", "switch"}
 FOLLOW_UP_OPERATORS = {">", ">=", "<", "<=", "==", "!="}
@@ -109,6 +109,10 @@ def normalize_follow_up_conditions(
             "observable": is_observable,
             "observedAt": str(facts.get("updatedAt") or facts.get("sourceAsOf") or ""),
             "expiresAt": str(raw.get("expiresAt") or ""),
+            "trackingOwner": "system" if is_observable else "none",
+            "trackingCadence": "each-live-snapshot" if is_observable else "unsupported",
+            "trackingStatus": "active" if is_observable else "unavailable",
+            "notificationOnTransition": bool(is_observable),
         }
         if is_observable:
             baseline_observed = current_value not in (None, "")
@@ -217,7 +221,9 @@ def evaluate_follow_up_conditions(
                     value,
                 )
         if row.get("status") != previous:
+            row["previousStatus"] = previous
             row["transitionAt"] = stamp
+            row["trackingStatus"] = "condition-reached"
             material = True
         updated.append(row)
     return updated, material

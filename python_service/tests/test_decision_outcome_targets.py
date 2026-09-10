@@ -7,6 +7,7 @@ from digital_twin.domain.hypothesis_outcome_contract import (
     HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
     outcome_contract_fingerprint,
 )
+from digital_twin.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION
 from digital_twin.application.investment_reasoning.episode_projection import (
     decision_episode_outcome_contract_readiness,
     hypothesis_coverage_gap_request_from_subject_case,
@@ -79,6 +80,41 @@ class PendingRepairConnection(RecordingConnection):
                 else self.decision_rows
             )
             return SimpleNamespace(fetchall=lambda: list(rows))
+        return SimpleNamespace(rowcount=1)
+
+
+class FollowUpConnection(RecordingConnection):
+    def __init__(self, payload):
+        super().__init__()
+        self.payload = dict(payload or {})
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.split())
+        self.statements.append((normalized, tuple(params)))
+        if normalized.startswith("SELECT follow_up.condition_id"):
+            return SimpleNamespace(fetchall=lambda: [{
+                "condition_id": "decision-follow-up:1",
+                "episode_id": "decision-episode:1",
+                "account_id": "account:1",
+                "symbol": "NVDA",
+                "payload_json": json.dumps(self.payload),
+            }])
+        return SimpleNamespace(rowcount=1)
+
+
+class SupersedeConnection(RecordingConnection):
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.split())
+        self.statements.append((normalized, tuple(params)))
+        if normalized.startswith("SELECT decision_episode_id"):
+            return SimpleNamespace(fetchone=lambda: {
+                "decision_episode_id": "decision-episode:new",
+            })
+        if normalized.startswith("SELECT condition_id"):
+            return SimpleNamespace(fetchall=lambda: [{
+                "condition_id": "decision-follow-up:old",
+                "payload_json": json.dumps({"status": "pending"}),
+            }])
         return SimpleNamespace(rowcount=1)
 
 
@@ -175,6 +211,64 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
             connection.statements[-1][0],
         )
         self.assertEqual(71, len(outcome_contract_fingerprint(predictive_contract())))
+
+        payload = {
+            "version": FOLLOW_UP_CONDITION_VERSION,
+            "conditionId": "decision-follow-up:1",
+            "field": "ma20Distance",
+            "operator": ">=",
+            "threshold": 0,
+            "purpose": "strengthen",
+            "status": "pending",
+            "observable": True,
+            "armed": True,
+            "previousMatched": False,
+            "currentMatched": False,
+            "currentValue": -0.2,
+        }
+        connection = FollowUpConnection(payload)
+        store = self.store()
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        store.connect = connect
+        transitions = store.evaluate_follow_up_observation(
+            "account:1",
+            "NVDA",
+            {"ma20Distance": 0.3},
+            "2026-08-25T01:00:00Z",
+        )
+
+        self.assertEqual(1, len(transitions))
+        self.assertEqual("decision-episode:1", transitions[0]["episodeId"])
+        self.assertEqual("account:1", transitions[0]["accountId"])
+        self.assertEqual("NVDA", transitions[0]["symbol"])
+        self.assertEqual("pending", transitions[0]["previousStatus"])
+        self.assertEqual("condition-reached", transitions[0]["trackingStatus"])
+        self.assertEqual("system", transitions[0]["trackingOwner"])
+        self.assertEqual("each-live-snapshot", transitions[0]["trackingCadence"])
+        self.assertTrue(transitions[0]["notificationOnTransition"])
+        self.assertTrue(transitions[0]["transitionVerified"])
+        self.assertIn("JOIN investment_flow_current", connection.statements[0][0])
+
+        supersede_connection = SupersedeConnection()
+        changed = store.supersede_prior_follow_ups_for_current(
+            supersede_connection,
+            "account:1",
+            "NVDA",
+            "decision-episode:new",
+            "2026-08-25T01:01:00Z",
+        )
+        self.assertEqual(1, changed)
+        update_params = next(
+            params for sql, params in supersede_connection.statements
+            if sql.startswith("UPDATE investment_decision_follow_ups")
+        )
+        superseded_payload = json.loads(update_params[0])
+        self.assertEqual("superseded", superseded_payload["status"])
+        self.assertEqual("decision-episode:new", superseded_payload["supersededByEpisodeId"])
 
     def test_predictive_decision_creates_one_durable_target_per_horizon(self):
         connection = RecordingConnection()

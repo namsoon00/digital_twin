@@ -909,7 +909,15 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v6", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v21-customer-delta", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-judge-v22-customer-document", prompt_audit["promptRelease"]["version"])
+        self.assertIn(
+            "시스템이 자동으로 확인한다고 표현할 조건은 반드시 followUpConditions",
+            prompt_audit["prompt"],
+        )
+        self.assertIn(
+            "사용자 문장에는 이 구현 용어를 쓰지 않는다",
+            prompt_audit["prompt"],
+        )
         self.assertLessEqual(
             prompt_audit["inferencePacket"]["promptBudget"]["renderedPromptBytes"],
             prompt_audit["inferencePacket"]["promptBudget"]["maxPromptBytes"],

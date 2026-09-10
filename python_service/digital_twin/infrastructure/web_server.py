@@ -3509,7 +3509,36 @@ def notification_job_public_payload(
 ) -> Dict[str, object]:
     context = job.context or {}
     configured_settings = settings
+    customer_document = (
+        dict(context.get("customerInvestmentDocument") or {})
+        if isinstance(context.get("customerInvestmentDocument"), dict)
+        else {}
+    )
+    customer_document_quality = (
+        dict(context.get("customerInvestmentDocumentQuality") or {})
+        if isinstance(context.get("customerInvestmentDocumentQuality"), dict)
+        else {}
+    )
     customer_text = notification_customer_text(job)
+    if job.message_type == INVESTMENT_INSIGHT and not customer_document:
+        presentation_job = NotificationJob.from_dict(job.to_dict())
+        try:
+            NotificationRenderingService.apply_investment_presentation_contract(
+                presentation_job
+            )
+            customer_document = dict(
+                (presentation_job.context or {}).get("customerInvestmentDocument") or {}
+            )
+            customer_document_quality = dict(
+                (presentation_job.context or {}).get("customerInvestmentDocumentQuality") or {}
+            )
+            customer_text = str(
+                (presentation_job.context or {}).get("telegramMessage")
+                or presentation_job.text
+                or customer_text
+            )
+        except Exception:  # noqa: BLE001 - archived text remains the safe fallback.
+            customer_document = {}
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     trigger_ledger = context.get("deliveryTriggerLedger") if isinstance(context.get("deliveryTriggerLedger"), list) else []
     delivery_explanation = (
@@ -3519,8 +3548,10 @@ def notification_job_public_payload(
     )
     title_source = context.get("headline") if job.message_type == INVESTMENT_INSIGHT else (context.get("title") or context.get("headline") or "")
     if job.message_type == INVESTMENT_INSIGHT:
+        if customer_document.get("headline"):
+            title_source = customer_document.get("headline")
         validated = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
-        if validated:
+        if validated and not customer_document.get("headline"):
             try:
                 title_source = execution_headline(context, NotificationAIValidatedResponse.from_dict(validated))
             except Exception:  # noqa: BLE001 - old incomplete alert payloads keep their saved title.
@@ -3679,6 +3710,8 @@ def notification_job_public_payload(
     if detail:
         configured_settings = configured_settings or operational_read_settings()
         payload["fullText"] = full_notification_text(customer_text)
+        payload["customerInvestmentDocument"] = customer_document
+        payload["customerInvestmentDocumentQuality"] = customer_document_quality
         payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this
         # job, never from the currently active graph generation.

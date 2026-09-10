@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v21-customer-delta"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v22-customer-document"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v20"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -265,6 +265,10 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "입력에 없는 목표가, 손절가, 비중, 확률, 점수는 만들지 않는다.",
     "쉬운 한국어로 쓰고 내부 변수명과 TypeDB 식별자는 사용자 설명문에 노출하지 않는다.",
     "사용자 표시 문장은 모두 존댓말 완결문으로 쓴다. '가설 관계', '행동 적격성', '시스템 준비 상태', '독립 결과' 같은 구현 용어 대신 실제 가격·수급·재무 변화와 그 의미를 직접 설명한다.",
+    "내부 판단에서는 TypeDB, TBox, ABox, RuleBox, InferenceBox, 가설, 인과 경로, 수명주기, materialization 같은 정확한 기술 개념을 사용해도 된다. 그러나 summary, currentActionPlan, executionDecision, changeAnalysis, nextActionPlan, evidence, counterEvidence, invalidationCondition, nextChecks, narrativeClaims의 text와 insightAssessment의 사용자 문장에는 이 구현 용어를 쓰지 않는다.",
+    "사용자 문장에서는 '관계·가설·인과 경로' 대신 어떤 가격·거래량·외국인·기관 매매 흐름·뉴스·공시·실적·금리·환율을 함께 봤는지와 그 의미를 직접 쓴다. '수급'은 가능하면 '외국인·기관 매매 흐름', '추세'는 '가격 흐름', '밸류에이션'은 '현재 가격 수준', '펀더멘털'은 '실적과 재무 상태'로 풀어 쓴다.",
+    "시스템이 자동으로 확인한다고 표현할 조건은 반드시 followUpConditions에 field, operator, threshold, purpose, label, onSatisfied를 모두 기록한다. 구조화하지 못한 nextChecks는 시스템 자동 추적이라고 말하지 말고, 아직 필요한 외부 자료와 갱신 출처를 구체적으로 쓴다.",
+    "현재 입력으로 구조화할 수 있는 모든 수치형 다음 조건은 followUpConditions로 옮긴다. nextChecks에 같은 조건을 문장으로 중복하지 않는다.",
     "currentActionPlan은 행동 코드나 '관찰한다'만 반복하지 말고 지금 할 일과 보류할 일을 명확히 쓴다. nextActionPlan은 '다음 추론에서 확인'처럼 쓰지 말고 실제로 관찰할 가격·거래량·수급·실적·공시·거시 지표와 판단 결과를 쓴다.",
     "설명 문장 없이 응답 스키마를 따르는 JSON 객체 하나만 출력한다.",
 )

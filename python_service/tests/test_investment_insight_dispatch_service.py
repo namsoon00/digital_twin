@@ -319,18 +319,39 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         )
         self.assertNotIn("notificationAiValidatedResponse", typedb_job.context)
         typedb_job.context["displayTarget"] = "스트래티지 / MSTR"
+        typedb_job.context.pop("messageDeliveryLevel", None)
+        typedb_job.context["messageDeliveryProfile"] = {
+            "level": "absoluteBeginner",
+            "label": "왕초보",
+        }
         typedb_message = execution_telegram_message(
             typedb_job.context,
             NotificationAIValidatedResponse(action="NO_ACTION"),
         )
-        self.assertIn("🧩 TypeDB 추론 · 스트래티지 · 벤치마크 민감도 변화", typedb_message)
-        self.assertIn("이번 추론 계기", typedb_message)
-        self.assertIn("새 관측값은 가격 변화율 +2.4%입니다.", typedb_message)
-        self.assertIn("관계 변화", typedb_message)
-        self.assertIn("시장 민감도(베타)는 1.34이며, 성립 기준은 1.2 이상입니다.", typedb_message)
+        self.assertIn("🔎 스트래티지 · 중요한 변화 감지", typedb_message)
+        self.assertIn("규칙 기반 변화 감지", typedb_message)
+        self.assertIn("무엇이 달라졌나요", typedb_message)
+        self.assertIn("새로 확인된 수치는 주가 등락률 +2.4%입니다.", typedb_message)
+        self.assertIn("왜 중요한가요", typedb_message)
+        self.assertIn("시장과 같이 움직이는 정도(베타)는 1.34이며, 확인 기준은 1.2 이상입니다.", typedb_message)
+        self.assertIn("다음 알림", typedb_message)
         self.assertIn("현재가 $132.38", typedb_message)
         self.assertIn("평균 대비 &lt;0.01배", typedb_message)
         self.assertNotIn("AI 투자", typedb_message)
+        self.assertNotIn("TypeDB", typedb_message)
+        self.assertNotIn("추론", typedb_message)
+        self.assertEqual(
+            "typedb-observation",
+            typedb_job.context["customerInvestmentDocument"]["role"],
+        )
+        self.assertEqual(
+            "absoluteBeginner",
+            typedb_job.context["customerInvestmentDocument"]["languageLevel"],
+        )
+        self.assertEqual(
+            "passed",
+            typedb_job.context["customerInvestmentDocumentQuality"]["status"],
+        )
         self.assertEqual(PUBLISH_TYPEDB, observation.inference_dispatch_decision.route)
         self.assertEqual(HANDOFF_AI, actionable.inference_dispatch_decision.route)
 
@@ -389,9 +410,10 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             policy_context,
             NotificationAIValidatedResponse(action="NO_ACTION"),
         )
-        self.assertIn("계정 수익 보호선 도달", policy_message)
         self.assertIn("가격이 직전 확인 기준보다 +0.8% 변해", policy_message)
-        self.assertIn("수익률은 +47.8%이며, 성립 기준은 +25.0% 이상", policy_message)
+        self.assertIn("수익 보호 알림 쪽 근거가 강해졌습니다", policy_message)
+        self.assertIn("가격이 직전 확인 기준보다 +0.8% 변해", policy_message)
+        self.assertIn("수익률은 +47.8%이며, 확인 기준은 +25.0% 이상", policy_message)
         self.assertNotIn("price-move", policy_message)
 
         historical_job = NotificationJob.create(
@@ -406,8 +428,8 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         persisted_message = NotificationRenderingService.render_persisted_customer_text(
             historical_job
         )
-        self.assertIn("계정 수익 보호선 도달", persisted_message)
-        self.assertIn("수익률은 +47.8%이며, 성립 기준은 +25.0% 이상", persisted_message)
+        self.assertIn("가격이 직전 확인 기준보다 +0.8% 변해", persisted_message)
+        self.assertIn("수익률은 +47.8%이며, 확인 기준은 +25.0% 이상", persisted_message)
         self.assertNotIn("price-move", persisted_message)
         self.assertEqual("<b>TypeDB 추론</b>\n• price-move", historical_job.text)
 

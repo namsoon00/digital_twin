@@ -251,11 +251,8 @@ def customer_safe_text(value: object) -> str:
     text = text.replace("가격 변화율가", "가격 변화율이")
     text = text.replace("평균 대비 거래량가", "평균 대비 거래량이")
     text = text.replace("조건부이 아니게", "조건부에서 벗어나게")
-    text = text.replace("5일 평균", "5일선")
-    text = text.replace("20일 평균", "20일선")
-    text = text.replace("60일 평균", "60일선")
     text = re.sub(
-        r"(거래량[이가은는]?)\s*(5|20|60)일선\s*([\d,.]+배)",
+        r"(거래량[이가은는]?)\s*(5|20|60)일(?:선|\s*평균(?:\s*거래량의)?)\s*([\d,.]+배)",
         r"\1 \2일 평균 거래량의 \3",
         text,
     )

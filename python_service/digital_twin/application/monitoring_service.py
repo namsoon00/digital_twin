@@ -5,7 +5,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
-from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
+from ..domain.events import (
+    alerts_detected_event,
+    investment_follow_up_transitioned_event,
+    monitoring_cycle_completed_event,
+    ontology_reasoning_requested_event,
+    snapshot_collected_event,
+)
 from ..domain.ontology_projection_input import (
     compact_monitor_state_for_ontology,
     frozen_monitor_state_for_reasoning,
@@ -15,6 +21,9 @@ from ..domain.ontology_projection_status import projection_reuses_unchanged_infe
 from ..domain.message_types import PORTFOLIO_ONTOLOGY_SIGNAL
 from ..domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state
 from ..domain.repositories import MonitorAccountJob, MonitorAccountJobRepository, MonitorStateRepository, MonitoringCycleRecorder, OntologyProjectionRecorder, SnapshotMonitor
+from ..domain.reasoning_source_facts import reasoning_source_fact
+from ..domain.reasoning_source_snapshot import reasoning_source_snapshot_id
+from ..domain.verified_snapshot_reasoning import VERIFIED_MONITOR_SNAPSHOT_VERSION
 
 
 class MonitorRunner:
@@ -798,6 +807,12 @@ class MonitorRunner:
                 continue
             try:
                 result = dict(observer(snapshot) or {})
+                follow_up_reasoning = self.publish_follow_up_transition_reasoning(
+                    snapshot,
+                    result,
+                )
+                if follow_up_reasoning:
+                    result["followUpReasoning"] = follow_up_reasoning
                 self.last_investment_outcome_results[snapshot.account_id] = result
                 self.progress(
                     "investment_outcomes.observed",
@@ -816,6 +831,106 @@ class MonitorRunner:
                     accountId=snapshot.account_id,
                     reason=str(error)[:180],
                 )
+
+    def publish_follow_up_transition_reasoning(
+        self,
+        snapshot: AccountSnapshot,
+        observation_result: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Turn a verified watch-condition edge into fresh TypeDB work."""
+
+        if not self.event_publisher:
+            return {}
+        follow_up = observation_result.get("followUpObservation")
+        follow_up = dict(follow_up or {}) if isinstance(follow_up, dict) else {}
+        transitions = [
+            dict(item)
+            for item in follow_up.get("transitions") or []
+            if isinstance(item, dict)
+            and item.get("transitionVerified") is True
+            and str(item.get("transitionId") or "").strip()
+            and str(item.get("symbol") or "").strip()
+        ]
+        if not transitions:
+            return {}
+        observed_at = str(
+            follow_up.get("observedAt")
+            or observation_result.get("observedAt")
+            or snapshot.generated_at
+            or ""
+        )
+        snapshot_id = reasoning_source_snapshot_id(
+            snapshot.account_id,
+            snapshot.generated_at,
+        )
+        transition_event = investment_follow_up_transitioned_event(
+            snapshot.account_id,
+            transitions,
+            observed_at,
+            source_snapshot_id=snapshot_id,
+        )
+        persisted_transitions = list(transition_event.payload.get("transitions") or [])
+        if not persisted_transitions:
+            return {}
+        source_facts = [
+            reasoning_source_fact(
+                fact_type="DecisionFollowUpCondition",
+                aggregate_id=str(item.get("conditionId") or ""),
+                subject_ids=[str(item.get("symbol") or "")],
+                source_event=transition_event,
+                payload=item,
+                revision=str(item.get("transitionId") or ""),
+                observed_at=str(item.get("transitionAt") or observed_at),
+                quality_state="verified-observation-transition",
+            ).request_payload()
+            for item in persisted_transitions
+        ]
+        symbols = list(transition_event.payload.get("symbols") or [])
+        fact_types = list(
+            transition_event.payload.get("factTypes")
+            or ["DecisionFollowUpCondition"]
+        )
+        reasoning_event = ontology_reasoning_requested_event(
+            transition_event,
+            "decision-follow-up-transition",
+            symbols=symbols,
+            affected_symbols=symbols,
+            account_id=snapshot.account_id,
+            changed_count=len(persisted_transitions),
+            observed_count=len(persisted_transitions),
+            fact_types=fact_types,
+            fact_types_by_symbol=transition_event.payload.get("factTypesBySymbol") or {},
+            changed_fields_by_symbol=transition_event.payload.get("changedFieldsBySymbol") or {},
+            reason=(
+                "현재 투자 판단의 자동 관찰 조건이 처음 충족되어 최신 ABox와 "
+                "TypeDB 직접 규칙으로 판단을 다시 계산합니다."
+            ),
+            snapshot_barrier={
+                "version": VERIFIED_MONITOR_SNAPSHOT_VERSION,
+                "snapshotId": snapshot_id,
+                "generatedAt": str(snapshot.generated_at or ""),
+                "accountId": str(snapshot.account_id or ""),
+                "expectedSourceFactCount": len(source_facts),
+                "followUpTransitionCount": len(persisted_transitions),
+            },
+            source_facts=source_facts,
+        )
+        self.publish(transition_event)
+        self.publish(reasoning_event)
+        self.progress(
+            "investment_follow_up.reasoning_requested",
+            accountId=snapshot.account_id,
+            symbols=symbols,
+            transitionCount=len(persisted_transitions),
+            reasoningEventId=reasoning_event.event_id,
+        )
+        return {
+            "status": "reasoning-requested",
+            "transitionEventId": transition_event.event_id,
+            "reasoningEventId": reasoning_event.event_id,
+            "symbols": symbols,
+            "transitionCount": len(persisted_transitions),
+        }
 
     def publish_cycle_completed(self, snapshots, events, dry_run: bool, delivered: bool) -> None:
         self.publish(monitoring_cycle_completed_event(

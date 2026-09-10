@@ -100,7 +100,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("HOLD", response.action)
         self.assertEqual(["graph.portfolio.position_limit.v1"], response.portfolio_constraint_rule_ids)
         self.assertIn("<b>지금 할 일</b>", message)
-        self.assertIn("[시스템 판단]", message)
+        self.assertIn("규칙 기반 종합 판단", message)
+        self.assertNotIn("AI 종합 판단", message)
         self.assertNotIn("TypeDB", message)
         self.assertNotIn("종목 의견: 소액 진입 검토", message)
         self.assertIn("관심종목으로 유지", message)
@@ -480,12 +481,12 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("[AI] 지금은 매수하지 않고 관심종목으로 유지합니다.", message)
-        self.assertIn("<b>판단 이유</b>", message)
-        self.assertIn("<b>반대 근거</b>", message)
+        self.assertIn("지금은 매수하지 않고 관심종목으로 유지합니다.", message)
+        self.assertIn("<b>왜 이렇게 봤나요</b>", message)
+        self.assertIn("<b>다른 방향의 신호</b>", message)
         self.assertLess(
-            message.index("<b>판단 이유</b>"),
-            message.index("<b>반대 근거</b>"),
+            message.index("<b>왜 이렇게 봤나요</b>"),
+            message.index("<b>다른 방향의 신호</b>"),
         )
         self.assertNotIn("TypeDB", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
@@ -572,8 +573,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         for heading in [
-            "지금 할 일", "무엇이 바뀌었나", "판단 이유", "반대 근거",
-            "관련 사건", "판단이 바뀌는 조건", "현재 수치",
+            "지금 할 일", "이번에 달라진 점", "왜 이렇게 봤나요", "다른 방향의 신호",
+            "관련 사건", "추가로 볼 자료", "현재 상황", "원문",
         ]:
             self.assertIn(heading, message)
         self.assertIn("장중 +1.1% · 5일 +2.8% · 20일 -7.4%", message)
@@ -589,11 +590,12 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn('<a href="https://example.test/nvidia-contract">', message)
         self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
-        self.assertIn("[AI]", message)
+        self.assertIn("AI 종합 판단", message)
+        self.assertNotIn("[AI]", message)
         self.assertNotIn("API 조회 정보", message)
         self.assertNotIn("뉴스·공시 요약", message)
 
-    def test_typedb_fallback_is_labeled_as_typedb_not_ai(self):
+    def test_typedb_fallback_is_labeled_as_rules_not_ai(self):
         context = entry_context()
         context["messageDeliveryLevel"] = "beginner"
 
@@ -602,7 +604,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             local_validated_ai_response(context, source="TypeDB inference fallback"),
         )
 
-        self.assertIn("[시스템 판단]", message)
+        self.assertIn("규칙 기반 종합 판단", message)
+        self.assertNotIn("AI 종합 판단", message)
         self.assertNotIn("[AI]", message)
         self.assertNotIn("TypeDB", message)
 
@@ -668,7 +671,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("미국 2년 금리 4.37%", message)
         self.assertIn("미국 10년 금리가 4.5% 이하", message)
         self.assertIn("미국 10년 금리가 5% 이상", message)
-        self.assertIn("Apple 가격이 5일선·20일선·60일선 위를 유지하면", message)
+        self.assertIn("Apple 가격이 5일 평균 가격·20일 평균 가격·60일 평균 가격 위를 유지하면", message)
         for internal in ["거시 부담 관계", "진입 지지 관계", "원시"]:
             self.assertNotIn(internal, message)
 
@@ -813,7 +816,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertIn("<b>지금 할 일</b>", message)
-        self.assertIn("<b>판단 이유</b>", message)
+        self.assertIn("<b>한눈에 보기</b>", message)
+        self.assertIn("규칙 기반 종합 판단", message)
         self.assertNotIn("온톨로지 판단 영역", message)
         self.assertNotIn("TypeDB", message)
 

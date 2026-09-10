@@ -119,6 +119,63 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         self.assertEqual("1", configured["_skipOperationalSchemaBootstrap"])
         self.assertEqual("2", configured["notificationProcessingStaleMinutes"])
 
+        document = {
+            "version": "customer-investment-document-v1",
+            "role": "ai-judgement",
+            "headline": "🧠 엔비디아 · AI 종합 판단 · 보유 유지",
+            "roleLabel": "AI 종합 판단",
+            "lead": "현재 보유 수량을 유지합니다.",
+            "sections": [{
+                "key": "action",
+                "title": "지금 할 일",
+                "rows": ["추가매수와 매도 없이 보유합니다."],
+            }],
+            "links": [{
+                "label": "관련 기사 원문",
+                "url": "https://example.test/nvda-news",
+            }],
+        }
+        quality = {
+            "version": "customer-investment-document-quality-v1",
+            "status": "passed",
+            "issues": [],
+        }
+        job = NotificationJob(
+            job_id="customer-document-job",
+            account_id="default",
+            account_label="기본 계정",
+            message_type="investmentInsight",
+            text="이전 메시지",
+            context={
+                "symbol": "NVDA",
+                "customerInvestmentDocument": document,
+                "customerInvestmentDocumentQuality": quality,
+            },
+            status="done",
+            created_at="2026-09-10T00:00:00Z",
+            updated_at="2026-09-10T00:00:00Z",
+        )
+        lifecycle_store = SimpleNamespace(
+            lifecycle_trace=lambda _episode_id: {"status": "not-linked"}
+        )
+
+        with patch.object(
+            web_server.stores,
+            "investment_domain_store",
+            return_value=lifecycle_store,
+        ):
+            payload = web_server.notification_job_public_payload(
+                job,
+                detail=True,
+                stale_minutes=2,
+                settings={"_skipOperationalSchemaBootstrap": "1"},
+            )
+
+        self.assertEqual(document, payload["customerInvestmentDocument"])
+        self.assertEqual(quality, payload["customerInvestmentDocumentQuality"])
+        self.assertEqual(document["headline"], payload["title"])
+        self.assertEqual("ai-judgement", payload["customerInvestmentDocument"]["role"])
+
     def test_bootstrap_app_store_uses_read_only_operational_settings(self):
         marker = object()
         settings = {"_skipOperationalSchemaBootstrap": "1"}

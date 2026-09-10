@@ -360,12 +360,15 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
             values,
         )
 
-        self.assertIn("판단 보류", message)
+        self.assertIn("규칙 기반 종합 점검", message)
+        self.assertNotIn("AI 종합 점검", message)
         self.assertIn("지금은 주문하지 않습니다", message)
         self.assertNotIn("소액 진입 검토</b>", message)
         self.assertNotIn(stale_topline, message)
         self.assertNotIn("무엇이 바뀌었나", message)
         self.assertIn("219,090원 이상", message)
+        self.assertIn("시스템이 추적 중", message)
+        self.assertIn("자동 추적 중", message)
 
         values = context("shadow")
         values.update({
@@ -434,23 +437,23 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
 
         message = execution_telegram_message(values, response)
 
-        self.assertIn("🧠 AI 투자 인사이트 · SK하이닉스 · 상승 요인 우세", message)
+        self.assertIn("📌 SK하이닉스 · 규칙 기반 종합 판단", message)
         self.assertIn("상승 요인 우세", message)
-        self.assertIn("현재 판단", message)
+        self.assertIn("한눈에 보기", message)
         self.assertIn("단기 가격 회복", message)
-        self.assertIn("근거 연결", message)
+        self.assertIn("왜 이렇게 봤나요", message)
         self.assertNotIn("투자 의미", message)
         self.assertNotIn("성립값이 부족", message)
         self.assertIn("현재 보유 수량은 바꾸지 않습니다", message)
-        self.assertIn("판단이 바뀌는 조건", message)
-        self.assertIn("20일선 차이가 0% 이하", message)
+        self.assertIn("시스템이 추적 중", message)
+        self.assertIn("현재가가 20일 평균 가격 이하로 내려가면", message)
         self.assertNotIn("소액 진입", message)
         self.assertNotIn("사후 5건의 방향 적중률", message)
-        self.assertNotIn("재판단 기준 없음", message)
+        self.assertNotIn("다시 판단 기준 없음", message)
         self.assertNotIn("현재 신호는 확인했지만 실행 판단", message)
         self.assertNotIn("모든 후보 근거를 비교했으며", message)
-        self.assertIn("거래량과 매수 우위 수급이 가격 흐름을 확인하는지", message)
-        self.assertEqual(1, message.count("20일선 차이가 0% 이하"))
+        self.assertIn("거래량과 매수 우위가 가격 흐름을 확인하는지", message)
+        self.assertEqual(1, message.count("현재가가 20일 평균 가격 이하로 내려가면"))
         for internal in (
             "currentPrice", "ma20Distance", "ma20Slope", "volumeRatio",
             "buyVolume", "sellVolume", "bidAskImbalance", "macroDgs10",
@@ -472,9 +475,9 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
             }],
         })
         legacy_message = execution_telegram_message(values, legacy_response)
-        self.assertIn("🧠 AI 관계 해석 · SK하이닉스", legacy_message)
+        self.assertIn("📌 SK하이닉스 · 규칙 기반 종합 점검", legacy_message)
         self.assertIn("약화로 전환됐습니다.", legacy_message)
-        self.assertIn("동행 여부를 확인합니다.", legacy_message)
+        self.assertIn("함께 움직이는지 확인합니다.", legacy_message)
         self.assertNotIn("· 투자 관점", legacy_message)
 
     def test_unqualified_executable_episode_cannot_become_continuity_baseline(self):
@@ -591,8 +594,9 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
             NotificationAIValidatedResponse.from_dict(response),
         )
         self.assertNotIn(response["nextActionPlan"], message)
-        self.assertIn("재판단 기준 없음", message)
-        self.assertIn("검토 기록으로만 남깁니다", message)
+        self.assertNotIn("다시 판단 기준 없음", message)
+        self.assertIn("새 가격·거래 흐름·뉴스가 기존 판단을 바꾸는지", message)
+        self.assertIn("다음 알림", message)
 
     def test_validator_downgrades_shadow_buy_without_leaving_buy_plan(self):
         response = validated_response_from_payload(

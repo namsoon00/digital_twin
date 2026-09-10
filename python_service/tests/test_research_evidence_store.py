@@ -1,4 +1,5 @@
 import copy
+import json
 import sys
 import tempfile
 import unittest
@@ -102,6 +103,28 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         self.assertEqual("sufficient", merged["dataState"])
         self.assertEqual("conditional", merged["validationState"])
         self.assertNotIn("entityResolution", changed)
+
+        resolved_conflict = merge_derived_evidence_payload(
+            {
+                "articleText": "Apple reported audited revenue and guidance.",
+                "articleFacts": {
+                    "analysisConflict": True,
+                    "analysisConflictSource": "기존 주가 영향",
+                    "analysisConflictReasonKo": "과거 분석 충돌",
+                    "dataQualityRisk": "article-ai-impact-conflict",
+                },
+                "analysisConflict": True,
+                "analysisConflictReasonKo": "과거 분석 충돌",
+            },
+            {
+                "articleText": "Apple reported audited revenue and guidance.",
+                "articleFacts": {"analysisConflict": False},
+            },
+        )
+        self.assertFalse(resolved_conflict["articleFacts"]["analysisConflict"])
+        self.assertNotIn("analysisConflictReasonKo", resolved_conflict["articleFacts"])
+        self.assertNotIn("dataQualityRisk", resolved_conflict["articleFacts"])
+        self.assertNotIn("analysisConflict", resolved_conflict)
 
         rejected = merge_derived_evidence_payload(
             {
@@ -358,18 +381,40 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
             mysql_execute(
                 test_store_seed(temp),
-                "UPDATE research_evidence SET summary = ? WHERE evidence_id = ?",
-                ("실적과 이익 전망 변화가 핵심", original.evidence_id),
+                "UPDATE research_evidence SET summary = ?, payload_json = ? WHERE evidence_id = ?",
+                (
+                    "실적과 이익 전망 변화가 핵심",
+                    json.dumps({
+                        **store.get(original.evidence_id).raw_payload,
+                        "analysisConflict": True,
+                        "analysisConflictReasonKo": "과거 분석 충돌",
+                        "articleFacts": {
+                            **store.get(original.evidence_id).raw_payload["articleFacts"],
+                            "analysisConflict": False,
+                            "analysisConflictSource": "기존 주가 영향",
+                            "analysisConflictReasonKo": "과거 분석 충돌",
+                            "dataQualityRisk": "article-ai-impact-conflict",
+                        },
+                    }, ensure_ascii=False, sort_keys=True),
+                    original.evidence_id,
+                ),
             )
             preview = store.repair_news_enrichment_revisions(dry_run=True)
             self.assertEqual(1, preview["summaryRestoredCount"])
             self.assertEqual(1, preview["eventTakeawayRestoredCount"])
+            self.assertEqual(1, preview["analysisConflictCleanedCount"])
             self.assertEqual("실적과 이익 전망 변화가 핵심", store.get(original.evidence_id).summary)
 
             applied = store.repair_news_enrichment_revisions(dry_run=False)
             self.assertEqual(1, applied["summaryRestoredCount"])
             self.assertEqual(1, applied["eventTakeawayRestoredCount"])
+            self.assertEqual(1, applied["analysisConflictCleanedCount"])
             self.assertEqual(original.summary, store.get(original.evidence_id).summary)
+            self.assertNotIn("analysisConflict", store.get(original.evidence_id).raw_payload)
+            self.assertNotIn(
+                "analysisConflictReasonKo",
+                store.get(original.evidence_id).raw_payload["articleFacts"],
+            )
             self.assertEqual(
                 "삼성전자가 HBM 수요와 연간 전망을 발표했습니다.",
                 store.get(original.evidence_id).raw_payload["articleFacts"]["eventTakeaway"],

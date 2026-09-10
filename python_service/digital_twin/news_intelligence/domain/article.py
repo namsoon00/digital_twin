@@ -7,6 +7,14 @@ from typing import Dict, Mapping
 ARTICLE_SOURCE_REVISION_VERSION = "news-article-source-revision-v1"
 ARTICLE_ENRICHMENT_REVISION_VERSION = "news-article-enrichment-revision-v2-semantic"
 AUTHORITATIVE_ANALYSIS_STATUSES = {"complete", "ok", "success", "verified"}
+ANALYSIS_CONFLICT_DETAIL_KEYS = {
+    "analysisConflictAiPolarity",
+    "analysisConflictExistingPolarity",
+    "analysisConflictReasonKo",
+    "analysisConflictSource",
+    "dataQualityRisk",
+    "dataQualityRiskScore",
+}
 ENRICHMENT_REVISION_VOLATILE_KEYS = {
     "checkedAt",
     "collectedAt",
@@ -165,6 +173,26 @@ def authoritative_event_takeaway(payload: Dict[str, object]) -> str:
     analysis = _mapping(values.get("aiAnalysis"))
     summary = _mapping(analysis.get("summary"))
     return _text(summary.get("oneLineKo"))[:260]
+
+
+def clear_resolved_analysis_conflict(payload: Dict[str, object]) -> tuple:
+    values = dict(payload or {})
+    facts = _mapping(values.get("articleFacts"))
+    if facts.get("analysisConflict") is not False:
+        return values, False
+    changed = False
+    for key in ANALYSIS_CONFLICT_DETAIL_KEYS:
+        if key in facts:
+            facts.pop(key, None)
+            changed = True
+        if key in values:
+            values.pop(key, None)
+            changed = True
+    if values.pop("analysisConflict", None) is not None:
+        changed = True
+    if changed:
+        values["articleFacts"] = facts
+    return values, changed
 
 
 def enrichment_payload_snapshot(payload: Dict[str, object]) -> Dict[str, object]:

@@ -25,8 +25,10 @@ from ..news_intelligence.domain.article import (
     article_source_revision,
     authoritative_enrichment,
     authoritative_event_takeaway,
+    clear_resolved_analysis_conflict,
     enrichment_payload_snapshot,
 )
+from ..news_intelligence.domain.eligibility import annotate_news_eligibility
 from ..news_intelligence.domain.story import event_episode_identity, news_event_fingerprint
 from .operational_common import (
     json_dumps,
@@ -207,6 +209,7 @@ def merge_derived_evidence_payload(
                 merged[key] = previous.get(key)
     if preserve_authoritative_enrichment:
         merged = apply_enrichment_snapshot(merged, enrichment_payload_snapshot(previous))
+    merged, _conflict_cleaned = clear_resolved_analysis_conflict(merged)
     return merged
 
 
@@ -318,6 +321,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 "sourceRevisionUpdatedCount": 0,
                 "authoritativePersistedCount": 0,
                 "authoritativeRestoredCount": 0,
+                "analysisConflictCleanedCount": 0,
                 "eventTakeawayRestoredCount": 0,
                 "summaryRestoredCount": 0,
                 "provisionalCount": 0,
@@ -366,6 +370,22 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     payload["articleFacts"] = {**facts, "eventTakeaway": event_takeaway}
                     item.raw_payload = payload
                     result["eventTakeawayRestoredCount"] += 1
+                payload, analysis_conflict_cleaned = clear_resolved_analysis_conflict(payload)
+                if analysis_conflict_cleaned:
+                    payload = annotate_news_eligibility(
+                        payload,
+                        title=item.title,
+                        summary=payload.get("articleSummaryKo") or item.summary,
+                        symbol=item.symbol,
+                        name=payload.get("name") or payload.get("companyName") or "",
+                        source=item.source,
+                        provider=payload.get("provider") or "",
+                        url=item.url,
+                        published_at=item.published_at or item.observed_at,
+                        lifecycle_state="active",
+                    )
+                    item.raw_payload = payload
+                    result["analysisConflictCleanedCount"] += 1
                 if not dry_run and authoritative_enrichment(payload):
                     self._persist_news_enrichment_with_connection(connection, item, stamp)
                     payload = dict(item.raw_payload or {})
@@ -377,7 +397,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 )
                 if summary_changed:
                     result["summaryRestoredCount"] += 1
-                if payload != original_payload or summary_changed or event_takeaway_changed:
+                if payload != original_payload or summary_changed or event_takeaway_changed or analysis_conflict_cleaned:
                     result["changedCount"] += 1
                     if not dry_run:
                         states = news_domain.news_state_payload(payload)

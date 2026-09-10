@@ -995,6 +995,51 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             "repaired",
             outcome.execution_spans["structuredInsightRepair"]["status"],
         )
+
+        class MissingViewClaimReviewer:
+            calls = 0
+
+            def review(self, prepared):
+                self.calls += 1
+                payload = outcome.response.to_dict()
+                payload["narrativeClaims"] = [
+                    item for item in payload.get("narrativeClaims") or []
+                    if item.get("section") != "view"
+                ]
+                assessment = dict(payload.get("insightAssessment") or {})
+                assessment["dominantThesis"] = ""
+                payload["insightAssessment"] = assessment
+                return validated_response_from_payload(
+                    prepared,
+                    payload,
+                    raw_response=json.dumps(payload, ensure_ascii=False),
+                    source="test AI",
+                )
+
+        missing_view_reviewer = MissingViewClaimReviewer()
+        missing_view_outcome = NotificationAIJudgementService(
+            missing_view_reviewer,
+            {},
+        ).judge(context)
+
+        self.assertTrue(missing_view_outcome.publishable)
+        self.assertEqual(1, missing_view_reviewer.calls)
+        self.assertFalse(missing_view_outcome.repair_attempted)
+        repaired_view = next(
+            item for item in missing_view_outcome.response.narrative_claims
+            if item["section"] == "view"
+        )
+        verified_implication = next(
+            item for item in missing_view_outcome.response.narrative_claims
+            if item["section"] == "implication"
+        )
+        self.assertEqual(verified_implication["text"], repaired_view["text"])
+        self.assertEqual(
+            "verified-implication-claim",
+            missing_view_outcome.execution_spans[
+                "structuredInsightRepair"
+            ]["sourceSections"]["view"],
+        )
         counter_ledger = [{
             "evidenceId": "assertion:risk",
             "role": "counter",

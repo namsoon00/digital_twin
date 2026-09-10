@@ -3,6 +3,7 @@
 import html
 import hashlib
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Dict
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -17,6 +18,11 @@ from ...domain.customer_evidence_explanation import (
     customer_text_quality_issues,
     enforce_customer_message_quality,
 )
+from ...domain.customer_investment_document import (
+    customer_investment_document_from_dict,
+    customer_investment_document_quality,
+    normalized_customer_investment_document,
+)
 from ...domain.message_types import INVESTMENT_INSIGHT
 from ...domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from ...domain.notification_ai_gate_validation import local_validated_ai_response
@@ -27,6 +33,7 @@ from ...domain.notification_narrative import (
     narrative_fingerprint,
 )
 from ...domain.notifications import NotificationJob, notification_debug_number
+from ..customer_investment_message import render_customer_investment_document
 from ..notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
 
 
@@ -163,6 +170,52 @@ class NotificationRenderingService:
         context = dict(job.context or {})
         context.setdefault("messageType", INVESTMENT_INSIGHT)
         context.setdefault("notificationDetailLevel", "concise")
+        canonical_document = customer_investment_document_from_dict(
+            context.get("customerInvestmentDocument")
+        )
+        if canonical_document:
+            canonical_document = normalized_customer_investment_document(
+                replace(
+                    canonical_document,
+                    detail_url=str(
+                        context.get("notificationDetailUrl")
+                        or canonical_document.detail_url
+                        or ""
+                    ).strip(),
+                    sent_at=str(
+                        context.get("sentTime")
+                        or canonical_document.sent_at
+                        or ""
+                    ).strip(),
+                    notification_number=str(
+                        context.get("notificationNumber")
+                        or canonical_document.notification_number
+                        or ""
+                    ).strip(),
+                )
+            )
+            canonical_quality = customer_investment_document_quality(
+                canonical_document
+            )
+            if canonical_quality.get("status") == "passed":
+                rendered = prepend_execution_start_badge(
+                    render_customer_investment_document(canonical_document),
+                    context,
+                )
+                context.update({
+                    "customerInvestmentDocument": canonical_document.to_dict(),
+                    "customerInvestmentDocumentQuality": canonical_quality,
+                    "telegramMessage": rendered,
+                    "readableMessage": html.unescape(
+                        re.sub(r"<[^>]+>", "", rendered)
+                    ),
+                    "notificationPresentationContractVersion": (
+                        INVESTMENT_NOTIFICATION_PRESENTATION_VERSION
+                    ),
+                    "notificationPresentationMode": "canonical-customer-document",
+                })
+                job.context = context
+                return
         narrative_payload = (
             dict(context.get("notificationNarrativeBrief") or {})
             if isinstance(context.get("notificationNarrativeBrief"), dict)

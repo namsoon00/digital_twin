@@ -336,11 +336,9 @@ def recover_structured_investment_insight_claims(
         or {}
     )
     raw_assessment = raw_assessment if isinstance(raw_assessment, dict) else {}
-    if not raw_assessment:
-        return {"status": "unavailable", "reason": "structured-insight-missing"}
-
     existing_sections = response.verified_claim_sections
     candidates = []
+    candidate_sources = {}
     required_values = (
         ("view", raw_assessment.get("dominantThesis") or raw_assessment.get("dominant_thesis")),
         ("mechanism", raw_assessment.get("causalMechanism") or raw_assessment.get("causal_mechanism")),
@@ -350,16 +348,45 @@ def recover_structured_investment_insight_claims(
         text = str(value or "").strip()
         if text and section not in existing_sections:
             candidates.append((section, text))
+            candidate_sources[(section, text)] = "structured-insight"
+    if "view" not in existing_sections and not any(
+        section == "view" for section, _text in candidates
+    ):
+        verified_implication = next((
+            str(item.get("text") or "").strip()
+            for item in response.narrative_claims or []
+            if isinstance(item, dict)
+            and str(item.get("section") or "").strip() == "implication"
+            and str(item.get("text") or "").strip()
+        ), "")
+        if verified_implication:
+            # Some otherwise valid model responses express the investment
+            # view only in the implication claim. Reuse that exact verified
+            # sentence with view-approved evidence instead of spending a
+            # second max-reasoning model call to duplicate schema content.
+            candidates.insert(0, ("view", verified_implication))
+            candidate_sources[("view", verified_implication)] = (
+                "verified-implication-claim"
+            )
     if "catalyst" not in existing_sections:
         catalysts = raw_assessment.get("catalysts") or []
         if not isinstance(catalysts, (list, tuple)):
             catalysts = [catalysts]
-        candidates.extend(
-            ("catalyst", str(value or "").strip())
-            for value in catalysts[:2]
-            if str(value or "").strip()
-        )
+        for value in catalysts[:2]:
+            text = str(value or "").strip()
+            if text:
+                candidates.append(("catalyst", text))
+                candidate_sources[("catalyst", text)] = "structured-insight"
     if not candidates:
+        missing_required_sections = sorted(
+            {"view", "mechanism", "implication"} - existing_sections
+        )
+        if missing_required_sections and not raw_assessment:
+            return {
+                "status": "unavailable",
+                "reason": "structured-insight-missing",
+                "sections": missing_required_sections,
+            }
         return {"status": "not-required"}
 
     additions = []
@@ -413,6 +440,11 @@ def recover_structured_investment_insight_claims(
         "status": "repaired" if repaired_sections else "rejected",
         "sections": repaired_sections,
         "unavailableSections": sorted(set(unavailable_sections)),
+        "sourceSections": {
+            section: candidate_sources.get((section, text), "")
+            for section, text in candidates
+            if section in repaired_sections
+        },
     }
 
 

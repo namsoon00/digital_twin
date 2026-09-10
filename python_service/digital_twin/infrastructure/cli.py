@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Dict, List, Mapping
 
 from ..application.account_service import AccountApplicationService
+from ..application.external_data.configuration_recovery_service import (
+    ExternalDataConfigurationRecoveryService,
+)
 from ..application.mysql_minimal_retention_service import MySQLMinimalRetentionService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
 from ..domain.accounts import AccountConfig, split_symbols
@@ -1110,14 +1113,24 @@ def settings_command(args) -> int:
     if args.settings_action == "save-json":
         payload = json.loads(sys.stdin.read() or "{}")
         settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
+        previous = runtime_settings()
         saved = save_runtime_settings(settings if isinstance(settings, dict) else {})
-        print(json.dumps(public_settings_payload(saved), ensure_ascii=False))
+        result = public_settings_payload(saved)
+        result["externalDataRecovery"] = ExternalDataConfigurationRecoveryService(
+            stores.external_data_store(saved)
+        ).recover(previous, saved)
+        print(json.dumps(result, ensure_ascii=False))
         return 0
     if args.settings_action == "replace-json":
         payload = json.loads(sys.stdin.read() or "{}")
         settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
+        previous = runtime_settings()
         write_settings_store(settings if isinstance(settings, dict) else {})
-        print(json.dumps({"ok": True}, ensure_ascii=False))
+        saved = runtime_settings()
+        recovery = ExternalDataConfigurationRecoveryService(
+            stores.external_data_store(saved)
+        ).recover(previous, saved)
+        print(json.dumps({"ok": True, "externalDataRecovery": recovery}, ensure_ascii=False))
         return 0
     return 1
 

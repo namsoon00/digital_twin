@@ -423,6 +423,18 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             context=policy_context,
         )
         NotificationRenderingService.apply_investment_presentation_contract(historical_job)
+        canonical_document = dict(
+            historical_job.context["customerInvestmentDocument"]
+        )
+        historical_job.context.pop("notificationNarrativeBrief", None)
+        historical_job.context.pop("notificationNarrativePublication", None)
+        historical_job.context["notificationAiValidatedResponse"] = (
+            NotificationAIValidatedResponse(
+                action="SELL",
+                investment_view="오래된 내부 응답을 다시 렌더링한 문장입니다.",
+                current_action_plan="오래된 내부 응답을 따릅니다.",
+            ).to_dict()
+        )
         historical_job.text = "<b>TypeDB 추론</b>\n• price-move"
         historical_job.context["telegramMessage"] = historical_job.text
         persisted_message = NotificationRenderingService.render_persisted_customer_text(
@@ -431,6 +443,11 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assertIn("가격이 직전 확인 기준보다 +0.8% 변해", persisted_message)
         self.assertIn("수익률은 +47.8%이며, 확인 기준은 +25.0% 이상", persisted_message)
         self.assertNotIn("price-move", persisted_message)
+        self.assertNotIn("오래된 내부 응답", persisted_message)
+        self.assertEqual(
+            canonical_document,
+            historical_job.context["customerInvestmentDocument"],
+        )
         self.assertEqual("<b>TypeDB 추론</b>\n• price-move", historical_job.text)
 
         crypto_context = context_observation(observation)

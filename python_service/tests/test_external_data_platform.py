@@ -7,6 +7,9 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from digital_twin.application.external_data.collection_service import ExternalDataCollectionService
+from digital_twin.application.external_data.configuration_recovery_service import (
+    ExternalDataConfigurationRecoveryService,
+)
 from digital_twin.application.external_data.contracts import (
     CollectionJob,
     CollectionPartition,
@@ -769,6 +772,68 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("test.document", store.followups[0][0].dataset_id)
         self.assertEqual("NVDA:document-1", store.followups[0][1].partition_key)
         self.assertNotIn("test.document", registry.static_dataset_ids({}))
+
+        class DueStore:
+            calls = []
+
+            def make_due(self, dataset_ids):
+                self.calls.append(tuple(dataset_ids))
+                return 4
+
+        due_store = DueStore()
+        recovery_service = ExternalDataConfigurationRecoveryService(due_store)
+        recovery = recovery_service.recover(
+            {
+                "externalSecContactEmail": "",
+                "externalSecDocumentTextEnabled": "1",
+            },
+            {
+                "externalSecContactEmail": "owner@example.com",
+                "externalSecDocumentTextEnabled": "1",
+            },
+        )
+        repeated = recovery_service.recover(
+            {"externalSecContactEmail": "owner@example.com"},
+            {"externalSecContactEmail": "owner@example.com"},
+        )
+        self.assertEqual("scheduled", recovery["status"])
+        self.assertEqual(4, recovery["madeDueCount"])
+        self.assertEqual(
+            [("sec.submissions", "sec.document")],
+            due_store.calls,
+        )
+        self.assertEqual("not-required", repeated["status"])
+
+        metadata_only = recovery_service.recover(
+            {
+                "externalSecContactEmail": "",
+                "externalSecDocumentTextEnabled": "0",
+            },
+            {
+                "externalSecContactEmail": "owner@example.com",
+                "externalSecDocumentTextEnabled": "0",
+            },
+        )
+        document_enabled = recovery_service.recover(
+            {
+                "externalSecContactEmail": "owner@example.com",
+                "externalSecDocumentTextEnabled": "0",
+            },
+            {
+                "externalSecContactEmail": "owner@example.com",
+                "externalSecDocumentTextEnabled": "1",
+            },
+        )
+        self.assertEqual(["sec.submissions"], metadata_only["datasetIds"])
+        self.assertEqual(["sec.document"], document_enabled["datasetIds"])
+        self.assertEqual(
+            [
+                ("sec.submissions", "sec.document"),
+                ("sec.submissions",),
+                ("sec.document",),
+            ],
+            due_store.calls,
+        )
 
     def test_unusable_one_time_payload_remains_retryable(self):
         store = MemoryCollectionStore()

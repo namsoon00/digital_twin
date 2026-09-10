@@ -2306,6 +2306,18 @@ def select_target_scoped_manifest_patch(
             for symbol in requested_symbols
         )
 
+    def source_scope_complete(scope_id: str) -> bool:
+        """Return whether omission has meaning inside this source boundary.
+
+        A target-scoped projection is complete for each requested instrument's
+        current fact scopes, but deliberately partial for account/shared and
+        unrelated instruments. This narrower completeness proof lets an
+        integrity companion for the target be staged without widening the
+        event into a whole-world source assembly.
+        """
+
+        return bool(source_graph_complete or is_target_owned_scope(scope_id))
+
     def changed_from_active(scope_id: str, item: Mapping[str, object]) -> bool:
         active_item = active_by_scope.get(scope_id)
         if not active_item:
@@ -2835,11 +2847,72 @@ def select_target_scoped_manifest_patch(
             owner,
         ):
             return True
+        active_node_ids = {
+            _clean(node_id)
+            for node_id in (
+                retained_active_by_scope.get(dependency_scope_id) or {}
+            ).get("nodeIds") or []
+            if _clean(node_id)
+        }
+        if _clean(endpoint_id) in active_node_ids:
+            # The active Manifest proves the exact logical endpoint already
+            # exists in the retained generation. Reusing it is stricter than
+            # inferring safety from the broader scope id and avoids a complete
+            # source rebuild for unchanged episode/assessment nodes.
+            return True
         # A changed assertion may retain an endpoint from another mailbox only
         # when its logical identity is a stable anchor. Snapshot observations
         # must bring their owning scope into the candidate generation; their
         # ids can be new even when the broad scope already has an active row.
         return _is_stable_active_anchor_id(endpoint_id)
+
+    def relation_endpoint_bindings(
+        item: Mapping[str, object],
+    ) -> Dict[str, Set[str]]:
+        if (
+            _clean(item.get("relationEndpointBindingVersion"))
+            != RELATION_ENDPOINT_BINDING_VERSION
+        ):
+            return {}
+        raw = item.get("relationEndpointNodeIdsByScope")
+        if not isinstance(raw, Mapping):
+            return {}
+        return {
+            _clean(scope_id): {
+                _clean(node_id)
+                for node_id in node_ids or []
+                if _clean(node_id)
+            }
+            for scope_id, node_ids in raw.items()
+            if _clean(scope_id)
+        }
+
+    def active_relation_can_rebind_exact_incoming_endpoints(
+        relation_item: Mapping[str, object],
+        dependency_scope_ids: Iterable[str],
+    ) -> bool:
+        """Prove a retained relation remains valid after endpoint COW."""
+
+        bindings = relation_endpoint_bindings(relation_item)
+        dependencies = {
+            _clean(scope_id) for scope_id in dependency_scope_ids if _clean(scope_id)
+        }
+        if not dependencies:
+            return False
+        for dependency_scope_id in dependencies:
+            required_node_ids = bindings.get(dependency_scope_id) or set()
+            incoming_node_ids = {
+                _clean(node_id)
+                for node_id in (
+                    incoming.get(dependency_scope_id) or {}
+                ).get("nodeIds") or []
+                if _clean(node_id)
+            }
+            if not required_node_ids or not required_node_ids.issubset(
+                incoming_node_ids
+            ):
+                return False
+        return True
 
     missing_endpoints: List[str] = []
     incomplete_source_endpoint_scopes: List[str] = []
@@ -2886,6 +2959,14 @@ def select_target_scoped_manifest_patch(
                 }
             }
             if not selected_non_anchor_dependencies:
+                continue
+            if active_relation_can_rebind_exact_incoming_endpoints(
+                active_row,
+                selected_non_anchor_dependencies,
+            ):
+                selection_reasons.setdefault(scope_id, set()).add(
+                    "rebind-active-quality-relation-exact-endpoints"
+                )
                 continue
             incomplete_source_endpoint_scopes.extend(
                 selected_non_anchor_dependencies
@@ -2974,6 +3055,10 @@ def select_target_scoped_manifest_patch(
                         or scope_family(scope_id)
                     ).lower() == "quality"
                     and selected_non_anchor_dependencies
+                    and not active_relation_can_rebind_exact_incoming_endpoints(
+                        active_by_scope.get(scope_id) or row,
+                        selected_non_anchor_dependencies,
+                    )
                 ):
                     # A partial graph cannot prove which active quality
                     # relations disappeared with a changed source fact. Ask
@@ -3027,7 +3112,7 @@ def select_target_scoped_manifest_patch(
                         )
                         continue
                     if (
-                        not source_graph_complete
+                        not source_scope_complete(endpoint_scope)
                         and endpoint_scope in fact_slot_deferred_scope_ids
                         and ":item:" not in endpoint_scope
                     ):
@@ -3065,7 +3150,7 @@ def select_target_scoped_manifest_patch(
                         )
                         continue
                     if (
-                        not source_graph_complete
+                        not source_scope_complete(endpoint_scope)
                         and endpoint_scope in fact_slot_deferred_scope_ids
                         and ":item:" not in endpoint_scope
                     ):
@@ -3097,28 +3182,7 @@ def select_target_scoped_manifest_patch(
             return incoming.get(scope_id) or {}
         return retained_active_by_scope.get(scope_id) or {}
 
-    def relation_endpoint_bindings(
-        item: Mapping[str, object],
-    ) -> Dict[str, Set[str]]:
-        if (
-            _clean(item.get("relationEndpointBindingVersion"))
-            != RELATION_ENDPOINT_BINDING_VERSION
-        ):
-            return {}
-        raw = item.get("relationEndpointNodeIdsByScope")
-        if not isinstance(raw, Mapping):
-            return {}
-        return {
-            _clean(scope_id): {
-                _clean(node_id)
-                for node_id in node_ids or []
-                if _clean(node_id)
-            }
-            for scope_id, node_ids in raw.items()
-            if _clean(scope_id)
-        }
-
-    if source_graph_complete:
+    if source_graph_complete or requested_symbols:
         changed = True
         while changed:
             changed = False
@@ -3127,6 +3191,11 @@ def select_target_scoped_manifest_patch(
                 | selected
             ) - retired_scope_set
             for relation_scope_id in sorted(final_scope_ids):
+                if (
+                    not source_graph_complete
+                    and not is_target_owned_scope(relation_scope_id)
+                ):
+                    continue
                 relation_entry = prospective_scope_entry(relation_scope_id)
                 if (
                     _scope_type(relation_scope_id) != "link"
@@ -3151,6 +3220,20 @@ def select_target_scoped_manifest_patch(
 
                 incoming_relation = incoming.get(relation_scope_id) or {}
                 if not incoming_relation:
+                    if not source_graph_complete:
+                        # A target slice proves the endpoint generation but
+                        # does not own absence of a relation from another fact
+                        # mailbox. Ask for the bounded complete-source repair
+                        # instead of retiring an assertion we did not observe.
+                        incomplete_source_endpoint_scopes.extend(
+                            endpoint_scope_id
+                            for endpoint_scope_id, _node_ids in stale_bindings
+                        )
+                        selection_reasons.setdefault(
+                            relation_scope_id,
+                            set(),
+                        ).add("complete-source-required-missing-stale-relation")
+                        continue
                     # A complete source graph owns relation absence. If an
                     # active relation points at a logical node removed by an
                     # endpoint replacement and no current assertion replaces

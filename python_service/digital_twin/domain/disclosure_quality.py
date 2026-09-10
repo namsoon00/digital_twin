@@ -76,10 +76,19 @@ def assess_disclosure_document(
         issues.append("official-document-missing")
     if quality in {"unavailable", "insufficient", "error", "failed"}:
         issues.append("official-document-provider-failure")
+    configuration_required = quality in {
+        "deferred-contact",
+        "configuration-required",
+    }
+    if configuration_required:
+        issues.append("official-document-configuration-required")
     document_verified = bool(
         len(normalized) >= max(80, int(minimum_chars or 120))
         and not explicit_error
-        and quality not in {"unavailable", "insufficient", "error", "failed", "deferred-contact"}
+        and quality not in {
+            "unavailable", "insufficient", "error", "failed",
+            "deferred-contact", "configuration-required",
+        }
     )
     if document_verified:
         state = "document-verified"
@@ -89,6 +98,10 @@ def assess_disclosure_document(
         state = "document-rejected"
         data_state = "insufficient"
         validation_state = "blocked"
+    elif configuration_required:
+        state = "configuration-required"
+        data_state = "partial" if metadata_verified else "insufficient"
+        validation_state = "conditional" if metadata_verified else "blocked"
     else:
         state = "metadata-only"
         data_state = "partial" if metadata_verified else "insufficient"

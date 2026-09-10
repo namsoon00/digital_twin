@@ -5,6 +5,10 @@ from digital_twin.domain.ontology_fact_slots import (
     build_fact_slot_projection_plan,
     select_fact_slot_scope_ids,
 )
+from digital_twin.domain.abox_lifecycle.contracts import (
+    RELATION_ENDPOINT_BINDING_VERSION,
+    SCOPE_NODE_INVENTORY_VERSION,
+)
 from digital_twin.domain.ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
@@ -1922,6 +1926,7 @@ class OntologyFactSlotTests(unittest.TestCase):
         self._assert_changed_relation_reuses_active_stock_anchor()
         self._assert_changed_stock_relation_reuses_active_macro_endpoint()
         self._assert_changed_position_relation_reuses_active_portfolio_anchor()
+        self._assert_target_owned_dynamic_endpoint_is_complete()
 
     def _assert_changed_relation_reuses_active_stock_anchor(self):
         state_scope = "symbol:035720:state"
@@ -2028,23 +2033,23 @@ class OntologyFactSlotTests(unittest.TestCase):
             ],
         }
 
+        fact_slot_plan = {
+            "enabled": True,
+            "status": "ready",
+            "targetSymbols": ["035720"],
+            "requestedFactFamilies": ["valuation"],
+            "requestedFactFamiliesBySymbol": {"035720": ["valuation"]},
+            "slotFamilies": ["valuation"],
+            "slotFamiliesBySymbol": {"035720": ["valuation"]},
+            "eventBoundaryAuthoritative": True,
+        }
         selection = select_target_scoped_manifest_patch(
             graph,
             active,
             ["035720"],
-            fact_slot_plan={
-                "enabled": True,
-                "status": "ready",
-                "targetSymbols": ["035720"],
-                "requestedFactFamilies": ["valuation"],
-                "requestedFactFamiliesBySymbol": {"035720": ["valuation"]},
-                "slotFamilies": ["valuation"],
-                "slotFamiliesBySymbol": {"035720": ["valuation"]},
-                "eventBoundaryAuthoritative": True,
-            },
+            fact_slot_plan=fact_slot_plan,
             source_graph_complete=False,
         )
-
         self.assertEqual("ready", selection["status"])
         self.assertEqual(
             {valuation_scope, link_scope},
@@ -2079,14 +2084,14 @@ class OntologyFactSlotTests(unittest.TestCase):
                     "symbol": "TSLA",
                     "aboxScopeId": valuation_scope,
                 }),
-                OntologyEntity("fx-rate:USDKRW", "USD/KRW", "fx-rate", {
+                OntologyEntity("macro-observation:USDKRW", "USD/KRW", "fx-rate", {
                     "ontologyBox": "ABox",
                     "aboxScopeId": macro_scope,
                 }),
             ],
             relations=[OntologyRelation(
                 "valuation:TSLA",
-                "fx-rate:USDKRW",
+                "macro-observation:USDKRW",
                 "VALUED_WITH_FX",
                 properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
             )],
@@ -2123,6 +2128,7 @@ class OntologyFactSlotTests(unittest.TestCase):
                     "fingerprint": "macro-newer-in-memory",
                     "generationId": "macro-newer-in-memory",
                     "dependencyScopeIds": [],
+                    "nodeIds": ["macro-observation:USDKRW"],
                     "entityCount": 1,
                     "relationCount": 0,
                 },
@@ -2175,6 +2181,7 @@ class OntologyFactSlotTests(unittest.TestCase):
                     "fingerprint": "macro-active",
                     "generationId": "macro-active",
                     "dependencyScopeIds": [],
+                    "nodeIds": ["macro-observation:USDKRW"],
                     "entityCount": 1,
                     "relationCount": 0,
                 },
@@ -2361,6 +2368,248 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertIn(
             "reused-active-link-endpoint",
             selected_trace[link_scope]["reasons"],
+        )
+
+    def _assert_target_owned_dynamic_endpoint_is_complete(self):
+        market_scope = "symbol:035720:market:world:test"
+        valuation_scope = "symbol:035720:valuation:bucket:01:world:test"
+        quality_scope = "symbol:035720:quality:bucket:01:world:test"
+        link_scope = "link:symbol:035720:valuation:bucket:01:world:test"
+        quality_link_scope = "link:symbol:035720:quality:bucket:01:world:test"
+        temporal_link_scope = "link:symbol:035720:temporal:window:1h:world:test"
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity(
+                    "market-observation:035720:new",
+                    "Current market observation",
+                    "market-observation",
+                    {
+                        "ontologyBox": "ABox",
+                        "symbol": "035720",
+                        "aboxScopeId": market_scope,
+                    },
+                ),
+                OntologyEntity(
+                    "valuation:035720",
+                    "Valuation",
+                    "valuation-metric",
+                    {
+                        "ontologyBox": "ABox",
+                        "symbol": "035720",
+                        "aboxScopeId": valuation_scope,
+                    },
+                ),
+                OntologyEntity(
+                    "data-quality:035720:valuation",
+                    "Valuation quality",
+                    "data-quality",
+                    {
+                        "ontologyBox": "ABox",
+                        "symbol": "035720",
+                        "aboxScopeId": quality_scope,
+                    },
+                ),
+            ],
+            relations=[
+                OntologyRelation(
+                    "valuation:035720",
+                    "market-observation:035720:new",
+                    "VALUED_WITH_MARKET",
+                    properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
+                ),
+                OntologyRelation(
+                    "valuation:035720",
+                    "data-quality:035720:valuation",
+                    "HAS_DATA_QUALITY",
+                    properties={
+                        "ontologyBox": "ABox",
+                        "aboxScopeId": quality_link_scope,
+                    },
+                ),
+                OntologyRelation(
+                    "valuation:035720",
+                    "market-observation:035720:new",
+                    "OBSERVED_DURING",
+                    properties={
+                        "ontologyBox": "ABox",
+                        "aboxScopeId": temporal_link_scope,
+                    },
+                ),
+            ],
+        )
+        graph.worldview = {
+            "scopePlan": [{
+                "scopeId": market_scope,
+                "scopeType": "symbol",
+                "scopeFamily": "market",
+                "baseFingerprint": "market-new",
+                "fingerprint": "market-new",
+                "generationId": "market-new",
+                "dependencyScopeIds": [],
+                "nodeIds": ["market-observation:035720:new"],
+                "nodeInventoryVersion": SCOPE_NODE_INVENTORY_VERSION,
+                "entityCount": 1,
+                "relationCount": 0,
+            }, {
+                "scopeId": valuation_scope,
+                "scopeType": "symbol",
+                "scopeFamily": "valuation",
+                "baseFingerprint": "valuation-new",
+                "fingerprint": "valuation-new",
+                "generationId": "valuation-new",
+                "dependencyScopeIds": [],
+                "nodeIds": ["valuation:035720"],
+                "nodeInventoryVersion": SCOPE_NODE_INVENTORY_VERSION,
+                "entityCount": 1,
+                "relationCount": 0,
+            }, {
+                "scopeId": quality_scope,
+                "scopeType": "symbol",
+                "scopeFamily": "quality",
+                "baseFingerprint": "quality-stable",
+                "fingerprint": "quality-stable",
+                "generationId": "quality-active",
+                "dependencyScopeIds": [],
+                "nodeIds": ["data-quality:035720:valuation"],
+                "nodeInventoryVersion": SCOPE_NODE_INVENTORY_VERSION,
+                "entityCount": 1,
+                "relationCount": 0,
+            }, {
+                "scopeId": link_scope,
+                "scopeType": "link",
+                "scopeFamily": "valuation",
+                "baseFingerprint": "link-new",
+                "fingerprint": "link-new",
+                "generationId": "link-new",
+                "dependencyScopeIds": [market_scope, valuation_scope],
+                "nodeInventoryVersion": SCOPE_NODE_INVENTORY_VERSION,
+                "relationEndpointBindingVersion": RELATION_ENDPOINT_BINDING_VERSION,
+                "relationEndpointNodeIdsByScope": {
+                    market_scope: ["market-observation:035720:new"],
+                    valuation_scope: ["valuation:035720"],
+                },
+                "entityCount": 0,
+                "relationCount": 1,
+            }, {
+                "scopeId": quality_link_scope,
+                "scopeType": "link",
+                "scopeFamily": "quality",
+                "baseFingerprint": "quality-link-stable",
+                "fingerprint": "quality-link-stable",
+                "generationId": "quality-link-active",
+                "dependencyScopeIds": [quality_scope, valuation_scope],
+                "nodeInventoryVersion": SCOPE_NODE_INVENTORY_VERSION,
+                "relationEndpointBindingVersion": RELATION_ENDPOINT_BINDING_VERSION,
+                "relationEndpointNodeIdsByScope": {
+                    quality_scope: ["data-quality:035720:valuation"],
+                    valuation_scope: ["valuation:035720"],
+                },
+                "entityCount": 0,
+                "relationCount": 1,
+            }, {
+                "scopeId": temporal_link_scope,
+                "scopeType": "link",
+                "scopeFamily": "temporal",
+                "baseFingerprint": "temporal-link-stable",
+                "fingerprint": "temporal-link-new-endpoint",
+                "generationId": "temporal-link-new",
+                "dependencyScopeIds": [market_scope, valuation_scope],
+                "nodeInventoryVersion": SCOPE_NODE_INVENTORY_VERSION,
+                "relationEndpointBindingVersion": RELATION_ENDPOINT_BINDING_VERSION,
+                "relationEndpointNodeIdsByScope": {
+                    market_scope: ["market-observation:035720:new"],
+                    valuation_scope: ["valuation:035720"],
+                },
+                "entityCount": 0,
+                "relationCount": 1,
+            }],
+        }
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [{
+                **graph.worldview["scopePlan"][0],
+                "baseFingerprint": "market-old",
+                "fingerprint": "market-old",
+                "generationId": "market-old",
+                "nodeIds": ["market-observation:035720:old"],
+            }, {
+                **graph.worldview["scopePlan"][1],
+                "baseFingerprint": "valuation-old",
+                "fingerprint": "valuation-old",
+                "generationId": "valuation-old",
+            }, {
+                **graph.worldview["scopePlan"][2],
+            }, {
+                **graph.worldview["scopePlan"][3],
+                "baseFingerprint": "link-old",
+                "fingerprint": "link-old",
+                "generationId": "link-old",
+                "relationEndpointNodeIdsByScope": {
+                    market_scope: ["market-observation:035720:old"],
+                    valuation_scope: ["valuation:035720"],
+                },
+            }, {
+                **graph.worldview["scopePlan"][4],
+            }, {
+                **graph.worldview["scopePlan"][5],
+                "fingerprint": "temporal-link-old-endpoint",
+                "generationId": "temporal-link-old",
+                "relationEndpointNodeIdsByScope": {
+                    market_scope: ["market-observation:035720:old"],
+                    valuation_scope: ["valuation:035720"],
+                },
+            }],
+        }
+        fact_slot_plan = {
+            "enabled": True,
+            "status": "ready",
+            "targetSymbols": ["035720"],
+            "requestedFactFamilies": ["valuation"],
+            "requestedFactFamiliesBySymbol": {"035720": ["valuation"]},
+            "slotFamilies": ["valuation"],
+            "slotFamiliesBySymbol": {"035720": ["valuation"]},
+            "eventBoundaryAuthoritative": True,
+        }
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["035720"],
+            fact_slot_plan=fact_slot_plan,
+            source_graph_complete=False,
+        )
+        validated_plan = plan_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["035720"],
+            fact_slot_plan=fact_slot_plan,
+            source_graph_complete=False,
+        )
+
+        self.assertEqual("ready", selection["status"])
+        self.assertEqual(
+            {market_scope, valuation_scope, link_scope, temporal_link_scope},
+            set(selection["selectedIncomingScopeIds"]),
+        )
+        self.assertNotIn("missingEndpointScopeIds", selection)
+        self.assertIn(quality_link_scope, selection["deferredScopeIds"])
+        self.assertIn(
+            temporal_link_scope,
+            selection["factSlot"]["integrityRepairScopeIds"],
+        )
+        self.assertEqual(
+            "valid",
+            validated_plan["manifestPatchContract"]["validation"]["status"],
+        )
+        deferred_trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["deferred"]
+        }
+        self.assertIn(
+            "rebind-active-quality-relation-exact-endpoints",
+            deferred_trace[quality_link_scope]["reasons"],
         )
 
     def _assert_authoritative_event_defers_matching_family_generation_only_scopes(self):

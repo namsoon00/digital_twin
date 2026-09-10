@@ -174,12 +174,19 @@ class DisclosureTaxonomyTests(unittest.TestCase):
             ".xforms * { font-family: 돋움체; color: red; } 회사는 자기주식 취득 결정을 공시했다. " * 5
         )
         error = assess_disclosure_document("014 파일이 존재하지 않습니다.", "body")
+        configuration = assess_disclosure_document("", "deferred-contact")
 
         self.assertNotIn("font-family", cleaned)
         self.assertNotIn(".xforms", cleaned)
         self.assertIn("자기주식 취득", cleaned)
         self.assertEqual("document-rejected", error.state)
         self.assertEqual("blocked", error.validation_state)
+        self.assertEqual("configuration-required", configuration.state)
+        self.assertEqual("conditional", configuration.validation_state)
+        self.assertIn(
+            "official-document-configuration-required",
+            configuration.issues,
+        )
 
     def test_disclosure_prompt_deduplicates_document_preview(self):
         sentence = "회사는 보통주 100만주를 취득하기로 결정했다."

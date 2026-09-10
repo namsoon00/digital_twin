@@ -28,6 +28,10 @@ from ..application.account_service import AccountApplicationService
 from ..application.account_watchlist_service import AccountWatchlistService
 from ..application.console_read_model_service import ConsoleReadModelService
 from ..application.capital_flow_service import CapitalFlowService
+from ..application.external_data.configuration_recovery_service import (
+    ExternalDataConfigurationRecoveryService,
+    sec_metadata_access_ready,
+)
 from ..application.notification_ai_gate_message import (
     compact_invalidation_line,
     compact_next_action_line,
@@ -1470,6 +1474,11 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
             "fredApiKey": bool(settings.get("fredApiKey")),
             "opendartApiKey": bool(settings.get("opendartApiKey")),
             "publicDataPortalServiceKey": bool(settings.get("publicDataPortalServiceKey")),
+            "externalSecContactEmail": sec_metadata_access_ready(settings),
+            "externalSecUserAgent": bool(
+                settings.get("externalSecUserAgent")
+                and "local-contact" not in str(settings.get("externalSecUserAgent")).lower()
+            ),
             "typedbAddress": bool(settings.get("typedbAddress")),
             "typedbPassword": bool(settings.get("typedbPassword")),
             "mysqlPassword": bool(settings.get("mysqlPassword")),
@@ -1486,14 +1495,20 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
 
 def save_settings_payload(payload: Dict[str, object], access: ShareAccess = None) -> Dict[str, object]:
     requested = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
-    save_runtime_settings(requested if isinstance(requested, dict) else {})
+    previous = runtime_settings()
+    saved = save_runtime_settings(requested if isinstance(requested, dict) else {})
+    recovery = ExternalDataConfigurationRecoveryService(
+        stores.external_data_store(saved)
+    ).recover(previous, saved)
     status = settings_status_payload(access)
+    status["externalDataRecovery"] = recovery
     new_domain_event(
         SETTINGS_UPDATED,
         "runtime",
         {
             "keys": sorted([str(key) for key in (requested or {}).keys()]) if isinstance(requested, dict) else [],
             "configured": status.get("configured") or {},
+            "externalDataRecovery": recovery,
         },
     )
     return status

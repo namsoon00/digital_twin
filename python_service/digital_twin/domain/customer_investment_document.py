@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, replace
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .alert_formatting import compact_number, price_money
 from .customer_evidence_explanation import customer_safe_text, customer_text_quality_issues
@@ -74,6 +74,73 @@ class CustomerInvestmentDocument:
         payload["detailUrl"] = payload.pop("detail_url")
         payload["languageLevel"] = payload.pop("language_level")
         return payload
+
+
+def customer_investment_document_from_dict(
+    payload: object,
+) -> Optional[CustomerInvestmentDocument]:
+    """Restore only the versioned customer artifact used at delivery time."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    version = _clean_spaces(payload.get("version"))
+    if version != CUSTOMER_INVESTMENT_DOCUMENT_VERSION:
+        return None
+    raw_sections = payload.get("sections") or []
+    raw_links = payload.get("links") or []
+    if not isinstance(raw_sections, (list, tuple)):
+        return None
+    if not isinstance(raw_links, (list, tuple)):
+        return None
+    sections = []
+    for item in raw_sections:
+        if not isinstance(item, Mapping):
+            continue
+        raw_rows = item.get("rows") or []
+        if isinstance(raw_rows, str):
+            raw_rows = [raw_rows]
+        elif not isinstance(raw_rows, (list, tuple)):
+            continue
+        sections.append(CustomerInvestmentSection(
+            key=_clean_spaces(item.get("key")),
+            title=_clean_spaces(item.get("title")),
+            rows=tuple(
+                _clean_spaces(row) for row in raw_rows if _clean_spaces(row)
+            ),
+        ))
+    links = []
+    for item in raw_links:
+        if not isinstance(item, Mapping):
+            continue
+        links.append(CustomerInvestmentLink(
+            label=_clean_spaces(item.get("label")),
+            url=_clean_spaces(item.get("url")),
+        ))
+    return CustomerInvestmentDocument(
+        role=_clean_spaces(payload.get("role")),
+        headline=_clean_spaces(payload.get("headline")),
+        target=_clean_spaces(payload.get("target")),
+        role_label=_clean_spaces(
+            payload.get("roleLabel") or payload.get("role_label")
+        ),
+        lead=_clean_spaces(payload.get("lead")),
+        sections=tuple(sections),
+        links=tuple(links),
+        detail_url=_clean_spaces(
+            payload.get("detailUrl") or payload.get("detail_url")
+        ),
+        reference_at=_clean_spaces(
+            payload.get("referenceAt") or payload.get("reference_at")
+        ),
+        sent_at=_clean_spaces(payload.get("sentAt") or payload.get("sent_at")),
+        notification_number=_clean_spaces(
+            payload.get("notificationNumber") or payload.get("notification_number")
+        ),
+        language_level=_clean_spaces(
+            payload.get("languageLevel") or payload.get("language_level") or "beginner"
+        ),
+        version=version,
+    )
 
 
 _BEGINNER_PHRASE_REPLACEMENTS = (

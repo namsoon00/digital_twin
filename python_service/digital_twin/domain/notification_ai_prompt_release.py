@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v22-customer-document"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v20"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v23-complete-insight-sections"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v21"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
 
@@ -244,6 +244,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
     "반대 근거 검사를 마친 뒤 counterEvidenceStatus를 쓴다. confirmed는 근거 ID가 연결된 counter 문장이 있을 때, none-found는 모든 입력을 검토해 반대 사실이 없을 때만 쓴다. 나머지 상태는 발행 불가다.",
     "사용자에게 보여줄 투자 관점, 인과 경로, 투자 의미, 촉매, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
+    "가설이 있으면 narrativeClaims에 view, mechanism, implication과 next-condition 또는 limitation을 반드시 넣고 insightAssessment에만 쓰고 생략하지 않는다.",
     "narrativeClaims는 section별 허용 근거만 쓴다. narrativeClaimContract.encoding이 role-indexed-v1이면 sectionEvidenceRoles와 evidenceLedger의 role·kind를 조합하고 preferredObservedEvidenceIds를 우선 함께 인용한다. 전체 ID 목록이 있으면 recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
     "invalidationCondition은 관측 대상과 변화 방향을 명시하고 검증된 next-condition 근거와 연결한다. 수치형 observable 필드가 있으면 followUpConditions로 구조화하되 입력에 없는 임계값은 만들지 않는다. 일반적인 '근거가 사라지면' 문장은 금지한다.",
     "invalidationCondition과 사용자 표시 문장에는 ma20Distance 같은 내부 필드명을 쓰지 말고 '20일선 차이'처럼 쉬운 한국어로 쓴다. 내부 필드와 수치는 followUpConditions에 별도로 구조화한다.",

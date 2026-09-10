@@ -961,6 +961,9 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     if authoritative:
                         payload = apply_enrichment_snapshot(payload, authoritative)
                 item.raw_payload = payload
+                authoritative_summary = news_domain.compact_text(payload.get("articleSummaryKo") or "", 520)
+                if authoritative_summary and authoritative_enrichment(payload):
+                    item.summary = authoritative_summary
                 self._persist_news_enrichment_with_connection(connection, item, stamp)
                 payload = dict(item.raw_payload or {})
                 self._persist_news_event_episode_with_connection(connection, item, stamp)

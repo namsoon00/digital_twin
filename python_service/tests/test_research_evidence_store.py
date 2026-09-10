@@ -321,6 +321,7 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
                     "sourceTextHash": "stable-source-hash",
                 },
             })
+            original.summary = "삼성전자가 HBM 수요와 연간 전망을 발표했습니다."
 
             self.assertEqual(1, store.upsert_many([original]))
             persisted = store.get(original.evidence_id)
@@ -337,6 +338,7 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
                 "version": "news-ai-analysis-test",
                 "sourceTextHash": "stable-source-hash",
             }
+            replayed.summary = "실적과 이익 전망 변화가 핵심"
             store.upsert_many([replayed])
 
             after = store.get(original.evidence_id)
@@ -347,6 +349,7 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             )
             self.assertEqual("ok", after.raw_payload["aiAnalysis"]["status"])
             self.assertEqual("complete", after.raw_payload["translationStatus"])
+            self.assertEqual("삼성전자가 HBM 수요와 연간 전망을 발표했습니다.", after.summary)
             self.assertIsNotNone(exact)
             self.assertEqual("ok", exact.raw_payload["aiAnalysis"]["status"])
 

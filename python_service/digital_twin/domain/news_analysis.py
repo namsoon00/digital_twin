@@ -816,6 +816,10 @@ def clean_article_body_text(value: object, limit: int = 5000) -> str:
         "Google에서 한국경제 기사를 더 자주 볼 수 있습니다",
         "로그인이 필요한 서비스 입니다",
         "로그인이 필요한 서비스입니다",
+        "기사에 대해 반론·정정",
+        "반론·정정추후 보도를 청구",
+        "반론·정정 보도를 청구",
+        "고충처리인",
     ):
         boundary = text.casefold().find(marker.casefold())
         if boundary >= 80:

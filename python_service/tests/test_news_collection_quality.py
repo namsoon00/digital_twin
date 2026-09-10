@@ -39,6 +39,23 @@ class NewsCollectionQualityTests(unittest.TestCase):
     def target(self):
         return NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology")
 
+    def test_yahoo_search_uses_exchange_symbol_for_korean_stock(self):
+        urls = []
+
+        def fetch_json(url, _headers=None):
+            urls.append(url)
+            return {"news": []}
+
+        gateway = NewsSourceGateway({}, fetch_json=fetch_json)
+
+        evidence = gateway.fetch_yahoo_finance_search(
+            NewsCollectionTarget("028260", "삼성물산", "KOSPI", "KRW", "복합기업"),
+        )
+
+        self.assertEqual([], evidence)
+        self.assertEqual(1, len(urls))
+        self.assertIn("q=028260.KS", urls[0])
+
     def test_news_digest_freshness_is_enforced_independently(self):
         enqueuer = NewsDigestEnqueuer(
             None,

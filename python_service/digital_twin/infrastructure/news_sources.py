@@ -1393,9 +1393,8 @@ class NewsSourceGateway:
 
     def fetch_yahoo_finance_search(self, target: NewsCollectionTarget) -> List[ResearchEvidence]:
         symbol = self.yahoo_finance_symbol(target)
-        query = symbol if not symbol.endswith((".KS", ".KQ")) else self.search_query_for_target(target)
         params = {
-            "q": query,
+            "q": symbol,
             "quotesCount": "1",
             "newsCount": str(min(30, max(8, self.per_symbol_limit() * 2))),
             "enableFuzzyQuery": "false",
@@ -1424,7 +1423,7 @@ class NewsSourceGateway:
                 published,
                 {
                     "provider": "Yahoo Finance Search",
-                    "query": query,
+                    "query": symbol,
                     "searchUrl": url,
                 },
             )

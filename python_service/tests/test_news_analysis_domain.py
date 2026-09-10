@@ -123,6 +123,21 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertFalse(facts["bodyQualityPassed"])
         self.assertEqual("limited", facts["bodyQualityState"])
 
+    def test_korean_publisher_footer_is_removed_from_article_body(self):
+        body = (
+            "네이버는 신규 검색 서비스를 공개했고 하반기부터 이용 대상을 확대한다고 밝혔다. "
+            "회사는 해당 서비스가 광고 매출과 검색 이용률에 미칠 영향을 다음 분기부터 공개할 예정이다. "
+            "기사에 대해 반론·정정추후 보도를 청구하실 분은 담당자에게 연락해 주십시오. "
+            "고충처리인 홍길동 contact@example.com 02-0000-0000"
+        )
+
+        cleaned = clean_article_body_text(body)
+
+        self.assertIn("다음 분기부터 공개할 예정이다", cleaned)
+        self.assertNotIn("반론", cleaned)
+        self.assertNotIn("고충처리인", cleaned)
+        self.assertNotIn("contact@example.com", cleaned)
+
     def test_reenrichment_blocks_legacy_body_after_google_result_boundary(self):
         target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
         evidence = ResearchEvidence(

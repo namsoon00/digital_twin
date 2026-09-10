@@ -678,6 +678,29 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual({"generation:current"}, {row[16] for row in inserts})
         self.assertEqual(1, len({row[19] for row in inserts}))
 
+        # A cold/partial run cannot turn the unexecuted first rule into a
+        # durable false result just because the second rule completed.
+        for prior in ({}, {"005930": {"graph.rule.two": "matched"}}):
+            cold_connection = RecordingConnection()
+            cold = {**result, "_priorRuleStatesBySymbol": prior}
+            count = store._upsert_rule_result_slots_with_connection(
+                cold_connection, run, cold, trace, "2026-08-16T00:00:00Z",
+            )
+            self.assertEqual(0, count)
+            self.assertFalse(cold_connection.calls)
+
+    def test_partial_prior_coverage_keeps_changed_and_unknown_rules(self):
+        plan = {"candidateRuleIds": ["changed"], "deferredRuleIds": ["unknown", "known"], "enabledRuleCount": 3}
+        partial = {"reusable": True, "partialCatalogProof": True, "candidateRuleIds": ["unknown"]}
+        updated = PortfolioOntologyProjectionRecorder.impact_plan_with_audited_candidates(plan, partial)
+        self.assertEqual(["changed", "unknown"], updated["candidateRuleIds"])
+        self.assertEqual(["known"], updated["deferredRuleIds"])
+        cold = {**partial, "candidateRuleIds": ["changed", "unknown", "known"]}
+        updated = PortfolioOntologyProjectionRecorder.impact_plan_with_audited_candidates(plan, cold)
+        self.assertEqual(["changed", "unknown", "known"], updated["candidateRuleIds"])
+        self.assertEqual([], updated["deferredRuleIds"])
+        self.assertFalse(updated["nativeRuleSelectionEligible"])
+
     def test_shared_world_can_persist_a_direct_coherent_result_slot_generation(self):
         connection = RecordingConnection()
         store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)

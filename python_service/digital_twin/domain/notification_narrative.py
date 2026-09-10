@@ -18,10 +18,11 @@ from .context_observation_notifications import typedb_context_observation_contra
 from .customer_evidence_explanation import build_customer_evidence_explanations
 from .decision_evidence_assertion import inference_evidence_assertions
 from .notification_ai_context import relation_context_value
+from .narrative_numeric_grounding import ungrounded_narrative_numbers
 
 
 NOTIFICATION_NARRATIVE_VERSION = "investment-notification-narrative-v1"
-NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v2"
+NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v3"
 NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v2"
 ROLE_INDEXED_CLAIM_CONTRACT_ENCODING = "role-indexed-v1"
 
@@ -78,7 +79,6 @@ ACTION_ONLY_PATTERN = re.compile(
     r"^(?:현재\s*)?(?:추가매수|매수|매도|분할축소|보유|신규\s*진입)"
     r"(?:를|는|은|이|가)?\s*(?:보류|유지|검토|우선|회피|권장|차단)?[.!]?$"
 )
-NUMBER_PATTERN = re.compile(r"(?<![0-9A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?")
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -109,18 +109,6 @@ def _stable_id(prefix: str, *parts: object) -> str:
     material = "|".join(str(part or "").strip() for part in parts)
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
     return prefix + ":" + digest
-
-
-def _number_tokens(value: object) -> set:
-    tokens = set()
-    for raw in NUMBER_PATTERN.findall(str(value or "")):
-        normalized = raw.replace(",", "").lstrip("+")
-        try:
-            number = float(normalized)
-        except (TypeError, ValueError):
-            continue
-        tokens.add(("%.8f" % number).rstrip("0").rstrip("."))
-    return tokens
 
 
 def _role(value: object, *, reference_only: bool = False) -> str:
@@ -938,11 +926,8 @@ def normalize_narrative_claims(
             reasons.append("next-condition-needs-observable-evidence")
         if section == "support" and is_action_only_text(text):
             reasons.append("action-used-as-evidence")
-        claim_numbers = _number_tokens(text)
-        evidence_numbers = _number_tokens(
-            json.dumps(known_rows, ensure_ascii=False, sort_keys=True, default=str)
-        )
-        if claim_numbers and not claim_numbers.issubset(evidence_numbers):
+        ungrounded_numbers = ungrounded_narrative_numbers(text, known_rows)
+        if ungrounded_numbers:
             reasons.append("ungrounded-number")
         status = "verified" if not reasons else "rejected"
         validation = NarrativeClaimValidation(
@@ -955,6 +940,7 @@ def normalize_narrative_claims(
             writer_kind=writer_kind,
         ).to_dict()
         validation["evidenceClosureAddedIds"] = _unique(closure_added_ids, 12)
+        validation["ungroundedNumbers"] = ungrounded_numbers
         validations.append(validation)
         if status == "verified":
             claims.append({

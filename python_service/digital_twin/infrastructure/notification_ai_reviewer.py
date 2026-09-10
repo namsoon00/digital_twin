@@ -14,6 +14,7 @@ from ..domain.notification_ai_gate_validation import (
     validated_response_from_text,
 )
 from .local_ai_process_guard import forward_termination_signals, local_ai_capacity_lease
+from .codex_execution_output import codex_execution_output
 from .model_reviewer import (
     codex_model_label,
     codex_process_arguments,
@@ -83,6 +84,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         capacity_reserved_slots: int = 1,
         capacity_wait_seconds=None,
         runtime_directory=None,
+        json_events: bool = False,
     ):
         self.command = command
         self.timeout_seconds = optional_timeout_seconds(timeout_seconds)
@@ -104,6 +106,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         )
         self.capacity_wait_seconds = optional_timeout_seconds(capacity_wait_seconds)
         self.runtime_directory = runtime_directory
+        self.json_events = bool(json_events)
 
     def begin_trace(self, _request_id: str = "") -> None:
         self.cancel_event.clear()
@@ -159,6 +162,8 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         process_started = None
         process = None
         termination_reason = "completed"
+        stdout, stderr = "", ""
+        output_diagnostics = {}
         try:
             lease = local_ai_capacity_lease(
                 self.capacity_lock_dir,
@@ -190,10 +195,10 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
                     termination_reason = "configured-timeout"
                     self.terminate_process(process, force=False)
                     try:
-                        process.wait(timeout=2)
+                        stdout, stderr = process.communicate(timeout=2)
                     except subprocess.TimeoutExpired:
                         self.terminate_process(process, force=True)
-                        process.wait(timeout=2)
+                        stdout, stderr = process.communicate(timeout=2)
                     raise TimeoutError("notification AI command exceeded " + str(timeout_seconds) + " seconds") from error
         except BaseException:
             if process is not None and process.poll() is None:
@@ -208,6 +213,8 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
             raise
         finally:
             finished = time.monotonic()
+            if self.json_events:
+                _, output_diagnostics = codex_execution_output(stdout)
             spans = {
                 "completionPolicy": "wait-until-complete" if timeout_seconds is None else "bounded",
                 "configuredTimeoutSeconds": int(timeout_seconds or 0),
@@ -218,12 +225,18 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
                 "returnCode": int(process.returncode) if process is not None and process.returncode is not None else None,
                 "terminationReason": termination_reason,
                 "runtimeDirectory": str(self.runtime_directory or ROOT_DIR),
+                "modelOutput": output_diagnostics,
             }
             self.last_execution_spans = spans
             self.execution_history.append(dict(spans))
             if self.process is process:
                 self.process = None
         output = str(stdout or "").strip()
+        if self.json_events:
+            output, output_diagnostics = codex_execution_output(stdout)
+            if not output_diagnostics["turnCompleted"] or output_diagnostics["turnFailed"]:
+                codes = ", ".join(output_diagnostics["errorCodes"])
+                raise RuntimeError("Codex model turn did not complete" + (": " + codes if codes else ""))
         if process.returncode != 0:
             raise RuntimeError((stderr or output or "notification AI command failed").strip())
         if not output:
@@ -335,6 +348,7 @@ def notification_ai_reviewer_from_settings(
             reasoning_effort=reasoning_effort,
             working_directory=runtime_dir,
             output_schema_path=output_schema_path,
+            json_events=True,
         )
         if command:
             try:
@@ -358,6 +372,7 @@ def notification_ai_reviewer_from_settings(
                     reasoning_effort=reasoning_effort,
                     working_directory=runtime_dir,
                     output_schema_path=output_schema_path,
+                    json_events=True,
                 ),
                 settings=settings,
                 capacity_lock_dir=data_dir() / "local-ai-capacity",
@@ -365,6 +380,7 @@ def notification_ai_reviewer_from_settings(
                 capacity_reserved_slots=reserved,
                 capacity_wait_seconds=capacity_wait,
                 runtime_directory=runtime_dir,
+                json_events=True,
             )
             return FallbackNotificationAIReviewer(primary) if allow_local_fallback else primary
     if allow_local_fallback:

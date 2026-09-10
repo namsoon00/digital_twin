@@ -36,6 +36,7 @@ from digital_twin.domain.world_partitioned_reasoning import (
 from digital_twin.infrastructure.typedb_ontology import (
     typedb_inferencebox_graph,
     typedb_native_rule_execution_selection,
+    typedb_rule_is_enabled,
 )
 
 
@@ -939,6 +940,29 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         self.assertFalse(compact["ruleRoutingComplete"])
         self.assertFalse(compact["nativeRuleSelectionEligible"])
+
+    def test_native_selection_requires_complete_prior_coverage(self):
+        rules = [rule for rule in default_graph_inference_rules() if typedb_rule_is_enabled(rule)][:4]
+        ids = [rule.rule_id for rule in rules]
+        for prior in ([], [ids[1]]):
+            with self.subTest(prior=prior):
+                result = typedb_native_rule_execution_selection(
+                    rules, candidate_rule_ids=ids[:1],
+                    prior_matched_rule_ids=prior, eligible=True,
+                    prior_inference_reusable=False,
+                )
+                self.assertEqual(ids, result["selectedRuleIds"])
+                self.assertEqual([], result["deferredRuleIds"])
+                self.assertFalse(result["selectionApplied"])
+                self.assertEqual("prior-rule-coverage-unavailable", result["fallbackReason"])
+        warm = typedb_native_rule_execution_selection(
+            rules, candidate_rule_ids=ids[:1],
+            prior_matched_rule_ids=ids[1:2], eligible=True,
+            prior_inference_reusable=True,
+        )
+        self.assertEqual(ids[:2], warm["selectedRuleIds"])
+        self.assertEqual(ids[2:], warm["deferredRuleIds"])
+        self.assertEqual("candidate-plus-prior-matches", warm["coverageMode"])
 
     def test_impact_plan_is_preserved_with_the_inference_generation(self):
         source = PortfolioOntology(

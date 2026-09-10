@@ -2127,7 +2127,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v4"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v5"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -28014,9 +28014,9 @@ def typedb_native_rule_execution_selection(
     change, an unchanged rule can only remain matched when it was matched in
     the previous aligned InferenceBox; known non-matches remain non-matches.
     We execute changed candidates plus verified previous matches when that
-    compact proof is available. Missing prior proof must not expand a local
-    revision to the complete rule catalog; unchanged outcomes remain owned by
-    their prior result slots and reconciliation is handled separately.
+    compact proof is available. Without it, deferred rules have unknown
+    outcomes, not known non-matches. Establish complete coverage for the
+    requested subjects before producing a replacement InferenceBox.
     """
     all_rules = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
     all_ids = [str(getattr(rule, "rule_id", "") or "").strip() for rule in all_rules]
@@ -28041,6 +28041,8 @@ def typedb_native_rule_execution_selection(
         fallback_reason = "rulebox-version-or-candidate-mismatch"
     elif prior_inference_reusable and (prior_matches - available):
         fallback_reason = "rulebox-version-or-prior-match-mismatch"
+    elif not prior_inference_reusable:
+        fallback_reason = "prior-rule-coverage-unavailable"
     if fallback_reason:
         return {
             "selectedRules": all_rules,
@@ -28050,6 +28052,7 @@ def typedb_native_rule_execution_selection(
             "priorMatchedRuleIds": sorted(prior_matches),
             "selectionApplied": False,
             "fallbackReason": fallback_reason,
+            "coverageMode": "complete-target-evaluation",
             "fullRuleCount": len(all_rules),
         }
     selected_ids = candidates | (prior_matches if prior_inference_reusable else set())
@@ -28063,7 +28066,7 @@ def typedb_native_rule_execution_selection(
         "priorMatchedRuleIds": sorted(prior_matches),
         "selectionApplied": len(selected_rules) < len(all_rules),
         "fallbackReason": "",
-        "coverageMode": "candidate-plus-prior-matches" if prior_inference_reusable else "changed-candidates",
+        "coverageMode": "candidate-plus-prior-matches",
         "fullRuleCount": len(all_rules),
     }
 

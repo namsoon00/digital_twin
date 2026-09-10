@@ -103,7 +103,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Exact claim revisions, prediction/premise outcomes, PIT financial
         # reads, explicit action denial, and independent comparison cohorts
         # each need positive and negative contract regression coverage.
-        self.assertLessEqual(total, 1040)
+        # Cold-start rule coverage, numerical display equivalence, and model
+        # completion events each protect a distinct production failure path.
+        self.assertLessEqual(total, 1055)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

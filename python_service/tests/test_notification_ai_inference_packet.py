@@ -20,6 +20,7 @@ from digital_twin.domain.notification_narrative import (
     resolved_narrative_claim_evidence_contract,
 )
 from digital_twin.domain.notifications import NotificationJob
+from digital_twin.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 
 
 def investment_context():
@@ -92,6 +93,71 @@ def response_payload(view_id, support_id, next_id):
 
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
+    def test_display_rounding_and_korean_direction_preserve_numeric_grounding(self):
+        rows = [
+            {"evidenceId": "fact:ma20Distance", "label": "20일 평균 괴리", "value": -4.75781},
+            {"evidenceId": "fact:priceChangeRate", "value": -0.4294},
+            {"evidenceId": "fact:volumeRatio", "value": 0.8461},
+        ]
+        for text in [
+            "20일 평균보다 4.76% 낮습니다.",
+            "20일 평균을 4.76% 밑도는 가격입니다.",
+            "가격 변화율은 -0.43%입니다.",
+            "가격은 0.43% 하락했습니다.",
+            "거래량은 평균의 0.85배입니다.",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual([], ungrounded_narrative_numbers(text, rows))
+        for text in [
+            "20일 평균보다 4.76% 높습니다.",
+            "가격은 -0.43% 상승했습니다.",
+            "가격은 0.44% 하락했습니다.",
+            "60일 평균보다 4.76% 낮습니다.",
+            "새 진입 가격은 20원입니다.",
+            "평균 대비 4.76%입니다.",
+        ]:
+            with self.subTest(text=text):
+                self.assertTrue(ungrounded_narrative_numbers(text, rows))
+
+    def test_numeric_grounding_uses_observed_values_not_provenance_digits(self):
+        rows = [{
+            "evidenceId": "fact:unrelated:999", "sourceAsOf": "2026-09-11",
+            "value": {"ma20Distance": "2.761", "releaseId": "release:999", "priceChangeRate": -1.136456322557844},
+        }]
+        self.assertEqual([], ungrounded_narrative_numbers(
+            "20일선보다 2.761% 높지만 일간 1.136% 하락했습니다.", rows,
+        ))
+        for text in ("목표는 999원입니다.", "목표는 2026원입니다.", "2.7609% 높습니다."):
+            with self.subTest(text=text):
+                self.assertTrue(ungrounded_narrative_numbers(text, rows))
+        self.assertEqual([], ungrounded_narrative_numbers(
+            "기준금리가 3.5%로 내려가면 다시 확인합니다.",
+            [{"evidenceId": "fact:krBaseRate", "value": 3.5}],
+        ))
+
+    def test_grounded_display_rounding_does_not_request_a_second_model_turn(self):
+        context = investment_context()
+        context["ontologyRelationContext"]["facts"]["ma20Distance"] = -4.75781
+
+        class Reviewer:
+            calls = 0
+
+            def review(self, prepared):
+                self.calls += 1
+                core = prepared["_notificationAiPreparedDecisionCore"]
+                support = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
+                payload = response_payload("fact:ma20Distance", support, "fact:ma20Distance")
+                payload["narrativeClaims"][0]["text"] = "20일선보다 4.76% 낮아 추가매수는 보류합니다."
+                return validated_response_from_payload(
+                    prepared, payload, raw_response=json.dumps(payload, ensure_ascii=False), source="test AI",
+                )
+
+        reviewer = Reviewer()
+        result = NotificationAIJudgementService(reviewer, {}).judge(context)
+        self.assertTrue(result.publishable)
+        self.assertFalse(result.repair_attempted)
+        self.assertEqual(1, reviewer.calls)
+
     def _assert_research_compaction_preserves_each_rule_proof_path(self):
         rule_ids = [
             "graph.company.capital.research.rule:" + str(index) + ":" + ("r" * 36)

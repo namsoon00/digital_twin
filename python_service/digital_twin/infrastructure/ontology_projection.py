@@ -7496,7 +7496,10 @@ class PortfolioOntologyProjectionRecorder:
                         result["reason"] = result["ruleboxExecution"]["reason"]
                         return
             bootstrap_full_rule_coverage = bool(
-                active_key == "typedb" and not selection_context.get("reusable")
+                active_key == "typedb" and (
+                    not selection_context.get("reusable")
+                    or selection_context.get("coverageComplete") is False
+                )
             )
             if bootstrap_full_rule_coverage:
                 result.setdefault("priorInferenceReuse", {}).update({
@@ -8765,6 +8768,12 @@ class PortfolioOntologyProjectionRecorder:
             for rule_id in context.get("candidateRuleIds") or []
             if str(rule_id or "").strip()
         ]
+        if context.get("partialCatalogProof"):
+            # Missing slots are additional work, not a replacement for rules
+            # affected by the current source revision.
+            candidate_ids = list(dict.fromkeys([
+                *candidate_ids, *(base.get("candidateRuleIds") or []),
+            ]))
         all_rule_ids = []
         for rule_id in list(base.get("candidateRuleIds") or []) + list(base.get("deferredRuleIds") or []):
             clean_rule_id = str(rule_id or "").strip()
@@ -8773,16 +8782,18 @@ class PortfolioOntologyProjectionRecorder:
         if not candidate_ids or not all_rule_ids or any(rule_id not in all_rule_ids for rule_id in candidate_ids):
             return {}
         candidate_ids = [rule_id for rule_id in all_rule_ids if rule_id in candidate_ids]
-        if len(candidate_ids) >= len(all_rule_ids):
-            return {}
         deferred_rule_ids = [rule_id for rule_id in all_rule_ids if rule_id not in candidate_ids]
+        selection_reason = (
+            "audited-target-proof-candidate-subset"
+            if deferred_rule_ids else "complete-target-coverage-required"
+        )
         base.update({
             "candidateRuleIds": candidate_ids,
             "deferredRuleIds": deferred_rule_ids,
             "candidateRuleCount": len(candidate_ids),
             "enabledRuleCount": max(int(base.get("enabledRuleCount") or 0), len(all_rule_ids)),
-            "nativeRuleSelectionEligible": True,
-            "nativeRuleSelectionEligibilityReason": "audited-target-proof-candidate-subset",
+            "nativeRuleSelectionEligible": bool(deferred_rule_ids),
+            "nativeRuleSelectionEligibilityReason": selection_reason,
         })
         diagnostics = dict(base.get("diagnostics") or {})
         enabled_count = int(base.get("enabledRuleCount") or len(all_rule_ids))
@@ -8790,8 +8801,8 @@ class PortfolioOntologyProjectionRecorder:
             "candidateRuleCount": len(candidate_ids),
             "enabledRuleCount": enabled_count,
             "candidateRuleRatioPct": round((len(candidate_ids) / max(1, enabled_count)) * 100, 1),
-            "candidateSubsetAvailable": True,
-            "selectionEligibilityReason": "audited-target-proof-candidate-subset",
+            "candidateSubsetAvailable": bool(deferred_rule_ids),
+            "selectionEligibilityReason": selection_reason,
         })
         reason_codes = list(diagnostics.get("reasonCodes") or [])
         if "audited-target-proof-reuse" not in reason_codes:

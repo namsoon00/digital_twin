@@ -1143,6 +1143,14 @@ class AIInferenceQueueRunner:
                 "error": comparison_repair_error,
                 "initialContractError": comparison_repair_initial_contract_error,
                 "contractError": comparison_repair_contract_error,
+                "initialPublicationError": (
+                    judgement_outcome.initial_publication_error
+                    if judgement_outcome is not None else ""
+                ),
+                "publicationError": (
+                    judgement_outcome.final_publication_error
+                    if judgement_outcome is not None else ""
+                ),
                 "reasoningEffort": comparison_repair_reasoning_effort,
                 "timeoutSeconds": int(self.comparison_repair_timeout_seconds or 0),
                 "finalState": str(response.hypothesis_comparison_state or ""),
@@ -1153,9 +1161,10 @@ class AIInferenceQueueRunner:
             "latencyMs": latency_ms,
             "executionSpans": {
                 "completionPolicy": (
-                    "wait-until-complete"
-                    if self.delivery_deadline_seconds is None
-                    else "bounded"
+                    "bounded" if any(
+                        attempt.get("completionPolicy") == "bounded"
+                        for attempt in getattr(self.reviewer, "execution_history", []) or []
+                    ) or self.delivery_deadline_seconds is not None else "wait-until-complete"
                 ),
                 "queueWaitMs": queue_wait_ms,
                 "promptPreparationMs": prompt_preparation_ms,

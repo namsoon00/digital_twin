@@ -1031,8 +1031,6 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 return 0
             missing_prior_rule_ids_by_symbol[symbol] = (
                 set(catalog_rule_ids) - set(previous)
-                if inherit_prior_generation
-                else set()
             )
             states_by_symbol[symbol] = {
                 rule_id: (
@@ -1047,18 +1045,21 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             or execution.get("executedRuleIds")
             or []
         )
+        full_evaluation = bool(
+            not execution.get("nativeRuleSelectionApplied")
+            and execution.get("nativeInferenceEvaluationComplete")
+        )
         executed_rule_ids = {
             str(rule_id or "").strip()
             for rule_id in (
                 reported_executed_rule_ids
-                if inherit_prior_generation
-                else catalog_rule_ids
+                or (catalog_rule_ids if full_evaluation else [])
             )
             if str(rule_id or "").strip() in states_by_symbol[targets[0]]
         }
         if not executed_rule_ids:
             return 0
-        if inherit_prior_generation and any(
+        if any(
             missing_rule_ids - executed_rule_ids
             for missing_rule_ids in missing_prior_rule_ids_by_symbol.values()
         ):

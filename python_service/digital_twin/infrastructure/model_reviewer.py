@@ -134,6 +134,7 @@ def codex_process_arguments(
     reasoning_effort: str = "",
     working_directory: Path = None,
     output_schema_path: Path = None,
+    json_events: bool = False,
 ) -> list:
     """Build direct Codex argv without the cross-process guard wrapper."""
 
@@ -156,6 +157,8 @@ def codex_process_arguments(
     ]
     if output_schema_path:
         arguments.extend(["--output-schema", str(Path(output_schema_path))])
+    if json_events:
+        arguments.append("--json")
     arguments.append("-")
     return arguments
 

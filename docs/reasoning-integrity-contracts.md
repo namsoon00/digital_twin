@@ -72,6 +72,16 @@ than fabricated success. The baseline survives normal snapshot retention.
 
 ## Engine Comparisons
 
+Incremental rule selection requires complete, release-scoped prior result slots.
+Without that proof, the native executor evaluates the complete rule catalogue
+for the requested subjects only. Unknown deferred rules must not become implicit
+non-matches in a replacement InferenceBox. Once a complete baseline exists,
+changed candidates plus prior matches are sufficient again.
+Partial prior coverage adds unknown rules to changed rules; it cannot replace
+them. Slot persistence rejects every rule absent from both the prior proof and
+the current execution. Native engine v5 starts a new execution namespace so
+previously manufactured non-match slots cannot become its baseline.
+
 Comparison input v2 requires identical source scope, snapshot ID/time, payload
 hash, accounts, and symbols. Sharing an event ID is insufficient. SQL pairing and
 the application boundary both enforce this contract.
@@ -86,6 +96,26 @@ Reconciliation appends comparisons under the new contract identity. It does not
 rewrite old decisions, manufacture a passing cohort, or bypass release promotion.
 
 ## Validation and Rollout
+
+### AI Numeric Claims and Execution
+
+Claim validation v3 compares observed numeric values with the precision actually
+displayed, using decimal rounding. Signed change metrics can be expressed as a
+magnitude and Korean direction. Observation periods are validated separately;
+digits from opaque IDs, release names or timestamps do not authorize a quantity.
+Absolute levels (for example, an interest-rate threshold) do not acquire the
+sign of a future movement verb. Unsupported levels and reversed directions
+remain rejected, with the unmatched numbers recorded in the claim audit.
+
+The notification model adapter consumes Codex JSONL completion events. It records
+event counts, terminal state, usage and bounded error codes, including partial
+progress on timeout. It does not store hidden reasoning or tool output in these
+diagnostics and cannot accept an incomplete model turn as a final answer. Model
+and reasoning effort are unchanged. Publication errors are retained separately
+from decision-contract errors; the execution audit reflects the actual bounded
+model watchdog even when the notification delivery deadline is disabled.
+
+### Rollout Requirements
 
 Focused tests cover explicit grant/denial, shared endpoint replacement, exact
 claim revisions, price-versus-premise results, point-in-time financial enrichment,

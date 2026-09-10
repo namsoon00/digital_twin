@@ -31,9 +31,56 @@ from digital_twin.infrastructure.notification_ai_reviewer import (  # noqa: E402
     notification_ai_reviewer_from_settings,
 )
 from digital_twin.infrastructure.rule_change_candidate_ai import rule_change_candidate_advisor_from_settings  # noqa: E402
+from digital_twin.infrastructure.codex_execution_output import codex_execution_output  # noqa: E402
 
 
 class AiModelPolicyTests(unittest.TestCase):
+    def test_model_events_retain_final_output_and_safe_diagnostics(self):
+        events = [
+            {"type": "thread.started", "thread_id": "private-thread"},
+            {"type": "item.completed", "item": {"type": "reasoning", "text": "private-reasoning"}},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": '{"action":"HOLD"}'}},
+            {"type": "turn.completed", "usage": {"input_tokens": 40, "output_tokens": 10}},
+        ]
+        output, audit = codex_execution_output("\n".join(json.dumps(event) for event in events))
+        self.assertEqual('{"action":"HOLD"}', output)
+        self.assertTrue(audit["turnCompleted"])
+        self.assertEqual(40, audit["usage"]["input_tokens"])
+        self.assertNotIn("private-", json.dumps(audit))
+
+    def test_timeout_retains_partial_progress_without_accepting_partial_answer(self):
+        events = json.dumps({"type": "turn.started"}) + "\n"
+        script = "import sys,time; sys.stdin.read(); print(" + repr(events) + ",flush=True); time.sleep(5)"
+        reviewer = CommandNotificationAIReviewer(
+            [sys.executable, "-c", script], timeout_seconds=1, json_events=True,
+        )
+        with self.assertRaises(TimeoutError):
+            reviewer.review({"messageType": "investmentInsight", "_notificationAiPreparedPrompt": "test"})
+        audit = reviewer.last_execution_spans
+        self.assertEqual("configured-timeout", audit["terminationReason"])
+        self.assertEqual(1, audit["modelOutput"]["eventTypes"]["turn.started"])
+        self.assertFalse(audit["modelOutput"]["turnCompleted"])
+        self.assertIsNone(reviewer.process)
+
+    def test_json_model_output_requires_a_completed_turn(self):
+        for terminal in ("turn.completed", "turn.failed"):
+            with self.subTest(terminal=terminal):
+                output = "\n".join(json.dumps(event) for event in [
+                    {"type": "item.completed", "item": {"type": "agent_message", "text": "{}"}},
+                    {"type": terminal},
+                ])
+                script = "import sys; sys.stdin.read(); print(" + repr(output) + ")"
+                reviewer = CommandNotificationAIReviewer([sys.executable, "-c", script], json_events=True)
+                with patch("digital_twin.infrastructure.notification_ai_reviewer.validated_response_from_text") as validate:
+                    context = {"messageType": "investmentInsight", "_notificationAiPreparedPrompt": "test"}
+                    if terminal == "turn.completed":
+                        reviewer.review(context)
+                        self.assertEqual("{}", validate.call_args.args[1])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "did not complete"):
+                            reviewer.review(context)
+                        validate.assert_not_called()
+
     def test_all_application_ai_factories_ignore_custom_commands_and_use_the_fixed_codex_policy(self):
         fixed_command = ["codex", "--model", "gpt-5.6-sol", "exec", "-"]
         with patch("digital_twin.infrastructure.model_reviewer.background_codex_process_arguments", return_value=fixed_command) as model_command, \

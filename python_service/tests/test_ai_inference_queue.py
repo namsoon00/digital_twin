@@ -617,35 +617,32 @@ class AIInferenceQueueTests(unittest.TestCase):
 
         changed_outcome = self.queue.enqueue_subject_decision(changed_job, changed)
 
-        self.assertEqual("awaiting-ai-insight", changed_outcome["status"])
-        self.assertEqual("superseded", self.queue.get(first.request_id).status)
-        stale_result = AIInferenceResult.create(
+        self.assertEqual("coalesced-active", changed_outcome["status"])
+        self.assertTrue(changed_outcome["refreshRequired"])
+        self.assertEqual(first.request_id, changed_outcome["requestId"])
+        self.assertEqual("processing", self.queue.get(first.request_id).status)
+        self.assertTrue(
+            self.queue.is_current(first.request_id, "worker-stale-material")
+        )
+        self.assertIsNone(self.notifications.get(first_job.job_id))
+        self.assertEqual([], self.queue.claim("worker-material-change", 1, 60))
+        active_result = AIInferenceResult.create(
             stale,
-            {"action": "HOLD", "summary": "이미 대체된 과거 판단입니다."},
+            {"action": "HOLD", "summary": "진행 중인 판단을 끝까지 완료했습니다."},
             source="fake max AI",
             validation_state="ready",
             latency_ms=10,
             prompt_bytes=100,
         )
-        self.assertFalse(
+        self.assertTrue(
             self.queue.complete(
                 stale,
                 "worker-stale-material",
-                stale_result,
-                {
-                    **stale.context,
-                    "decisionReconciliation": {
-                        "notificationDecision": "send",
-                        "notificationJobId": first_job.job_id,
-                    },
-                },
+                active_result,
+                stale.context,
             )
         )
-        self.assertIsNone(self.notifications.get(first_job.job_id))
-        self.assertEqual(
-            changed.request_id,
-            self.queue.claim("worker-material-change", 1, 60)[0].request_id,
-        )
+        self.assertEqual("completed", self.queue.get(first.request_id).status)
 
     def test_verified_ai_narrative_survives_action_contract_fallback(self):
         reviewed = NotificationAIValidatedResponse(

@@ -552,6 +552,29 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 and _clean(latest.get("material_fingerprint"))
                 == request.material_fingerprint
             )
+            latest_status = _clean(latest.get("status")) if latest else ""
+            if latest and latest_status == AI_INFERENCE_PROCESSING:
+                # A max-effort review can run longer than the market polling
+                # interval. Replacing it on every fresh observation starves
+                # the subject forever: each nearly-complete model call is
+                # discarded and the next one starts from zero. Keep the
+                # claimed review as the single flight. Final admission still
+                # rechecks freshness, and a later material event can start the
+                # next review after this request reaches a terminal state.
+                return {
+                    "status": "coalesced-active",
+                    "requestId": latest_id,
+                    "notificationJobId": "",
+                    "reservedNotificationJobId": job.job_id,
+                    "subjectKey": request.subject_key,
+                    "subjectCaseId": request.origin_id,
+                    "existing": True,
+                    "materialFingerprint": request.material_fingerprint,
+                    "activeMaterialFingerprint": _clean(
+                        latest.get("material_fingerprint")
+                    ),
+                    "refreshRequired": not same_material,
+                }
             if latest and same_material and _clean(latest.get("status")) in (
                 *ACTIVE_STATES,
                 AI_INFERENCE_COMPLETED,

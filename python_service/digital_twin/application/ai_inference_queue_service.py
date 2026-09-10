@@ -671,9 +671,15 @@ class NotificationAIRequestEnqueuer:
             not narrative_only
             and status in {"coalesced-material", "coalesced-identical", "coalesced-active"}
         ):
+            reason = (
+                "진행 중인 최고 모델 분석을 중단하지 않도록 이번 중간 판단 건을 "
+                "별도 AI 실행 없이 종료했습니다."
+                if status == "coalesced-active" and outcome.get("refreshRequired")
+                else "동일한 판단 의미의 AI 인사이트가 이미 처리 중이거나 완료됐습니다."
+            )
             self.reasoning_orchestrator.case_superseded(
                 subject_case_id,
-                "동일한 판단 의미의 AI 인사이트가 이미 처리 중이거나 완료됐습니다.",
+                reason,
             )
         if not narrative_only:
             for superseded_case_id in outcome.get("supersededReasoningCaseIds") or []:

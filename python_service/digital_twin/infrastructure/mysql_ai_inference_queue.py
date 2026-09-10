@@ -927,6 +927,73 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "workerId": worker,
         }
 
+    def recover_worker_label_leases(
+        self,
+        worker_label: str,
+        worker_id: str,
+        reason: object = "",
+    ) -> Dict[str, object]:
+        """Fence prior instances of one managed worker slot at startup."""
+
+        label = _clean(worker_label)
+        worker = _clean(worker_id)
+        if not label or not worker or not worker.startswith(label + ":"):
+            return {
+                "status": "unchanged",
+                "recoveredCount": 0,
+                "retryCount": 0,
+                "supersededCount": 0,
+            }
+        stamp = utc_now()
+        retried = 0
+        superseded = 0
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT request_id, subject_key, lease_owner FROM ai_inference_requests "
+                "WHERE status = %s AND lease_owner <> %s "
+                "AND LEFT(lease_owner, CHAR_LENGTH(%s) + 1) = CONCAT(%s, ':') "
+                "FOR UPDATE",
+                (AI_INFERENCE_PROCESSING, worker, label, label),
+            ).fetchall()
+            for row in rows or []:
+                request_id = _clean(row.get("request_id"))
+                prior_owner = _clean(row.get("lease_owner"))
+                head = connection.execute(
+                    "SELECT latest_request_id FROM ai_inference_subject_heads "
+                    "WHERE subject_key = %s FOR UPDATE",
+                    (_clean(row.get("subject_key")),),
+                ).fetchone()
+                is_latest = _clean(head.get("latest_request_id") if head else "") == request_id
+                target_status = AI_INFERENCE_RETRY if is_latest else AI_INFERENCE_SUPERSEDED
+                cursor = connection.execute(
+                    "UPDATE ai_inference_requests SET status = %s, available_at = %s, "
+                    "lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
+                    "last_error = %s, completed_at = %s, updated_at = %s "
+                    "WHERE request_id = %s AND status = %s AND lease_owner = %s",
+                    (
+                        target_status,
+                        stamp if is_latest else "",
+                        _clean(reason)[:500],
+                        "" if is_latest else stamp,
+                        stamp,
+                        request_id,
+                        AI_INFERENCE_PROCESSING,
+                        prior_owner,
+                    ),
+                )
+                changed = int(getattr(cursor, "rowcount", 0) or 0)
+                retried += changed if is_latest else 0
+                superseded += changed if not is_latest else 0
+        recovered = retried + superseded
+        return {
+            "status": "recovered" if recovered else "unchanged",
+            "recoveredCount": recovered,
+            "retryCount": retried,
+            "supersededCount": superseded,
+            "workerLabel": label,
+            "workerId": worker,
+        }
+
     def is_current(self, request_id: str, worker_id: str = "") -> bool:
         clauses = ["request.request_id = %s", "request.status = %s"]
         params: List[object] = [_clean(request_id), AI_INFERENCE_PROCESSING]

@@ -745,6 +745,10 @@ class AIInferenceQueueTests(unittest.TestCase):
         shutdown_order = []
 
         class StopQueue:
+            def recover_worker_label_leases(self, *_args):
+                shutdown_order.append("startup-recovery")
+                return {"status": "unchanged", "recoveredCount": 0}
+
             def release_worker_leases(self, *_args):
                 shutdown_order.append("lease-released")
                 return {"status": "released", "releasedCount": 1}
@@ -760,9 +764,10 @@ class AIInferenceQueueTests(unittest.TestCase):
         )
         stopping_runner.stop()
         self.assertEqual(
-            ["lease-released", "model-stopped"],
+            ["startup-recovery", "lease-released", "model-stopped"],
             shutdown_order,
         )
+        self.assertEqual("unchanged", stopping_runner.start_recovery["status"])
         self.assertEqual(1, stopping_runner.stop_recovery["releasedCount"])
 
     @classmethod
@@ -835,6 +840,19 @@ class AIInferenceQueueTests(unittest.TestCase):
         runner.stop()
         self.assertEqual("retry", self.queue.get(first.request_id).status)
         self.assertEqual(1, runner.stop_recovery["releasedCount"])
+
+        stale_owner = "worker-1:stale-instance"
+        self.assertEqual(first.request_id, self.queue.claim(stale_owner, 1, 60)[0].request_id)
+        replacement = AIInferenceQueueRunner(
+            self.queue,
+            FakeReviewer(),
+            worker_id="worker-1",
+        )
+        self.assertEqual("recovered", replacement.start_recovery["status"])
+        self.assertEqual(1, replacement.start_recovery["recoveredCount"])
+        self.assertEqual(1, replacement.start_recovery["retryCount"])
+        self.assertEqual("retry", self.queue.get(first.request_id).status)
+        replacement.stop()
 
     def test_material_action_change_replaces_running_subject(self):
         first_job = self.create_job(100, "generation-1")

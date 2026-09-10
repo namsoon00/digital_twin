@@ -784,7 +784,24 @@ class AIInferenceQueueRunner:
         )
         self.last_run_details = []
         self.stopping = False
+        self.start_recovery = {}
         self.stop_recovery = {}
+        recover = getattr(self.queue, "recover_worker_label_leases", None)
+        if callable(recover):
+            try:
+                self.start_recovery = dict(
+                    recover(
+                        self.worker_label,
+                        self.worker_id,
+                        "stale managed AI worker instance replaced",
+                    )
+                    or {}
+                )
+            except Exception as error:  # noqa: BLE001 - a transient DB issue must not block startup.
+                self.start_recovery = {
+                    "status": "failed",
+                    "reason": str(error)[:240],
+                }
 
     def stop(self) -> None:
         self.stopping = True

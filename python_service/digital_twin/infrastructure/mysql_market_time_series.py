@@ -1031,6 +1031,115 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             results[request_id] = payload
         return results
 
+    def load_baseline_observations(
+        self,
+        account_id: str,
+        targets: Iterable[Dict[str, object]],
+        max_age_minutes: int = 60 * 24 * 7,
+    ) -> Dict[str, Dict[str, object]]:
+        """Return the latest usable quote at or before each decision baseline.
+
+        Decisions made while a market is closed have no quote after their
+        timestamp until the next session. Using that future quote as the
+        baseline leaks outcome information, so baseline lookups are bounded
+        backwards and outcome lookups remain bounded forwards.
+        """
+
+        try:
+            age_minutes = int(float(max_age_minutes or 60 * 24 * 7))
+        except (TypeError, ValueError):
+            age_minutes = 60 * 24 * 7
+        age_minutes = max(1, min(60 * 24 * 31, age_minutes))
+        clean_targets = []
+        for raw in targets or []:
+            target = dict(raw or {}) if isinstance(raw, dict) else {}
+            request_id = str(target.get("requestId") or "").strip()
+            symbol = str(target.get("symbol") or "").upper().strip()
+            target_at = iso_utc(target.get("targetAt"))
+            parsed_target = parse_timestamp(target_at)
+            if not request_id or not symbol or not parsed_target:
+                continue
+            try:
+                target_age_minutes = int(float(
+                    target.get("maximumBaselineAgeMinutes") or age_minutes
+                ))
+            except (TypeError, ValueError):
+                target_age_minutes = age_minutes
+            target_age_minutes = max(1, min(60 * 24 * 31, target_age_minutes))
+            clean_targets.append({
+                "requestId": request_id,
+                "symbol": symbol,
+                "targetAt": target_at,
+                "earliestAt": (
+                    parsed_target - timedelta(minutes=target_age_minutes)
+                ).isoformat().replace("+00:00", "Z"),
+            })
+            if len(clean_targets) >= 1000:
+                break
+        if not self.enabled() or not clean_targets:
+            return {}
+        target_sql = " UNION ALL ".join(
+            "SELECT %s AS request_key, %s AS symbol, %s AS target_at, %s AS earliest_at"
+            for _ in clean_targets
+        )
+        params: List[object] = []
+        for target in clean_targets:
+            params.extend([
+                target["requestId"],
+                target["symbol"],
+                target["targetAt"],
+                target["earliestAt"],
+            ])
+        params.extend([str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID])
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM (
+                    SELECT target_requests.request_key,
+                           observations.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY target_requests.request_key, observations.account_id
+                               ORDER BY COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) DESC,
+                                        CASE observations.granularity
+                                            WHEN '3m' THEN 1
+                                            WHEN '15m' THEN 2
+                                            WHEN '1h' THEN 3
+                                            WHEN '1d' THEN 4
+                                            ELSE 5
+                                        END ASC,
+                                        observations.bucket_at DESC
+                           ) AS row_number_value
+                    FROM (""" + target_sql + """) AS target_requests
+                    JOIN market_time_series_observations observations
+                      ON observations.symbol = target_requests.symbol
+                     AND observations.account_id IN (%s, %s)
+                     AND observations.current_price > 0
+                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) <= target_requests.target_at
+                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) >= target_requests.earliest_at
+                ) ranked
+                WHERE ranked.row_number_value = 1
+                """,
+                params,
+            ).fetchall()
+        preferred: Dict[str, Dict[str, object]] = {}
+        for row in rows or []:
+            request_id = str(row.get("request_key") or "")
+            if not request_id:
+                continue
+            current = preferred.get(request_id)
+            is_account_row = str(row.get("account_id") or "") == str(account_id or "")
+            current_is_account_row = str((current or {}).get("account_id") or "") == str(account_id or "")
+            if current and current_is_account_row and not is_account_row:
+                continue
+            preferred[request_id] = row
+        results: Dict[str, Dict[str, object]] = {}
+        for request_id, row in preferred.items():
+            payload = self.observation_payload(row)
+            payload["outcomeRequestId"] = request_id
+            payload["observationBasis"] = "point-in-time-baseline-observation"
+            results[request_id] = payload
+        return results
+
     def limit_for_window(
         self,
         rows: List[Dict[str, object]],

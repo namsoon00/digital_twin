@@ -2,6 +2,7 @@ import json
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from digital_twin.domain.hypothesis_outcome_contract import (
     HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
@@ -252,6 +253,11 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         self.assertTrue(transitions[0]["notificationOnTransition"])
         self.assertTrue(transitions[0]["transitionVerified"])
         self.assertIn("JOIN investment_flow_current", connection.statements[0][0])
+        follow_up_update = next(
+            params for sql, params in connection.statements
+            if sql.startswith("UPDATE investment_decision_follow_ups")
+        )
+        self.assertEqual(6, len(follow_up_update))
 
         supersede_connection = SupersedeConnection()
         changed = store.supersede_prior_follow_ups_for_current(
@@ -337,14 +343,26 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
                 result = {}
                 for request in rows:
                     request_id = request["requestId"]
-                    baseline = request_id.endswith(":instrument-start")
                     result[request_id] = {
-                        "currentPrice": 100 if baseline else 110,
+                        "currentPrice": 110,
                         "sourceAsOf": request["targetAt"],
                         "dataQuality": "fresh",
                         "observationBasis": "historical-market-time-series",
                     }
                 return result
+
+            def load_baseline_observations(self, _account_id, requests, **_kwargs):
+                rows = list(requests)
+                self.requests.append(rows)
+                return {
+                    request["requestId"]: {
+                        "currentPrice": 100,
+                        "sourceAsOf": request["targetAt"],
+                        "dataQuality": "fresh",
+                        "observationBasis": "point-in-time-baseline-observation",
+                    }
+                    for request in rows
+                }
 
         store = Store()
         time_series = TimeSeries()
@@ -796,6 +814,29 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
             ("account:1", "2026-08-25T01:30:00Z", 1, "2026-08-25T01:30:00Z"),
             connection.statements[0][1],
         )
+
+        performance_store = self.store()
+        performance_store.performance_episodes = lambda **_kwargs: []
+        performance_store.performance_archive_episode_count = lambda *_args, **_kwargs: 3375
+        performance_store.outcome_coverage_population = lambda **_kwargs: {
+            "observedEpisodeCount": 50,
+            "dueUnobservedEpisodeCount": 10,
+        }
+        with patch(
+            "digital_twin.infrastructure.mysql_investment_decision_episodes.evaluate_decision_performance",
+            return_value={
+                "status": "ok",
+                "episodeCount": 719,
+                "episodeWithOutcomeCount": 719,
+                "calibrationEligibleEpisodeCount": 50,
+            },
+        ):
+            performance = performance_store.performance("account:1")
+        self.assertEqual(3375, performance["episodeCount"])
+        self.assertEqual(60, performance["outcomeCoveragePopulationEpisodeCount"])
+        self.assertEqual(10, performance["outcomeCoverageDueUnobservedEpisodeCount"])
+        self.assertEqual(83.33, performance["outcomeCoveragePct"])
+        self.assertEqual("eligible-due-outcome-targets-v1", performance["outcomeCoverageBasis"])
 
 
 if __name__ == "__main__":

@@ -1731,12 +1731,93 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         evaluated_count = int(result.get("episodeCount") or 0)
         result["evaluatedEpisodeCount"] = evaluated_count
         result["episodeCount"] = archive_count
+        coverage_population = self.outcome_coverage_population(
+            account_id=account_id,
+            symbol=symbol,
+            as_of=as_of,
+        )
+        calibration_eligible = int(result.get("calibrationEligibleEpisodeCount") or 0)
+        observed_population = max(
+            calibration_eligible,
+            int(coverage_population.get("observedEpisodeCount") or 0),
+        )
+        due_unobserved = int(coverage_population.get("dueUnobservedEpisodeCount") or 0)
+        coverage_denominator = observed_population + due_unobserved
         result["outcomeCoveragePct"] = round(
-            (int(result.get("episodeWithOutcomeCount") or 0) / archive_count) * 100,
+            (calibration_eligible / coverage_denominator) * 100,
             2,
-        ) if archive_count else 0.0
+        ) if coverage_denominator else 0.0
+        result["outcomeCoverageEligibleEpisodeCount"] = calibration_eligible
+        result["outcomeCoverageObservedEpisodeCount"] = observed_population
+        result["outcomeCoverageDueUnobservedEpisodeCount"] = due_unobserved
+        result["outcomeCoveragePopulationEpisodeCount"] = coverage_denominator
+        result["outcomeCoverageBasis"] = "eligible-due-outcome-targets-v1"
         result["historySelection"] = "outcome-led-bounded-history"
         return result
+
+    def outcome_coverage_population(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        as_of: str = "",
+    ) -> Dict[str, int]:
+        """Count only observable episodes whose outcome contract is in force."""
+
+        cutoff = canonical_investment_timestamp(as_of) or utc_now_iso()
+
+        def counts_for(
+            connection,
+            target_table: str,
+            outcome_table: str,
+            episode_column: str,
+        ) -> Dict[str, int]:
+            scope = []
+            params: List[object] = []
+            if account_id:
+                scope.append("targets.account_id = %s")
+                params.append(str(account_id))
+            if symbol:
+                scope.append("targets.symbol = %s")
+                params.append(str(symbol).upper())
+            scope_sql = (" AND " + " AND ".join(scope)) if scope else ""
+            observed = connection.execute(
+                "SELECT COUNT(DISTINCT targets." + episode_column + ") AS count "
+                "FROM " + target_table + " AS targets "
+                "WHERE targets.status = 'observed' AND targets.observed_at <= %s"
+                + scope_sql,
+                tuple([cutoff] + params),
+            ).fetchone() or {}
+            due = connection.execute(
+                "SELECT COUNT(DISTINCT targets." + episode_column + ") AS count "
+                "FROM " + target_table + " AS targets "
+                "WHERE targets.status = 'pending' AND targets.target_at <= %s"
+                + scope_sql
+                + " AND NOT EXISTS (SELECT 1 FROM " + outcome_table + " AS outcomes "
+                "WHERE outcomes." + episode_column + " = targets." + episode_column + ")",
+                tuple([cutoff] + params),
+            ).fetchone() or {}
+            return {
+                "observed": int(observed.get("count") or 0),
+                "due": int(due.get("count") or 0),
+            }
+
+        with self.connect() as connection:
+            decision = counts_for(
+                connection,
+                "investment_decision_outcome_targets",
+                "investment_decision_outcomes",
+                "episode_id",
+            )
+            shadow = counts_for(
+                connection,
+                "investment_hypothesis_observation_targets",
+                "investment_hypothesis_observation_outcomes",
+                "observation_episode_id",
+            )
+        return {
+            "observedEpisodeCount": decision["observed"] + shadow["observed"],
+            "dueUnobservedEpisodeCount": decision["due"] + shadow["due"],
+        }
 
     def performance_archive_episode_count(
         self,
@@ -2890,7 +2971,10 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     source_episode_ids_json, payload_json, created_at, updated_at,
                     reviewed_at, review_note
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '', '')
-                ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                ON DUPLICATE KEY UPDATE title = VALUES(title), reason = VALUES(reason),
+                    affected_rule_ids_json = VALUES(affected_rule_ids_json),
+                    source_episode_ids_json = VALUES(source_episode_ids_json),
+                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
                 """,
                 (
                     proposal.proposal_id,

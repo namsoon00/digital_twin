@@ -40,6 +40,7 @@ from ..application.notification_ai_gate_message import (
 )
 from ..application.notification.rendering import NotificationRenderingService
 from ..application.notification_replay_service import NotificationReplayService
+from ..application.notification_feedback_service import NotificationFeedbackService
 from ..application.investment_case_query_service import InvestmentCaseQueryService
 from ..application.investment_flow_query_service import InvestmentFlowQueryService
 from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
@@ -64,6 +65,7 @@ from ..domain.events import (
     NOTIFICATION_RULE_UPDATED,
     NOTIFICATION_TEMPLATE_UPDATED,
     NOTIFICATION_TEST_REQUESTED,
+    NOTIFICATION_USEFULNESS_RECORDED,
     SETTINGS_UPDATED,
     SYMBOL_UNIVERSE_REFRESH_FAILED,
     SYMBOL_UNIVERSE_REFRESH_REQUESTED,
@@ -1834,6 +1836,13 @@ def _investment_model_source_payload() -> Dict[str, object]:
         "rulebox": ontology_rulebox_summary_payload,
         "catalog": lambda: ontology_catalog_api_payload("summary", {}),
         "experiments": ontology_experiments_status_payload,
+        "messageQuality": lambda: notification_queue_store().message_quality_summary(
+            "local-owner",
+            safe_int(runtime_settings().get("investmentMessageQualityWindowDays"), 90, 7, 365),
+        ),
+        "learning": lambda: build_investment_brain_service().learning_proposals(
+            limit=100
+        ),
     }
     results = {}
     errors = []
@@ -1852,6 +1861,8 @@ def _investment_model_source_payload() -> Dict[str, object]:
         results.get("experiments"),
         runtime_settings(),
         results.get("timeSeries"),
+        results.get("messageQuality"),
+        results.get("learning"),
     )
     payload["diagnostics"] = {"partial": bool(errors), "errors": errors}
     return payload
@@ -3913,6 +3924,9 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
             "readAt": str(receipt.get("readAt") or ""),
             "acknowledgedAt": str(receipt.get("acknowledgedAt") or ""),
             "important": bool(receipt.get("important")),
+            "usefulness": str(receipt.get("usefulness") or ""),
+            "feedbackReason": str(receipt.get("feedbackReason") or ""),
+            "feedbackAt": str(receipt.get("feedbackAt") or ""),
             "receiptUpdatedAt": str(receipt.get("receiptUpdatedAt") or ""),
         })
         items.append(item)
@@ -4097,6 +4111,9 @@ def notification_job_detail_payload(
             "readAt": str(receipt.get("readAt") or ""),
             "acknowledgedAt": str(receipt.get("acknowledgedAt") or ""),
             "important": bool(receipt.get("important")),
+            "usefulness": str(receipt.get("usefulness") or ""),
+            "feedbackReason": str(receipt.get("feedbackReason") or ""),
+            "feedbackAt": str(receipt.get("feedbackAt") or ""),
             "receiptUpdatedAt": str(receipt.get("receiptUpdatedAt") or ""),
         })
     try:
@@ -4201,17 +4218,45 @@ def notification_job_detail_payload(
 
 def update_notification_receipt_payload(job_id: str, payload: Dict[str, object]) -> Dict[str, object]:
     body = payload if isinstance(payload, dict) else {}
-    store = notification_queue_store()
-    if not store.get(job_id):
-        return {"error": "알림을 찾지 못했습니다."}
-    receipt = store.update_receipt(
+    configured = operational_read_settings()
+    store = notification_queue_store(configured)
+    service = NotificationFeedbackService(
+        store,
+        stores.investment_decision_episode_store(configured),
+        configured,
+    )
+    result = service.record(
         job_id,
         str(body.get("recipientId") or "local-owner"),
         read=request_bool(body.get("read")) if "read" in body else None,
         acknowledged=request_bool(body.get("acknowledged")) if "acknowledged" in body else None,
         important=request_bool(body.get("important")) if "important" in body else None,
+        usefulness=str(body.get("usefulness") or "") if "usefulness" in body else None,
+        feedback_reason=str(body.get("feedbackReason") or "") if "feedbackReason" in body else None,
     )
-    return {"receipt": receipt, "inboxSummary": store.inbox_summary(receipt["recipientId"], scope="investment")}
+    if result.get("error"):
+        return result
+    receipt = dict(result.get("receipt") or {})
+    if "usefulness" in body:
+        new_domain_event(
+            NOTIFICATION_USEFULNESS_RECORDED,
+            str(job_id or ""),
+            {
+                "jobId": str(job_id or ""),
+                "recipientId": str(receipt.get("recipientId") or ""),
+                "usefulness": str(receipt.get("usefulness") or ""),
+                "feedbackReason": str(receipt.get("feedbackReason") or ""),
+                "feedbackAt": str(receipt.get("feedbackAt") or ""),
+                "learningProposalId": str(
+                    (result.get("learningProposal") or {}).get("proposalId") or ""
+                ),
+            },
+        )
+    result["inboxSummary"] = store.inbox_summary(
+        str(receipt.get("recipientId") or "local-owner"),
+        scope="investment",
+    )
+    return result
 
 
 def mark_all_notifications_read_payload(payload: Dict[str, object]) -> Dict[str, object]:

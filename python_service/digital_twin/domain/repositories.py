@@ -637,6 +637,22 @@ class MarketTimeSeriesRepository(Protocol):
     ) -> List[Dict[str, object]]:
         ...
 
+    def load_outcome_observations(
+        self,
+        account_id: str,
+        targets: Iterable[Dict[str, object]],
+        max_delay_minutes: int = 180,
+    ) -> Dict[str, Dict[str, object]]:
+        ...
+
+    def load_baseline_observations(
+        self,
+        account_id: str,
+        targets: Iterable[Dict[str, object]],
+        max_age_minutes: int = 60 * 24 * 7,
+    ) -> Dict[str, Dict[str, object]]:
+        ...
+
     def summary(self, account_id: str = "") -> Dict[str, object]:
         ...
 

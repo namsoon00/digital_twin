@@ -28,6 +28,7 @@ from ..domain.notification_rules import (
     notification_state_group_key,
 )
 from ..domain.notifications import NotificationJob
+from ..domain.notification_feedback import normalize_notification_feedback
 from ..domain.notification.lifecycle import NotificationLifecycleEvent
 from ..domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from ..domain.sent_article_filter import (
@@ -454,6 +455,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ", receipt.read_at AS receipt_read_at"
                 ", receipt.acknowledged_at AS receipt_acknowledged_at"
                 ", receipt.important AS receipt_important"
+                ", receipt.usefulness AS receipt_usefulness"
+                ", receipt.feedback_reason AS receipt_feedback_reason"
+                ", receipt.feedback_at AS receipt_feedback_at"
                 ", receipt.updated_at AS receipt_updated_at"
             )
         with self.connect() as connection:
@@ -552,7 +556,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         placeholders = ",".join(["%s"] * len(ids))
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT job_id, read_at, acknowledged_at, important, updated_at "
+                "SELECT job_id, read_at, acknowledged_at, important, usefulness, "
+                "feedback_reason, feedback_at, updated_at "
                 "FROM notification_inbox_receipts WHERE recipient_id = %s AND job_id IN (" + placeholders + ")",
                 [recipient] + ids,
             ).fetchall()
@@ -561,6 +566,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 "readAt": str(row.get("read_at") or ""),
                 "acknowledgedAt": str(row.get("acknowledged_at") or ""),
                 "important": bool(row.get("important")),
+                "usefulness": str(row.get("usefulness") or ""),
+                "feedbackReason": str(row.get("feedback_reason") or ""),
+                "feedbackAt": str(row.get("feedback_at") or ""),
                 "receiptUpdatedAt": str(row.get("updated_at") or ""),
             }
             for row in rows
@@ -595,6 +603,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         read: Optional[bool] = None,
         acknowledged: Optional[bool] = None,
         important: Optional[bool] = None,
+        usefulness: Optional[str] = None,
+        feedback_reason: Optional[str] = None,
     ) -> Dict[str, object]:
         job_key = str(job_id or "").strip()[:191]
         recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
@@ -605,6 +615,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         read_at = str(existing.get("readAt") or "")
         acknowledged_at = str(existing.get("acknowledgedAt") or "")
         important_value = bool(existing.get("important"))
+        usefulness_value = str(existing.get("usefulness") or "")
+        feedback_reason_value = str(existing.get("feedbackReason") or "")
+        feedback_at = str(existing.get("feedbackAt") or "")
         if read is not None:
             read_at = stamp if read else ""
         if acknowledged is not None:
@@ -613,14 +626,32 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 read_at = read_at or stamp
         if important is not None:
             important_value = bool(important)
+        if usefulness is not None:
+            feedback = normalize_notification_feedback(usefulness, feedback_reason)
+            usefulness_value = feedback["usefulness"]
+            feedback_reason_value = feedback["reason"]
+            feedback_at = stamp if usefulness_value else ""
         with self.connect() as connection:
             connection.execute(
                 "INSERT INTO notification_inbox_receipts "
-                "(recipient_id, job_id, read_at, acknowledged_at, important, updated_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "(recipient_id, job_id, read_at, acknowledged_at, important, usefulness, "
+                "feedback_reason, feedback_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON DUPLICATE KEY UPDATE read_at = VALUES(read_at), acknowledged_at = VALUES(acknowledged_at), "
-                "important = VALUES(important), updated_at = VALUES(updated_at)",
-                (recipient, job_key, read_at, acknowledged_at, int(important_value), stamp),
+                "important = VALUES(important), usefulness = VALUES(usefulness), "
+                "feedback_reason = VALUES(feedback_reason), feedback_at = VALUES(feedback_at), "
+                "updated_at = VALUES(updated_at)",
+                (
+                    recipient,
+                    job_key,
+                    read_at,
+                    acknowledged_at,
+                    int(important_value),
+                    usefulness_value,
+                    feedback_reason_value,
+                    feedback_at,
+                    stamp,
+                ),
             )
         return {
             "jobId": job_key,
@@ -628,8 +659,113 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "readAt": read_at,
             "acknowledgedAt": acknowledged_at,
             "important": important_value,
+            "usefulness": usefulness_value,
+            "feedbackReason": feedback_reason_value,
+            "feedbackAt": feedback_at,
             "receiptUpdatedAt": stamp,
         }
+
+    def message_quality_summary(
+        self,
+        recipient_id: str = "local-owner",
+        window_days: int = 90,
+    ) -> Dict[str, object]:
+        recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
+        days = max(7, min(365, int(window_days or 90)))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT receipt.usefulness, receipt.feedback_reason, COUNT(*) AS count "
+                "FROM notification_inbox_receipts AS receipt "
+                "JOIN notification_jobs ON notification_jobs.job_id = receipt.job_id "
+                "WHERE receipt.recipient_id = %s AND receipt.feedback_at >= %s "
+                "AND receipt.usefulness IN ('helpful', 'not-helpful') "
+                "AND notification_jobs.message_type IN (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "AND notification_jobs.status = 'done' "
+                "GROUP BY receipt.usefulness, receipt.feedback_reason",
+                (
+                    recipient,
+                    cutoff,
+                    INVESTMENT_INSIGHT,
+                    NEWS_DIGEST,
+                    INVESTMENT_CALENDAR_REMINDER,
+                    MODEL_BUY,
+                    MODEL_SELL,
+                    WATCHLIST_BUY_CANDIDATE,
+                    WATCHLIST_ONTOLOGY_SIGNAL,
+                    HOLDING_TIMING,
+                ),
+            ).fetchall()
+        helpful = 0
+        not_helpful = 0
+        reason_counts: Dict[str, int] = {}
+        for row in rows or []:
+            count = int(row.get("count") or 0)
+            usefulness = str(row.get("usefulness") or "")
+            reason = str(row.get("feedback_reason") or "unspecified")
+            if usefulness == "helpful":
+                helpful += count
+            elif usefulness == "not-helpful":
+                not_helpful += count
+            reason_counts[reason] = reason_counts.get(reason, 0) + count
+        sample_count = helpful + not_helpful
+        return {
+            "version": "notification-message-quality-v1",
+            "status": "measured" if sample_count else "warming-up",
+            "windowDays": days,
+            "sampleCount": sample_count,
+            "helpfulCount": helpful,
+            "notHelpfulCount": not_helpful,
+            "helpfulPct": round((helpful / sample_count) * 100, 2) if sample_count else 0.0,
+            "reasonCounts": [
+                {"reason": reason, "count": count}
+                for reason, count in sorted(
+                    reason_counts.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )
+            ],
+            "basis": "explicit-owner-feedback",
+        }
+
+    def negative_feedback_evidence(
+        self,
+        recipient_id: str,
+        reason: str,
+        limit: int = 20,
+    ) -> List[Dict[str, object]]:
+        recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
+        normalized_reason = str(reason or "unspecified").strip().lower()[:64]
+        maximum = max(1, min(100, int(limit or 20)))
+        try:
+            window_days = int(float(str(
+                self.runtime_settings.get("investmentMessageQualityWindowDays") or 90
+            )))
+        except (TypeError, ValueError):
+            window_days = 90
+        window_days = max(7, min(365, window_days))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat().replace("+00:00", "Z")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT notification_jobs.job_id, notification_jobs.decision_episode_id, "
+                "notification_jobs.message_type, notification_jobs.symbol, receipt.feedback_at "
+                "FROM notification_inbox_receipts AS receipt "
+                "JOIN notification_jobs ON notification_jobs.job_id = receipt.job_id "
+                "WHERE receipt.recipient_id = %s AND receipt.usefulness = 'not-helpful' "
+                "AND receipt.feedback_reason = %s AND receipt.feedback_at >= %s "
+                "AND notification_jobs.status = 'done' "
+                "ORDER BY receipt.feedback_at DESC, notification_jobs.job_id DESC LIMIT %s",
+                (recipient, normalized_reason, cutoff, maximum),
+            ).fetchall()
+        return [
+            {
+                "jobId": str(row.get("job_id") or ""),
+                "decisionEpisodeId": str(row.get("decision_episode_id") or ""),
+                "messageType": str(row.get("message_type") or ""),
+                "symbol": str(row.get("symbol") or ""),
+                "feedbackAt": str(row.get("feedback_at") or ""),
+            }
+            for row in rows or []
+        ]
 
     def mark_all_read(self, recipient_id: str, scope: str = "investment") -> int:
         recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
@@ -857,6 +993,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 "receipt_read_at",
                 "receipt_acknowledged_at",
                 "receipt_important",
+                "receipt_usefulness",
+                "receipt_feedback_reason",
+                "receipt_feedback_at",
                 "receipt_updated_at",
             )
         ):
@@ -864,6 +1003,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 "readAt": str(row.get("receipt_read_at") or ""),
                 "acknowledgedAt": str(row.get("receipt_acknowledged_at") or ""),
                 "important": bool(row.get("receipt_important")),
+                "usefulness": str(row.get("receipt_usefulness") or ""),
+                "feedbackReason": str(row.get("receipt_feedback_reason") or ""),
+                "feedbackAt": str(row.get("receipt_feedback_at") or ""),
                 "receiptUpdatedAt": str(row.get("receipt_updated_at") or ""),
             }
         return NotificationJob(

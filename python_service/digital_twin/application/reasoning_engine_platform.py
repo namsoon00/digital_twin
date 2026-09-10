@@ -2,7 +2,7 @@
 
 import hashlib
 import inspect
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
 
 from ..domain.reasoning_engine_versions import (
@@ -245,6 +245,7 @@ class ReasoningEnginePlatformService:
         self,
         deployment_id: str,
         release: Mapping[str, object],
+        completed_since: str = "",
     ) -> Dict[str, object]:
         lookback = self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000)
         parameters = inspect.signature(self.independent_job_store.summary).parameters
@@ -260,9 +261,15 @@ class ReasoningEnginePlatformService:
         if "completed_since" in parameters:
             deployment = dict(self.registry.get(deployment_id) or {})
             health = dict(deployment.get("health") or {})
-            kwargs["completed_since"] = str(
-                health.get("validationStartedAt") or ""
-            )
+            starts = [
+                str(value or "")
+                for value in (
+                    health.get("validationStartedAt"),
+                    completed_since,
+                )
+                if str(value or "")
+            ]
+            kwargs["completed_since"] = max(starts, default="")
         return self.independent_job_store.summary(deployment_id, **kwargs)
 
     def descriptors(self):
@@ -835,6 +842,45 @@ class ReasoningEnginePlatformService:
                         "status": "unavailable",
                         "reason": str(error)[:180],
                     }
+        latency_window_hours = self.int_setting(
+            "investmentLaunchLatencyWindowHours",
+            6,
+            1,
+            168,
+        )
+        latency_window_started_at = (
+            datetime.now(timezone.utc) - timedelta(hours=latency_window_hours)
+        ).isoformat().replace("+00:00", "Z")
+        recent_performance = {}
+        if self.independent_job_store is not None and active_id:
+            try:
+                recent_summary = dict(self.independent_queue_summary(
+                    active_id,
+                    self.release_identity(active_id),
+                    completed_since=latency_window_started_at,
+                ) or {})
+                recent_performance = {
+                    "windowHours": latency_window_hours,
+                    "windowStartedAt": latency_window_started_at,
+                    "sampleCount": int(
+                        recent_summary.get("uniqueCompletedRunCount")
+                        or recent_summary.get("sampleCount")
+                        or 0
+                    ),
+                    "durationP95Ms": int(recent_summary.get("durationP95Ms") or 0),
+                    "queueWaitP95Ms": int(recent_summary.get("queueWaitP95Ms") or 0),
+                    "endToEndP95Ms": int(recent_summary.get("endToEndP95Ms") or 0),
+                    "latestCompletedAt": str(recent_summary.get("latestCompletedAt") or ""),
+                    "basis": "release-cohort-rolling-window",
+                }
+            except Exception as error:  # noqa: BLE001 - full queue health remains available.
+                recent_performance = {
+                    "windowHours": latency_window_hours,
+                    "windowStartedAt": latency_window_started_at,
+                    "sampleCount": 0,
+                    "reason": str(error)[:180],
+                    "basis": "release-cohort-rolling-window",
+                }
         completion = dict(
             platform_state.get("marketObservationReasoningCompletion") or {}
         )
@@ -987,6 +1033,7 @@ class ReasoningEnginePlatformService:
                 "durationP95Ms": int(queue.get("durationP95Ms") or 0),
                 "queueWaitP95Ms": int(queue.get("queueWaitP95Ms") or 0),
                 "endToEndP95Ms": int(queue.get("endToEndP95Ms") or 0),
+                "recentPerformance": recent_performance,
                 "latestCompletedAt": str(queue.get("latestCompletedAt") or ""),
                 "jobRowCounts": dict(queue.get("jobRowCounts") or queue.get("counts") or {}),
             },

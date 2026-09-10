@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin.domain.notifications import NotificationJob
+from digital_twin.domain.notification_feedback import normalize_notification_feedback
+from digital_twin.application.notification_feedback_service import NotificationFeedbackService
 from digital_twin.infrastructure import web_server
 
 
@@ -57,6 +59,9 @@ class WebReadPathPerformanceTests(unittest.TestCase):
                     "readAt": "2026-08-28T00:00:00Z",
                     "acknowledgedAt": "",
                     "important": True,
+                    "usefulness": "helpful",
+                    "feedbackReason": "actionable",
+                    "feedbackAt": "2026-08-28T00:00:00Z",
                     "receiptUpdatedAt": "2026-08-28T00:00:00Z",
                 },
             },
@@ -78,6 +83,70 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         self.assertEqual(0, store.receipt_queries)
         self.assertEqual(1, len(payload["jobs"]))
         self.assertTrue(payload["jobs"][0]["important"])
+        self.assertEqual("helpful", payload["jobs"][0]["usefulness"])
+        self.assertEqual("actionable", payload["jobs"][0]["feedbackReason"])
+        self.assertEqual(
+            {
+                "version": "notification-feedback-v1",
+                "usefulness": "not-helpful",
+                "reason": "too-vague",
+            },
+            normalize_notification_feedback("not-helpful", "too-vague"),
+        )
+
+        class FeedbackStore:
+            @staticmethod
+            def get(_job_id):
+                return job
+
+            @staticmethod
+            def update_receipt(job_id, recipient_id, **_kwargs):
+                return {
+                    "jobId": job_id,
+                    "recipientId": recipient_id,
+                    "usefulness": "not-helpful",
+                    "feedbackReason": "too-vague",
+                    "feedbackAt": "2026-09-10T00:00:00Z",
+                }
+
+            @staticmethod
+            def negative_feedback_evidence(*_args, **_kwargs):
+                return [
+                    {
+                        "jobId": "job-" + str(index),
+                        "decisionEpisodeId": "episode-" + str(index),
+                        "messageType": "investmentInsight",
+                    }
+                    for index in range(3)
+                ]
+
+        class ProposalStore:
+            def __init__(self):
+                self.proposal = None
+
+            def save_learning_proposal(self, proposal):
+                self.proposal = proposal
+                return proposal
+
+        proposal_store = ProposalStore()
+        feedback_result = NotificationFeedbackService(
+            FeedbackStore(),
+            proposal_store,
+            {"investmentMessageQualityProposalThreshold": "3"},
+        ).record(
+            "job-1",
+            "local-owner",
+            usefulness="not-helpful",
+            feedback_reason="too-vague",
+        )
+        self.assertEqual("review-proposal-created", feedback_result["evolutionState"])
+        proposed_change = feedback_result["learningProposal"]["proposedChange"]
+        self.assertEqual(
+            "review-prompt-specificity-and-action-contract",
+            proposed_change["changeType"],
+        )
+        self.assertFalse(proposed_change["automaticDeployment"])
+        self.assertIn("human-approval", proposed_change["requiredValidation"])
 
         now = datetime.now(timezone.utc)
         recent = NotificationJob(

@@ -62,6 +62,13 @@ class InvestmentProductReadinessTests(unittest.TestCase):
                     "health": {"status": "ready"},
                 }],
             },
+            {"sampleCount": 12, "helpfulPct": 75},
+            {
+                "proposals": [{
+                    "proposalId": "learning-proposal:1",
+                    "status": "review-required",
+                }],
+            },
         )
 
         self.assertEqual("ontology-v2-production-r88", result["activeRelease"]["deploymentId"])
@@ -77,6 +84,10 @@ class InvestmentProductReadinessTests(unittest.TestCase):
         )
         self.assertTrue(rule_contract["passed"])
         self.assertEqual(745526, result["productReadiness"]["metrics"]["p95TotalDurationMs"])
+        self.assertEqual("review-required", result["evolution"]["state"])
+        self.assertEqual(1, result["evolution"]["proposals"]["reviewRequiredCount"])
+        self.assertTrue(result["evolution"]["proposals"]["automaticGeneration"])
+        self.assertFalse(result["evolution"]["promotion"]["automatic"])
         self.assert_runtime_failover_blocks_a_release_that_declares_a_different_backend()
         self.assert_tbox_fingerprint_drift_blocks_model_release_readiness()
 
@@ -140,17 +151,21 @@ class InvestmentProductReadinessTests(unittest.TestCase):
                 "statisticalSignals": {"migrationCounts": {}},
             },
             experiments={},
-            active_health={"queue": {"endToEndP95Ms": 45000}},
+            active_health={"queue": {"endToEndP95Ms": 45000, "uniqueCompletedRunCount": 20}},
             comparison={"sampleCount": 20},
             settings={
                 "investmentProductSoakTestPassed": "1",
                 "investmentProductComplianceReviewed": "1",
             },
+            message_quality={"sampleCount": 12, "helpfulPct": 75},
         )
 
         latency = next(gate for gate in result["gates"] if gate["id"] == "latency-slo")
         self.assertTrue(latency["passed"])
         self.assertEqual(45000, result["metrics"]["p95TotalDurationMs"])
+        usefulness = next(gate for gate in result["gates"] if gate["id"] == "message-usefulness")
+        self.assertTrue(usefulness["passed"])
+        self.assertEqual(12, result["metrics"]["messageFeedbackSampleCount"])
 
     def assert_tbox_fingerprint_drift_blocks_model_release_readiness(self):
         result = investment_model_projection(

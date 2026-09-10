@@ -51,6 +51,15 @@ class InvestmentOutcomeObservationService:
     def max_delay_minutes(self) -> int:
         return int_setting(self.settings, "investmentBrainOutcomeMaxDelayMinutes", 180, 1, 60 * 24 * 14)
 
+    def baseline_max_age_minutes(self) -> int:
+        return int_setting(
+            self.settings,
+            "investmentBrainOutcomeBaselineMaxAgeMinutes",
+            60 * 24 * 7,
+            1,
+            60 * 24 * 31,
+        )
+
     def observe_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         if not snapshot or not snapshot.has_live_account_data():
             return {"status": "skipped-non-live-snapshot", "reason": "정상 live 계좌 스냅샷에서만 결과를 기록합니다."}
@@ -100,16 +109,22 @@ class InvestmentOutcomeObservationService:
             and str(target.get("requestId") or "")
             and str(target.get("symbol") or "").strip()
         ]
+        baseline_loader = getattr(
+            self.market_time_series_store,
+            "load_baseline_observations",
+            None,
+        )
         instrument_start_observations = (
-            self.market_time_series_store.load_outcome_observations(
+            baseline_loader(
                 snapshot.account_id,
                 instrument_start_requests,
-                max_delay_minutes=self.max_delay_minutes(),
+                max_age_minutes=self.baseline_max_age_minutes(),
             )
-            if instrument_start_requests
+            if instrument_start_requests and callable(baseline_loader)
             else {}
         )
-        benchmark_requests = []
+        benchmark_start_requests = []
+        benchmark_end_requests = []
         for target in targets:
             benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
             request_id = str(target.get("requestId") or "")
@@ -119,19 +134,26 @@ class InvestmentOutcomeObservationService:
                 "symbol": benchmark_symbol,
                 "maximumObservationDelayMinutes": target.get("maximumObservationDelayMinutes"),
             }
-            benchmark_requests.extend([
-                {
-                    **common,
-                    "requestId": request_id + ":benchmark-start",
-                    "targetAt": target.get("baselineAt") or target.get("decidedAt"),
-                },
-                {**common, "requestId": request_id + ":benchmark-end", "targetAt": target.get("targetAt")},
-            ])
-        benchmark_observations = self.market_time_series_store.load_outcome_observations(
+            benchmark_start_requests.append({
+                **common,
+                "requestId": request_id + ":benchmark-start",
+                "targetAt": target.get("baselineAt") or target.get("decidedAt"),
+            })
+            benchmark_end_requests.append({
+                **common,
+                "requestId": request_id + ":benchmark-end",
+                "targetAt": target.get("targetAt"),
+            })
+        benchmark_start_observations = baseline_loader(
             snapshot.account_id,
-            benchmark_requests,
+            benchmark_start_requests,
+            max_age_minutes=self.baseline_max_age_minutes(),
+        ) if benchmark_start_requests and callable(baseline_loader) else {}
+        benchmark_end_observations = self.market_time_series_store.load_outcome_observations(
+            snapshot.account_id,
+            benchmark_end_requests,
             max_delay_minutes=self.max_delay_minutes(),
-        ) if benchmark_requests else {}
+        ) if benchmark_end_requests else {}
         records = []
         historical_count = 0
         snapshot_fallback_count = 0
@@ -175,8 +197,8 @@ class InvestmentOutcomeObservationService:
             )
             benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
             if benchmark_symbol:
-                start = benchmark_observations.get(request_id + ":benchmark-start") or {}
-                end = benchmark_observations.get(request_id + ":benchmark-end") or {}
+                start = benchmark_start_observations.get(request_id + ":benchmark-start") or {}
+                end = benchmark_end_observations.get(request_id + ":benchmark-end") or {}
                 start_price = self.optional_number(start.get("currentPrice"))
                 end_price = self.optional_number(end.get("currentPrice"))
                 facts["benchmarkSymbol"] = benchmark_symbol
@@ -211,6 +233,7 @@ class InvestmentOutcomeObservationService:
             "outcomeIds": [item.outcome_id for item in outcomes],
             "symbols": sorted({str(item.get("symbol") or "").upper() for item in targets if str(item.get("symbol") or "").strip()}),
             "maximumDelayMinutes": self.max_delay_minutes(),
+            "maximumBaselineAgeMinutes": self.baseline_max_age_minutes(),
             "performanceAttributionCount": review_result.get("attributionCount", 0),
             "decisionReviewCount": review_result.get("reviewCount", 0),
             "followUpObservation": follow_up,

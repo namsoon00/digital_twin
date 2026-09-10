@@ -326,6 +326,10 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS decision_notification_receipts", schema)
         self.assertIn("idx_decision_notification_episode_time", schema)
         self.assertIn("INSERT IGNORE INTO decision_notification_receipts", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS notification_inbox_receipts", schema)
+        self.assertIn("usefulness VARCHAR(24) NOT NULL DEFAULT ''", schema)
+        self.assertIn("feedback_reason VARCHAR(64) NOT NULL DEFAULT ''", schema)
+        self.assertIn("feedback_at VARCHAR(40) NOT NULL DEFAULT ''", schema)
 
 
 if __name__ == "__main__":

@@ -691,6 +691,23 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         MySQLColumnDefinition("notification_jobs", "data_quality", "VARCHAR(32) NOT NULL DEFAULT 'actual'"),
         MySQLColumnDefinition("notification_jobs", "is_mock", "TINYINT NOT NULL DEFAULT 0"),
     ),
+    "notification_inbox_receipts": (
+        MySQLColumnDefinition(
+            "notification_inbox_receipts",
+            "usefulness",
+            "VARCHAR(24) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "notification_inbox_receipts",
+            "feedback_reason",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "notification_inbox_receipts",
+            "feedback_at",
+            "VARCHAR(40) NOT NULL DEFAULT ''",
+        ),
+    ),
     "notification_rules": (
         MySQLColumnDefinition(
             "notification_rules",

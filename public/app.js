@@ -4443,6 +4443,11 @@
       if (changes.acknowledged) next.readAt = next.readAt || new Date().toISOString();
     }
     if (Object.prototype.hasOwnProperty.call(changes || {}, "important")) next.important = Boolean(changes.important);
+    if (Object.prototype.hasOwnProperty.call(changes || {}, "usefulness")) {
+      next.usefulness = String(changes.usefulness || "");
+      next.feedbackReason = String(changes.feedbackReason || "");
+      next.feedbackAt = next.usefulness ? new Date().toISOString() : "";
+    }
     state.notificationJobItems = state.notificationJobItems.map(function (item) {
       return notificationJobKey(item) === key ? next : item;
     });
@@ -13636,6 +13641,31 @@
     ].join("");
   }
 
+  function renderInvestmentModelEvolution(evolution) {
+    var current = evolution && typeof evolution === "object" ? evolution : {};
+    var observations = current.observations || {};
+    var proposals = current.proposals || {};
+    var validation = current.validation || {};
+    var stages = Array.isArray(current.stages) ? current.stages : [];
+    var labels = {
+      observe: "관찰", propose: "제안", replay: "과거 재현", compare: "후보 비교",
+      approve: "승인", candidate: "후보 운영", promote: "승격", monitor: "성과 추적", rollback: "롤백"
+    };
+    return [
+      '<section class="investment-model-evolution" data-evolution-state="' + escapeHtml(current.state || "warming-up") + '">',
+      '<header><div><span class="label">LEARNING LOOP</span><strong>판단 품질 진화</strong></div><em>' + escapeHtml(current.state === "review-required" ? "검토 제안 있음" : current.state === "observing" ? "성과 관찰 중" : "표본 준비 중") + '</em></header>',
+      '<div class="investment-model-evolution-metrics">',
+      '<div><span>결과 표본</span><strong>' + escapeHtml(Number(observations.eligibleOutcomeEpisodeCount || 0)) + '건</strong><em>연결 ' + escapeHtml(Number(observations.outcomeCoveragePct || 0).toFixed(1)) + '%</em></div>',
+      '<div><span>사용자 평가</span><strong>' + escapeHtml(Number(observations.messageFeedbackSampleCount || 0)) + '건</strong><em>도움됨 ' + escapeHtml(Number(observations.messageHelpfulPct || 0).toFixed(1)) + '%</em></div>',
+      '<div><span>검토 제안</span><strong>' + escapeHtml(Number(proposals.reviewRequiredCount || 0)) + '건</strong><em>자동 생성·수동 승인</em></div>',
+      '<div><span>후보 비교</span><strong>' + escapeHtml(Number(validation.comparisonSampleCount || 0)) + '건</strong><em>동일 입력 기준</em></div>',
+      '</div>',
+      '<div class="investment-model-evolution-stages">' + stages.map(function (stage) { return '<span>' + escapeHtml(labels[stage] || stage) + '</span>'; }).join('') + '</div>',
+      '<p>실제 결과와 사용자 평가가 개선 제안을 만들고, 과거 재현·후보 비교·승인을 통과한 변경만 운영에 반영됩니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
   function renderInvestmentModelOverview(operator) {
     var payload = investmentModelPayload();
     if ((state.investmentModelLoading && !state.investmentModelLoaded) || payload.status === "warming") {
@@ -13683,6 +13713,7 @@
       '</section>',
       renderInvestmentModelContractNavigation(),
       modelContract,
+      renderInvestmentModelEvolution(payload.evolution || {}),
       readinessMarkup,
       renderInvestmentModelBindings(bindings, release),
       operator ? '<section class="investment-model-governance"><header><div><span class="label">RELEASE GOVERNANCE</span><strong>변경·승격 절차</strong></div><em>자동 승격 없음</em></header><div class="investment-model-lifecycle">' + lifecycle + '</div>' + (blockers.length ? '<div class="investment-model-blockers"><strong>운영 승격 차단</strong>' + blockers.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '<p>현재 릴리스는 운영 구조 검증을 통과했습니다. 제품 출시는 위 품질·성과·지연 게이트를 별도로 통과해야 합니다.</p>') + '</section>' : '<section class="investment-model-note"><strong>운영 상태와 출시 품질은 별도 기준입니다.</strong><p>규칙 편집과 승격은 운영 관리에서만 수행하며 AI 제안은 자동 반영하지 않습니다.</p></section>',
@@ -27775,11 +27806,21 @@
       });
       detailTabBody = renderNotificationDetailTabIntro(activeDetailTab) + detailTabBody;
     }
+    var feedbackOptions = [
+      { usefulness: "helpful", reason: "actionable", label: "도움됨" },
+      { usefulness: "not-helpful", reason: "too-vague", label: "모호함" },
+      { usefulness: "not-helpful", reason: "not-relevant", label: "관련 없음" }
+    ];
+    var feedbackActions = '<div class="notification-feedback-actions" aria-label="알림 유용성 평가"><span>알림 평가</span>' + feedbackOptions.map(function (option) {
+      var selected = String(job.usefulness || "") === option.usefulness && String(job.feedbackReason || "") === option.reason;
+      return '<button class="text-button compact' + (selected ? ' selected' : '') + '" type="button" data-notification-feedback data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-usefulness="' + escapeHtml(selected ? "" : option.usefulness) + '" data-notification-feedback-reason="' + escapeHtml(selected ? "" : option.reason) + '" aria-pressed="' + (selected ? "true" : "false") + '">' + escapeHtml(option.label) + '</button>';
+    }).join("") + '</div>';
     var receiptActions = '<div class="notification-detail-actions"><button class="text-button compact" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.important ? "false" : "true") + '">' + escapeHtml(job.important ? "중요 해제" : "중요 표시") + '</button><button class="text-button compact" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.acknowledgedAt ? "false" : "true") + '">' + escapeHtml(job.acknowledgedAt ? "확인 취소" : "확인 완료") + '</button></div>';
     return [
       '<aside class="notification-decision-detail" data-notification-detail-mode="' + (compact ? "compact" : "full") + '" data-notification-detail-job-id="' + escapeHtml(jobId) + '" data-notification-active-tab="' + escapeHtml(activeDetailTab) + '" aria-label="선택 알림 판단 상세">',
       compact ? '<div class="notification-detail-head"><div><p class="label">Decision Report</p><h3>' + escapeHtml(payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단") + '</h3><span>' + escapeHtml([payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · ")) + '</span></div><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span></div>' : '',
       compact ? receiptActions : '<div class="notification-detail-toolbar"><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>' + receiptActions + '</div>',
+      feedbackActions,
       compact ? '' : renderNotificationDetailTabs(jobId, activeDetailTab),
       compact && !customerDocumentBody ? '<div class="notification-detail-metrics">' + renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone) + renderNotificationDetailMetric("지금 행동", currentAction, actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold") + renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted") + renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)) + '</div>' : '',
       compact ? (customerDocumentBody || '<section class="notification-detail-section primary"><strong>판단 요약</strong><p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p></section>') : '',
@@ -35460,6 +35501,18 @@
           var receiptChange = {};
           receiptChange[receiptField] = receiptValue;
           updateNotificationReceipt(receiptJobId, receiptChange);
+        }
+        return;
+      }
+      var feedbackButton = event.target.closest && event.target.closest("[data-notification-feedback]");
+      if (feedbackButton && app.contains(feedbackButton)) {
+        event.preventDefault();
+        var feedbackJobId = feedbackButton.getAttribute("data-notification-job-id") || "";
+        if (feedbackJobId) {
+          updateNotificationReceipt(feedbackJobId, {
+            usefulness: feedbackButton.getAttribute("data-notification-usefulness") || "",
+            feedbackReason: feedbackButton.getAttribute("data-notification-feedback-reason") || ""
+          });
         }
         return;
       }

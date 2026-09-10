@@ -1212,6 +1212,27 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("single-process", result["writerTopology"]["mode"])
         self.assertEqual(1234, result["writerTopology"]["owner"]["processId"])
 
+        platform.independent_job_store = object()
+        platform.release_identity = lambda _deployment_id: {}
+
+        def queue_summary(deployment_id, _release, completed_since=""):
+            if deployment_id == "v2-r24" and completed_since:
+                return {
+                    "uniqueCompletedRunCount": 22,
+                    "durationP95Ms": 31000,
+                    "queueWaitP95Ms": 8000,
+                    "endToEndP95Ms": 39000,
+                    "latestCompletedAt": "2026-09-10T06:00:00Z",
+                }
+            return {}
+
+        platform.independent_queue_summary = queue_summary
+        rolling = platform.current_status(state)["queue"]["recentPerformance"]
+        self.assertEqual(6, rolling["windowHours"])
+        self.assertEqual(22, rolling["sampleCount"])
+        self.assertEqual(39000, rolling["endToEndP95Ms"])
+        self.assertEqual("release-cohort-rolling-window", rolling["basis"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,6 +50,9 @@ def _gate(
 
 def _latency_p95_ms(active_health: Mapping[str, object]) -> int:
     health = _mapping(active_health)
+    recent = _mapping(_mapping(health.get("queue")).get("recentPerformance"))
+    if recent:
+        return _count(recent.get("endToEndP95Ms"))
     candidates = [
         health.get("p95TotalDurationMs"),
         _mapping(health.get("runPerformance")).get("p95TotalDurationMs"),
@@ -70,6 +73,7 @@ def investment_product_readiness(
     active_health: Mapping[str, object],
     comparison: Mapping[str, object],
     settings: Mapping[str, object],
+    message_quality: Mapping[str, object] = None,
 ) -> Dict[str, object]:
     """Evaluate launch gates without confusing runtime health with quality."""
 
@@ -81,6 +85,7 @@ def investment_product_readiness(
     migration_counts = _mapping(statistical.get("migrationCounts"))
     comparison_payload = _mapping(comparison)
     settings_payload = _mapping(settings)
+    message_quality_payload = _mapping(message_quality)
 
     calibration_episodes = _count(performance.get("calibrationEligibleEpisodeCount"))
     outcome_coverage = _number(performance.get("outcomeCoveragePct"))
@@ -94,6 +99,17 @@ def investment_product_readiness(
     minimum_comparisons = max(5, _count(settings_payload.get("investmentLaunchMinimumComparisonSamples") or 20))
     p95_ms = _latency_p95_ms(active_health)
     maximum_p95_ms = max(15000, _count(settings_payload.get("investmentLaunchMaximumP95Ms") or 60000))
+    latency_queue = _mapping(_mapping(active_health).get("queue"))
+    recent_latency = _mapping(latency_queue.get("recentPerformance"))
+    latency_sample_count = _count(
+        recent_latency.get("sampleCount")
+        if recent_latency
+        else latency_queue.get("uniqueCompletedRunCount") or latency_queue.get("sampleCount")
+    )
+    minimum_latency_samples = max(
+        5,
+        _count(settings_payload.get("investmentLaunchMinimumLatencySamples") or 20),
+    )
     migration_remaining = sum(
         _count(migration_counts.get(key))
         for key in (
@@ -110,7 +126,28 @@ def investment_product_readiness(
         and outcome_coverage >= 80.0
     )
     comparison_ready = comparison_samples >= minimum_comparisons
-    latency_ready = bool(p95_ms and p95_ms <= maximum_p95_ms)
+    latency_ready = bool(
+        latency_sample_count >= minimum_latency_samples
+        and p95_ms
+        and p95_ms <= maximum_p95_ms
+    )
+    message_quality_samples = _count(message_quality_payload.get("sampleCount"))
+    minimum_message_quality_samples = max(
+        5,
+        _count(settings_payload.get("investmentLaunchMinimumMessageFeedbackSamples") or 10),
+    )
+    message_helpful_pct = _number(message_quality_payload.get("helpfulPct"))
+    minimum_message_helpful_pct = max(
+        50.0,
+        min(
+            100.0,
+            _number(settings_payload.get("investmentLaunchMinimumHelpfulPct") or 70),
+        ),
+    )
+    message_quality_ready = bool(
+        message_quality_samples >= minimum_message_quality_samples
+        and message_helpful_pct >= minimum_message_helpful_pct
+    )
     compliance_reviewed = str(
         settings_payload.get("investmentProductComplianceReviewed") or ""
     ).strip().lower() in {"1", "true", "yes", "on"}
@@ -155,7 +192,18 @@ def investment_product_readiness(
             "latency-slo",
             "추론 지연",
             latency_ready,
-            "p95 " + (str(round(p95_ms / 1000, 1)) + "초" if p95_ms else "측정 없음") + " · 한도 " + str(round(maximum_p95_ms / 1000, 1)) + "초",
+            "최근 표본 " + str(latency_sample_count) + "/" + str(minimum_latency_samples)
+            + "건 · p95 " + (str(round(p95_ms / 1000, 1)) + "초" if p95_ms else "측정 없음")
+            + " · 한도 " + str(round(maximum_p95_ms / 1000, 1)) + "초",
+        ),
+        _gate(
+            "message-usefulness",
+            "알림 유용성",
+            message_quality_ready,
+            "사용자 평가 " + str(message_quality_samples) + "/"
+            + str(minimum_message_quality_samples) + "건 · 도움됨 "
+            + str(round(message_helpful_pct, 1)) + "%/"
+            + str(round(minimum_message_helpful_pct, 1)) + "%",
         ),
         _gate(
             "statistical-signal-migration",
@@ -186,6 +234,7 @@ def investment_product_readiness(
         "rule-performance": "experiment-validation-board",
         "engine-comparison": "experiment-validation-board",
         "latency-slo": "strategy-trace-board",
+        "message-usefulness": "notification-diagnostics-board",
         "statistical-signal-migration": "strategy-rulebox-editor",
         "operational-soak": "experiment-validation-board",
         "compliance-review": "settings-diagnostics",
@@ -226,6 +275,9 @@ def investment_product_readiness(
             "quarantineRecommendedRuleIds": quarantine_rule_ids[:30],
             "comparisonSampleCount": comparison_samples,
             "p95TotalDurationMs": p95_ms,
+            "latencySampleCount": latency_sample_count,
+            "messageFeedbackSampleCount": message_quality_samples,
+            "messageHelpfulPct": message_helpful_pct,
             "statisticalSignalMigrationRemaining": migration_remaining,
             "activeExperimentCount": _count(experiments.get("activeCount")),
         },

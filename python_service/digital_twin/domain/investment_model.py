@@ -114,12 +114,15 @@ def investment_model_projection(
     experiments_value: object,
     settings_value: object,
     time_series_value: object = None,
+    message_quality_value: object = None,
+    learning_value: object = None,
 ) -> Dict[str, object]:
     platform = _mapping(platform_value)
     rulebox = _mapping(rulebox_value)
     catalog = _mapping(catalog_value)
     experiments = _mapping(experiments_value)
     settings = _mapping(settings_value)
+    learning = _mapping(learning_value)
     control = _mapping(platform.get("control"))
     promotion = _mapping(platform.get("promotionReadiness"))
     promotion_health = _mapping(promotion.get("health"))
@@ -224,7 +227,19 @@ def investment_model_projection(
         active_health=readiness_health,
         comparison=comparison,
         settings=settings,
+        message_quality=_mapping(message_quality_value),
     )
+    learning_proposals = [
+        _mapping(item)
+        for item in learning.get("proposals") or []
+        if isinstance(item, Mapping)
+    ]
+    review_required_proposals = [
+        item for item in learning_proposals
+        if _text(item.get("status")) == "review-required"
+    ]
+    decision_performance = _mapping(catalog.get("decisionPerformance"))
+    message_quality = _mapping(message_quality_value)
     return {
         "version": INVESTMENT_MODEL_VERSION,
         "status": status,
@@ -306,6 +321,53 @@ def investment_model_projection(
             "tboxDeployedFingerprint": _text(deployed_tbox.get("deployedFingerprint")),
         },
         "productReadiness": product_readiness,
+        "messageQuality": _mapping(message_quality_value),
+        "evolution": {
+            "version": "investment-model-evolution-v1",
+            "state": (
+                "review-required" if review_required_proposals
+                else "observing" if (
+                    _number(decision_performance.get("calibrationEligibleEpisodeCount"))
+                    or _number(message_quality.get("sampleCount"))
+                )
+                else "warming-up"
+            ),
+            "observations": {
+                "eligibleOutcomeEpisodeCount": _number(
+                    decision_performance.get("calibrationEligibleEpisodeCount")
+                ),
+                "outcomeCoveragePct": decision_performance.get("outcomeCoveragePct") or 0,
+                "messageFeedbackSampleCount": _number(message_quality.get("sampleCount")),
+                "messageHelpfulPct": message_quality.get("helpfulPct") or 0,
+            },
+            "proposals": {
+                "count": len(learning_proposals),
+                "reviewRequiredCount": len(review_required_proposals),
+                "automaticGeneration": True,
+                "sources": ["contract-outcomes", "explicit-owner-feedback"],
+            },
+            "validation": {
+                "comparisonSampleCount": _number(comparison.get("sampleCount")),
+                "historicalReplayRequired": True,
+                "shadowComparisonRequired": True,
+            },
+            "promotion": {
+                "automatic": False,
+                "humanApprovalRequired": True,
+                "rollbackRequired": True,
+            },
+            "stages": [
+                "observe",
+                "propose",
+                "replay",
+                "compare",
+                "approve",
+                "candidate",
+                "promote",
+                "monitor",
+                "rollback",
+            ],
+        },
         "candidate": {
             "deploymentId": candidate_id,
             "releaseId": _text(candidate_release.get("release_id") or candidate_health.get("candidateReleaseId")),

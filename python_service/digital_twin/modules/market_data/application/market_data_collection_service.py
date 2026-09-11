@@ -358,7 +358,8 @@ class MarketDataCollectionRunner:
             if not account_id:
                 continue
             try:
-                pending = self.decision_episode_store.pending_outcome_targets(account_id, utc_now_iso(), limit=limit)
+                collection_reader = getattr(self.decision_episode_store, "outcome_collection_targets", None)
+                pending = collection_reader(account_id, limit=limit) if callable(collection_reader) else self.decision_episode_store.pending_outcome_targets(account_id, utc_now_iso(), limit=limit)
             except Exception:
                 continue
             for target in pending:

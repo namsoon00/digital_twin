@@ -980,7 +980,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v6", prompt_audit["contextRouting"]["version"])
         self.assertEqual(
-            "investment-ai-judge-v23-complete-insight-sections",
+            "investment-ai-judge-v24-observation-aware-continuity",
             prompt_audit["promptRelease"]["version"],
         )
         self.assertIn(
@@ -988,7 +988,7 @@ class AIInferenceQueueTests(unittest.TestCase):
             prompt_audit["prompt"],
         )
         self.assertIn(
-            "사용자 문장에는 이 구현 용어를 쓰지 않는다",
+            "구현 용어는 사용자 표시 필드에 노출하지 않고",
             prompt_audit["prompt"],
         )
         self.assertLessEqual(

@@ -1,0 +1,54 @@
+{
+  "domain": {
+    "modules/model_registry/domain/hypothesis_development.py::HypothesisDevelopmentCase": {
+      "hash": "80c2f300e983ca4f5924bdfda6112fb3a2762afdd84a35cd115a8144518dbb4e",
+      "reason": "Persist retry ownership and timestamps; test_hypothesis_closed_loop."
+    },
+    "modules/decisions/domain/investment_brain.py::ObservedOutcome": {
+      "hash": "efb48388571e3758f0336539efdc7ae945e28dc70c78893581a56909012f25b1",
+      "reason": "Reload immutable outcomes for idempotent repair; test_stabilization_transactions."
+    },
+    "modules/outcomes/domain/investment_outcomes.py::PerformanceAttribution": {
+      "hash": "0e65a9c375e510937a9c593e8890ef9655a835c65a76c5f751466c6e672d7dd9",
+      "reason": "Missing benchmark is null, not zero return; test_portfolio_lifecycle_service."
+    },
+    "modules/decisions/domain/investment_reasoning/ai_insight.py::AIInsightEpisode": {
+      "hash": "60d93e39c55ad9fdd58cf02c9925f263436ff54b4c2ecc5a5534e3db7175fa14",
+      "reason": "Capture account/symbol-bound decision memory; test_hypothesis_closed_loop."
+    },
+    "modules/decisions/domain/notification_ai_context_router.py::_continuity_delta": {
+      "hash": "9b47c71b489ac740798008b39ac4192e5d999bf7cac5de1240ca2811e4838bf8",
+      "reason": "Preserve eligibility and verified transitions in AI context; test_hypothesis_closed_loop."
+    },
+    "modules/decisions/domain/notification_ai_context_router.py::fit_notification_ai_decision_core": {
+      "hash": "39ebef465c880dbe510c79fdc8c7f6559ce76e65d2ef311f7d0693008070a675",
+      "reason": "Preserve review state under prompt pressure; test_notification_ai_inference_packet."
+    },
+    "modules/decisions/domain/notification_ai_decision_brief.py::build_notification_ai_prompt_bundle": {
+      "hash": "6eb08e78e97257ed406d50d95ff22176fb046f0ca19c46bab0e257315a34cf8d",
+      "reason": "Fit the actual remaining input budget without inflating it to 6KB; test_hypothesis_closed_loop."
+    },
+    "modules/decisions/domain/notification_ai_decision_brief.py::_minimum_decision_continuity": {
+      "hash": "a050d48211c16bfb08cb9f8cd56cabc96f8fde0eca0e2725b6ef30b3d0b4c074",
+      "reason": "Retain outcome eligibility under compact contracts; test_hypothesis_closed_loop."
+    },
+    "modules/decisions/domain/notification_ai_prompt_release.py::AI_DECISION_PROMPT_VERSION": {
+      "hash": "0fd81ecf7d926fddc2021a9a1be7048e59a0471bf4d62755a332a9c38650bab5",
+      "reason": "Release observation-aware continuity instructions; test_ai_inference_queue."
+    },
+    "modules/decisions/domain/notification_ai_prompt_release.py::BASE_AI_DECISION_INSTRUCTIONS": {
+      "hash": "b410f61d6a533df3c50ba66952aed5abb2929ed73e4fcac610cd25fe3e44ba23",
+      "reason": "Do not convert data gaps into success or price outcomes into trading returns; test_ai_inference_queue."
+    }
+  },
+  "storage": {
+    "modules/model_registry/infrastructure/mysql_hypothesis_development.py::MySQLHypothesisDevelopmentStore": {
+      "hash": "5e9dd0e7e10ca6b7474a164116033995c335705c29dd1c5e62b13f7adcda3da6",
+      "reason": "Persist retry audit and serialize same-case processing; test_hypothesis_closed_loop."
+    },
+    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
+      "hash": "b4fbd2a4c024a14cf6b5895802b5ac689290e1b275a1a38487f433a804e5295e",
+      "reason": "Future baselines and atomic immutable outcome repair; test_stabilization_transactions."
+    }
+  }
+}

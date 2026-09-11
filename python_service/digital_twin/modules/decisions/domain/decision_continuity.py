@@ -73,6 +73,77 @@ def _material_fingerprint(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _outcome_rows(values: Iterable[object]) -> Tuple[Dict[str, object], ...]:
+    rows = []
+    for value in values or []:
+        source = _mapping(value)
+        payload = _mapping(source.get("payload"))
+        rows.append({**payload, **source})
+    return _rows(rows, (
+        "outcomeId", "episodeId", "observedAt", "price", "profitLossRate",
+        "priceChangeFromDecisionPct", "selectedHypothesisStatus", "contradictedEvidenceIds",
+        "calibrationEligibility", "missingRequiredMetricIds", "missingObservationDomains",
+        "benchmarkReturnPct", "excessReturnPct", "horizonMinutes", "targetAt",
+        "contractFingerprint", "marketIndependenceKey", "accountIndependenceKey",
+    ), 6)
+
+
+def decision_review_summary(packet: Mapping[str, object]) -> Dict[str, object]:
+    """Explain recorded checks, never infer an investment action or missing result."""
+    previous = _mapping(packet.get("previousDecision"))
+    hypothesis = _mapping(packet.get("selectedHypothesis"))
+    conditions = [_mapping(item) for item in packet.get("followUpConditions") or []]
+    changes = [
+        {"conditionId": item.get("conditionId"), "label": _text(item.get("label") or "이전 판단의 확인 조건"),
+         "status": item.get("status"), "observedAt": item.get("transitionAt")}
+        for item in conditions
+        if item.get("transitionVerified") is True and item.get("transitionAt")
+        and (item.get("status") == "expired" or (
+            item.get("status") in {"satisfied", "invalidated"}
+            and item.get("previousMatched") is False and item.get("currentMatched") is True
+        ))
+    ][:4]
+    outcomes = []
+    for row in packet.get("observedOutcomes") or []:
+        eligibility = str(row.get("calibrationEligibility") or "")
+        state = "evaluated" if eligibility == "eligible" else "data-gap" if eligibility in {
+            "excluded-contract-data-gap", "excluded-criterion-data-gap"
+        } else "excluded"
+        verdict = {
+            "supported": "관측 결과가 가설을 지지했습니다.",
+            "directionally-corroborated": "예상한 가격 방향과 관측 결과가 일치했습니다.",
+            "weakened": "관측 결과에서 가설의 근거가 약해졌습니다.",
+            "rejected": "미리 정한 반증 조건이 확인됐습니다.",
+            "invalidated": "미리 정한 무효화 조건이 확인됐습니다.",
+            "directionally-contradicted": "관측 가격이 예상 방향과 반대로 움직였습니다.",
+        }.get(str(row.get("selectedHypothesisStatus") or ""), "관측은 완료했지만 가설의 성립 여부는 확정되지 않았습니다.")
+        explanation = verdict if state == "evaluated" else (
+            "필수 자료가 부족해 가설의 성공·실패 판정을 보류했습니다." if state == "data-gap"
+            else "관측 시점 또는 평가 계약을 확인하지 못해 성과 평가에서 제외했습니다."
+        )
+        outcomes.append({
+            **{key: row.get(key) for key in (
+                "outcomeId", "observedAt", "horizonMinutes", "priceChangeFromDecisionPct",
+                "benchmarkReturnPct", "excessReturnPct", "calibrationEligibility",
+                "missingRequiredMetricIds", "missingObservationDomains",
+            ) if row.get(key) is not None},
+            "state": state, "explanation": explanation,
+        })
+    states = {row["state"] for row in outcomes}
+    state = ("partial" if len(states) > 1 else next(iter(states))) if states else "pending" if previous else "not-recorded"
+    return {
+        "state": state,
+        "previousSummary": _text(previous.get("decisionSummary")),
+        "previousAction": previous.get("action") or "",
+        "previousDecidedAt": previous.get("decidedAt") or "",
+        "claim": _text(hypothesis.get("claim")),
+        "verifiedChanges": changes,
+        "outcomes": outcomes,
+        "nextChecks": [_text(item.get("label") or "이전 판단의 확인 조건") for item in conditions if item.get("status") == "pending"][:4],
+        "interpretation": "자료 부족은 가설 실패가 아니며, 관측 수익률은 실제 매매 수익을 뜻하지 않습니다.",
+    }
+
+
 @dataclass(frozen=True)
 class DecisionContinuityPacket:
     account_id: str
@@ -148,6 +219,8 @@ class DecisionContinuityPacket:
             "sourceStatus": statuses,
             "sourceErrors": errors,
         }
+        payload["reviewSummary"] = decision_review_summary(payload)
+        payload["observationState"]["outcome"] = payload["reviewSummary"]["state"]
         fingerprint = _material_fingerprint(payload)
         payload["materialFingerprint"] = fingerprint
         payload["packetId"] = "decision-continuity:" + fingerprint[:24]
@@ -187,11 +260,7 @@ def build_decision_continuity_packet(
             "conditionId", "field", "operator", "threshold", "purpose", "label",
             "status", "observable", "reason",
         ), 4),
-        observed_outcomes=_rows(observed_outcomes or [], (
-            "outcomeId", "episodeId", "observedAt", "price", "profitLossRate",
-            "priceChangeFromDecisionPct", "selectedHypothesisStatus",
-            "contradictedEvidenceIds",
-        ), 6),
+        observed_outcomes=_outcome_rows(observed_outcomes or []),
         action_observations=_rows(action_observations or [], (
             "observationId", "observedAt", "activityEpisodeId", "priorDecisionEpisodeId",
             "priorAction", "observedDirection", "correspondence", "elapsedMinutes",
@@ -224,7 +293,7 @@ def compact_decision_continuity_packet(value: object) -> Dict[str, object]:
             "capturedAt", "status", "previousDecision", "selectedHypothesis",
             "followUpConditions", "unsupportedFollowUps", "observedOutcomes",
             "actionObservations", "currentPosition", "executionFeedback",
-            "lifecycleFeedback", "observationState", "summary", "sourceStatus", "sourceErrors",
+            "lifecycleFeedback", "observationState", "summary", "sourceStatus", "sourceErrors", "reviewSummary",
         )
         if packet.get(key) not in (None, "", [], {})
     }

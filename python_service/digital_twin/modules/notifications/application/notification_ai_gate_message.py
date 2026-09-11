@@ -6067,11 +6067,15 @@ def decision_continuity_rows(context: Dict[str, object], limit: int = 3) -> List
     outcomes = [item for item in packet.get("observedOutcomes") or [] if isinstance(item, dict)]
     if outcomes:
         item = outcomes[-1]
+        reviewed = [item for item in (packet.get("reviewSummary") or {}).get("outcomes") or [] if isinstance(item, dict)]
+        if reviewed:
+            rows.append("이전 판단 검증: " + str(reviewed[-1].get("explanation") or "평가 자료를 확인하고 있습니다."))
+            return rows[:max(1, int(limit or 1))]
         detail = []
         if item.get("priceChangeFromDecisionPct") not in (None, ""):
             detail.append("판단 시점 대비 가격 " + signed_pct(float(item.get("priceChangeFromDecisionPct") or 0)))
         status = str(item.get("selectedHypothesisStatus") or "").strip()
-        if status:
+        if status and item.get("calibrationEligibility") == "eligible":
             hypothesis_status = {
                 "supported": "지지됨",
                 "weakened": "약화됨",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Callable, Dict, List
 
 from digital_twin.modules.decisions.domain.investment_brain import canonical_investment_timestamp
@@ -119,7 +120,7 @@ def outcome_target_summary(
         str((shadow_latest or {}).get("latest_observed_at") or ""),
     )
     return {
-        "status": "warning" if due_count else "ok",
+        "status": "warning" if due_count or (states.get("needs-data") or {}).get("count") else "ok",
         "checkedAt": now,
         "accountId": str(account_id or ""),
         "symbol": str(symbol or "").upper(),
@@ -127,6 +128,7 @@ def outcome_target_summary(
         "dueTargetCount": due_count,
         "oldestDueTargetAt": oldest_due,
         "observedTargetCount": int((states.get("observed") or {}).get("count") or 0),
+        "dataGapTargetCount": int((states.get("needs-data") or {}).get("count") or 0),
         "excludedTargetCount": int((states.get("excluded") or {}).get("count") or 0),
         "latestOutcomeObservedAt": latest_observed,
         "states": states,
@@ -146,6 +148,7 @@ class PendingTargetRead:
     account_id: str
     observed_at: str
     limit: int
+    include_future: bool = False
 
 
 def pending_outcome_targets(
@@ -154,36 +157,49 @@ def pending_outcome_targets(
     normalized_account_id = request.account_id
     observed_stamp = request.observed_at
     target_limit = request.limit
+    cutoff = canonical_investment_timestamp((datetime.fromisoformat(observed_stamp.replace("Z", "+00:00")) - timedelta(minutes=15)).isoformat())
+    time_clause = "" if request.include_future else " AND targets.target_at <= %s"
+    state_clause = """ AND (targets.status = 'pending' OR (
+        targets.status IN ('needs-data', 'observed') AND targets.updated_at <= %s
+        AND JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, '$.payload.calibrationEligibility'))
+          IN ('excluded-contract-data-gap', 'excluded-criterion-data-gap')
+    ))"""
+    params = (normalized_account_id, cutoff, *(() if request.include_future else (observed_stamp,)), target_limit)
     with _connect() as connection:
         decision_rows = connection.execute(
             """
-                SELECT targets.payload_json,
+                SELECT targets.payload_json, outcomes.payload_json AS outcome_json,
                        episodes.payload_json AS episode_json
                 FROM investment_decision_outcome_targets AS targets
                 JOIN investment_decision_episodes AS episodes
                   ON episodes.episode_id = targets.episode_id
+                LEFT JOIN investment_decision_outcomes AS outcomes ON outcomes.outcome_id = targets.outcome_id
                 WHERE targets.account_id = %s
-                  AND targets.status = 'pending'
-                  AND targets.target_at <= %s
+                """ + state_clause + time_clause + """
                 ORDER BY targets.target_at ASC, targets.target_id ASC
                 LIMIT %s
                 """,
-            (normalized_account_id, observed_stamp, target_limit),
+            params,
         ).fetchall()
         shadow_rows = connection.execute(
             """
-                SELECT payload_json
-                FROM investment_hypothesis_observation_targets
-                WHERE account_id = %s AND status = 'pending' AND target_at <= %s
-                ORDER BY target_at ASC, target_id ASC
+                SELECT targets.payload_json, outcomes.payload_json AS outcome_json
+                FROM investment_hypothesis_observation_targets AS targets
+                LEFT JOIN investment_hypothesis_observation_outcomes AS outcomes ON outcomes.outcome_id = targets.outcome_id
+                WHERE targets.account_id = %s
+                """ + state_clause + time_clause + """
+                ORDER BY targets.target_at ASC, targets.target_id ASC
                 LIMIT %s
                 """,
-            (normalized_account_id, observed_stamp, target_limit),
+            params,
         ).fetchall()
     targets: List[Dict[str, object]] = []
     for row in decision_rows or []:
         payload = _json_loads(row.get("payload_json"), {})
         if payload:
+            previous_outcome = _json_loads(row.get("outcome_json"), {})
+            if previous_outcome:
+                payload["previousOutcome"] = previous_outcome
             # Older pending decision targets predate the explicit baseline
             # flag. They still need the quote at decidedAt because V2
             # decision episodes intentionally keep large market facts out
@@ -216,6 +232,9 @@ def pending_outcome_targets(
     for row in shadow_rows or []:
         payload = _json_loads(row.get("payload_json"), {})
         if payload:
+            previous_outcome = _json_loads(row.get("outcome_json"), {})
+            if previous_outcome:
+                payload["previousOutcome"] = previous_outcome
             payload.setdefault("episodeKind", "shadow-hypothesis")
             payload.setdefault("requiresInstrumentBaseline", True)
             targets.append(payload)

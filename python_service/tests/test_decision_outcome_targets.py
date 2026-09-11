@@ -39,7 +39,7 @@ class RecordingConnection:
 
     def execute(self, sql, params=()):
         self.statements.append((" ".join(sql.split()), tuple(params)))
-        return SimpleNamespace(rowcount=1)
+        return SimpleNamespace(rowcount=1, fetchone=lambda: None)
 
 
 class EmptyMigrationConnection(RecordingConnection):

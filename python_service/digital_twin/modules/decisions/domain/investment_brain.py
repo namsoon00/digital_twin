@@ -513,6 +513,20 @@ class ObservedOutcome:
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
 
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]):
+        return cls(
+            outcome_id=str(payload.get("outcomeId") or ""),
+            episode_id=str(payload.get("episodeId") or ""),
+            observed_at=str(payload.get("observedAt") or ""),
+            price=float(payload.get("price") or 0),
+            profit_loss_rate=float(payload.get("profitLossRate") or 0),
+            price_change_from_decision_pct=float(payload.get("priceChangeFromDecisionPct") or 0),
+            selected_hypothesis_status=str(payload.get("selectedHypothesisStatus") or "pending"),
+            contradicted_evidence_ids=list(payload.get("contradictedEvidenceIds") or []),
+            payload=dict(payload.get("payload") or {}),
+        )
+
 
 @dataclass
 class DecisionEpisode:

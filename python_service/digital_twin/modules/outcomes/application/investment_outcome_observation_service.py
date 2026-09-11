@@ -6,6 +6,7 @@ from digital_twin.modules.outcomes.domain.investment_outcomes import DecisionRev
 from digital_twin.modules.market_data.contracts import market_evidence_profile
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.outcomes.domain.hypothesis_outcome_facts import premise_observation_facts
+from digital_twin.modules.outcomes.domain.outcome_recovery import frozen_outcome_facts
 
 
 def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int, upper: int) -> int:
@@ -81,6 +82,11 @@ class InvestmentOutcomeObservationService:
                 "observedAt": observed_at,
                 "followUpObservation": follow_up,
             }
+        try:
+            self.capture_baselines(snapshot.account_id)
+            baseline_capture_state = "checked"
+        except Exception:  # Baseline recovery must not prevent other due observations.
+            baseline_capture_state = "retry-required"
         targets = self.decision_episode_store.pending_outcome_targets(
             snapshot.account_id,
             observed_at,
@@ -92,6 +98,7 @@ class InvestmentOutcomeObservationService:
                 "observedAt": observed_at,
                 "targetCount": 0,
                 "savedOutcomeCount": 0,
+                "baselineCaptureState": baseline_capture_state,
                 "followUpObservation": follow_up,
             }
         historical = self.market_time_series_store.load_outcome_observations(
@@ -166,7 +173,8 @@ class InvestmentOutcomeObservationService:
         for target in targets:
             request_id = str(target.get("requestId") or "")
             symbol = str(target.get("symbol") or "").upper().strip()
-            facts = dict(historical.get(request_id) or {})
+            previous_outcome = dict(target.get("previousOutcome") or {})
+            facts = frozen_outcome_facts(previous_outcome) if previous_outcome else dict(historical.get(request_id) or {})
             if facts:
                 historical_count += 1
             else:
@@ -180,7 +188,9 @@ class InvestmentOutcomeObservationService:
                 start = instrument_start_observations.get(
                     request_id + ":instrument-start"
                 ) or {}
+                start = dict((target.get("baselineObservations") or {}).get("instrument") or start)
                 decision_price = self.optional_number(
+                    facts.get("decisionPrice") if previous_outcome else None,
                     target.get("decisionPrice"),
                     start.get("currentPrice"),
                 )
@@ -189,7 +199,8 @@ class InvestmentOutcomeObservationService:
                     continue
                 facts["decisionPrice"] = decision_price
                 facts["decisionPriceSourceAsOf"] = (
-                    target.get("decisionPriceSourceAsOf")
+                    (facts.get("decisionPriceSourceAsOf") if previous_outcome else None)
+                    or target.get("decisionPriceSourceAsOf")
                     or start.get("sourceAsOf")
                     or start.get("generatedAt")
                     or start.get("updatedAt")
@@ -203,6 +214,7 @@ class InvestmentOutcomeObservationService:
             benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
             if benchmark_symbol:
                 start = benchmark_start_observations.get(request_id + ":benchmark-start") or {}
+                start = dict((target.get("baselineObservations") or {}).get("benchmark") or start)
                 end = benchmark_end_observations.get(request_id + ":benchmark-end") or {}
                 start_price = self.optional_number(start.get("currentPrice"))
                 end_price = self.optional_number(end.get("currentPrice"))
@@ -249,6 +261,7 @@ class InvestmentOutcomeObservationService:
             "missingObservationCount": missing_count,
             "savedOutcomeCount": len(outcomes),
             "contractDataGapCount": contract_data_gap_count,
+            "baselineCaptureState": baseline_capture_state,
             "outcomeIds": [item.outcome_id for item in outcomes],
             "symbols": sorted({str(item.get("symbol") or "").upper() for item in targets if str(item.get("symbol") or "").strip()}),
             "maximumDelayMinutes": self.max_delay_minutes(),
@@ -257,6 +270,43 @@ class InvestmentOutcomeObservationService:
             "decisionReviewCount": review_result.get("reviewCount", 0),
             "followUpObservation": follow_up,
         }
+
+    def capture_baselines(self, account_id: str) -> None:
+        reader = getattr(self.decision_episode_store, "outcome_collection_targets", None)
+        writer = getattr(self.decision_episode_store, "record_outcome_baselines", None)
+        loader = getattr(self.market_time_series_store, "load_baseline_observations", None)
+        if not all(callable(item) for item in (reader, writer, loader)):
+            return
+        requests = []
+        bindings = {}
+        for target in reader(account_id, limit=self.batch_size()):
+            baseline_at = canonical_investment_timestamp(target.get("baselineAt") or target.get("decidedAt"))
+            if not baseline_at or not target.get("requestId"):
+                continue
+            for kind, symbol in (("instrument", target.get("symbol")), ("benchmark", target.get("benchmarkSymbol"))):
+                if not symbol or (target.get("baselineObservations") or {}).get(kind):
+                    continue
+                key = str(target["requestId"]) + ":" + kind
+                requests.append({"requestId": key, "symbol": symbol, "targetAt": baseline_at})
+                bindings[key] = (target, kind, baseline_at)
+        if not requests:
+            return
+        loaded = loader(account_id, requests, max_age_minutes=self.baseline_max_age_minutes())
+        records = []
+        for key, observation in (loaded or {}).items():
+            if key not in bindings:
+                continue
+            target, kind, baseline_at = bindings[key]
+            price = self.optional_number(observation.get("currentPrice"))
+            as_of = canonical_investment_timestamp(observation.get("sourceAsOf") or observation.get("generatedAt"))
+            if price is None or price <= 0 or not as_of or as_of > baseline_at:
+                continue
+            records.append({
+                "requestId": target["requestId"], "episodeKind": target.get("episodeKind"), "kind": kind,
+                "observation": {"currentPrice": price, "sourceAsOf": as_of, "provider": observation.get("provider") or "mysql-market-time-series"},
+            })
+        if records:
+            writer(account_id, records)
 
     def observe_follow_ups(
         self,
@@ -312,6 +362,9 @@ class InvestmentOutcomeObservationService:
             if market_return is None:
                 missing.append("benchmarkReturnPct")
                 market_return = 0.0
+            eligible = payload.get("calibrationEligibility") == "eligible"
+            if not eligible:
+                missing.append("outcomeEvaluation")
             if not executions and str(episode.action or "").upper() in {"BUY", "ADD", "TRIM", "SELL"}:
                 missing.append("executionEpisode")
             execution_cost = sum(self.optional_number(item.get("fee")) or 0.0 for item in fills if isinstance(item, dict))
@@ -335,6 +388,8 @@ class InvestmentOutcomeObservationService:
             )
             attributions.append(attribution)
             selected_status = str(getattr(outcome, "selected_hypothesis_status", "") or "pending")
+            if not eligible or selected_status in {"pending", "inconclusive", "unresolved"}:
+                continue
             executable = str(episode.action or "").upper() in {"BUY", "ADD", "TRIM", "SELL"}
             review = DecisionReview(
                 review_id="decision-review:" + hashlib.sha256(
@@ -344,7 +399,7 @@ class InvestmentOutcomeObservationService:
                 selected_hypothesis_status=selected_status,
                 policy_compliant=bool(episode.mandate_version),
                 execution_compliant=(not executable) or bool(executions),
-                evidence_still_valid=selected_status not in {"contradicted", "invalidated"},
+                evidence_still_valid=selected_status not in {"contradicted", "directionally-contradicted", "invalidated", "rejected", "weakened"},
                 attribution_ids=[attribution_id],
                 observations=[
                     "outcome-horizon-minutes:" + str(horizon),

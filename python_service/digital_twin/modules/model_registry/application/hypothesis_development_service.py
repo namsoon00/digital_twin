@@ -1,6 +1,7 @@
 import hashlib
 import json
-from datetime import datetime, timezone
+from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.model_registry.domain.event_types import HYPOTHESIS_DEVELOPMENT_DEPLOYED, HYPOTHESIS_DEVELOPMENT_TRANSITIONED, HYPOTHESIS_DEVELOPMENT_VALIDATED
@@ -38,18 +39,61 @@ class HypothesisDevelopmentService:
 
     def ingest_proposal(self, proposal: Dict[str, object], inference_generation_id: str = "") -> Dict[str, object]:
         incoming = HypothesisDevelopmentCase.from_proposal(proposal, inference_generation_id)
-        existing = self.case_store.get_by_fingerprint(incoming.fingerprint) if self.case_store else None
-        case = existing or incoming
-        if existing:
-            case.merge_proposal(proposal, inference_generation_id)
-        self.persist(case, "proposal-merged" if existing else "proposal-ingested")
+        lock = getattr(self.case_store, "processing_lock", None)
+        with (lock(incoming.case_id) if callable(lock) else nullcontext(True)) as acquired:
+            if not acquired:
+                return {"status": "deferred-busy", "caseId": incoming.case_id}
+            existing = self.case_store.get_by_fingerprint(incoming.fingerprint) if self.case_store else None
+            case = existing or incoming
+            if existing:
+                case.merge_proposal(proposal, inference_generation_id)
+            self.persist(case, "proposal-merged" if existing else "proposal-ingested")
         if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES or case.status in {"approval-required", "deployed", "observing"}:
             return {"status": case.status, "case": case.to_dict(), "merged": bool(existing)}
-        result = self.process(case.case_id)
+        result = self.process(case.case_id, force=not bool(existing))
         result["merged"] = bool(existing)
         return result
 
-    def process(self, case_id: str) -> Dict[str, object]:
+    def process(self, case_id: str, force: bool = True) -> Dict[str, object]:
+        lock = getattr(self.case_store, "processing_lock", None)
+        with (lock(case_id) if callable(lock) else nullcontext(True)) as acquired:
+            if not acquired:
+                return {"status": "already-processing", "caseId": case_id}
+            case = self.case_store.get(case_id) if self.case_store else None
+            if not case:
+                return {"status": "not-found", "caseId": case_id}
+            if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES | {"approval-required", "deployed", "observing"}:
+                return {"status": case.status, "case": case.to_dict()}
+            if not force and not self.validation_retry_due(case):
+                return {"status": "deferred-unchanged", "caseId": case_id}
+            attempted = datetime.now(timezone.utc)
+            case.retry = {
+                **case.retry,
+                "attemptCount": int(case.retry.get("attemptCount") or 0) + 1,
+                "lastAttemptAt": attempted.isoformat(),
+                "lastInputFingerprint": self.validation_input_fingerprint(case),
+                "nextCheckAt": (attempted + timedelta(minutes=self.retry_minutes())).isoformat(),
+                "state": "processing",
+                "owner": "hypothesis-development",
+            }
+            self.persist(case, "retry-started")
+            try:
+                result = self._process_case(case_id)
+            except Exception as error:
+                case = self.case_store.get(case_id) or case
+                case.transition("needs-data", case.stage, str(error)[:500])
+                case.retry["state"] = "dependency-error"
+                self.persist(case, "retry-failed", case.blocked_reason)
+                return {"status": "error", "caseId": case_id, "reason": case.blocked_reason}
+            case = self.case_store.get(case_id) or case
+            case.retry["state"] = "waiting-data" if case.status == "needs-data" else "completed"
+            if case.status != "needs-data":
+                case.retry["nextCheckAt"] = ""
+            self.persist(case, "retry-finished", case.blocked_reason)
+            result["case"] = case.to_dict()
+            return result
+
+    def _process_case(self, case_id: str) -> Dict[str, object]:
         case = self.case_store.get(case_id) if self.case_store else None
         if not case:
             return {"status": "not-found", "caseId": str(case_id or "")}
@@ -95,6 +139,7 @@ class HypothesisDevelopmentService:
         candidate = next((item for item in candidates if isinstance(item.get("proposedRule"), dict)), None)
         if not candidate:
             needs_data = sorted({str(value) for item in candidates for value in (item.get("requiresData") or []) if str(value)})
+            case.retry["requirements"] = needs_data[:40]
             status = "needs-data" if needs_data else "needs-revision"
             reason = ", ".join(needs_data) or str(candidate_result.get("reason") or "AI가 실행 가능한 후보 규칙을 만들지 못했습니다.")
             case.transition(status, "compilation", reason)
@@ -138,23 +183,25 @@ class HypothesisDevelopmentService:
 
     def process_pending(self, limit: int = 5) -> Dict[str, object]:
         statuses = {"proposed", "screening", "compiled", "validating", "needs-data"}
+        reader = getattr(self.case_store, "pending", None)
+        scanned = reader(limit=50) if callable(reader) else (self.case_store.list(limit=500) if self.case_store else [])
         candidates = [
             item
-            for item in (self.case_store.list(limit=max(1, min(50, int(limit or 5)))) if self.case_store else [])
+            for item in scanned
             if item.status in statuses
-            and (item.status != "needs-data" or (item.candidate_rule and item.experiment_id))
         ]
+        candidates.sort(key=lambda item: (str(item.retry.get("lastAttemptAt") or item.validation_attempted_at), item.created_at, item.case_id))
         rows = []
         deferred = []
         for item in candidates:
-            if item.status == "needs-data" and not self.validation_retry_due(item):
+            if not self.validation_retry_due(item):
                 deferred.append(item.case_id)
                 continue
             rows.append(item)
         results = []
         for item in rows[: max(1, int(limit or 5))]:
             try:
-                results.append(self.process(item.case_id))
+                results.append(self.process(item.case_id, force=False))
             except Exception as error:  # noqa: BLE001 - one unavailable dependency must not stop the batch.
                 results.append({"status": "error", "caseId": item.case_id, "reason": str(error)[:500]})
         return {
@@ -163,6 +210,7 @@ class HypothesisDevelopmentService:
             "deferredUnchangedCount": len(deferred),
             "deferredCaseIds": deferred[:20],
             "results": results,
+            "scannedCount": len(scanned),
         }
 
     def reconcile_proposal_backlog(self, limit: int = 5) -> Dict[str, object]:
@@ -184,7 +232,7 @@ class HypothesisDevelopmentService:
                 continue
             incoming = HypothesisDevelopmentCase.from_proposal(proposal)
             existing = self.case_store.get_by_fingerprint(incoming.fingerprint)
-            if existing:
+            if existing and (not proposal.get("proposalId") or str(proposal["proposalId"]) in existing.source_proposal_ids):
                 continue
             try:
                 results.append(self.ingest_proposal(proposal))
@@ -504,23 +552,23 @@ class HypothesisDevelopmentService:
             return []
         return [item for item in rows if self.snapshot_has_symbol(item, case.symbol)]
 
+    def retry_minutes(self) -> int:
+        return max(15, min(24 * 60, int(self.settings.get("hypothesisDevelopmentUnchangedRetryMinutes") or 180)))
+
     def validation_retry_due(self, case: HypothesisDevelopmentCase) -> bool:
         """Retry a needs-data experiment only after new input or a slow health retry."""
 
-        current = self.validation_input_fingerprint(case)
-        if not case.validation_input_fingerprint or current != case.validation_input_fingerprint:
-            return True
-        attempted = self.parse_timestamp(case.validation_attempted_at)
+        attempted = self.parse_timestamp(case.retry.get("lastAttemptAt") or case.validation_attempted_at)
         if attempted is None:
             return True
-        retry_minutes = max(
-            15,
-            min(
-                24 * 60,
-                int(self.settings.get("hypothesisDevelopmentUnchangedRetryMinutes") or 180),
-            ),
-        )
-        return (datetime.now(timezone.utc) - attempted).total_seconds() >= retry_minutes * 60
+        elapsed = (datetime.now(timezone.utc) - attempted).total_seconds()
+        # Price ticks must not turn a missing-data hypothesis into an AI loop.
+        minimum_minutes = max(1, int(self.settings.get("hypothesisDevelopmentChangedRetryMinutes") or 15))
+        if elapsed < minimum_minutes * 60:
+            return False
+        current = self.validation_input_fingerprint(case)
+        previous = str(case.retry.get("lastInputFingerprint") or case.validation_input_fingerprint)
+        return not previous or current != previous or elapsed >= self.retry_minutes() * 60
 
     def validation_input_fingerprint(
         self,

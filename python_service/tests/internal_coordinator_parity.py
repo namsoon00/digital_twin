@@ -45,6 +45,9 @@ def decision_history_members():
     for method in cls.body:
         if not isinstance(method, ast.FunctionDef):
             continue
+        if method.name in {"outcome_collection_targets", "record_outcome_baselines"}:
+            # New closed-loop entry points have no pre-extraction equivalent.
+            continue
         if method.name == "save":
             helper = declarations(parts / "decision_write.py")
             prepare = helper["prepare_decision"].body[:-1]

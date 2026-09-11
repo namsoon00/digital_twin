@@ -15,7 +15,13 @@ from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import (
     observation_domain_status,
     outcome_contract_completeness,
 )
-from digital_twin.modules.outcomes.contracts import evaluate_hypothesis_outcome
+from digital_twin.modules.outcomes.contracts import (
+    evaluate_hypothesis_outcome,
+    observation_facts,
+    outcome_evaluation_history,
+    outcome_needs_data,
+    validate_outcome_repair,
+)
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from .outcome_policy import (
@@ -278,6 +284,7 @@ def record_shadow_hypothesis_outcome_observations(
                 evaluation.get("selectedHypothesisStatus") or "inconclusive"
             ),
             payload={
+                "observationFacts": observation_facts(facts),
                 "episodeKind": "shadow-hypothesis",
                 "selectedHypothesisId": episode.hypothesis_id,
                 "selectedHypothesisStance": episode.stance,
@@ -324,6 +331,9 @@ def record_shadow_hypothesis_outcome_observations(
                 "missingRequiredMetricIds": missing_metrics,
                 "benchmarkSymbol": contract_benchmark_symbol(contract),
                 "benchmarkReturnPct": facts.get("benchmarkReturnPct"),
+                "benchmarkStartAsOf": facts.get("benchmarkStartAsOf") or "",
+                "benchmarkEndAsOf": facts.get("benchmarkEndAsOf") or "",
+                "benchmarkObservationSource": facts.get("benchmarkObservationSource") or "",
                 "excessReturnPct": (
                     round(change_pct - number(facts.get("benchmarkReturnPct")), 6)
                     if facts.get("benchmarkReturnPct") not in (None, "")
@@ -342,8 +352,8 @@ def record_shadow_hypothesis_outcome_observations(
                 "predictionContractCompleteness": completeness,
             },
         )
-        _save_shadow_hypothesis_outcome(episode, outcome)
-        outcomes.append(outcome)
+        saved = _save_shadow_hypothesis_outcome(episode, outcome)
+        outcomes.append(saved or outcome)
     return outcomes
 
 
@@ -359,6 +369,18 @@ def save_shadow_hypothesis_outcome(
     horizon_minutes = int((outcome.payload or {}).get("horizonMinutes") or 0)
     fingerprint = str((outcome.payload or {}).get("contractFingerprint") or "")
     with _transaction() as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM investment_hypothesis_observation_outcomes WHERE outcome_id = %s FOR UPDATE",
+            (outcome.outcome_id,),
+        ).fetchone()
+        previous = _json_loads((row or {}).get("payload_json"), {})
+        if previous:
+            if not outcome_needs_data(previous):
+                return ObservedOutcome.from_dict(previous)
+            validate_outcome_repair(previous, payload)
+            outcome.payload["evaluationHistory"] = outcome_evaluation_history(previous, stamp)
+            outcome.payload["evaluationAttemptCount"] = int((previous.get("payload") or {}).get("evaluationAttemptCount") or 1) + 1
+            payload = outcome.to_dict()
         connection.execute(
             """
                 INSERT INTO investment_hypothesis_observation_outcomes (
@@ -392,10 +414,11 @@ def save_shadow_hypothesis_outcome(
         )
         connection.execute(
             "UPDATE investment_hypothesis_observation_targets "
-            "SET status = 'observed', outcome_id = %s, observed_at = %s, updated_at = %s "
+            "SET status = %s, outcome_id = %s, observed_at = %s, updated_at = %s "
             "WHERE observation_episode_id = %s AND horizon_minutes = %s "
             "AND contract_fingerprint = %s",
             (
+                "needs-data" if outcome_needs_data(payload) else "observed",
                 outcome.outcome_id,
                 outcome.observed_at,
                 stamp,

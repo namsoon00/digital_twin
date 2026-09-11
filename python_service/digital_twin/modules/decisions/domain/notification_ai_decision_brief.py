@@ -1663,7 +1663,9 @@ def _minimum_relation_facts(value: object, limit: int = 24) -> Dict[str, object]
 
 def _minimum_decision_continuity(value: object) -> Dict[str, object]:
     packet = _mapping(value)
-    payload = _selected_fields(packet, ("contractVersion", "status", "capturedAt"))
+    payload = _selected_fields(packet, ("contractVersion", "packetId", "status", "capturedAt", "accountId", "symbol"))
+    if packet.get("reviewSummary"):
+        payload["reviewSummary"] = _bounded_value(packet["reviewSummary"], string_limit=160, list_limit=2, dict_limit=14)
     previous = _selected_fields(
         packet.get("previousDecision"),
         (
@@ -1693,6 +1695,8 @@ def _minimum_decision_continuity(value: object) -> Dict[str, object]:
             (
                 "outcomeId", "observedAt", "price", "profitLossRate",
                 "priceChangeFromDecisionPct", "selectedHypothesisStatus",
+                "calibrationEligibility", "missingRequiredMetricIds", "missingObservationDomains",
+                "benchmarkReturnPct", "excessReturnPct", "horizonMinutes",
             ),
             2,
         ),
@@ -1708,7 +1712,7 @@ def _minimum_decision_continuity(value: object) -> Dict[str, object]:
     for key, fields, limit in row_specs:
         rows = _compact_dict_rows(packet.get(key), fields, limit)
         if rows:
-            payload[key] = _bounded_value(rows, string_limit=72, list_limit=limit, dict_limit=8)
+            payload[key] = _bounded_value(rows, string_limit=72, list_limit=limit, dict_limit=14)
     current_position = _selected_fields(
         packet.get("currentPosition"),
         (
@@ -2211,7 +2215,7 @@ def build_notification_ai_prompt_bundle(
             default=str,
         ).encode("utf-8")
     )
-    payload_budget_bytes = max(6 * 1024, maximum - instruction_bytes)
+    payload_budget_bytes = max(1, maximum - instruction_bytes)
     payload = fit_notification_ai_decision_core(
         decision_core,
         payload_budget_bytes,

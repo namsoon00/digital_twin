@@ -219,6 +219,9 @@ function renderHypothesisDevelopmentCaseDetail(item) {
   var counter = Array.isArray(item.counterEvidenceIds) ? item.counterEvidenceIds : [];
   var impact = item.decisionImpact && typeof item.decisionImpact === "object" ? item.decisionImpact : {};
   var busy = Boolean(hypothesesState.hypothesisDevelopmentAction);
+  var retry = item.retry || {};
+  var requirements = Array.isArray(retry.requirements) ? retry.requirements : [];
+  var retryLabels = { processing: "검증 진행 중", "waiting-data": "자료 갱신 대기", "dependency-error": "연결 복구 대기", completed: "이번 검증 완료" };
   return [
     '<section class="hypothesis-development-detail">',
     '<div class="hypothesis-development-detail-head">',
@@ -235,6 +238,11 @@ function renderHypothesisDevelopmentCaseDetail(item) {
     path.length ? '<div class="hypothesis-development-path">' + path.map(function (step, index) { return '<span><b>' + escapeHtml(index + 1) + '</b>' + escapeHtml(step) + '</span>'; }).join("") + '</div>' : '',
     '<div class="hypothesis-development-evidence"><span>지지 근거 <strong>' + escapeHtml(supporting.length) + '</strong></span><span>반대 근거 <strong>' + escapeHtml(counter.length) + '</strong></span><span>원본 제안 <strong>' + escapeHtml((item.sourceProposalIds || []).length) + '</strong></span></div>',
     '<div class="hypothesis-development-gates">' + gates.map(renderHypothesisDevelopmentGate).join("") + '</div>',
+    '<section class="hypothesis-development-retry"><header><strong>재검증 상태</strong><span>' + escapeHtml(retryLabels[retry.state] || "다음 검증 대기") + '</span></header><dl>' +
+    '<div><dt>실행 횟수</dt><dd>' + escapeHtml(Number(retry.attemptCount || 0)) + '회</dd></div>' +
+    '<div><dt>마지막 시도</dt><dd>' + escapeHtml(retry.lastAttemptAt ? formatClock(retry.lastAttemptAt) : "기록 없음") + '</dd></div>' +
+    '<div><dt>다음 정기 확인</dt><dd>' + escapeHtml(retry.nextCheckAt ? formatClock(retry.nextCheckAt) : "예약 없음") + '</dd></div></dl>' +
+    (requirements.length ? '<ul>' + requirements.slice(0, 8).map(function (text) { return '<li>' + escapeHtml(text) + '</li>'; }).join("") + '</ul>' : '') + '</section>',
     item.blockedReason ? '<p class="form-error">' + escapeHtml(item.blockedReason) + '</p>' : '',
     '<div class="ontology-experiment-actions">',
     '<button class="text-button" type="button" data-hypothesis-development-process="' + escapeHtml(item.caseId || "") + '"' + (busy || ["deployed", "observing", "retired"].indexOf(String(item.status || "")) >= 0 ? ' disabled' : '') + '>검증 다시 실행</button>',

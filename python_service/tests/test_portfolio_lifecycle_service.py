@@ -906,7 +906,14 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual({"attributionCount": 1, "reviewCount": 1}, result)
         self.assertEqual("partial", repository.attributions[0].data_state)
         self.assertEqual(["benchmarkReturnPct"], repository.attributions[0].missing_data)
+        self.assertIsNone(repository.attributions[0].to_dict()["activeReturnPct"])
+        self.assertIsNone(repository.attributions[0].to_dict()["market_return_pct"])
         self.assertTrue(repository.decision_reviews[0].evidence_still_valid)
+
+        repository.decision_reviews.clear()
+        outcome.payload["calibrationEligibility"] = "excluded-criterion-data-gap"
+        self.assertEqual(0, service.review_outcomes([outcome])["reviewCount"])
+        self.assertEqual([], repository.decision_reviews)
 
     def test_incomplete_live_snapshot_cannot_mutate_the_ledger(self):
         repository = MemoryInvestmentRepository()

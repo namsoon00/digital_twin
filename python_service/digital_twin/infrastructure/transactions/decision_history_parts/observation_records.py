@@ -13,14 +13,20 @@ from digital_twin.modules.decisions.domain.investment_brain import (
 from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import (
     observation_domain_status,
 )
-from digital_twin.modules.outcomes.contracts import evaluate_hypothesis_outcome
+from digital_twin.modules.outcomes.contracts import (
+    evaluate_hypothesis_outcome,
+    observation_facts,
+    outcome_evaluation_history,
+    outcome_needs_data,
+    validate_outcome_repair,
+)
+from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from .outcome_policy import (
     contract_benchmark_symbol,
     due_outcome_horizon_minutes,
     number,
     outcome_horizon_minutes,
-    outcome_horizon_recorded,
     outcome_observation_is_usable,
     outcome_target_at,
     parse_datetime,
@@ -137,9 +143,8 @@ def record_outcome_observations(
         horizon_minutes = int(item["horizonMinutes"])
         contract = _episode_outcome_contract(episode)
         contract_completeness = _episode_outcome_contract_completeness(episode)
-        if horizon_minutes not in _episode_outcome_horizons(episode) or outcome_horizon_recorded(
-            episode, horizon_minutes
-        ):
+        existing = next((outcome for outcome in episode.outcomes if int((outcome.payload or {}).get("horizonMinutes") or 0) == horizon_minutes), None)
+        if horizon_minutes not in _episode_outcome_horizons(episode) or (existing and not outcome_needs_data(existing.to_dict())):
             continue
         target_at = outcome_target_at(episode, horizon_minutes)
         observed_at = str(item["observedAt"])
@@ -203,6 +208,8 @@ def record_outcome_observations(
                 evaluation.get("selectedHypothesisStatus") or "inconclusive"
             ),
             payload={
+                "observationFacts": observation_facts(facts),
+                "evaluationAttemptCount": int((existing.payload or {}).get("evaluationAttemptCount") or 1) + 1 if existing else 1,
                 "selectedHypothesisId": episode.selected_hypothesis_id,
                 "selectedHypothesisStance": stance,
                 "hypothesisFamilyId": selected_hypothesis.get("familyId") or "",
@@ -256,8 +263,8 @@ def record_outcome_observations(
                 "predictionContractCompleteness": contract_completeness,
             },
         )
-        _save_outcome(episode, outcome)
-        outcomes.append(outcome)
+        saved = _save_outcome(episode, outcome)
+        outcomes.append(saved or outcome)
         changed_symbols.add(episode.symbol)
     outcomes.extend(
         _record_shadow_hypothesis_outcome_observations(
@@ -278,13 +285,24 @@ def save_outcome(
     utc_now_iso: Callable[[], str],
 ) -> ObservedOutcome:
     outcome.observed_at = canonical_investment_timestamp(outcome.observed_at) or utc_now_iso()
-    episode.status = "observed"
-    episode.outcomes = [
-        item for item in episode.outcomes if item.outcome_id != outcome.outcome_id
-    ] + [outcome]
     payload = outcome.to_dict()
-    episode_payload = episode.to_dict()
     with _transaction() as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM investment_decision_outcomes WHERE outcome_id = %s FOR UPDATE",
+            (outcome.outcome_id,),
+        ).fetchone()
+        previous = _json_loads((row or {}).get("payload_json"), {})
+        if previous:
+            if not outcome_needs_data(previous):
+                return ObservedOutcome.from_dict(previous)
+            validate_outcome_repair(previous, payload)
+            outcome.payload["evaluationHistory"] = outcome_evaluation_history(previous, utc_now_iso())
+            payload = outcome.to_dict()
+        episode.status = "observed"
+        episode.outcomes = [
+            item for item in episode.outcomes if item.outcome_id != outcome.outcome_id
+        ] + [outcome]
+        episode_payload = episode.to_dict()
         connection.execute(
             """
                 INSERT INTO investment_decision_outcomes (
@@ -325,9 +343,10 @@ def save_outcome(
         fingerprint = str((outcome.payload or {}).get("contractFingerprint") or "")
         connection.execute(
             "UPDATE investment_decision_outcome_targets "
-            "SET status = 'observed', outcome_id = %s, observed_at = %s, updated_at = %s "
+            "SET status = %s, outcome_id = %s, observed_at = %s, updated_at = %s "
             "WHERE episode_id = %s AND horizon_minutes = %s AND contract_fingerprint = %s",
             (
+                "needs-data" if outcome_needs_data(payload) else "observed",
                 outcome.outcome_id,
                 outcome.observed_at,
                 utc_now_iso(),

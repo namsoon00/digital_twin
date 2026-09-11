@@ -31,6 +31,10 @@ class PerformanceAttribution:
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["activeReturnPct"] = self.active_return_pct
+        if "benchmarkReturnPct" in self.missing_data:
+            # Legacy numeric SQL columns use zero; the public fact contract does not.
+            payload["market_return_pct"] = None
+            payload["activeReturnPct"] = None
         payload["version"] = INVESTMENT_OUTCOME_REVIEW_VERSION
         return payload
 

@@ -8,6 +8,7 @@ import json
 from typing import Dict, Mapping, Tuple
 
 from digital_twin.modules.portfolio.contracts import utc_now_iso
+from digital_twin.modules.decisions.domain.decision_continuity import compact_decision_continuity_packet
 
 
 AI_INSIGHT_HANDOFF_VERSION = "investment-ai-insight-handoff-v1"
@@ -351,6 +352,11 @@ class AIInsightEpisode:
         reconciliation = _mapping(values.get("decisionReconciliation"))
         provenance = _mapping(values.get("notificationAIInsightProvenance"))
         insight = compact_ai_insight(getattr(result, "response", {}) or {})
+        continuity = compact_decision_continuity_packet(values.get("decisionContinuityPacket"))
+        if continuity:
+            if continuity.get("accountId") != handoff.account_id or continuity.get("symbol") != handoff.symbol:
+                raise ValueError("Decision memory must belong to the handoff account and symbol.")
+            insight["decisionContinuity"] = continuity
         transition = _mapping(values.get("investmentInsightTransition"))
         if transition:
             insight["insightTransition"] = transition

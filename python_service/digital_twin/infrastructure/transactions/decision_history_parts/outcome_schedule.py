@@ -161,8 +161,9 @@ def sync_shadow_hypothesis_observation_targets(
                 ON DUPLICATE KEY UPDATE
                     target_at = VALUES(target_at),
                     maximum_delay_minutes = VALUES(maximum_delay_minutes),
-                    payload_json = VALUES(payload_json),
-                    updated_at = VALUES(updated_at)
+                    payload_json = JSON_SET(VALUES(payload_json), '$.baselineObservations',
+                        COALESCE(JSON_EXTRACT(investment_hypothesis_observation_targets.payload_json, '$.baselineObservations'), JSON_OBJECT())),
+                    updated_at = investment_hypothesis_observation_targets.updated_at
                 """,
             (
                 target_id,

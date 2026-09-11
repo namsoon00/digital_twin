@@ -8,6 +8,7 @@ import { formatClock, renderRecordChangedAt } from "../shared/format.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";
 import { settingsState } from "../state/settings.mjs";
+import { renderDecisionReview } from "./case-review.mjs";
 
 function investmentCaseOperatorAccess() {
   return !settingsState.serverSettingsLocked && !isStaticPreviewHost();
@@ -157,6 +158,7 @@ function renderInvestmentCaseSummary(detail, key) {
     renderInvestmentCaseLineageChain(detail),
     renderInvestmentInsightAssessmentCard(((((detail.reasoningLineage || {}).ai) || {}).insightAssessment) || {}),
     renderInvestmentDecisionRationale(detail, false),
+    renderDecisionReview(detail.decisionReview, formatClock),
     '<section class="oa-case-overview-section"><header><strong>처리 상태와 영향</strong>' + renderDecisionInfoButton("decision-readiness", "자료 부족, 관계 추론, AI 비교와 결과 관측을 분리해 각각의 이유를 표시합니다.") + '</header>' + renderDecisionStatusDimensions(detail.statusDimensions, false) + '</section>',
     '<div class="oa-case-cause-columns"><section><header><strong>' + escapeHtml(supportTitle) + '</strong>' + renderDecisionInfoButton("reasoning-rule", "성립한 관계와 규칙 중 현재 투자 의견에 실제로 채택된 근거입니다.") + '</header>' + renderDecisionCauseList(support, supportEmpty) + '</section><section><header><strong>반대 근거와 제한</strong>' + renderDecisionInfoButton("competing-hypothesis", "다른 결론을 지지하거나 현재 의견의 강도를 낮춘 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 기록된 반대 근거나 제한 조건이 없습니다.") + '</section></div>',
     '<section class="oa-case-next-check"><header><span>다음 판단</span><strong>의견이 달라지는 조건</strong></header>',

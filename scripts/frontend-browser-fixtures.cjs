@@ -65,6 +65,11 @@ function payload(url, options = {}) {
   if (pathname.startsWith("/api/decisions/")) return {
     caseId: pathname.split("/")[3], episodeId: "fixture-resolved", resolvedFromLegacyKey: pathname.endsWith("fixture-legacy"),
     symbol: "TEST01", name: "MOCK Synthetic case", accountId: "fixture-a", decision: { action: "HOLD" },
+    decisionReview: {state: "data-gap", previousSummary: "검증용 가설: 수요 증가가 다음 분기 매출에 반영되는지 확인합니다.",
+      capturedAt: stamp, packetId: "synthetic-review", interpretation: "자료 부족은 가설 실패가 아니며, 관측 수익률은 실제 매매 수익을 뜻하지 않습니다.",
+      verifiedChanges: [{label: "20일 평균 가격 회복", status: "satisfied"}], nextChecks: ["다음 분기 매출 발표"],
+      outcomes: [{state: "data-gap", explanation: "비교 지수 자료가 부족해 성공·실패 판정을 보류했습니다.",
+        horizonMinutes: 1440, observedAt: stamp, priceChangeFromDecisionPct: 1.2, benchmarkReturnPct: null}]},
     availableViews: ["summary", "current", "evidence", "reasoning", "history"],
     currentState: { items: [] }, stages: [], summary: {},
     evidence: { supportCount: 30, resolvedCount: 30, records: Array.from({length: 30}, (_,i)=>({

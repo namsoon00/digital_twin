@@ -140,7 +140,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # evidence protect policy gates and distinguish observation from proof.
         # Literal-only MySQL scope checks also guard account identity and
         # JSON_TABLE collation without constructing application stores.
-        self.assertLessEqual(total, 1375)
+        # Durable hypothesis retry, frozen outcome repair, baseline retention,
+        # and shared AI/web memory add 13 unit and isolated SQL boundaries.
+        self.assertLessEqual(total, 1388)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

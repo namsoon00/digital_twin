@@ -1213,6 +1213,26 @@ def _company_context(current: Dict[str, object], rules: List[Dict[str, object]],
     }, {}
 
 
+def _review_memory(value: object) -> Dict[str, object]:
+    review = _mapping(value)
+    outcomes = sorted(
+        [_mapping(item) for item in review.get("outcomes") or []],
+        key=lambda item: str(item.get("observedAt") or ""), reverse=True,
+    )
+    if not outcomes:
+        return {}
+    return {
+        "state": review.get("state"),
+        "outcomes": [_selected(item, (
+            "outcomeId", "observedAt", "horizonMinutes", "state", "calibrationEligibility",
+            "explanation",
+            "priceChangeFromDecisionPct", "benchmarkReturnPct", "excessReturnPct",
+            "missingRequiredMetricIds", "missingObservationDomains",
+        )) for item in outcomes[:2]],
+        "omittedOutcomeCount": max(0, len(outcomes) - 2),
+    }
+
+
 def _continuity_delta(value: object) -> Dict[str, object]:
     packet = _mapping(value)
     previous = _mapping(packet.get("previousDecision"))
@@ -1223,7 +1243,7 @@ def _continuity_delta(value: object) -> Dict[str, object]:
             continue
         row = _selected(
             item,
-            ("field", "operator", "threshold", "purpose", "status", "observedValue", "onSatisfied"),
+            ("conditionId", "field", "operator", "threshold", "purpose", "status", "currentValue", "onSatisfied", "transitionVerified", "transitionAt", "previousMatched", "currentMatched"),
         )
         if row.get("onSatisfied"):
             row["onSatisfied"] = _sentence_text(row.get("onSatisfied"), 120)
@@ -1234,6 +1254,8 @@ def _continuity_delta(value: object) -> Dict[str, object]:
         previous_payload["summary"] = previous_summary
     payload = {
         "status": packet.get("status"),
+        "packetId": packet.get("packetId"),
+        "reviewSummary": _review_memory(packet.get("reviewSummary")),
         "previousDecision": previous_payload,
         "previousSelectedHypothesisId": selected.get("hypothesisId") or previous.get("selectedHypothesisId"),
         "followUpConditions": followups[:2],
@@ -1625,7 +1647,7 @@ def _is_research_review_core(value: object) -> bool:
 def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     """Reduce reference detail without truncating the hypothesis evidence contract."""
 
-    budget = max(6 * 1024, int(budget_bytes or 6 * 1024))
+    budget = max(1, int(budget_bytes or 6 * 1024))
     fitted = json.loads(json.dumps(core, ensure_ascii=False, default=str))
     required_evidence_ids = {
         evidence_id
@@ -1796,6 +1818,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     previous = _mapping(continuity.get("previousDecision"))
     fitted["continuityDelta"] = {
         "status": continuity.get("status"),
+        "packetId": continuity.get("packetId"),
+        "reviewSummary": continuity.get("reviewSummary"),
+        "observationState": continuity.get("observationState"),
         "previousDecision": {
             **_selected(previous, ("action", "decisionReadiness", "decidedAt")),
             "summary": _sentence_text(previous.get("summary"), 96),
@@ -1804,7 +1829,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         "followUpConditions": [{
             **_selected(
                 item,
-                ("field", "operator", "threshold", "purpose", "status"),
+                ("field", "operator", "threshold", "purpose", "status", "transitionVerified", "previousMatched", "currentMatched"),
             ),
             "onSatisfied": _sentence_text(item.get("onSatisfied"), 80),
         } for item in list(continuity.get("followUpConditions") or [])[:1]

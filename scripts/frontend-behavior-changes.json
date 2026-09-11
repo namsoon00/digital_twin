@@ -1,5 +1,9 @@
 [
   {
+    "reason": "Show captured prior-decision validation without recomputing judgments, and durable retry state for data-blocked hypothesis development.",
+    "functions": ["renderHypothesisDevelopmentCaseDetail", "renderInvestmentCaseSummary"]
+  },
+  {
     "reason": "Graph engines and deferred loading are owned by the current view, including repeated init and detached-container cleanup.",
     "functions": ["destroyOntologyCytoscapeGraphs", "initOntologyCytoscapeGraphs"]
   },

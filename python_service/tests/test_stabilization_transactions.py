@@ -25,9 +25,66 @@ from digital_twin.modules.portfolio.application.portfolio_lifecycle_service impo
 from digital_twin.modules.portfolio.application.investment_domain_service import (
     InvestmentDomainService,
 )
+from digital_twin.modules.outcomes.infrastructure.transaction_writes import upsert_decision_outcome_target
+from digital_twin.infrastructure.transactions.decision_history_parts.target_queries import PendingTargetRead, pending_outcome_targets
 
 
 class TransactionStabilizationTests(StabilizationDatabaseCase):
+    def outcome_target(self, episode, target_at="2099-01-01T01:00:00Z"):
+        target_id = "target:" + episode.episode_id
+        payload = {"requestId": target_id, "episodeId": episode.episode_id, "symbol": episode.symbol,
+                   "horizonMinutes": 60, "baselineAt": episode.decided_at, "targetAt": target_at}
+        with self.decisions.transaction() as connection:
+            upsert_decision_outcome_target(connection, target_id, episode, 60, target_at, 120,
+                                           "contract:fixture", "pending", "", payload, episode.decided_at)
+        return target_id
+
+    def test_compact_baseline_is_write_once_account_scoped_and_survives_reschedule(self):
+        episode = fixture_episode(account="baseline:" + uuid.uuid4().hex, episode_id="episode:" + uuid.uuid4().hex)
+        self.decisions.save(episode)
+        target_id = self.outcome_target(episode)
+        def read_targets(include_future):
+            return pending_outcome_targets(PendingTargetRead(episode.account_id, "2026-09-12T00:00:00Z", 200, include_future), _connect=self.decisions.connect)
+        self.assertEqual([], read_targets(False))
+        targets = read_targets(True)
+        self.assertIn(target_id, [item["requestId"] for item in targets])
+        record = {"requestId": target_id, "kind": "benchmark", "observation": {"currentPrice": 200, "sourceAsOf": episode.decided_at}}
+        self.assertEqual(0, self.decisions.record_outcome_baselines("different-account", [record]))
+        self.assertEqual(1, self.decisions.record_outcome_baselines(episode.account_id, [record]))
+        record["observation"]["currentPrice"] = 999
+        self.assertEqual(0, self.decisions.record_outcome_baselines(episode.account_id, [record]))
+        self.outcome_target(episode)
+        target = next(item for item in read_targets(True) if item["requestId"] == target_id)
+        self.assertEqual(200, target["baselineObservations"]["benchmark"]["currentPrice"])
+
+    def test_gap_outcome_repair_is_atomic_and_completed_observation_is_immutable(self):
+        episode = fixture_episode(account="repair:" + uuid.uuid4().hex, episode_id="episode:" + uuid.uuid4().hex)
+        self.decisions.save(episode)
+        target_id = self.outcome_target(episode, "2026-09-10T02:00:00Z")
+        outcome = ObservedOutcome(outcome_id="outcome:" + episode.episode_id, episode_id=episode.episode_id,
+                                  observed_at="2026-09-10T02:00:00Z", price=110,
+                                  payload={"calibrationEligibility": "excluded-criterion-data-gap", "decisionPrice": 100,
+                                           "contractFingerprint": "contract:fixture", "horizonMinutes": 60})
+        self.decisions.save_outcome(episode, outcome)
+        self.sql("UPDATE investment_decision_outcome_targets SET updated_at = %s WHERE target_id = %s", ("2026-09-10T02:01:00Z", target_id))
+        target = self.decisions.pending_outcome_targets(episode.account_id, "2026-09-12T00:00:00Z")[0]
+        self.assertEqual(110, target["previousOutcome"]["price"])
+        invalid = ObservedOutcome.from_dict(outcome.to_dict())
+        invalid.price = 999
+        with self.assertRaises(ValueError):
+            self.decisions.save_outcome(episode, invalid)
+        self.assertEqual("needs-data", self.sql("SELECT status FROM investment_decision_outcome_targets WHERE target_id = %s", (target_id,))["status"])
+        repaired = ObservedOutcome.from_dict(outcome.to_dict())
+        repaired.payload.update({"calibrationEligibility": "eligible", "benchmarkReturnPct": 2})
+        self.decisions.save_outcome(episode, repaired)
+        self.assertEqual("observed", self.sql("SELECT status FROM investment_decision_outcome_targets WHERE target_id = %s", (target_id,))["status"])
+        self.assertEqual([], self.decisions.pending_outcome_targets(episode.account_id, "2026-09-12T00:00:00Z"))
+        returned = self.decisions.save_outcome(episode, invalid)
+        self.assertEqual(110, returned.price)
+        stored = self.decisions.outcomes_for_episode(episode.episode_id)[0]
+        self.assertEqual("eligible", stored.payload["calibrationEligibility"])
+        self.assertEqual(1, len(stored.payload["evaluationHistory"]))
+
     def counts(self, tables):
         return {
             table: self.sql("SELECT COUNT(*) AS n FROM " + table)["n"]

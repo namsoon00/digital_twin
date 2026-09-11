@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List
 
@@ -11,6 +12,29 @@ from digital_twin.infrastructure.operational_common import json_dumps
 
 
 class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
+    @contextmanager
+    def processing_lock(self, case_id: str):
+        name = "hypothesis:" + hashlib.sha256(str(case_id).encode()).hexdigest()[:48]
+        with self.connect() as connection:
+            row = connection.execute("SELECT GET_LOCK(%s, 0) AS acquired", (name,)).fetchone() or {}
+            acquired = int(row.get("acquired") or 0) == 1
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    connection.execute("SELECT RELEASE_LOCK(%s)", (name,))
+
+    def pending(self, limit: int = 50) -> List[HypothesisDevelopmentCase]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM hypothesis_development_cases "
+                "WHERE status IN ('proposed', 'screening', 'compiled', 'validating', 'needs-data') "
+                "ORDER BY COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.retry.lastAttemptAt')), '') ASC, "
+                "created_at ASC, case_id LIMIT %s",
+                (max(1, min(500, int(limit))),),
+            ).fetchall()
+        return [HypothesisDevelopmentCase.from_dict(_json_loads(row.get("payload_json"), {})) for row in rows or []]
+
     def get(self, case_id: str):
         with self.connect() as connection:
             row = connection.execute(
@@ -82,7 +106,7 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
                 (
                     event_id, case.case_id, str(event_type or "updated")[:80],
                     case.status, case.stage, str(reason or "")[:1000],
-                    json_dumps({"caseId": case.case_id, "status": case.status, "stage": case.stage}),
+                    json_dumps({"caseId": case.case_id, "status": case.status, "stage": case.stage, "retry": case.retry}),
                     stamp,
                 ),
             )

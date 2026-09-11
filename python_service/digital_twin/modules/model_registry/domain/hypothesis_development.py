@@ -199,6 +199,7 @@ class HypothesisDevelopmentCase:
     deployment: Dict[str, object] = field(default_factory=dict)
     validation_input_fingerprint: str = ""
     validation_attempted_at: str = ""
+    retry: Dict[str, object] = field(default_factory=dict)
     blocked_reason: str = ""
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -264,6 +265,7 @@ class HypothesisDevelopmentCase:
             validation_summary_payload=dict(payload.get("validationSummary") or payload.get("validation_summary") or {}),
             decision_impact=dict(payload.get("decisionImpact") or payload.get("decision_impact") or {}),
             deployment=dict(payload.get("deployment") or {}),
+            retry=dict(payload.get("retry") or {}),
             validation_input_fingerprint=clean_text(
                 payload.get("validationInputFingerprint")
                 or payload.get("validation_input_fingerprint"),

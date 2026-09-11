@@ -532,6 +532,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         account_id: str,
         observed_at: str = "",
         limit: int = 0,
+        include_future: bool = False,
     ) -> List[Dict[str, object]]:
         normalized_account_id = str(account_id or "")
         observed_stamp = canonical_investment_timestamp(observed_at) or utc_now_iso()
@@ -550,9 +551,16 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             repaired_accounts.add(normalized_account_id)
             self._outcome_target_schedule_repair_completed_accounts = repaired_accounts
         return target_queries.pending_outcome_targets(
-            target_queries.PendingTargetRead(normalized_account_id, observed_stamp, target_limit),
+            target_queries.PendingTargetRead(normalized_account_id, observed_stamp, target_limit, include_future),
             _connect=self.connect,
         )
+
+    def outcome_collection_targets(self, account_id: str, limit: int = 200) -> List[Dict[str, object]]:
+        return self.pending_outcome_targets(account_id, limit=limit, include_future=True)
+
+    def record_outcome_baselines(self, account_id: str, records: Iterable[Dict[str, object]]) -> int:
+        with self.transaction() as connection:
+            return outcomes_writes.record_outcome_baselines(connection, account_id, records)
 
     def outcome_target_summary(self, account_id: str = "", symbol: str = "") -> Dict[str, object]:
         return target_queries.outcome_target_summary(

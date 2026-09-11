@@ -49,6 +49,15 @@ async function routeTo(page, tab, detail, key, pushedDetail = false) {
 async function caseInteractions(page, label) {
   await routeTo(page, "feed", "investment-case", "fixture-case");
   await page.waitForSelector('[data-investment-case-tab="history"]');
+  const review = page.locator('.oa-decision-review');
+  await review.waitFor();
+  await review.scrollIntoViewIfNeeded();
+  assert.equal(await review.getAttribute('data-review-state'), 'data-gap');
+  assert.match(await review.textContent(), /성공·실패 판정을 보류/);
+  assert.match(await review.textContent(), /비교 지수 자료 없음/);
+  const reviewBounds = await review.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
+  assert(reviewBounds.content <= reviewBounds.width + 1, label + ' decision review overflows');
+  await review.screenshot({path: path.join(screenshots, label + '-decision-review.png')});
   await page.locator('[data-investment-case-tab="history"]').click();
   await page.waitForSelector('.oa-case-history-row');
   await settle(page);

@@ -75,6 +75,8 @@ class DomainOwnershipCompletionTests(unittest.TestCase):
 
     def test_moved_business_definitions_keep_baseline_executable_semantics(self):
         fixture = json.loads((ROOT / "python_service/tests/fixtures/domain_semantics_v1.json").read_text())
+        changes = json.loads((ROOT / "python_service/tests/fixtures/closed_loop_semantic_changes.json").read_text())["domain"]
+        checked_changes = set()
         self.assertEqual("637b49023", fixture["baseline"])
         self.assertGreater(len(fixture["definitions"]), 3000)
         parsed = {}
@@ -94,4 +96,11 @@ class DomainOwnershipCompletionTests(unittest.TestCase):
                         parsed[path].setdefault(node.target.id, []).append(node)
             with self.subTest(source=item["source"], definition=item["name"]):
                 self.assertIn(item["name"], parsed[path])
-                self.assertEqual(item["hash"], definition_fingerprint(parsed[path][item["name"]][item.get("occurrence", 0)]))
+                key = item["target"] + "::" + item["name"]
+                reviewed = changes.get(key)
+                if reviewed:
+                    checked_changes.add(key)
+                    self.assertTrue(reviewed["reason"])
+                    self.assertNotEqual(item["hash"], reviewed["hash"])
+                self.assertEqual(reviewed["hash"] if reviewed else item["hash"], definition_fingerprint(parsed[path][item["name"]][item.get("occurrence", 0)]))
+        self.assertEqual(set(changes), checked_changes)

@@ -231,7 +231,7 @@ class InternalDecisionHistoryTests(unittest.TestCase):
         sql, params = ledger.committed[-1]
         self.assertIn("AND contract_fingerprint = %s", sql)
         self.assertEqual(
-            ("outcome:fixture", NOW, NOW, "episode:fixture", 60, "contract:frozen"), params
+            ("observed", "outcome:fixture", NOW, NOW, "episode:fixture", 60, "contract:frozen"), params
         )
         self.assertEqual(DECIDED, ledger.committed[1][1][1])
 
@@ -260,7 +260,7 @@ class InternalDecisionHistoryTests(unittest.TestCase):
             store.record_outcome_observations("fixture", observations)
         self.assertEqual(2, ledger.begins)
         self.assertEqual(3, len(ledger.committed))
-        self.assertEqual("episode:first", ledger.committed[-1][1][3])
+        self.assertEqual("episode:first", ledger.committed[-1][1][4])
         store.propose_learning_from_outcomes.assert_not_called()
 
     def test_shadow_batch_scheduling_is_atomic_and_has_no_decision_or_delivery_writes(self):

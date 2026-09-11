@@ -10,6 +10,11 @@ _EXPORTS = {'evaluate_hypothesis_outcome': ('digital_twin.modules.outcomes.domai
 
 
 _EXPORTS.update({
+    'frozen_outcome_facts': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'frozen_outcome_facts'),
+    'observation_facts': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'observation_facts'),
+    'outcome_evaluation_history': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'outcome_evaluation_history'),
+    'outcome_needs_data': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'outcome_needs_data'),
+    'validate_outcome_repair': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'validate_outcome_repair'),
     'DecisionReview': ('digital_twin.modules.outcomes.domain.investment_outcomes', 'DecisionReview'),
     'HYPOTHESIS_OUTCOME_CONTRACT_VERSION': ('digital_twin.modules.outcomes.domain.hypothesis_outcome_contract', 'HYPOTHESIS_OUTCOME_CONTRACT_VERSION'),
     'HypothesisOutcomeContract': ('digital_twin.modules.outcomes.domain.hypothesis_outcome_contract', 'HypothesisOutcomeContract'),

@@ -336,17 +336,19 @@ def upsert_decision_outcome_target(
                 target_at = VALUES(target_at),
                 maximum_delay_minutes = VALUES(maximum_delay_minutes),
                 exclusion_reason = IF(
-                    investment_decision_outcome_targets.status = 'observed',
+                    investment_decision_outcome_targets.status IN ('observed', 'needs-data'),
                     investment_decision_outcome_targets.exclusion_reason,
                     VALUES(exclusion_reason)
                 ),
                 status = IF(
-                    investment_decision_outcome_targets.status = 'observed',
+                    investment_decision_outcome_targets.status IN ('observed', 'needs-data'),
                     investment_decision_outcome_targets.status,
                     VALUES(status)
                 ),
-                payload_json = VALUES(payload_json),
-                updated_at = VALUES(updated_at)
+                payload_json = JSON_SET(VALUES(payload_json), '$.baselineObservations',
+                    COALESCE(JSON_EXTRACT(investment_decision_outcome_targets.payload_json, '$.baselineObservations'), JSON_OBJECT())),
+                updated_at = IF(investment_decision_outcome_targets.status IN ('observed', 'needs-data'),
+                    investment_decision_outcome_targets.updated_at, VALUES(updated_at))
             """,
         (
             target_id,
@@ -364,3 +366,22 @@ def upsert_decision_outcome_target(
             stamp,
         ),
     )
+
+
+def record_outcome_baselines(connection: BoundWriteConnection, account_id: str, records) -> int:
+    """Persist each small as-of baseline once, independently of raw quote retention."""
+    count = 0
+    for record in list(records or [])[:2000]:
+        kind = record.get("kind")
+        if kind not in {"instrument", "benchmark"}:
+            continue
+        table = "investment_hypothesis_observation_targets" if record.get("episodeKind") == "shadow-hypothesis" else "investment_decision_outcome_targets"
+        path = "$.baselineObservations." + kind
+        cursor = connection.execute(
+            "UPDATE " + table + " SET payload_json = JSON_SET(payload_json, '$.baselineObservations', "
+            "JSON_SET(COALESCE(JSON_EXTRACT(payload_json, '$.baselineObservations'), JSON_OBJECT()), %s, CAST(%s AS JSON))) "
+            "WHERE account_id = %s AND target_id = %s AND JSON_EXTRACT(payload_json, %s) IS NULL",
+            ("$." + kind, json_dumps(record.get("observation") or {}), str(account_id), str(record.get("requestId") or ""), path),
+        )
+        count += int(cursor.rowcount or 0)
+    return count

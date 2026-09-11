@@ -853,6 +853,11 @@ class InvestmentCaseQueryService:
         subject_case: Mapping[str, object],
     ) -> Dict[str, object]:
         ai_episode = self._ai_insight_for_subject(subject_case)
+        continuity = item_dict(item_dict(item_dict(ai_episode).get("insight")).get("decisionContinuity"))
+        review = item_dict(continuity.get("reviewSummary")) if (
+            continuity.get("accountId") == subject_case.get("accountId")
+            and continuity.get("symbol") == subject_case.get("symbol")
+        ) else {}
         reasoning_case = self._reasoning_case_for_subject(subject_case)
         observations = self._observations_for_subject(subject_case)
         lineage = subject_reasoning_lineage(
@@ -935,6 +940,7 @@ class InvestmentCaseQueryService:
             "canonicalUrl": f"/?tab=modeling&detail=investment-case&detailKey={subject_case_id}",
             "headline": headline,
             "decision": decision,
+            "decisionReview": {**review, "capturedAt": continuity.get("capturedAt"), "packetId": continuity.get("packetId")} if review else {},
             "facts": {
                 "state": "pass" if facts_count else "blocked",
                 "dataState": "sufficient" if facts_count else "unavailable",

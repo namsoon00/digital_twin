@@ -214,6 +214,8 @@ class BackendIntegrationTests(unittest.TestCase):
             self.assertEqual(set(), missing, str(path))
 
     def test_integrated_storage_retains_original_sql_and_transaction_bodies(self):
+        changes = json.loads((FIXTURES / "closed_loop_semantic_changes.json").read_text())["storage"]
+        checked_changes = set()
         for entry in STORAGE["adapters"].values():
             tree = ast.parse((ROOT / entry["path"]).read_text())
             declarations = {
@@ -260,7 +262,15 @@ class BackendIntegrationTests(unittest.TestCase):
                 actual = hashlib.sha256(
                     ast.dump(normalized, include_attributes=False).encode()
                 ).hexdigest()
+                key = entry["path"] + "::" + name
+                if key in changes:
+                    reviewed = changes[key]
+                    checked_changes.add(key)
+                    self.assertTrue(reviewed["reason"])
+                    self.assertNotEqual(expected, reviewed["hash"])
+                    expected = reviewed["hash"]
                 self.assertEqual(expected, actual, (entry["path"], name))
+        self.assertEqual(set(changes), checked_changes)
 
     def test_integrated_repository_contracts_have_one_owner(self):
         for name, entry in STORAGE["ports"].items():

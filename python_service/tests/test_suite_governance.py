@@ -116,7 +116,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # scoped failure plans guard the reasoning adapter extraction.
         # Inference publication adds transaction-order, injected-I/O, rollback,
         # empty-result, fallback and scoped-retention extraction contracts.
-        self.assertLessEqual(total, 1108)
+        # ABox persistence adds separate row/control ports, original execution
+        # parity, endpoint gates and fail-closed atomic activation boundaries.
+        self.assertLessEqual(total, 1118)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

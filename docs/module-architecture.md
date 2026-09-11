@@ -120,8 +120,8 @@ Existing graph-adapter imports resolve to the same owned implementations.
 These functions return query strings, plans and diagnostics, not an investment
 verdict. Preflight rejection does not prove a matched rule. An unavailable
 index remains explicit and may select the existing scoped **TypeDB** query;
-it must never fall back to Python investment evaluation. Actual transactions,
-leases, retry policy, candidate activation and InferenceBox publication remain
+it must never fall back to Python investment evaluation. Actual transactions
+belong to the storage adapters described below; leases and retry policy remain
 in the graph repository and existing runtime.
 
 The extraction moved 85 definitions without changing their AST or the
@@ -175,6 +175,60 @@ No worker, event/outbox contract, transaction retry policy, native engine
 version or investment rule changed. Source validation and pointer activation
 still rely on the existing projection coordinator/write lease; this extraction
 does not introduce a new cross-store transaction or compare-and-swap protocol.
+
+## Scoped ABox Persistence Boundary
+
+`modules/reasoning/infrastructure/abox_persistence/` separates physical fact
+writes from active-generation control. These are internal reasoning adapters,
+not new business modules or asynchronous workers.
+
+| File | Responsibility |
+| --- | --- |
+| `writer.py` | Reuse verified storage identities, write bounded node batches, verify relation endpoints and write relation batches |
+| `controls.py` | Replace active Manifest/scope pointers and the pending journal together; clear only the journal after finalization |
+| `lifecycle.py` | Admit a staged candidate, verify pointer/journal readback and finalize only after aligned inference proof |
+| `ports.py` | Separate `ABoxRowStore` and `ABoxControlStore` capabilities plus injected clock, settings, timeout and error classification |
+| `world_calls.py` | Preserve explicit world ownership and the existing empty-world callback contract |
+
+The row writer cannot activate a generation through its port. It retains the
+existing short-lived driver per bounded commit, storage reuse checks, endpoint
+inventory, relation-plan fallback and telemetry. Physical batches are still
+incremental, not a single transaction for the complete graph. Candidate plans,
+copy-on-write/current-state selection, Manifest construction and verification,
+projection coordinator and scoped writer leases remain in the shared adapter.
+This extraction does not change those policies or add a new atomicity guarantee
+for in-place physical fact updates.
+
+The control port does not expose physical row writes, rule editing, native
+execution or notification delivery. A fully staged candidate may move the
+active pointer only through the existing admission path. Its recovery journal
+stays durable until the exact source generation and target coverage are proven
+by a completed native `matched` or `no-match` result. A failed readback after
+a committed activation reports an error but retains the journal; it does not
+claim that the previous pointer was restored. Retired-generation cleanup
+remains deferred to the existing maintenance lane.
+
+**Atomic control limit correction:** the former control writer split oversized
+pointer updates across commits despite describing them as atomic. A failure in
+a later batch could leave the active Manifest, scope pointers and pending
+journal inconsistent. Control updates now either commit together or fail
+before their first write. `typedbScopedControlWriteTransactionQueryCount`
+remains the bounded query limit (default 256, clamped to 8-512), but it is no
+longer a batch size for multi-commit activation. An oversized activation returns
+`typedbAtomicControlPatchLimit`, the required/allowed query counts and
+`preservedPreviousAbox=true`. Reduce the control patch or review that limit;
+never retry it as separate commits. Larger patches can therefore remain blocked
+instead of partially activating. No account data is migrated by this change.
+
+Six repository entry points are thin delegates. Forty-three synthetic golden
+execution scenarios from revision `966b3c9f0` preserve normal and failure-path
+query order, return values, telemetry, retries and journal lifecycle. Separate
+boundary tests cover exact limits, one-query overflow, rollback, other-world
+isolation and retained scope pointers. The recorded transaction engine is not
+a substitute for native TypeDB crash/ambiguous-commit testing. Existing replay
+and repository regressions remain required. Native TypeQL match semantics,
+rules and engine version are unchanged; the atomic control guard and its
+diagnostics are the intentional storage behavior correction.
 
 ## Synchronous and Asynchronous Boundaries
 
@@ -269,11 +323,12 @@ claim that the entire persistence/domain migration is complete:
 - Runtime builders are physically separated and loaded lazily, but some
   reasoning builders still assemble large collaborator graphs. Those graphs
   are not fully described by module import checks alone.
-- `typedb_ontology.py` still has roughly 26,000 lines after query and inference
-  publication extraction, and `ontology_projection.py` remains a large shared
-  adapter. Driver/schema lifecycle, ABox persistence/activation, scoped Manifest
-  recovery and native execution orchestration still need ownership separation.
-  Their transaction and investment semantics are unchanged.
+- `typedb_ontology.py` still has roughly 25,000 lines after query, inference
+  publication and ABox write/control extraction. `ontology_projection.py`
+  remains a large shared adapter. Driver/schema lifecycle, candidate/Manifest
+  planning and verification, projection leases, recovery, maintenance and native
+  execution orchestration still need ownership separation. The atomic control
+  limit fix is explicit above; investment semantics are unchanged.
 - The MySQL schema and operational store facade remain shared. Owner helpers
   restrict the changed write paths, but do not enforce table ownership for
   every legacy writer.
@@ -285,8 +340,9 @@ claim that the entire persistence/domain migration is complete:
 
 Next work should move remaining store ports and table writes one owner at a
 time, then simplify large builder dependency graphs. Following TypeQL and
-InferenceBox publication extraction, separate ABox persistence/activation and
-driver/schema lifecycle only with immutable replay and failure-path tests.
+InferenceBox publication and scoped ABox write/control extraction, separate
+driver/schema lifecycle and candidate/Manifest orchestration only with immutable
+replay and failure-path tests.
 Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
 asynchronous APIs by default.
@@ -309,6 +365,9 @@ asynchronous APIs by default.
 - `test_inference_publication.py`: original execution fingerprints, injected
   graph-I/O isolation, atomic marker switching, failure preservation, complete
   versus incomplete empty results, relation fallback and world-scoped cleanup.
+- `test_abox_persistence.py`: original row/control execution fingerprints,
+  independent injected execution, separate row/control ports, endpoint checks,
+  atomic control limits, world/scope isolation and retained recovery journals.
 - The web smoke test checks changed-field payloads and existing pages.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not

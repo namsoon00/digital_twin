@@ -1,0 +1,18 @@
+{
+  "sourceRevision": "9fa1913affdeaa379bf5e429c793f1e20f97e27e",
+  "scenarios": {
+    "schema": "7ab0357222215ff96f9de63aac6122d7a3b9dac5cbe32eac6a2295b259d1c191",
+    "schemaIdentity": "9a10408fe819d5c8117a86373476c7a78f13c21e1d099cd68b749d52e0af5248",
+    "manifestIdentity": "05af9cc9f60eb251f8a185979245011534353ea9d657186ea71879f1160ee38a",
+    "generatedRows": "8a9a041ba881296028e305d718e7b7bc61598888ae7ed31416ff5cb7303d494e",
+    "sentinels": "1424613eb9594be38d89ac4c49a85dde81a2b156ac4364972216e5a422f70597",
+    "restore:ok": "078650b8e6f9794578a85421d92e049d87e0a40623cf67efe1e17706e10579e9",
+    "restore:schema-error": "efd028dcb469055af5f90d9c970a48c41097c4239a89577fe86dea9a9063c6c4",
+    "restore:static-error": "e16dbc36106d181b8e722fe532fdebac6f6875d012e9748060d79808bb6b2943",
+    "restore:manifest-error": "e76f9ed27e69aac5e3fefdb6d78f7d264ac55afe262981c99bc815f2fc79f647",
+    "restore:readback-error": "e8211c6fa9dd766b84cf1a2bc16356e014540e4c4910d31655a5456e939efd9b",
+    "restore:hash-error": "9bcf9cbcc6164ac7a29d4b2080eeb5c69b57e97aedc3a5edbb528f5bde3995df",
+    "restore:contract-error": "fccca9db4148a8be1964036f491a51f4f17e6a69c40413eb2ca9905637c14cfe",
+    "restore:missing-box": "0ccfdc6e478a56a911fc2a4d27092fba6473a8d96a5c7c0bd65068ef1611a373"
+  }
+}

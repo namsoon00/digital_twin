@@ -538,6 +538,53 @@ This rehearsal does not touch managed runtime data or credentials. It verifies
 native transaction durability and source replay, not the full production
 Manifest recovery algorithm or an end-to-end investment engine crash.
 
+## Static Schema And Release Seeds
+
+`modules/reasoning/infrastructure/static_seed/` owns the static TypeDB contract:
+
+| Component | Responsibility |
+| --- | --- |
+| `schema` | Exact base TypeQL definition and schema contract fingerprint |
+| `artifact` | Freeze and rehydrate the release's original static graph |
+| `identity`, `graphs` | Static manifest identity, box generations and cross-box endpoint references |
+| `reads`, `preflight` | Keyed manifest/sentinel reads and conservative refresh selection |
+| `repair`, `persistence` | Bounded static relation repair, append-only static rows and manifest activation |
+| `restore`, `bootstrap` | Separate immutable-artifact restoration from current-catalog initialization |
+
+The repository facade retains its signatures, coordinator decorators,
+driver/cache objects and retry callbacks. `typedb_runtime` still owns connection,
+schema synchronization and readiness. `graph_store_lifecycle.py` only re-exports
+the artifact and TBox read helpers. No worker, broker or asynchronous boundary
+was introduced. Investment rules, release IDs, schema bytes, cache policies,
+quiet hours and source collection settings are unchanged.
+
+Thirty-three moved members have pre-migration body contracts; 32 preserve
+their bodies and one is intentionally corrected. Thirteen execution/identity
+fingerprints preserve schema output, manifest identity, generated rows,
+sentinels and release restoration outcomes. Authored artifact fingerprints
+remain distinct from normalized executable readback fingerprints.
+
+The intentional correction is the static manifest activation transaction.
+Previously, its delete committed before `write_graph` inserted the replacement;
+a write failure could leave no active static manifest. The new owner generates
+the same insert queries, rejects an empty replacement, and commits the keyed
+delete plus insert together. Uncommitted failures retain the old pointer and
+retry after a lost commit acknowledgement leaves one pointer. Static rows
+themselves remain staged through bounded append-only writes, not one large
+transaction. Failed candidates may remain for existing recovery/maintenance;
+this change does not claim all static writes or release readback are atomic.
+
+Run the opt-in native publication test against its own temporary server:
+
+```bash
+PYTHONPATH=python_service:python_service/tests python3 python_service/tests/verify_static_seed_atomicity.py --typedb-command "$HOME/.typedb/typedb"
+```
+
+It uses the production manifest writer and queries against a small physical
+manifest schema. It verifies rollback after delete and before commit, and
+single-row retry after commit acknowledgement loss. It neither touches managed
+data nor proves full production schema reconstruction or whole-engine recovery.
+
 ## Remaining Shared Boundaries
 
 This is application-layer modularization with selected ownership fixes, not a
@@ -549,9 +596,10 @@ claim that the entire persistence/domain migration is complete:
 - Runtime builders are lazy and V2 has tested phases, but some phases still
   assemble large collaborator graphs. Import checks alone cannot prove all
   runtime interactions safe.
-- `typedb_ontology.py` is now roughly 9,200 lines, down from 22,738 at the start
-  of this batch. Schema/seed administration, primitive writes, legacy helpers,
-  facade methods and some driver/cache identities remain there.
+- `typedb_ontology.py` is now roughly 7,300 lines, down from 22,738 before the
+  backend ownership batches. Primitive writes, RuleBox snapshot/version
+  administration, legacy helpers, facade methods and some driver/cache
+  identities remain there.
   `ontology_projection.py` is roughly 8,700 lines after separating source
   input assembly; record/save/inference/recovery coordination remains large.
   The extracted save and native-cycle algorithms are deliberately intact;
@@ -568,7 +616,7 @@ claim that the entire persistence/domain migration is complete:
 
 Further changes should move remaining store ports and table writes one owner
 at a time, and simplify the larger save/native algorithms only with immutable
-replay and failure-path tests. Schema/seed administration and the remaining
+replay and failure-path tests. RuleBox version administration and the remaining
 projection write/recovery orchestration are separate remaining ownership areas.
 Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
@@ -576,6 +624,11 @@ asynchronous APIs by default.
 
 ## Verification
 
+- `test_static_seed_ownership.py`: frozen schema/seed bodies and output
+  fingerprints, narrow import/port ownership, bounded preflight, authored
+  artifact restoration, phase failure, atomic pointer rollback and retry.
+- `verify_static_seed_atomicity.py`: opt-in, temporary native TypeDB using the
+  production manifest writer for transaction failure and acknowledgement loss.
 - `test_projection_input_ownership.py`: frozen source bodies and execution
   fingerprints, import/capability isolation, bounded point-in-time reads,
   source/release cache keys, copy/TTL/LRU behavior, failed input preservation,
@@ -618,6 +671,7 @@ asynchronous APIs by default.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not
   the owner's production account data.
-- Unit failure injection is not a native-server crash test. Deliberately killing
-  TypeDB mid-commit and exhaustive mobile/network outage testing were not part
-  of this backend ownership batch.
+- Unit failure injection is not a native-server crash test. The opt-in native
+  fixtures cover only their explicitly stated boundaries. Managed TypeDB
+  interruption, whole-engine crash recovery and exhaustive mobile/network
+  outage testing are not part of these ownership batches.

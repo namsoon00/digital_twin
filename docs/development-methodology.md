@@ -447,6 +447,17 @@ effectful outcome observation explicitly instead of disguising it as a read.
 Native crash rehearsals must create and stop only their own temporary server;
 never stop the managed TypeDB process to test a failure path.
 
+Keep TypeDB static schema, seed identity, bounded preflight, append-only writes
+and immutable release restoration in `reasoning/infrastructure/static_seed`.
+Connection/schema lifecycle remains in `typedb_runtime`; do not create a second
+bootstrap owner. Reads and graph-shaping ports must not acquire graph-write or
+delivery capabilities. Restore artifacts without consulting the current source
+catalog. Publish the keyed static manifest only after static rows are saved,
+and delete/insert that single pointer in one transaction. A failed replacement
+must preserve the prior committed pointer; a lost commit acknowledgement must
+remain retryable without duplicating it. This is not an atomic transaction for
+the entire static graph or a change to release promotion policy.
+
 V2 composition separates launch settings, immutable release binding, warmup,
 release health and decision/delivery wiring. Keep this preparation synchronous
 and preserve its phase order. Do not change frozen release identities or

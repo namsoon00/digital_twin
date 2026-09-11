@@ -513,6 +513,26 @@ from digital_twin.modules.reasoning.infrastructure.graph_reads import (
     inference_ports as _graph_reads_inference_ports,
 )
 
+from digital_twin.modules.reasoning.infrastructure.static_seed import (
+    bootstrap as _static_seed_bootstrap,
+    graphs as _static_seed_graphs,
+    identity as _static_seed_identity,
+    persistence as _static_seed_persistence,
+    preflight as _static_seed_preflight,
+    reads as _static_seed_reads,
+    repair as _static_seed_repair,
+    restore as _static_seed_restore,
+    schema as _static_seed_schema,
+)
+from digital_twin.modules.reasoning.infrastructure.static_seed.bootstrap_ports import BootstrapBindings
+from digital_twin.modules.reasoning.infrastructure.static_seed.identity import (
+    rulebox_runtime_metadata,
+    rulebox_structural_fingerprint,
+)
+from digital_twin.modules.reasoning.infrastructure.static_seed.persistence_ports import PersistenceBindings
+from digital_twin.modules.reasoning.infrastructure.static_seed.repair_ports import RepairBindings
+from digital_twin.modules.reasoning.infrastructure.static_seed.schema import slim_typeql_node_schema
+
 from digital_twin.modules.reasoning.infrastructure.backend_constants import (
     NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
     NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION,
@@ -894,59 +914,8 @@ def generated_inference_id(original_id: str, generation_id: str) -> str:
     return original + ":gen:" + digest
 
 
-def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str, object]:
-    rules_payload = [item for item in (rules_payload or []) if isinstance(item, dict)]
-    active_rules_payload = [item for item in rules_payload if typedb_rule_is_enabled(item)]
-    rules_hash = rulebox_rules_hash(rules_payload)
-    execution_profiles = [rule_execution_profile(item) for item in active_rules_payload]
-    all_execution_profiles = [rule_execution_profile(item) for item in rules_payload]
-    stage_counts = {
-        stage: len([
-            item
-            for item in execution_profiles
-            if str(item.get("executionStage") or "") == stage
-        ])
-        for stage in ["critical", "core", "supporting"]
-    }
-    dependency_index = rule_dependency_reverse_index(rules_payload)
-    return {
-        "ruleboxRulesHash": rules_hash,
-        "ruleboxShortHash": rules_hash[:12],
-        "ruleboxRuleCount": len(rules_payload),
-        "ruleboxActiveRuleCount": len(active_rules_payload),
-        "ruleboxDisabledRuleCount": len(rules_payload) - len(active_rules_payload),
-        "ruleboxConditionCount": sum(len(item.get("conditions") or []) for item in rules_payload),
-        "ruleboxDerivationCount": sum(len(item.get("derivations") or []) for item in rules_payload),
-        "ruleboxEngineVersion": GRAPH_REASONER_VERSION,
-        "ruleExecutionPolicyVersion": RULE_EXECUTION_POLICY_VERSION,
-        "ruleExecutionStageCounts": stage_counts,
-        "ruleExecutionStageCountsAll": {
-            stage: len([
-                item
-                for item in all_execution_profiles
-                if str(item.get("executionStage") or "") == stage
-            ])
-            for stage in ["critical", "core", "supporting"]
-        },
-        "ruleDependencyIndexVersion": str(dependency_index.get("version") or ""),
-        "ruleDependencyIndexFingerprint": str(dependency_index.get("fingerprint") or ""),
-        "ruleDependencyIndexRuleCount": int(dependency_index.get("ruleCount") or 0),
-    }
 
 
-def rulebox_structural_fingerprint(rules_payload: List[Dict[str, object]]) -> Dict[str, Tuple[int, int]]:
-    fingerprint: Dict[str, Tuple[int, int]] = {}
-    for rule in rules_payload or []:
-        if not isinstance(rule, dict):
-            continue
-        rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
-        if not rule_id:
-            continue
-        fingerprint[rule_id] = (
-            len(rule.get("conditions") or []),
-            len(rule.get("derivations") or []),
-        )
-    return fingerprint
 
 
 def node_boxes(graph: PortfolioOntology) -> List[str]:
@@ -1119,52 +1088,6 @@ def typedb_node_allowed_attributes(properties: Dict[str, object], kind: object =
     )
 
 
-def slim_typeql_node_schema(schema: str) -> str:
-    """Replace the universal capability fan-out with bounded-context roots."""
-    pattern = re.compile(
-        r"entity ontology-node @abstract,\s*(?P<body>.*?)"
-        r"\s*plays ontology-assertion:target;\s*\n\s*"
-        r"entity ontology-entity, sub ontology-node;\s*\n"
-        r"entity ontology-evidence, sub ontology-node;\s*\n"
-        r"entity ontology-belief, sub ontology-node;\s*\n"
-        r"entity ontology-opinion, sub ontology-node;\s*\n"
-        r"entity ontology-reasoning-card, sub ontology-node;",
-        re.DOTALL,
-    )
-    match = pattern.search(str(schema or ""))
-    if match is None:
-        raise ValueError("The TypeDB ontology-node schema block is unavailable.")
-    all_owned = set(re.findall(r"owns\s+(ontology-[a-z0-9-]+)", match.group("body")))
-    common = sorted(all_owned & TYPEDB_COMMON_NODE_ATTRIBUTES)
-    fallback_only = sorted(all_owned - TYPEDB_COMMON_NODE_ATTRIBUTES)
-
-    def ownership(attributes: Iterable[str], unique_storage: bool = False) -> str:
-        rows = []
-        for attribute in attributes:
-            annotation = " @unique" if unique_storage and attribute == "ontology-storage-id" else ""
-            rows.append("    owns " + attribute + annotation)
-        return ",\n".join(rows)
-
-    root = (
-        "entity ontology-node @abstract,\n"
-        + ownership(common, unique_storage=True)
-        + ",\n    plays ontology-assertion:source,\n"
-        + "    plays ontology-assertion:target;"
-    )
-    fallback_ownership = ownership(fallback_only)
-    fallbacks = []
-    for node_type in (
-        "ontology-entity",
-        "ontology-evidence",
-        "ontology-belief",
-        "ontology-opinion",
-        "ontology-reasoning-card",
-    ):
-        clause = "entity " + node_type + ", sub ontology-node"
-        if fallback_ownership:
-            clause += ",\n" + fallback_ownership
-        fallbacks.append(clause + ";")
-    return schema[:match.start()] + root + "\n" + "\n".join(fallbacks) + schema[match.end():]
 
 
 class ScopedABoxManifestMixin:
@@ -4247,114 +4170,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         boxes: Iterable[str],
         retain_cross_box_relations: bool = False,
     ) -> PortfolioOntology:
-        """Return a persistence-safe graph slice for the requested ontology boxes.
-
-        Static boxes are normally independent, except for a small number of
-        declaration edges such as ``TBox RuleBox -> RuleBox RuleRegistry``.
-        A targeted RuleBox refresh must retain those edges without re-inserting
-        the already durable TBox endpoint.  External endpoints are therefore
-        kept only as in-memory lookup rows and are excluded from node writes.
-        """
-        allowed = {str(item or "").strip() for item in boxes or [] if str(item or "").strip()}
-        if not allowed:
-            return PortfolioOntology(str(graph.portfolio_id or "typedb-empty"))
-        clone = copy.deepcopy(graph)
-        source_entities = list(clone.entities)
-        source_entity_ids = {str(item.entity_id or "") for item in source_entities if str(item.entity_id or "")}
-        selected_entities = [
-            item
-            for item in source_entities
-            if str((item.properties or {}).get("ontologyBox") or "ABox") in allowed
-        ]
-        selected_entity_ids = {str(item.entity_id or "") for item in selected_entities}
-        selected_relations = [
-            item
-            for item in clone.relations
-            if str((item.properties or {}).get("ontologyBox") or "ABox") in allowed
-            and str(item.source or "") in source_entity_ids
-            and str(item.target or "") in source_entity_ids
-            and (
-                retain_cross_box_relations
-                or (
-                    str(item.source or "") in selected_entity_ids
-                    and str(item.target or "") in selected_entity_ids
-                )
-            )
-        ]
-        if retain_cross_box_relations:
-            endpoint_ids = {
-                str(endpoint or "")
-                for relation in selected_relations
-                for endpoint in [relation.source, relation.target]
-                if str(endpoint or "")
-            }
-            external_endpoint_ids = endpoint_ids - selected_entity_ids
-            selected_entities.extend(
-                item
-                for item in source_entities
-                if str(item.entity_id or "") in external_endpoint_ids
-            )
-            for item in selected_entities:
-                if str(item.entity_id or "") in external_endpoint_ids:
-                    item.properties = dict(item.properties or {})
-                    item.properties["_typedbExternalEndpointRef"] = True
-        clone.entities = selected_entities
-        clone.relations = selected_relations
-        clone.evidence = [
-            item
-            for item in clone.evidence
-            if str((item.value or {}).get("ontologyBox") or "ABox") in allowed
-        ]
-        return clone
+        return _static_seed_graphs.graph_for_boxes(
+            self, graph, boxes, retain_cross_box_relations
+        )
 
     def graph_with_static_seed_generation(
-        self,
-        graph: PortfolioOntology,
-        boxes: Iterable[str],
-        generation_id,
+        self, graph: PortfolioOntology, boxes: Iterable[str], generation_id
     ) -> PortfolioOntology:
-        """Attach immutable static generation IDs to selected persisted boxes.
-
-        ``generation_id`` accepts either one shared value or a per-box map.
-        The latter is required for targeted static updates: a changed RuleBox
-        must still link to the active TBox generation without rewriting that
-        TBox.  Cross-box endpoint references receive their owning box's
-        storage identity but remain excluded from node writes.
-        """
-        selected_boxes = {str(item or "").strip() for item in boxes or [] if str(item or "").strip()}
-        if isinstance(generation_id, dict):
-            generation_by_box = {
-                str(box or "").strip(): str(value or "").strip()
-                for box, value in generation_id.items()
-                if str(box or "").strip() and str(value or "").strip()
-            }
-        else:
-            clean_generation = str(generation_id or "").strip()
-            generation_by_box = {
-                box: clean_generation
-                for box in selected_boxes
-                if clean_generation
-            }
-        if not generation_by_box or not selected_boxes:
-            return graph
-        clone = copy.deepcopy(graph)
-        for item in clone.entities:
-            properties = dict(item.properties or {})
-            box = str(properties.get("ontologyBox") or "ABox")
-            generation = generation_by_box.get(box)
-            if generation:
-                properties["snapshotId"] = generation
-                properties["staticSeedGeneration"] = generation
-                item.properties = properties
-        for item in clone.relations:
-            properties = dict(item.properties or {})
-            box = str(properties.get("ontologyBox") or "ABox")
-            generation = generation_by_box.get(box)
-            if generation:
-                properties["snapshotId"] = generation
-                properties["staticSeedGeneration"] = generation
-                item.properties = properties
-        return clone
+        return _static_seed_graphs.graph_with_static_seed_generation(
+            self, graph, boxes, generation_id
+        )
 
     def abox_candidate_graph(self, graph: PortfolioOntology) -> PortfolioOntology:
         """Return one immutable ABox generation ready for pointer activation.
@@ -4734,650 +4559,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             }
 
     def schema_query(self) -> str:
-        schema = """
-define
-attribute ontology-id, value string;
-attribute ontology-storage-id, value string;
-attribute ontology-content-fingerprint, value string;
-attribute ontology-label, value string;
-attribute ontology-kind, value string;
-attribute ontology-box, value string;
-attribute ontology-symbol, value string;
-attribute ontology-rule-id, value string;
-attribute ontology-account-id, value string;
-attribute ontology-tenant-id, value string;
-attribute ontology-world-id, value string;
-attribute ontology-world-type, value string;
-attribute ontology-snapshot-id, value string;
-attribute ontology-scope-id, value string;
-attribute ontology-scope-type, value string;
-attribute ontology-manifest-id, value string;
-attribute ontology-tbox-class, value string;
-attribute ontology-semantic-type, value string;
-attribute ontology-relation-type, value string;
-attribute ontology-updated-at, value string;
-attribute ontology-json, value string;
-attribute ontology-weight, value double;
-attribute ontology-source-value, value string;
-attribute ontology-field, value string;
-attribute ontology-level-type, value string;
-attribute ontology-data-scope, value string;
-attribute ontology-domain-scope, value string;
-attribute ontology-relation-scope, value string;
-attribute ontology-group, value string;
-attribute ontology-polarity, value string;
-attribute ontology-evidence-role, value string;
-attribute ontology-review-level, value string;
-attribute ontology-data-state, value string;
-attribute ontology-change-state, value string;
-attribute ontology-conflict-state, value string;
-attribute ontology-validation-state, value string;
-attribute ontology-transition-type, value string;
-attribute ontology-signal-group, value string;
-attribute ontology-event-type, value string;
-attribute ontology-materiality-passed, value string;
-attribute ontology-materiality-state, value string;
-attribute ontology-relevance-state, value string;
-attribute ontology-source-trust-state, value string;
-attribute ontology-value-number, value double;
-attribute ontology-profit-loss-rate, value double;
-attribute ontology-allow-add-on-strength, value string;
-attribute ontology-trim-on-trend-break, value string;
-attribute ontology-avoid-averaging-down, value string;
-attribute ontology-impact-polarity, value string;
-attribute ontology-needs-review, value string;
-attribute ontology-read-scope, value string;
-attribute ontology-pe-ratio, value double;
-attribute ontology-beta, value double;
-attribute ontology-delta, value double;
-attribute ontology-delta-pct, value double;
-attribute ontology-delta-bp, value double;
-attribute ontology-previous-value, value double;
-attribute ontology-delta-1d-bp, value double;
-attribute ontology-delta-5d-bp, value double;
-attribute ontology-delta-20d-bp, value double;
-attribute ontology-change-24h, value double;
-attribute ontology-change-7d, value double;
-attribute ontology-surprise-percentage, value double;
-attribute ontology-current-price, value double;
-attribute ontology-average-price, value double;
-attribute ontology-market-value, value double;
-attribute ontology-quantity, value double;
-attribute ontology-sellable-quantity, value double;
-attribute ontology-position-weight-pct, value double;
-attribute ontology-position-account-weight-pct, value double;
-attribute ontology-exposure-ratio, value double;
-attribute ontology-position-count, value double;
-attribute ontology-change-rate, value double;
-attribute ontology-price-change-rate, value double;
-attribute ontology-ma5, value double;
-attribute ontology-ma20, value double;
-attribute ontology-ma60, value double;
-attribute ontology-ma5-distance, value double;
-attribute ontology-ma20-distance, value double;
-attribute ontology-ma60-distance, value double;
-attribute ontology-ma20-slope, value double;
-attribute ontology-ma60-slope, value double;
-attribute ontology-trend-curve, value double;
-attribute ontology-volume, value double;
-attribute ontology-volume-ratio, value double;
-attribute ontology-raw-volume-ratio, value double;
-attribute ontology-time-adjusted-volume-ratio, value double;
-attribute ontology-expected-volume-ratio-now, value double;
-attribute ontology-trade-strength, value double;
-attribute ontology-trading-value, value double;
-attribute ontology-reported-trading-value, value double;
-attribute ontology-estimated-trading-value, value double;
-attribute ontology-trading-value-mismatch-pct, value double;
-attribute ontology-trading-value-quality, value string;
-attribute ontology-trading-value-basis, value string;
-attribute ontology-bid-ask-imbalance, value double;
-attribute ontology-foreign-net-volume, value double;
-attribute ontology-foreign-net-amount, value double;
-attribute ontology-institution-net-volume, value double;
-attribute ontology-institution-net-amount, value double;
-attribute ontology-individual-net-volume, value double;
-attribute ontology-individual-net-amount, value double;
-attribute ontology-smart-money-net-volume, value double;
-attribute ontology-adr-ratio, value double;
-attribute ontology-adr-price-usd, value double;
-attribute ontology-adr-volume, value double;
-attribute ontology-usd-krw-rate, value double;
-attribute ontology-local-price-krw, value double;
-attribute ontology-local-equivalent-krw, value double;
-attribute ontology-leverage-factor, value double;
-attribute ontology-price, value double;
-attribute ontology-fair-value, value double;
-attribute ontology-fair-value-price, value double;
-attribute ontology-fair-value-low, value double;
-attribute ontology-fair-value-base, value double;
-attribute ontology-fair-value-high, value double;
-attribute ontology-margin-of-safety-pct, value double;
-attribute ontology-conservative-margin-of-safety-pct, value double;
-attribute ontology-optimistic-margin-of-safety-pct, value double;
-attribute ontology-expensive-premium-pct, value double;
-attribute ontology-minimum-margin-of-safety-pct, value double;
-attribute ontology-valuation-decision-eligible, value double;
-attribute ontology-valuation-model-count, value double;
-attribute ontology-valuation-consensus-price, value double;
-attribute ontology-valuation-disagreement-pct, value double;
-attribute ontology-expected-eps, value double;
-attribute ontology-reported-eps, value double;
-attribute ontology-estimated-eps, value double;
-attribute ontology-target-per, value double;
-attribute ontology-forward-pe, value double;
-attribute ontology-peg-ratio, value double;
-attribute ontology-dividend-yield, value double;
-attribute ontology-peer-per, value double;
-attribute ontology-historical-median-per, value double;
-attribute ontology-lookback-days, value double;
-attribute ontology-required-sample-count, value double;
-attribute ontology-sample-count, value double;
-attribute ontology-coverage-ratio, value double;
-attribute ontology-elapsed-hours, value double;
-attribute ontology-start-price, value double;
-attribute ontology-price-change-pct, value double;
-attribute ontology-relative-return-pct, value double;
-attribute ontology-proxy-change-rate, value double;
-attribute ontology-peak-price, value double;
-attribute ontology-trough-price, value double;
-attribute ontology-peak-return-pct, value double;
-attribute ontology-trough-return-pct, value double;
-attribute ontology-drawdown-from-peak-pct, value double;
-attribute ontology-rebound-from-trough-pct, value double;
-attribute ontology-prior-price-change-pct, value double;
-attribute ontology-recent-price-change-pct, value double;
-attribute ontology-price-velocity-change-pct, value double;
-attribute ontology-consecutive-decline-count, value double;
-attribute ontology-consecutive-advance-count, value double;
-attribute ontology-direction-change-count, value double;
-attribute ontology-valid-observation-count, value double;
-attribute ontology-invalid-observation-count, value double;
-attribute ontology-stale-observation-count, value double;
-attribute ontology-valid-observation-ratio, value double;
-attribute ontology-profit-loss-rate-start, value double;
-attribute ontology-profit-loss-rate-end, value double;
-attribute ontology-profit-loss-rate-change-pct, value double;
-attribute ontology-ma20-distance-start, value double;
-attribute ontology-ma20-distance-end, value double;
-attribute ontology-ma20-distance-change, value double;
-attribute ontology-ma20-distance-peak, value double;
-attribute ontology-ma20-distance-trough, value double;
-attribute ontology-ma20-reclaim-count, value double;
-attribute ontology-ma20-break-count, value double;
-attribute ontology-ma20-observation-count, value double;
-attribute ontology-ma60-distance-start, value double;
-attribute ontology-ma60-distance-end, value double;
-attribute ontology-volume-ratio-end, value double;
-attribute ontology-trade-strength-end, value double;
-attribute ontology-bid-ask-imbalance-end, value double;
-attribute ontology-smart-money-net-latest, value double;
-attribute ontology-smart-money-net-change, value double;
-attribute ontology-smart-money-net-cumulative, value double;
-attribute ontology-smart-money-net-amount-cumulative, value double;
-attribute ontology-smart-money-trading-value-ratio-pct, value double;
-attribute ontology-smart-money-positive-session-ratio, value double;
-attribute ontology-smart-money-negative-session-ratio, value double;
-attribute ontology-smart-money-flow-persistence-ratio, value double;
-attribute ontology-smart-money-flow-acceleration, value double;
-attribute ontology-smart-money-observation-count, value double;
-attribute ontology-smart-money-distinct-observation-count, value double;
-attribute ontology-smart-money-distinct-session-count, value double;
-attribute ontology-individual-net-latest, value double;
-attribute ontology-event-count, value double;
-attribute ontology-risk-event-count, value double;
-attribute ontology-support-event-count, value double;
-attribute ontology-investment-strategy-profile, value string;
-attribute ontology-investment-strategy-profile-label, value string;
-attribute ontology-position-role, value string;
-attribute ontology-target-position-role, value string;
-attribute ontology-position-intent, value string;
-attribute ontology-position-intent-label, value string;
-attribute ontology-position-intent-description, value string;
-attribute ontology-instrument-archetype, value string;
-attribute ontology-instrument-archetype-label, value string;
-attribute ontology-factor, value string;
-attribute ontology-sensitivity-level, value string;
-attribute ontology-rate-series-id, value string;
-attribute ontology-observation-date, value string;
-attribute ontology-previous-observation-date, value string;
-attribute ontology-source-as-of, value string;
-attribute ontology-change-basis, value string;
-attribute ontology-crypto-symbol, value string;
-attribute ontology-fx-pair, value string;
-attribute ontology-action-policy, value string;
-attribute ontology-security-line-role, value string;
-attribute ontology-local-symbol, value string;
-attribute ontology-company-name, value string;
-attribute ontology-market, value string;
-attribute ontology-currency, value string;
-attribute ontology-exchange, value string;
-attribute ontology-adr-symbol, value string;
-attribute ontology-etf-symbol, value string;
-attribute ontology-underlying-symbol, value string;
-attribute ontology-conversion-start-date, value string;
-attribute ontology-listing-date, value string;
-attribute ontology-source-url, value string;
-attribute ontology-valuation-method, value string;
-attribute ontology-formula, value string;
-attribute ontology-eps-period, value string;
-attribute ontology-multiple-period, value string;
-attribute ontology-valuation-as-of, value string;
-attribute ontology-valuation-freshness-status, value string;
-attribute ontology-valuation-data-state-label, value string;
-attribute ontology-valuation-source-type, value string;
-attribute ontology-valuation-currency, value string;
-attribute ontology-valuation-consensus-status, value string;
-attribute ontology-per-valuation-status, value string;
-attribute ontology-per-valuation-reason, value string;
-attribute ontology-preferred-valuation-metric, value string;
-attribute ontology-fundamental-data-source-priority, value string;
-attribute ontology-window-key, value string;
-attribute ontology-has-sufficient-history, value string;
-attribute ontology-latest-observation-quality, value string;
-attribute ontology-sequence-role, value string;
-attribute ontology-observation-quality, value string;
-attribute ontology-observed-at, value string;
-attribute ontology-provider, value string;
-attribute ontology-price-path-pattern, value string;
-attribute ontology-flow-pattern, value string;
-attribute ontology-event-cluster-type, value string;
-attribute ontology-trend-episode-type, value string;
-attribute ontology-language-registry-version, value string;
-attribute ontology-language-term-id, value string;
-attribute ontology-language-term-category, value string;
-attribute ontology-language-term-status, value string;
-attribute ontology-language-term-version, value string;
-attribute ontology-language-preferred-label, value string;
-attribute ontology-language-delivery-level, value string;
-attribute ontology-language-delivery-level-label, value string;
-attribute ontology-language-rendered-label, value string;
-attribute ontology-smart-money-direction, value string;
-attribute ontology-smart-money-flow-direction, value string;
-attribute ontology-smart-money-flow-basis, value string;
-attribute ontology-investor-flow-psychology, value string;
-attribute ontology-investor-flow-evidence-role, value string;
-attribute ontology-investor-flow-data-state, value string;
-attribute ontology-investor-flow-review-level, value string;
-attribute ontology-investor-flow-measurement-type, value string;
-attribute ontology-investor-flow-is-estimate, value string;
-attribute ontology-investor-flow-source-as-of, value string;
-attribute ontology-investor-flow-provider-update-slot, value string;
-attribute ontology-investor-flow-freshness-status, value string;
-attribute ontology-trend-risk-state, value string;
-attribute ontology-trend-review-level, value string;
-attribute ontology-trend-evidence-role, value string;
-attribute ontology-trend-data-state, value string;
-attribute ontology-liquidity-state, value string;
-attribute ontology-liquidity-review-level, value string;
-attribute ontology-liquidity-data-state, value string;
-attribute ontology-source-data-state, value string;
-attribute ontology-external-signal-data-state, value string;
-attribute ontology-valuation-data-state, value string;
-attribute ontology-valuation-input-state, value string;
-attribute ontology-valuation-reliability-state, value string;
-
-entity ontology-node @abstract,
-    owns ontology-id,
-    owns ontology-storage-id @unique,
-    owns ontology-content-fingerprint,
-    owns ontology-label,
-    owns ontology-kind,
-    owns ontology-box,
-    owns ontology-symbol,
-    owns ontology-rule-id,
-    owns ontology-account-id,
-    owns ontology-tenant-id,
-    owns ontology-world-id,
-    owns ontology-world-type,
-    owns ontology-snapshot-id,
-    owns ontology-scope-id,
-    owns ontology-scope-type,
-    owns ontology-manifest-id,
-    owns ontology-tbox-class,
-    owns ontology-semantic-type,
-    owns ontology-updated-at,
-    owns ontology-json,
-    owns ontology-source-value,
-    owns ontology-field,
-    owns ontology-level-type,
-    owns ontology-data-scope,
-    owns ontology-domain-scope,
-    owns ontology-relation-type,
-    owns ontology-relation-scope,
-    owns ontology-group,
-    owns ontology-polarity,
-    owns ontology-evidence-role,
-    owns ontology-review-level,
-    owns ontology-data-state,
-    owns ontology-change-state,
-    owns ontology-conflict-state,
-    owns ontology-validation-state,
-    owns ontology-event-type,
-    owns ontology-materiality-passed,
-    owns ontology-materiality-state,
-    owns ontology-relevance-state,
-    owns ontology-source-trust-state,
-    owns ontology-value-number,
-    owns ontology-profit-loss-rate,
-    owns ontology-allow-add-on-strength,
-    owns ontology-trim-on-trend-break,
-    owns ontology-avoid-averaging-down,
-    owns ontology-impact-polarity,
-    owns ontology-needs-review,
-    owns ontology-read-scope,
-    owns ontology-pe-ratio,
-    owns ontology-beta,
-    owns ontology-delta,
-    owns ontology-delta-pct,
-    owns ontology-delta-bp,
-    owns ontology-previous-value,
-    owns ontology-delta-1d-bp,
-    owns ontology-delta-5d-bp,
-    owns ontology-delta-20d-bp,
-    owns ontology-change-24h,
-    owns ontology-change-7d,
-    owns ontology-surprise-percentage,
-    owns ontology-current-price,
-    owns ontology-average-price,
-    owns ontology-market-value,
-    owns ontology-quantity,
-    owns ontology-sellable-quantity,
-    owns ontology-position-weight-pct,
-    owns ontology-position-account-weight-pct,
-    owns ontology-exposure-ratio,
-    owns ontology-position-count,
-    owns ontology-change-rate,
-    owns ontology-price-change-rate,
-    owns ontology-ma5,
-    owns ontology-ma20,
-    owns ontology-ma60,
-    owns ontology-ma5-distance,
-    owns ontology-ma20-distance,
-    owns ontology-ma60-distance,
-    owns ontology-ma20-slope,
-    owns ontology-ma60-slope,
-    owns ontology-trend-curve,
-    owns ontology-volume,
-    owns ontology-volume-ratio,
-    owns ontology-raw-volume-ratio,
-    owns ontology-time-adjusted-volume-ratio,
-    owns ontology-expected-volume-ratio-now,
-    owns ontology-trade-strength,
-    owns ontology-trading-value,
-    owns ontology-reported-trading-value,
-    owns ontology-estimated-trading-value,
-    owns ontology-trading-value-mismatch-pct,
-    owns ontology-trading-value-quality,
-    owns ontology-trading-value-basis,
-    owns ontology-bid-ask-imbalance,
-    owns ontology-foreign-net-volume,
-    owns ontology-foreign-net-amount,
-    owns ontology-institution-net-volume,
-    owns ontology-institution-net-amount,
-    owns ontology-individual-net-volume,
-    owns ontology-individual-net-amount,
-    owns ontology-smart-money-net-volume,
-    owns ontology-adr-ratio,
-    owns ontology-adr-price-usd,
-    owns ontology-adr-volume,
-    owns ontology-usd-krw-rate,
-    owns ontology-local-price-krw,
-    owns ontology-local-equivalent-krw,
-    owns ontology-leverage-factor,
-    owns ontology-price,
-    owns ontology-fair-value,
-    owns ontology-fair-value-price,
-    owns ontology-fair-value-low,
-    owns ontology-fair-value-base,
-    owns ontology-fair-value-high,
-    owns ontology-margin-of-safety-pct,
-    owns ontology-conservative-margin-of-safety-pct,
-    owns ontology-optimistic-margin-of-safety-pct,
-    owns ontology-expensive-premium-pct,
-    owns ontology-minimum-margin-of-safety-pct,
-    owns ontology-valuation-decision-eligible,
-    owns ontology-valuation-model-count,
-    owns ontology-valuation-consensus-price,
-    owns ontology-valuation-disagreement-pct,
-    owns ontology-expected-eps,
-    owns ontology-reported-eps,
-    owns ontology-estimated-eps,
-    owns ontology-target-per,
-    owns ontology-forward-pe,
-    owns ontology-peg-ratio,
-    owns ontology-dividend-yield,
-    owns ontology-peer-per,
-    owns ontology-historical-median-per,
-    owns ontology-lookback-days,
-    owns ontology-required-sample-count,
-    owns ontology-sample-count,
-    owns ontology-coverage-ratio,
-    owns ontology-elapsed-hours,
-    owns ontology-start-price,
-    owns ontology-price-change-pct,
-    owns ontology-relative-return-pct,
-    owns ontology-proxy-change-rate,
-    owns ontology-peak-price,
-    owns ontology-trough-price,
-    owns ontology-peak-return-pct,
-    owns ontology-trough-return-pct,
-    owns ontology-drawdown-from-peak-pct,
-    owns ontology-rebound-from-trough-pct,
-    owns ontology-prior-price-change-pct,
-    owns ontology-recent-price-change-pct,
-    owns ontology-price-velocity-change-pct,
-    owns ontology-consecutive-decline-count,
-    owns ontology-consecutive-advance-count,
-    owns ontology-direction-change-count,
-    owns ontology-valid-observation-count,
-    owns ontology-invalid-observation-count,
-    owns ontology-stale-observation-count,
-    owns ontology-valid-observation-ratio,
-    owns ontology-profit-loss-rate-start,
-    owns ontology-profit-loss-rate-end,
-    owns ontology-profit-loss-rate-change-pct,
-    owns ontology-ma20-distance-start,
-    owns ontology-ma20-distance-end,
-    owns ontology-ma20-distance-change,
-    owns ontology-ma20-distance-peak,
-    owns ontology-ma20-distance-trough,
-    owns ontology-ma20-reclaim-count,
-    owns ontology-ma20-break-count,
-    owns ontology-ma20-observation-count,
-    owns ontology-ma60-distance-start,
-    owns ontology-ma60-distance-end,
-    owns ontology-volume-ratio-end,
-    owns ontology-trade-strength-end,
-    owns ontology-bid-ask-imbalance-end,
-    owns ontology-smart-money-net-latest,
-    owns ontology-smart-money-net-change,
-    owns ontology-smart-money-net-cumulative,
-    owns ontology-smart-money-net-amount-cumulative,
-    owns ontology-smart-money-trading-value-ratio-pct,
-    owns ontology-smart-money-positive-session-ratio,
-    owns ontology-smart-money-negative-session-ratio,
-    owns ontology-smart-money-flow-persistence-ratio,
-    owns ontology-smart-money-flow-acceleration,
-    owns ontology-smart-money-observation-count,
-    owns ontology-smart-money-distinct-observation-count,
-    owns ontology-smart-money-distinct-session-count,
-    owns ontology-individual-net-latest,
-    owns ontology-event-count,
-    owns ontology-risk-event-count,
-    owns ontology-support-event-count,
-    owns ontology-investment-strategy-profile,
-    owns ontology-investment-strategy-profile-label,
-    owns ontology-position-role,
-    owns ontology-target-position-role,
-    owns ontology-position-intent,
-    owns ontology-position-intent-label,
-    owns ontology-position-intent-description,
-    owns ontology-instrument-archetype,
-    owns ontology-instrument-archetype-label,
-    owns ontology-factor,
-    owns ontology-sensitivity-level,
-    owns ontology-rate-series-id,
-    owns ontology-observation-date,
-    owns ontology-previous-observation-date,
-    owns ontology-source-as-of,
-    owns ontology-change-basis,
-    owns ontology-crypto-symbol,
-    owns ontology-fx-pair,
-    owns ontology-action-policy,
-    owns ontology-security-line-role,
-    owns ontology-local-symbol,
-    owns ontology-company-name,
-    owns ontology-market,
-    owns ontology-currency,
-    owns ontology-exchange,
-    owns ontology-adr-symbol,
-    owns ontology-etf-symbol,
-    owns ontology-underlying-symbol,
-    owns ontology-conversion-start-date,
-    owns ontology-listing-date,
-    owns ontology-source-url,
-    owns ontology-valuation-method,
-    owns ontology-formula,
-    owns ontology-eps-period,
-    owns ontology-multiple-period,
-    owns ontology-valuation-as-of,
-    owns ontology-valuation-freshness-status,
-    owns ontology-valuation-data-state-label,
-    owns ontology-valuation-source-type,
-    owns ontology-valuation-currency,
-    owns ontology-valuation-consensus-status,
-    owns ontology-per-valuation-status,
-    owns ontology-per-valuation-reason,
-    owns ontology-preferred-valuation-metric,
-    owns ontology-fundamental-data-source-priority,
-    owns ontology-window-key,
-    owns ontology-has-sufficient-history,
-    owns ontology-latest-observation-quality,
-    owns ontology-sequence-role,
-    owns ontology-observation-quality,
-    owns ontology-observed-at,
-    owns ontology-provider,
-    owns ontology-price-path-pattern,
-    owns ontology-flow-pattern,
-    owns ontology-event-cluster-type,
-    owns ontology-trend-episode-type,
-    owns ontology-language-registry-version,
-    owns ontology-language-term-id,
-    owns ontology-language-term-category,
-    owns ontology-language-term-status,
-    owns ontology-language-term-version,
-    owns ontology-language-preferred-label,
-    owns ontology-language-delivery-level,
-    owns ontology-language-delivery-level-label,
-    owns ontology-language-rendered-label,
-    owns ontology-smart-money-direction,
-    owns ontology-smart-money-flow-direction,
-    owns ontology-smart-money-flow-basis,
-    owns ontology-investor-flow-psychology,
-    owns ontology-investor-flow-evidence-role,
-    owns ontology-investor-flow-data-state,
-    owns ontology-investor-flow-review-level,
-    owns ontology-investor-flow-measurement-type,
-    owns ontology-investor-flow-is-estimate,
-    owns ontology-investor-flow-source-as-of,
-    owns ontology-investor-flow-provider-update-slot,
-    owns ontology-investor-flow-freshness-status,
-    owns ontology-trend-risk-state,
-    owns ontology-trend-review-level,
-    owns ontology-trend-evidence-role,
-    owns ontology-trend-data-state,
-    owns ontology-liquidity-state,
-    owns ontology-liquidity-review-level,
-    owns ontology-liquidity-data-state,
-    owns ontology-source-data-state,
-    owns ontology-external-signal-data-state,
-    owns ontology-valuation-data-state,
-    owns ontology-valuation-input-state,
-    owns ontology-valuation-reliability-state,
-    plays ontology-assertion:source,
-    plays ontology-assertion:target;
-
-entity ontology-entity, sub ontology-node;
-entity ontology-evidence, sub ontology-node;
-entity ontology-belief, sub ontology-node;
-entity ontology-opinion, sub ontology-node;
-entity ontology-reasoning-card, sub ontology-node;
-
-relation ontology-assertion,
-    relates source,
-    relates target,
-    owns ontology-id,
-    owns ontology-storage-id @unique,
-    owns ontology-content-fingerprint,
-    owns ontology-relation-type,
-    owns ontology-box,
-    owns ontology-symbol,
-    owns ontology-rule-id,
-    owns ontology-account-id,
-    owns ontology-tenant-id,
-    owns ontology-world-id,
-    owns ontology-world-type,
-    owns ontology-snapshot-id,
-    owns ontology-scope-id,
-    owns ontology-scope-type,
-    owns ontology-manifest-id,
-    owns ontology-tbox-class,
-    owns ontology-semantic-type,
-    owns ontology-updated-at,
-    owns ontology-json,
-    owns ontology-weight,
-    owns ontology-field,
-    owns ontology-polarity,
-    owns ontology-evidence-role,
-    owns ontology-review-level,
-    owns ontology-data-state,
-    owns ontology-change-state,
-    owns ontology-conflict-state,
-    owns ontology-validation-state,
-    owns ontology-transition-type,
-    owns ontology-signal-group,
-    owns ontology-materiality-passed,
-    owns ontology-materiality-state,
-    owns ontology-relevance-state,
-    owns ontology-source-trust-state,
-    owns ontology-delta,
-    owns ontology-delta-pct,
-    owns ontology-exposure-ratio,
-    owns ontology-position-count;
-""".strip()
-        promoted_types = {
-            **{attribute: "double" for attribute in TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values()},
-            **{attribute: "string" for attribute in TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values()},
-        }
-        missing_promoted_types = {
-            attribute: value_type
-            for attribute, value_type in promoted_types.items()
-            if "attribute " + attribute + ", value " not in schema
-        }
-        if missing_promoted_types:
-            declarations = "\n".join(
-                "attribute " + attribute + ", value " + value_type + ";"
-                for attribute, value_type in sorted(missing_promoted_types.items())
-            )
-            ownership = "\n".join(
-                "    owns " + attribute + ","
-                for attribute in sorted(missing_promoted_types)
-            )
-            schema = schema.replace("define\n", "define\n" + declarations + "\n", 1)
-            schema = schema.replace(
-                "    plays ontology-assertion:source,",
-                ownership + "\n    plays ontology-assertion:source,",
-                1,
-            )
-        schema = slim_typeql_node_schema(schema)
-        capability_contract = typedb_rule_schema_capability_contract()
-        semantic_schema = semantic_typeql_schema(
-            context_attribute_ownership=capability_contract.get("contextAttributes") or {},
-            physical_class_names=capability_contract.get("physicalClassNames") or [],
-            physical_relation_names=capability_contract.get("physicalRelationNames") or [],
-        )
-        return schema + "\n\n" + semantic_schema.replace("define\n", "", 1).strip()
+        return _static_seed_schema.schema_query(self)
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:
         queries = []
@@ -6200,23 +5382,10 @@ relation ontology-assertion,
 
     @staticmethod
     def seed_static_manifest_entity_id() -> str:
-        return "ontology-seed-manifest:typedb-static-v1"
+        return _static_seed_identity.seed_static_manifest_entity_id()
 
     def base_schema_contract_metadata(self) -> Dict[str, str]:
-        """Return the immutable TypeDB schema contract required by this build.
-
-        A current static graph does not prove that every promoted TypeQL
-        attribute required by the active RuleBox exists. Keep a compact,
-        content-addressed schema contract beside the static manifest so a
-        costly schema inspection happens only after the actual definition
-        changes.
-        """
-        schema = self.schema_query()
-        return {
-            "schemaContractVersion": "typedb-base-schema-contract-v2:" + SEMANTIC_STORAGE_CONTRACT_VERSION,
-            "schemaContractFingerprint": "typedb-base-schema:"
-            + hashlib.sha256(schema.encode("utf-8")).hexdigest()[:24],
-        }
+        return _static_seed_schema.base_schema_contract_metadata(self)
 
     def seed_static_manifest_metadata(
         self,
@@ -6224,88 +5393,13 @@ relation ontology-assertion,
         rules_payload: List[Dict[str, object]],
         tbox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        """Return the durable identity of the immutable ontology seed.
-
-        The manifest deliberately excludes mutable ABox/InferenceBox data. It
-        lets startup compare a small, keyed record instead of reducing every
-        row in a multi-gigabyte TypeDB graph merely to prove static boxes have
-        not changed.
-        """
-        expected_entities = graph_box_entity_counts(graph)
-        expected_relations = graph_box_relation_counts(graph)
-        expected_boxes = self.seed_static_box_names()
-        counts = {
-            box: {
-                "entityCount": int(expected_entities.get(box, 0)),
-                "relationCount": int(expected_relations.get(box, 0)),
-            }
-            for box in expected_boxes
-        }
-        expected_rulebox = rulebox_runtime_metadata(rules_payload)
-        expected_tbox = normalize_tbox_metadata(
-            dict(tbox_metadata or default_tbox_metadata())
+        return _static_seed_identity.seed_static_manifest_metadata(
+            self, graph, rules_payload, tbox_metadata
         )
-        language_registry = next(
-            (
-                item
-                for item in graph.entities
-                if str(item.kind or "") == "language-registry-version"
-            ),
-            None,
-        )
-        metadata = {
-            "manifestVersion": "typedb-static-seed-manifest-v1",
-            "engineVersion": GRAPH_REASONER_VERSION,
-            "tboxVersion": str(expected_tbox.get("version") or ""),
-            "tboxFingerprint": str(expected_tbox.get("fingerprint") or ""),
-            "ruleboxRulesHash": str(expected_rulebox.get("ruleboxRulesHash") or ""),
-            "ruleboxRuleCount": int(expected_rulebox.get("ruleboxRuleCount") or 0),
-            "ruleboxConditionCount": int(expected_rulebox.get("ruleboxConditionCount") or 0),
-            "ruleboxDerivationCount": int(expected_rulebox.get("ruleboxDerivationCount") or 0),
-            "languageRegistryVersion": str(
-                (language_registry.properties if language_registry else {}).get("registryVersion") or ""
-            ),
-            "boxCounts": counts,
-        }
-        canonical = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        fingerprint = "typedb-static-seed:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
-        tbox_fingerprint = str(expected_tbox.get("fingerprint") or "")
-        rulebox_fingerprint = hashlib.sha256(
-            (tbox_fingerprint + ":" + str(expected_rulebox.get("ruleboxRulesHash") or "")).encode("utf-8")
-        ).hexdigest()[:24]
-        language_fingerprint = hashlib.sha256(
-            (tbox_fingerprint + ":" + str(metadata.get("languageRegistryVersion") or "")).encode("utf-8")
-        ).hexdigest()[:24]
-        schema_contract = self.base_schema_contract_metadata()
-        return {
-            **metadata,
-            "staticSeedFingerprint": fingerprint,
-            # Keep storage-schema evolution independent from the immutable
-            # TBox/RuleBox graph fingerprint. A new promoted attribute should
-            # trigger one schema sync, not a static graph rewrite.
-            **schema_contract,
-            # Every immutable static box has its own stable physical
-            # generation.  RuleBox-only updates can therefore keep linking to
-            # the active TBox endpoint, while a TBox change advances all
-            # dependent static generations together.
-            "tboxSnapshotId": "static-tbox:" + tbox_fingerprint,
-            "ruleboxSnapshotId": "static-rulebox:" + rulebox_fingerprint,
-            "languageSnapshotId": "static-language:" + language_fingerprint,
-        }
 
     @staticmethod
     def static_seed_generation_ids(metadata: Dict[str, object] = None) -> Dict[str, str]:
-        """Resolve active immutable static generations from one manifest."""
-        values = dict(metadata or {})
-        mappings = {
-            "TBox": str(values.get("tboxSnapshotId") or "").strip(),
-            "RuleBox": str(values.get("ruleboxSnapshotId") or "").strip(),
-            "LanguageGovernance": str(values.get("languageSnapshotId") or "").strip(),
-        }
-        # Manifests written during the first RuleBox-only rollout carried only
-        # the RuleBox ID.  Preserve their read behavior until the next full
-        # static seed publishes the richer generation map.
-        return {box: generation for box, generation in mappings.items() if generation}
+        return _static_seed_identity.static_seed_generation_ids(metadata)
 
     def seed_static_manifest_graph(
         self,
@@ -6313,154 +5407,30 @@ relation ontology-assertion,
         rules_payload: List[Dict[str, object]],
         tbox_metadata: Dict[str, object] = None,
     ) -> PortfolioOntology:
-        metadata = self.seed_static_manifest_metadata(
-            graph,
-            rules_payload,
-            tbox_metadata=tbox_metadata,
-        )
-        return PortfolioOntology(
-            "typedb-static-seed-manifest",
-            entities=[OntologyEntity(
-                self.seed_static_manifest_entity_id(),
-                "TypeDB static ontology seed manifest",
-                "ontology-seed-manifest",
-                {
-                    "ontologyBox": "TBox",
-                    "tboxClass": "OntologySeedManifest",
-                    **metadata,
-                },
-            )],
+        return _static_seed_graphs.seed_static_manifest_graph(
+            self, graph, rules_payload, tbox_metadata
         )
 
     def seed_static_manifest_storage_id(self) -> str:
-        return ontology_storage_id(
-            {"ontologyBox": "TBox"},
-            self.seed_static_manifest_entity_id(),
-            "node",
-        )
+        return _static_seed_identity.seed_static_manifest_storage_id(self)
 
     def read_seed_static_manifest(self) -> Dict[str, object]:
-        """Read the static seed manifest through its unique storage identity."""
-        query = (
-            "match $n isa ontology-node, has ontology-storage-id "
-            + typedb_string(self.seed_static_manifest_storage_id())
-            + ", has ontology-json $json; limit 1;"
-        )
-        try:
-            rows = self.read_rows(query, ["json"], label="typedb.static-seed-manifest")
-        except Exception as error:  # noqa: BLE001 - caller treats an unreadable manifest as stale.
-            return {
-                "status": "error",
-                "reason": str(error)[:180],
-                "metadata": {},
-            }
-        metadata = json_object((rows[0] if rows else {}).get("json"))
-        if not metadata:
-            return {"status": "missing", "metadata": {}}
-        if str(metadata.get("manifestVersion") or "") != "typedb-static-seed-manifest-v1":
-            return {"status": "invalid", "metadata": metadata}
-        return {"status": "ok", "metadata": metadata}
+        return _static_seed_reads.read_seed_static_manifest(self)
 
     def seed_static_sentinels(
-        self,
-        graph: PortfolioOntology,
-        generation_ids=None,
+        self, graph: PortfolioOntology, generation_ids=None
     ) -> List[Dict[str, str]]:
-        """Return stable static records that must exist beside a valid manifest."""
-        if isinstance(generation_ids, dict):
-            resolved_generation_ids = self.static_seed_generation_ids(generation_ids)
-            if not resolved_generation_ids:
-                resolved_generation_ids = {
-                    str(box or "").strip(): str(value or "").strip()
-                    for box, value in generation_ids.items()
-                    if str(box or "").strip() and str(value or "").strip()
-                }
-        else:
-            rulebox_snapshot_id = str(generation_ids or "").strip()
-            resolved_generation_ids = {"RuleBox": rulebox_snapshot_id} if rulebox_snapshot_id else {}
-        static_graph = self.graph_with_static_seed_generation(
-            graph,
-            self.seed_static_box_names(),
-            resolved_generation_ids,
-        )
-        node_rows, relation_rows = self.graph_persistence_rows(static_graph)
-        candidates: List[Tuple[str, Dict[str, object]]] = []
-        for row in node_rows:
-            node_id = str(row.get("id") or "")
-            if node_id == "ontology-box:TBox":
-                candidates.append(("tbox", row))
-            elif str(row.get("kind") or "") == "rule-registry":
-                candidates.append(("rulebox", row))
-            elif str(row.get("kind") or "") == "language-registry-version":
-                candidates.append(("language", row))
-        for row in relation_rows:
-            if (
-                str(row.get("type") or "") == "DEFINES_RULE"
-                and str(row.get("source") or "") == "ontology-box:RuleBox"
-            ):
-                candidates.append(("rulebox-declaration", row))
-                break
-        sentinels = []
-        seen = set()
-        for name, row in candidates:
-            if name in seen:
-                continue
-            seen.add(name)
-            owner_kind = "relation" if "source" in row and "target" in row else "node"
-            canonical_id = relation_row_id(row) if owner_kind == "relation" else row.get("id")
-            sentinels.append({
-                "name": name,
-                "type": "ontology-assertion" if owner_kind == "relation" else "ontology-node",
-                "storageId": ontology_storage_id(row, canonical_id, owner_kind),
-            })
-        return sentinels
+        return _static_seed_graphs.seed_static_sentinels(self, graph, generation_ids)
 
     def seed_static_sentinels_present(
-        self,
-        graph: PortfolioOntology,
-        generation_ids=None,
+        self, graph: PortfolioOntology, generation_ids=None
     ) -> Dict[str, object]:
-        missing = []
-        try:
-            for sentinel in self.seed_static_sentinels(graph, generation_ids):
-                rows = self.read_rows(
-                    "match $item isa " + sentinel["type"]
-                    + ", has ontology-storage-id " + typedb_string(sentinel["storageId"])
-                    + "; limit 1;",
-                    [],
-                    label="typedb.static-seed-sentinel",
-                )
-                if not rows:
-                    missing.append(sentinel["name"])
-        except Exception as error:  # noqa: BLE001 - a probe failure is not a valid static seed.
-            return {"status": "error", "missing": missing, "reason": str(error)[:180]}
-        return {
-            "status": "ok" if not missing else "missing",
-            "missing": missing,
-        }
+        return _static_seed_reads.seed_static_sentinels_present(self, graph, generation_ids)
 
     def seed_static_node_properties(
-        self,
-        graph: PortfolioOntology,
-        entity_id_value: str,
+        self, graph: PortfolioOntology, entity_id_value: str
     ) -> Dict[str, object]:
-        node_row = next(
-            (
-                row
-                for row in self.node_rows(graph)
-                if str(row.get("id") or "") == str(entity_id_value or "")
-            ),
-            None,
-        )
-        if not isinstance(node_row, dict):
-            return {}
-        query = (
-            "match $n isa ontology-node, has ontology-storage-id "
-            + typedb_string(ontology_storage_id(node_row, node_row.get("id"), "node"))
-            + ", has ontology-json $json; limit 1;"
-        )
-        rows = self.read_rows(query, ["json"], label="typedb.static-seed-node")
-        return json_object((rows[0] if rows else {}).get("json"))
+        return _static_seed_reads.seed_static_node_properties(self, graph, entity_id_value)
 
     def legacy_static_seed_preflight(
         self,
@@ -6468,377 +5438,46 @@ relation ontology-assertion,
         rules_payload: List[Dict[str, object]],
         expected: Dict[str, object],
     ) -> Dict[str, object]:
-        """Upgrade a legacy seed without an ABox-wide or RuleBox-wide scan.
-
-        There is no historical keyed RuleBox fingerprint to trust.  Instead of
-        reading every old rule component, verify the TBox and language anchors
-        through their unique storage identities and deterministically replace
-        the RuleBox.  The replacement produces the first trustworthy manifest.
-        """
-        expected_counts = dict(expected.get("boxCounts") or {})
-        try:
-            tbox_properties = self.seed_static_node_properties(graph, "ontology-box:TBox")
-            expected_tbox = default_tbox_metadata()
-            tbox_matches = (
-                str(tbox_properties.get("tboxFingerprint") or tbox_properties.get("fingerprint") or "")
-                == str(expected_tbox.get("fingerprint") or "")
-                and str(tbox_properties.get("tboxVersion") or tbox_properties.get("version") or "")
-                == str(expected_tbox.get("version") or "")
-            )
-            language_entity = next(
-                (
-                    item
-                    for item in graph.entities
-                    if str(item.kind or "") == "language-registry-version"
-                ),
-                None,
-            )
-            language_properties = self.seed_static_node_properties(
-                graph,
-                str(language_entity.entity_id if language_entity else ""),
-            ) if language_entity else {}
-            language_registry_matches = (
-                language_entity is None
-                or str(language_properties.get("registryVersion") or "")
-                == str(expected.get("languageRegistryVersion") or "")
-            )
-        except Exception as error:  # noqa: BLE001 - a legacy seed cannot be trusted after a failed probe.
-            return {
-                "ready": False,
-                "status": "legacy-probe-error",
-                "reason": str(error)[:180],
-                "preflightMode": "legacy-static-seed-probe",
-                "expectedBoxCounts": expected_counts,
-                "actualBoxCounts": {},
-                "tboxMatches": False,
-                "ruleboxMatches": False,
-                "languageRegistryMatches": False,
-                "schemaContractMatches": False,
-            }
-        return {
-            "ready": False,
-            "status": "legacy-manifest-bootstrap-repair",
-            "preflightMode": "legacy-static-seed-anchor",
-            "expectedBoxCounts": expected_counts,
-            "actualBoxCounts": {
-                box: dict(expected_counts.get(box) or {})
-                for box in self.seed_static_box_names()
-                if (
-                    (box == "TBox" and tbox_matches)
-                    or (box == "LanguageGovernance" and language_registry_matches)
-                )
-            },
-            "tboxMatches": tbox_matches,
-            "ruleboxMatches": False,
-            "languageRegistryMatches": language_registry_matches,
-            "schemaContractMatches": False,
-            "staticSeedManifest": {
-                "status": "missing",
-                "expectedFingerprint": expected.get("staticSeedFingerprint"),
-                "bootstrapAction": "replace-rulebox",
-            },
-        }
+        return _static_seed_preflight.legacy_static_seed_preflight(
+            self, graph, rules_payload, expected
+        )
 
     def seed_graph_preflight(
-        self,
-        graph: PortfolioOntology,
-        rules_payload: List[Dict[str, object]],
+        self, graph: PortfolioOntology, rules_payload: List[Dict[str, object]]
     ) -> Dict[str, object]:
-        """Check immutable boxes without scanning the live ABox.
-
-        TypeDB count reductions filtered by ``ontology-box`` can still plan
-        over every persisted assertion. A keyed static manifest plus exact
-        sentinel probes gives the startup path a bounded, fail-closed check.
-        Legacy stores without a manifest validate their keyed TBox/language
-        anchors, replace RuleBox deterministically, and receive the manifest
-        only after that bounded repair completes.
-        """
-        expected = self.seed_static_manifest_metadata(graph, rules_payload)
-        expected_counts = dict(expected.get("boxCounts") or {})
-        manifest = self.read_seed_static_manifest()
-        stored = dict(manifest.get("metadata") or {})
-        if str(manifest.get("status") or "") != "ok":
-            if str(manifest.get("status") or "") == "missing":
-                return self.legacy_static_seed_preflight(graph, rules_payload, expected)
-            return {
-                "ready": False,
-                "status": "manifest-" + str(manifest.get("status") or "unavailable"),
-                "reason": str(manifest.get("reason") or "Static seed manifest is absent."),
-                "preflightMode": "static-seed-manifest",
-                "expectedBoxCounts": expected_counts,
-                "actualBoxCounts": dict(stored.get("boxCounts") or {}),
-                "tboxMatches": False,
-                "ruleboxMatches": False,
-                "languageRegistryMatches": False,
-                "schemaContractMatches": False,
-                "staticSeedManifest": {
-                    "status": str(manifest.get("status") or "unavailable"),
-                    "expectedFingerprint": expected.get("staticSeedFingerprint"),
-                },
-            }
-        actual_counts = dict(stored.get("boxCounts") or {})
-        tbox_matches = (
-            str(stored.get("tboxVersion") or "") == str(expected.get("tboxVersion") or "")
-            and str(stored.get("tboxFingerprint") or "") == str(expected.get("tboxFingerprint") or "")
-            and actual_counts.get("TBox") == expected_counts.get("TBox")
-        )
-        rulebox_matches = (
-            str(stored.get("ruleboxRulesHash") or "") == str(expected.get("ruleboxRulesHash") or "")
-            and int(number_or_none(stored.get("ruleboxRuleCount")) or 0)
-            == int(number_or_none(expected.get("ruleboxRuleCount")) or 0)
-            and int(number_or_none(stored.get("ruleboxConditionCount")) or 0)
-            == int(number_or_none(expected.get("ruleboxConditionCount")) or 0)
-            and int(number_or_none(stored.get("ruleboxDerivationCount")) or 0)
-            == int(number_or_none(expected.get("ruleboxDerivationCount")) or 0)
-            and actual_counts.get("RuleBox") == expected_counts.get("RuleBox")
-        )
-        language_registry_matches = (
-            str(stored.get("languageRegistryVersion") or "")
-            == str(expected.get("languageRegistryVersion") or "")
-            and actual_counts.get("LanguageGovernance") == expected_counts.get("LanguageGovernance")
-        )
-        fingerprint_matches = (
-            str(stored.get("staticSeedFingerprint") or "")
-            == str(expected.get("staticSeedFingerprint") or "")
-        )
-        schema_contract_matches = (
-            str(stored.get("schemaContractVersion") or "")
-            == str(expected.get("schemaContractVersion") or "")
-            and str(stored.get("schemaContractFingerprint") or "")
-            == str(expected.get("schemaContractFingerprint") or "")
-        )
-        sentinels = self.seed_static_sentinels_present(
-            graph,
-            self.static_seed_generation_ids(stored),
-        )
-        ready = bool(
-            fingerprint_matches
-            and tbox_matches
-            and rulebox_matches
-            and language_registry_matches
-            and str(sentinels.get("status") or "") == "ok"
-        )
-        return {
-            "ready": ready,
-            "status": "current" if ready else "stale",
-            "reason": str(sentinels.get("reason") or ""),
-            "preflightMode": "static-seed-manifest",
-            "expectedBoxCounts": expected_counts,
-            "actualBoxCounts": actual_counts,
-            "tboxMatches": tbox_matches,
-            "ruleboxMatches": rulebox_matches,
-            "languageRegistryMatches": language_registry_matches,
-            "schemaContractMatches": schema_contract_matches,
-            "staticSeedManifest": {
-                "status": "ok",
-                "expectedFingerprint": expected.get("staticSeedFingerprint"),
-                "activeFingerprint": stored.get("staticSeedFingerprint"),
-                "fingerprintMatches": fingerprint_matches,
-                "expectedTboxFingerprint": expected.get("tboxFingerprint"),
-                "activeTboxFingerprint": stored.get("tboxFingerprint"),
-                "tboxMatches": tbox_matches,
-                "expectedRuleboxFingerprint": expected.get("ruleboxRulesHash"),
-                "activeRuleboxFingerprint": stored.get("ruleboxRulesHash"),
-                "ruleboxMatches": rulebox_matches,
-                "sentinelStatus": sentinels.get("status"),
-                "missingSentinels": list(sentinels.get("missing") or []),
-                "expectedSchemaContractFingerprint": expected.get("schemaContractFingerprint"),
-                "activeSchemaContractFingerprint": stored.get("schemaContractFingerprint"),
-                "schemaContractMatches": schema_contract_matches,
-            },
-        }
+        return _static_seed_preflight.seed_graph_preflight(self, graph, rules_payload)
 
     def seed_relation_repair_eligible(self, preflight: Dict[str, object]) -> bool:
-        """Return whether a stale seed can be repaired without replacing nodes.
+        return _static_seed_preflight.seed_relation_repair_eligible(self, preflight)
 
-        A TypeDB process can be interrupted after static nodes are committed but
-        before every relation batch is written. Replacing all boxes in that
-        state is slow and competes with live ABox projection. A relation-only
-        repair is safe when every expected static node is already present and
-        no box has more relations than the immutable seed expects.
-        """
-        if not isinstance(preflight, dict) or preflight.get("status") != "stale":
-            return False
-        if str(preflight.get("preflightMode") or "") in {
-            "static-seed-manifest",
-            "legacy-static-seed-anchor",
-        }:
-            # The manifest is intentionally a bounded startup proof, not a
-            # full relation inventory. A failed sentinel must trigger a
-            # deterministic static replacement rather than an unbounded scan.
-            return False
-        expected = preflight.get("expectedBoxCounts") if isinstance(preflight.get("expectedBoxCounts"), dict) else {}
-        actual = preflight.get("actualBoxCounts") if isinstance(preflight.get("actualBoxCounts"), dict) else {}
-        if not expected or not actual:
-            return False
-        for box, expected_counts in expected.items():
-            if not isinstance(expected_counts, dict):
-                return False
-            actual_counts = actual.get(box) if isinstance(actual.get(box), dict) else {}
-            expected_entities = int(number_or_none(expected_counts.get("entityCount")) or 0)
-            expected_relations = int(number_or_none(expected_counts.get("relationCount")) or 0)
-            if int(number_or_none(actual_counts.get("entityCount")) or 0) != expected_entities:
-                return False
-            if int(number_or_none(actual_counts.get("relationCount")) or 0) > expected_relations:
-                return False
-        return True
-
-    def missing_seed_relation_rows(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
-        """Return immutable static relation rows absent from the graph store."""
-        _node_rows, relation_rows = self.graph_persistence_rows(graph)
-        expected_boxes = {
-            str(row.get("ontologyBox") or "ABox")
-            for row in relation_rows
-            if str(row.get("ontologyBox") or "ABox") != "ABox"
-        }
-        stored_ids = set()
-        for box in sorted(expected_boxes):
-            rows = self.read_rows(
-                "match $r isa ontology-assertion, has ontology-box "
-                + typedb_string(box)
-                + ", has ontology-id $id;",
-                ["id"],
-                label="typedb.seed-relation-repair-audit",
-            )
-            stored_ids.update(str(row.get("id") or "") for row in rows)
-        return [
-            row
-            for row in relation_rows
-            if str(row.get("ontologyBox") or "ABox") in expected_boxes
-            and relation_row_id(row) not in stored_ids
-        ]
+    def missing_seed_relation_rows(
+        self, graph: PortfolioOntology
+    ) -> List[Dict[str, object]]:
+        return _static_seed_reads.missing_seed_relation_rows(self, graph)
 
     def repair_seed_relations(self, graph: PortfolioOntology) -> Dict[str, object]:
-        """Insert only missing static relations after an interrupted seed."""
-        if not self.address:
-            return {"configured": False, "saved": False, "status": "disabled", "missingRelationCount": 0}
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return self.driver_missing_result(imported[1], graph)
-        try:
-            missing_rows = self.missing_seed_relation_rows(graph)
-            if not missing_rows:
-                return {
-                    "configured": True,
-                    "saved": True,
-                    "status": "unchanged",
-                    "graphStore": "typedb",
-                    "missingRelationCount": 0,
-                    "insertedRelationCount": 0,
-                }
-            settings = runtime_settings()
-            relation_batch_size = self.abox_relation_batch_size(settings)
-            queries = self.batched_relation_insert_queries(
-                missing_rows,
-                utc_now(),
-                relation_batch_size,
-                self.write_query_max_bytes(settings),
-            )
-            _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-
-            def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    self.ensure_schema(driver, imported)
-                    transaction_query_count = self.graph_write_transaction_query_count(settings)
-                    for offset in range(0, len(queries), transaction_query_count):
-                        query_batch = queries[offset: offset + transaction_query_count]
-                        with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB seed relation repair"):
-                            with driver.transaction(
-                                self.database,
-                                TransactionType.WRITE,
-                                options=self.write_transaction_options(),
-                            ) as tx:
-                                for query in query_batch:
-                                    tx.query(query).resolve()
-                                tx.commit()
-                finally:
-                    self.close_driver(driver)
-
-            self.with_typedb_retries(operation)
-            return {
-                "configured": True,
-                "saved": True,
-                "status": "ok",
-                "graphStore": "typedb",
-                "missingRelationCount": len(missing_rows),
-                "insertedRelationCount": len(missing_rows),
-                "queryCount": len(queries),
-            }
-        except Exception as error:  # noqa: BLE001 - caller can fall back to a full deterministic seed.
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "error",
-                "graphStore": "typedb",
-                "reason": str(error)[:220],
-            }
+        return _static_seed_repair.repair_seed_relations(
+            self,
+            graph,
+            _bindings=RepairBindings(
+                runtime_settings=runtime_settings,
+                typedb_operation_timeout=typedb_operation_timeout,
+                utc_now=utc_now,
+            ),
+        )
 
     @staticmethod
     def seed_static_box_names() -> List[str]:
-        return ["TBox", "RuleBox", "LanguageGovernance"]
+        return _static_seed_identity.seed_static_box_names()
 
-    def seed_static_boxes_requiring_refresh(self, preflight: Dict[str, object]) -> List[str]:
-        """Identify the smallest safe static seed replacement.
-
-        A RuleBox policy edit must not rewrite the TBox or language registry.
-        Conversely, a changed TBox can change the meaning of both, so it is
-        deliberately promoted to a complete static refresh.  Incomplete
-        preflight metadata is treated conservatively as a full static repair.
-        """
-        static_boxes = self.seed_static_box_names()
-        if not isinstance(preflight, dict):
-            return static_boxes
-        expected = preflight.get("expectedBoxCounts")
-        actual = preflight.get("actualBoxCounts")
-        required_flags = {"tboxMatches", "ruleboxMatches", "languageRegistryMatches"}
-        if (
-            not isinstance(expected, dict)
-            or not isinstance(actual, dict)
-            or not required_flags.issubset(set(preflight))
-        ):
-            return static_boxes
-
-        def counts_match(box: str) -> bool:
-            expected_counts = expected.get(box)
-            actual_counts = actual.get(box)
-            if not isinstance(expected_counts, dict) or not isinstance(actual_counts, dict):
-                return False
-            return (
-                int(number_or_none(expected_counts.get("entityCount")) or 0)
-                == int(number_or_none(actual_counts.get("entityCount")) or 0)
-                and int(number_or_none(expected_counts.get("relationCount")) or 0)
-                == int(number_or_none(actual_counts.get("relationCount")) or 0)
-            )
-
-        tbox_stale = not bool(preflight.get("tboxMatches")) or not counts_match("TBox")
-        if tbox_stale:
-            return static_boxes
-        stale = []
-        if not bool(preflight.get("ruleboxMatches")) or not counts_match("RuleBox"):
-            stale.append("RuleBox")
-        if not bool(preflight.get("languageRegistryMatches")) or not counts_match("LanguageGovernance"):
-            stale.append("LanguageGovernance")
-        # A stale signal without a diagnosable box is never assumed harmless.
-        return stale or static_boxes
+    def seed_static_boxes_requiring_refresh(
+        self, preflight: Dict[str, object]
+    ) -> List[str]:
+        return _static_seed_preflight.seed_static_boxes_requiring_refresh(self, preflight)
 
     @staticmethod
     def static_seed_schema_prepared(preflight: Dict[str, object]) -> bool:
-        """Return whether bounded graph probes already proved the base schema.
-
-        A current manifest is sufficient only when it was written against the
-        exact base-schema contract of this build. New, legacy, or upgraded
-        databases intentionally return ``False`` and run the bounded schema
-        upgrade path before the manifest is republished.
-        """
-        mode = str((preflight or {}).get("preflightMode") or "")
-        status = str((preflight or {}).get("status") or "")
-        return (
-            mode == "static-seed-manifest"
-            and status in {"current", "stale"}
-            and bool((preflight or {}).get("schemaContractMatches"))
-        )
+        return _static_seed_preflight.static_seed_schema_prepared(preflight)
 
     def sync_base_schema_contract(self) -> Dict[str, object]:
         return _typedb_lifecycle.sync_base_schema_contract(self, runtime=self._typedb_runtime())
@@ -6851,108 +5490,18 @@ relation ontology-assertion,
         schema_prepared: bool = False,
         tbox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        """Refresh only selected immutable seed boxes through one graph write.
-
-        This bypasses ``save_graph`` because a targeted RuleBox slice carries
-        a read-only TBox endpoint for its cross-box declaration relation.  The
-        endpoint is used to match the existing node, never inserted or deleted.
-        Every static box is append-only. The manifest pointer activates the
-        completed TBox/RuleBox/language generation after this write succeeds,
-        so a TBox evolution never scans or deletes the live ABox.
-        """
-        selected_boxes = [
-            box
-            for box in self.seed_static_box_names()
-            if box in {str(item or "").strip() for item in boxes or []}
-        ]
-        if not selected_boxes:
-            return {
-                "configured": bool(self.address),
-                "saved": True,
-                "status": "unchanged",
-                "graphStore": "typedb",
-                "refreshedBoxes": [],
-            }
-        if not self.address:
-            return {
-                "configured": False,
-                "saved": False,
-                "status": "disabled",
-                "graphStore": "typedb",
-                "refreshedBoxes": selected_boxes,
-                "reason": "TypeDB ontology storage is not configured.",
-            }
-        imported = self.driver_imports()
-        if imported[0] is None:
-            result = self.driver_missing_result(imported[1], graph)
-            result["refreshedBoxes"] = selected_boxes
-            return result
-        slice_graph = self.graph_for_boxes(
+        return _static_seed_persistence.save_static_seed_boxes(
+            self,
             graph,
-            selected_boxes,
-            retain_cross_box_relations=True,
+            boxes,
+            rules_payload,
+            schema_prepared,
+            tbox_metadata,
+            _bindings=PersistenceBindings(
+                typedb_error_code=typedb_error_code,
+                typedb_operation_timeout=typedb_operation_timeout,
+            ),
         )
-        metadata = self.seed_static_manifest_metadata(
-            graph,
-            list(rules_payload or rulebox_rules_to_payload(self._last_rules or default_graph_inference_rules())),
-            tbox_metadata=tbox_metadata,
-        )
-        generation_ids = self.static_seed_generation_ids(metadata)
-        slice_graph = self.graph_with_static_seed_generation(
-            slice_graph,
-            self.seed_static_box_names(),
-            generation_ids,
-        )
-        rulebox_generation = str(generation_ids.get("RuleBox") or "")
-        # Do not use ``ontology-box`` deletes for static evolution. TypeDB can
-        # plan such deletes against the entire durable graph even though the
-        # requested box is tiny relative to the ABox. Immutable rows plus the
-        # manifest pointer provide atomic read selection without that scan.
-        delete_boxes: List[str] = []
-        node_rows, relation_rows = self.graph_persistence_rows(slice_graph)
-        try:
-            def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    if not schema_prepared:
-                        self.ensure_schema(driver, imported)
-                    self.write_graph(
-                        driver,
-                        imported,
-                        slice_graph,
-                        delete_boxes=delete_boxes,
-                    )
-                finally:
-                    self.close_driver(driver)
-
-            self.with_typedb_retries(operation)
-        except Exception as error:  # noqa: BLE001 - startup must surface a failed static contract.
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "error",
-                "graphStore": "typedb",
-                "refreshedBoxes": selected_boxes,
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:240],
-                "entityCount": len(node_rows),
-                "relationCount": len(relation_rows),
-                "ruleboxSnapshotId": rulebox_generation,
-            }
-        return {
-            "configured": True,
-            "saved": True,
-            "status": "ok",
-            "graphStore": "typedb",
-            "refreshedBoxes": selected_boxes,
-            "entityCount": len(node_rows),
-            "relationCount": len(relation_rows),
-            "crossBoxEndpointReferenceCount": len(self.external_relation_endpoint_ids(slice_graph)),
-            "ruleboxSnapshotId": rulebox_generation,
-            "staticGenerationIds": generation_ids,
-            "staticWriteMode": "append-only-static-generation",
-        }
 
     def save_seed_static_manifest(
         self,
@@ -6961,70 +5510,17 @@ relation ontology-assertion,
         schema_prepared: bool = False,
         tbox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        """Atomically publish the static seed identity after a successful refresh."""
-        manifest_graph = self.seed_static_manifest_graph(
+        return _static_seed_persistence.save_seed_static_manifest(
+            self,
             graph,
             rules_payload,
-            tbox_metadata=tbox_metadata,
+            schema_prepared,
+            tbox_metadata,
+            _bindings=PersistenceBindings(
+                typedb_error_code=typedb_error_code,
+                typedb_operation_timeout=typedb_operation_timeout,
+            ),
         )
-        metadata = self.seed_static_manifest_metadata(
-            graph,
-            rules_payload,
-            tbox_metadata=tbox_metadata,
-        )
-        if not self.address:
-            return {
-                "configured": False,
-                "saved": False,
-                "status": "disabled",
-                "graphStore": "typedb",
-                "reason": "TypeDB ontology storage is not configured.",
-            }
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return self.driver_missing_result(imported[1], manifest_graph)
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        delete_query = (
-            "match $n isa ontology-node, has ontology-storage-id "
-            + typedb_string(self.seed_static_manifest_storage_id())
-            + "; delete $n;"
-        )
-        try:
-            def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    if not schema_prepared:
-                        self.ensure_schema(driver, imported)
-                    with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB static seed manifest delete"):
-                        with driver.transaction(
-                            self.database,
-                            TransactionType.WRITE,
-                            options=self.write_transaction_options(),
-                        ) as tx:
-                            tx.query(delete_query).resolve()
-                            tx.commit()
-                    self.write_graph(driver, imported, manifest_graph, delete_boxes=[])
-                finally:
-                    self.close_driver(driver)
-
-            self.with_typedb_retries(operation)
-        except Exception as error:  # noqa: BLE001 - no manifest means the next startup repairs static boxes.
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "error",
-                "graphStore": "typedb",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:240],
-            }
-        return {
-            "configured": True,
-            "saved": True,
-            "status": "ok",
-            "graphStore": "typedb",
-            "staticSeedFingerprint": metadata.get("staticSeedFingerprint"),
-        }
 
     @coordinated_typedb_projection_write(
         "ontology-release-artifact-seed",
@@ -7032,423 +5528,15 @@ relation ontology-assertion,
         bootstrap_schema=True,
     )
     def seed_release_artifact(self, payload: Dict[str, object]) -> Dict[str, object]:
-        """Restore an immutable release from its durable static graph artifact."""
-
-        artifact = dict(payload or {})
-        if (
-            str(artifact.get("version") or "") != "ontology-release-seed-artifact-v2"
-            or str(artifact.get("semanticStorageContractVersion") or "")
-            != SEMANTIC_STORAGE_CONTRACT_VERSION
-            or not dict(artifact.get("releaseBundle") or {})
-        ):
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "unsupported-release-artifact-contract",
-                "artifactVersion": str(artifact.get("version") or ""),
-                "semanticStorageContractVersion": str(
-                    artifact.get("semanticStorageContractVersion") or ""
-                ),
-            }
-        authored_rules_payload = [
-            dict(item)
-            for item in list(artifact.get("rules") or [])
-            if isinstance(item, dict)
-        ]
-        try:
-            rules = rulebox_rules_from_payload(
-                {"rules": authored_rules_payload},
-                strict_governance=True,
-            )
-        except ValueError as error:
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "invalid-release-artifact",
-                "reason": str(error)[:240],
-            }
-        expected_rulebox_fingerprint = str(artifact.get("ruleboxFingerprint") or "").strip()
-        # The artifact payload is immutable release data. Newer readers may
-        # normalize an older governed rule into a different in-memory shape,
-        # so hashing a parse/serialize round trip falsely marks a valid frozen
-        # release as corrupt. Validate and publish the authored rows exactly;
-        # keep parsed rules only as the executable in-process representation.
-        actual_rulebox_fingerprint = rulebox_rules_hash(authored_rules_payload)
-        tbox_metadata = normalize_tbox_metadata(dict(artifact.get("tboxMetadata") or {}))
-        expected_tbox_fingerprint = str(artifact.get("tboxFingerprint") or "").strip()
-        if (
-            not expected_rulebox_fingerprint
-            or expected_rulebox_fingerprint != actual_rulebox_fingerprint
-            or not expected_tbox_fingerprint
-            or expected_tbox_fingerprint != str(tbox_metadata.get("fingerprint") or "")
-        ):
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "release-artifact-fingerprint-mismatch",
-                "expectedRuleboxFingerprint": expected_rulebox_fingerprint,
-                "actualRuleboxFingerprint": actual_rulebox_fingerprint,
-                "expectedTboxFingerprint": expected_tbox_fingerprint,
-                "actualTboxFingerprint": str(tbox_metadata.get("fingerprint") or ""),
-            }
-        graph = ontology_seed_graph_from_artifact(artifact)
-        box_counts = graph_box_entity_counts(graph)
-        missing_boxes = [
-            box for box in self.seed_static_box_names()
-            if int(box_counts.get(box) or 0) <= 0
-        ]
-        if missing_boxes:
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "release-artifact-static-box-missing",
-                "missingBoxes": missing_boxes,
-            }
-        schema_sync = self.sync_base_schema_contract()
-        if not bool(schema_sync.get("saved")):
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "release-artifact-schema-sync-failed",
-                "schemaSync": schema_sync,
-                "reason": str(schema_sync.get("reason") or "")[:240],
-            }
-        self._last_rules = list(rules)
-        static_write = self.save_static_seed_boxes(
-            graph,
-            self.seed_static_box_names(),
-            rules_payload=authored_rules_payload,
-            schema_prepared=True,
-            tbox_metadata=tbox_metadata,
-        )
-        if not bool(static_write.get("saved")):
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "release-artifact-static-write-failed",
-                "staticWrite": static_write,
-            }
-        manifest = self.save_seed_static_manifest(
-            graph,
-            authored_rules_payload,
-            schema_prepared=True,
-            tbox_metadata=tbox_metadata,
-        )
-        if not bool(manifest.get("saved")):
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "release-artifact-manifest-write-failed",
-                "staticWrite": static_write,
-                "manifest": manifest,
-            }
-        self.clear_rulebox_snapshot_cache()
-        restored_rulebox = dict(self.rulebox_snapshot() or {})
-        restored_tbox = dict(self.active_tbox_metadata() or {})
-        restored_runtime_rulebox_fingerprint = str(
-            restored_rulebox.get("sourceRulesHash")
-            or restored_rulebox.get("ruleboxRulesHash")
-            or restored_rulebox.get("rulesHash")
-            or ""
-        ).strip()
-        restored_tbox_fingerprint = str(restored_tbox.get("fingerprint") or "").strip()
-        restored_manifest = dict(self.read_seed_static_manifest() or {})
-        restored_manifest_metadata = dict(restored_manifest.get("metadata") or {})
-        restored_artifact_rulebox_fingerprint = str(
-            restored_manifest_metadata.get("ruleboxRulesHash") or ""
-        ).strip()
-        ready = bool(
-            str(restored_rulebox.get("status") or "") == "ok"
-            and restored_runtime_rulebox_fingerprint
-            and str(restored_manifest.get("status") or "") == "ok"
-            and restored_artifact_rulebox_fingerprint == expected_rulebox_fingerprint
-            and str(restored_tbox.get("status") or "") == "ok"
-            and restored_tbox_fingerprint == expected_tbox_fingerprint
-        )
-        return {
-            "configured": True,
-            "saved": ready,
-            "status": "restored" if ready else "release-artifact-readback-mismatch",
-            "ruleCount": len(authored_rules_payload),
-            # TypeDB normalizes governed rule rows on readback. Keep the exact
-            # authored artifact hash separate from the executable readback
-            # hash used by the deployment release identity.
-            "ruleboxFingerprint": restored_runtime_rulebox_fingerprint,
-            "runtimeRuleboxFingerprint": restored_runtime_rulebox_fingerprint,
-            "artifactRuleboxFingerprint": restored_artifact_rulebox_fingerprint,
-            "expectedArtifactRuleboxFingerprint": expected_rulebox_fingerprint,
-            "tboxFingerprint": restored_tbox_fingerprint,
-            "schemaSync": schema_sync,
-            "staticWrite": static_write,
-            "manifest": manifest,
-            "manifestReadback": {
-                "status": str(restored_manifest.get("status") or ""),
-                "ruleboxFingerprint": restored_artifact_rulebox_fingerprint,
-                "tboxFingerprint": str(
-                    restored_manifest_metadata.get("tboxFingerprint") or ""
-                ),
-            },
-        }
+        return _static_seed_restore.seed_release_artifact(self, payload)
 
     @coordinated_typedb_projection_write(
-        "ontology-seed",
-        typedb_projection_world_from_payload,
-        bootstrap_schema=True,
+        "ontology-seed", typedb_projection_world_from_payload, bootstrap_schema=True
     )
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
-        payload = payload or {}
-        try:
-            rules = rulebox_rules_from_payload(payload, strict_governance=True) if (payload.get("rules") is not None or payload.get("rulesJson")) else default_graph_inference_rules()
-        except ValueError as error:
-            return {"configured": True, "saved": False, "seeded": False, "status": "invalid-rulebox", "graphStore": "typedb", "reason": str(error)}
-        rules = list(rules)
-        rules_payload = rulebox_rules_to_payload(rules)
-        self._last_rules = rules
-        scoped_write_lease_recovery = {}
-        if typedb_bool(payload.get("recoverScopedABoxWriteLease")):
-            scoped_write_lease_recovery = self.recover_scoped_abox_write_lease_after_server_start()
-
-        def complete_seed(result: Dict[str, object]) -> Dict[str, object]:
-            completed = dict(result or {})
-            if scoped_write_lease_recovery:
-                completed["scopedABoxWriteLeaseRecovery"] = dict(scoped_write_lease_recovery)
-            return completed
-
-        seed_graph = ontology_seed_graph(
-            rules,
-            language_registry=investment_language_registry(runtime_settings()),
+        return _static_seed_bootstrap.seed_ontology(
+            self, payload, _bindings=BootstrapBindings(runtime_settings=runtime_settings)
         )
-        preflight = self.seed_graph_preflight(seed_graph, rules_payload)
-        schema_prepared = self.static_seed_schema_prepared(preflight)
-        if preflight.get("ready") and not typedb_bool(payload.get("forceReseed")):
-            schema_contract_sync = {}
-            # A manifest can prove static rows are current while an older
-            # TypeDB schema lacks a newly promoted attribute used by the
-            # RuleBox. Upgrade only that schema contract before returning the
-            # normal static no-op; do not rewrite the static graph or ABox.
-            if (
-                str(preflight.get("preflightMode") or "") == "static-seed-manifest"
-                and not bool(preflight.get("schemaContractMatches"))
-            ):
-                schema_contract_sync = self.sync_base_schema_contract()
-                if not schema_contract_sync.get("saved"):
-                    return complete_seed({
-                        "configured": True,
-                        "saved": False,
-                        "seeded": False,
-                        "status": "schema-contract-sync-failed",
-                        "graphStore": "typedb",
-                        "engineVersion": GRAPH_REASONER_VERSION,
-                        "ruleCount": len(rules),
-                        "seedSkipped": True,
-                        "seedPreflight": preflight,
-                        "schemaContractSync": schema_contract_sync,
-                        "reason": str(schema_contract_sync.get("reason") or "TypeDB schema contract sync failed."),
-                    })
-                manifest_result = self.save_seed_static_manifest(
-                    seed_graph,
-                    rules_payload,
-                    schema_prepared=True,
-                )
-                schema_contract_sync["manifest"] = manifest_result
-                if not manifest_result.get("saved"):
-                    return complete_seed({
-                        "configured": True,
-                        "saved": False,
-                        "seeded": False,
-                        "status": "schema-contract-manifest-write-failed",
-                        "graphStore": "typedb",
-                        "engineVersion": GRAPH_REASONER_VERSION,
-                        "ruleCount": len(rules),
-                        "seedSkipped": True,
-                        "seedPreflight": preflight,
-                        "schemaContractSync": schema_contract_sync,
-                        "reason": str(manifest_result.get("reason") or "TypeDB schema contract manifest write failed."),
-                    })
-                preflight = self.seed_graph_preflight(seed_graph, rules_payload)
-                if not (preflight.get("ready") and preflight.get("schemaContractMatches")):
-                    return complete_seed({
-                        "configured": True,
-                        "saved": False,
-                        "seeded": False,
-                        "status": "schema-contract-verification-failed",
-                        "graphStore": "typedb",
-                        "engineVersion": GRAPH_REASONER_VERSION,
-                        "ruleCount": len(rules),
-                        "seedSkipped": True,
-                        "seedPreflight": preflight,
-                        "schemaContractSync": schema_contract_sync,
-                        "reason": "The TypeDB static manifest did not confirm the active schema contract.",
-                    })
-            manifest_bootstrap = {}
-            if preflight.get("manifestBootstrapRequired"):
-                manifest_bootstrap = self.save_seed_static_manifest(
-                    seed_graph,
-                    rules_payload,
-                    schema_prepared=schema_prepared,
-                )
-                if not manifest_bootstrap.get("saved"):
-                    return complete_seed({
-                        "configured": True,
-                        "saved": False,
-                        "seeded": False,
-                        "status": "static-seed-manifest-write-failed",
-                        "graphStore": "typedb",
-                        "engineVersion": GRAPH_REASONER_VERSION,
-                        "ruleCount": len(rules),
-                        "seedSkipped": True,
-                        "seedPreflight": preflight,
-                        "staticSeedManifest": manifest_bootstrap,
-                        "reason": str(manifest_bootstrap.get("reason") or "Static seed manifest write failed."),
-                    })
-            return complete_seed({
-                "configured": True,
-                "saved": True,
-                "seeded": True,
-                "status": "unchanged",
-                "graphStore": "typedb",
-                "engineVersion": GRAPH_REASONER_VERSION,
-                "ruleCount": len(rules),
-                "seedSkipped": True,
-                "seedPreflight": preflight,
-                "ruleBoxReplaceRequested": typedb_bool(payload.get("replaceRuleBox")),
-                "ruleBoxAlreadyCurrent": True,
-                "ruleBoxHashMatched": True,
-                "activeRuleBoxRuleCount": len(rules),
-                "expectedRuleBoxRuleCount": len(rules),
-                "activeRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
-                "expectedRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
-                "staticSeedManifest": manifest_bootstrap,
-                "manifestBootstrapped": bool(manifest_bootstrap.get("saved")),
-                "schemaContractSync": schema_contract_sync,
-            })
-        relation_repair = {}
-        if not typedb_bool(payload.get("forceReseed")) and self.seed_relation_repair_eligible(preflight):
-            relation_repair = self.repair_seed_relations(seed_graph)
-            if relation_repair.get("saved"):
-                repaired_preflight = self.seed_graph_preflight(seed_graph, rules_payload)
-                if repaired_preflight.get("ready"):
-                    return complete_seed({
-                        "configured": True,
-                        "saved": True,
-                        "seeded": True,
-                        "status": "repaired",
-                        "graphStore": "typedb",
-                        "engineVersion": GRAPH_REASONER_VERSION,
-                        "ruleCount": len(rules),
-                        "seedSkipped": False,
-                        "seedPreflight": repaired_preflight,
-                        "staticRelationRepair": relation_repair,
-                        "ruleBoxReplaceRequested": typedb_bool(payload.get("replaceRuleBox")),
-                        "ruleBoxAlreadyCurrent": True,
-                        "ruleBoxHashMatched": True,
-                        "activeRuleBoxRuleCount": len(rules),
-                        "expectedRuleBoxRuleCount": len(rules),
-                        "activeRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
-                        "expectedRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
-        })
-        refresh_boxes = self.seed_static_boxes_requiring_refresh(preflight)
-        result = self.save_static_seed_boxes(
-            seed_graph,
-            refresh_boxes,
-            rules_payload=rules_payload,
-            schema_prepared=schema_prepared,
-        )
-        result.update({
-            "configured": True,
-            "seeded": bool(result.get("saved")),
-            "engineVersion": GRAPH_REASONER_VERSION,
-            "ruleCount": len(rules),
-            "graphStore": "typedb",
-            "seedSkipped": False,
-            "seedPreflight": preflight,
-            "staticBoxRefresh": {
-                "mode": "targeted-box-replacement",
-                "requestedBoxes": refresh_boxes,
-                "refreshedBoxes": list(result.get("refreshedBoxes") or refresh_boxes),
-            },
-        })
-        if relation_repair:
-            result["staticRelationRepair"] = relation_repair
-        if result.get("saved"):
-            manifest_result = self.save_seed_static_manifest(
-                seed_graph,
-                rules_payload,
-                schema_prepared=True,
-            )
-            result["staticSeedManifest"] = manifest_result
-            if not manifest_result.get("saved"):
-                result.update({
-                    "saved": False,
-                    "seeded": False,
-                    "status": "static-seed-manifest-write-failed",
-                    "reason": str(manifest_result.get("reason") or "Static seed manifest write failed."),
-                })
-        if result.get("saved"):
-            self.clear_rulebox_snapshot_cache()
-            post_seed_preflight = self.seed_graph_preflight(seed_graph, rules_payload)
-            result["postSeedPreflight"] = post_seed_preflight
-            result["staticBoxRefresh"]["verified"] = bool(post_seed_preflight.get("ready"))
-            if not post_seed_preflight.get("ready"):
-                result.update({
-                    "saved": False,
-                    "seeded": False,
-                    "status": "static-seed-verification-failed",
-                    "reason": "Targeted static seed replacement did not pass the post-write completeness check.",
-                })
-        if typedb_bool(payload.get("replaceRuleBox")) and result.get("saved"):
-            expected_rulebox = rulebox_runtime_metadata(rules_payload)
-            # ``seed_graph`` already replaced RuleBox in the same graph write.
-            # Read it back for verification instead of performing a second full
-            # RuleBox replacement during every service startup.
-            self.clear_rulebox_snapshot_cache()
-            rulebox_result = self.rulebox_snapshot()
-            expected_structure = rulebox_structural_fingerprint(rules_payload)
-            active_rules_payload = rulebox_result.get("rules") if isinstance(rulebox_result.get("rules"), list) else []
-            active_structure = rulebox_structural_fingerprint(active_rules_payload)
-            active_rule_count = int(number_or_none(rulebox_result.get("ruleCount") or rulebox_result.get("ruleboxRuleCount")) or 0)
-            active_rule_hash = str(rulebox_result.get("ruleboxRulesHash") or "")
-            hash_matched = active_rule_hash == expected_rulebox["ruleboxRulesHash"]
-            replace_verified = (
-                bool(rulebox_result.get("saved"))
-                and str(rulebox_result.get("status") or "") == "ok"
-                and active_rule_count == len(rules_payload)
-                and active_structure == expected_structure
-            )
-            result.update({
-                "ruleBoxReplaceRequested": True,
-                "ruleBoxReplaced": replace_verified,
-                "ruleBoxHashMatched": hash_matched,
-                "activeRuleBoxRuleCount": active_rule_count,
-                "expectedRuleBoxRuleCount": len(rules_payload),
-                "activeRuleBoxHash": active_rule_hash,
-                "expectedRuleBoxHash": expected_rulebox["ruleboxRulesHash"],
-                "activeRuleBoxShortHash": str(rulebox_result.get("ruleboxShortHash") or active_rule_hash[:12]),
-                "expectedRuleBoxShortHash": expected_rulebox["ruleboxShortHash"],
-                "ruleBoxReplaceResult": {
-                    "saved": bool(rulebox_result.get("saved")),
-                    "status": rulebox_result.get("status") or "",
-                    "reason": rulebox_result.get("reason") or "",
-                    "ruleCount": active_rule_count,
-                    "conditionCount": int(number_or_none(rulebox_result.get("conditionCount") or rulebox_result.get("ruleboxConditionCount")) or 0),
-                    "derivationCount": int(number_or_none(rulebox_result.get("derivationCount") or rulebox_result.get("ruleboxDerivationCount")) or 0),
-                    "ruleboxRulesHash": active_rule_hash,
-                    "ruleboxShortHash": str(rulebox_result.get("ruleboxShortHash") or active_rule_hash[:12]),
-                },
-            })
-            if replace_verified and typedb_bool(payload.get("clearInference")):
-                result["clearInferenceResult"] = self.clear_inferencebox()
-            if not replace_verified:
-                result.update({
-                    "saved": False,
-                    "seeded": False,
-                    "status": rulebox_result.get("status") or "rulebox-replace-failed",
-                    "reason": (
-                        "RuleBox replace requested but active RuleBox did not match the seeded rules. "
-                        + str(rulebox_result.get("reason") or "")
-                    ).strip(),
-                })
-        return complete_seed(result)
 
     def rulebox_snapshot(self) -> Dict[str, object]:
         if not self.address:

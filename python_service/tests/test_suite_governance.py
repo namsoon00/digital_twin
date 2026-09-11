@@ -127,7 +127,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # explicit capabilities and guarded public entry points.
         # Source-bound input assembly separately protects query scope, cache
         # identity/copy isolation, optional-source failures and replay parity.
-        self.assertLessEqual(total, 1190)
+        # Immutable seed ownership and atomic static-manifest replacement add
+        # independent schema parity, authored release and rollback contracts.
+        self.assertLessEqual(total, 1207)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

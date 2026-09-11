@@ -1,0 +1,246 @@
+{
+  "sourceRevision": "9fa1913affdeaa379bf5e429c793f1e20f97e27e",
+  "methods": {
+    "schema_query": {
+      "path": "static_seed/schema.py",
+      "bodyHash": "511d868bac4b39e4fdcb458920a3166e4e63cdb55d5d15f1e4ee46dc9abb9714",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "base_schema_contract_metadata": {
+      "path": "static_seed/schema.py",
+      "bodyHash": "42f5c22833af49343dfbe92b7510797a31a5669833c247f6e028452e90643760",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_static_manifest_entity_id": {
+      "path": "static_seed/identity.py",
+      "bodyHash": "2d20e09009d2afc952d6a9c41981069e83ea3d5b4674924f5de9b73734124eb5",
+      "signature": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": []
+    },
+    "seed_static_box_names": {
+      "path": "static_seed/identity.py",
+      "bodyHash": "91462eba05610b68b2c3986c5acbdcf8e72aaed827ed7562cccc04eaec1a6f70",
+      "signature": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": []
+    },
+    "static_seed_generation_ids": {
+      "path": "static_seed/identity.py",
+      "bodyHash": "904300b6b53b711b9167bb31c80d88aef72911b992a0c01b9bfd716b6e13e943",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": []
+    },
+    "seed_static_manifest_metadata": {
+      "path": "static_seed/identity.py",
+      "bodyHash": "c64628fc69d68be97d35da4a5c22b3b706274bbd26d9c15c036de83ae3401e5f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='tbox_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_static_manifest_storage_id": {
+      "path": "static_seed/identity.py",
+      "bodyHash": "b64a85eb0ee60bea8415ca50cfc542f84a9b2527bc4e6c0e32b4bf178ab83333",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "graph_for_boxes": {
+      "path": "static_seed/graphs.py",
+      "bodyHash": "9dc1ad465410e7d41796a22c188a3f182908358c731e70c71951a5baee8ce30f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='retain_cross_box_relations', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=False)])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "graph_with_static_seed_generation": {
+      "path": "static_seed/graphs.py",
+      "bodyHash": "61e954fffa8a2f7122ca24c7c93d176e14c60dc503ef0821ca586f53bfd9e87f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='generation_id')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_static_manifest_graph": {
+      "path": "static_seed/graphs.py",
+      "bodyHash": "4ae4e4d35b10743451899edef582c7755cd6daa8c28d4996e9afd52a9268edbc",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='tbox_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_static_sentinels": {
+      "path": "static_seed/graphs.py",
+      "bodyHash": "add9d054b0f2855114a58e4d69c647c1c48bfa15805bf00870c199ac325ec7d8",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='generation_ids')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "read_seed_static_manifest": {
+      "path": "static_seed/reads.py",
+      "bodyHash": "c17965ecf1ed4a6318a41cb57a6ce4fd55b157ba2c33a014bd53b28dffae83ac",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_static_sentinels_present": {
+      "path": "static_seed/reads.py",
+      "bodyHash": "6d2d950c340e483eabb08125726a735cfd905c7c9a83d4508ab63083575775ef",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='generation_ids')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_static_node_properties": {
+      "path": "static_seed/reads.py",
+      "bodyHash": "1eed8dd135d7bcb4db237eac7e662627b7f3c18cf8cf75c092da27fadedf4a22",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='entity_id_value', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "missing_seed_relation_rows": {
+      "path": "static_seed/reads.py",
+      "bodyHash": "5fef2ecc6ea6fa74f87a4393b6ab986a713b4d035d4a50798fb490ff68da6d30",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "legacy_static_seed_preflight": {
+      "path": "static_seed/preflight.py",
+      "bodyHash": "e4b694d19a3417c2c13ea4c6f4c96d78a0f753c2ea297a2cf0e10e9cbcecd298",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='expected', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_graph_preflight": {
+      "path": "static_seed/preflight.py",
+      "bodyHash": "2f75f133d477bcca2f68a24da3922b669f1b4b64a5e42701f75b489ec3c3d0e3",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_relation_repair_eligible": {
+      "path": "static_seed/preflight.py",
+      "bodyHash": "30847f551c516d8069a7f1629695fe457264ffdd80d731c4bdb7a7d570b8390a",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='preflight', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "seed_static_boxes_requiring_refresh": {
+      "path": "static_seed/preflight.py",
+      "bodyHash": "214a4ca8e83e39feb9757ce9c58a6c9e8b22130ec09f5b4e8ebf3e455436415f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='preflight', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "static_seed_schema_prepared": {
+      "path": "static_seed/preflight.py",
+      "bodyHash": "ad6f6fbffd3a2dd6990d0438f069c2809995ed35976102fdd4d95f1a4a34b444",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='preflight', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": []
+    },
+    "repair_seed_relations": {
+      "path": "static_seed/repair.py",
+      "bodyHash": "083b3b230d287f7990338cb36755f6539543c3a3f885bc1337893efa493e4d1a",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings",
+        "typedb_operation_timeout",
+        "utc_now"
+      ]
+    },
+    "save_static_seed_boxes": {
+      "path": "static_seed/persistence.py",
+      "bodyHash": "62a83755840b01b6f4be7c3aeb1adff820332b00ea0f4b7011aea40cd29190b0",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='schema_prepared', annotation=Name(id='bool', ctx=Load())), arg(arg='tbox_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=False), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "typedb_error_code"
+      ]
+    },
+    "save_seed_static_manifest": {
+      "path": "static_seed/persistence.py",
+      "bodyHash": "031ca19892bf666e5fc52204fb34dd16358089a7ebe500b18d41ce421c41891a",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='schema_prepared', annotation=Name(id='bool', ctx=Load())), arg(arg='tbox_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=False), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "typedb_error_code",
+        "typedb_operation_timeout"
+      ]
+    },
+    "seed_release_artifact": {
+      "path": "static_seed/restore.py",
+      "bodyHash": "4ecc4a29e9ba465751bb7f6ddabc0e458a308d7f03c17670475be1e657e25834",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "coordinated_typedb_projection_write('ontology-release-artifact-seed', typedb_projection_world_from_payload, bootstrap_schema=True)"
+      ],
+      "runtimeFields": []
+    },
+    "seed_ontology": {
+      "path": "static_seed/bootstrap.py",
+      "bodyHash": "221ecb30853207544e9b895c3a3d811aeccaffd1ff6b936fe62be5f2d76e84cc",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "coordinated_typedb_projection_write('ontology-seed', typedb_projection_world_from_payload, bootstrap_schema=True)"
+      ],
+      "runtimeFields": [
+        "runtime_settings"
+      ]
+    }
+  },
+  "helpers": {
+    "ontology_seed_graph": {
+      "path": "static_seed/artifact.py",
+      "bodyHash": "d4949ebfbdb45567f1f29b3731a415585be208ff8ce5361e24d5626f5466aadf"
+    },
+    "ontology_release_seed_artifact": {
+      "path": "static_seed/artifact.py",
+      "bodyHash": "bf22c72f33bdfeddd54b2d41f57ca1a333123b501f65623a2cfd9ba3a75ec5d2"
+    },
+    "ontology_seed_graph_from_artifact": {
+      "path": "static_seed/artifact.py",
+      "bodyHash": "07c2cfeda726e192ccc180d389443b952dba5b44e70cae04dfaca7b07c20f525"
+    },
+    "graph_box_entity_counts": {
+      "path": "static_seed/artifact.py",
+      "bodyHash": "4982d25728406b740957a64caacd052b743927fcef37e9c4da3179b69d07509c"
+    },
+    "graph_box_relation_counts": {
+      "path": "static_seed/artifact.py",
+      "bodyHash": "538961e5810585afe22320ca2735c1ab5665525046b4030872e2c83644f79268"
+    },
+    "slim_typeql_node_schema": {
+      "path": "static_seed/schema.py",
+      "bodyHash": "23dcb078a6ddeddb9b9032700f9e27c689b4c650372bdca130c3624fe4f31db4",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='schema', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "rulebox_runtime_metadata": {
+      "path": "static_seed/identity.py",
+      "bodyHash": "82fb74cb97a16b4b2f5b813a1714c3a2057d9bbaede9abeeb79f9cbc7fb5c2e0",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    },
+    "rulebox_structural_fingerprint": {
+      "path": "static_seed/identity.py",
+      "bodyHash": "9bb5f8f8188674c8e383f3592d9f2ce548781748a5686e6c4e3e234139ceee92",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='rules_payload', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": []
+    }
+  }
+}

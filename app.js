@@ -5780,7 +5780,7 @@
   }
 
   function accountDraftFromAccount(account) {
-    return {
+    var draft = {
       id: account.id || "",
       label: account.label || account.id || "",
       provider: account.provider || "toss",
@@ -5797,10 +5797,12 @@
       quietHoursTimezone: String(account.quietHoursTimezone || currentAppTimezone()),
       enabled: account.enabled !== false
     };
+    draft._baseline = Object.assign({}, draft);
+    return draft;
   }
 
-  function serviceAccountPayloadFromDraft() {
-    var draft = state.accountDraft || defaultAccountDraft();
+  function serviceAccountPayloadFromDraft(source) {
+    var draft = source || state.accountDraft || defaultAccountDraft();
     var payload = {
       id: String(draft.id || "").trim(),
       label: String(draft.label || "").trim(),
@@ -5821,6 +5823,15 @@
     return payload;
   }
 
+  function accountPayloadChanges(payload, baseline) {
+    if (!baseline || baseline.id !== payload.id) return payload;
+    var changes = { id: payload.id };
+    Object.keys(payload).forEach(function (key) {
+      if (key !== "id" && payload[key] !== baseline[key]) changes[key] = payload[key];
+    });
+    return changes;
+  }
+
   function saveServiceAccount() {
     if (isStaticPreviewHost()) {
       state.serviceAccountsError = "GitHub Pages에서는 실제 계정 DB를 저장할 수 없습니다. 로컬 서버에서 사용하세요.";
@@ -5837,7 +5848,9 @@
     state.serviceAccountsError = "";
     state.accountSaved = false;
     render();
-    return sendJson("/api/service-accounts", "POST", { account: account })
+    var baseline = state.accountDraft && state.accountDraft._baseline;
+    var changes = accountPayloadChanges(account, baseline ? serviceAccountPayloadFromDraft(baseline) : null);
+    return sendJson("/api/service-accounts", "POST", { account: changes })
       .then(function () {
         state.accountSaved = true;
         state.editingAccountId = account.id;

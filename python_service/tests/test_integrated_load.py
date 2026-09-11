@@ -86,21 +86,31 @@ class IntegratedLoadSafetyTests(unittest.TestCase):
         self.assertIsNone(percentile_summary([])["p95Ms"])
         self.assertEqual(7, percentile_summary([7])["p99Ms"])
 
-    def test_ai_claim_deadlock_retry_is_counted_but_connection_loss_is_not_retried(self):
+    def test_ai_claim_measures_production_receipt_without_an_outer_retry(self):
         import pymysql
 
-        store = MagicMock(runtime_settings={"mysqlDeadlockRetryCount": "3"})
-        store.claim.side_effect = [pymysql.err.OperationalError(1213, "synthetic deadlock"), []]
+        store = MagicMock(last_transaction_retry={"attempts": 2, "retryCount": 1})
+        store.claim.return_value = []
         measurements = Measurements()
         self.assertEqual([], claim_ai_with_retry(store, "fixture-worker", measurements))
-        self.assertEqual(2, store.claim.call_count)
+        self.assertEqual(1, store.claim.call_count)
         self.assertEqual(1, measurements.counters["aiClaimDeadlockRetries"])
         self.assertEqual(2, measurements.counters["aiClaimTransactionAttempts"])
-        store.claim.reset_mock(side_effect=True)
-        store.claim.side_effect = pymysql.err.OperationalError(2013, "synthetic lost acknowledgement")
-        with self.assertRaises(pymysql.err.OperationalError):
-            claim_ai_with_retry(store, "fixture-worker", measurements)
-        self.assertEqual(1, store.claim.call_count)
+        for code, receipt, attempts, retries in (
+            (1213, {}, 1, 0),
+            (2013, {}, 1, 0),
+            (2013, {"attempts": 2, "retryCount": 1, "recovered": False}, 2, 1),
+        ):
+            with self.subTest(code=code, attempts=attempts):
+                store.claim.reset_mock(side_effect=True)
+                store.last_transaction_retry = receipt
+                store.claim.side_effect = pymysql.err.OperationalError(code, "synthetic failure")
+                measurements = Measurements()
+                with self.assertRaises(pymysql.err.OperationalError):
+                    claim_ai_with_retry(store, "fixture-worker", measurements)
+                self.assertEqual(1, store.claim.call_count)
+                self.assertEqual(attempts, measurements.counters["aiClaimTransactionAttempts"])
+                self.assertEqual(retries, measurements.counters["aiClaimDeadlockRetries"])
 
     def test_schema_collision_never_drops_an_existing_database(self):
         connection = MagicMock()

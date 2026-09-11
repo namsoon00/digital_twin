@@ -745,6 +745,7 @@ class AIInferenceQueueRunner:
             repair_timeout_seconds=self.comparison_repair_timeout_seconds,
         )
         self.last_run_details = []
+        self.last_claim_retry = {}
         self.stopping = False
         self.start_recovery = {}
         self.stop_recovery = {}
@@ -785,11 +786,15 @@ class AIInferenceQueueRunner:
 
     def run_once(self, limit: int = 1) -> int:
         self.last_run_details = []
-        requests = self.queue.claim(
-            self.worker_id,
-            limit=max(1, int(limit or 1)),
-            lease_seconds=self.lease_seconds,
-        )
+        self.last_claim_retry = {}
+        try:
+            requests = self.queue.claim(
+                self.worker_id,
+                limit=max(1, int(limit or 1)),
+                lease_seconds=self.lease_seconds,
+            )
+        finally:
+            self.last_claim_retry = dict(getattr(self.queue, "last_transaction_retry", {}) or {})
         processed = 0
         for request in requests:
             try:

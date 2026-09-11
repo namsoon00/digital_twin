@@ -28,7 +28,8 @@ CHANGED_METHODS = {
         "await_target_scope_repair",
         "reshard_claimed_job",
     },
-    "MySQLAIInferenceQueueStore": {"complete"},
+    # Claim now retries its whole transaction; test_ai_claim_retry preserves its SQL/guards.
+    "MySQLAIInferenceQueueStore": {"complete", "claim"},
     "MySQLMarketObservationReasoningAnchorStore": {
         "repair_completed_reasoning_receipts"
     },

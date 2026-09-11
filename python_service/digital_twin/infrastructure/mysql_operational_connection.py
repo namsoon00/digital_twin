@@ -107,9 +107,10 @@ def attach_mysql_error_context(error: Exception, sql: object, started_at: float)
 
 
 def mysql_deadlock_retry_count(settings: Dict[str, object] = None) -> int:
+    value = (settings or {}).get("mysqlDeadlockRetryCount")
     try:
-        parsed = int(float(str((settings or {}).get("mysqlDeadlockRetryCount") or "3").strip()))
-    except (TypeError, ValueError):
+        parsed = int(float("3" if value is None or str(value).strip() == "" else str(value).strip()))
+    except (TypeError, ValueError, OverflowError):
         parsed = 3
     return max(0, min(8, parsed))
 
@@ -170,6 +171,15 @@ def run_mysql_deadlock_retry(
             )
         except Exception as error:
             if not mysql_is_deadlock(error):
+                # Keep the original error (especially an ambiguous commit) and
+                # its attempt history without authorizing another transaction.
+                error.orbit_mysql_retry_receipt = MySQLDeadlockRetryReceipt(
+                    operation=str(operation or "mysql-transaction"),
+                    attempts=attempts,
+                    retry_count=max(0, attempts - 1),
+                    recovered=False,
+                    delays_ms=tuple(delays),
+                )
                 raise
             if attempts > retry_count:
                 receipt = MySQLDeadlockRetryReceipt(
@@ -363,6 +373,10 @@ class MySQLOperationalConnection:
             )
         except MySQLDeadlockRetryExhausted as error:
             self.last_transaction_retry = error.receipt.to_dict()
+            raise
+        except Exception as error:
+            receipt = getattr(error, "orbit_mysql_retry_receipt", None)
+            self.last_transaction_retry = receipt.to_dict() if isinstance(receipt, MySQLDeadlockRetryReceipt) else {}
             raise
         self.last_transaction_retry = receipt.to_dict()
         return result

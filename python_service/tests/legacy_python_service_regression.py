@@ -12445,22 +12445,31 @@ class PythonServiceTests(unittest.TestCase):
         holding_rule = next(item for item in payload["internalRules"] if item["messageType"] == "holdingTiming")
         self.assertTrue(holding_rule["similarityBypassConditions"])
         self.assertTrue(holding_rule["stateCooldownEnabled"])
-        change_condition = next(item for item in holding_rule["similarityBypassConditions"] if item["id"] == "holding_score_delta")
+        original_conditions = deepcopy(holding_rule["similarityBypassConditions"])
+        self.assertNotIn("holding_score_delta", [item["id"] for item in original_conditions])
+        change_condition = next(item for item in holding_rule["similarityBypassConditions"] if item["id"] == "loss_rate_worsened")
+        self.assertEqual("profit_loss_worsened_lte", change_condition["type"])
         change_condition["value"] = 9.5
         change_condition["enabled"] = False
         holding_rule["stateCooldownMinutes"] = 720
 
         saved = save_notification_rule_payload({"rule": holding_rule})["rule"]
 
-        saved_condition = next(item for item in saved["similarityBypassConditions"] if item["id"] == "holding_score_delta")
+        saved_condition = next(item for item in saved["similarityBypassConditions"] if item["id"] == "loss_rate_worsened")
         self.assertEqual("9.5", str(saved_condition["value"]))
         self.assertFalse(saved_condition["enabled"])
         self.assertEqual(720, saved["stateCooldownMinutes"])
         reloaded = next(item for item in list_notification_rules_payload(include_internal=True)["internalRules"] if item["messageType"] == "holdingTiming")
-        reloaded_condition = next(item for item in reloaded["similarityBypassConditions"] if item["id"] == "holding_score_delta")
+        reloaded_condition = next(item for item in reloaded["similarityBypassConditions"] if item["id"] == "loss_rate_worsened")
         self.assertEqual("9.5", str(reloaded_condition["value"]))
         self.assertFalse(reloaded_condition["enabled"])
         self.assertEqual(720, reloaded["stateCooldownMinutes"])
+        self.assertEqual(saved["similarityBypassConditions"], reloaded["similarityBypassConditions"])
+        self.assertEqual(
+            [item for item in original_conditions if item["id"] != "loss_rate_worsened"],
+            [item for item in reloaded["similarityBypassConditions"] if item["id"] != "loss_rate_worsened"],
+        )
+        self.assertTrue(reloaded["stateCooldownEnabled"])
 
     def test_notification_policy_payload_defaults_to_managed_types(self):
         payload = list_notification_rules_payload()
@@ -12468,12 +12477,16 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual([
             "investmentInsight",
+            "marketObservation",
+            "portfolioHoldingsSnapshot",
+            "portfolioActivityObservation",
             "investmentCalendarReminder",
             "newsDigest",
             "ontologyInferenceMissing",
             "monitorConnection",
             "externalDataConnection",
         ], message_types)
+        self.assertEqual(message_types, payload["managedMessageTypes"])
         self.assertGreater(payload["internalRuleCount"], 0)
         self.assertNotIn("modelBuy", message_types)
         self.assertNotIn("externalCryptoMove", message_types)
@@ -12481,10 +12494,18 @@ class PythonServiceTests(unittest.TestCase):
 
         internal_payload = list_notification_rules_payload(include_internal=True)
         internal_types = [item["messageType"] for item in internal_payload["internalRules"]]
+        self.assertEqual(payload["rules"], internal_payload["rules"])
+        self.assertEqual(len(internal_types), payload["internalRuleCount"])
+        self.assertFalse(set(message_types).intersection(internal_types))
         self.assertIn("holdingTiming", internal_types)
         self.assertIn("watchlistOntologySignal", internal_types)
         self.assertNotIn("modelBuy", internal_types)
         self.assertNotIn("externalCryptoMove", internal_types)
+        for removed_type in (
+            "modelBuy", "modelSell", "monitorPnlChange", "monitorTrendChange",
+            "externalCryptoMove", "externalDartDisclosure",
+        ):
+            self.assertNotIn(removed_type, message_types + internal_types)
 
     def test_notification_template_payload_hides_internal_templates(self):
         payload = list_templates_payload()
@@ -13667,30 +13688,45 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
         )
         TestNotificationTemplateStore().upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "상태 확인 템플릿", True)
-        rules = TestNotificationRuleStore()
-        heartbeat_rule = rules.get("monitorHeartbeat")
-        heartbeat_rule.threshold = 0
-        rules.upsert(heartbeat_rule)
+        TestNotificationTemplateStore().upsert("monitorConnection", "[{messageType}] {title}\n{rawLines}", "Connection change", True)
 
-        with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot):
-            status, payload = notification_template_test_payload({"messageType": "monitorHeartbeat"})
+        with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot), \
+                mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account") as notifier:
+            suppressed_status, suppressed = notification_template_test_payload({"messageType": "monitorHeartbeat"})
+            self.assertEqual(202, suppressed_status)
+            self.assertFalse(suppressed["delivered"])
+            self.assertFalse(suppressed["queued"])
+            self.assertTrue(suppressed["suppressed"])
+            self.assertEqual("suppressed", suppressed["deliveryDecision"])
+            self.assertEqual("blocked", suppressed["deliveryGateState"])
+            self.assertEqual([], TestNotificationJobStore().pending(limit=10))
+            self.assertNotIn("notification.job_queued", TestEventLog().event_counts())
 
+            status, payload = notification_template_test_payload({"messageType": "monitorConnection"})
+
+        notifier.assert_not_called()
         self.assertEqual(202, status)
         self.assertFalse(payload["delivered"])
         self.assertTrue(payload["queued"])
-        self.assertEqual("monitorHeartbeat", payload["event"]["messageType"])
+        self.assertEqual("monitorConnection", payload["event"]["messageType"])
         jobs = TestNotificationJobStore().pending(limit=10)
         self.assertEqual(1, len(jobs))
         self.assertEqual("pending", jobs[0].status)
-        self.assertEqual("monitorHeartbeat", jobs[0].message_type)
-        self.assertIn("상태 토스 계좌 동기화", jobs[0].context["rawLines"])
+        self.assertEqual("monitorConnection", jobs[0].message_type)
+        self.assertIn("현재 토스 계좌 동기화", jobs[0].context["rawLines"])
+        self.assertIn("[monitorConnection]", jobs[0].text)
+        self.assertFalse(jobs[0].context["notificationTestBypassPolicy"])
         self.assertEqual("notification.test_requested", jobs[0].source_event_name)
         self.assertTrue(jobs[0].source_event_id)
+        suppressed_jobs = [job for job in TestNotificationJobStore().jobs() if job.status == "suppressed"]
+        self.assertEqual(1, len(suppressed_jobs))
+        self.assertEqual("monitorHeartbeat", suppressed_jobs[0].message_type)
+        self.assertEqual("status_noise", suppressed_jobs[0].context["deliverySuppressionReason"])
         counts = TestEventLog().event_counts()
-        self.assertEqual(1, counts["notification.test_requested"])
+        self.assertEqual(2, counts["notification.test_requested"])
         self.assertEqual(1, counts["notification.job_queued"])
 
-    def test_investment_insight_test_send_bypasses_policy_and_sends_directly(self):
+    def test_investment_insight_test_send_rejects_unqualified_inference_even_with_bypass(self):
         registry = AccountRegistry()
         account = AccountConfig("main", "메인", "toss", "https://example.test", "client", "secret", "1", ["005930"])
         registry.upsert(account)
@@ -13720,36 +13756,30 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
             metadata=self.inferencebox_metadata("005930", "graph.loss_guard.breakdown.v1", "lossControl", "손실 방어 추론"),
         )
-        sent_messages = []
-
-        class FakeNotifier:
-            def send(self, text):
-                sent_messages.append(text)
-                return SimpleNamespace(delivered=True, reason="")
-
-        save_runtime_settings({
-            "notificationAiGateEnabled": "0",
-            "dartDisclosureAiAnalysisEnabled": "0",
-        })
+        # A native trace without the governed decision contract is not an
+        # eligible investment event, even when delivery-policy bypass is requested.
         with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot), \
-                mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account", return_value=FakeNotifier()):
+                mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_notification_queue_runner") as runner, \
+                mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account") as notifier:
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
-        self.assertEqual(200, status, payload)
-        self.assertTrue(payload["delivered"])
-        self.assertTrue(payload["direct"])
-        self.assertFalse(payload["queued"])
+        self.assertEqual(422, status, payload)
+        self.assertFalse(payload["delivered"])
         self.assertEqual("investmentInsight", payload["messageType"])
-        self.assertTrue(sent_messages)
-        self.assertIn("검증 발송", sent_messages[0])
-        jobs = TestNotificationJobStore().jobs()
-        self.assertEqual(1, len(jobs))
-        self.assertEqual("done", jobs[0].status)
-        self.assertEqual("investmentInsight", jobs[0].message_type)
-        self.assertEqual(
-            "verification",
-            jobs[0].context["customerDeliveryExplanation"]["primaryCause"]["category"],
-        )
+        self.assertNotIn("direct", payload)
+        self.assertNotIn("jobId", payload)
+        decision = snapshot.decisions[0]
+        self.assertEqual("typedbInferenceBox", decision.decision_basis)
+        envelope = decision.relation_rule_context["actionEnvelope"]
+        self.assertTrue(envelope["judgementBlocked"])
+        self.assertFalse(envelope["investmentJudgementAvailable"])
+        self.assertEqual([], envelope["allowedActions"])
+        self.assertEqual([], envelope["coreInferenceSelection"]["eligibleRuleIds"])
+        runner.assert_not_called()
+        notifier.assert_not_called()
+        self.assertEqual([], TestNotificationJobStore().jobs())
+        self.assertNotIn("notification.test_requested", TestEventLog().event_counts())
+        self.assertNotIn("notification.job_queued", TestEventLog().event_counts())
 
     def test_investment_insight_test_send_records_typedb_projection_before_type_check(self):
         registry = AccountRegistry()
@@ -13797,7 +13827,8 @@ class PythonServiceTests(unittest.TestCase):
             "nativeRelationCount": 1,
         })
         recorder_calls = []
-        sent_messages = []
+        type_check_calls = []
+        original_type_check = RealtimeMonitor.type_check_events_for_snapshot
 
         class FakeProjectionRecorder:
             def __init__(self, *args, **kwargs):
@@ -13808,29 +13839,35 @@ class PythonServiceTests(unittest.TestCase):
                 target_snapshot.metadata.update(deepcopy(projection_metadata))
                 return target_snapshot.metadata["ontology"]["typedb"]
 
-        class FakeNotifier:
-            def send(self, text):
-                sent_messages.append(text)
-                return SimpleNamespace(delivered=True, reason="")
+        def type_check_after_projection(monitor, target_snapshot):
+            self.assertEqual(["main"], recorder_calls)
+            self.assertEqual(projection_metadata["ontology"]["typedb"], target_snapshot.metadata["ontology"]["typedb"])
+            events = original_type_check(monitor, target_snapshot)
+            type_check_calls.append([event.rule for event in events])
+            return events
 
-        save_runtime_settings({
-            "notificationAiGateEnabled": "0",
-            "dartDisclosureAiAnalysisEnabled": "0",
-        })
         with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot), \
                 mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.PortfolioOntologyProjectionRecorder", FakeProjectionRecorder), \
-                mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account", return_value=FakeNotifier()):
+                mock.patch.object(RealtimeMonitor, "type_check_events_for_snapshot", type_check_after_projection), \
+                mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_notification_queue_runner") as runner, \
+                mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account") as notifier:
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
-        self.assertEqual(200, status)
-        self.assertTrue(payload["delivered"])
+        self.assertEqual(422, status, payload)
+        self.assertFalse(payload["delivered"])
         self.assertNotEqual("ontologyInferenceMissing", payload.get("blockedBy"))
         self.assertEqual(["main"], recorder_calls)
-        self.assertTrue(sent_messages)
-        jobs = TestNotificationJobStore().jobs()
-        self.assertEqual(1, len(jobs))
-        self.assertEqual("typedbInferenceBox", jobs[0].context["ontologyInference"]["source"])
-        self.assertNotIn("Neo4j", jobs[0].text)
+        self.assertEqual(2, len(type_check_calls))
+        for message_types in type_check_calls:
+            self.assertNotIn("ontologyInferenceMissing", message_types)
+            self.assertNotIn("investmentInsight", message_types)
+        envelope = snapshot.decisions[0].relation_rule_context["actionEnvelope"]
+        self.assertTrue(envelope["judgementBlocked"])
+        self.assertEqual([], envelope["allowedActions"])
+        runner.assert_not_called()
+        notifier.assert_not_called()
+        self.assertEqual([], TestNotificationJobStore().jobs())
+        self.assertNotIn("notification.test_requested", TestEventLog().event_counts())
 
     def test_investment_insight_test_send_blocks_when_inference_missing(self):
         registry = AccountRegistry()
@@ -13919,10 +13956,22 @@ class PythonServiceTests(unittest.TestCase):
         payload = realtime_status_payload()
 
         self.assertEqual(1, payload["events"][MONITORING_CYCLE_COMPLETED])
-        self.assertEqual(1, sum(payload["notificationJobs"].values()))
+        jobs = payload["notificationJobs"]
+        self.assertEqual(1, jobs["pending"])
+        for state in ("awaiting_ai", "processing", "done", "superseded", "suppressed", "failed"):
+            self.assertEqual(0, jobs.get(state, 0))
+        self.assertEqual(0, jobs["actionable_failed"])
+        self.assertEqual(0, jobs["historical_failed"])
+        self.assertEqual(0, jobs["intentional_suppressed"])
+        self.assertEqual({}, jobs["suppression_categories"])
+        self.assertEqual("", jobs["oldest_actionable_failure_at"])
+        self.assertGreater(jobs["active_failure_window_minutes"], 0)
         self.assertTrue(any(event["name"] == MONITORING_CYCLE_COMPLETED for event in payload["latestEvents"]))
         self.assertEqual(MONITORING_CYCLE_COMPLETED, payload["monitoring"]["cycle"]["name"])
-        self.assertEqual(1, payload["monitoring"]["cycle"]["payload"]["alertCount"])
+        self.assertEqual({"snapshotCount": 2}, payload["monitoring"]["cycle"]["payload"])
+        stored_cycle = event_log.latest_events_by_name([MONITORING_CYCLE_COMPLETED])[MONITORING_CYCLE_COMPLETED]
+        self.assertEqual(1, stored_cycle.payload["alertCount"])
+        self.assertEqual(["main"], stored_cycle.payload["accountIds"])
 
     def test_admin_preview_config_is_static_and_sanitized(self):
         registry = AccountRegistry()

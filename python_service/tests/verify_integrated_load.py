@@ -227,17 +227,14 @@ class Measurements:
 
 
 def claim_ai_with_retry(store, worker, measurements):
-    from digital_twin.infrastructure.mysql_operational_connection import run_mysql_deadlock_retry
-
-    # Only error 1213 rolls back the complete claim transaction. Never retry
-    # inference, publication, transport or an ambiguous connection-loss result.
-    with measurements.measure("aiClaim"):
-        claimed, receipt = run_mysql_deadlock_retry(
-            store.runtime_settings, "integrated-load-ai-claim", lambda: store.claim(worker, 1, 60),
-        )
-    measurements.count("aiClaimTransactionAttempts", receipt.attempts)
-    measurements.count("aiClaimDeadlockRetries", receipt.retry_count)
-    return claimed
+    # Measure the production policy once; a harness retry would multiply its budget.
+    try:
+        with measurements.measure("aiClaim"):
+            return store.claim(worker, 1, 60)
+    finally:
+        receipt = dict(store.last_transaction_retry or {})
+        measurements.count("aiClaimTransactionAttempts", int(receipt.get("attempts") or 1))
+        measurements.count("aiClaimDeadlockRetries", int(receipt.get("retryCount") or 0))
 
 
 def memory_sample():
@@ -737,7 +734,7 @@ class Rehearsal:
             "typeDBExecuted": False, "modelExecuted": False, "externalDeliveryExecuted": False,
             "wavesCompleted": self.waves, "elapsedWorkSeconds": round(time.monotonic() - self.load_started, 3),
             "peakConcurrentReasoningClaims": self.peak_claims,
-            "aiClaimRetryPolicy": "harness-applied existing run_mysql_deadlock_retry; 1213 only, at most 3 retries; counted separately",
+            "aiClaimRetryPolicy": "production claim transaction retry; 1213 only, configured bounded budget; no harness retry",
             "counters": self.metrics.counters, "countConsistency": self.consistency,
             "latency": {key: percentile_summary(values) for key, values in sorted(self.metrics.samples.items())},
             "backlogSamples": self.backlogs,

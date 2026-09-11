@@ -4,6 +4,11 @@ This rehearsal exercises the **real MySQL operational schema, connection pool,
 durable queues and transaction adapters**, using synthetic account identities.
 It is not an in-memory queue benchmark or a production capacity certification.
 
+The production-claim follow-up is documented in
+[Backend Operational Stabilization](backend-operational-stabilization.md).
+Current runs call the production claim once and measure its retry receipt;
+the older measured runs below used the former harness-only retry policy.
+
 ## Run
 
 From the repository root, with Python and the existing `pymysql` dependency:
@@ -148,13 +153,14 @@ Both modes have at most 1,000 waves. Schema/import setup has a 90-second budget;
 the supervisor's child timeout is setup + workload + recovery + 15 seconds.
 Admin cleanup is outside that child timeout, with five-second connection/read/
 write timeouts. Runtime DB calls also use five-second driver timeouts; the
-existing pool/deadlock retry contracts remain in use. AI claiming is wrapped
-explicitly by this harness in the existing `run_mysql_deadlock_retry` component,
-with at most three retries for InnoDB error 1213 only. The entire short claim
-transaction is retried, never inference, publication, delivery or ambiguous
-connection loss. `aiClaimTransactionAttempts` and `aiClaimDeadlockRetries`
-report that policy separately; it is not a claim that the unwrapped production
-AI consumer already has this retry policy. These are stall guards,
+existing pool/deadlock retry contracts remain in use. The production AI claim
+now uses the existing whole-transaction retry boundary, with three retries by
+default for InnoDB error 1213 only. The entire short claim transaction is
+retried, never inference, publication, delivery or ambiguous connection loss.
+The harness adds no outer retry. `aiClaimTransactionAttempts` and
+`aiClaimDeadlockRetries` read the production receipt, including exhausted
+attempts. The historical reports explicitly identify their former
+harness-applied policy; those measurements remain unchanged. These are stall guards,
 not service-level performance objectives.
 
 For `C = accounts * completed waves`, the final checks require `3C + 1`
@@ -280,9 +286,9 @@ Exact zero invariants and recovery evidence:
 
 There were **42 recovered InnoDB 1213 deadlocks** in 1,982 AI-claim transaction
 attempts across 1,940 timed claim calls (including empty polls). These retries
-used the explicitly harness-applied, existing bounded retry component described
-above. This is neither a zero-deadlock result nor evidence that the unwrapped
-production AI consumer already has that retry policy.
+used the former explicitly harness-applied, existing bounded retry component.
+This historical run is neither a zero-deadlock result nor evidence about the
+later production policy; see the follow-up report for its separate validation.
 
 Actual soak latency, milliseconds; nearest-rank percentiles, with tracing and
 verification overhead included:

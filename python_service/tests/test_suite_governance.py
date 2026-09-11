@@ -135,7 +135,12 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # completion/receipt recovery add 25 focused boundary tests.
         # Integrated domain ownership, HTTP access/payloads, atomic history and
         # isolated multi-account recovery add 76 focused regressions.
-        self.assertLessEqual(total, 1326)
+        # Production claim retry keeps rollback, ambiguous failure and model
+        # execution separate. Legacy notification contracts and passive live
+        # evidence protect policy gates and distinguish observation from proof.
+        # Literal-only MySQL scope checks also guard account identity and
+        # JSON_TABLE collation without constructing application stores.
+        self.assertLessEqual(total, 1375)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

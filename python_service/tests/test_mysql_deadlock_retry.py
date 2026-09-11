@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.infrastructure.mysql_operational_connection import (
     MySQLDeadlockRetryExhausted,
+    mysql_deadlock_retry_count,
     run_mysql_deadlock_retry,
 )
 from digital_twin.infrastructure.mysql_versioned_runtime import (
@@ -16,6 +17,17 @@ from digital_twin.infrastructure.mysql_versioned_runtime import (
 
 
 class MySQLDeadlockRetryTests(unittest.TestCase):
+    def test_retry_count_honors_both_numeric_and_text_zero(self):
+        for value in (0, "0"):
+            with self.subTest(value=value):
+                self.assertEqual(0, mysql_deadlock_retry_count({"mysqlDeadlockRetryCount": value}))
+
+    def test_retry_count_bounds_and_nonfinite_values_keep_a_finite_budget(self):
+        for value, expected in ((None, 3), ("", 3), ("invalid", 3), (float("inf"), 3),
+                                ("nan", 3), (-1, 0), (99, 8)):
+            with self.subTest(value=value):
+                self.assertEqual(expected, mysql_deadlock_retry_count({"mysqlDeadlockRetryCount": value}))
+
     def test_reasoning_deployment_retirement_uses_deadlock_retry_boundary(self):
         store = object.__new__(MySQLReasoningEngineRegistryStore)
         store.runtime_settings = {}

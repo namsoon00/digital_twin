@@ -741,6 +741,15 @@ class AIInferenceQueueScheduler:
             started = time.monotonic()
             try:
                 processed = self.runner.run_once(limit=limit)
+                retry = dict(getattr(self.runner, "last_claim_retry", {}) or {})
+                if retry.get("recovered"):
+                    print(
+                        "AI queue claim transaction recovered. attempts="
+                        + str(retry.get("attempts") or 0)
+                        + " retries=" + str(retry.get("retryCount") or 0)
+                        + " delayMs=" + str(sum(retry.get("delaysMs") or [])),
+                        flush=True,
+                    )
                 if processed:
                     details = list(getattr(self.runner, "last_run_details", []) or [])
                     print("Processed AI inference requests: " + str(processed) + " · " + "; ".join(details[:6]))

@@ -98,13 +98,19 @@ notification transport was executed.
 
 ## Remaining Verification Limits
 
+Follow-up: [Backend Operational Stabilization](backend-operational-stabilization.md)
+adds production AI claim retry and passive runtime verification. The six
+notification disagreements listed below are historical migration evidence;
+they have since been corrected in tests without changing production policy.
+See [Legacy Notification Contracts](legacy-notification-contracts.md).
+
 The legacy shared test schema cannot safely run two complete suites at once.
 One concurrent full/core invocation hit MySQL error 1684 during table DDL.
 Both final suites passed when run sequentially; future full/core invocations
 must also be serialized. The new load harness uses its own exclusive schema
 and does not adopt that shared schema.
 
-Six additional tests outside the curated suite fail identically at pristine
+Six additional tests outside the curated suite failed identically at pristine
 baseline `637b49023` and after this migration (four assertion failures and two
 errors). Both reproductions used isolated schemas, disabled TypeDB, and kept
 the same test bodies apart from moved mock targets. Relevant web/policy

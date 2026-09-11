@@ -107,6 +107,7 @@
     "python:test:system": "node scripts/run-python-tests.js system",
     "python:test:full": "node scripts/run-python-tests.js full",
     "python:test:load": "python3 python_service/tests/verify_integrated_load.py",
+    "python:verify:runtime": "python3 python_service/tests/verify_runtime_continuity.py",
     "share": "node scripts/share-local.js",
     "share:publish-target": "node scripts/publish-live-target.js",
     "smoke": "node scripts/smoke-test.js",

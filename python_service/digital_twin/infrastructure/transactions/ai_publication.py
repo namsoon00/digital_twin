@@ -684,10 +684,12 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         worker = _clean(worker_id) or "notification-ai"
         bounded_limit = max(1, min(10, int(limit or 1)))
         bounded_lease = max(30, min(3600, int(lease_seconds or 360)))
-        stamp = utc_now()
-        lease_expires = _timestamp_after(bounded_lease)
-        claimed: List[AIInferenceRequest] = []
-        with self.transaction() as connection:
+
+        def claim_transaction(connection):
+            # A rolled-back attempt owns neither its selected rows nor its lease clock.
+            stamp = utc_now()
+            lease_expires = _timestamp_after(bounded_lease)
+            claimed: List[AIInferenceRequest] = []
             # Older workers could record a normal supersession race as a hard
             # AI failure after the source notification had already moved on.
             # Reclassify those rows before computing current queue health.
@@ -795,7 +797,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     "started_at": _clean(row.get("started_at")) or stamp,
                     "updated_at": stamp,
                 }))
-        return claimed
+            return claimed
+
+        self.last_transaction_retry = {}
+        return self.transaction_with_deadlock_retry("ai-inference-claim", claim_transaction)
 
     def heartbeat(self, request_id: str, worker_id: str, lease_seconds: int = 360) -> bool:
         stamp = utc_now()

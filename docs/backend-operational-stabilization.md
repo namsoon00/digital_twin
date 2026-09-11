@@ -11,8 +11,8 @@ bounded observation of the running system.
 - [x] Reconcile the six previously failing notification tests with current contracts.
 - [x] Add read-only runtime verification and validate its SQL against local MySQL.
 - [x] Complete integrated validation with the final source tree.
-- [ ] Observe the committed, restarted runtime for 900 seconds.
-- [ ] Complete publishing handoff.
+- [x] Observe the committed, restarted runtime for 900 seconds.
+- [x] Publish validated code and restart the managed runtime.
 
 ## AI Claim Boundary
 
@@ -130,3 +130,46 @@ Missing or stale linked evidence remains inconclusive, not an E2E pass.
 The pre-deployment smoke report is
 `/tmp/orbit-stability-runtime-smoke-4.json`. It reports sampled infrastructure
 as passing and new live AI/delivery as inconclusive. It is not a duration test.
+
+## Deployed Runtime Result
+
+Application commit `3793cc3bb` was pushed to `origin/main` and the managed
+runtime restarted. All 23 configured services were running. MySQL, TypeDB and
+the existing Cloudflare tunnel were preserved. Local version, bootstrap,
+accounts/watchlist, symbol suggestion, notifications, calendar and case reads
+returned HTTP 200 without payload errors. The authenticated Cloudflare version,
+bootstrap and case reads also returned HTTP 200 and matched that commit.
+
+The passive run observed **2026-09-11 18:19:21 through 18:34:22 UTC**:
+
+| Evidence | Result |
+| --- | --- |
+| Requested / observed duration | 900 / 900.114 seconds |
+| Scheduled observations | 16 of 16; no skipped slots |
+| First-to-last sample span | 900.008 seconds |
+| Allowlisted HTTP reads | 32 of 32 HTTP 200; maximum 6.711 ms |
+| Bounded, rollback-only SELECTs | 400; no read failures |
+| Maximum observation duration | 0.470 seconds |
+| Latest live-source timestamps | Nine distinct timestamps; advanced without regression |
+| Maximum sampled source age | 127.386 seconds; configured threshold 300 seconds |
+| Primary active/delivery/AI/notification backlog | Zero at first, last and peak sample |
+| Candidate-only backlog | Two old retry jobs throughout; `aged-backlog` warning retained |
+| Sampled infrastructure / source progress | `pass` / `pass` |
+| New linked AI / recorded investment delivery | `inconclusive` / `inconclusive` |
+
+Stored subjects observed were `OBSERVATION` or `REVIEW_ONLY`, with no new
+qualifying AI completion. The verifier exited **2**, deliberately distinguishing
+incomplete live-AI evidence from a passing infrastructure check. No model,
+investment notification, trade, promotion or repair was forced to obtain a pass.
+The candidate-only warning was not hidden and its rows were not deleted.
+
+Private local report:
+`/tmp/orbit-stability-runtime-3793cc3bb-900s.json`, with a sibling progress log.
+Both have file mode `0600`; the report includes the verifier source fingerprint.
+Raw reports and runtime data are not committed. This document-only follow-up
+does not alter the application code tested by that observation.
+
+Remaining limits: minute-spaced samples cannot prove availability between
+polls or 24-hour stability. Live TypeDB execution, a new AI-to-delivery chain,
+model quality, and every account/provider's freshness remain separate from
+the verified storage/queue contracts and sampled infrastructure result.

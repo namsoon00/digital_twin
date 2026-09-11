@@ -177,6 +177,996 @@
       ],
       "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='relation_types', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=None)])",
       "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_write_lease_seconds": {
+      "path": "projection_lock/policy.py",
+      "bodyHash": "1f6f920f4ffa62ba6740af7a54a137135211ec5c1bc988dc582247f0558e5d93",
+      "instance": true,
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.typedb_projection_coordinator_enabled": {
+      "path": "projection_lock/policy.py",
+      "bodyHash": "51428deaf40b61fb24297ac359e375427e42286d409457be9cdb5bf394423afc",
+      "instance": true,
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.typedb_projection_coordinator_lease_seconds": {
+      "path": "projection_lock/policy.py",
+      "bodyHash": "1a7625deb1f0ce7f4e977b0108244b73f519a83fd7e56a5f228270c8b85b40cf",
+      "instance": true,
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.typedb_projection_coordinator_retry_seconds": {
+      "path": "projection_lock/policy.py",
+      "bodyHash": "d39890f17c0f9f0a1fdd187d54d180520ffac5f24b44ad97b7c5ae110b38a639",
+      "instance": true,
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_write_lease_storage_id": {
+      "path": "projection_lock/policy.py",
+      "bodyHash": "ef1de1e7b717f9072aa0461197b99c722fc9bc2386ee63f44bed5b757e6ce485",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.local_process_alive": {
+      "path": "projection_lock/policy.py",
+      "bodyHash": "229f71cf239a798cbff656bb857d2937bce8b240e0f14d5b337c0e1b5143aa8d",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='process_id', annotation=Name(id='object', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.scoped_abox_write_lease_rows": {
+      "path": "projection_lock/lease.py",
+      "bodyHash": "ac1c624ebdf923acf64bccb1eb29aaa51380dfb795bd6dbac0d590daceb93e56",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_write_lease_world_ids": {
+      "path": "projection_lock/lease.py",
+      "bodyHash": "b5e27ca4f75094ebbb190333f3c7e13018de24250a52781164939c7f55f8853a",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_write_lease_status": {
+      "path": "projection_lock/lease.py",
+      "bodyHash": "ce3f1b9eaefcb92db7a6a0059133795e28775d524e354e6e46b3a15e279ac013",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_write_lease_graph": {
+      "path": "projection_lock/lease.py",
+      "bodyHash": "75453b35d0c832282886edd079a5af04e785945ca7b8471cb42307891ec23bee",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='owner', annotation=Name(id='str', ctx=Load())), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='lease_seconds', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=0), Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.delete_scoped_abox_write_lease": {
+      "path": "projection_lock/lease.py",
+      "bodyHash": "0137fa37bfac34ffb58393388e63c83230cbfd988ffe108482d5ac68c7037209",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.acquire_scoped_abox_write_lease": {
+      "path": "projection_lock/lease.py",
+      "bodyHash": "4f83103a057e6671cb1aaf967fd603a51525ef7049a13286ee5d633eb420c2ea",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='lease_seconds', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=''), Constant(value=0)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.release_scoped_abox_write_lease": {
+      "path": "projection_lock/lease.py",
+      "bodyHash": "bd02b05bddd0547c24c6bb2a47271a7ad74a4d021607df27d7169b95b7a7ebe5",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.projection_coordinator_lease_status": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "f128fc5d0145ba96ee3d4b7a7d356b28ed136873a20999e55a35604d4cbaa1f6",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.recover_dead_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "ede6cd02233589ec5e8b5d23386a90d4c7cddb6acd2d8d0c7de90bcb07f84cd3",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.projection_coordinator_write_enforced": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "08b0b5eec17f689fd7e582069395ebcc8d5b05d1ab258979d45779390123e949",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.active_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "502909dbcfb6dbdde9324f887c189fb2cffc26be21b56c81f29ab40b74b68ba8",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.projection_coordinator_token_is_active": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "449df59574a78814834b4d58dcb036944ca11ba51c197368370c27e9184d9c82",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='token', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.track_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "2026b8fee2db58378cf7273c113fed983b8ed9f8b87ea5b554aa98c79507cd26",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.forget_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "3c1a620c83af5649ff2821f99b287446bba1bd034e40759b6feb7f8cc0348f2c",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.projection_coordinator_write_scope": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "7dc797ad90fe7a15ec9c908fd158a57a8d34f16a2d9ebbfd6654dd5eae07b4d8",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='owner', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [
+        "contextmanager"
+      ]
+    },
+    "ScopedABoxManifestMixin.acquire_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "ce63cba748e1eff6ba9bdf71d91d6b6e8f83c7230eaee4f7063a738a66bc6eef",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='owner', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin._acquire_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "f7a34665103e95e0c3148125181453781bc6a3cd4a84c101b63614e7278615ce",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='owner', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='allow_adopt', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=False)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.release_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "71b2d95549617a7693a8f344095ab490c566460340a5d7b70c2e6134c3db8048",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin._release_projection_coordinator_lease": {
+      "path": "projection_lock/coordinator.py",
+      "bodyHash": "4b4b0af67de3ef078ca49438adc898566a39dfdafbcc5a2491b780834a7ce0c3",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.recover_dead_local_scoped_abox_write_lease": {
+      "path": "projection_lock/recovery.py",
+      "bodyHash": "cf77c90978144f519922f0b76a1283387211f5eb7156d7384475efb04b4f18d9",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='recover_untracked_current_process', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=False)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.recover_all_dead_local_scoped_abox_write_leases": {
+      "path": "projection_lock/recovery.py",
+      "bodyHash": "b52b0f640acf9b39bce3ef824dced03ba70bfbfe08b7f19e7074a1a2974e53c0",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.recover_scoped_abox_write_lease_after_server_start_for_world": {
+      "path": "projection_lock/recovery.py",
+      "bodyHash": "38eae7d9acb22d4260bdf2761836efb84a695366a4f761852f463accb8293294",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.recover_all_scoped_abox_write_leases_after_server_start": {
+      "path": "projection_lock/recovery.py",
+      "bodyHash": "4334abfaef0f95a015451dd09c2ba87f4bd0e24baee126edc65e0ed6f0e4d2d6",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.recover_scoped_abox_write_lease_after_server_start": {
+      "path": "projection_lock/recovery.py",
+      "bodyHash": "dd89b82e0a6b760461f479b637cc8b18a648a0c638d2cf2e864cfb908396a373",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.recover_scoped_abox_write_lease_after_managed_shutdown": {
+      "path": "projection_lock/recovery.py",
+      "bodyHash": "7c3cb612dc4675677fcb53149443cd1914ea65631ea07feadf50b469d1e5e106",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.active_abox_uses_scoped_manifest": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "a57275db4f90e78c23d65c35904d9f773f3deedc9bf7e77ee401b84027069fcc",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.active_abox_members_clause": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "f438dbe5dfaa395748ae380b0175e96928ce8e49532bed0287b054e22f09ae23",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='members', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Tuple', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='str', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_manifest_inventory": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "b87a39f9997df30aae4b7e9a5fc09eceb1f6e4e89a030822c58cbc17b2d86bfd",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_integrity_audit": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "95fff20d859435d3759c71b7e993f6ee3ef11a1a5e553c404fc14e34b99580b3",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='cursor', annotation=Name(id='int', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='scope_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=0), Constant(value=20), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_storage_diagnostics": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "bbc90962d49a08df95e4a78097bd35c5680d0b751bf8ec7819ab79f2fe5ddf84",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.current_state_slot_inventory": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "9f187bd007753ae575b95cb979276998525999f204993a4c183620bdc3bb367e",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='physical_generation_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.current_state_storage_inventory": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "fba00231973d2992303f63dd5c7cf22bb2aa52c1d4db28dcdcff230fb8e71210",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='node_storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='relation_storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.read_active_scoped_abox_rows": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "7cf2a4916adf504fc5e3b5396855a3cb6e04c3bc519fa1afbb1b55f1d99d4e29",
+      "instance": true,
+      "runtimeFields": [
+        "endpoint_node_row"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='active_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='scope_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_manifest_generation_references": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "7e2d2c9a21c1447448f2abb300296b87a5cc21d1f6af327ee4c40da2a9c1f65d",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_orphan_candidate_inventory": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "a44ff3913dcbbef5d8b39da33e2d6fb2f8db03f210fa64e2d8ce7f4e5d92b965",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_scope_row_counts": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "12266eba27b61b57d875d81abe2ed37b8e944bdc7bfcb25630f05d49dda1ad31",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='scope_id', annotation=Name(id='str', ctx=Load())), arg(arg='generation_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_scope_row_counts_batch": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "97cfe4cfa09fe7af721d9c2a3140fcfb7fb4746a1a380785059fd52dfa381d3e",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='scope_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_storage_rows_by_id": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "a0a66cd554216f2c2a50b455bf2820d1e52d84f6f909a0bb0a149e82297be324",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='node_storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='relation_storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_manifest_metadata": {
+      "path": "graph_reads/inventory.py",
+      "bodyHash": "05619392733991c6158b5f9f4cbf85e248ca26acb86846004101ae32ca13a547",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_rows": {
+      "path": "graph_reads/execution.py",
+      "bodyHash": "d51fdedacecbb55ddc91da233d192eb6cfe1dcc190a2d8d017d27bfe4666e110",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='query', annotation=Name(id='str', ctx=Load())), arg(arg='columns', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='label', annotation=Name(id='str', ctx=Load())), arg(arg='timeout_seconds', annotation=Name(id='float', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='typedb.read'), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_rows_in_transaction": {
+      "path": "graph_reads/execution.py",
+      "bodyHash": "ad3a0060152842805ebbb5e1f2afac6ed74fcd779bb698ee62982fc0f4f1544f",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout",
+        "typedb_row_value"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='tx'), arg(arg='query', annotation=Name(id='str', ctx=Load())), arg(arg='columns', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='label', annotation=Name(id='str', ctx=Load())), arg(arg='timeout_seconds', annotation=Name(id='float', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='typedb.read'), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.has_box_rows": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "9ae139db7fbda0f5024c33d124478859b5b205b46e85ecaf796d8fcc641d1213",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_entity_rows": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "d368bd123b21ecf5d9b6ed6c37bd175d40062c41bbc2ff43caf7904665f2687b",
+      "instance": true,
+      "runtimeFields": [
+        "normalized_boxes",
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=0), Constant(value=''), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_active_hypothesis_calibration_rows": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "d3bc8b712c6846674e442de760fb3f817e4abf9e4fd5b5a8abfb235b6fb1bc92",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=40), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.hypothesis_calibration_snapshot": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "519c8940c24f7cc9f5f6f76e424e0eb61c32dec22a99981ca1ca8897cc186290",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='source_abox_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='generation_aligned', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=40), Constant(value=''), Constant(value=''), Constant(value=False)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.hypothesis_calibration_snapshot_for_native_result": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "bf2a6783e64ad66bf6e6ae38919f5887ed3d1bd4a044e629a17ded6ab30be27a",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='matched_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='source_abox_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='generation_aligned', annotation=Name(id='bool', ctx=Load())), arg(arg='scoped_active_abox', annotation=Name(id='bool', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=40), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_entity_rows_by_ids": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "fb9acac21b578da20a972f4535d416c0955388f0077e2aa66975816802a52809",
+      "instance": true,
+      "runtimeFields": [
+        "normalized_boxes"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_abox_entity_rows_by_storage_ids": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "b0f58633f4f8d200a2186e22973c83eca5b1d22d545a2ffb6cb083b186f95502",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_abox_relation_rows_by_storage_ids": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "95365db10696223d9a62f8e6b9282b777b43cb90525b9917390a480ce4dc5a0f",
+      "instance": true,
+      "runtimeFields": [
+        "endpoint_node_row"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='relation_types', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_relation_rows_by_source_ids": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "39d11cb2d1d809ff88e375ca1e9035238765e6880df8bcf484b3a40a4e088d0c",
+      "instance": true,
+      "runtimeFields": [
+        "endpoint_node_row",
+        "normalized_boxes"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='source_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='relation_types', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='include_incoming', annotation=Name(id='bool', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=True), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.active_abox_relation_types_by_symbol": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "f15cb761c0b019cd0139ee2b8189d12e88bb730bcd0a80d248ecee1384461910",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='timeout_seconds', annotation=Name(id='float', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='active_abox_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=''), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.active_abox_rule_context": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "6ebdf23c2e30857295892e29ba54796691403d883b0c5534a37c2407944146e4",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_relation_rows": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "7f8116ee09b64fc504abefcdfd09bd518f19970bb3db06f87fc967edc086a77c",
+      "instance": true,
+      "runtimeFields": [
+        "normalized_boxes",
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=0), Constant(value=''), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_inferencebox_entity_rows": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "0cce8f563bf9c4152cad37795c3f8ea9089df9587750888447c6d7481af789f9",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='generation_id', annotation=Name(id='str', ctx=Load())), arg(arg='symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None), Constant(value=0), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_inferencebox_relation_rows": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "9047842cf2609714842244834fb7e321bafd4d057becd14a38bb25138658a2e5",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='generation_id', annotation=Name(id='str', ctx=Load())), arg(arg='symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None), Constant(value=0), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.entity_row_from_typeql": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "269511ecb49af0424388de7922c5e43438771806a01d60f69e5008b33ba9ce14",
+      "instance": true,
+      "runtimeFields": [
+        "list_of_strings",
+        "merge_flat_properties"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='box', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.relation_row_from_typeql": {
+      "path": "graph_reads/rows.py",
+      "bodyHash": "d9d4de62309b329305f24682600ce9ea54c2aee3d3daffc707b779e7bef952a3",
+      "instance": true,
+      "runtimeFields": [
+        "list_of_strings",
+        "merge_flat_properties"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='box', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.active_tbox_metadata": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "3bbe4d46f60e4bd079ffb06a093bd2075eec545a39f9b0c3b103313024b5a0f7",
+      "instance": true,
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.box_snapshot_row_counts": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "c5a0d92f2828804c6d964d82a30abb0477ce024751532406a9614424a39b602a",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.box_row_counts": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "e13251bdbec6ca8b926c8c1699c27c783e49efc217e043053d70d222f571b7eb",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.abox_projection_marker_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "dd0b12ea58e5fc45932e89006a856417b647fac4d3fa331b9674052d898eeacf",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=''), Constant(value=0)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.active_worldview_manifest_pointer_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "e771f1871da2dbfe5b123b265736069bdb2af1169f0ab13b31fbb6105e117d23",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=0)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.active_worldview_manifest_pointer_identity_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "232781f390dcd08e9a1b9ec1d3ccdcb1b3eb67d28cc47ae5988c2a968e93058b",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=0)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.worldview_manifest_marker_count": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "7279fa1f0b328d75da7c55e8665d453de91ec3e74d9741376c0af8170d899a83",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.worldview_manifest_marker_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "2225f2cf20b1c3041f8ae5fae7a94ce560e94d968c85d15e650996cdfd77f60a",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=''), Constant(value=0)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.worldview_manifest_marker_identity_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "b9e2dcfe0d0fe3145529be147c13187e487e879b379ff8257dfdfb83b29f2ec3",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=''), Constant(value=0)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.scoped_abox_metadata_from_manifest_marker": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "8eb2de093f97afdcb2b81c06b59e6d4476863cb402c56721161470de70f41ed2",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='marker', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.active_abox_pointer_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "eff21dfd5f355c36001bd53ceaf691cdb17d17c84f7088919942eef5325f7c89",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=0)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.abox_metadata_from_marker": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "c6146260bd1f37d649378c6bff987e1925bdece6b76eda5a4e3101a181819e8b",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='marker', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.active_abox_metadata": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "f2db688484ea0ffcddde37c4b0bc0cf3a997db1631bae50cf491f024149a0928",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.active_inference_generation_marker_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "b9a309e393bc551e3e208617ee6dbddda5fe64be96cfc11f09a0639399622be7",
+      "instance": true,
+      "runtimeFields": [
+        "typeql_limit_clause"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=1)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.inferencebox_recovery_metadata": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "356eca09c8529bee621d8074314082479b7b7c5e492d743b06f1d99d94a8f160",
+      "instance": true,
+      "runtimeFields": [
+        "inference_rulebox_metadata",
+        "native_inference_decision_eligible",
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.inferencebox_commit_proof": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "bb4b48fa5bd694f84b790edff0c74b05fe211dc2989d46c8e8d147d2a4cec317",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='inference_generation_id', annotation=Name(id='str', ctx=Load())), arg(arg='source_abox_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.list_ontology_worlds": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "064ade2d45f915b8fb33c674ae004423b2fc3edca3fe3f4c5ab58758322ca824",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.abox_pending_activation_rows": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "f90680ab2c4c009e36709df9729562f969149528a54a72288d81a68fd34ec764",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.pending_abox_activation": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "8ad160a7825d496082cc2ccb4fa4cca417e5f946ead57da04e652c6b4779259d",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.read_inference_generation_records": {
+      "path": "graph_reads/metadata.py",
+      "bodyHash": "c1a8c42543d7d824fd181a83f1540f78fddcd1b6d6020a03754310c3191b16a9",
+      "instance": true,
+      "runtimeFields": [
+        "inference_generation_records",
+        "inference_marker_is_active"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='published_only', annotation=Name(id='bool', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=True), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.reset_query_metrics": {
+      "path": "graph_reads/metrics.py",
+      "bodyHash": "6a575a8b8d9b5e14f417afc578e3f8a089ef960a305b9eeece6546b286018d28",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.record_query_metric": {
+      "path": "graph_reads/metrics.py",
+      "bodyHash": "238ee6431e5109aba2861b70a78f2d7c2f97b1c65e9ccee6243c60a9a621e9d4",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='label', annotation=Name(id='str', ctx=Load())), arg(arg='query', annotation=Name(id='str', ctx=Load())), arg(arg='row_count', annotation=Name(id='int', ctx=Load())), arg(arg='duration_ms', annotation=Name(id='float', ctx=Load())), arg(arg='status', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='ok')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.query_metrics_snapshot": {
+      "path": "graph_reads/metrics.py",
+      "bodyHash": "80d87eceb1764da51a91ddd15aca31ade7f039b01ca23fd7720c1c6e6adb6d69",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.delete_current_state_slot_rows": {
+      "path": "graph_maintenance/current_state.py",
+      "bodyHash": "03d341767386d7c6201446c62e99dfa26424349c6833121fad594dc6e8f5dfe1",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='physical_generation_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.delete_current_state_storage_ids": {
+      "path": "graph_maintenance/current_state.py",
+      "bodyHash": "7e73d832b91a07ec8bc4c3b6f453bf9afa3d559bd4a515e4d7db204c1ba7e3b3",
+      "instance": true,
+      "runtimeFields": [
+        "runtime_settings",
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='node_storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='relation_storage_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_abox_orphan_cleanup_max_generations": {
+      "path": "graph_maintenance/orphans.py",
+      "bodyHash": "66593c984c17689ac2ee82d117a56b1b83809087143650e628cbf25cefcabe72",
+      "instance": true,
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.cleanup_orphan_scoped_abox_candidates": {
+      "path": "graph_maintenance/orphans.py",
+      "bodyHash": "fb55d2f91ad0751fbdd2227387f2f4c13c98820ea8e8aac32f15e060c0cc5668",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='max_generation_count', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=0), Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.prune_orphan_scoped_abox_candidates": {
+      "path": "graph_maintenance/orphans.py",
+      "bodyHash": "68e57bffa3c9328a8270ef6d359900a2484fb3616bca5753a37a61cb4016e901",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='max_generation_count', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=0)])",
+      "decorators": [],
+      "originalBodyHash": "f8565c5742feb29450827fd322fe6434443881ecd7bee158101a90c9819689dc",
+      "correction": "Remove undefined, unused timing assignment before orphan cleanup; preserve control and deletion policy."
+    },
+    "ScopedABoxManifestMixin.discard_scoped_abox_manifest_in_driver": {
+      "path": "graph_maintenance/manifests.py",
+      "bodyHash": "98375e3be73fb6dcf8bfef1daeec955c953a7efc8d769ebbff085c866de7d303",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='protected_generation_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='max_delete_batches', annotation=Name(id='int', ctx=Load())), arg(arg='delete_batch_size', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=''), Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.discard_scoped_abox_manifest": {
+      "path": "graph_maintenance/manifests.py",
+      "bodyHash": "de0569021783a02b716379a1ed3b24fc9c20a58c2f1b627f21d16f93e7fba006",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.delete_worldview_manifest_markers_batch": {
+      "path": "graph_maintenance/manifests.py",
+      "bodyHash": "10d916e5d063b8fcaf7243d7cec72308ba84c139857b328d110883af854d900d",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='manifest_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.prune_inactive_scoped_abox_manifests_in_driver": {
+      "path": "graph_maintenance/manifests.py",
+      "bodyHash": "31ad48fe532cea2cde19e4a0a7e6b2bd3df3ea8086e427520b6880ff9966b84f",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='active_manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='keep_inactive_count', annotation=Name(id='int', ctx=Load())), arg(arg='max_manifests', annotation=Name(id='int', ctx=Load())), arg(arg='max_delete_batches', annotation=Name(id='int', ctx=Load())), arg(arg='delete_batch_size', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='max_duration_seconds', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None), Constant(value=None), Constant(value=None), Constant(value=None), Constant(value=''), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.prune_inactive_scoped_abox_manifests": {
+      "path": "graph_maintenance/manifests.py",
+      "bodyHash": "8e307eb190ac32472b6fe2e45b6063ae6a91f5b78d7283dc2521668d8170e088",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='keep_inactive_count', annotation=Name(id='int', ctx=Load())), arg(arg='max_manifests', annotation=Name(id='int', ctx=Load())), arg(arg='max_delete_batches', annotation=Name(id='int', ctx=Load())), arg(arg='delete_batch_size', annotation=Name(id='int', ctx=Load())), arg(arg='max_duration_seconds', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None), Constant(value=None), Constant(value=None), Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.run_deferred_maintenance": {
+      "path": "graph_maintenance/runner.py",
+      "bodyHash": "f863135f80a45e867594d5e4daa23c92944961cae3babc510596be2cc9370bf3",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "coordinated_typedb_projection_write('deferred-maintenance', typedb_projection_world_from_payload)"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.box_snapshot_instance_exists": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "c73fe6fe89ee55c3526327080608be41ca2e38c41fe195a2b6260b057ac3eb64",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='type_label', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.box_manifest_instance_exists": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "8a43d7a665eeaa4ca2d3ea86dca12791f1f9c0d2cc3e96da8bf9dc1587fa7f14",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='type_label', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.box_manifest_delete_batch_query": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "846223edce131ec73b4d19a47d4b66abc8be66e27644688cbbae8743ef713857",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='type_label', annotation=Name(id='str', ctx=Load())), arg(arg='batch_size', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.delete_box_manifest_rows_in_batches": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "0dc131a7373a3af409c3d689abbbfed8339f168095039557cecde0469d557efa",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='batch_size', annotation=Name(id='int', ctx=Load())), arg(arg='max_batches', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.box_snapshot_delete_batch_query": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "d86dd2227764d4c277f75bc6936d8d355ff7193a0850e96cb668987a4174b0bc",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='type_label', annotation=Name(id='str', ctx=Load())), arg(arg='batch_size', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.box_snapshot_external_relation_references": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "89392634b84c38a8598d3adc08056610c34bd593949625495fe8f2ee62ea47a5",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=5)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.delete_box_snapshot_rows_in_batches": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "f9f9e86466d3099e533545542a2f36733a98147209f6880a821e50d2a223b28b",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='batch_size', annotation=Name(id='int', ctx=Load())), arg(arg='max_batches', annotation=Name(id='int', ctx=Load())), arg(arg='deadline_monotonic', annotation=Name(id='float', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.discard_abox_generation": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "839e53e5bbb675c2d15dc523b165ff77558301f17a951f966ffea7e87f82faf4",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.delete_box_rows_in_batches": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "52a48b51706d19afda02b21f5492745b7f6173191993119610639527e2340937",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.delete_world_abox_control_rows": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "363fb833d71126f73b504249d5c2b8ab97bd3ec70a54ee3930f4a2638d7dfb3a",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_operation_timeout"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.cleanup_inactive_abox_candidates": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "7d2fbc27d7a1d118aed865bbd92d02ec82a56d2dfa83dc6b5a9769ba2f199ba5",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='active_snapshot_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.drain_inactive_abox_generations_incrementally": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "69e9fbfe93fe153004ae929c1afdda0955bd73c6111a328e331eed8a3da9f3ad",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='active_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='excluded_snapshot_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.prune_inactive_abox_generations": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "c88951dd88ff414bdaaad4f8913e28f70340144aec7f4d037dd020fe48a83a0e",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='active_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='keep_inactive_count', annotation=Name(id='int', ctx=Load())), arg(arg='max_generations', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.clear_boxes_in_batches": {
+      "path": "graph_maintenance/generations.py",
+      "bodyHash": "853c9c84c34f6b4f343b92d0e6d8760941660fb7218abb89c6f63a6bfa21d955",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
     }
   },
   "helpers": {

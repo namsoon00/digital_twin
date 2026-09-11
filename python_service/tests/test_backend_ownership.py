@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,6 +95,64 @@ class BackendOwnershipTests(unittest.TestCase):
         failed = native_gate_scenario(api, 'error')
         self.assertEqual('RuntimeError', failed['result']['raised'])
         self.assertEqual(['run', 'release'], [event[0] for event in failed['events']])
+
+    def test_orphan_cleanup_reaches_bounded_delete_and_closes_on_failure(self):
+        from digital_twin.infrastructure import typedb_ontology as api
+        with patch.object(api, 'runtime_settings', return_value={}):
+            repository = api.TypeDBOntologyGraphRepository('fixture.invalid', retry_count=0)
+        calls = []
+        repository.driver_imports = lambda: (('fixture',), None)
+        repository.open_driver = lambda imported: 'fixture-driver'
+        repository.close_driver = lambda driver: calls.append(['close', driver])
+        repository.ensure_database = lambda driver: calls.append(['database'])
+        repository.ensure_schema = lambda driver, imported: calls.append(['schema'])
+        repository.scoped_abox_orphan_candidate_inventory = lambda world: {
+            'candidateGenerationIds': ['orphan-one', 'orphan-two'], 'candidateManifestIds': []}
+        repository.delete_box_snapshot_rows_in_batches = lambda driver, imported, box, generation: calls.append(['delete', generation]) or {'status': 'ok', 'deletedBatchCount': 1}
+        result = repository.prune_orphan_scoped_abox_candidates('market:fixture', max_generation_count=1)
+        self.assertEqual('partial', result['status'])
+        self.assertEqual(['orphan-one'], result['removedGenerationIds'])
+        self.assertEqual(['orphan-two'], result['remainingGenerationIds'])
+        self.assertEqual([['database'], ['schema'], ['delete', 'orphan-one'], ['close', 'fixture-driver']], calls)
+        repository.ensure_schema = lambda *args: (_ for _ in ()).throw(RuntimeError('schema unavailable'))
+        result = repository.prune_orphan_scoped_abox_candidates('market:fixture')
+        self.assertEqual('error', result['status'])
+        self.assertEqual(['close', 'fixture-driver'], calls[-1])
+
+    def test_lease_state_is_per_repository_and_nested_adoption_is_thread_local(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from digital_twin.infrastructure import typedb_ontology as api
+        with patch.object(api, 'runtime_settings', return_value={}):
+            first = api.TypeDBOntologyGraphRepository('fixture.invalid')
+            second = api.TypeDBOntologyGraphRepository('fixture.invalid')
+        first.typedb_projection_coordinator_enabled = lambda: False
+        self.assertIsNot(first._projection_leases, second._projection_leases)
+        lock = first._projection_coordinator_registry_lock
+        with first.projection_coordinator_write_scope('outer') as outer:
+            self.assertTrue(outer['acquired'])
+            with first.projection_coordinator_write_scope('inner') as inner:
+                self.assertTrue(inner['adopted'])
+            self.assertEqual(1, len(first._projection_coordinator_local.leases))
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                self.assertEqual({}, worker.submit(first.active_projection_coordinator_lease).result())
+            self.assertEqual({}, second.active_projection_coordinator_lease())
+        self.assertEqual({}, first.active_projection_coordinator_lease())
+        self.assertEqual(0, first._projection_coordinator_local.explicit_scope_depth)
+        self.assertIs(lock, first._projection_coordinator_registry_lock)
+
+    def test_query_metric_state_stays_bounded_and_does_not_leak_to_other_repositories(self):
+        from digital_twin.infrastructure import typedb_ontology as api
+        with patch.object(api, 'runtime_settings', return_value={}):
+            first = api.TypeDBOntologyGraphRepository('fixture.invalid', query_metrics_enabled=True)
+            second = api.TypeDBOntologyGraphRepository('fixture.invalid', query_metrics_enabled=True)
+        lock = first._query_metrics_lock
+        for index in range(130):
+            first.record_query_metric('fixture', 'match $x isa fixture;', 1, index)
+        self.assertEqual(120, first.query_metrics_snapshot()['queryCount'])
+        self.assertEqual(0, second.query_metrics_snapshot()['queryCount'])
+        first.reset_query_metrics()
+        self.assertEqual(0, first.query_metrics_snapshot()['queryCount'])
+        self.assertIs(lock, first._query_metrics_lock)
 
     def test_manifest_index_helpers_match_original_code(self):
         for name, entry in self.contract['helpers'].items():

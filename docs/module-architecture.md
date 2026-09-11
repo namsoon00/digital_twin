@@ -194,8 +194,9 @@ The row writer cannot activate a generation through its port. It retains the
 existing short-lived driver per bounded commit, storage reuse checks, endpoint
 inventory, relation-plan fallback and telemetry. Physical batches are still
 incremental, not a single transaction for the complete graph. Candidate plans,
-copy-on-write/current-state selection, Manifest construction and verification,
-projection coordinator and scoped writer leases remain in the shared adapter.
+copy-on-write/current-state selection and row-image verification now live in
+`abox_candidates/`. Manifest construction, the save coordinator, database
+readback queries and scoped writer leases remain in the shared adapter.
 This extraction does not change those policies or add a new atomicity guarantee
 for in-place physical fact updates.
 
@@ -284,6 +285,66 @@ models commit/rollback only; it does not validate TypeQL or simulate native
 server crashes. Existing native repository and replay suites remain required.
 No investment rules, native engine version, event contract, asynchronous
 boundary, deployment target or database schema definition changed.
+
+## ABox Candidate and Recovery Boundary
+
+`modules/reasoning/infrastructure/abox_candidates/` separates candidate planning
+and row-image validation from physical writes, and interrupted-activation
+recovery from the general graph repository. It is private to reasoning and
+remains synchronous under the existing projection coordinator. This is not an
+additional business module, worker, queue or general event framework.
+
+| File | Responsibility |
+| --- | --- |
+| `scope_plan.py` | Normalize scope plans and choose physical generation identities |
+| `selection.py` | Distinguish semantic changes, physical-only relation rebinds and reusable scope/index entries |
+| `row_image.py` | Copy the graph into its physical generation and map selected scope rows |
+| `rows.py` | Reconcile current and retained rows; validate candidate counts, generations and exact endpoint identities |
+| `identity.py` | Pure world/box/generation storage identities and material-content fingerprints |
+| `validation.py` | Dedupe rows, validate identity readback/reuse and report missing endpoints |
+| `recovery.py` | Inspect the pending journal, active Manifest and bounded native-result marker; restore control or finalize through existing operations |
+| `retry.py` | Delegate transport retries without replaying semantic candidate failures inline |
+| `ports.py` | Separate mapping, identity readback, guarded recovery and retry capabilities |
+
+Twenty-one facade methods delegate or alias these implementations; three
+shared storage helpers are re-exported for existing callers. The facade keeps
+the `pending-abox-recovery` coordinator decorator. A denied write lease must
+return before reading the journal, and an exception must release the guard.
+The recovery implementation is not a public unguarded entry point. Its port
+exposes neither physical row deletion nor native rule execution, and cannot
+request a complete historical graph or InferenceBox. Mapping/validation ports
+cannot activate a generation. These are logical capability contracts, not a
+runtime security sandbox.
+
+Planning preserves the distinction between a new fact and an existing relation
+whose endpoint now has another storage identity. Only semantic selections seed
+relation expansion; integrity-only companions do not expand the patch into
+unrelated assertions. Deferred scopes retain their published image, and
+physical-only rebinds retain active semantic assertions. The existing bounded
+current-image fallback is allowed only when obsolete endpoints can be replaced
+by a complete, count-aligned current relation scope. Invalid endpoint,
+generation or row-count results return diagnostics without writable rows.
+
+Recovery preserves the existing world-specific policies. Aligned, completed
+native `matched` or `no-match` proof with requested target coverage can finalize
+a pending candidate. An unproven account candidate retains its journal and
+requires a bounded native retry. Shared-premise recovery and oversized-batch
+recovery may restore the verified predecessor through the existing control
+adapter; they do not delete candidate facts here. Unreadable control state
+cannot authorize a new judgement. The initial active generation with no target
+symbols retains its special control-only journal-clear path; this does not
+create a native result or investment opinion. Recovery does not add an atomic
+commit across physical facts and native results.
+
+Seventy-five synthetic golden scenarios captured from `f6ef96d9dec2` cover
+selection, physical images, row identities and recovery state/callback order.
+Eighteen tests additionally verify endpoint closure, input immutability,
+generation/world isolation, narrow imports/ports, transport-only retries,
+idempotence, failed control writes and coordinator refusal/release. They model
+interruption states with injected stores, not a real TypeDB server crash.
+Native query/rule semantics, engine version and persisted formats are unchanged.
+The larger reconciliation and recovery algorithms remain intact inside their
+new owners; splitting those algorithms is separate from this ownership move.
 
 ## Synchronous and Asynchronous Boundaries
 
@@ -378,12 +439,13 @@ claim that the entire persistence/domain migration is complete:
 - Runtime builders are physically separated and loaded lazily, but some
   reasoning builders still assemble large collaborator graphs. Those graphs
   are not fully described by module import checks alone.
-- `typedb_ontology.py` still has roughly 24,600 lines after query, inference
-  publication, ABox write/control and connection/schema extraction. Its state
+- `typedb_ontology.py` still has roughly 22,700 lines after query, inference
+  publication, ABox write/control, connection/schema and candidate/recovery
+  extraction. Its state
   identities remain at the composition boundary. `ontology_projection.py`
-  remains a large shared adapter. Candidate/Manifest planning and verification,
-  projection leases, recovery, maintenance and native
-  execution orchestration still need ownership separation. The atomic control
+  remains a large shared adapter. The scoped save coordinator, Manifest/index
+  construction, database readback queries, projection leases, maintenance and
+  native execution orchestration still need ownership separation. The atomic control
   limit fix is explicit above; investment semantics are unchanged.
 - The MySQL schema and operational store facade remain shared. Owner helpers
   restrict the changed write paths, but do not enforce table ownership for
@@ -395,10 +457,11 @@ claim that the entire persistence/domain migration is complete:
   Existing job-specific recovery remains authoritative.
 
 Next work should move remaining store ports and table writes one owner at a
-time, then simplify large builder dependency graphs. Following TypeQL and
-InferenceBox publication, scoped ABox write/control and connection/schema
-extraction, separate candidate/Manifest orchestration and state ownership only
-with immutable replay and failure-path tests.
+time, then simplify large builder dependency graphs. Following TypeQL,
+InferenceBox publication, scoped ABox write/control, connection/schema and
+candidate/recovery extraction, separate the remaining save/Manifest
+orchestration and state ownership only with immutable replay and failure-path
+tests.
 Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
 asynchronous APIs by default.
@@ -428,6 +491,9 @@ asynchronous APIs by default.
   fingerprints, shared/dedicated driver ownership, retries and deadlines,
   readiness-cache scope, partial schema resumption, HTTP failures and narrow
   driver-free port execution.
+- `test_abox_candidates.py`: original candidate/recovery fingerprints, exact
+  row-image closure, deferred facts and relation rebinding, identity readback,
+  bounded world-scoped recovery, idempotence and retained coordinator guards.
 - The web smoke test checks changed-field payloads and existing pages.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not

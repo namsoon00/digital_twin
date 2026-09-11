@@ -121,7 +121,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Driver sharing, deadline isolation, cache scope, resumable schema
         # bootstrap and optional HTTP/driver failure contracts are independent
         # of investment rule semantics and need dedicated runtime coverage.
-        self.assertLessEqual(total, 1136)
+        # Candidate-image closure and guarded recovery separately preserve
+        # semantic facts, physical ownership and pending-generation safety.
+        self.assertLessEqual(total, 1154)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

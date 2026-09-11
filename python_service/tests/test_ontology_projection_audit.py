@@ -754,6 +754,14 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual({("005930", context_rule): 1, ("NVDA", context_rule): 1,
                           ("005930", stock_rule): 0, ("NVDA", stock_rule): 1}, outcomes)
 
+        # The selected-ID-only compact form retains the same context proof.
+        executed_rows = result["ruleboxExecution"]["nativeMatchResult"]["executedRules"]
+        result["ruleboxExecution"]["nativeMatchResult"]["executedRules"] = []
+        compact_trace = reasoning_execution_trace_payload(run, result)
+        self.assertEqual(4, store._upsert_rule_result_slots_with_connection(
+            RecordingConnection(), run, result, compact_trace, "now",
+        ))
+
         # Unknown owners, worlds, kinds, and mixed precise/unknown identities
         # must not become reusable per-stock evidence, even for one target.
         for invalid in (
@@ -763,9 +771,11 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             {**context_match, "sourceKind": "stock"},
             {**context_match, "sourceId": "position:main:NVDA"},
         ):
-            for targets in (["005930", "NVDA"], ["NVDA"]):
-                with self.subTest(invalid=invalid, targets=targets):
+            for targets, rows in ((["005930", "NVDA"], executed_rows), (["NVDA"], executed_rows),
+                                  (["005930", "NVDA"], []), (["NVDA"], [])):
+                with self.subTest(invalid=invalid, targets=targets, compact=not rows):
                     invalid_run = replace(run, source_symbols=targets)
+                    result["ruleboxExecution"]["nativeMatchResult"]["executedRules"] = rows
                     result["ruleboxExecution"]["nativeMatchResult"]["matches"] = [context_match, invalid, stock_match]
                     invalid_trace = reasoning_execution_trace_payload(invalid_run, result)
                     connection = RecordingConnection()

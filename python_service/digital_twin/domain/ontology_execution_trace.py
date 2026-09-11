@@ -499,12 +499,10 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
                 record_matched = False
                 matched_target_symbols = []
                 unresolved_match_target = True
-        if status_group == "executed":
-            status = (
-                "matched-target-unresolved"
-                if unresolved_match_target
-                else "matched" if record_matched else "evaluated-no-match"
-            )
+        if unresolved_match_target:
+            status = "matched-target-unresolved"
+        elif status_group == "executed":
+            status = "matched" if record_matched else "evaluated-no-match"
         elif status_group == "selected":
             status = "selected"
         elif status_group == "deferred":

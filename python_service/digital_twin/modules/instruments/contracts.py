@@ -15,6 +15,9 @@ _EXPORTS = {'ListedSymbol': ('digital_twin.modules.instruments.domain.symbol_uni
  'watchlist_changed_event': ('digital_twin.modules.instruments.domain.watchlist',
                              'watchlist_changed_event')}
 
+_EXPORTS['SymbolUniverseRepository'] = ('digital_twin.modules.instruments.domain.repositories', 'SymbolUniverseRepository')
+_EXPORTS['SymbolSourceGateway'] = ('digital_twin.modules.instruments.domain.repositories', 'SymbolSourceGateway')
+
 __all__ = list(_EXPORTS)
 
 

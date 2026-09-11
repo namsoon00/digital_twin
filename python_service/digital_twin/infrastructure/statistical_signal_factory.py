@@ -12,8 +12,8 @@ from ..domain.statistical_signals import (
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
     DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
 )
-from .mysql_statistical_signals import MySQLStatisticalModelSignalStore
-from .mysql_versioned_runtime import MySQLTemporalFeatureSnapshotStore
+from digital_twin.modules.model_registry.infrastructure.mysql_statistical_signals import MySQLStatisticalModelSignalStore
+from digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime import MySQLTemporalFeatureSnapshotStore
 from .settings import runtime_settings
 
 

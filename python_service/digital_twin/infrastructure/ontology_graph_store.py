@@ -1,6 +1,6 @@
 from typing import Dict
 
-from ..domain.repositories import ensure_ontology_graph_repository_contract
+from digital_twin.modules.reasoning.contracts import ensure_ontology_graph_repository_contract
 from .settings import runtime_settings
 
 

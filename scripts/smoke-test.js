@@ -265,7 +265,7 @@ function checkWorkflowConsoleContract() {
   const watchlistStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "instruments", "infrastructure", "account_watchlist.py"), "utf8");
   const calendarStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "investment_calendar", "infrastructure", "mysql_investment_calendar_candidates.py"), "utf8");
   const calendarSymbolProjection = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "read_models", "application", "symbol_display_projection.py"), "utf8");
-  const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_notification_jobs.py"), "utf8");
+  const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "notifications", "infrastructure", "mysql_notification_jobs.py"), "utf8");
   const symbolStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "instruments", "infrastructure", "mysql_symbol_universe.py"), "utf8");
   const webServer = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "web_server.py"), "utf8");
   const webRestart = fs.readFileSync(path.join(rootDir, "scripts", "restart-web-service.js"), "utf8");

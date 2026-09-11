@@ -6,6 +6,8 @@ from digital_twin.modules._exports import resolve_export
 _EXPORTS = {'InvestmentCalendarEvent': ('digital_twin.modules.investment_calendar.domain.investment_calendar',
                              'InvestmentCalendarEvent')}
 
+_EXPORTS['InvestmentCalendarRepository'] = ('digital_twin.modules.investment_calendar.domain.repositories', 'InvestmentCalendarRepository')
+
 __all__ = list(_EXPORTS)
 
 

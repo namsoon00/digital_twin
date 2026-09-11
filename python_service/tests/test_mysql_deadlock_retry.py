@@ -31,7 +31,7 @@ class MySQLDeadlockRetryTests(unittest.TestCase):
                 return {"operation": "reasoning-engine-deployment-retirement", "attempts": 2}
 
         with patch(
-            "digital_twin.infrastructure.mysql_versioned_runtime.run_mysql_deadlock_retry",
+            "digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime.run_mysql_deadlock_retry",
             return_value=(expected, Receipt()),
         ) as retry:
             result = store.retire_unselected("v2", ["active", "candidate-current"])

@@ -113,6 +113,7 @@
     {"file": "test_backend_ownership.py", "tier": "contract", "core": true},
     {"file": "test_projection_input_ownership.py", "tier": "contract", "core": true},
     {"file": "test_static_seed_ownership.py", "tier": "contract", "core": true},
+    {"file": "test_backend_integration.py", "tier": "contract", "core": true},
     {"file": "test_account_contracts.py", "tier": "contract", "core": true},
     {"file": "test_module_account_mutations.py", "tier": "integration", "core": false},
     {"file": "test_web_server_port_fallback.py", "tier": "system", "core": false},

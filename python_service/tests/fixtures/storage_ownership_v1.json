@@ -1,0 +1,426 @@
+{
+  "sourceRevision": "abc07d99d7e44e3af148eb190c205617d2548932",
+  "ports": {
+    "InvestmentDomainRepository": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "7b5da718d55c10000ff15d15d9268e9e737b204481a3e0908d554b2af3e9e27a"
+    },
+    "SnapshotProvider": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "f40620fbcf847b6653825c9c5efa2b9ffb199c5418793c9f92252497b20bf78e"
+    },
+    "MonitorStateRepository": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "4a138b474ab03940521134af4f3aaccc8100ae336a42ff27cea2ecc4440460aa"
+    },
+    "MonitorSnapshotReader": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "2a714134d4faec7ab6d761b37535f1275a67f74c43e4ac03402b510adf7d12a5"
+    },
+    "SnapshotMonitor": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "ae23c2eb8b9dfa39a6249e83057345b3a729853e452472adcb0bdf5a96ff3a2e"
+    },
+    "MonitoringCycleRecordResult": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "090accf1bd1e272a40131b20fe2ace97942798a2a4443ead81303cf8d010c4e1"
+    },
+    "MonitoringCycleRecorder": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "b6a61cfc1acc7c20b793eeb5b4fea869970a5c7f35b30241224d0de42bcc5a7e"
+    },
+    "MonitorAccountJob": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "d1ddec4341f82e2635e1e7e57d986e9ae1cb6190a99297e4d7c184a7206c03f7"
+    },
+    "MonitorAccountJobRepository": {
+      "path": "modules/portfolio/domain/repositories.py",
+      "astHash": "a131fb97a42506f2aba7454b5a4316cc918d1c481deb4cc7daab1293c15296eb"
+    },
+    "NotificationGateway": {
+      "path": "modules/notifications/domain/repositories.py",
+      "astHash": "81e4571f9c3c42c23285da1a5d7cb92315435ee4b1965b9252d230711636aade"
+    },
+    "ONTOLOGY_GRAPH_REPOSITORY_CONTRACT": {
+      "path": "modules/reasoning/domain/repositories.py",
+      "astHash": "9ba13938242a18f1cc8853a094e170071c736bfd801a7f8bc86c35e9ca6af231"
+    },
+    "OntologyGraphRepository": {
+      "path": "modules/reasoning/domain/repositories.py",
+      "astHash": "7e84c4ffe69578816f7feb8374f7ef7e23c8ff249daedcbf230c291ef5d43434"
+    },
+    "ontology_graph_repository_contract_errors": {
+      "path": "modules/reasoning/domain/repositories.py",
+      "astHash": "3bbb287cd90c79859b50fbf0707f51e675bbb68b473c120640a61445827f0c95"
+    },
+    "ensure_ontology_graph_repository_contract": {
+      "path": "modules/reasoning/domain/repositories.py",
+      "astHash": "0e3bff920b217284cd751945577841f1e0e6a4170f69988e42f2ac81ef8aee81"
+    },
+    "OntologyProjectionRecorder": {
+      "path": "modules/reasoning/domain/repositories.py",
+      "astHash": "77aefaa8c33748fbde10ead340ec733b051f337ea0c585e6652c020008b0dead"
+    },
+    "OntologyProjectionAuditRepository": {
+      "path": "modules/reasoning/domain/repositories.py",
+      "astHash": "78c17c64d82bc6c176b9b7e3a50ba0f0e1e8d0180111bad47590ecd1a5405b67"
+    },
+    "DecisionEpisodeRepository": {
+      "path": "modules/decisions/domain/repositories.py",
+      "astHash": "274444989267b605113082a6ef497aa577cc98324c4d147814ef7c9d9df34b99"
+    },
+    "HypothesisLifecycleRepository": {
+      "path": "modules/model_registry/domain/repositories.py",
+      "astHash": "795ef00189f8c38c973798f0adf806d214bba143533098b1fdf981ebbb72825b"
+    },
+    "InvestmentResearchRepository": {
+      "path": "modules/news_intelligence/domain/repositories.py",
+      "astHash": "c9ea531975012d389367fba175f80e290f28b8e1ce7ac444577e16a2657d0038"
+    },
+    "ResearchEvidenceRepository": {
+      "path": "modules/news_intelligence/domain/repositories.py",
+      "astHash": "56929490b479c38ec1fa1c50a25e99070319e5300c93727b64337b29e91760af"
+    },
+    "ResearchEvidenceGateway": {
+      "path": "modules/news_intelligence/domain/repositories.py",
+      "astHash": "12a86615b0d7d849b43a833e8f888d2905b9907044b95cbb8921bec58f5b5aae"
+    },
+    "SymbolUniverseRepository": {
+      "path": "modules/instruments/domain/repositories.py",
+      "astHash": "65068c3eee2b25fbbb37b9197d97b1aedf64c5c5c8d0f8dd300d28cadc007fd3"
+    },
+    "SymbolSourceGateway": {
+      "path": "modules/instruments/domain/repositories.py",
+      "astHash": "86e7967d8e0ead379348f333972893e0a57ecfeaf2128f248440c8951586efad"
+    },
+    "InvestmentCalendarRepository": {
+      "path": "modules/investment_calendar/domain/repositories.py",
+      "astHash": "742db572d1ce4630725aebf175cff976365bcd79c4114dae653b0dbebeb16af0"
+    },
+    "MarketQuoteRepository": {
+      "path": "modules/market_data/domain/repositories.py",
+      "astHash": "b7aef670cd6c8baa1a21b3f7f00da6e4ce6f85128ac4abc576ee71f6efdfbc04"
+    },
+    "MarketTimeSeriesRepository": {
+      "path": "modules/market_data/domain/repositories.py",
+      "astHash": "b570a68790f4080e977af78946a9eb78a3f60368a114ab5905bd38962d42e7e4"
+    },
+    "MarketDataProvider": {
+      "path": "modules/market_data/domain/repositories.py",
+      "astHash": "6b92b105c77443c0b1e500f53ee6902346a33c4f5db16612f39795ddc9ee5455"
+    }
+  },
+  "adapters": {
+    "digital_twin.infrastructure.mysql_historical_replay_jobs": {
+      "path": "modules/outcomes/infrastructure/mysql_historical_replay_jobs.py",
+      "declarations": {
+        "MySQLHistoricalReplayJobStore": "32a0714cd64ab66670b6d1ff19b7c29387c10a7f1aceadbb00bbef65fda8cdde"
+      },
+      "originalSource": "infrastructure/mysql_historical_replay_jobs.py"
+    },
+    "digital_twin.infrastructure.mysql_hypothesis_development": {
+      "path": "modules/model_registry/infrastructure/mysql_hypothesis_development.py",
+      "declarations": {
+        "MySQLHypothesisDevelopmentStore": "d1bea37d699195c1ae6918d43b51aedc947827241d14a5604ec5c2b7e640a9a7",
+        "MySQLOntologyExperimentStore": "49442d31f58fc2430f42d396d2a3fa666b3aa61c928b1a11fa4ba6ccf490b5ab"
+      },
+      "originalSource": "infrastructure/mysql_hypothesis_development.py"
+    },
+    "digital_twin.infrastructure.mysql_hypothesis_lifecycle": {
+      "path": "modules/model_registry/infrastructure/mysql_hypothesis_lifecycle.py",
+      "declarations": {
+        "MySQLHypothesisLifecycleStore": "d52314dc4a1ae1e495c76696938bb7f226eb43aee606678259f2921f9330f091"
+      },
+      "originalSource": "infrastructure/mysql_hypothesis_lifecycle.py"
+    },
+    "digital_twin.infrastructure.mysql_investment_alert_coverage": {
+      "path": "modules/notifications/infrastructure/mysql_investment_alert_coverage.py",
+      "declarations": {
+        "_text": "685ce6323bf884914805cf921eb17ea25fcb2b111ab98fe594639c5947e84fc3",
+        "_upper": "de096b8a40ea827f1949112b05848fbab3852b7cc8961c049692fc86bcdc13c7",
+        "_mapping": "2ef9fd647dec5afe73ddd9cfe5fc182b08caaca2f9cb25fe422edaf7c77abc42",
+        "_utc_iso": "3993315fd2c43c70cdbfb5ac1f71db767821d6029915e8d0505e34d790464d7e",
+        "_coverage_id": "87628442a0b54ce3564c1c6ce2cc78a882a05343fb9494baf67eed441ebc2069",
+        "_event_context": "51e326757686fada84d447d066c882d7157350bf97e55600a4ca87f01ebe707a",
+        "MySQLInvestmentAlertCoverageStore": "694f148e9411ff0e0d2d24aafe261d12aa58e610c32ca8a8c8fc6ee64905b320"
+      },
+      "originalSource": "infrastructure/mysql_investment_alert_coverage.py"
+    },
+    "digital_twin.infrastructure.mysql_investment_reasoning_cases": {
+      "path": "modules/reasoning/infrastructure/mysql_investment_reasoning_cases.py",
+      "declarations": {
+        "MySQLInvestmentReasoningCaseStore": "aed9d8bd1ab4245715887fd122ab762b9bb8b9f4aa2eb6b490e48889fb096507"
+      },
+      "originalSource": "infrastructure/mysql_investment_reasoning_cases.py"
+    },
+    "digital_twin.infrastructure.mysql_investment_research": {
+      "path": "modules/news_intelligence/infrastructure/mysql_investment_research.py",
+      "declarations": {
+        "MySQLInvestmentResearchStore": "7d466e203fee728aa239aab9cfdc4fd6a97079b5c397d21546ce258771fff374"
+      },
+      "originalSource": "infrastructure/mysql_investment_research.py"
+    },
+    "digital_twin.infrastructure.mysql_investment_strategy_proposals": {
+      "path": "modules/model_registry/infrastructure/mysql_investment_strategy_proposals.py",
+      "declarations": {
+        "strategy_proposal_payload_from_row": "8b73f90f27573b09c18c51fe9489efee39a9f1da8d594ff653b0b4bdab083fb1",
+        "strategy_proposal_from_row": "e8436cb2351c4f29cf0182cb366898e6bb82034a1b1c763a207b393203d1a737",
+        "MySQLInvestmentStrategyProposalStore": "3f908d298fa222eb804c1c85f27773ebd9bcfbaebb1f8b44646210d0ab222fc0"
+      },
+      "originalSource": "infrastructure/mysql_investment_strategy_proposals.py"
+    },
+    "digital_twin.infrastructure.mysql_market_quotes": {
+      "path": "modules/market_data/infrastructure/mysql_market_quotes.py",
+      "declarations": {
+        "MySQLMarketQuoteCache": "896aa4d0f7796a25e4d0248bf101e98dde1ecf415c79825f146743698f8743e3"
+      },
+      "originalSource": "infrastructure/mysql_market_quotes.py"
+    },
+    "digital_twin.infrastructure.mysql_market_time_series": {
+      "path": "modules/market_data/infrastructure/mysql_market_time_series.py",
+      "declarations": {
+        "insert_placeholders": "b83a65db586fee0f97380861e9604d2f7650cfd0c067d4c6509bab30a7116540",
+        "row_values": "b76a1d0d53dd6f36c7a9c307191ba582284193b4d0c0415763e80784bb3988f4",
+        "capital_flow_row": "cfbc5d465a177959ec8a713230ff2daee43ed3bf110552f0cfe1bf53dd28ab0f",
+        "capital_flow_values": "8ea6dfae0093ab4bd95b15efb230d5157ae282a427f1c5821f62a346b059d79d",
+        "positive_int": "c54db965350351d2fed8e7a96731ba384f8034a1747043617d8f9d1dece3ee53",
+        "MySQLMarketTimeSeriesStore": "afe8c38ab968adf7a626a55d2a2a80df123539b3c5d0dba0409a1e083e5094e2"
+      },
+      "originalSource": "infrastructure/mysql_market_time_series.py"
+    },
+    "digital_twin.infrastructure.mysql_notification_config": {
+      "path": "modules/notifications/infrastructure/mysql_notification_config.py",
+      "declarations": {
+        "notification_rule_defaults_fingerprint": "0d10b5d26ef6c4121b9baa3c18cf2cb04ca6efb6579549edce81a364e02d1367",
+        "notification_rule_defaults_marker_matches": "0de8d6acd780606240adfbc34227c4988d0d366c68ca82c08c69869d3841708c",
+        "MySQLNotificationTemplateStore": "c2a0afe0b045aaee2900e5789b9ab4339826e61d0d6180cccf6ac644b74109a5",
+        "MySQLNotificationRuleStore": "257c86b91127cf81befaaf723d498ce58a92647774aa3349f051af511f86cfed"
+      },
+      "originalSource": "infrastructure/mysql_notification_config.py"
+    },
+    "digital_twin.infrastructure.mysql_notification_jobs": {
+      "path": "modules/notifications/infrastructure/mysql_notification_jobs.py",
+      "declarations": {
+        "notification_list_presentation_column": "54795b237f0636c4c25d7288b5317353a57719b2678b4c687e41490b38557824",
+        "notification_list_presentation_join": "801eee756b5033f33d3810b9d9395ac24f236675d12497925685441bc48601bf",
+        "MySQLNotificationJobStore": "eb02e26e7333e525b13babf242fed8516a5156863c1a70be66d93b3ef9be9abb"
+      },
+      "originalSource": "infrastructure/mysql_notification_jobs.py"
+    },
+    "digital_twin.infrastructure.mysql_ontology_graph_assembly_cache": {
+      "path": "modules/reasoning/infrastructure/mysql_ontology_graph_assembly_cache.py",
+      "declarations": {
+        "_timestamp_after": "96bc245e9820772f9e1a94214d62b2488e5babe1c603292ac80c88bae7673f58",
+        "_parsed_timestamp": "63dba785f73c4cc263fec9d1b07e5422f9cc5d43890e96b2a9a6e1f12251a627",
+        "MySQLOntologyGraphAssemblyCacheStore": "584a7e72895c8d15e9b4d6ffd0c95fc647d08ac8fa85fb349acfe54e27a8c2f1"
+      },
+      "originalSource": "infrastructure/mysql_ontology_graph_assembly_cache.py"
+    },
+    "digital_twin.infrastructure.mysql_ontology_inference_detail_outbox": {
+      "path": "modules/reasoning/infrastructure/mysql_ontology_inference_detail_outbox.py",
+      "declarations": {
+        "_clean": "60efba148771c9c13e82b54d3279a1d02682e48bd3f65a13a04684e8dadd3c60",
+        "_clean_symbols": "8d1acb9f24e79add4b4598752da1054cf30617b79f8c2d525a5af4521a665e53",
+        "_sha": "edc8b25734746e6cc7b34548d009c79c880a7f527b942a025b1bb60b784e4313",
+        "inference_detail_dedupe_key": "2a0f22b19f7204e892dda31003898fd1b5ad9f4616a5aa603a8e8d323fc92b26",
+        "_job_ids": "3835dc52939d0dbac8b34ee8ede8aa489df006817758c0718471bc97377cd9a5",
+        "_timestamp_after": "675d81856005c551b44aaf61fb6c738ba411b721ac0a563c2bd170bcd6cbb8b2",
+        "MySQLOntologyInferenceDetailOutboxStore": "6bebc403c3cd694204754bf69bc015cd4ccaaf226f995cb4ff0004c2afabd270"
+      },
+      "originalSource": "infrastructure/mysql_ontology_inference_detail_outbox.py"
+    },
+    "digital_twin.infrastructure.mysql_ontology_projection_runs": {
+      "path": "modules/reasoning/infrastructure/mysql_ontology_projection_runs.py",
+      "declarations": {
+        "MySQLOntologyProjectionRunStore": "c8b9f6397c2e3ae1bc70d3af8d3b8937662b9481b3101bcdd58863c2fd279214"
+      },
+      "originalSource": "infrastructure/mysql_ontology_projection_runs.py"
+    },
+    "digital_twin.infrastructure.mysql_ontology_quality": {
+      "path": "modules/reasoning/infrastructure/mysql_ontology_quality.py",
+      "declarations": {
+        "MySQLOntologyQualitySampleStore": "2f2c127545d35bac5ccbaa7dcc4a4c3eef0132059c4a5ff74d25adbe9cefcfb1"
+      },
+      "originalSource": "infrastructure/mysql_ontology_quality.py"
+    },
+    "digital_twin.infrastructure.mysql_ontology_world_projection_outbox": {
+      "path": "modules/reasoning/infrastructure/mysql_ontology_world_projection_outbox.py",
+      "declarations": {
+        "_clean": "60efba148771c9c13e82b54d3279a1d02682e48bd3f65a13a04684e8dadd3c60",
+        "_sha": "edc8b25734746e6cc7b34548d009c79c880a7f527b942a025b1bb60b784e4313",
+        "_job_ids": "3835dc52939d0dbac8b34ee8ede8aa489df006817758c0718471bc97377cd9a5",
+        "_timestamp_after": "675d81856005c551b44aaf61fb6c738ba411b721ac0a563c2bd170bcd6cbb8b2",
+        "_projection_payload_symbols": "980cb4033e630255deefcdd40fdf60860b01cd9312c2dc074d67b286c05e23ff",
+        "MySQLOntologyWorldProjectionOutboxStore": "d3c0b448b554442dd1a0ec4442cdd5704bdcaf8614112637cbf086e63d1fd887"
+      },
+      "originalSource": "infrastructure/mysql_ontology_world_projection_outbox.py"
+    },
+    "digital_twin.infrastructure.mysql_reasoning_ingress": {
+      "path": "modules/reasoning/infrastructure/mysql_reasoning_ingress.py",
+      "declarations": {
+        "_text": "c835e927689d36077fd66e26baf51fe88d439e067299f8575f8cc0865ee3fd68",
+        "active_reasoning_engine_with_connection": "af5681bee707721ba9fb9b88e9625386d8f11a0c51bcebb9b339c7f70b5fd9fc",
+        "ingress_reasoning_event_with_connection": "6a7fe5328975efdbd0c84da66a3da3be105cde93e09341703e7906d1ff061076",
+        "MySQLReasoningIngressRouter": "575fd1b7b807dd52c3c8e63a5f1d61acd8dd4bd9d0174b080fcc17ccbaac113b"
+      },
+      "originalSource": "infrastructure/mysql_reasoning_ingress.py"
+    },
+    "digital_twin.infrastructure.mysql_reasoning_mailbox": {
+      "path": "modules/reasoning/infrastructure/mysql_reasoning_mailbox.py",
+      "declarations": {
+        "_text": "c835e927689d36077fd66e26baf51fe88d439e067299f8575f8cc0865ee3fd68",
+        "direct_work_key": "95760b46f36a47efb4828e1bbea666d3c68c4079533a17a5403572d57d03ad11",
+        "source_snapshot_id": "69b73460a9d9561e9565903eb4258a55c64c819990231cf1d4cd1b6d864bed58",
+        "local_reasoning_watch_pid": "2592f8f7fc821f13b6cab7f221b88208f1881bddfb20176e05f6e24b0c371da2",
+        "local_reasoning_watch_is_dead": "8a8e57c7327f5ac7a3b08a1c0afe5da4887764a83bd33f6362f3d0ff3a472818",
+        "_older_than": "3d6024634bc327e9761e57f21fae6d45d2d8baf5a76e52c29719178b9bb60bcd",
+        "_age_grace_remaining_seconds": "a1d7719e0174e8f7baf3b72c4688cbb429466da13804f4ac09a2a65de5263f16",
+        "_entries_by_event": "fa3e8e7bcfa02c774bfd77997729b3c2ab0a6ecb60f4802a5223c16dbb187a5c",
+        "_newer": "7f81b7242f081f3b13ff1b386497c913565b05933c4a36870566d918f6ce5b2b",
+        "_event_fact_revision": "bec17b225942ec87bb0879c2284cbe11a4e2779538067501d2b54d799e3916dd",
+        "_entry_fact_revision": "33c8a7cec08bae2750ec705c2adfa9c0eecb18a1df4b316e846d4f8ffa0b6c2f",
+        "_priority_hint": "c9c1e0b1e0f1eb578f68a461f640cde71829e199954da3357b2e9a9d153abe2b",
+        "_checkpoint_metadata": "b6de349f0c2d5f403dfdca6d467bd6bc68cf49383feff34fdf1b94acf5d43302",
+        "MySQLOntologyReasoningMailboxStore": "0087aaeae46dcf212babc42507800bafa55d2b7d7eb38c3a2393a54d66fb1073"
+      },
+      "originalSource": "infrastructure/mysql_reasoning_mailbox.py"
+    },
+    "digital_twin.infrastructure.mysql_reasoning_source_facts": {
+      "path": "modules/reasoning/infrastructure/mysql_reasoning_source_facts.py",
+      "declarations": {
+        "source_fact_from_row": "3e002fb8af6c4c883ca8b649481d9c1adf09307c09b1bf786b49f53f52d7c61e",
+        "append_reasoning_source_facts_with_connection": "6998961f9fc7c0d4beb4de48c17d9d7f065c4776a8ae28fca67b91cd60388be0",
+        "MySQLReasoningSourceFactStore": "fcb349be0ae94609f85f511be864c174d32838c4090a1bfb80892f45d2b3103a"
+      },
+      "originalSource": "infrastructure/mysql_reasoning_source_facts.py"
+    },
+    "digital_twin.infrastructure.mysql_research_evidence": {
+      "path": "modules/news_intelligence/infrastructure/mysql_research_evidence.py",
+      "declarations": {
+        "_payload_source_text": "c38c2717ed602f00b9bb1213609772c6f9a06a93e390aa8efbe1d7e6ac38e433",
+        "merge_derived_evidence_payload": "19c142ac7ece33137bcb9453690b68aac855656cadffb178a3ce12fc779b5d77",
+        "MySQLResearchEvidenceStore": "691da4dbdb0803be5572e6ba9b78da41413eb74e8703113bf92989c740771f36"
+      },
+      "originalSource": "infrastructure/mysql_research_evidence.py"
+    },
+    "digital_twin.infrastructure.mysql_statistical_signals": {
+      "path": "modules/model_registry/infrastructure/mysql_statistical_signals.py",
+      "declarations": {
+        "_iso_utc": "8a099e867d9045c09018b1a060c432abf6d8369dc5d962a131d8aedcab63f195",
+        "_json": "f3e81ed398eb2cf74c7f7886af6a0e7f0858b995b7597cd6584efb47a0061c14",
+        "_loads": "231dc16ca1df34aeb11390b8331e2207da5e4e7957856a7695d26d4b41ae9b37",
+        "_assessment_material_hash": "7b7aa08710434ae7b37acdca7ddb4067e9aecca6c9b03f4743cc5ba03d2b1ea2",
+        "MySQLStatisticalModelSignalStore": "f2f9b9c7c54332ec99471aa810d28256f17b54d9990ce80feeb3b5fcd409e7f6"
+      },
+      "originalSource": "infrastructure/mysql_statistical_signals.py"
+    },
+    "digital_twin.infrastructure.mysql_subject_decision_cases": {
+      "path": "modules/decisions/infrastructure/mysql_subject_decision_cases.py",
+      "declarations": {
+        "MySQLSubjectDecisionCaseStore": "b9a4c51f2d827b4d904d2df06be1e930482b224181666c432d1d5aa504c59136"
+      },
+      "originalSource": "infrastructure/mysql_subject_decision_cases.py"
+    },
+    "digital_twin.infrastructure.storage_values": {
+      "path": "infrastructure/storage_values.py",
+      "declarations": {
+        "utc_now": "aa4f42f6a26352f9d710af201442610d68905338dd44367ee9f352e0709acc51",
+        "iso_utc": "6757b6052f56ff9b22f278ca94911db00575907baf10ef005650275db57594f7",
+        "json_value": "35f235f00a2587c328329c4a48e63eb850936a4b2ec63e9517dcf0bccb51aef4"
+      },
+      "originalSource": "infrastructure/mysql_versioned_runtime.py"
+    },
+    "digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime": {
+      "path": "modules/market_data/infrastructure/mysql_temporal_runtime.py",
+      "declarations": {
+        "MySQLTimeSeriesBackendRegistryStore": "7911347d3b1c9299b9abc052da4c4718352973f6d6f4985aad86bfd83bb20698",
+        "MySQLTimeSeriesProjectionOutboxStore": "28e6e4a98a80ce8645524d5cdf8aade91d3bfc7f607844f649250d768b7043ac",
+        "MySQLTemporalFeatureSnapshotStore": "f534471393dd8fd6b38f870ebf6e606b8ac237c36847ab4dcfb189b6155048d7"
+      },
+      "originalSource": "infrastructure/mysql_versioned_runtime.py"
+    },
+    "digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime": {
+      "path": "modules/reasoning/infrastructure/mysql_engine_runtime.py",
+      "declarations": {
+        "reasoning_queue_deadlock_retry": "05ef84d30490576f31dff8d83265ae1ef2a7738fddf67d7bc21b38d3817adbb0",
+        "reasoning_failure_recovery_allowed": "f032544ce54f40a62b9084b2741ed3a8cbf6a268dac4ecb9d9ae3d4773152942",
+        "merge_reasoning_deployment_health": "b95594db87b8e4f9444d8bc41744a6caec6e941d340481c5c389eed3febfcfe7",
+        "reasoning_worker_process_owner": "3e8edaa98620b81f03274ce972fb45585d71cee3580b488b4d8db2868f95aa31",
+        "local_process_is_alive": "071f691489dde1196ff8bab48250b20b32e50dff7756a6895ea25973d84e0ca7",
+        "MySQLReasoningEngineRegistryStore": "b4a0c1b9dcd62c0ddf34bf9e99c02e1b14132bc30cb9b8a700e390dbea914818",
+        "MySQLReasoningShadowJobStore": "c8e56e76deb24c47e0f19a8efc0e4e7d70317e7cf90007050fda610ac284649b",
+        "MySQLReasoningEngineJobStore": "96fe6f0f9419903bc7000e8fd8a8ef37b580a3375326f7a1d89f61b70ec23a06",
+        "MySQLReasoningEngineComparisonStore": "ce2dd15598519df98e9c438afc1c014d92fdb41f338b78f19b4e9ce3cbac8574"
+      },
+      "originalSource": "infrastructure/mysql_versioned_runtime.py"
+    },
+    "digital_twin.infrastructure.mysql_ai_inference_queue": {
+      "path": "infrastructure/transactions/ai_publication.py",
+      "multiOwnerTransaction": true,
+      "declarations": {
+        "_clean": "60efba148771c9c13e82b54d3279a1d02682e48bd3f65a13a04684e8dadd3c60",
+        "_timestamp_after": "675d81856005c551b44aaf61fb6c738ba411b721ac0a563c2bd170bcd6cbb8b2",
+        "_notification_job_from_row": "5ccda76d4f354612e3d4e56233d84191664c973f60054e1cb89b22ff09d5e23c",
+        "_compact_notification_payload": "a64d4f7653ca498eca145bffd60c246865ceb10444b410468ce15a7be86f6efc",
+        "_decision_case_id_from_context": "259a93b0e05759c0b65ef570796969e70a6ad9e33ff026543bdbf70788377ea8",
+        "ai_contract_failure_code": "4b76c1cf334b171f4494d22f6b491e63c1e727f639a9c34b6191bf0e239b5ea9",
+        "compact_ai_queue_context": "5e79f2fed510f714ecffea600ae546be78695c5a3ff1a92f9dfe041d4cfeaa55",
+        "MySQLAIInferenceQueueStore": "9478382bed360b37597abb7bc8846d3ad121b36b4c7f52088918eaff2a729259"
+      },
+      "originalSource": "infrastructure/mysql_ai_inference_queue.py"
+    },
+    "digital_twin.infrastructure.mysql_investment_domain": {
+      "path": "infrastructure/transactions/portfolio.py",
+      "multiOwnerTransaction": true,
+      "declarations": {
+        "ledger_entry_from_payload": "1c180e8bf0891fc785f5b731104b97d22fc216109118ffee2b627c67bb9bbf65",
+        "MySQLInvestmentDomainStore": "d42ed8a2e2a3bbcf3cb08a6e51e37f343ebed2f3c94c94d2252d27f385241eb7"
+      },
+      "originalSource": "infrastructure/mysql_investment_domain.py"
+    },
+    "digital_twin.infrastructure.mysql_investment_decision_episodes": {
+      "path": "infrastructure/transactions/decision_history.py",
+      "multiOwnerTransaction": true,
+      "declarations": {
+        "MySQLInvestmentDecisionEpisodeStore": "f02cd846317aacd488525b469afee2289333ecad7156ee4fae6dd3e9fe9d5bd1",
+        "selected_hypothesis_stance": "98207197503b2facbc5d0db436863632cec8537bbba0ebcbb21fef0ad43af96e",
+        "selected_hypothesis_payload": "b5cbd93f6919c17b6d25da2575b8fc215e27314b18d71e67476246360b9aa5a0",
+        "directional_hypothesis_status": "e1535e04f57028ae1d18535ce9cb248282b7a5a118300bf8b380f4be73e9e3c4",
+        "contract_benchmark_symbol": "c0893ddb44ffba5dbfeb90fed0f95f86f3fea88d12e8c68a0f60b7a5b75cac5e",
+        "due_outcome_horizon_minutes": "98363a1ca35d71a2cc631265d570e89c2fdf98eea4025ad8241fda597237f219",
+        "due_outcome_horizon_minutes_all": "67ed67c2182a6c1235481aa30636b8473c1994377d69817a3986062dace97689",
+        "outcome_horizon_minutes": "c327d49cb050d5e9fbde0196ee305d595f02b82c19b153bcc7d9220dd05be7d5",
+        "outcome_horizon_recorded": "7590e48b25a78ac4c52c3e30537dd1062afc7b4b2d613391615285ea87abde46",
+        "outcome_target_at": "639d115f6c61f7fcfa3762832f247ab57b5430d8b23bf39973c087a60f09944c",
+        "market_outcome_target_at": "d24e1f4d4bdf73d996820529a66507e60be8e1a701041588c1cbb43213bc1850",
+        "outcome_observation_is_usable": "7c81882d573b8947635beb1e6d3b7d2be7047d733011a503f5f54b769e397f56",
+        "outcome_is_calibration_eligible": "a36cb6b94233aef0f761e9a14e5d838d4261313ed74e27807803b4c96f28929a",
+        "parse_datetime": "cc652b3191f36a19b0672a89131bbac8f631104a5fbbdc766b5a180cffb0ba3a",
+        "number": "444d308dd3214a96331b252022ba123b7b3693ad42d5c0ec0423ed44b4ac40a5"
+      },
+      "originalSource": "infrastructure/mysql_investment_decision_episodes.py"
+    },
+    "digital_twin.infrastructure.mysql_monitoring_stores": {
+      "path": "infrastructure/transactions/monitoring.py",
+      "multiOwnerTransaction": true,
+      "declarations": {
+        "snapshot_state_for_persistence": "6fbad0a33eb70c8992fc3315b675e67f967d25fe42a8ee1f23bb7ec051cb5306",
+        "reasoning_snapshot_for_persisted_boundary": "215a86c0085155cf8fd74352914f84dde94448a730d4bd7b28ad095735ed3763",
+        "market_observation_followup_symbols": "e7be23d5a89157a61232889707ceb45ca269d53d669ce51836ab3bfe621c150b",
+        "MySQLMarketObservationReasoningAnchorStore": "5deedf94181a01d185920a10c23ba0e017cca7bef4d0993643d8ecc6c7040d72",
+        "MySQLMonitorStore": "c063cba1c8478ddacd8bffcc07afceb0c533b3de68692bc8fd4cedd3f0790099",
+        "MySQLOntologyReasoningMonitorStore": "4384ab189510536b55359148874105cd52112480b78820665da19a68eaa27433",
+        "MySQLMonitoringCycleRecorder": "5072d4c6716390382d97e48ee7189b5f03a2cca399f4a966bce3e668e84917fd",
+        "MySQLEventLog": "d10d14eb0300b5539562cffb431e488a4efadc471832c6b4bd875e8f2e685516"
+      },
+      "originalSource": "infrastructure/mysql_monitoring_stores.py"
+    },
+    "digital_twin.modules.portfolio.infrastructure.mandate_store": {
+      "path": "modules/portfolio/infrastructure/mandate_store.py",
+      "declarations": {
+        "save_mandate_with_connection": "9ad60274a25fad16d56b53688522c9557557d22ff2c4a2ddcbf626539eebcb39"
+      },
+      "originalSource": "infrastructure/mysql_investment_domain.py"
+    }
+  }
+}

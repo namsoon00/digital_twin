@@ -1,6 +1,6 @@
 """Portfolio-owned account mandate writes within a supplied transaction."""
 
-from digital_twin.infrastructure.mysql_investment_domain import save_mandate_with_connection
+from .mandate_store import save_mandate_with_connection
 
 
 def write_account_mandate(connection, account, stamp):

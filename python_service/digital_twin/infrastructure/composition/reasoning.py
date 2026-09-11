@@ -267,7 +267,7 @@ def build_v2_reasoning_job_runner(
     store_settings = dict(configured)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
-    from digital_twin.infrastructure.mysql_reasoning_ingress import MySQLReasoningIngressRouter
+    from digital_twin.modules.reasoning.infrastructure.mysql_reasoning_ingress import MySQLReasoningIngressRouter
 
     registry = stores.reasoning_engine_registry_store(configured)
     selected_deployment = dict(registry.get(selected_deployment_id) or {})

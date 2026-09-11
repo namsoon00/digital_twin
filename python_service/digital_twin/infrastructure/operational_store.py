@@ -138,14 +138,14 @@ def ontology_inference_detail_state_store(settings: Dict[str, str] = None):
 
 
 def ontology_reasoning_mailbox_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
 
     configured = configured_settings(settings)
     return MySQLOntologyReasoningMailboxStore(configured)
 
 
 def monitor_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMonitorStore
+    from digital_twin.infrastructure.transactions.monitoring import MySQLMonitorStore
 
     configured = configured_settings(settings)
     return MySQLMonitorStore(configured)
@@ -153,7 +153,7 @@ def monitor_store(settings: Dict[str, str] = None):
 
 def ontology_reasoning_monitor_store(settings: Dict[str, str] = None):
     """Return the read-only, target-scoped monitor source for TypeDB replay."""
-    from digital_twin.infrastructure.mysql_monitoring_stores import MySQLOntologyReasoningMonitorStore
+    from digital_twin.infrastructure.transactions.monitoring import MySQLOntologyReasoningMonitorStore
 
     configured = configured_settings(settings)
     return MySQLOntologyReasoningMonitorStore(configured)
@@ -164,7 +164,7 @@ def monitoring_cycle_recorder(
     monitor_store_instance=None,
     market_time_series_store_instance=None,
 ):
-    from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMonitoringCycleRecorder
+    from digital_twin.infrastructure.transactions.monitoring import MySQLMonitoringCycleRecorder
 
     configured = configured_settings(settings)
     return MySQLMonitoringCycleRecorder(
@@ -175,7 +175,7 @@ def monitoring_cycle_recorder(
 
 
 def event_log(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_monitoring_stores import MySQLEventLog
+    from digital_twin.infrastructure.transactions.monitoring import MySQLEventLog
 
     configured = configured_settings(settings)
     return MySQLEventLog(configured)
@@ -189,42 +189,42 @@ def model_review_job_store(settings: Dict[str, str] = None):
 
 
 def historical_replay_job_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_historical_replay_jobs import MySQLHistoricalReplayJobStore
+    from digital_twin.modules.outcomes.infrastructure.mysql_historical_replay_jobs import MySQLHistoricalReplayJobStore
 
     configured = configured_settings(settings)
     return MySQLHistoricalReplayJobStore(configured)
 
 
 def notification_job_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
+    from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
 
     configured = configured_settings(settings)
     return MySQLNotificationJobStore(configured)
 
 
 def ai_inference_queue_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_ai_inference_queue import MySQLAIInferenceQueueStore
+    from digital_twin.infrastructure.transactions.ai_publication import MySQLAIInferenceQueueStore
 
     configured = configured_settings(settings)
     return MySQLAIInferenceQueueStore(configured)
 
 
 def notification_template_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_notification_config import MySQLNotificationTemplateStore
+    from digital_twin.modules.notifications.infrastructure.mysql_notification_config import MySQLNotificationTemplateStore
 
     configured = configured_settings(settings)
     return MySQLNotificationTemplateStore(configured)
 
 
 def notification_rule_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_notification_config import MySQLNotificationRuleStore
+    from digital_twin.modules.notifications.infrastructure.mysql_notification_config import MySQLNotificationRuleStore
 
     configured = configured_settings(settings)
     return MySQLNotificationRuleStore(configured)
 
 
 def market_quote_cache(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_market_quotes import MySQLMarketQuoteCache
+    from digital_twin.modules.market_data.infrastructure.mysql_market_quotes import MySQLMarketQuoteCache
 
     configured = configured_settings(settings)
     return MySQLMarketQuoteCache(configured)
@@ -237,50 +237,50 @@ def market_time_series_store(settings: Dict[str, str] = None):
 
 
 def raw_mysql_market_time_series_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
+    from digital_twin.modules.market_data.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
 
     configured = configured_settings(settings)
     return MySQLMarketTimeSeriesStore(configured)
 
 
 def time_series_backend_registry_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_versioned_runtime import MySQLTimeSeriesBackendRegistryStore
+    from digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime import MySQLTimeSeriesBackendRegistryStore
 
     return MySQLTimeSeriesBackendRegistryStore(configured_settings(settings))
 
 
 def time_series_projection_outbox_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_versioned_runtime import MySQLTimeSeriesProjectionOutboxStore
+    from digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime import MySQLTimeSeriesProjectionOutboxStore
 
     return MySQLTimeSeriesProjectionOutboxStore(configured_settings(settings))
 
 
 def temporal_feature_snapshot_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_versioned_runtime import MySQLTemporalFeatureSnapshotStore
+    from digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime import MySQLTemporalFeatureSnapshotStore
 
     return MySQLTemporalFeatureSnapshotStore(configured_settings(settings))
 
 
 def statistical_model_signal_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_statistical_signals import MySQLStatisticalModelSignalStore
+    from digital_twin.modules.model_registry.infrastructure.mysql_statistical_signals import MySQLStatisticalModelSignalStore
 
     return MySQLStatisticalModelSignalStore(configured_settings(settings))
 
 
 def reasoning_engine_registry_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_versioned_runtime import MySQLReasoningEngineRegistryStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime import MySQLReasoningEngineRegistryStore
 
     return MySQLReasoningEngineRegistryStore(configured_settings(settings))
 
 
 def reasoning_engine_comparison_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_versioned_runtime import MySQLReasoningEngineComparisonStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime import MySQLReasoningEngineComparisonStore
 
     return MySQLReasoningEngineComparisonStore(configured_settings(settings))
 
 
 def reasoning_engine_job_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_versioned_runtime import MySQLReasoningEngineJobStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime import MySQLReasoningEngineJobStore
 
     return MySQLReasoningEngineJobStore(configured_settings(settings))
 
@@ -292,32 +292,32 @@ def shared_instrument_inference_store(settings: Dict[str, str] = None):
 
 
 def investment_reasoning_case_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_investment_reasoning_cases import MySQLInvestmentReasoningCaseStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_investment_reasoning_cases import MySQLInvestmentReasoningCaseStore
 
     return MySQLInvestmentReasoningCaseStore(configured_settings(settings))
 
 
 def subject_decision_case_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_subject_decision_cases import MySQLSubjectDecisionCaseStore
+    from digital_twin.modules.decisions.infrastructure.mysql_subject_decision_cases import MySQLSubjectDecisionCaseStore
 
     return MySQLSubjectDecisionCaseStore(configured_settings(settings))
 
 
 def reasoning_shadow_job_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_versioned_runtime import MySQLReasoningShadowJobStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime import MySQLReasoningShadowJobStore
 
     return MySQLReasoningShadowJobStore(configured_settings(settings))
 
 
 def market_observation_reasoning_anchor_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMarketObservationReasoningAnchorStore
+    from digital_twin.infrastructure.transactions.monitoring import MySQLMarketObservationReasoningAnchorStore
 
     configured = configured_settings(settings)
     return MySQLMarketObservationReasoningAnchorStore(configured)
 
 
 def investment_alert_coverage_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_investment_alert_coverage import MySQLInvestmentAlertCoverageStore
+    from digital_twin.modules.notifications.infrastructure.mysql_investment_alert_coverage import MySQLInvestmentAlertCoverageStore
 
     return MySQLInvestmentAlertCoverageStore(configured_settings(settings))
 
@@ -330,7 +330,7 @@ def symbol_universe_store(settings: Dict[str, str] = None):
 
 
 def research_evidence_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore
 
     configured = configured_settings(settings)
     return MySQLResearchEvidenceStore(configured)
@@ -344,7 +344,7 @@ def investment_calendar_store(settings: Dict[str, str] = None):
 
 
 def reasoning_source_fact_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_reasoning_source_facts import MySQLReasoningSourceFactStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_reasoning_source_facts import MySQLReasoningSourceFactStore
 
     return MySQLReasoningSourceFactStore(configured_settings(settings))
 
@@ -357,42 +357,42 @@ def investment_calendar_candidate_store(settings: Dict[str, str] = None):
 
 
 def ontology_quality_sample_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_ontology_quality import MySQLOntologyQualitySampleStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_ontology_quality import MySQLOntologyQualitySampleStore
 
     configured = configured_settings(settings)
     return MySQLOntologyQualitySampleStore(configured)
 
 
 def ontology_projection_run_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
 
     configured = configured_settings(settings)
     return MySQLOntologyProjectionRunStore(configured)
 
 
 def ontology_graph_assembly_cache_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_ontology_graph_assembly_cache import MySQLOntologyGraphAssemblyCacheStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_ontology_graph_assembly_cache import MySQLOntologyGraphAssemblyCacheStore
 
     configured = configured_settings(settings)
     return MySQLOntologyGraphAssemblyCacheStore(configured)
 
 
 def ontology_world_projection_outbox_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_ontology_world_projection_outbox import MySQLOntologyWorldProjectionOutboxStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_ontology_world_projection_outbox import MySQLOntologyWorldProjectionOutboxStore
 
     configured = configured_settings(settings)
     return MySQLOntologyWorldProjectionOutboxStore(configured)
 
 
 def ontology_inference_detail_outbox_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_ontology_inference_detail_outbox import MySQLOntologyInferenceDetailOutboxStore
+    from digital_twin.modules.reasoning.infrastructure.mysql_ontology_inference_detail_outbox import MySQLOntologyInferenceDetailOutboxStore
 
     configured = configured_settings(settings)
     return MySQLOntologyInferenceDetailOutboxStore(configured)
 
 
 def ontology_experiment_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_hypothesis_development import MySQLOntologyExperimentStore
+    from digital_twin.modules.model_registry.infrastructure.mysql_hypothesis_development import MySQLOntologyExperimentStore
 
     configured = configured_settings(settings)
     from .settings import data_dir
@@ -400,42 +400,42 @@ def ontology_experiment_store(settings: Dict[str, str] = None):
 
 
 def hypothesis_development_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_hypothesis_development import MySQLHypothesisDevelopmentStore
+    from digital_twin.modules.model_registry.infrastructure.mysql_hypothesis_development import MySQLHypothesisDevelopmentStore
 
     configured = configured_settings(settings)
     return MySQLHypothesisDevelopmentStore(configured)
 
 
 def investment_strategy_proposal_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_investment_strategy_proposals import MySQLInvestmentStrategyProposalStore
+    from digital_twin.modules.model_registry.infrastructure.mysql_investment_strategy_proposals import MySQLInvestmentStrategyProposalStore
 
     configured = configured_settings(settings)
     return MySQLInvestmentStrategyProposalStore(configured)
 
 
 def investment_decision_episode_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_investment_decision_episodes import MySQLInvestmentDecisionEpisodeStore
+    from digital_twin.infrastructure.transactions.decision_history import MySQLInvestmentDecisionEpisodeStore
 
     configured = configured_settings(settings)
     return MySQLInvestmentDecisionEpisodeStore(configured)
 
 
 def investment_domain_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_investment_domain import MySQLInvestmentDomainStore
+    from digital_twin.infrastructure.transactions.portfolio import MySQLInvestmentDomainStore
 
     configured = configured_settings(settings)
     return MySQLInvestmentDomainStore(configured)
 
 
 def hypothesis_lifecycle_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_hypothesis_lifecycle import MySQLHypothesisLifecycleStore
+    from digital_twin.modules.model_registry.infrastructure.mysql_hypothesis_lifecycle import MySQLHypothesisLifecycleStore
 
     configured = configured_settings(settings)
     return MySQLHypothesisLifecycleStore(configured)
 
 
 def investment_research_store(settings: Dict[str, str] = None):
-    from digital_twin.infrastructure.mysql_investment_research import MySQLInvestmentResearchStore
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_investment_research import MySQLInvestmentResearchStore
 
     configured = configured_settings(settings)
     return MySQLInvestmentResearchStore(configured)

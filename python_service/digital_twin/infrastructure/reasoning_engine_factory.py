@@ -1,12 +1,8 @@
 """Runtime composition for the versioned reasoning engine control plane."""
 
 from digital_twin.modules.reasoning.public import ReasoningEnginePlatformService
-from .mysql_versioned_runtime import MySQLReasoningEngineRegistryStore
-from .mysql_versioned_runtime import (
-    MySQLReasoningEngineComparisonStore,
-    MySQLReasoningEngineJobStore,
-    MySQLReasoningShadowJobStore,
-)
+from digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime import MySQLReasoningEngineRegistryStore
+from digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime import MySQLReasoningEngineComparisonStore, MySQLReasoningEngineJobStore, MySQLReasoningShadowJobStore
 from .runtime_identity import runtime_identity
 
 

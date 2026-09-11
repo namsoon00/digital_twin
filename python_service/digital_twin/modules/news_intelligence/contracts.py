@@ -37,6 +37,10 @@ _EXPORTS = {'COMPANY_ALIASES': ('digital_twin.modules.news_intelligence.domain.e
                            'resolve_target_entity'),
  'story_identity': ('digital_twin.modules.news_intelligence.domain.story', 'story_identity')}
 
+_EXPORTS['InvestmentResearchRepository'] = ('digital_twin.modules.news_intelligence.domain.repositories', 'InvestmentResearchRepository')
+_EXPORTS['ResearchEvidenceRepository'] = ('digital_twin.modules.news_intelligence.domain.repositories', 'ResearchEvidenceRepository')
+_EXPORTS['ResearchEvidenceGateway'] = ('digital_twin.modules.news_intelligence.domain.repositories', 'ResearchEvidenceGateway')
+
 __all__ = list(_EXPORTS)
 
 

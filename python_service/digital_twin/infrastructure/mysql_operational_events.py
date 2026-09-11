@@ -29,7 +29,7 @@ from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, Noti
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.portfolio import AccountSnapshot, AlertEvent
-from ..domain.repositories import MonitoringCycleRecordResult
+from digital_twin.modules.portfolio.contracts import MonitoringCycleRecordResult
 from digital_twin.modules.instruments.contracts import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from digital_twin.modules.model_registry.infrastructure.model_review_queue import model_review_payloads_from_event
 from .mysql_monitoring import MySQLDependencyError, MySQLMonitorAccountJobStore, ensure_mysql_database_exists, mysql_settings
@@ -44,7 +44,7 @@ from .operational_common import (
     template_from_row,
 )
 from .settings import read_json, settings_path, utc_now
-from .mysql_notification_jobs import MySQLNotificationJobStore
+from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy, MySQLOperationalConnection
 from .mysql_operational_helpers import (
     _is_duplicate_key_error,

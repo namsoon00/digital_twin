@@ -1,0 +1,1447 @@
+{
+  "sourceRevision": "abc07d99d7e44e3af148eb190c205617d2548932",
+  "methods": {
+    "typedb_ontology.TypeDBOntologyGraphRepository.save_graph": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_save.py",
+      "bodyHash": "7838e480db99e45f2a93d117c10393ce95c96728eca056fcfcf6ad224e93750d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "coordinated_typedb_projection_write('graph-save', typedb_projection_world_from_graph)"
+      ],
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository",
+        "node_boxes",
+        "typedb_operation_timeout",
+        "utc_now"
+      ],
+      "port": "GraphSavePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.driver_missing_result": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_save.py",
+      "bodyHash": "2fc1c855e9f3b004d5467010196dc4e4a306ac9fa1a5ff5b1c5513a96d151ef9",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='error', annotation=Name(id='Exception', ctx=Load())), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "GraphSavePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.fresh_candidate_world_bootstrap_required": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_save.py",
+      "bodyHash": "821898abfb0c19e5ccd2527dbfef26718b7ac39dc4968d2298a50e13f9c5e261",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "GraphSavePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_delete_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "9eea6fab85a8bd84aee3eedfa34ee512e1f85358b2d7f661fb38293a6920453b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_incremental_cleanup_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "2da45e0ca07f65a14fd9fdc707c504d648e61ba216fa7a4875b4fd3e881b9c83",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_incremental_cleanup_max_batches_per_save": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "aa53fde547dbe557deae4c7764306921402281a15556173f9842ffbca7eb4352",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_inactive_generation_keep_count": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "c9693022214079d5e0c5a7ecaaa398a7f61e101964c4a7f5cfb8b2c5a325759b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_inactive_generation_max_prune_per_save": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "641e91425608904ba809d9a52792e53fc459a1f1dc6ab6153e0638f77c3a43fe",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.deferred_maintenance_abox_max_manifests": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "7c4e4f68ad1893e2805f5a4d7b2440c44526c1b91d9207adfa6cd2eebdf92370",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.deferred_maintenance_abox_max_delete_batches": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "cfc9e8e7bdee8d1041725e6a86a30eb3f584bb1db9a9b663be02d54431413789",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.deferred_maintenance_abox_delete_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "24bdcb4c42779a14963037519e42ebde7241535f7eefb0ebb3e354189a02a230",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_write_transaction_query_count": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "54be31eec43147312876cf5c6d45d8557fa833dcea60c90f74d95b0605c31fe2",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_node_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "5b59da253276c0459e6df5866f6ea952a82a066e105bcf9533c01322e0fc3930",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_relation_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "6db942f3265999029ee07651bc261323b57bc88c698a0720d4d64a3b28f62a46",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.graph_write_transaction_query_count": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "011ce2cadd13bc326bb5b3d7f3c831df0b8892847a93e823cc07ec94555e06e2",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.static_node_insert_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "689b59d15d74703ebe1d9852a0f330ba64efcc228835ee58b915cc781cb3aa2b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.static_write_transaction_query_count": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "831d4f8a5d86c7a1f7437a77d09a13f12d0cfa2fb875256edb376eac9b16f278",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.inferencebox_write_transaction_query_count": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "d917aa7776406292be37bcebabe9ecc34978a6c65b90560a7fce1803048f8b6b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.inferencebox_relation_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "2bc2cd211affaef7706127ee01f96fdae1219f6fa6ad2e79968e70fded2d253d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.inferencebox_given_relation_writes_enabled": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "966ee59c14f40164cf2aa684dacd822e6af26a4646d227d65d8e4a0daa60a144",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.inferencebox_given_relation_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "db974a60218c4b2c5401b51b81bf4951ce99167cd4861a8c89d13dbab51ac0c0",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.write_query_max_bytes": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "97bda93fd920091c4b2329200effa9c9ff130e49bb5c8350bdccc2425caa7167",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.given_relation_writes_enabled": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "f363e4a62f9f637f165925b8c1585d85bebf95e7e3f7e34ca0ca55cd5a67344f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.given_relation_batch_size": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/write_policy.py",
+      "bodyHash": "100e7eda9f741340248b1eb688b61558da31c72995a1b06a17820fa3188c699d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "WritePolicyPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.box_instance_exists": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "43e0caf1600b1d9e3b09991ce96718a359c61fd75c742a220a8025dfb0669e2e",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='type_label', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.box_delete_batch_query": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "862400fdfe9ff0db283e6efc215a97d74d7e4d3acda99fd307cde43e95ee69eb",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='box', annotation=Name(id='str', ctx=Load())), arg(arg='type_label', annotation=Name(id='str', ctx=Load())), arg(arg='batch_size', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_candidate_snapshot_ids": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "3ab5dd826559c283dc7fc368d0c10090f79dac9bb8cbc8efc7d47e530128ab54",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_candidate_graph": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "96d410eb5e1012e6cbd6c10cdf1adec7bbb2917b5e812ed7828482f514a55288",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_snapshot_id_from_graph": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "91e0f9d41fcf0f68fab77a0f906576752f6ff9aac56aa77fffc2540167baa2e0",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_active_pointer_graph": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "81f986f5e1f2e6e9645bba13cf53db09638bccf4830522ab0cc320afeede24c9",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='previous_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='pending_activation', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=True)])",
+      "decorators": [],
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.activate_abox_generation": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "1d05f3a3f15dcb20e31005022c98429db63909604ed39682266dc63ce6d70743",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [
+        "typedb_error_code",
+        "utc_now"
+      ],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.finalize_abox_generation": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "0b16c17545c263739bc41d8a9332b66fdb18efb0cd56dc0ba6d5f2b4cc64110c",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='active_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='previous_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.abox_projection_marker_graph": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "f035123fc4b1ee81d6e320e99a27b34de07e1c63774cc231d24e9ba85d428915",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='expected_entity_count', annotation=Name(id='int', ctx=Load())), arg(arg='expected_relation_count', annotation=Name(id='int', ctx=Load())), arg(arg='box', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='ABox')])",
+      "decorators": [],
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.verify_abox_projection": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/legacy_activation.py",
+      "bodyHash": "71f0c6c0b9f9c9440f09d7207488f381af5bdf1eee8ab5ac027deac1975b523d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='expected_entity_count', annotation=Name(id='int', ctx=Load())), arg(arg='expected_relation_count', annotation=Name(id='int', ctx=Load())), arg(arg='box', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='ABox')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "LegacyActivationPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.write_graph": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "f82c95cef132d4e5145c9e252ddf2a4ef84ffda2a07edb7d3cdff657cc1ea937",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='imported'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='delete_boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "node_boxes",
+        "typedb_operation_timeout"
+      ],
+      "port": "GraphWritePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.clear_inferencebox": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "b9eaf2604c4ea3f56fd4fccf5a3fc0c40938f88ca5538ed67810bb7a828d49e0",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "port": "GraphWritePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.delete_queries": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "0a872b37a20d44b3e1efd2aafd30ef6f50b285ab93d4386c71a2476ba1793d61",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "GraphWritePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.insert_queries": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "32f7828d451003de7daf2a44a0f67d19295e77ffd61b9dd927c6c8fca31beb7f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "port": "GraphWritePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.graph_persistence_rows": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "02751d2afb0cd5308e717a62bc434577400238a9f55ae2176ad6780e3b193a59",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "GraphWritePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.graph_insert_queries": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "1ce7bd4d1fcde938cdfb1806235d81317685486ff31f313f5458b40adca39345",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings",
+        "utc_now"
+      ],
+      "port": "GraphWritePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.static_graph_insert_queries": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "102795423e1f310bbd98a701261530fc4dc9432280b999670affc41796c6c05f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings",
+        "utc_now"
+      ],
+      "port": "GraphWritePort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.external_relation_endpoint_ids": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/graph_write.py",
+      "bodyHash": "f98cff051e2b618cfb368220adf8c24c26b3599853629b0463b8b58183149355",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.node_rows": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/node_rows.py",
+      "bodyHash": "f801482e8ffe29e1f25728bbd19b5059bd5e5088ec22b8b4a6288df07049e461",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='include_external_relation_endpoints', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=False)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "NodeRowsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.evidence_node_rows": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/node_rows.py",
+      "bodyHash": "0d6bd180a7dd938c23e43cc507359ab4b7f516fadb76d7904516d84598b10ca2",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "NodeRowsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.belief_node_rows": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/node_rows.py",
+      "bodyHash": "51da594950eb0f1d18278f79709779926516b83e873016e82f8af04ac6c38552",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "rule_id_from_value"
+      ],
+      "port": "NodeRowsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.opinion_node_rows": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/node_rows.py",
+      "bodyHash": "c7cf1c32bc9767bd79f65f35fac6c19d6f9396556e0488cd2746594d2ab23f97",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "NodeRowsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.reasoning_card_node_rows": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/node_rows.py",
+      "bodyHash": "7b94620fd3c5ee83ccf384ec44260b01ef617a5222e20d333b28953d70fc786b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "NodeRowsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.support_relation_rows": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/node_rows.py",
+      "bodyHash": "13d72865d7c996b2cad3d79314bdfcc50268f50d770e975bf0e2c4abefc6b69d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "rule_id_from_value"
+      ],
+      "port": "NodeRowsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.node_insert_clause": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "fc6d20dec4ab5db9d2b3c141178382780ddd82fd07af234c92ec7d76c4b46f3e",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load())), arg(arg='variable', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "promoted_node_text_value",
+        "promoted_node_value",
+        "typedb_node_allowed_attributes",
+        "typeql_has",
+        "typeql_has_bool_string"
+      ],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.relation_insert_query": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "28ec0170e28a7a02715a6e7001a28e5fe32a15b8788dded9772ff668e9764bd6",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.relation_match_clause": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "f7de3edbeb928e5a11cdd7c6dd20716bc930883bfeed34cc6fcca6c476c41b20",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='source_variable', annotation=Name(id='str', ctx=Load())), arg(arg='target_variable', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "typeql_has"
+      ],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.relation_insert_clause": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "15002d15ff7fe32a05dd33ead348f29b519a8a89906039425b63ce29025994eb",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load())), arg(arg='relation_variable', annotation=Name(id='str', ctx=Load())), arg(arg='source_variable', annotation=Name(id='str', ctx=Load())), arg(arg='target_variable', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "typeql_has",
+        "typeql_has_bool_string"
+      ],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.batched_node_insert_queries": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "e298ee3fbf1a31d28ba509bdc248cd4ded6e27733687d7aca719272b3f5454be",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load())), arg(arg='batch_size', annotation=Name(id='int', ctx=Load())), arg(arg='max_query_bytes', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=40), Constant(value=0)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.node_batch_insert_query": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "6a861773c557660c70b4bce86b8b62d5b9845cedb3f2c608718cdeb7140beb10",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.batched_relation_insert_queries": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "1db1dc39573acf47490e742b2dc5494471691274907770ada8b61147471c7b74",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load())), arg(arg='batch_size', annotation=Name(id='int', ctx=Load())), arg(arg='max_query_bytes', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=25), Constant(value=0)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.relation_batch_insert_query": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "0cc9357b21515be391e2d74206d293422a3ca30b4d5953c7f5579d266839da5b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository._given_relation_value": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "95fcb84ec9cfa9069bcac8ec992db7e2bd67360287d33e572f4435b51e2aa1e0",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='value', annotation=Name(id='object', ctx=Load())), arg(arg='value_type', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.given_relation_row_values": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "3b3c42075b830d61b33f91ab271e835d5c33e8e8dba62cd26b28a15487ef3d31",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.given_relation_insert_plans": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "7760a7794c5506c20bb860eb65a26a598fb5db4f71c821c9519a86bc750cee69",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load())), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.inferencebox_insert_queries": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "ecbc4d26b1b8bd11c34aa4ce2d8af9569225018cc44395a92440c2c777e5cfc6",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='node_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='relation_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.inferencebox_given_relation_insert_plans": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/row_queries.py",
+      "bodyHash": "3817603667bb197ea4e8027a079170debc116fe6bcb4479c0ac5bf32ec0069f3",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='updated_at', annotation=Name(id='str', ctx=Load())), arg(arg='settings', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "runtime_settings"
+      ],
+      "port": "RowQueriesPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.rulebox_snapshot": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/rulebox_read.py",
+      "bodyHash": "a6175dab8afa97b122e98d38e5d4a06aab9f561894f276f19a3ad22cfc7d148d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository",
+        "entity_node_kind",
+        "relation_type_rows_from_derivations",
+        "typedb_error_code"
+      ],
+      "port": "RuleboxReadPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.save_rulebox": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/rulebox_commands.py",
+      "bodyHash": "afa509d732da2e0113e4f2423f4cf1d9223676a7a9dfdaa144fa0e62735f3a8a",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "coordinated_typedb_projection_write('rulebox-save', typedb_projection_world_from_payload)"
+      ],
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "port": "RuleboxCommandsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.restore_rulebox_version": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/rulebox_commands.py",
+      "bodyHash": "f5c94e394b09a5d8aef958d743a6943ca222382556db155465e0e92df47cb296",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='version_id', annotation=Name(id='str', ctx=Load())), arg(arg='change_reason', annotation=Name(id='str', ctx=Load())), arg(arg='author', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RuleboxCommandsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.ensure_rulebox_version_baseline": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/rulebox_commands.py",
+      "bodyHash": "7c33728b15e1ca18864f19d6a7f49bc0734a920c15aaa073467a355ffa67774e",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='author', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "port": "RuleboxCommandsPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.append_rulebox_version": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/rulebox_history.py",
+      "bodyHash": "19213f6f4d6dbf5d1ee6a51661c0f1e1dd9b5cfec87ec04b407d8d39bceb651e",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='version', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "coordinated_typedb_projection_write('rulebox-version-append')"
+      ],
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "port": "RuleboxHistoryPort"
+    },
+    "typedb_ontology.TypeDBOntologyGraphRepository.save_rule_change_candidates": {
+      "source": "infrastructure/typedb_ontology.py",
+      "path": "modules/reasoning/infrastructure/graph_writes/rulebox_history.py",
+      "bodyHash": "4b067f566f9487d365de5e572728d3e4932ae7f9fa9dc1fd2a9aa2dbf12fc2ad",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='candidates', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RuleboxHistoryPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.execution_namespace": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/reuse.py",
+      "bodyHash": "a2c1c3087e424e275f719a07a4d4378825211c887bee6f64bd4aa5cb88d59bfc",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "RULE_EVALUATION_NAMESPACE_VERSION"
+      ],
+      "port": "ReusePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.compact_shared_inference_reuse": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/reuse.py",
+      "bodyHash": "02afb57e349b84d8c0e3d0c73dd4d28d4c644cc768638bc56cef0f1dfcca2090",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='active_abox', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='selection_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "shared_inference_from_result_slot_proof"
+      ],
+      "port": "ReusePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.reused_shared_premise_result": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/reuse.py",
+      "bodyHash": "35c14e403c451a3aa32f61e4d2424d54217f83f643a1b47bf78665850b199b29",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[arg(arg='inference', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='active_abox', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='selection_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='shared_world'), arg(arg='shared_rule_ids', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='overlay_rule_ids', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='shared_rulebox_hash', annotation=Name(id='str', ctx=Load())), arg(arg='shared_tbox_fingerprint', annotation=Name(id='str', ctx=Load())), arg(arg='requested_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='evaluated_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='not_evaluated_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='catalog', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='preflight', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='runtime_stages', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='int', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='started_at', annotation=Name(id='float', ctx=Load())), arg(arg='reuse_mode', annotation=Name(id='str', ctx=Load()))], kw_defaults=[None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ReusePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.existing_inference_result": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/reuse.py",
+      "bodyHash": "cc1594394c1ac6f09a16f54e941e875d3e0cc72b7173d4dd1fe0998f26550524",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ReusePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.inference_result_is_reusable": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/reuse.py",
+      "bodyHash": "a13f4594ae848eeeb81d48212ad1e6e40ac09a9385458f9072a301ca3e20219b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='inferencebox', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='active_abox', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='required_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ReusePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.attach_inference_reuse_proof": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/reuse.py",
+      "bodyHash": "b8bdcb49c7bdee9e4bae099ae352efb7fb3dc8246876fd6311a6a5ae2e36be92",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='projection_run', annotation=Name(id='OntologyProjectionRun', ctx=Load())), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ReusePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.interrupted_projection_recovery_required": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/current_state.py",
+      "bodyHash": "15f916f50cd6d5f22742b5097b81b56f57b718b1746ad7013325978a9721ab06",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CurrentStatePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.advance_current_state_transition": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/current_state.py",
+      "bodyHash": "3f1dacf79f47fe5d64552a501af93d3a9798b9b36216389944f2e28ec1c45938",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='projection_run', annotation=Name(id='OntologyProjectionRun', ctx=Load())), arg(arg='stage', annotation=Name(id='str', ctx=Load())), arg(arg='status', annotation=Name(id='str', ctx=Load())), arg(arg='inference_generation_id', annotation=Name(id='str', ctx=Load())), arg(arg='detail', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='running'), Constant(value=''), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CurrentStatePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.finalize_current_state_transition": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/current_state.py",
+      "bodyHash": "1a68a9d516e53d455493aae49d99a8f075c3902f317871983b56c32f3eef6e52",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='completed_run', annotation=Name(id='OntologyProjectionRun', ctx=Load())), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CurrentStatePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.world_rule_partition": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/catalog.py",
+      "bodyHash": "7e6550874e2616414ebd7db8a6c572dbcb62010c034d230d44122702ec98f8ac",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rule_catalog', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CatalogPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.copy_world_rule_partition": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/catalog.py",
+      "bodyHash": "0b140bc61a74c0bd83879889bfad900b3f85a11259c971f0387ede498bc0cafb",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='partition', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.catalog_for_rules": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/catalog.py",
+      "bodyHash": "0b4700f3192f16dd282fd0d5a0ad7680b5bfff1d31d0a1fbd96af87da80bb191",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rule_catalog', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='rules')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CatalogPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.ensure_rulebox_ready": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/catalog.py",
+      "bodyHash": "368ecb261c8672ce6df285fc5c74e2817fd4432a631462e8365c99fea18fc584",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [
+        "bootstrap_rule_catalog",
+        "rulebox_catalog_requires_bootstrap_repair",
+        "rulebox_input_relation_types",
+        "rulebox_rules_missing_decision_stage"
+      ],
+      "port": "CatalogPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.migrate_typedb_rule_catalog": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/catalog.py",
+      "bodyHash": "2d13af5017ebb417a87a972d668f9287ad4672836a25486754134785e88284b1",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='bootstrap_rules', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CatalogPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.prepare_shared_premises": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_premises.py",
+      "bodyHash": "4d12447ae7012b43d0cc64adfd3ac374f868eb65e9ae6c708b2479377d126897",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='progress_callback', annotation=Subscript(value=Name(id='Callable', ctx=Load()), slice=Tuple(elts=[List(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())], ctx=Load()), Constant(value=None)], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "compact_staged_abox_activation_lifecycle",
+        "shared_premise_evaluation_plan"
+      ],
+      "port": "SharedPremisesPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.record_snapshot": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/record.py",
+      "bodyHash": "9516695ad2dfe5e9f89d62f0287210e1988495e9f7d5a6f62d9087c620107f5d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='progress_callback', annotation=Subscript(value=Name(id='Callable', ctx=Load()), slice=Tuple(elts=[List(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())], ctx=Load()), Constant(value=None)], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR",
+        "compact_target_scope_selection_trace"
+      ],
+      "port": "RecordPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.repository_world_call": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/recovery.py",
+      "bodyHash": "242dc6945767a1d5e03b0edd2c9b171441affc55338545088aa4a8ebb0185742",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='method_name', annotation=Name(id='str', ctx=Load()))], vararg=arg(arg='args'), kwonlyargs=[arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kw_defaults=[Constant(value='')], kwarg=arg(arg='kwargs'), defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RecoveryPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.active_abox_metadata": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/recovery.py",
+      "bodyHash": "2883894a0dbab529c0054bf3737ef5cb37104f34da7b80a79cbb3f896a5dd256",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RecoveryPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.recover_pending_abox_activation": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/recovery.py",
+      "bodyHash": "28384e94665ba0017184cb5038d061ff0b67a44954f37a45c0c41423399ab764",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='max_staged_target_symbols', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=0)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RecoveryPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.resume_staged_pending_abox_activation": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/recovery.py",
+      "bodyHash": "6f40402cf67e1cfa357b6822692d9efc4f59ef8274e9f52603d6f3cb52489fa6",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='recovery', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RecoveryPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.reconcile_interrupted_projection_audit": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/recovery.py",
+      "bodyHash": "8e5d979698469cf7323bec675808522287aeb2733a4e99be48e181674c8a1106",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RecoveryPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.active_projection_audit_run": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/recovery.py",
+      "bodyHash": "97faddc282ed8dac1cc6f6455910a71a68a1facbbe0eab92b53db0247b9ca322",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "RecoveryPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.async_quality_record_enabled": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/detail_outbox.py",
+      "bodyHash": "a43309af39b66d740f979dcc4fa943317a43b8852a8dca5e84af9d32a70fb987",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "DetailOutboxPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.inference_detail_outbox_enabled": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/detail_outbox.py",
+      "bodyHash": "d3192848cfa0fb76b97255e9bdca60323ae3300dc0fd74fc9c7ad2dd0d3f7126",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "DetailOutboxPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.inference_detail_outbox_summary": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/detail_outbox.py",
+      "bodyHash": "76e1168ee6c3d286a2417612c7d65de00a304d1ef9b7d99ef28d28f842196798",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.enqueue_inference_detail_readback": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/detail_outbox.py",
+      "bodyHash": "586c5a3bf6858db1418e14f54f36068b541ad5f157b40847594cb12207682f8f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='inference_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "DetailOutboxPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.schedule_market_world_projection": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_dispatch.py",
+      "bodyHash": "1528dcfa16a706b24402e8714bb4c69d95397c262fb9671f33e7c8b8a01dd955",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='portfolio_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='shared_world'), arg(arg='source_world')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedDispatchPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.schedule_knowledge_world_projection": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_dispatch.py",
+      "bodyHash": "4d4b8b8253778b64fa54536137132a9e66ef4b731e7e3f249cd36b525f09ba9f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='portfolio_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='shared_world'), arg(arg='source_world')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedDispatchPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.schedule_shared_world_projection": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_dispatch.py",
+      "bodyHash": "54acc294bf7ae6343847ca7f02d423db59fb0f569ac439aede3109fbdff014da",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='projection_kind', annotation=Name(id='str', ctx=Load())), arg(arg='portfolio_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='shared_world'), arg(arg='source_world')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [
+        "SHARED_MARKET_WORLD_PROJECTION_COORDINATOR"
+      ],
+      "port": "SharedDispatchPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.shared_world_projection_input": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_dispatch.py",
+      "bodyHash": "1ca877744cc7d1783a572b9be44bf5153cbadcbd884ef597634648ca6457d82d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='projection_kind', annotation=Name(id='str', ctx=Load())), arg(arg='portfolio_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='shared_world')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedDispatchPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.project_market_world": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_dispatch.py",
+      "bodyHash": "a622cefe35a03d3ba9590e939d106e2f11906b7cc4137993d0d210c017c31f39",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='portfolio_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='shared_world')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedDispatchPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.project_knowledge_world": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_dispatch.py",
+      "bodyHash": "b2281caf7a5f3853f44b40054f81a4291ee3f15063beadc7e37e109b899c134f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='portfolio_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='shared_world')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedDispatchPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.project_shared_world_update": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/shared_world.py",
+      "bodyHash": "9436ffd0515894156dc988496d767be44b61586126c5e0b3dec2d9f4b1b6b044",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='update', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='shared_world'), arg(arg='projection_kind', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='market')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedWorldPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.attach_graph_store_inference_result": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/inference.py",
+      "bodyHash": "700abfddf6ebfaa804a9c76c00baee2ea0ab0516d8467b2c1a4bdb305cd19319",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='inference_impact_plan', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='candidate_scope_plan', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='rulebox_rules_hash', annotation=Name(id='str', ctx=Load())), arg(arg='tbox_fingerprint', annotation=Name(id='str', ctx=Load())), arg(arg='preflight_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='preflight_manifest_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=''), Constant(value=None), Constant(value=''), Constant(value=''), Constant(value=None), Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "InferencePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.acquire_inference_write_lease": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/publication.py",
+      "bodyHash": "b9d3f0c81a403f8daa88e3dbf2ff2a2757d6eaf0f406d0905af8c3cc037dfc8d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "PublicationPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.release_inference_write_lease": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/publication.py",
+      "bodyHash": "e67fcad177f5b2782334e60aece7473e7c7ae70811f4c8520af4462d01110fd1",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "PublicationPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.reconcile_abox_activation_after_inference": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/publication.py",
+      "bodyHash": "584aa5b94f5d4c68cb6fd135aaccae2321d14e13514e018d948bcc05cf956f1a",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='inference_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "PublicationPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.attach_abox_persistence_runtime_stages": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/publication.py",
+      "bodyHash": "c1f74a0d1c6e895667233fd96a57b9282a29a1794c6394a240cca705057790ae",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='runtime_stages', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='int', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.native_preflight_projection_graph": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/publication.py",
+      "bodyHash": "454873ef77f4797cae28037046ecae2bb2532abcfc6a6c927b3e4bfc37ad35b7",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='persistence', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "PublicationPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.inference_alignment_diagnostics": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/publication.py",
+      "bodyHash": "b9898471bbc841df049271d9b0503d7e28173f999a52e6aeaf8b0ae9592298e2",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='inferencebox', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='expected_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='required_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.prior_rule_selection_context": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/selection.py",
+      "bodyHash": "56d652210b58f532a733b258f3b8a4603de722f5bc0b072672e8bac0fa574be5",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='inference_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='candidate_scope_plan', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='rulebox_rules_hash', annotation=Name(id='str', ctx=Load())), arg(arg='tbox_fingerprint', annotation=Name(id='str', ctx=Load())), arg(arg='requested_fact_families', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='requested_fact_families_by_symbol', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None), Constant(value=''), Constant(value=''), Constant(value=None), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SelectionPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.adaptive_native_rule_target_sharding_profile": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/selection.py",
+      "bodyHash": "cb918cb884e946b2ed23b1ccfab76c2b804e3298312afe40efb3119689fe67b9",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='rulebox_rules_hash', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value='')])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SelectionPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.matched_rule_ids_from_inference_payload": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/selection.py",
+      "bodyHash": "8eede0341f8807def9dac125084495806f625be43b113aec131ed523ba20c00f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.audited_prior_rule_selection_context": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/selection.py",
+      "bodyHash": "243bb3fb586e03f167a6b311eb795d0f433bb5d27dc6da4613e06ad5e3bd52ff",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='inference_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='candidate_scope_plan', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='rulebox_rules_hash', annotation=Name(id='str', ctx=Load())), arg(arg='tbox_fingerprint', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='requested_fact_families', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='requested_fact_families_by_symbol', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=''), Constant(value=''), Constant(value=''), Constant(value=None), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SelectionPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.shared_inference_selection_context": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/selection.py",
+      "bodyHash": "14c77e31658f38bd3156e25b6fcb910d25bfdefb71cf5f4f9ee9cd9f110cfff1",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='impact_plan', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='inference_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='account_selection_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SelectionPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.combine_audited_target_rule_selection_contexts": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/selection.py",
+      "bodyHash": "8979fb778e262b82187d65b3f7557c23ea57de5e71d4823420db2cf36cb477ae",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='targets', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='target_contexts', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SelectionPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.impact_plan_with_audited_candidates": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/selection.py",
+      "bodyHash": "9c79719fd4ba88feb814064ccff6194a603484aae1d87b4e43a61a22bb09065c",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='impact_plan', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='selection_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.snapshot_symbols": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "9e67e848e95c8a27fca183b23252f7d2836a5a381643435dfa60e928f923d7e9",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.inference_symbols": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "dba6bbaaaf145d8ffb8c50ac797d62819519eca02259d8067229679870da4abb",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.scheduler_target_symbol_limit": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "c6cd964dfc73fde2e443e96cb5aeb61f8af4233bbde2d1a9863722bc20668726",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.reasoning_queue_pressure": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "e45b935dc5bef02c820c70df3b73c1767f9a6d4d09422159a6af685421586cfd",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.target_scoped_patch_targets": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "07078d9466a46851e0e6f0497fbf019c901fee04d44fcd2d3a8091d217d9698b",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='active_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='scoped_identity', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='requested_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.inference_impact_plan": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "f8de464263d238221c2b42a7cb9a4a576969952e204442cdf48c27449cd0120e",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='active_abox', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='scoped_identity', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.rulebox_rules_for_impact": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "9656d4bb7928978233d4d02de8cfdc6f0338beae84d4160d85894a790cfb7216",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.inference_snapshot_limit": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "8ef0705a96e51329bc751837e7ec5bbe5bb8417bcc84797291345d978baf584a",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.has_projectable_data": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "92ba568b226fd271e532815c65e3dbb3498a5d402e127388facec125eaf257a9",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.typedb_projection_deferred": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "b5517c8dfa50cb90e135ef7fa5da129b41a27132e7a2ab62bf13a6bb5b93a3ba",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.active_graph_store_key": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/scope_policy.py",
+      "bodyHash": "7443a9db812dcd574073df79a09e2f1e26284e4a64cc7ad00a8007badd343d24",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePolicyPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.projection_coordinator_summary": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/audit.py",
+      "bodyHash": "8bb87d64467a229f2db0c875edd77d3f1bb7b4f107d80e4522cdfad4f01d9965",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.begin_projection_audit_run": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/audit.py",
+      "bodyHash": "be9234f94d3ff4d8b6af784821dafdec1289a1558e232ba0291de86697fbbf39",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='material_fingerprint', annotation=Name(id='str', ctx=Load())), arg(arg='abox_snapshot_id', annotation=Name(id='str', ctx=Load())), arg(arg='inference_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='rulebox_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='reasoning_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "AuditPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.store_projection_result": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_write/audit.py",
+      "bodyHash": "072d65a4c54f659d56ad8e9deb0dd59e0983c7705f2cf77f91f8c15833edd285",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='projection_run', annotation=Name(id='OntologyProjectionRun', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "AuditPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.world_partitioned_reasoning_enabled": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/current_state.py",
+      "bodyHash": "842fa151fff1d42fcb9fde9609590476de03368a8a5d25831e687084982f9e25",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CurrentStatePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.incremental_current_state_reasoning_enabled": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/current_state.py",
+      "bodyHash": "42cdcf48b0c80746581ff7792a784f282b0ce099bd8b3f219004a54a595879cb",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CurrentStatePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.current_state_abox_storage_enabled": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/current_state.py",
+      "bodyHash": "10c6154e5edad95bd925d1bdfec4b5b6cec03f7313505e52e69eb69502a41645",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CurrentStatePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.copy_compiled_rule_catalog": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/current_state.py",
+      "bodyHash": "0e78c89dc00eaed8c843913026fce4b46eeb7508a322fc4f4c48ba224e107a75",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='catalog', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ],
+      "runtimeFields": [],
+      "port": ""
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.shared_market_world_retention_hours": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/shared_world.py",
+      "bodyHash": "fd59d3256eae7bc2ee7ca0a57c90f68175f299f495d3c5ee3b340b1feb38518a",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedWorldPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.shared_knowledge_world_retention_hours": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/shared_world.py",
+      "bodyHash": "d90aa542a8fdb59a76329d307e78b3683263ca8dd8e82eaee338046853a49c2f",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedWorldPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.shared_world_retention_hours": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/shared_world.py",
+      "bodyHash": "1bfe780bce694fde2004b3b45c230da15ba242329ab6e2a349724fdbe897d5de",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='projection_kind', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedWorldPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.shared_market_world_symbol_limit": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/shared_world.py",
+      "bodyHash": "d8dd1475cb1eef1f397ce751286b3dee41a8c93cf19a49c26246adde542a72ac",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedWorldPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.shared_market_world_async_projection_enabled": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/shared_world.py",
+      "bodyHash": "084808c95d590f66051d238fced8211eb0dc9704dddb6b50b56dcc933e5043c8",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "SharedWorldPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.incremental_equivalence_audit_selected": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/scope.py",
+      "bodyHash": "7efb4da06552a2d88aedb67ec2d2fd548534938088237d8431276890cdfd49cf",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='impact_plan', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='selection_context', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.native_inference_symbol_limit": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/scope.py",
+      "bodyHash": "98c44b8f1e230ed72ccc0b6709256fda4a74809ab8ed4a6d381cbb5ce51a4f9d",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.bounded_native_inference_symbols": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/scope.py",
+      "bodyHash": "7327f5dbffbb087c76023f749523301318595eec01120edaa725480556b92fdf",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Name(id='AccountSnapshot', ctx=Load())), arg(arg='inferred_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='requested_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='scheduler_target_symbol_limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=0)])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.scope_integrity_audit_interval_minutes": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/scope.py",
+      "bodyHash": "6750dba09d9a4299f2b5a6bc6343af9195fe8c435d8ad7c8296b4cd9d2d69e42",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.scope_integrity_audit_age_minutes": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/scope.py",
+      "bodyHash": "4f6b445ab7e10a8fdf4f7ecf0ed04b7eb971940e18e6e700b572a15e0190e588",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='active_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "ScopePort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.acquire_projection_coordinator_lease": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/coordinator.py",
+      "bodyHash": "bce4dc12b49167763dbd78424b536f9d2a1b0e6939dca8913e2972a2ce707262",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='owner', annotation=Name(id='str', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CoordinatorPort"
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.release_projection_coordinator_lease": {
+      "source": "infrastructure/ontology_projection.py",
+      "path": "modules/reasoning/infrastructure/projection_policy/coordinator.py",
+      "bodyHash": "52de327b94cb2dbdc32f5df10e8f8a2029561b99e1e26034f5ec79bb78419796",
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [],
+      "runtimeFields": [],
+      "port": "CoordinatorPort"
+    }
+  }
+}

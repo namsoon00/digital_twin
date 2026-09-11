@@ -1,0 +1,1 @@
+"""Subject decision persistence adapters."""

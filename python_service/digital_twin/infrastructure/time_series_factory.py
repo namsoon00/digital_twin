@@ -4,12 +4,8 @@ from typing import Dict
 
 from digital_twin.modules.market_data.public import TemporalFeatureSnapshotService, TimeSeriesBackendPlatformService, TimeSeriesProjectionRunner, VersionedMarketTimeSeriesStore, truthy
 from ..domain.time_series_storage import TimeSeriesBackendDescriptor
-from .mysql_market_time_series import MySQLMarketTimeSeriesStore
-from .mysql_versioned_runtime import (
-    MySQLTemporalFeatureSnapshotStore,
-    MySQLTimeSeriesBackendRegistryStore,
-    MySQLTimeSeriesProjectionOutboxStore,
-)
+from digital_twin.modules.market_data.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
+from digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime import MySQLTemporalFeatureSnapshotStore, MySQLTimeSeriesBackendRegistryStore, MySQLTimeSeriesProjectionOutboxStore
 from .questdb_time_series import QuestDBTimeSeriesAdapter
 
 

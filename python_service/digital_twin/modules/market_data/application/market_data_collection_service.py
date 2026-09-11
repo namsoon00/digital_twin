@@ -10,7 +10,8 @@ from digital_twin.domain.market_data import normalize_position, number, technica
 from digital_twin.domain.position_identity import position_with_symbol_identity
 from digital_twin.domain.materiality import market_change_materiality
 from digital_twin.domain.portfolio import Position, utc_now_iso
-from digital_twin.domain.repositories import MarketDataProvider, MarketDataProviderFactory, MarketQuoteRepository
+from digital_twin.modules.market_data.contracts import MarketDataProvider, MarketQuoteRepository
+from digital_twin.modules.market_data.contracts import MarketDataProviderFactory
 from digital_twin.modules.accounts.public import AccountReader
 from digital_twin.modules.instruments.contracts import SUPPORTED_MARKETS, normalize_market
 

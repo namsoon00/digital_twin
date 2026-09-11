@@ -53,7 +53,8 @@ digital_twin/
     composition/            # Responsibility-specific runtime builders
     service_factory.py      # Explicit, lazy builder exports
     account_transactions.py # Explicit cross-owner account transaction
-                            # Remaining shared adapters also live here
+    transactions/           # Explicit multi-owner atomic storage operations
+                            # Schema/connection/retention are shared facilities
 ```
 
 - A business module imports another module only through `public` or `contracts`.
@@ -90,7 +91,7 @@ builder can still construct its actual required collaborators; laziness does
 not make a slow use case asynchronous.
 
 Web handlers and CLI commands use these builders. Business modules cannot
-import `service_factory`, `composition` or `account_transactions`; dependencies
+import `service_factory`, `composition`, `account_transactions` or `transactions`; dependencies
 are injected through ports. There is no implicit fallback export or runtime
 service locator. Add each new builder to the explicit export catalog and its
 isolation tests.
@@ -585,45 +586,95 @@ manifest schema. It verifies rollback after delete and before commit, and
 single-row retry after commit acknowledgement loss. It neither touches managed
 data nor proves full production schema reconstruction or whole-engine recovery.
 
-## Remaining Shared Boundaries
+## Integrated Backend Ownership
 
-This is application-layer modularization with selected ownership fixes, not a
-claim that the entire persistence/domain migration is complete:
+The remaining backend batch is tracked in
+[Backend Ownership Integration](backend-integration-completion.md). Repository
+contracts formerly combined in `domain/repositories.py` now live under the
+owning module's `domain/repositories.py` and are exported by `contracts.py`.
+The shared file is exports only, including the market provider factory alias.
+Composite contracts retain atomic use cases; moving an interface does not split
+its database transaction or change its event ordering.
 
-- Account configuration has an owner, but still composes multiple policy
-  contracts for provider/notification workers. Other large ontology, decision
-  and portfolio repository contracts remain in the shared domain package.
-- Runtime builders are lazy and V2 has tested phases, but some phases still
-  assemble large collaborator graphs. Import checks alone cannot prove all
-  runtime interactions safe.
-- `typedb_ontology.py` is now roughly 7,300 lines, down from 22,738 before the
-  backend ownership batches. Primitive writes, RuleBox snapshot/version
-  administration, legacy helpers, facade methods and some driver/cache
-  identities remain there.
-  `ontology_projection.py` is roughly 8,700 lines after separating source
-  input assembly; record/save/inference/recovery coordination remains large.
-  The extracted save and native-cycle algorithms are deliberately intact;
-  ownership separation does not mean
-  every algorithm is already small or that overall code volume decreased.
-- The MySQL schema and operational store facade remain shared. Owner helpers
-  restrict the changed write paths, but do not enforce table ownership for
-  every legacy writer.
-- `public/app.js` and the Python web router were not split into frontend/BFF
-  modules. Account payload handling and dependency wiring changed; navigation
-  and rendering did not.
-- There is no new generic per-consumer acknowledgement/outbox framework.
-  Existing job-specific recovery remains authoritative.
+Twenty-two single-owner MySQL files moved to business infrastructure: quotes and
+candles to `market_data`, research/evidence to `news_intelligence`, governance to
+`model_registry`, inbox/policy to `notifications`, subject cases to `decisions`,
+replay jobs to `outcomes`, and source lineage/projection/mailboxes to `reasoning`.
+The versioned runtime store is also split: engine queues and deployments belong
+to `reasoning/infrastructure/mysql_engine_runtime.py`; time-series registry,
+replication outbox and feature snapshots belong to
+`market_data/infrastructure/mysql_temporal_runtime.py`.
+Pure JSON/UTC helpers remain platform facilities. A temporal-store import no
+longer loads the reasoning queue implementation.
 
-Further changes should move remaining store ports and table writes one owner
-at a time, and simplify the larger save/native algorithms only with immutable
-replay and failure-path tests. RuleBox version administration and the remaining
-projection write/recovery orchestration are separate remaining ownership areas.
-Convert a synchronous follow-up to a durable consumer only when measured
-latency, retries or failure isolation justify it. Do not migrate all modules to
-asynchronous APIs by default.
+Legacy storage module names resolve to owned adapters, while composition imports
+the owners explicitly. Four existing multi-owner operations are deliberately
+located in `infrastructure/transactions/`, not disguised as a single feature:
+
+| Coordinator | Atomic participants |
+| --- | --- |
+| `portfolio.py` | Snapshot/checkpoint, ledger, exposure, activity, event and queued follow-up |
+| `ai_publication.py` | AI request, immutable subject/publication state and notification handoff |
+| `decision_history.py` | Decision episode, outcome targets, observations and learning audit |
+| `monitoring.py` | Source snapshot/anchor, recorded event, admission and reasoning ingress |
+
+Business modules cannot import these coordinators. Composition supplies them;
+SQL and transaction bodies are frozen against the pre-move source revision.
+The portfolio mandate write helper now belongs to `portfolio/infrastructure/mandate_store.py`
+and accepts an existing connection, so account creation does not import the
+larger portfolio transaction coordinator.
+
+Reasoning implementation ownership is now explicit:
+
+| Package | Responsibility |
+| --- | --- |
+| `graph_writes/` | Graph-save checks, write batch policy, node/relationship serialization, legacy activation, RuleBox read/edit/history |
+| `projection_write/` | Source recording, pending-candidate recovery, publication, shared-world work, selection, audit and deferred readback |
+| `projection_policy/` | Current-state settings, target limits, shared-world retention and writer-coordinator policy |
+
+Each file has a capability protocol and explicit per-call bindings for the
+facade's clocks, helpers or shared coordinators. Existing entry-point guards,
+driver/cache identity and release/source/generation contracts remain unchanged.
+The TypeDB facade is about 5,900 lines and the projection facade about 2,400,
+compared with 7,266 and 8,687 at the start of this batch. Some extracted
+orchestration functions remain large; ownership is not a claim of smaller total
+code volume or a fully decomposed algorithm.
+
+Two failure behaviors are strengthened without changing investment semantics:
+
+- Failed RuleBox publication restores the prior in-memory rule list and clears
+  the speculative cache. Only successful publication appends the new version.
+  Database readback remains authoritative after ambiguous commit responses.
+- Recovery negotiates legacy optional parameters before calling an adapter.
+  An internal `TypeError` never causes the mutation to run again with weaker
+  world/target arguments. Existing queue retry remains the recovery owner.
+
+## Deliberate Shared Boundaries
+
+- Connection pools, schema/bootstrap, retention, runtime settings and keyed
+  application-cache facilities remain shared platform infrastructure. Storage
+  ownership checks are architectural guards, not database permission isolation.
+- Multi-owner transaction coordinators are still substantial. Splitting their
+  participants requires connection-bound ports and rollback tests, not replacing
+  one atomic commit with unrelated event callbacks.
+- The common ontology kernel and some pure domain contracts remain shared.
+  Runtime builders and native/save algorithms may still be large. Import and
+  source-parity tests cannot prove every runtime interaction safe.
+- `public/app.js` and the Python web router were not redesigned or split into
+  frontend/BFF modules. Existing route, payload and navigation contracts remain.
+- No generic consumer-acknowledgement framework, new message broker or new
+  worker is introduced. Existing job-specific leases/retries remain authoritative.
+
+Convert a synchronous follow-up to a durable consumer only when measured latency,
+retries or failure isolation justify it. Module count is not an async mandate.
 
 ## Verification
 
+- `test_backend_integration.py`: 144 moved method contracts, storage declaration
+  and transaction parity, owner/legacy identity, resolvable narrow ports, unbound
+  global detection, temporal import isolation, exactly-once adapter invocation,
+  failed RuleBox cache restoration and owned-lease cleanup. Three intentional
+  failure-path changes are explicitly excluded from source-body equivalence.
 - `test_static_seed_ownership.py`: frozen schema/seed bodies and output
   fingerprints, narrow import/port ownership, bounded preflight, authored
   artifact restoration, phase failure, atomic pointer rollback and retry.

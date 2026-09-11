@@ -31,6 +31,8 @@ _EXPORTS['quiet_minutes'] = ('digital_twin.modules.notifications.domain.account_
 _EXPORTS['quiet_timezone'] = ('digital_twin.modules.notifications.domain.account_preferences', 'quiet_timezone')
 _EXPORTS['is_quiet_time'] = ('digital_twin.modules.notifications.domain.account_preferences', 'is_quiet_time')
 
+_EXPORTS['NotificationGateway'] = ('digital_twin.modules.notifications.domain.repositories', 'NotificationGateway')
+
 __all__ = list(_EXPORTS)
 
 

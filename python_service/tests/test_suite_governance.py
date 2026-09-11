@@ -129,7 +129,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # identity/copy isolation, optional-source failures and replay parity.
         # Immutable seed ownership and atomic static-manifest replacement add
         # independent schema parity, authored release and rollback contracts.
-        self.assertLessEqual(total, 1207)
+        # Integrated storage ownership and projection recovery additionally
+        # protect single-call mutations, verified rule caches and lease cleanup.
+        self.assertLessEqual(total, 1225)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

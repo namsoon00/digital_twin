@@ -43,7 +43,7 @@ from .ontology_decision_state import (
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, fx_rates_with_external_signals, runtime_fx_currencies_from_external_signals, value_in_base
-from .repositories import MonitorStateRepository
+from digital_twin.modules.portfolio.contracts import MonitorStateRepository
 from .strategy import StrategyModel, decisions_for_positions
 from .notification_ai_context import is_graph_backed_relation_context
 from .strategy_alerts import StrategyAlertMixin

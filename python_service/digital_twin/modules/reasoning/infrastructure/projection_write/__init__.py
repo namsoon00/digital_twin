@@ -1,0 +1,1 @@
+"""Private projection write ownership."""

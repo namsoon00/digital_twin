@@ -7,6 +7,8 @@ _EXPORTS = {'MODEL_REVIEW_PROMPT_VERSION': ('digital_twin.modules.model_registry
                                  'MODEL_REVIEW_PROMPT_VERSION'),
  'ModelReviewJob': ('digital_twin.modules.model_registry.domain.model_review', 'ModelReviewJob')}
 
+_EXPORTS['HypothesisLifecycleRepository'] = ('digital_twin.modules.model_registry.domain.repositories', 'HypothesisLifecycleRepository')
+
 __all__ = list(_EXPORTS)
 
 

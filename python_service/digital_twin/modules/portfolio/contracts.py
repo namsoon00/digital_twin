@@ -28,6 +28,16 @@ _EXPORTS['INVESTMENT_STRATEGY_PROFILES'] = ('digital_twin.modules.portfolio.doma
 _EXPORTS['normalize_investment_strategy_profile'] = ('digital_twin.modules.portfolio.domain.strategy_profile', 'normalize_investment_strategy_profile')
 _EXPORTS['investment_strategy_profile'] = ('digital_twin.modules.portfolio.domain.strategy_profile', 'investment_strategy_profile')
 
+_EXPORTS['InvestmentDomainRepository'] = ('digital_twin.modules.portfolio.domain.repositories', 'InvestmentDomainRepository')
+_EXPORTS['SnapshotProvider'] = ('digital_twin.modules.portfolio.domain.repositories', 'SnapshotProvider')
+_EXPORTS['MonitorStateRepository'] = ('digital_twin.modules.portfolio.domain.repositories', 'MonitorStateRepository')
+_EXPORTS['MonitorSnapshotReader'] = ('digital_twin.modules.portfolio.domain.repositories', 'MonitorSnapshotReader')
+_EXPORTS['SnapshotMonitor'] = ('digital_twin.modules.portfolio.domain.repositories', 'SnapshotMonitor')
+_EXPORTS['MonitoringCycleRecordResult'] = ('digital_twin.modules.portfolio.domain.repositories', 'MonitoringCycleRecordResult')
+_EXPORTS['MonitoringCycleRecorder'] = ('digital_twin.modules.portfolio.domain.repositories', 'MonitoringCycleRecorder')
+_EXPORTS['MonitorAccountJob'] = ('digital_twin.modules.portfolio.domain.repositories', 'MonitorAccountJob')
+_EXPORTS['MonitorAccountJobRepository'] = ('digital_twin.modules.portfolio.domain.repositories', 'MonitorAccountJobRepository')
+
 __all__ = list(_EXPORTS)
 
 

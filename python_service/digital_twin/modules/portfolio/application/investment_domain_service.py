@@ -9,7 +9,7 @@ from digital_twin.modules.portfolio.domain.portfolio_ledger import PortfolioLedg
 from digital_twin.modules.portfolio.domain.portfolio_ledger import INFERRED_SNAPSHOT_ENTRY_TYPES
 from digital_twin.domain.snapshot_portfolio_activity import activity_payload
 from digital_twin.domain.portfolio_rebalancing import RebalanceProposal, RebalanceTransition
-from digital_twin.domain.repositories import InvestmentDomainRepository
+from digital_twin.modules.portfolio.contracts import InvestmentDomainRepository
 from digital_twin.domain.trade_execution import ActionPlan, ExecutionEpisode
 
 

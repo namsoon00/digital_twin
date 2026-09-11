@@ -134,6 +134,48 @@ a byte-equivalent relocation. Future semantic changes require the normal
 versioned engine/replay review; do not simply regenerate the golden file to
 silence a failure.
 
+## Inference Publication Boundary
+
+`modules/reasoning/infrastructure/inference_publication/` owns the storage
+lifecycle of a TypeDB inference result, not the final AI investment opinion:
+
+| File | Responsibility |
+| --- | --- |
+| `writer.py` | Persist candidate nodes, relations and marker in the existing bounded write batches |
+| `validation.py` | Read counts/marker in one transaction and verify source-ABox alignment and completeness |
+| `lifecycle.py` | Atomically switch the active marker and separately prune old world-scoped generations |
+| `markers.py`, `values.py` | Marker payloads, generation deletion clauses and exact stored-value decoding |
+| `ports.py` | Required graph I/O capabilities and injected clock, settings, timeout and error classification |
+
+The shared graph repository retains five thin entry-point delegates and the
+runtime wiring. Publication code depends on `PublicationStore`, not the whole
+repository implementation. It cannot invoke rule evaluation, graph projection,
+rule editing, account access or notification delivery. Driver acquisition,
+retries, serialization and transaction options are supplied by the existing
+adapter. A deterministic in-memory transaction recorder can exercise the
+complete publication path without importing a database driver, settings,
+application services or the graph repository.
+
+Candidate writes are **not** one all-or-nothing transaction. Earlier batches
+may remain staged after a failure, but they must not replace the active result.
+The candidate marker/count/source checks precede activation; old marker removal
+and new marker insertion remain in one write transaction. A successful empty
+native evaluation can be published as `no-match`; an incomplete evaluation
+cannot be treated as that result. Cleanup remains a separate, bounded,
+world-scoped operation and a cleanup failure does not invalidate publication.
+
+The extraction preserves the original five storage algorithms and four payload
+helpers, with only receiver/runtime bindings and docstring indentation changed.
+Twenty-two golden execution scenarios from revision `685821a19` compare query
+and transaction order, markers, return values, failures, retries and retention.
+The recorded driver models commit/rollback; it is not a replacement for native
+TypeDB validation. Existing repository and replay tests remain required.
+
+No worker, event/outbox contract, transaction retry policy, native engine
+version or investment rule changed. Source validation and pointer activation
+still rely on the existing projection coordinator/write lease; this extraction
+does not introduce a new cross-store transaction or compare-and-swap protocol.
+
 ## Synchronous and Asynchronous Boundaries
 
 Use a synchronous public interface when the caller needs an immediate result
@@ -227,10 +269,11 @@ claim that the entire persistence/domain migration is complete:
 - Runtime builders are physically separated and loaded lazily, but some
   reasoning builders still assemble large collaborator graphs. Those graphs
   are not fully described by module import checks alone.
-- `typedb_ontology.py` still has roughly 27,000 lines after the TypeQL extraction,
-  and `ontology_projection.py` remains a large shared adapter. Driver execution,
-  generation publication and scoped Manifest persistence are not yet separated
-  by ownership. Their transaction and investment semantics are unchanged.
+- `typedb_ontology.py` still has roughly 26,000 lines after query and inference
+  publication extraction, and `ontology_projection.py` remains a large shared
+  adapter. Driver/schema lifecycle, ABox persistence/activation, scoped Manifest
+  recovery and native execution orchestration still need ownership separation.
+  Their transaction and investment semantics are unchanged.
 - The MySQL schema and operational store facade remain shared. Owner helpers
   restrict the changed write paths, but do not enforce table ownership for
   every legacy writer.
@@ -241,10 +284,10 @@ claim that the entire persistence/domain migration is complete:
   Existing job-specific recovery remains authoritative.
 
 Next work should move remaining store ports and table writes one owner at a
-time, then simplify large builder dependency graphs. Following the TypeQL query
-extraction, separate TypeDB generation publication and storage adapters only
-with immutable replay and failure-path tests. Convert a synchronous follow-up
-to a durable consumer only when measured
+time, then simplify large builder dependency graphs. Following TypeQL and
+InferenceBox publication extraction, separate ABox persistence/activation and
+driver/schema lifecycle only with immutable replay and failure-path tests.
+Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
 asynchronous APIs by default.
 
@@ -263,6 +306,9 @@ asynchronous APIs by default.
   import isolation, explicit ownership, acyclic leaf dependencies and scoped
   unexecutable/fallback plans. Existing TypeDB/replay regressions still cover
   repository execution and failed-generation behavior.
+- `test_inference_publication.py`: original execution fingerprints, injected
+  graph-I/O isolation, atomic marker switching, failure preservation, complete
+  versus incomplete empty results, relation fallback and world-scoped cleanup.
 - The web smoke test checks changed-field payloads and existing pages.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not

@@ -232,6 +232,16 @@ from digital_twin.modules.reasoning.infrastructure.typeql.storage_schema import 
     typedb_target_attribute,
 )
 
+from digital_twin.modules.reasoning.infrastructure.inference_publication import (
+    lifecycle as _inference_lifecycle,
+    markers as _inference_markers,
+    validation as _inference_validation,
+    writer as _inference_writer,
+)
+from digital_twin.modules.reasoning.infrastructure.inference_publication.markers import inference_generation_delete_queries
+from digital_twin.modules.reasoning.infrastructure.inference_publication.ports import PublicationRuntime
+from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object, typedb_bool
+
 
 class TypeDBOperationTimeout(TimeoutError):
     pass
@@ -260,12 +270,6 @@ def typedb_operation_timeout(seconds: float, label: str):
             signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
-def typedb_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def typedb_world_kwargs(world_id: str = "") -> Dict[str, str]:
@@ -1858,16 +1862,6 @@ def typeql_has_bool_string(attribute: str, value: object) -> str:
     return ", has " + attribute + " " + typedb_string(normalized)
 
 
-def json_object(value: object) -> Dict[str, object]:
-    if isinstance(value, dict):
-        return dict(value)
-    if not value:
-        return {}
-    try:
-        decoded = json.loads(str(value))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-    return dict(decoded) if isinstance(decoded, dict) else {}
 
 
 def promoted_node_value(row: Dict[str, object], properties: Dict[str, object], field: str):
@@ -24355,423 +24349,31 @@ relation ontology-assertion,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
 
+    def _inference_publication_runtime(self) -> PublicationRuntime:
+        return PublicationRuntime(
+            settings=runtime_settings,
+            now=utc_now,
+            timeout=typedb_operation_timeout,
+            error_code=typedb_error_code,
+        )
+
     def write_inferencebox_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
-        if not self.address:
-            return {
-                "configured": False,
-                "saved": False,
-                "status": "disabled",
-                "graphStore": "typedb",
-                "reason": "TypeDB ontology storage is not configured.",
-            }
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "driver-missing",
-                "graphStore": "typedb",
-                "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160],
-            }
-        inference_material_fingerprint = material_graph_fingerprint(graph)
-        graph.worldview["inferenceMaterialFingerprint"] = inference_material_fingerprint
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        node_rows = [
-            row for row in self.node_rows(graph)
-            if str(row.get("ontologyBox") or "") == "InferenceBox"
-        ]
-        relation_rows = [
-            row for row in self.rows_for_relations(graph) + self.support_relation_rows(graph)
-            if str(row.get("ontologyBox") or "") == "InferenceBox"
-        ]
-        updated_at = utc_now()
-        settings = runtime_settings()
-        node_queries = self.batched_node_insert_queries(
-            node_rows,
-            updated_at,
-            int(number_or_none(settings.get("typedbInferenceBoxNodeBatchSize")) or 25),
-            self.write_query_max_bytes(settings),
+        return _inference_writer.write_inferencebox_graph(
+            self,
+            graph,
+            runtime=self._inference_publication_runtime(),
         )
-        relation_write_plans = self.inferencebox_given_relation_insert_plans(
-            relation_rows,
-            updated_at,
-            settings=settings,
-        )
-        planned_batch_count = len(node_queries) + len(relation_write_plans)
-        write_timing: Dict[str, object] = {
-            "queryCount": planned_batch_count,
-            "nodeQueryCount": len(node_queries),
-            "relationQueryCount": len(relation_write_plans),
-            "relationBatchSize": self.inferencebox_relation_batch_size(),
-            "relationGivenBatchSize": self.inferencebox_given_relation_batch_size(),
-        }
-        generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
-        world_id = str((graph.worldview or {}).get("worldId") or "").strip()
-        fresh_generation = typedb_bool(
-            (graph.worldview or {}).get("freshInferenceGeneration")
-        )
-        marker_query = self.node_insert_query(
-            inference_generation_marker_row(graph, node_rows, relation_rows, "candidate"),
-            updated_at,
-        ) if generation_id else ""
-        statement_count = len(node_rows) + len([row for row in relation_rows if row.get("source") and row.get("target")])
-        try:
-            def operation():
-                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB InferenceBox graph save"):
-                    write_started = time.monotonic()
-                    query_durations_ms: List[float] = []
-                    driver = self.open_driver(imported)
-                    try:
-                        self.ensure_database(driver)
-                        transaction_query_count = self.inferencebox_write_transaction_query_count()
-                        write_timing["transactionQueryCount"] = transaction_query_count
-                        write_timing["relationGivenBatchCount"] = 0
-                        write_timing["relationGivenRowCount"] = 0
-                        write_timing["relationGivenFallbackCount"] = 0
-                        write_timing["relationLegacyQueryCount"] = 0
-
-                        def write_query_chunks(query_rows: Iterable[str], stage: str) -> None:
-                            query_list = [str(query) for query in query_rows or [] if str(query or "").strip()]
-                            stage_started = time.monotonic()
-                            for offset in range(0, len(query_list), transaction_query_count):
-                                query_batch = query_list[offset: offset + transaction_query_count]
-
-                                def write_batch():
-                                    with driver.transaction(
-                                        self.database,
-                                        TransactionType.WRITE,
-                                        options=self.write_transaction_options(),
-                                    ) as tx:
-                                        for query in query_batch:
-                                            query_started = time.monotonic()
-                                            tx.query(query).resolve()
-                                            query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
-                                        tx.commit()
-
-                                self.with_typedb_retries(write_batch)
-                            write_timing[stage + "Ms"] = round((time.monotonic() - stage_started) * 1000, 1)
-
-                        candidate_queries = (
-                            inference_generation_delete_queries(generation_id, world_id=world_id)
-                            if generation_id and not fresh_generation
-                            else []
-                        )
-                        write_timing["candidateDeleteSkipped"] = bool(
-                            generation_id and fresh_generation
-                        )
-                        candidate_started = time.monotonic()
-                        write_query_chunks(candidate_queries, "candidateDelete")
-                        write_query_chunks(node_queries, "candidateNodeWrite")
-
-                        given_plans = [
-                            plan for plan in relation_write_plans
-                            if str(plan.get("query") or "")
-                            and list(plan.get("givenRows") or [])
-                        ]
-                        legacy_plans = [
-                            plan for plan in relation_write_plans
-                            if str(plan.get("query") or "")
-                            and not list(plan.get("givenRows") or [])
-                        ]
-
-                        def write_given_plan_batch(plans: List[Dict[str, object]]) -> None:
-                            if not plans:
-                                return
-
-                            def write_given_transaction():
-                                with driver.transaction(
-                                    self.database,
-                                    TransactionType.WRITE,
-                                    options=self.write_transaction_options(),
-                                ) as tx:
-                                    for plan in plans:
-                                        query_started = time.monotonic()
-                                        tx.query(
-                                            str(plan.get("query") or ""),
-                                            given_rows=list(plan.get("givenRows") or []),
-                                        ).resolve()
-                                        query_durations_ms.append(round(
-                                            (time.monotonic() - query_started) * 1000,
-                                            1,
-                                        ))
-                                    tx.commit()
-
-                            self.with_typedb_retries(write_given_transaction)
-
-                        relation_started = time.monotonic()
-                        for offset in range(0, len(given_plans), transaction_query_count):
-                            plan_batch = given_plans[offset: offset + transaction_query_count]
-                            try:
-                                write_given_plan_batch(plan_batch)
-                                write_timing["relationGivenBatchCount"] += len(plan_batch)
-                                write_timing["relationGivenRowCount"] += sum(
-                                    len(plan.get("givenRows") or [])
-                                    for plan in plan_batch
-                                )
-                                continue
-                            except Exception:
-                                pass
-
-                            for plan in plan_batch:
-                                try:
-                                    write_given_plan_batch([plan])
-                                    write_timing["relationGivenBatchCount"] += 1
-                                    write_timing["relationGivenRowCount"] += len(
-                                        plan.get("givenRows") or []
-                                    )
-                                    continue
-                                except Exception:
-                                    write_timing["relationGivenFallbackCount"] += 1
-                                fallback_queries = self.batched_relation_insert_queries(
-                                    list(plan.get("rows") or []),
-                                    updated_at,
-                                    self.inferencebox_relation_batch_size(settings),
-                                    self.write_query_max_bytes(settings),
-                                )
-                                write_query_chunks(
-                                    fallback_queries,
-                                    "candidateRelationFallback",
-                                )
-                                write_timing["relationLegacyQueryCount"] += len(
-                                    fallback_queries
-                                )
-
-                        for plan in legacy_plans:
-                            write_query_chunks(
-                                [str(plan.get("query") or "")],
-                                "candidateRelationLegacy",
-                            )
-                            write_timing["relationLegacyQueryCount"] += 1
-                        write_timing["candidateRelationWriteMs"] = round(
-                            (time.monotonic() - relation_started) * 1000,
-                            1,
-                        )
-                        if marker_query:
-                            write_query_chunks([marker_query], "candidateMarker")
-                        write_timing["candidateCommitMs"] = round(
-                            (time.monotonic() - candidate_started) * 1000,
-                            1,
-                        )
-                        write_timing["candidateWriteMs"] = write_timing.get(
-                            "candidateCommitMs", 0.0
-                        )
-                        write_timing["relationWriteMode"] = (
-                            "given-rows"
-                            if write_timing["relationGivenBatchCount"]
-                            and not write_timing["relationGivenFallbackCount"]
-                            else "given-rows-with-legacy-fallback"
-                            if write_timing["relationGivenBatchCount"]
-                            else "legacy-single-edge"
-                        )
-                    finally:
-                        self.close_driver(driver)
-                        write_timing["slowestQueryMs"] = max(query_durations_ms) if query_durations_ms else 0.0
-                        write_timing["totalQueryMs"] = round(sum(query_durations_ms), 1)
-                        write_timing["totalWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
-            self.with_typedb_retries(operation)
-            validation_started = time.monotonic()
-            candidate_validation = self.validate_inference_generation_candidate(
-                graph,
-                generation_id,
-                len(node_rows),
-                len(relation_rows),
-                world_id=world_id,
-            ) if generation_id else {"status": "legacy", "valid": True}
-            write_timing["candidateValidationMs"] = round((time.monotonic() - validation_started) * 1000, 1)
-            if not candidate_validation.get("valid"):
-                return {
-                    "configured": True,
-                    "saved": False,
-                    "status": "candidate-validation-failed",
-                    "graphStore": "typedb",
-                    "reason": str(candidate_validation.get("reason") or "InferenceBox candidate validation failed."),
-                    "entityCount": len(node_rows),
-                    "relationCount": len(relation_rows),
-                    "statementCount": statement_count,
-                    "batchCount": planned_batch_count,
-                    "insertMode": "batched-candidate",
-                    "publicationStatus": "candidate",
-                    "preservedPreviousInference": True,
-                    "inferenceGenerationId": generation_id,
-                    "candidateValidation": candidate_validation,
-                    "writeTiming": write_timing,
-                }
-            activation_started = time.monotonic()
-            activation = self.activate_inference_generation(graph, node_rows, relation_rows, world_id=world_id) if generation_id else {"status": "legacy", "activated": True}
-            write_timing["activationMs"] = round((time.monotonic() - activation_started) * 1000, 1)
-            if not activation.get("activated"):
-                return {
-                    "configured": True,
-                    "saved": False,
-                    "status": "activation-failed",
-                    "graphStore": "typedb",
-                    "reason": str(activation.get("reason") or "InferenceBox candidate activation failed."),
-                    "entityCount": len(node_rows),
-                    "relationCount": len(relation_rows),
-                    "statementCount": statement_count,
-                    "batchCount": planned_batch_count,
-                    "insertMode": "batched-candidate",
-                    "publicationStatus": "candidate",
-                    "preservedPreviousInference": True,
-                    "inferenceGenerationId": generation_id,
-                    "candidateValidation": candidate_validation,
-                    "activation": activation,
-                    "writeTiming": write_timing,
-                }
-            return {
-                "configured": True,
-                "saved": True,
-                "status": "ok",
-                "graphStore": "typedb",
-                "entityCount": len(node_rows),
-                "relationCount": len(relation_rows),
-                "statementCount": statement_count,
-                "batchCount": planned_batch_count,
-                "insertMode": "batched-candidate-activation",
-                "publicationStatus": "active" if marker_query else "legacy-unmarked",
-                "inferenceGenerationId": generation_id,
-                "inferenceMaterialFingerprint": inference_material_fingerprint,
-                "inferenceGenerationAt": str((graph.worldview or {}).get("inferenceGenerationAt") or ""),
-                "worldId": world_id,
-                "worldType": str((graph.worldview or {}).get("worldType") or ""),
-                "tenantId": str((graph.worldview or {}).get("tenantId") or ""),
-                "accountId": str((graph.worldview or {}).get("accountId") or ""),
-                "candidateValidation": candidate_validation,
-                "activation": activation,
-                "writeTiming": write_timing,
-            }
-        except Exception as error:  # noqa: BLE001 - materialization failure must be visible to diagnostics.
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "error",
-                "graphStore": "typedb",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:220],
-                "entityCount": len(node_rows),
-                "relationCount": len(relation_rows),
-                "statementCount": statement_count,
-                "batchCount": planned_batch_count,
-                "insertMode": "batched",
-                "publicationStatus": "not-published",
-                "inferenceGenerationId": generation_id,
-                "writeTiming": write_timing,
-            }
 
     def inference_generation_candidate_summary(
         self,
         generation_id: str,
         world_id: str = "",
     ) -> Dict[str, object]:
-        """Validate a staged generation without loading every JSON row.
-
-        Counts and the candidate marker are read in one transaction. The
-        marker carries the native evaluation and source ABox proof, while the
-        aggregate counts detect partial writes without paying the cost of
-        deserializing the complete InferenceBox.
-        """
-        clean_generation_id = str(generation_id or "").strip()
-        clean_world_id = str(world_id or "").strip()
-        if not clean_generation_id:
-            return {
-                "status": "invalid",
-                "entityCount": 0,
-                "relationCount": 0,
-                "traceCount": 0,
-                "candidateMarkerPresent": False,
-                "metadata": {},
-            }
-        imported = self.driver_imports()
-        if imported[0] is None:
-            raise RuntimeError(
-                "typedb-driver Python package is not installed: "
-                + str(imported[1])[:160]
-            )
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        generation_clause = (
-            "has ontology-snapshot-id " + typedb_string(clean_generation_id)
+        return _inference_validation.inference_generation_candidate_summary(
+            self,
+            generation_id,
+            world_id,
         )
-        world_clause = (
-            ", has ontology-world-id " + typedb_string(clean_world_id)
-            if clean_world_id
-            else ""
-        )
-
-        def count_query(type_label: str, kind: str = "") -> str:
-            return (
-                "match $item isa " + type_label
-                + ', has ontology-box "InferenceBox", '
-                + generation_clause
-                + world_clause
-                + (', has ontology-kind "' + kind + '"' if kind else "")
-                + "; reduce $count = count;"
-            )
-
-        marker_query = (
-            "match $item isa ontology-node, "
-            'has ontology-box "InferenceBox", '
-            + generation_clause
-            + world_clause
-            + ', has ontology-kind "inference-generation-candidate", '
-            + "has ontology-json $json; limit 1;"
-        )
-
-        def operation():
-            driver = self.open_driver(imported)
-            try:
-                self.ensure_database(driver)
-                with driver.transaction(
-                    self.database,
-                    TransactionType.READ,
-                    self.read_transaction_options(),
-                ) as tx:
-                    entity_rows = self.read_rows_in_transaction(
-                        tx,
-                        count_query("ontology-node"),
-                        ["count"],
-                        label="typedb.inference-candidate-summary.entities",
-                    )
-                    relation_rows = self.read_rows_in_transaction(
-                        tx,
-                        count_query("ontology-assertion"),
-                        ["count"],
-                        label="typedb.inference-candidate-summary.relations",
-                    )
-                    trace_rows = self.read_rows_in_transaction(
-                        tx,
-                        count_query("ontology-node", "inference-trace"),
-                        ["count"],
-                        label="typedb.inference-candidate-summary.traces",
-                    )
-                    marker_rows = self.read_rows_in_transaction(
-                        tx,
-                        marker_query,
-                        ["json"],
-                        label="typedb.inference-candidate-summary.marker",
-                    )
-                    marker = json_object(
-                        (marker_rows[0] if marker_rows else {}).get("json")
-                    )
-                    return {
-                        "status": "ok",
-                        "entityCount": int(number_or_none(
-                            (entity_rows[0] if entity_rows else {}).get("count")
-                        ) or 0),
-                        "relationCount": int(number_or_none(
-                            (relation_rows[0] if relation_rows else {}).get("count")
-                        ) or 0),
-                        "traceCount": int(number_or_none(
-                            (trace_rows[0] if trace_rows else {}).get("count")
-                        ) or 0),
-                        "candidateMarkerPresent": bool(marker_rows),
-                        "metadata": marker,
-                        "readTransactionCount": 1,
-                        "readQueryCount": 4,
-                    }
-            finally:
-                self.close_driver(driver)
-
-        return self.with_typedb_retries(operation)
 
     def validate_inference_generation_candidate(
         self,
@@ -24781,71 +24383,14 @@ relation ontology-assertion,
         expected_relation_count: int,
         world_id: str = "",
     ) -> Dict[str, object]:
-        summary = self.inference_generation_candidate_summary(
+        return _inference_validation.validate_inference_generation_candidate(
+            self,
+            graph,
             generation_id,
-            world_id=world_id,
+            expected_entity_count,
+            expected_relation_count,
+            world_id,
         )
-        metadata = dict(summary.get("metadata") or {})
-        expected_source_abox = str((graph.worldview or {}).get("sourceAboxSnapshotId") or metadata.get("sourceAboxSnapshotId") or "").strip()
-        stable_source_alignment = bool(
-            typedb_bool((graph.worldview or {}).get("sourceAboxValidatedUnderWriteLease"))
-            and typedb_bool((graph.worldview or {}).get("sourceAboxGenerationValid"))
-            and expected_source_abox
-        )
-        active_abox = (
-            expected_source_abox
-            if stable_source_alignment
-            else self.active_abox_snapshot_id(world_id)
-        )
-        actual_entities = int(number_or_none(summary.get("entityCount")) or 0)
-        actual_relations = int(number_or_none(summary.get("relationCount")) or 0)
-        actual_traces = int(number_or_none(summary.get("traceCount")) or 0)
-        expected_traces = len([item for item in graph.entities if item.kind == "inference-trace"])
-        native_evaluation_completed = typedb_bool(metadata.get("nativeInferenceEvaluationComplete"))
-        candidate_marker_present = bool(summary.get("candidateMarkerPresent"))
-        reasons = []
-        # One additional node is the candidate publication marker itself.
-        if actual_entities != int(expected_entity_count or 0) + 1:
-            reasons.append("candidate-entity-count-mismatch")
-        if actual_relations != int(expected_relation_count or 0):
-            reasons.append("candidate-relation-count-mismatch")
-        if expected_relation_count <= 0 and not native_evaluation_completed:
-            reasons.append("candidate-empty-evaluation-not-complete")
-        if not candidate_marker_present:
-            reasons.append("candidate-generation-marker-missing")
-        if actual_traces != expected_traces:
-            reasons.append("candidate-trace-count-mismatch")
-        if not expected_source_abox:
-            reasons.append("candidate-source-abox-missing")
-        elif not active_abox or expected_source_abox != active_abox:
-            reasons.append("candidate-source-abox-not-active")
-        return {
-            "status": "ok" if not reasons else "invalid",
-            "valid": not reasons,
-            "reason": ", ".join(reasons),
-            "generationId": generation_id,
-            "expectedEntityCount": int(expected_entity_count or 0),
-            "actualEntityCount": max(0, actual_entities - (1 if candidate_marker_present else 0)),
-            "actualStoredEntityCount": actual_entities,
-            "expectedRelationCount": int(expected_relation_count or 0),
-            "actualRelationCount": actual_relations,
-            "expectedTraceCount": expected_traces,
-            "actualTraceCount": actual_traces,
-            "sourceAboxSnapshotId": expected_source_abox,
-            "activeAboxSnapshotId": active_abox,
-            "generationAligned": bool(expected_source_abox and expected_source_abox == active_abox),
-            "nativeInferenceEvaluationComplete": native_evaluation_completed,
-            "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
-            "candidateMarkerPresent": candidate_marker_present,
-            "validationMode": "aggregate-marker",
-            "readTransactionCount": int(number_or_none(summary.get("readTransactionCount")) or 0),
-            "readQueryCount": int(number_or_none(summary.get("readQueryCount")) or 0),
-            "sourceAboxValidationMode": (
-                "stable-write-lease"
-                if stable_source_alignment
-                else "active-pointer-read"
-            ),
-        }
 
     def activate_inference_generation(
         self,
@@ -24854,134 +24399,22 @@ relation ontology-assertion,
         relation_rows: Iterable[Dict[str, object]],
         world_id: str = "",
     ) -> Dict[str, object]:
-        generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
-        if not generation_id:
-            return {"status": "invalid", "activated": False, "reason": "generation id is empty"}
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return {"status": "driver-missing", "activated": False, "reason": str(imported[1])[:180]}
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        active_marker_query = self.node_insert_query(
-            inference_generation_marker_row(graph, node_rows, relation_rows, "active"),
-            utc_now(),
+        return _inference_lifecycle.activate_inference_generation(
+            self,
+            graph,
+            node_rows,
+            relation_rows,
+            world_id,
+            runtime=self._inference_publication_runtime(),
         )
-        marker_world_clause = (
-            ", has ontology-world-id " + typedb_string(world_id)
-            if str(world_id or "").strip()
-            else ""
-        )
-        delete_markers = [
-            'match $n isa ontology-node, has ontology-box "InferenceBox", has ontology-kind "inference-generation"'
-            + marker_world_clause + "; delete $n;",
-            'match $n isa ontology-node, has ontology-box "InferenceBox", has ontology-kind "inference-generation-candidate"'
-            + marker_world_clause + "; delete $n;",
-        ]
-        try:
-            def operation():
-                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB InferenceBox generation activation"):
-                    driver = self.open_driver(imported)
-                    try:
-                        self.ensure_database(driver)
-                        with driver.transaction(self.database, TransactionType.WRITE) as tx:
-                            for query in delete_markers:
-                                tx.query(query).resolve()
-                            tx.query(active_marker_query).resolve()
-                            tx.commit()
-                    finally:
-                        self.close_driver(driver)
-            self.with_typedb_retries(operation)
-            return {
-                "status": "ok",
-                "activated": True,
-                "activeGenerationId": generation_id,
-                "worldId": world_id,
-                "activationMode": "validated-candidate-pointer-swap",
-            }
-        except Exception as error:  # noqa: BLE001 - preserve the previous active marker on transaction failure.
-            return {
-                "status": "error",
-                "activated": False,
-                "activeGenerationId": generation_id,
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:220],
-                "preservedPreviousInference": True,
-            }
 
     def prune_inferencebox_generations(self, active_generation_id: str, keep_count: int = 2, world_id: str = "") -> Dict[str, object]:
-        active_generation_id = str(active_generation_id or "").strip()
-        if not active_generation_id:
-            return {"configured": bool(self.address), "status": "skipped", "reason": "active generation id is empty"}
-        try:
-            records = self.read_inference_generation_records(published_only=False, world_id=world_id)
-        except Exception as error:  # noqa: BLE001 - pruning must not fail materialization.
-            return {"configured": True, "status": "error", "reason": str(error)[:180], "activeGenerationId": active_generation_id}
-        if not records:
-            return {"configured": True, "status": "skipped", "reason": "no generation-scoped InferenceBox rows", "activeGenerationId": active_generation_id}
-        keep = {active_generation_id}
-        published_records = [item for item in records if str(item.get("publicationStatus") or "active") in {"active", "published"}]
-        for item in sorted(published_records, key=lambda row: str(row.get("latestAt") or ""), reverse=True)[: max(1, int(keep_count or 2))]:
-            keep.add(str(item.get("generationId") or ""))
-        prune_ids = [
-            str(item.get("generationId") or "")
-            for item in records
-            if str(item.get("generationId") or "") and str(item.get("generationId") or "") not in keep
-        ]
-        if not prune_ids:
-            return {
-                "configured": True,
-                "status": "ok",
-                "activeGenerationId": active_generation_id,
-                "keptGenerationCount": len(keep),
-                "deletedGenerationCount": 0,
-            }
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return {"configured": True, "status": "driver-missing", "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160]}
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        queries = []
-        for generation_id in prune_ids:
-            queries.append(
-                "match $r isa ontology-assertion, has ontology-box \"InferenceBox\", has ontology-snapshot-id "
-                + typedb_string(generation_id)
-                + (", has ontology-world-id " + typedb_string(world_id) if str(world_id or "").strip() else "")
-                + "; delete $r;"
-            )
-            queries.append(
-                "match $n isa ontology-node, has ontology-box \"InferenceBox\", has ontology-snapshot-id "
-                + typedb_string(generation_id)
-                + (", has ontology-world-id " + typedb_string(world_id) if str(world_id or "").strip() else "")
-                + "; delete $n;"
-            )
-        try:
-            def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    self.ensure_schema(driver, imported)
-                    with driver.transaction(self.database, TransactionType.WRITE) as tx:
-                        for query in queries:
-                            tx.query(query).resolve()
-                        tx.commit()
-                finally:
-                    self.close_driver(driver)
-            self.with_typedb_retries(operation)
-            return {
-                "configured": True,
-                "status": "ok",
-                "activeGenerationId": active_generation_id,
-                "worldId": world_id,
-                "keptGenerationCount": len(keep),
-                "deletedGenerationCount": len(prune_ids),
-                "deletedGenerationIds": prune_ids[:20],
-            }
-        except Exception as error:  # noqa: BLE001 - pruning is non-critical but must be visible.
-            return {
-                "configured": True,
-                "status": "error",
-                "reason": str(error)[:220],
-                "activeGenerationId": active_generation_id,
-                "deletedGenerationCount": 0,
-            }
+        return _inference_lifecycle.prune_inferencebox_generations(
+            self,
+            active_generation_id,
+            keep_count,
+            world_id,
+        )
 
     def inferencebox_snapshot_from_graph(
         self,
@@ -26650,40 +26083,9 @@ def inference_generation_marker_row(
     relation_rows: Iterable[Dict[str, object]],
     publication_status: str = "candidate",
 ) -> Dict[str, object]:
-    worldview = dict(graph.worldview or {})
-    generation_id = str(worldview.get("inferenceGenerationId") or "").strip()
-    generation_at = str(worldview.get("inferenceGenerationAt") or utc_now()).strip()
-    properties = {
-        **worldview,
-        "ontologyBox": "InferenceBox",
-        "tboxClass": "ActiveGeneration" if publication_status == "active" else "CandidateGeneration",
-        "tboxClasses": ["InferenceGeneration", "ActiveGeneration" if publication_status == "active" else "CandidateGeneration"],
-        "publicationStatus": publication_status,
-        "candidateCreatedAt": generation_at,
-        "activatedAt": generation_at if publication_status == "active" else "",
-        "expectedEntityCount": len(list(node_rows or [])),
-        "expectedRelationCount": len(list(relation_rows or [])),
-        "nativeTypeDbReasoned": True,
-    }
-    return {
-        "id": "inference-generation" + ("" if publication_status == "active" else "-candidate") + ":" + generation_id,
-        "label": ("Active" if publication_status == "active" else "Candidate") + " InferenceBox " + generation_id,
-        "kind": "inference-generation" if publication_status == "active" else "inference-generation-candidate",
-        "nodeType": "ontology-entity",
-        "ontologyBox": "InferenceBox",
-        # These fields must be promoted to TypeDB attributes, not merely left
-        # in ``propertiesJson``. Candidate validation and active-generation
-        # lookup are scoped by world id, and an unscoped marker becomes
-        # invisible immediately after it is written.
-        "worldId": str(worldview.get("worldId") or ""),
-        "worldType": str(worldview.get("worldType") or ""),
-        "tenantId": str(worldview.get("tenantId") or ""),
-        "accountId": str(worldview.get("accountId") or ""),
-        "snapshotId": generation_id,
-        "aboxSnapshotId": generation_id,
-        "tboxClass": "ActiveGeneration" if publication_status == "active" else "CandidateGeneration",
-        "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
-    }
+    return _inference_markers.inference_generation_marker_row(
+        graph, node_rows, relation_rows, publication_status, now=utc_now,
+    )
 
 
 def inference_marker_is_active(raw_json: object) -> bool:
@@ -26695,23 +26097,6 @@ def inference_marker_is_active(raw_json: object) -> bool:
     return status in {"", "active", "published"}
 
 
-def inference_generation_delete_queries(generation_id: str, world_id: str = "") -> List[str]:
-    generation_literal = typedb_string(str(generation_id or ""))
-    world_clause = (
-        ", has ontology-world-id " + typedb_string(world_id)
-        if str(world_id or "").strip()
-        else ""
-    )
-    return [
-        (
-            'match $r isa ontology-assertion, has ontology-box "InferenceBox", '
-            "has ontology-snapshot-id " + generation_literal + world_clause + "; delete $r;"
-        ),
-        (
-            'match $n isa ontology-node, has ontology-box "InferenceBox", '
-            "has ontology-snapshot-id " + generation_literal + world_clause + "; delete $n;"
-        ),
-    ]
 
 
 def inference_generation_records(

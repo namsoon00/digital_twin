@@ -114,7 +114,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # protect startup isolation and cross-owner create/delete rollback.
         # TypeQL compiler byte parity, import isolation, acyclic ownership and
         # scoped failure plans guard the reasoning adapter extraction.
-        self.assertLessEqual(total, 1100)
+        # Inference publication adds transaction-order, injected-I/O, rollback,
+        # empty-result, fallback and scoped-retention extraction contracts.
+        self.assertLessEqual(total, 1108)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

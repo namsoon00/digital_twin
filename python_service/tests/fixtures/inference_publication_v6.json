@@ -1,0 +1,28 @@
+{
+  "sourceRevision": "685821a19",
+  "engineVersion": "typedb-direct-typeql-rule-engine-v6",
+  "scenarios": {
+    "success": {"bytes": 8266, "sha256": "d2a69033f780ac036a75f8f396ec61233953bae6396679b36a3ab4edc1fa67fa"},
+    "fresh": {"bytes": 7753, "sha256": "e99b5881420fe9012d41f813d9572ccb90a1caeae9fd31c16ab9277fc802e4f6"},
+    "retry-node": {"bytes": 8471, "sha256": "396112a4ec6e0be8be9ada0fd757ecb213fc8921b63ba27aa0a3703f2fb90497"},
+    "given-fallback": {"bytes": 8722, "sha256": "ea7bf3882c6b3f0912f12228a1cb8020191fa5b1228b131282fb644844d9387e"},
+    "legacy-relations": {"bytes": 8320, "sha256": "8446995d202240d5aad024b146a25639843e06ff2c259bd9ebc152f2ec9e873a"},
+    "node-write": {"bytes": 1792, "sha256": "0ec25a43dc21d4525d81b0d935789a358b5521f61b9e24c969357a72dc9bea4e"},
+    "timeout": {"bytes": 1790, "sha256": "036bf5ba22c161711ac1f09e5aa79b539c540ae800cefbbc647f43bd9d137548"},
+    "relation-write": {"bytes": 2557, "sha256": "ca7b81ad6e4e5b534355b58876d7033d6922a3135d382c54172f31d7685508eb"},
+    "candidate-marker": {"bytes": 3761, "sha256": "651aac8679845e584e37e5c488c2c6503498a9d15370f25c71d0eb11aa4bd1ce"},
+    "validation-read": {"bytes": 4271, "sha256": "047a39987084e2f6e8f74b05121c7c603a6f58e6fc2a2bb8e20825617f4041ec"},
+    "validation-count": {"bytes": 5870, "sha256": "447cc27f3057290d6917038a73d8f337ce9b175236fd7d5542ea73a14943b180"},
+    "validation-source": {"bytes": 5874, "sha256": "b05272a8a3b9f96ca896e91bd2e9e4e5de096b66ead5e1178c5294283bd49d08"},
+    "activation-insert": {"bytes": 8086, "sha256": "425f97201f32c0c3c3772e3627c2ba4a7568584001d70fa89ad71e4a94d87efa"},
+    "activation-commit": {"bytes": 8099, "sha256": "df2dfb034ecd1e154c17f2340cab5513ab65bc64b2398775c17eb6f87f2a1bf9"},
+    "driver-missing": {"bytes": 322, "sha256": "fd6597f6717429d31167c09d1403a444f859eafe93ee828a98cd84393a273747"},
+    "disabled": {"bytes": 289, "sha256": "276439c32691eca6923e034942541cfe884f12796d2982264b307d74ff2726ce"},
+    "empty-complete": {"bytes": 7755, "sha256": "3039c2181f124d1bf24fe4d7b02dcb3a71c7b599a6aa09454381ef11b2bafb16"},
+    "empty-incomplete": {"bytes": 5376, "sha256": "bf7372c32aa0f2c38431bf141e2a47a7fc479aaa400897a31e4ddb5d06fe68ae"},
+    "stable-lease": {"bytes": 8396, "sha256": "f89821f708311e08a37ccf5aba3d3671c71e2ebc93f81069690d3980110dd09e"},
+    "prune": {"bytes": 1620, "sha256": "8946bfe9e620b38ee53dad8cf4d73cc381ecc3f95f005e6cd1f5e1e88e2b9865"},
+    "prune-read": {"bytes": 330, "sha256": "dae37421888640b60cfe13b601349971267e7c7e7406134b7fda2365a71e20ff"},
+    "prune-write": {"bytes": 692, "sha256": "e48a3edb09ee711c6d2977b78b94bff6210b7de09c4eb6cb08e3e9438152ccdf"}
+  }
+}

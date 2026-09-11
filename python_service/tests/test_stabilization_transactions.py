@@ -10,9 +10,9 @@ from stabilization_database import (
     fixture_episode,
     fixture_snapshot,
 )
-from digital_twin.domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
-from digital_twin.domain.investment_brain import ObservedOutcome
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.decisions.domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
+from digital_twin.modules.decisions.domain.investment_brain import ObservedOutcome
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.infrastructure.transactions import (
     ai_publication,
     decision_history,

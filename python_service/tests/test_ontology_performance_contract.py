@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.domain.ontology_performance_contract import (
+from digital_twin.modules.reasoning.domain.ontology_performance_contract import (
     ontology_performance_assessment,
 )
 

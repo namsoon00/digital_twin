@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.domain.incremental_inference_equivalence import (
+from digital_twin.modules.reasoning.domain.incremental_inference_equivalence import (
     compare_incremental_rule_states,
 )
 

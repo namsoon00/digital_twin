@@ -3,7 +3,7 @@ import unittest
 from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message
-from digital_twin.domain.investment_reasoning import (
+from digital_twin.modules.decisions.domain.investment_reasoning import (
     ARCHIVE,
     HANDOFF_AI,
     INVALID,
@@ -14,10 +14,10 @@ from digital_twin.domain.investment_reasoning import (
     SubjectDecisionCase,
     inference_dispatch_decision,
 )
-from digital_twin.domain.message_types import INVESTMENT_INSIGHT
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
 
 
 def subject_case(case_id, *, action_authority="observe", eligible=(), outcome="OBSERVATION"):

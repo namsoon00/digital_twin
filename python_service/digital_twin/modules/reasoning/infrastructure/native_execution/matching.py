@@ -1,11 +1,11 @@
 """native_execution: matching through explicit injected capabilities."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from digital_twin.domain.model_signal_interpretation import is_model_signal_interpretation_rule
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_execution_units import rules_allow_subject_fanout
-from digital_twin.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.model_registry.contracts import is_model_signal_interpretation_rule
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_execution_units import rules_allow_subject_fanout
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
     TYPEDB_NATIVE_RULE_ENGINE_VERSION,

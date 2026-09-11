@@ -21,7 +21,7 @@ from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.share_runtime import fixed_entry_url, share_credentials_environment
 from .infrastructure.typedb_storage_guard import typedb_storage_health, typedb_storage_inventory
 from .infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
-from .domain.time_series_storage import canonical_json
+from digital_twin.modules.market_data.domain.time_series_storage import canonical_json
 
 
 BASE_WORKERS = {
@@ -2344,7 +2344,7 @@ def record_typedb_rulebox_deployment_event(
     """Best-effort operational audit; audit failure never weakens cutover gates."""
 
     try:
-        from .domain.events import ontology_rulebox_deployment_changed_event
+        from digital_twin.modules.model_registry.domain.events import ontology_rulebox_deployment_changed_event
         from .infrastructure.operational_store import event_log
 
         configured = runtime_settings(fast_operational_read=True)
@@ -3342,9 +3342,9 @@ def validate_typedb_candidate_seed_contract(
             "typedbTlsEnabled": str(spec.get("typedbTlsEnabled") or configured.get("typedbTlsEnabled") or "0"),
         }
         snapshot = dict(repository_factory(candidate_settings).rulebox_snapshot() or {})
-        from .domain.ontology_rulebox_catalog import default_graph_inference_rules
-        from .domain.ontology_rulebox_governance import rulebox_rules_hash
-        from .domain.ontology_schema import default_tbox_metadata
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
+        from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
 
         snapshot_rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
         candidate_rulebox_fingerprint = str(
@@ -3596,7 +3596,7 @@ def validate_typedb_candidate_release_contract(
                 "governedDeployments": governed,
                 "reason": "The seeded candidate RuleBox could not be read before cutover.",
             }
-        from .domain.reasoning_shadow import payload_hash
+        from digital_twin.modules.reasoning.domain.reasoning_shadow import payload_hash
         candidate_fingerprint = str(
             snapshot.get("sourceRulesHash")
             or snapshot.get("rulesHash")
@@ -3657,8 +3657,8 @@ def validate_typedb_candidate_release_contract(
             frozen_candidate_tbox_fingerprint = str(
                 candidate_health.get("tboxFingerprint") or ""
             ).strip()
-            from .domain.ontology_rulebox_catalog import default_graph_inference_rules
-            from .domain.ontology_rulebox_governance import rulebox_rules_hash
+            from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+            from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
 
             source_rulebox_fingerprint = rulebox_rules_hash([
                 rule.to_dict()

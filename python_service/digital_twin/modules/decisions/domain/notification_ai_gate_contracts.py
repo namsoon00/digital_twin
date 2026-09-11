@@ -1,0 +1,276 @@
+import re
+from dataclasses import asdict, dataclass, field
+from datetime import timedelta, timezone
+from typing import Dict, List, Optional
+
+from digital_twin.modules.notifications.contracts import EXTERNAL_CRYPTO_MOVE, EXTERNAL_DART_DISCLOSURE, EXTERNAL_EQUITY_MOVE, EXTERNAL_MACRO_SHIFT, HOLDING_TIMING, INVESTMENT_INSIGHT, MODEL_BUY, MODEL_SELL, MONITOR_DECISION_CHANGE, MONITOR_PNL_CHANGE, MONITOR_TREND_CHANGE, MONITOR_VALUE_CHANGE, PORTFOLIO_REBALANCE_REVIEW, WATCHLIST_BUY_CANDIDATE
+
+
+NOTIFICATION_AI_GATE_VERSION = "notification-ai-gate-v1"
+AI_DECISION_MODE = "ai-first"
+AI_DECISION_SOURCE_LABEL = "AI 투자 판단"
+MESSAGE_START_BADGE = "🔔 새 알림"
+KST = timezone(timedelta(hours=9))
+VALID_ACTIONS = {"BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID"}
+ACTION_LABELS = {
+    "BUY": "매수",
+    "ADD": "추가매수",
+    "HOLD": "보유",
+    "TRIM": "분할축소",
+    "SELL": "매도",
+    "AVOID": "회피",
+}
+ACTION_TEXT_REPLACEMENTS = {
+    "BUY": "매수",
+    "ADD": "추가매수",
+    "HOLD": "보유",
+    "TRIM": "분할축소",
+    "SELL": "매도",
+    "AVOID": "회피",
+}
+
+DEFAULT_AI_GATE_MESSAGE_TYPES = {
+    INVESTMENT_INSIGHT,
+    HOLDING_TIMING,
+    MONITOR_DECISION_CHANGE,
+    MONITOR_TREND_CHANGE,
+    MONITOR_PNL_CHANGE,
+    MONITOR_VALUE_CHANGE,
+    MODEL_BUY,
+    MODEL_SELL,
+    WATCHLIST_BUY_CANDIDATE,
+    EXTERNAL_EQUITY_MOVE,
+    EXTERNAL_CRYPTO_MOVE,
+    EXTERNAL_MACRO_SHIFT,
+    EXTERNAL_DART_DISCLOSURE,
+    PORTFOLIO_REBALANCE_REVIEW,
+}
+
+
+@dataclass
+class NotificationAIValidatedResponse:
+    action: str = "HOLD"
+    action_label: str = "보유"
+    investment_view_action: str = ""
+    execution_action: str = "HOLD"
+    execution_disposition: str = ""
+    selected_rule_id: str = ""
+    portfolio_constraint_rule_ids: List[str] = field(default_factory=list)
+    execution_constraint_rule_ids: List[str] = field(default_factory=list)
+    data_quality_rule_ids: List[str] = field(default_factory=list)
+    validation_state: str = "conditional"
+    validation_label: str = "조건부 사용"
+    data_state: str = "partial"
+    data_state_label: str = "일부 자료만 있음"
+    review_level: str = "check"
+    review_label: str = "조건 확인"
+    summary: str = ""
+    opinion: str = ""
+    investment_view: str = ""
+    execution_decision: str = ""
+    current_action_plan: str = ""
+    change_analysis: str = ""
+    next_action_plan: str = ""
+    evidence: List[str] = field(default_factory=list)
+    counter_evidence: List[str] = field(default_factory=list)
+    counter_evidence_status: str = "not-checked"
+    invalidation_condition: str = ""
+    next_checks: List[str] = field(default_factory=list)
+    missing_data_impact: List[str] = field(default_factory=list)
+    source_urls: List[str] = field(default_factory=list)
+    precomputed_action: str = ""
+    disagreement_reason: str = ""
+    validation_reasons: List[str] = field(default_factory=list)
+    reference_date: str = ""
+    validation_warnings: List[str] = field(default_factory=list)
+    strategy_guide: Dict[str, object] = field(default_factory=dict)
+    hypotheses: List[Dict[str, object]] = field(default_factory=list)
+    selected_hypothesis_id: str = ""
+    research_lead_hypothesis_id: str = ""
+    hypothesis_comparison_state: str = "unavailable"
+    hypothesis_selection_source: str = "not-selected"
+    decision_guardrails: List[Dict[str, object]] = field(default_factory=list)
+    decision_abstention: Dict[str, object] = field(default_factory=dict)
+    unresolved_questions: List[str] = field(default_factory=list)
+    epistemic_summary: str = ""
+    decision_readiness: str = "conditional"
+    decision_assurance: Dict[str, object] = field(default_factory=dict)
+    insight_assessment: Dict[str, object] = field(default_factory=dict)
+    causal_chain: List[Dict[str, object]] = field(default_factory=list)
+    alternative_action: Dict[str, object] = field(default_factory=dict)
+    follow_up_conditions: List[Dict[str, object]] = field(default_factory=list)
+    unsupported_follow_ups: List[Dict[str, object]] = field(default_factory=list)
+    narrative_claims: List[Dict[str, object]] = field(default_factory=list)
+    claim_validation: Dict[str, object] = field(default_factory=dict)
+    writer_provenance: Dict[str, object] = field(default_factory=dict)
+    source: str = "local"
+    raw_response: str = ""
+
+    @property
+    def verified_claim_count(self) -> int:
+        return int((self.claim_validation or {}).get("verifiedClaimCount") or 0)
+
+    @property
+    def rejected_claim_count(self) -> int:
+        return int((self.claim_validation or {}).get("rejectedClaimCount") or 0)
+
+    @property
+    def verified_claim_sections(self) -> set:
+        return {
+            str(item.get("section") or "")
+            for item in self.narrative_claims or []
+            if isinstance(item, dict) and str(item.get("section") or "")
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]) -> "NotificationAIValidatedResponse":
+        """Restore a persisted validated decision without trusting old presentation text."""
+
+        payload = payload if isinstance(payload, dict) else {}
+        aliases = {
+            "actionLabel": "action_label",
+            "investmentViewAction": "investment_view_action",
+            "executionAction": "execution_action",
+            "executionDisposition": "execution_disposition",
+            "selectedRuleId": "selected_rule_id",
+            "portfolioConstraintRuleIds": "portfolio_constraint_rule_ids",
+            "executionConstraintRuleIds": "execution_constraint_rule_ids",
+            "dataQualityRuleIds": "data_quality_rule_ids",
+            "validationState": "validation_state",
+            "validationLabel": "validation_label",
+            "dataState": "data_state",
+            "dataStateLabel": "data_state_label",
+            "reviewLevel": "review_level",
+            "reviewLabel": "review_label",
+            "currentActionPlan": "current_action_plan",
+            "investmentView": "investment_view",
+            "executionDecision": "execution_decision",
+            "changeAnalysis": "change_analysis",
+            "nextActionPlan": "next_action_plan",
+            "counterEvidence": "counter_evidence",
+            "counterEvidenceStatus": "counter_evidence_status",
+            "invalidationCondition": "invalidation_condition",
+            "nextChecks": "next_checks",
+            "missingDataImpact": "missing_data_impact",
+            "sourceUrls": "source_urls",
+            "precomputedAction": "precomputed_action",
+            "disagreementReason": "disagreement_reason",
+            "validationReasons": "validation_reasons",
+            "referenceDate": "reference_date",
+            "validationWarnings": "validation_warnings",
+            "strategyGuide": "strategy_guide",
+            "selectedHypothesisId": "selected_hypothesis_id",
+            "researchLeadHypothesisId": "research_lead_hypothesis_id",
+            "hypothesisComparisonState": "hypothesis_comparison_state",
+            "hypothesisSelectionSource": "hypothesis_selection_source",
+            "decisionGuardrails": "decision_guardrails",
+            "decisionAbstention": "decision_abstention",
+            "unresolvedQuestions": "unresolved_questions",
+            "epistemicSummary": "epistemic_summary",
+            "decisionReadiness": "decision_readiness",
+            "decisionAssurance": "decision_assurance",
+            "insightAssessment": "insight_assessment",
+            "causalChain": "causal_chain",
+            "alternativeAction": "alternative_action",
+            "followUpConditions": "follow_up_conditions",
+            "unsupportedFollowUps": "unsupported_follow_ups",
+            "narrativeClaims": "narrative_claims",
+            "claimValidation": "claim_validation",
+            "writerProvenance": "writer_provenance",
+            "rawResponse": "raw_response",
+        }
+        allowed = set(cls.__dataclass_fields__)
+        values = {
+            aliases.get(str(key), str(key)): value
+            for key, value in payload.items()
+            if aliases.get(str(key), str(key)) in allowed
+        }
+        return cls(**values)
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        if payload.get("counter_evidence") and payload.get("counter_evidence_status") == "not-checked":
+            payload["counter_evidence_status"] = "confirmed"
+        if not payload.get("decision_assurance"):
+            payload["decision_assurance"] = {
+                "contractVersion": "notification-decision-assurance-v1",
+                "pipelineValidation": payload.get("validation_state") or "conditional",
+                "evidenceQuality": payload.get("data_state") or "partial",
+                "decisionConfidence": payload.get("decision_readiness") or "conditional",
+                "executionEligibility": (
+                    "blocked"
+                    if payload.get("validation_state") == "blocked" or payload.get("data_state") == "unavailable"
+                    else "eligible"
+                    if payload.get("action") in {"BUY", "ADD", "TRIM", "SELL"}
+                    and payload.get("decision_readiness") == "ready"
+                    else "review-only"
+                ),
+                "counterEvidenceStatus": payload.get("counter_evidence_status") or "not-checked",
+            }
+        payload["engineVersion"] = NOTIFICATION_AI_GATE_VERSION
+        payload["actionLabel"] = payload.pop("action_label")
+        payload["investmentViewAction"] = payload.pop("investment_view_action")
+        payload["executionAction"] = payload.pop("execution_action")
+        payload["executionDisposition"] = payload.pop("execution_disposition")
+        payload["selectedRuleId"] = payload.pop("selected_rule_id")
+        payload["portfolioConstraintRuleIds"] = payload.pop("portfolio_constraint_rule_ids")
+        payload["executionConstraintRuleIds"] = payload.pop("execution_constraint_rule_ids")
+        payload["dataQualityRuleIds"] = payload.pop("data_quality_rule_ids")
+        payload["validationState"] = payload.pop("validation_state")
+        payload["validationLabel"] = payload.pop("validation_label")
+        payload["dataState"] = payload.pop("data_state")
+        payload["dataStateLabel"] = payload.pop("data_state_label")
+        payload["reviewLevel"] = payload.pop("review_level")
+        payload["reviewLabel"] = payload.pop("review_label")
+        payload["currentActionPlan"] = payload.pop("current_action_plan")
+        payload["investmentView"] = payload.pop("investment_view")
+        payload["executionDecision"] = payload.pop("execution_decision")
+        payload["changeAnalysis"] = payload.pop("change_analysis")
+        payload["nextActionPlan"] = payload.pop("next_action_plan")
+        payload["counterEvidence"] = payload.pop("counter_evidence")
+        payload["counterEvidenceStatus"] = payload.pop("counter_evidence_status")
+        payload["invalidationCondition"] = payload.pop("invalidation_condition")
+        payload["nextChecks"] = payload.pop("next_checks")
+        payload["missingDataImpact"] = payload.pop("missing_data_impact")
+        payload["sourceUrls"] = payload.pop("source_urls")
+        payload["precomputedAction"] = payload.pop("precomputed_action")
+        payload["disagreementReason"] = payload.pop("disagreement_reason")
+        payload["validationReasons"] = payload.pop("validation_reasons")
+        payload["referenceDate"] = payload.pop("reference_date")
+        payload["validationWarnings"] = payload.pop("validation_warnings")
+        payload["strategyGuide"] = payload.pop("strategy_guide")
+        payload["selectedHypothesisId"] = payload.pop("selected_hypothesis_id")
+        payload["researchLeadHypothesisId"] = payload.pop("research_lead_hypothesis_id")
+        payload["hypothesisComparisonState"] = payload.pop("hypothesis_comparison_state")
+        payload["hypothesisSelectionSource"] = payload.pop("hypothesis_selection_source")
+        payload["decisionGuardrails"] = payload.pop("decision_guardrails")
+        payload["decisionAbstention"] = payload.pop("decision_abstention")
+        payload["unresolvedQuestions"] = payload.pop("unresolved_questions")
+        payload["epistemicSummary"] = payload.pop("epistemic_summary")
+        payload["decisionReadiness"] = payload.pop("decision_readiness")
+        payload["decisionAssurance"] = payload.pop("decision_assurance")
+        payload["insightAssessment"] = payload.pop("insight_assessment")
+        payload["causalChain"] = payload.pop("causal_chain")
+        payload["alternativeAction"] = payload.pop("alternative_action")
+        payload["followUpConditions"] = payload.pop("follow_up_conditions")
+        payload["unsupportedFollowUps"] = payload.pop("unsupported_follow_ups")
+        payload["narrativeClaims"] = payload.pop("narrative_claims")
+        payload["claimValidation"] = payload.pop("claim_validation")
+        payload["writerProvenance"] = payload.pop("writer_provenance")
+        payload["rawResponse"] = payload.pop("raw_response")
+        return payload
+
+
+def ai_gate_message_type_set(raw: object = "") -> set:
+    text = str(raw or "").strip()
+    if not text:
+        return set(DEFAULT_AI_GATE_MESSAGE_TYPES)
+    return {part.strip() for part in text.replace("\n", ",").split(",") if part.strip()}
+
+
+def ai_gate_enabled_for_message_type(message_type: str, settings: Optional[Dict[str, object]] = None) -> bool:
+    settings = settings or {}
+    enabled = str(settings.get("notificationAiGateEnabled") or "1").strip() != "0"
+    if not enabled:
+        return False
+    return str(message_type or "").strip() in ai_gate_message_type_set(settings.get("notificationAiGateMessageTypes"))

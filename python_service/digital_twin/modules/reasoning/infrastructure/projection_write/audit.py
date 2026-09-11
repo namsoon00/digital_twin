@@ -3,17 +3,10 @@
 from __future__ import annotations
 from .audit_ports import AuditPort
 from dataclasses import replace
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_projection_audit import (
-    OntologyProjectionRun,
-    apply_projection_run_identity,
-    build_ontology_projection_run,
-    complete_ontology_projection_run,
-)
-from digital_twin.domain.ontology_runtime_operations import (
-    build_projection_runtime_observation,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun, apply_projection_run_identity, build_ontology_projection_run, complete_ontology_projection_run
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import build_projection_runtime_observation
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.infrastructure.runtime_identity import runtime_identity
 from typing import Dict, List
 

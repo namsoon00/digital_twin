@@ -1,8 +1,8 @@
 """TypeDB static-seed preflight owner; no facade or runtime construction."""
 
 from .preflight_ports import PreflightStore
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_schema import default_tbox_metadata
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from typing import Dict, List
 

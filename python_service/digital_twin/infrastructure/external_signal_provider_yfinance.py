@@ -4,9 +4,9 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Tuple
 
-from ..domain.company_knowledge import optional_number
-from ..domain.market_data import number
-from ..domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.news_intelligence.domain.company_knowledge import optional_number
+from digital_twin.modules.market_data.domain.market_data import number
+from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
 from digital_twin.modules.instruments.contracts import normalize_market
 
 

@@ -2,23 +2,15 @@
 
 from __future__ import annotations
 
-from digital_twin.domain.ontology_native_rule_planning import (
-    native_rule_planner_manifest_fingerprint,
-)
-from digital_twin.domain.ontology_native_rule_planning import (
-    native_rule_planner_topology,
-)
-from digital_twin.domain.ontology_projection_fingerprint import (
-    apply_material_graph_identity,
-)
-from digital_twin.domain.ontology_projection_fingerprint import (
-    material_graph_fingerprint,
-)
-from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
-from digital_twin.domain.ontology_worlds import market_world
-from digital_twin.domain.ontology_worlds import world_metadata
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.world_partitioned_reasoning import account_overlay_graph
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import native_rule_planner_manifest_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import native_rule_planner_topology
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import apply_material_graph_identity
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import material_graph_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_scopes import apply_scoped_abox_identity
+from digital_twin.modules.reasoning.domain.ontology_worlds import market_world
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_metadata
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import account_overlay_graph
 from typing import Callable
 from typing import Dict
 from typing import List

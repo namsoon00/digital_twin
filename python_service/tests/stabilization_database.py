@@ -6,10 +6,11 @@ import unittest
 import uuid
 
 from mysql_fixtures import reset_mysql_test_database
-from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
-from digital_twin.domain.investment_brain import DecisionEpisode
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
-from digital_twin.domain.reasoning_engine_versions import (
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.decisions.domain.investment_brain import DecisionEpisode
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.modules.reasoning.domain.reasoning_engine_versions import (
     EngineReleaseBundle,
     ReasoningEngineDescriptor,
 )

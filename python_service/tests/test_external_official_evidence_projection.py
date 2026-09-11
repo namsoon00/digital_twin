@@ -4,11 +4,13 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from digital_twin.modules.market_data.application.external_data.research_evidence_projection_service import ExternalFactResearchEvidenceReconciler, ExternalOfficialEvidenceProjectionService
-from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult
-from digital_twin.domain.disclosure_quality import disclosure_reasoning_eligibility
-from digital_twin.domain.events import EXTERNAL_FACT_CHANGED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology, entity_id
-from digital_twin.domain.ontology_external_abox import add_symbol_external_signal_concepts
+from digital_twin.modules.news_intelligence.domain.disclosure_analysis import DisclosureAnalysisResult
+from digital_twin.modules.news_intelligence.domain.disclosure_quality import disclosure_reasoning_eligibility
+from digital_twin.modules.market_data.domain.event_types import EXTERNAL_FACT_CHANGED
+from digital_twin.modules.news_intelligence.domain.event_types import RESEARCH_EVIDENCE_COLLECTED
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology, entity_id
+from digital_twin.modules.reasoning.domain.ontology_external_abox import add_symbol_external_signal_concepts
 from digital_twin.infrastructure.mysql_research_evidence import merge_derived_evidence_payload
 
 

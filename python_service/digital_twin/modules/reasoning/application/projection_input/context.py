@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from digital_twin.domain.decision_performance import evaluate_decision_performance
-from digital_twin.domain.hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.reasoning_shadow import frozen_projection_runtime_context
+from digital_twin.modules.outcomes.contracts import evaluate_decision_performance
+from digital_twin.modules.model_registry.contracts import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projection_runtime_context
 from typing import Callable
 from typing import Dict
 from typing import List

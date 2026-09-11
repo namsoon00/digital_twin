@@ -2,14 +2,14 @@ import time
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from digital_twin.modules.accounts.contracts import AccountConfig
-from digital_twin.domain.data_freshness import age_minutes
-from digital_twin.domain.events import market_data_collected_event
-from digital_twin.domain.fact_changes import market_fact_change
-from digital_twin.domain.instrument_profiles import market_signal_symbols
-from digital_twin.domain.market_data import normalize_position, number, technical_indicators_from_candles
-from digital_twin.domain.position_identity import position_with_symbol_identity
-from digital_twin.domain.materiality import market_change_materiality
-from digital_twin.domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.market_data.domain.data_freshness import age_minutes
+from digital_twin.modules.market_data.domain.events import market_data_collected_event
+from digital_twin.modules.reasoning.contracts import market_fact_change
+from digital_twin.modules.instruments.contracts import market_signal_symbols
+from digital_twin.modules.market_data.domain.market_data import normalize_position, number, technical_indicators_from_candles
+from digital_twin.modules.portfolio.contracts import position_with_symbol_identity
+from digital_twin.modules.news_intelligence.contracts import market_change_materiality
+from digital_twin.modules.portfolio.contracts import Position, utc_now_iso
 from digital_twin.modules.market_data.contracts import MarketDataProvider, MarketQuoteRepository
 from digital_twin.modules.market_data.contracts import MarketDataProviderFactory
 from digital_twin.modules.accounts.public import AccountReader

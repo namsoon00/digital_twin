@@ -1,7 +1,7 @@
 import unittest
 
 from digital_twin.modules.outcomes.application.historical_replay_job_service import HistoricalReplayJobService
-from digital_twin.domain.historical_replay import HistoricalReplayJob
+from digital_twin.modules.outcomes.domain.historical_replay import HistoricalReplayJob
 
 
 class FakeReplayStore:

@@ -3,18 +3,10 @@
 from functools import lru_cache
 from typing import Dict, Set
 
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_schema_capabilities import rule_schema_capability_manifest
-from digital_twin.domain.ontology_semantics import (
-    SEMANTIC_STORAGE_CONTRACT_VERSION,
-    class_for_kind,
-    primary_tbox_class,
-    semantic_class_types,
-    typedb_class_type,
-    typedb_context_fallback_type,
-    typedb_relation_type,
-)
-from digital_twin.domain.ontology_tbox import CLASS_DEFS, tbox_class_def
+from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+from digital_twin.modules.reasoning.domain.ontology_schema_capabilities import rule_schema_capability_manifest
+from digital_twin.modules.reasoning.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION, class_for_kind, primary_tbox_class, semantic_class_types, typedb_class_type, typedb_context_fallback_type, typedb_relation_type
+from digital_twin.modules.model_registry.contracts import CLASS_DEFS, tbox_class_def
 from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
     TYPEDB_COMMON_NODE_ATTRIBUTES,
     TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES,

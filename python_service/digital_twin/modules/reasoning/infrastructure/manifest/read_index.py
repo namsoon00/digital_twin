@@ -1,8 +1,8 @@
 """manifest: read_index through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_change_impact import scope_symbol
-from digital_twin.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_change_impact import scope_symbol
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
     native_rule_evidence_read_index_from_components,
     normalize_native_rule_evidence_read_index,

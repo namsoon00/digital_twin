@@ -1,0 +1,11 @@
+MAX_REASONING_SOURCE_FACTS_PER_EVENT = 1200
+
+MAX_DERIVED_DOCUMENT_SOURCE_FACTS_PER_EVENT = 100
+
+ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
+
+ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
+
+ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED = "ontology.reasoning_queue_health_changed"
+
+INVESTMENT_ALERT_COVERAGE_CHANGED = "investment.alert_coverage_changed"

@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.investment_alert_coverage import (
+from digital_twin.modules.reasoning.domain.investment_alert_coverage import (
     CANDIDATE,
     DELIVERED,
     FAILED,
@@ -20,7 +20,7 @@ from digital_twin.domain.investment_alert_coverage import (
     material_event_assessment,
     reasoning_delivery_trigger,
 )
-from digital_twin.domain.events import compact_materiality_assessment_event_payload
+from digital_twin.modules.news_intelligence.domain.event_payloads import compact_materiality_assessment_event_payload
 
 
 class InvestmentAlertCoverageTests(unittest.TestCase):

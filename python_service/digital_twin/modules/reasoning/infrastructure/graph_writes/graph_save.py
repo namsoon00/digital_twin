@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from .graph_save_ports import GraphSavePort, SaveGraphBindings
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.infrastructure.graph_store_lifecycle import (
     graph_box_entity_counts,
     graph_box_relation_counts,

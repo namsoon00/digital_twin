@@ -4,11 +4,7 @@ from __future__ import annotations
 from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any, Callable
 import gzip
-from digital_twin.domain.ai_inference_queue import (
-    AI_INFERENCE_COMPLETED,
-    AI_INFERENCE_SUPERSEDED,
-    AIInferenceRequest,
-)
+from digital_twin.modules.decisions.domain.ai_inference_queue import AI_INFERENCE_COMPLETED, AI_INFERENCE_SUPERSEDED, AIInferenceRequest
 from digital_twin.infrastructure.operational_common import json_dumps
 
 

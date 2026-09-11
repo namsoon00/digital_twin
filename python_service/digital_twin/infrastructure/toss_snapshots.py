@@ -16,33 +16,20 @@ try:
 except ImportError:  # pragma: no cover - the production runtime is macOS/Linux.
     fcntl = None
 
-from ..domain.accounts import AccountConfig
-from ..domain.data_freshness import combine_quality, freshness_record, int_setting, parse_datetime
-from ..domain.instrument_profiles import market_signal_symbols
-from ..domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_observed_fields
-from ..domain.market_data import (
-    derived_price_change_facts,
-    known_stock,
-    normalize_position,
-    number,
-    pct_distance,
-    technical_indicators_from_candles,
-)
-from ..domain.market_hours import evaluate_market_hours
-from ..domain.market_time_series import market_session_date
-from ..domain.message_types import INVESTMENT_INSIGHT
-from ..domain.position_identity import position_with_symbol_identity
-from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
-from ..domain.portfolio_calculations import (
-    LIVE_MARKET_FX_SOURCE_TYPE,
-    apply_position_base_currency_values,
-    fx_rates_with_external_signals,
-    portfolio_summary,
-    runtime_fx_currencies_from_external_signals,
-)
-from ..domain.portfolio_valuation import BROKER_NET_BASIS, MARK_TO_MARKET_BASIS, normalized_valuation_basis
-from ..domain.strategy import decisions_for_positions
-from ..domain.volume_time_adjustment import trading_value_snapshot
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
+from digital_twin.modules.market_data.domain.data_freshness import combine_quality, freshness_record, int_setting, parse_datetime
+from digital_twin.modules.instruments.domain.instrument_profiles import market_signal_symbols
+from digital_twin.modules.market_data.domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_observed_fields
+from digital_twin.modules.market_data.domain.market_data import derived_price_change_facts, known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
+from digital_twin.modules.market_data.domain.market_hours import evaluate_market_hours
+from digital_twin.modules.market_data.domain.market_time_series import market_session_date
+from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT
+from digital_twin.modules.portfolio.domain.position_identity import position_with_symbol_identity
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, Position, utc_now_iso
+from digital_twin.modules.portfolio.domain.portfolio_calculations import LIVE_MARKET_FX_SOURCE_TYPE, apply_position_base_currency_values, fx_rates_with_external_signals, portfolio_summary, runtime_fx_currencies_from_external_signals
+from digital_twin.modules.portfolio.domain.portfolio_valuation import BROKER_NET_BASIS, MARK_TO_MARKET_BASIS, normalized_valuation_basis
+from digital_twin.modules.decisions.domain.strategy import decisions_for_positions
+from digital_twin.modules.market_data.domain.volume_time_adjustment import trading_value_snapshot
 from .external_signals import ExternalSignalProvider
 from .external_signal_utils import guarded_external_call, root_api_error
 from .kis_market_signals import KISMarketSignalProvider

@@ -1,7 +1,7 @@
 from typing import Callable, Dict, Iterable, List, Optional
 
-from digital_twin.domain.data_freshness import age_minutes, int_setting
-from digital_twin.domain.market_data import known_stock
+from digital_twin.modules.market_data.contracts import age_minutes, int_setting
+from digital_twin.modules.market_data.contracts import known_stock
 from digital_twin.modules.market_data.contracts import MarketQuoteRepository
 from digital_twin.modules.instruments.contracts import SymbolSourceGateway, SymbolUniverseRepository
 from digital_twin.modules.instruments.domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, stale_after_hours, symbol_search_symbol_candidates, symbol_search_terms

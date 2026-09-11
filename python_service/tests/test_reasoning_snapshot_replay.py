@@ -6,21 +6,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin.modules.market_data.application.monitoring_service import MonitorRunner
-from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.events import (
-    INVESTMENT_FOLLOW_UP_TRANSITIONED,
-    ONTOLOGY_REASONING_REQUESTED,
-)
-from digital_twin.domain.ontology_projection_audit import projection_source_snapshot
-from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.portfolio import AlertEvent, AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
-from digital_twin.domain.repositories import MonitoringCycleRecordResult
-from digital_twin.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
+from digital_twin.modules.outcomes.domain.event_types import INVESTMENT_FOLLOW_UP_TRANSITIONED
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import projection_source_snapshot
+from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent, AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
+from digital_twin.modules.portfolio.contracts import MonitoringCycleRecordResult
+from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
 from digital_twin.infrastructure.mysql_monitoring_stores import (
     MySQLMonitoringCycleRecorder,
     reasoning_snapshot_for_persisted_boundary,
 )
-from digital_twin.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
+from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.event_bus import EventBus
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource

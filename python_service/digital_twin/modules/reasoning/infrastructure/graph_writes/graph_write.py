@@ -9,7 +9,7 @@ from .graph_write_ports import (
     GraphInsertQueriesBindings,
     StaticGraphInsertQueriesBindings,
 )
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_storage_id,
 )

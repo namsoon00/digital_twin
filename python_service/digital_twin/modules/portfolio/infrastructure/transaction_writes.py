@@ -3,8 +3,8 @@
 from __future__ import annotations
 from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any
-from digital_twin.domain.portfolio_analytics import PortfolioRiskSnapshot
-from digital_twin.domain.trade_execution import ExecutionEpisode
+from digital_twin.modules.portfolio.domain.portfolio_analytics import PortfolioRiskSnapshot
+from digital_twin.modules.portfolio.domain.trade_execution import ExecutionEpisode
 from digital_twin.infrastructure.operational_common import json_dumps
 
 

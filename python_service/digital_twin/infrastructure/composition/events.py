@@ -21,9 +21,10 @@ def monitor_event_bus(settings=None) -> EventBus:
 
 
 def news_event_bus(settings=None) -> EventBus:
-    from digital_twin.application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer
-    from digital_twin.domain.events import DATA_PIPELINE_HEALTH_CHANGED, RESEARCH_EVIDENCE_COLLECTED
-    from digital_twin.domain.market_data import number
+    from digital_twin.platform.application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer
+    from digital_twin.platform.domain.event_types import DATA_PIPELINE_HEALTH_CHANGED
+    from digital_twin.modules.news_intelligence.domain.event_types import RESEARCH_EVIDENCE_COLLECTED
+    from digital_twin.modules.market_data.domain.market_data import number
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.investment_calendar import build_investment_calendar_service
     from digital_twin.infrastructure.event_bus import EventBus, default_event_bus
@@ -66,8 +67,8 @@ def news_event_bus(settings=None) -> EventBus:
 
 
 def data_pipeline_health_event_bus(settings=None) -> EventBus:
-    from digital_twin.application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer
-    from digital_twin.domain.events import DATA_PIPELINE_HEALTH_CHANGED
+    from digital_twin.platform.application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer
+    from digital_twin.platform.domain.event_types import DATA_PIPELINE_HEALTH_CHANGED
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.event_bus import EventBus, default_event_bus
     from digital_twin.infrastructure.settings import runtime_settings
@@ -86,8 +87,8 @@ def data_pipeline_health_event_bus(settings=None) -> EventBus:
 
 
 def operational_storage_event_bus(settings=None) -> EventBus:
-    from digital_twin.application.operational_storage_capacity_service import OperationalStorageCapacityNotificationEnqueuer
-    from digital_twin.domain.events import OPERATIONAL_STORAGE_CAPACITY_CHANGED
+    from digital_twin.platform.application.operational_storage_capacity_service import OperationalStorageCapacityNotificationEnqueuer
+    from digital_twin.platform.domain.event_types import OPERATIONAL_STORAGE_CAPACITY_CHANGED
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.event_bus import EventBus, default_event_bus
     from digital_twin.infrastructure.settings import runtime_settings
@@ -106,7 +107,7 @@ def operational_storage_event_bus(settings=None) -> EventBus:
 
 
 def ontology_reasoning_event_bus(settings=None) -> EventBus:
-    from digital_twin.domain.events import ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED
+    from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.event_bus import EventBus, default_event_bus
     from digital_twin.infrastructure.settings import runtime_settings

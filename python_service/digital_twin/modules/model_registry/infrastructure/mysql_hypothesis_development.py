@@ -2,9 +2,9 @@ import hashlib
 from pathlib import Path
 from typing import Dict, List
 
-from digital_twin.domain.hypothesis_development import HypothesisDevelopmentCase
-from digital_twin.domain.ontology_experiments import OntologyExperiment
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase
+from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

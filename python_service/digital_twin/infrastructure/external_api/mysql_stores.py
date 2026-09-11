@@ -5,10 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
-from ...domain.events import (
-    DomainEvent,
-    external_provider_health_changed_event,
-)
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.market_data.domain.events import external_provider_health_changed_event
 from ..mysql_operational_connection import MySQLOperationalConnection
 from ..mysql_operational_events import insert_domain_event_with_connection
 from ..mysql_operational_helpers import _json_loads

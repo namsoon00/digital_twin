@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Callable, ContextManager, Dict, Iterable, List, Protocol, Tuple
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 class PersistenceStore(Protocol):

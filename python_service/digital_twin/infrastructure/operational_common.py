@@ -1,9 +1,9 @@
 import json
 from datetime import datetime, timezone
 
-from ..domain.investment_research import ResearchEvidence
-from ..domain.notification_rules import NotificationRuleConfig
-from ..domain.notification_templates import NotificationTemplate
+from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence
+from digital_twin.modules.notifications.domain.notification_rules import NotificationRuleConfig
+from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate
 
 
 IN_FLIGHT_NOTIFICATION_HISTORY_MINUTES = 30

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Callable, Dict, List, Optional
 
-from ..domain.market_data import number
+from digital_twin.modules.market_data.domain.market_data import number
 
 
 

@@ -1,11 +1,6 @@
 """native_execution: bridge through explicit injected capabilities."""
 
-from digital_twin.domain.model_signal_interpretation import (
-    MODEL_SIGNAL_BRIDGE_VERSION,
-    model_signal_bridge_conditions,
-    model_signal_conditions,
-    model_signal_interpretation_contract_id,
-)
+from digital_twin.modules.model_registry.contracts import MODEL_SIGNAL_BRIDGE_VERSION, model_signal_bridge_conditions, model_signal_conditions, model_signal_interpretation_contract_id
 from digital_twin.modules.reasoning.infrastructure.typeql.model_signal_queries import (
     typedb_dispatch_model_signal_bridge_rows,
     typedb_model_signal_bridge_batch_query,

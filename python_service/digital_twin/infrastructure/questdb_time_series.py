@@ -11,23 +11,9 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping
 
 from digital_twin.modules.market_data.contracts import boolean_value, merge_capital_flow_rows, observation_from_row, observed_fields_from_coverage
-from ..domain.market_time_series import (
-    completed_daily_rows,
-    granularity_preferences,
-    limit_temporal_rows,
-    parse_timestamp,
-    required_session_count,
-    snapshot_safe_granularity_preferences,
-    temporal_observation_payload,
-    temporal_session_count,
-)
-from ..domain.portfolio_ontology_temporal_concepts import trim_to_recent_sessions, window_rows
-from ..domain.time_series_storage import (
-    TIME_SERIES_CONTRACT_VERSION,
-    TimeSeriesBackendDescriptor,
-    TimeSeriesCapabilities,
-    TimeSeriesWatermark,
-)
+from digital_twin.modules.market_data.domain.market_time_series import completed_daily_rows, granularity_preferences, limit_temporal_rows, parse_timestamp, required_session_count, snapshot_safe_granularity_preferences, temporal_observation_payload, temporal_session_count
+from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import trim_to_recent_sessions, window_rows
+from digital_twin.modules.market_data.domain.time_series_storage import TIME_SERIES_CONTRACT_VERSION, TimeSeriesBackendDescriptor, TimeSeriesCapabilities, TimeSeriesWatermark
 
 
 QUESTDB_ADAPTER_VERSION = "questdb-time-series-adapter-v2"

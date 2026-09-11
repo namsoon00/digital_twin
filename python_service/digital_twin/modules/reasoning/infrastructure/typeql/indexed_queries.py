@@ -2,10 +2,7 @@
 
 from typing import Dict, Iterable, List, Set
 
-from digital_twin.domain.model_signal_interpretation import (
-    is_model_signal_interpretation_rule,
-    model_signal_bridge_source_scope,
-)
+from digital_twin.modules.model_registry.contracts import is_model_signal_interpretation_rule, model_signal_bridge_source_scope
 from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
     NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
     NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS,

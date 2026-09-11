@@ -3,15 +3,15 @@
 from __future__ import annotations
 from typing import Optional, Union
 from .record_ports import RecordSnapshotBindings
-from digital_twin.domain.ontology_worlds import world_metadata
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_metadata
 from typing import Dict
 import time
 
 
 from .stage_results import CompletedProjection, ScheduleFollowupsResult
 from .schedule_followups_ports import ScheduleFollowupsPort
-from digital_twin.domain.ontology_worlds import OntologyWorld
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_worlds import OntologyWorld
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 def schedule_followups(

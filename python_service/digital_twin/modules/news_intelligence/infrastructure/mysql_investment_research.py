@@ -2,8 +2,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-from digital_twin.domain.investment_brain import NovelHypothesisProposal, utc_now_iso
-from digital_twin.domain.investment_evidence_governance import ResearchReasoningHandoff, ResearchRun
+from digital_twin.modules.decisions.contracts import NovelHypothesisProposal, utc_now_iso
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import ResearchReasoningHandoff, ResearchRun
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

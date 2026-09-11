@@ -9,8 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, Mapping
 
-from digital_twin.domain.reasoning_shadow import compare_engine_outcomes, engine_outcome_packet, frozen_projection_runtime_context, pack_projection_runtime_contexts, payload_hash
-from digital_twin.domain.reasoning_engine_versions import reasoning_release_identity
+from digital_twin.modules.reasoning.domain.reasoning_shadow import compare_engine_outcomes, engine_outcome_packet, frozen_projection_runtime_context, pack_projection_runtime_contexts, payload_hash
+from digital_twin.modules.reasoning.domain.reasoning_engine_versions import reasoning_release_identity
 
 
 DISABLED_VALUES = {"", "0", "false", "no", "off", "disabled"}

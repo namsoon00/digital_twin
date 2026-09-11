@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Dict
 import time
 from .ports import AssemblyInputs

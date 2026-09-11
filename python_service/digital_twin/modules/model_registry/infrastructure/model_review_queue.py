@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.market_data.contracts import MONITORING_ALERTS_DETECTED
 from digital_twin.modules.model_registry.domain.model_review import ModelReviewJob
 from digital_twin.infrastructure.settings import data_dir, read_json, utc_now, write_private_json
 

@@ -1,7 +1,7 @@
 from typing import Dict, List
 
 from digital_twin.modules.accounts.contracts import AccountConfig
-from digital_twin.domain.events import account_removed_event, account_saved_event
+from digital_twin.modules.accounts.domain.events import account_removed_event, account_saved_event
 from digital_twin.modules.accounts.application.ports import AccountRepository
 from digital_twin.modules.accounts.domain.account_patch import ACCOUNT_FIELDS, explicit_account_patch
 

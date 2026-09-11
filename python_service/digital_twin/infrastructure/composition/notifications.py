@@ -9,8 +9,8 @@ if TYPE_CHECKING:
 
 
 def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") -> NotificationQueueRunner:
-    from digital_twin.domain.market_data import number
-    from digital_twin.domain.monitoring import RealtimeMonitor
+    from digital_twin.modules.market_data.domain.market_data import number
+    from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.decisions import build_investment_brain_service
     from digital_twin.infrastructure.composition.market_data import monitor_account_job_store_from_settings

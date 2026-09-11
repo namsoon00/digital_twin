@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.domain.ontology_reasoning_proof import ONTOLOGY_REASONING_PROOF_VERSION, classify_reasoning_bottleneck, summarize_production_stage_evidence, summarize_read_only_replay
-from digital_twin.domain.ontology_worlds import portfolio_world_id
+from digital_twin.modules.reasoning.domain.ontology_reasoning_proof import ONTOLOGY_REASONING_PROOF_VERSION, classify_reasoning_bottleneck, summarize_production_stage_evidence, summarize_read_only_replay
+from digital_twin.modules.reasoning.domain.ontology_worlds import portfolio_world_id
 
 
 def _mapping(value: object) -> Dict[str, object]:

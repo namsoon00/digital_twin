@@ -3,13 +3,14 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.events import HYPOTHESIS_DEVELOPMENT_DEPLOYED, HYPOTHESIS_DEVELOPMENT_TRANSITIONED, HYPOTHESIS_DEVELOPMENT_VALIDATED, hypothesis_development_event
-from digital_twin.domain.hypothesis_development import HypothesisDevelopmentCase, TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES, hypothesis_decision_impact, screen_hypothesis_case, validation_gate
-from digital_twin.domain.ontology_experiments import OntologyExperiment, normalize_candidate_rules, rulebox_metrics
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
-from digital_twin.domain.ontology_rulebox_governance import rulebox_semantic_violations
-from digital_twin.domain.ontology_worlds import portfolio_world_id
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.model_registry.domain.event_types import HYPOTHESIS_DEVELOPMENT_DEPLOYED, HYPOTHESIS_DEVELOPMENT_TRANSITIONED, HYPOTHESIS_DEVELOPMENT_VALIDATED
+from digital_twin.modules.model_registry.domain.events import hypothesis_development_event
+from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase, TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES, hypothesis_decision_impact, screen_hypothesis_case, validation_gate
+from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment, normalize_candidate_rules, rulebox_metrics
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_semantic_violations
+from digital_twin.modules.reasoning.contracts import portfolio_world_id
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 class HypothesisDevelopmentService:

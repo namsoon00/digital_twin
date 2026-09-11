@@ -2,8 +2,8 @@
 
 from typing import Dict
 
-from digital_twin.domain.message_types import PORTFOLIO_ACTIVITY_OBSERVATION
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.contracts import PORTFOLIO_ACTIVITY_OBSERVATION
+from digital_twin.modules.notifications.contracts import NotificationJob
 
 
 ACTIVITY_LABELS = {

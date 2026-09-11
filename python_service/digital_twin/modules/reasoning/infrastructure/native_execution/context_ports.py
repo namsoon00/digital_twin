@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from typing import Dict, Iterable, List
 
 

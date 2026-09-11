@@ -3,13 +3,8 @@
 from __future__ import annotations
 from .catalog_ports import CatalogPort, EnsureRuleboxReadyBindings
 from copy import deepcopy
-from digital_twin.domain.ontology_rulebox_governance import (
-    rulebox_rules_hash as compute_rulebox_rules_hash,
-)
-from digital_twin.domain.world_partitioned_reasoning import (
-    WORLD_PARTITIONED_REASONING_VERSION,
-    compile_world_partitioned_rules,
-)
+from digital_twin.modules.model_registry.contracts import rulebox_rules_hash as compute_rulebox_rules_hash
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import WORLD_PARTITIONED_REASONING_VERSION, compile_world_partitioned_rules
 from digital_twin.infrastructure.graph_store_rulebox import (
     rulebox_rules_from_payload,
     rulebox_rules_to_payload,

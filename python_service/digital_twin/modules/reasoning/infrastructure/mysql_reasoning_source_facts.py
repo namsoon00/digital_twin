@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.domain.reasoning_source_facts import ReasoningSourceFact
+from digital_twin.modules.reasoning.domain.reasoning_source_facts import ReasoningSourceFact
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

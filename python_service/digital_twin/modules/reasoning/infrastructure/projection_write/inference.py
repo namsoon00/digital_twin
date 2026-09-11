@@ -2,22 +2,13 @@
 
 from __future__ import annotations
 from .inference_ports import InferencePort
-from digital_twin.domain.incremental_inference_equivalence import (
-    compare_incremental_rule_states,
-)
-from digital_twin.domain.ontology_change_impact import compact_inference_impact_plan
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_rulebox_governance import (
-    rulebox_rules_hash as compute_rulebox_rules_hash,
-)
-from digital_twin.domain.ontology_runtime_operations import (
-    native_rule_failure_diagnostic,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.world_partitioned_reasoning import (
-    WORLD_PARTITIONED_REASONING_VERSION,
-    partitioned_phase_impact_plan,
-)
+from digital_twin.modules.reasoning.domain.incremental_inference_equivalence import compare_incremental_rule_states
+from digital_twin.modules.reasoning.domain.ontology_change_impact import compact_inference_impact_plan
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.model_registry.contracts import rulebox_rules_hash as compute_rulebox_rules_hash
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_rule_failure_diagnostic
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import WORLD_PARTITIONED_REASONING_VERSION, partitioned_phase_impact_plan
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_to_payload
 from digital_twin.modules.reasoning.domain.projection_facts import rule_id_from_payload
 from typing import Dict, List

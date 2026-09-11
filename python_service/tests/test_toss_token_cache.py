@@ -8,7 +8,7 @@ import urllib.parse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
 from digital_twin.infrastructure.toss_snapshots import TossProvider, toss_api_request_guard
 
 

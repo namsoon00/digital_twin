@@ -5,16 +5,18 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 
-from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
-from digital_twin.domain.ontology_change_impact import requested_scope_families_for_event_fact_types
-from digital_twin.domain.ontology_execution_units import revision_vector_for_change
-from digital_twin.domain.ontology_reasoning_batch import adaptive_reasoning_batch_plan
-from digital_twin.domain.ontology_runtime_operations import native_replay_validation, scoped_abox_maintenance_yield_status
-from digital_twin.domain.market_data import known_stock
-from digital_twin.domain.market_hours import evaluate_market_hours
-from digital_twin.domain.message_types import INVESTMENT_INSIGHT
-from digital_twin.domain.investment_evidence_governance import ReasoningGeneration, ResearchReasoningHandoff, complete_reasoning_handoff
-from digital_twin.domain.ontology_reasoning_queue import OBSERVATION_FOLLOWUP_PRIORITY_HINT, REASONING_LANES, REASONING_PRIORITY_ORDER, WORK_CLASSES, VERIFIED_MONITOR_SNAPSHOT_TRIGGER, durable_mailbox_entries, event_affected_symbols, event_has_reasoning_work, event_subject_id, event_subject_kind, event_subject_revision, event_work_class as domain_event_work_class, event_fact_types_for_symbol, event_reasoning_lane, event_reasoning_priority, is_generic_research_latest_state, is_observation_followup_symbol, is_realtime_latest_state, is_verified_monitor_snapshot_event, mailbox_entry_priority, mailbox_slot_family
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_completed_event
+from digital_twin.modules.reasoning.domain.ontology_change_impact import requested_scope_families_for_event_fact_types
+from digital_twin.modules.reasoning.domain.ontology_execution_units import revision_vector_for_change
+from digital_twin.modules.reasoning.domain.ontology_reasoning_batch import adaptive_reasoning_batch_plan
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_replay_validation, scoped_abox_maintenance_yield_status
+from digital_twin.modules.market_data.contracts import known_stock
+from digital_twin.modules.market_data.contracts import evaluate_market_hours
+from digital_twin.modules.notifications.contracts import INVESTMENT_INSIGHT
+from digital_twin.modules.news_intelligence.contracts import ReasoningGeneration, ResearchReasoningHandoff, complete_reasoning_handoff
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import OBSERVATION_FOLLOWUP_PRIORITY_HINT, REASONING_LANES, REASONING_PRIORITY_ORDER, WORK_CLASSES, VERIFIED_MONITOR_SNAPSHOT_TRIGGER, durable_mailbox_entries, event_affected_symbols, event_has_reasoning_work, event_subject_id, event_subject_kind, event_subject_revision, event_work_class as domain_event_work_class, event_fact_types_for_symbol, event_reasoning_lane, event_reasoning_priority, is_generic_research_latest_state, is_observation_followup_symbol, is_realtime_latest_state, is_verified_monitor_snapshot_event, mailbox_entry_priority, mailbox_slot_family
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

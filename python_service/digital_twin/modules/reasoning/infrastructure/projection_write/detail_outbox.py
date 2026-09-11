@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from .detail_outbox_ports import DetailOutboxPort
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Dict, List
 
 

@@ -6,10 +6,10 @@ from .shared_dispatch_ports import (
     ScheduleSharedWorldProjectionBindings,
 )
 from copy import deepcopy
-from digital_twin.domain.knowledge_world_projection import build_knowledge_world_graph
-from digital_twin.domain.market_world_projection import build_market_world_graph
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_worlds import world_metadata
+from digital_twin.modules.reasoning.domain.knowledge_world_projection import build_knowledge_world_graph
+from digital_twin.modules.reasoning.domain.market_world_projection import build_market_world_graph
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_metadata
 from typing import Dict
 
 

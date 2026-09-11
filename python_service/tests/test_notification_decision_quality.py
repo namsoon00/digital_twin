@@ -2,8 +2,8 @@ import unittest
 
 from digital_twin.modules.decisions.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
 from digital_twin.modules.notifications.application.notification.quality import ontology_quality_gate_context
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.ontology_decision_quality import (
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.reasoning.domain.ontology_decision_quality import (
     QUALITY_CONTRACT_VERSION,
     build_ontology_decision_quality_snapshot,
 )

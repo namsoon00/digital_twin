@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from module_migration_fixtures import is_domain_dependency
 from unittest.mock import patch
 
 from digital_twin.infrastructure import typedb_ontology as api
@@ -90,7 +91,8 @@ for name in sys.modules:
                 module = importlib.util.resolve_name("." * node.level + (node.module or ""), PACKAGE) if node.level else node.module
                 if module.startswith("digital_twin"):
                     self.assertTrue(
-                        module.startswith((PACKAGE + ".", "digital_twin.domain.", "digital_twin.modules.reasoning.infrastructure.typeql."))
+                        is_domain_dependency(module)
+                        or module.startswith((PACKAGE + ".", "digital_twin.modules.reasoning.infrastructure.typeql."))
                         or module == "digital_twin.infrastructure.graph_store_payloads",
                         (path.name, module),
                     )

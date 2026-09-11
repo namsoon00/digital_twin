@@ -7,20 +7,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.ontology_prompting import prompt_payload
-from digital_twin.domain.ontology_inference_ledger import inference_trace_ledger_payload
-from digital_twin.domain.instrument_profiles import market_signal_profiles, parse_instrument_profiles_text
-from digital_twin.domain.ontology_rulebox_catalog import (
+from digital_twin.modules.reasoning.domain.ontology_prompting import prompt_payload
+from digital_twin.modules.reasoning.domain.ontology_inference_ledger import inference_trace_ledger_payload
+from digital_twin.modules.instruments.domain.instrument_profiles import market_signal_profiles, parse_instrument_profiles_text
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import (
     default_graph_inference_rules,
     governed_graph_inference_rules,
 )
-from digital_twin.domain.ontology_tbox import tbox_class_def
-from digital_twin.domain.ontology_threshold_policy import default_ontology_threshold_policy
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio import Position
-from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
-from digital_twin.domain.portfolio_ontology_temporal_concepts import (
+from digital_twin.modules.model_registry.domain.ontology_tbox import tbox_class_def
+from digital_twin.modules.model_registry.domain.ontology_threshold_policy import default_ontology_threshold_policy
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.portfolio.domain.portfolio import Position
+from digital_twin.modules.portfolio.domain.portfolio_calculations import portfolio_summary
+from digital_twin.modules.reasoning.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
+from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import (
     TemporalWindowDefinition,
     add_temporal_observation_anchors,
     market_session_phase,
@@ -29,8 +29,8 @@ from digital_twin.domain.portfolio_ontology_temporal_concepts import (
     temporal_window_values,
     window_rows,
 )
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.security_lines import related_market_symbols_for_positions, security_lines_for_symbol
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.instruments.domain.security_lines import related_market_symbols_for_positions, security_lines_for_symbol
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
     inferencebox_snapshot_from_rows,
@@ -50,7 +50,7 @@ from digital_twin.infrastructure.graph_store_rulebox import (
     build_rulebox_rules_from_rows,
     derivation_payload_from_row,
 )
-from digital_twin.domain.ontology_rulebox_governance import (
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import (
     rulebox_governance_candidates,
     rulebox_rules_hash,
     rulebox_semantic_violations,

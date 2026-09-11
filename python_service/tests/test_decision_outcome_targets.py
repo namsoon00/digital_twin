@@ -4,17 +4,17 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.domain.hypothesis_outcome_contract import (
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import (
     HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
     outcome_contract_fingerprint,
 )
-from digital_twin.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION
+from digital_twin.modules.outcomes.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION
 from digital_twin.modules.reasoning.application.investment_reasoning.episode_projection import decision_episode_outcome_contract_readiness, hypothesis_coverage_gap_request_from_subject_case, shadow_hypothesis_observation_episodes
 from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
-from digital_twin.domain.hypothesis_observation import (
+from digital_twin.modules.outcomes.domain.hypothesis_observation import (
     ShadowHypothesisObservationEpisode,
 )
-from digital_twin.domain.investment_reasoning import (
+from digital_twin.modules.decisions.domain.investment_reasoning import (
     ConditionEvidence,
     DataGap,
     HypothesisRecord,

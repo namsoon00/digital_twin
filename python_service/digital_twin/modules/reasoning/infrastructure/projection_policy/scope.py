@@ -3,7 +3,7 @@
 from __future__ import annotations
 from .scope_ports import ScopePort
 from datetime import datetime, timezone
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Dict, List
 import hashlib
 

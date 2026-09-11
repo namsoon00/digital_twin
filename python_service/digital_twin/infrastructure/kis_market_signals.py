@@ -8,11 +8,11 @@ from datetime import datetime, timedelta, timezone
 from statistics import median
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from ..domain.data_freshness import combine_quality
-from ..domain.market_data import known_stock, number, optional_investor_net_volume, pct_distance
-from ..domain.portfolio import Position, utc_now_iso
-from ..domain.company_knowledge import merge_company_overview_rows
-from ..domain.position_identity import preferred_instrument_name
+from digital_twin.modules.market_data.domain.data_freshness import combine_quality
+from digital_twin.modules.market_data.domain.market_data import known_stock, number, optional_investor_net_volume, pct_distance
+from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.news_intelligence.domain.company_knowledge import merge_company_overview_rows
+from digital_twin.modules.portfolio.domain.position_identity import preferred_instrument_name
 from .external_signal_utils import ExternalCircuitOpen, root_api_error
 from .operational_store import market_quote_cache
 from .settings import runtime_settings

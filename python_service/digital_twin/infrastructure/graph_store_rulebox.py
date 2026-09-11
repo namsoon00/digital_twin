@@ -2,19 +2,14 @@ import json
 import re
 from typing import Dict, Iterable, List
 
-from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
-from ..domain.ontology_decision_state import DECISION_EFFECTS
-from ..domain.investment_ubiquitous_language import add_investment_language_governance_concepts
-from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
-from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
-from ..domain.ontology_rulebox_governance import (
-    normalize_rule_change_candidate,
-    rulebox_governance_candidates,
-    rulebox_version_payload,
-    validate_rulebox_semantics,
-)
-from ..domain.ontology_rulebox_projection import add_rulebox_concepts
-from ..domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata, tbox_entities, tbox_relations
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from digital_twin.modules.reasoning.domain.ontology_decision_state import DECISION_EFFECTS
+from digital_twin.modules.model_registry.domain.investment_ubiquitous_language import add_investment_language_governance_concepts
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import normalize_rule_change_candidate, rulebox_governance_candidates, rulebox_version_payload, validate_rulebox_semantics
+from digital_twin.modules.model_registry.domain.ontology_rulebox_projection import add_rulebox_concepts
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata, tbox_entities, tbox_relations
 from .graph_store_payloads import (
     condition_relation_filter_bool,
     condition_relation_filter_number,

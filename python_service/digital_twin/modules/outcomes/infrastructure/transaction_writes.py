@@ -3,18 +3,10 @@
 from __future__ import annotations
 from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any, Callable, Dict
-from digital_twin.domain.investment_outcomes import (
-    DecisionReview,
-    PerformanceAttribution,
-)
+from digital_twin.modules.outcomes.domain.investment_outcomes import DecisionReview, PerformanceAttribution
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
-from digital_twin.domain.investment_brain import (
-    DecisionEpisode,
-    canonical_investment_timestamp,
-    stable_id,
-    utc_now_iso,
-)
+from digital_twin.modules.decisions.contracts import DecisionEpisode, canonical_investment_timestamp, stable_id, utc_now_iso
 
 
 def save_decision_review(

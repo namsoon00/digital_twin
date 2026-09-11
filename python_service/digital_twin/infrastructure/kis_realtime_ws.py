@@ -10,9 +10,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from ..domain.accounts import split_symbols
-from ..domain.market_data import known_stock, number
-from ..domain.portfolio import utc_now_iso
+from digital_twin.modules.accounts.domain.accounts import split_symbols
+from digital_twin.modules.market_data.domain.market_data import known_stock, number
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from .external_signal_utils import guarded_external_call
 from .kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, clean_symbol
 from .operational_store import market_quote_cache

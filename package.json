@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "check": "node --check public/app.js && node --check public/console-workspaces.js && node --check public/web-runtime.js && node --check scripts/smoke-test.js && node --check scripts/api-performance-audit.js && node --check scripts/share-local.js && node --check scripts/share-tunnel-lifecycle.js && node --check scripts/publish-live-target.js && node --check scripts/issue-workflow.js && node --check scripts/stamp-flutter-web-build.js && node --check scripts/generate-static-mock-market.js && node --check scripts/restart-web-service.js && node --check scripts/run-python-tests.js && npm run python:check",
+    "check": "npm run frontend:check && node --check public/app.js && node --check public/console-workspaces.js && node --check public/web-runtime.js && node --check scripts/smoke-test.js && node --check scripts/api-performance-audit.js && node --check scripts/share-local.js && node --check scripts/share-tunnel-lifecycle.js && node --check scripts/publish-live-target.js && node --check scripts/issue-workflow.js && node --check scripts/stamp-flutter-web-build.js && node --check scripts/generate-static-mock-market.js && node --check scripts/restart-web-service.js && node --check scripts/run-python-tests.js && npm run python:check",
+    "frontend:build": "node scripts/build-frontend.cjs",
+    "frontend:check": "node scripts/check-frontend-modules.cjs && node scripts/build-frontend.cjs --check",
+    "frontend:test": "node --test scripts/frontend-tests/*.test.mjs",
+    "frontend:test:browser": "node scripts/test-frontend-browser.cjs",
     "api:performance": "node scripts/api-performance-audit.js",
     "api:performance:strict": "API_PERFORMANCE_STRICT=1 node scripts/api-performance-audit.js",
     "dev": "python3 python_service/service.py web",
@@ -102,17 +106,18 @@
     "python:test:integration": "node scripts/run-python-tests.js integration",
     "python:test:system": "node scripts/run-python-tests.js system",
     "python:test:full": "node scripts/run-python-tests.js full",
+    "python:test:load": "python3 python_service/tests/verify_integrated_load.py",
     "share": "node scripts/share-local.js",
     "share:publish-target": "node scripts/publish-live-target.js",
     "smoke": "node scripts/smoke-test.js",
     "stamp:flutter-web": "node scripts/stamp-flutter-web-build.js",
     "start": "python3 python_service/service.py web",
-    "test": "npm run check && npm run smoke && npm run python:test",
+    "test": "npm run check && npm run frontend:test && npm run smoke && npm run python:test",
     "test:unit": "npm run check && npm run python:test:unit",
     "test:contract": "npm run check && npm run python:test:contract",
     "test:integration": "npm run check && npm run python:test:integration",
     "test:system": "npm run check && npm run python:test:system",
-    "test:full": "npm run check && npm run smoke && npm run python:test:full",
+    "test:full": "npm run check && npm run frontend:test && npm run smoke && npm run python:test:full",
     "web:restart": "node scripts/restart-web-service.js"
   },
   "dependencies": {
@@ -120,6 +125,10 @@
     "lightweight-charts": "^5.2.1"
   },
   "devDependencies": {
+    "acorn": "8.15.0",
+    "acorn-walk": "8.3.4",
+    "esbuild": "0.25.10",
+    "eslint-scope": "8.4.0",
     "lucide-static": "^1.31.0"
   }
 }

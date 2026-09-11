@@ -1,6 +1,6 @@
 """manifest: indexes through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
     merge_native_rule_evidence_read_index,
     native_rule_evidence_read_index_from_rows,

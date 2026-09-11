@@ -2,8 +2,8 @@
 
 from typing import Callable, Dict
 
-from digital_twin.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 
 
 class NotificationDispatchService:

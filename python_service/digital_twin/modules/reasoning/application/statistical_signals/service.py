@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.domain.market_time_series import parse_timestamp
-from digital_twin.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, ModelSignalBundle, score_graph_hypothesis_contracts, score_flow_feature_snapshot, score_temporal_feature_snapshot
-from digital_twin.domain.time_series_storage import TEMPORAL_FEATURE_SET_VERSION, TemporalFeatureSnapshot, TimeSeriesWatermark
+from digital_twin.modules.market_data.contracts import parse_timestamp
+from digital_twin.modules.model_registry.contracts import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, ModelSignalBundle, score_graph_hypothesis_contracts, score_flow_feature_snapshot, score_temporal_feature_snapshot
+from digital_twin.modules.market_data.contracts import TEMPORAL_FEATURE_SET_VERSION, TemporalFeatureSnapshot, TimeSeriesWatermark
 
 
 def _row_timestamp(row: Mapping[str, object]) -> str:

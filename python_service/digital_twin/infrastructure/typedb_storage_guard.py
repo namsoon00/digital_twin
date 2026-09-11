@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Mapping
 
-from ..domain.typedb_capacity_policy import evaluate_typedb_capacity_policy
+from digital_twin.platform.domain.typedb_capacity_policy import evaluate_typedb_capacity_policy
 from .operational_storage_guard import (
     storage_directory_physical_size_bytes,
     storage_directory_size_bytes,

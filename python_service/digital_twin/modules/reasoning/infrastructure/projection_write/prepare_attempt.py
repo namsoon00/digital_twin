@@ -2,26 +2,17 @@
 
 from __future__ import annotations
 from typing import Optional, Union
-from digital_twin.domain.ontology_projection_audit import (
-    compact_reasoning_request_context,
-)
-from digital_twin.domain.ontology_projection_status import (
-    TYPEDB_REASONING_WORKER_DEFERRED,
-)
-from digital_twin.domain.ontology_worlds import (
-    knowledge_world,
-    market_world,
-    world_from_snapshot,
-    world_metadata,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import compact_reasoning_request_context
+from digital_twin.modules.reasoning.domain.ontology_projection_status import TYPEDB_REASONING_WORKER_DEFERRED
+from digital_twin.modules.reasoning.domain.ontology_worlds import knowledge_world, market_world, world_from_snapshot, world_metadata
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Callable, Dict, List
 import time
 
 
 from .stage_results import CompletedProjection, PrepareAttemptResult
 from .prepare_attempt_ports import PrepareAttemptPort
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
 
 
 def prepare_attempt(

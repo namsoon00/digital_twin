@@ -9,26 +9,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.outcomes.application.hypothesis_lifecycle_service import HypothesisLifecycleService
 from digital_twin.modules.decisions.application.investment_brain_service import InvestmentBrainService
-from digital_twin.domain.hypothesis_lifecycle import (
+from digital_twin.modules.model_registry.domain.hypothesis_lifecycle import (
     HypothesisLifecycleSnapshot,
     lifecycle_snapshots_from_relation_context,
     record_for_snapshot,
     relation_lifecycle_transition_contract,
     stable_fingerprint,
 )
-from digital_twin.domain.hypothesis_review import episode_matches_lifecycle
-from digital_twin.domain.ontology_inference_context import (
+from digital_twin.modules.outcomes.domain.hypothesis_review import episode_matches_lifecycle
+from digital_twin.modules.reasoning.domain.ontology_inference_context import (
     relation_context_from_inferencebox,
     relation_contexts_from_snapshot,
 )
-from digital_twin.domain.ontology_rulebox_contracts import (
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
     GraphRuleDerivation,
 )
-from digital_twin.domain.portfolio import AccountSnapshot, Position
-from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, Position
+from digital_twin.modules.portfolio.domain.portfolio_calculations import portfolio_summary
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 

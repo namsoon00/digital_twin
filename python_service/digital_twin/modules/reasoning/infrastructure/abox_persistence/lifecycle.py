@@ -2,7 +2,7 @@
 
 from typing import Dict, Iterable
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
 from .controls import AtomicControlPatchTooLarge
 from .ports import ABoxControlStore, ABoxRuntime

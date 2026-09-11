@@ -2,29 +2,29 @@ import unittest
 
 from digital_twin.modules.reasoning.application.statistical_signals import StatisticalSignalPipelineService
 from digital_twin.modules.reasoning.application.statistical_signals import observe_model_signal_outcome
-from digital_twin.domain.hypothesis_scoping import condition_scope_profile
-from digital_twin.domain.ontology_contracts import (
+from digital_twin.modules.model_registry.domain.hypothesis_scoping import condition_scope_profile
+from digital_twin.modules.reasoning.domain.ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
     PortfolioOntology,
 )
-from digital_twin.domain.ontology_rule_manifest import (
+from digital_twin.modules.model_registry.domain.ontology_rule_manifest import (
     rule_dependency_reverse_index,
     validate_rule_domain_manifests,
 )
-from digital_twin.domain.ontology_change_impact import rule_dependency_profile
-from digital_twin.domain.ontology_rulebox_catalog import (
+from digital_twin.modules.reasoning.domain.ontology_change_impact import rule_dependency_profile
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import (
     default_graph_inference_rules,
     governed_graph_inference_rules,
 )
-from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-from digital_twin.domain.ontology_schema import add_entity
-from digital_twin.domain.portfolio import PortfolioSummary, Position
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio_ontology_statistical_concepts import (
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+from digital_twin.modules.portfolio.domain.portfolio import PortfolioSummary, Position
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.reasoning.domain.portfolio_ontology_statistical_concepts import (
     add_position_statistical_signal_concepts,
 )
-from digital_twin.domain.statistical_signals import (
+from digital_twin.modules.model_registry.domain.statistical_signals import (
     DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
     DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
     DEFAULT_EVENT_SIGNAL_RELEASE_ID,
@@ -40,7 +40,7 @@ from digital_twin.domain.statistical_signals import (
     statistical_rule_candidate_release,
     validate_signal_hypothesis_mapping,
 )
-from digital_twin.domain.time_series_storage import TemporalFeatureSnapshot, TimeSeriesWatermark
+from digital_twin.modules.market_data.domain.time_series_storage import TemporalFeatureSnapshot, TimeSeriesWatermark
 from digital_twin.infrastructure.ontology_projection import (
     rule_catalog_requires_statistical_signal_scoring,
 )

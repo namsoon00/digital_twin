@@ -5,18 +5,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 
 from digital_twin.modules.accounts.contracts import AccountConfig
-from digital_twin.domain.events import DomainEvent, NEWS_ARTICLE_ANALYZED, RESEARCH_EVIDENCE_COLLECTED
-from digital_twin.domain.data_freshness import freshness_record
-from digital_twin.domain.market_data import number
-from digital_twin.domain.message_types import NEWS_DIGEST
-from digital_twin.domain.investment_research import NewsCollectionTarget
-from digital_twin.domain.investment_strategy_guidance import merge_strategy_context
-from digital_twin.domain.news_analysis import NEWS_MATERIALITY_STATE_LABELS, NEWS_RELEVANCE_STATE_LABELS, NEWS_SOURCE_TRUST_STATE_LABELS, analysis_payload_requires_refresh, article_body_quality, classify_news_relevance, clean_article_summary_noise, news_state_rank, news_state_payload, relation_scope_is_investable
-from digital_twin.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, clean_summary_text, news_ai_analysis_is_current, summary_texts_similar
-from digital_twin.domain.notifications import NotificationJob, notification_debug_number
-from digital_twin.domain.portfolio import utc_now_iso
-from digital_twin.domain.prompt_evidence_admission import assess_prompt_evidence
-from digital_twin.domain.sent_article_filter import article_digest_context_item, article_has_new_story_fact, article_identity_keys, article_weak_identity_keys, article_story_cluster_id, collect_article_identity_keys_from_context
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.news_intelligence.domain.event_types import NEWS_ARTICLE_ANALYZED, RESEARCH_EVIDENCE_COLLECTED
+from digital_twin.modules.market_data.contracts import freshness_record
+from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.notifications.contracts import NEWS_DIGEST
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget
+from digital_twin.modules.decisions.contracts import merge_strategy_context
+from digital_twin.modules.news_intelligence.domain.news_analysis import NEWS_MATERIALITY_STATE_LABELS, NEWS_RELEVANCE_STATE_LABELS, NEWS_SOURCE_TRUST_STATE_LABELS, analysis_payload_requires_refresh, article_body_quality, classify_news_relevance, clean_article_summary_noise, news_state_rank, news_state_payload, relation_scope_is_investable
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, clean_summary_text, news_ai_analysis_is_current, summary_texts_similar
+from digital_twin.modules.notifications.contracts import NotificationJob, notification_debug_number
+from digital_twin.modules.portfolio.contracts import utc_now_iso
+from digital_twin.modules.decisions.contracts import assess_prompt_evidence
+from digital_twin.modules.notifications.contracts import article_digest_context_item, article_has_new_story_fact, article_identity_keys, article_weak_identity_keys, article_story_cluster_id, collect_article_identity_keys_from_context
 from digital_twin.modules.news_intelligence.domain.eligibility import assess_news_eligibility
 
 

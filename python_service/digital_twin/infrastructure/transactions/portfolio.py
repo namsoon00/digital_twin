@@ -12,17 +12,17 @@ from decimal import Decimal
 import hashlib
 from typing import Dict, Iterable, List, Optional
 
-from digital_twin.domain.investment_mandate import InvestmentMandate
-from digital_twin.domain.investment_outcomes import DecisionReview, PerformanceAttribution, decision_quality_summary
-from digital_twin.domain.portfolio_activity_episode import DecisionActionObservation, PortfolioActivityEpisode, PortfolioSnapshotCheckpoint, PortfolioStateSnapshot
-from digital_twin.domain.portfolio_decision_cycle import PortfolioDecisionCycle
+from digital_twin.modules.portfolio.domain.investment_mandate import InvestmentMandate
+from digital_twin.modules.outcomes.domain.investment_outcomes import DecisionReview, PerformanceAttribution, decision_quality_summary
+from digital_twin.modules.portfolio.domain.portfolio_activity_episode import DecisionActionObservation, PortfolioActivityEpisode, PortfolioSnapshotCheckpoint, PortfolioStateSnapshot
+from digital_twin.modules.portfolio.domain.portfolio_decision_cycle import PortfolioDecisionCycle
 from digital_twin.modules.portfolio.contracts import INFERRED_SNAPSHOT_ENTRY_TYPES, PortfolioLedgerEntry, PortfolioReconciliation, execution_ledger_entries
-from digital_twin.domain.portfolio_analytics import PortfolioRiskSnapshot
-from digital_twin.domain.events import PORTFOLIO_RISK_OBSERVED
-from digital_twin.domain.snapshot_portfolio_activity import activity_payload
-from digital_twin.domain.portfolio_rebalancing import RebalanceProposal, RebalanceState, RebalanceTransition, rebalance_transition
-from digital_twin.domain.risk_exposure import ExposureSnapshot
-from digital_twin.domain.trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
+from digital_twin.modules.portfolio.domain.portfolio_analytics import PortfolioRiskSnapshot
+from digital_twin.modules.portfolio.domain.event_types import PORTFOLIO_RISK_OBSERVED
+from digital_twin.modules.portfolio.domain.snapshot_portfolio_activity import activity_payload
+from digital_twin.modules.portfolio.domain.portfolio_rebalancing import RebalanceProposal, RebalanceState, RebalanceTransition, rebalance_transition
+from digital_twin.modules.portfolio.domain.risk_exposure import ExposureSnapshot
+from digital_twin.modules.portfolio.domain.trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads

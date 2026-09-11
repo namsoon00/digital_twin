@@ -3,8 +3,8 @@ import urllib.parse
 from typing import Callable, Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest, SourceObservation, bounded_int
-from ....domain.disclosure_quality import assess_disclosure_document
-from ....domain.disclosure_taxonomy import classify_disclosure
+from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
+from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
 from ...external_signal_utils import (
     dart_document_permanently_unavailable,
     dart_document_text,

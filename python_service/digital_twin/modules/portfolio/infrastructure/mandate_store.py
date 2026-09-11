@@ -1,7 +1,7 @@
 """Connection-bound portfolio mandate history and current-state writes."""
 
 import hashlib
-from digital_twin.domain.investment_mandate import InvestmentMandate
+from digital_twin.modules.portfolio.domain.investment_mandate import InvestmentMandate
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.infrastructure.settings import utc_now
 

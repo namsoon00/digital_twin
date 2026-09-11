@@ -3,13 +3,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 from zoneinfo import ZoneInfo
 
-from digital_twin.domain.events import DomainEvent, investment_calendar_event_removed_event, investment_calendar_event_saved_event, investment_calendar_reminder_due_event, ontology_reasoning_requested_event
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.investment_calendar.domain.events import investment_calendar_event_removed_event, investment_calendar_event_saved_event, investment_calendar_reminder_due_event
+from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
 from digital_twin.modules.investment_calendar.domain.investment_calendar import DEFAULT_EVENT_TIMEZONE, EVENT_TYPE_LABELS, InvestmentCalendarEvent, InvestmentCalendarReminder, due_reminders_for_event, event_materiality_level, event_type_label, parse_utc, utc_iso
-from digital_twin.domain.investment_strategy_guidance import event_strategy_guidance, merge_strategy_context, strategy_message_lines
-from digital_twin.domain.reasoning_source_facts import investment_calendar_source_fact
-from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.decisions.contracts import event_strategy_guidance, merge_strategy_context, strategy_message_lines
+from digital_twin.modules.reasoning.contracts import investment_calendar_source_fact
+from digital_twin.modules.notifications.contracts import INVESTMENT_CALENDAR_REMINDER
+from digital_twin.modules.notifications.contracts import NotificationJob
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 from digital_twin.modules.read_models.public import enrich_symbol_display_records
 
 

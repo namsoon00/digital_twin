@@ -3,7 +3,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
 from digital_twin.infrastructure.event_bus import EventBus
 from digital_twin.modules.accounts.public import AccountApplicationService
 from digital_twin.modules.instruments.public import AccountWatchlistService

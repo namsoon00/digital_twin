@@ -8,8 +8,8 @@ queues. Immediate reads and transactional edits remain synchronous. Collection,
 TypeDB inference, AI execution, delivery, and outcome observation retain their
 existing background job boundaries.
 
-This migration physically moves the application services and their selected
-owned domain/storage implementations into `python_service/digital_twin/modules`.
+The integrated migration moves the application services and remaining business
+domain/storage implementations into `python_service/digital_twin/modules`.
 It does not rewrite investment rules, promote models, change delivery policy,
 create new worker processes, migrate private account data, or add a message
 broker. Existing API routes and UI navigation remain intact.
@@ -45,16 +45,22 @@ digital_twin/
       public.py             # Explicit, lazy use-case exports
       contracts.py          # Explicit owned data/event exports
       application/          # Use cases and narrow ports
-      domain/               # Owned pure concepts, when already separated
-      infrastructure/       # Owned adapters, when already separated
-  domain/                   # Remaining shared contracts and ontology kernel
-  application/              # Runtime coordination only
+      domain/               # Owned pure concepts and event contracts
+      infrastructure/       # Owned adapters
+  shared_kernel/            # Business-independent event envelope/clock/parsing
+  platform/
+    domain/                 # Operational health/retention/event serialization
+    application/            # Runtime coordination and maintenance only
   infrastructure/
     composition/            # Responsibility-specific runtime builders
     service_factory.py      # Explicit, lazy builder exports
     account_transactions.py # Explicit cross-owner account transaction
     transactions/           # Explicit multi-owner atomic storage operations
                             # Schema/connection/retention are shared facilities
+    web/                    # Access/HTTP boundaries, business routers/adapters
+    web_server.py           # Server binding/bootstrap only
+public/modules/             # Browser source, feature state/requests/navigation
+public/app.js               # Generated classic bundle, not an editing target
 ```
 
 - A business module imports another module only through `public` or `contracts`.
@@ -68,7 +74,7 @@ digital_twin/
   `decisions`. The delivery module must not import AI execution to render a
   completed message.
 - Domain implementations stay free of application/infrastructure imports.
-- The root application package is limited to scheduling, checkpoints, pipeline
+- The platform application package is limited to scheduling, checkpoints, pipeline
   health and storage maintenance. New business features belong to their owner.
 - Shared runtime composition can wire implementations. That exception is not
   permission for business modules to bypass each other's contracts.
@@ -429,8 +435,9 @@ This is a logical capability boundary, not a security sandbox. The database
 schema/credentials are still shared. `AccountConfig` remains a credential-aware
 runtime configuration owned by `modules/accounts/domain/configuration.py`; it
 must not be serialized into events. Its account read/atomic command ports live
-in the same module. `domain/accounts.py` and the old account repository import
-are compatibility exports, not duplicate implementations.
+in the same module. `modules/accounts/domain/accounts.py` is an owner-local
+compatibility export. The former root repository import is removed; consumers
+use the account module's explicit contracts.
 
 Quiet hours and message-level policies belong to `notifications` contracts;
 investment strategy profiles belong to `portfolio` contracts. Values, defaults
@@ -674,17 +681,31 @@ Late AI publication also cannot supersede a request now owned by another worker.
 
 ## Deliberate Shared Boundaries
 
+The root-domain/application migration and current web/coordinator work are
+tracked in [Integrated Modularization](integrated-modularization.md). The
+historical ownership/stabilization batches above do not by themselves establish
+full-system completion. [Domain ownership](domain-ownership.json) inventories all
+287 former root files, including removals and split event definitions.
+
 - Connection pools, schema/bootstrap, retention, runtime settings and keyed
   application-cache facilities remain shared platform infrastructure. Storage
   ownership checks are architectural guards, not database permission isolation.
-- Multi-owner transaction coordinators are still substantial after the owner
-  participants were extracted. Continue splitting algorithms with rollback
-  tests, not by replacing one atomic commit with unrelated event callbacks.
-- The common ontology kernel and some pure domain contracts remain shared.
-  Runtime builders and native/save algorithms may still be large. Import and
-  source-parity tests cannot prove every runtime interaction safe.
-- `public/app.js` and the Python web router were not redesigned or split into
-  frontend/BFF modules. Existing route, payload and navigation contracts remain.
+- Multi-owner commits remain explicit transaction coordinators. Decision-history
+  preparation, SQL writes, target repair, observations and read hydration now
+  have separate helpers; manifest repair separates source recovery, identity
+  merging and diagnostics. See [Coordinator Decomposition](internal-coordinator-decomposition.md).
+  A file boundary does not replace one atomic commit with unrelated callbacks.
+- Ontology shape/projection contracts belong to reasoning; authored model/rule
+  definitions belong to model registry. Their consumers use explicit module
+  contracts. Only business-independent envelope/time/parsing utilities remain
+  in the shared kernel. Import and source-parity tests cannot prove every
+  runtime interaction safe.
+- Browser source lives under `public/modules`; `public/app.js` is a deterministic
+  generated bundle for the existing static entry. Build/source checks reject
+  stale generated assets. This is not code splitting or a claim of a smaller
+  download. The [web router](web-router-separation.md) separates explicit
+  business dispatch, access, transport and payload adapters while retaining
+  existing URLs and response contracts.
 - No generic consumer-acknowledgement framework, new message broker or new
   worker is introduced. Existing job-specific leases/retries remain authoritative.
 

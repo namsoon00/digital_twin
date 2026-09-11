@@ -18,11 +18,11 @@ class ReasoningBinding:
 def bind_v2_release(
     repository, platform, descriptor, candidate_settings, configured, deployment_health
 ) -> ReasoningBinding:
-    from digital_twin.domain.investment_ubiquitous_language import investment_language_registry
-    from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-    from digital_twin.domain.ontology_schema import default_tbox_metadata
-    from digital_twin.domain.reasoning_engine_versions import reasoning_release_identity
-    from digital_twin.domain.reasoning_shadow import payload_hash
+    from digital_twin.modules.model_registry.domain.investment_ubiquitous_language import investment_language_registry
+    from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+    from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
+    from digital_twin.modules.reasoning.domain.reasoning_engine_versions import reasoning_release_identity
+    from digital_twin.modules.reasoning.domain.reasoning_shadow import payload_hash
     from digital_twin.infrastructure.composition.reasoning_release import prepare_v2_rulebox_release
     from digital_twin.infrastructure.graph_store_lifecycle import ontology_release_seed_artifact
 

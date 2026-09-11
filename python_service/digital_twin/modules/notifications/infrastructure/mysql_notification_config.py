@@ -2,10 +2,10 @@ import hashlib
 import json
 from typing import Dict, List
 
-from digital_twin.domain.message_types import MARKET_OBSERVATION
-from digital_twin.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, attach_previous_profit_loss_context, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
-from digital_twin.domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
-from digital_twin.domain.notifications import NotificationJob, notification_debug_number
+from digital_twin.modules.notifications.domain.message_types import MARKET_OBSERVATION
+from digital_twin.modules.notifications.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, attach_previous_profit_loss_context, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
+from digital_twin.modules.notifications.domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
+from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
 from digital_twin.infrastructure.operational_common import age_minutes_since, json_dumps, rule_from_row, template_from_row
 from digital_twin.infrastructure.settings import utc_now
 from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore

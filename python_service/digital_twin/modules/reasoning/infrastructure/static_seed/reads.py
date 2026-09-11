@@ -1,7 +1,7 @@
 """TypeDB static-seed reads owner; no facade or runtime construction."""
 
 from .reads_ports import ReadsStore
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_storage_id,
     relation_row_id,

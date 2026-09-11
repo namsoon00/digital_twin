@@ -1,10 +1,10 @@
 import time
 from typing import Callable, Dict, Iterable, List
 
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.market_data import number
-from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, article_body_quality_needs_refresh, article_summary_quality_needs_refresh, local_news_ai_analysis, news_ai_analysis_is_current, news_ai_analysis_retryable, refreshed_article_summary_quality, refresh_article_summary_quality
-from digital_twin.domain.news_analysis import news_state_rank, news_state_payload
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import apply_news_ai_analysis, article_body_quality_needs_refresh, article_summary_quality_needs_refresh, local_news_ai_analysis, news_ai_analysis_is_current, news_ai_analysis_retryable, refreshed_article_summary_quality, refresh_article_summary_quality
+from digital_twin.modules.news_intelligence.domain.news_analysis import news_state_rank, news_state_payload
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

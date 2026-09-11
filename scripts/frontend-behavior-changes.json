@@ -1,0 +1,34 @@
+[
+  {
+    "reason": "Graph engines and deferred loading are owned by the current view, including repeated init and detached-container cleanup.",
+    "functions": ["destroyOntologyCytoscapeGraphs", "initOntologyCytoscapeGraphs"]
+  },
+  {
+    "reason": "The existing AI review renderer referenced spans and firstAttempt from an unrelated function scope; bind them to this section's execution data.",
+    "functions": ["renderNotificationAIReviewSection"]
+  },
+  {
+    "reason": "Private request client, bounded path-sensitive cache, latest-only publication and read-only active request API.",
+    "functions": ["requestJson", "clearReadModelPoll", "scheduleReadModelPoll", "invalidateJsonResponseCache", "loadDashboardSummary", "loadMarketReadModel", "loadOperationsHealth", "loadPortfolioReadModel", "loadPortfolioInterpretation", "portfolioReadModelBusy", "loadInvestmentFlow", "loadInstrumentValuation"]
+  },
+  {
+    "reason": "Latest-request lanes prevent obsolete query results and loading finalizers from replacing newer lists.",
+    "functions": ["loadNotificationJobs", "resetNotificationJobsPaging", "loadSymbolUniverse", "loadResearchEvidence"]
+  },
+  {
+    "reason": "View/layout generations cancel stale scroll restoration, observer callbacks and browser transitions. Realtime batches no longer suppress rendering during network waits.",
+    "functions": ["navigateToTab", "syncTabFromLocation", "openWorkDetailLayer", "closeWorkDetailLayer", "restoreRenderedPageScrollPositionAfterLayout", "restoreRenderedInteractiveStateAfterLayout", "mergeUniqueItems", "bindMobileInfiniteScroll", "render", "renderNow", "runWithSuppressedRender", "runTabDataPreloadQueue"]
+  },
+  {
+    "reason": "Account-qualified timeline caches accept legacy deep links. Stable charts retain zoom; removed charts, queued frames and resize observers are disposed.",
+    "functions": ["instrumentValuationCacheKey", "instrumentTimelineCacheKey", "loadInstrumentTimeline", "destroyInstrumentTimelineChart", "parseInstrumentEventGroupKey", "ensureInstrumentEventGroupTimeline", "instrumentEventGroupRows", "initInstrumentTimelineChart", "instrumentTimelineViewState"]
+  },
+  {
+    "reason": "Case tabs retain their own scroll positions across rapid switches through shorter content; DOM-scoped history is released with the dialog.",
+    "functions": ["patchInvestmentCaseTabRegion"]
+  },
+  {
+    "reason": "Content-addressed release version is shared by bundle, HTML and service worker.",
+    "functions": ["registerOrbitAlphaServiceWorker"]
+  }
+]

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import unittest
 
-from digital_twin.domain.events import DomainEvent
+from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.infrastructure.event_bus import EventBus
 
 
@@ -32,6 +32,8 @@ class ModuleBoundaryTests(unittest.TestCase):
                     self.assertEqual(set(api.__all__), set(api._EXPORTS))
                     for exported, (target, attribute) in api._EXPORTS.items():
                         self.assertTrue(target.startswith("digital_twin.modules." + name + "."), target)
+                        if surface == "contracts":
+                            self.assertTrue(target.startswith("digital_twin.modules." + name + ".domain."), target)
                         self.assertIs(getattr(api, exported), getattr(importlib.import_module(target), attribute))
                     with self.assertRaises(AttributeError):
                         getattr(api, "undeclared_internal_implementation")
@@ -98,11 +100,12 @@ for name in sys.modules:
         result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=20)
         self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_shared_application_directory_is_limited_to_runtime_coordination(self):
+    def test_platform_application_directory_is_limited_to_runtime_coordination(self):
         self.assertEqual({
             "__init__.py", "data_pipeline_health_service.py", "mysql_minimal_retention_service.py",
             "operational_storage_capacity_service.py", "runtime_checkpoint.py", "scheduler.py",
-        }, {path.name for path in (ROOT / "application").glob("*.py")})
+        }, {path.name for path in (ROOT / "platform/application").glob("*.py")})
+        self.assertEqual([], list((ROOT / "application").rglob("*.py")))
 
     def test_synchronous_event_delivery_records_before_consumers_and_fails_closed(self):
         steps = []

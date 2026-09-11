@@ -1,12 +1,9 @@
 """manifest: save through explicit injected capabilities."""
 
-from digital_twin.domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
-from digital_twin.domain.ontology_scopes import (
-    SCOPED_ABOX_MANIFEST_VERSION,
-    SCOPED_ABOX_PERSISTENCE_MODE,
-)
+from digital_twin.modules.reasoning.domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_row_content_fingerprint,
     ontology_storage_id,

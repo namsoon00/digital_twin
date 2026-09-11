@@ -6,7 +6,7 @@ these narrow ports. No application workflows or driver package are imported.
 
 from dataclasses import dataclass
 from typing import Any, Callable, ContextManager, Dict, Iterable, List, Protocol, Tuple
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from .constants import DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE
 
 

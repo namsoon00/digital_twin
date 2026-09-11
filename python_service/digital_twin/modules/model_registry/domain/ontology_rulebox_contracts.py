@@ -1,0 +1,509 @@
+import re
+from dataclasses import asdict, dataclass, field as dataclass_field
+from functools import cached_property
+from typing import Dict, Iterable, List, Mapping, Optional
+
+from digital_twin.modules.outcomes.contracts import HypothesisOutcomeContract
+from digital_twin.modules.model_registry.domain.ontology_rule_knowledge import RuleKnowledgeBasis, resolved_rule_knowledge_basis
+from digital_twin.modules.model_registry.domain.rule_claim_contract import RuleClaimContract, resolved_rule_claim_contract
+
+
+GRAPH_REASONER_VERSION = "typedb-rulebox-graph-reasoner-v1"
+WATCHLIST_TARGET_ROLE = "watchlist"
+WATCHLIST_ACTION_POLICY = "ENTRY_ONLY"
+WATCHLIST_ALLOWED_ACTIONS = ["BUY", "HOLD", "AVOID"]
+WATCHLIST_BLOCKED_ACTIONS = ["ADD", "TRIM", "SELL"]
+HOLDING_TARGET_ROLE = "holding"
+
+
+def _unique_strings(values: Iterable[object], limit: int = 64) -> List[str]:
+    result: List[str] = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def string_list(value: object) -> List[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if str(item or "").strip()]
+    if value is None or value == "":
+        return []
+    return [item.strip() for item in str(value).replace("\n", ",").split(",") if item.strip()]
+
+
+@dataclass(frozen=True)
+class HypothesisLifecyclePolicy:
+    """RuleBox-owned lifecycle semantics for a TypeDB hypothesis path.
+
+    These fields describe how an already materialized TypeDB path should be
+    audited across generations. They never choose an investment action in
+    Python. Empty values deliberately keep the conservative default: the
+    current TypeDB path remains valid until it is no longer materialized by a
+    healthy, aligned generation.
+    """
+
+    formation_condition_ids: List[str] = dataclass_field(default_factory=list)
+    invalidation_condition_ids: List[str] = dataclass_field(default_factory=list)
+    validity_minutes: int = 0
+    required_freshness_domains: List[str] = dataclass_field(default_factory=list)
+    next_data_requirements: List[str] = dataclass_field(default_factory=list)
+    invalidation_mode: str = "typedb-rule-not-materialized"
+    outcome_contract: HypothesisOutcomeContract = dataclass_field(default_factory=HypothesisOutcomeContract)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "formationConditionIds": list(self.formation_condition_ids or []),
+            "invalidationConditionIds": list(self.invalidation_condition_ids or []),
+            "validityMinutes": int(self.validity_minutes or 0),
+            "requiredFreshnessDomains": list(self.required_freshness_domains or []),
+            "nextDataRequirements": list(self.next_data_requirements or []),
+            "invalidationMode": str(self.invalidation_mode or "typedb-rule-not-materialized"),
+            "outcomeContract": self.outcome_contract.to_dict(),
+        }
+
+    @staticmethod
+    def from_dict(
+        payload: Dict[str, object],
+        default_formation_condition_ids: Iterable[object] = None,
+    ):
+        payload = dict(payload or {})
+        raw_formation = (
+            payload.get("formation_condition_ids")
+            or payload.get("formationConditionIds")
+            or default_formation_condition_ids
+            or []
+        )
+        raw_validity = payload.get("validity_minutes")
+        if raw_validity is None:
+            raw_validity = payload.get("validityMinutes")
+        try:
+            validity_minutes = int(float(str(raw_validity or 0)))
+        except (TypeError, ValueError):
+            validity_minutes = 0
+        return HypothesisLifecyclePolicy(
+            formation_condition_ids=_unique_strings(string_list(raw_formation)),
+            invalidation_condition_ids=_unique_strings(string_list(
+                payload.get("invalidation_condition_ids")
+                or payload.get("invalidationConditionIds")
+            )),
+            validity_minutes=max(0, min(60 * 24 * 365, validity_minutes)),
+            required_freshness_domains=_unique_strings(string_list(
+                payload.get("required_freshness_domains")
+                or payload.get("requiredFreshnessDomains")
+            )),
+            next_data_requirements=_unique_strings(string_list(
+                payload.get("next_data_requirements")
+                or payload.get("nextDataRequirements")
+            )),
+            invalidation_mode=str(
+                payload.get("invalidation_mode")
+                or payload.get("invalidationMode")
+                or "typedb-rule-not-materialized"
+            ).strip() or "typedb-rule-not-materialized",
+            outcome_contract=HypothesisOutcomeContract.from_dict(
+                payload.get("outcome_contract")
+                or payload.get("outcomeContract")
+                or {}
+            ),
+        )
+
+
+def stable_rulebox_component_id(value: object, prefix: str, index: int) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.:-]+", "-", str(value or "").strip()).strip("-")
+    if not normalized:
+        normalized = prefix + "-" + str(index + 1)
+    return normalized[:96]
+
+
+def unique_rulebox_component_id(value: object, prefix: str, index: int, seen: set) -> str:
+    base = stable_rulebox_component_id(value, prefix, index)
+    candidate = base
+    suffix = 2
+    while candidate in seen:
+        candidate = (base[:88] + "-" + str(suffix))[:96]
+        suffix += 1
+    seen.add(candidate)
+    return candidate
+
+
+@dataclass(frozen=True)
+class GraphRuleCondition:
+    condition_id: str
+    kind: str
+    description: str
+    field: str = ""
+    operator: str = "=="
+    value: object = None
+    relation_type: str = ""
+    direction: str = "out"
+    target_kind: str = ""
+    target_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
+    relation_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
+    role: str = "required"
+    # Ownership metadata for hypothesis projection. TypeDB still evaluates the
+    # condition itself; this only prevents private account inputs from being
+    # promoted into a cross-account market hypothesis.
+    hypothesis_scope: str = ""
+    # Conditions in an N-of-M group may observe the same underlying fact. The
+    # TypeDB compiler counts this key, rather than duplicated condition rows,
+    # so one investor-flow snapshot cannot masquerade as two confirmations.
+    evidence_group_key: str = ""
+    # Change-routing metadata. None preserves the conservative legacy
+    # contract (the condition can both trigger evaluation and invalidate a
+    # prior result). False is an explicit authored context-only boundary; it
+    # never changes how TypeDB evaluates the condition once a rule is run.
+    change_trigger: Optional[bool] = None
+    invalidation_trigger: Optional[bool] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        # Empty values keep backward compatibility for existing authored
+        # rules. Bootstrap RuleBox v3 writes both fields explicitly.
+        if not payload.get("hypothesis_scope"):
+            payload.pop("hypothesis_scope", None)
+        if not payload.get("evidence_group_key"):
+            payload.pop("evidence_group_key", None)
+        if payload.get("change_trigger") is None:
+            payload.pop("change_trigger", None)
+        if payload.get("invalidation_trigger") is None:
+            payload.pop("invalidation_trigger", None)
+        return payload
+
+    @staticmethod
+    def from_dict(payload: Dict[str, object]):
+        payload = dict(payload or {})
+
+        def optional_bool(*keys: str) -> Optional[bool]:
+            for key in keys:
+                if key not in payload or payload.get(key) is None:
+                    continue
+                value = payload.get(key)
+                if isinstance(value, bool):
+                    return value
+                return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+            return None
+
+        return GraphRuleCondition(
+            condition_id=str(payload.get("condition_id") or payload.get("conditionId") or ""),
+            kind=str(payload.get("kind") or ""),
+            description=str(payload.get("description") or ""),
+            field=str(payload.get("field") or ""),
+            operator=str(payload.get("operator") or "=="),
+            value=payload.get("value"),
+            relation_type=str(payload.get("relation_type") or payload.get("relationType") or ""),
+            direction=str(payload.get("direction") or "out"),
+            target_kind=str(payload.get("target_kind") or payload.get("targetKind") or ""),
+            target_property_filters=dict(payload.get("target_property_filters") or payload.get("targetPropertyFilters") or {}),
+            relation_property_filters=dict(payload.get("relation_property_filters") or payload.get("relationPropertyFilters") or {}),
+            role=str(payload.get("role") or payload.get("conditionRole") or "required"),
+            hypothesis_scope=str(
+                payload.get("hypothesis_scope")
+                or payload.get("hypothesisScope")
+                or payload.get("input_scope")
+                or payload.get("inputScope")
+                or ""
+            ),
+            evidence_group_key=str(
+                payload.get("evidence_group_key")
+                or payload.get("evidenceGroupKey")
+                or ""
+            ),
+            change_trigger=optional_bool(
+                "change_trigger", "changeTrigger", "can_trigger_evaluation", "canTriggerEvaluation",
+            ),
+            invalidation_trigger=optional_bool(
+                "invalidation_trigger", "invalidationTrigger",
+                "can_invalidate_prior_result", "canInvalidatePriorResult",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class GraphRuleDerivation:
+    relation_type: str
+    target_kind: str
+    target_key: str
+    target_label: str
+    tbox_class: str
+    tbox_classes: List[str] = dataclass_field(default_factory=list)
+    polarity: str = "context"
+    # Empty means "inherit the derivation polarity".  Defaulting this to
+    # context silently flattened risk/support rules into neutral evidence.
+    evidence_role: str = ""
+    # RuleBox-owned effect in the action envelope.  It is intentionally not
+    # inferred from the stage at runtime: support, defer, constrain and block
+    # are editable derivation semantics persisted to TypeDB.
+    decision_effect: str = ""
+    belief_label: str = ""
+    ai_influence_label: str = ""
+    action_group: str = ""
+    action_level: str = ""
+    decision_stage: str = ""
+    # These are RuleBox/TBox-owned presentation semantics.  Runtime readers
+    # must use the values materialized with the inference relation instead of
+    # mapping a stage key through a separate Python policy table.
+    decision_label: str = ""
+    decision_tone: str = ""
+    target_role: str = ""
+    action_policy: str = ""
+    allowed_actions: List[str] = dataclass_field(default_factory=list)
+    blocked_actions: List[str] = dataclass_field(default_factory=list)
+    # Execution wording is authored with the RuleBox derivation and persisted
+    # to TypeDB.  Runtime readers may render it but must never rebuild an
+    # investment recommendation from actionGroup/stage tables in Python.
+    primary_action: str = ""
+    primary_action_label: str = ""
+    # A valid UI action is separate from ``primary_action``.  The latter is a
+    # richer RuleBox workflow key (for example ``TRIM_REVIEW``), while this
+    # field is the TypeDB-authored candidate supplied to the AI for review.
+    candidate_action: str = ""
+    candidate_action_label: str = ""
+    blocked_action_labels: List[str] = dataclass_field(default_factory=list)
+    strengthen_conditions: List[str] = dataclass_field(default_factory=list)
+    weaken_conditions: List[str] = dataclass_field(default_factory=list)
+    next_checks: List[str] = dataclass_field(default_factory=list)
+    # Delivery routing is also RuleBox metadata.  It prevents notification
+    # code from reclassifying rule IDs or action groups in Python.
+    notification_category: str = ""
+    notification_severity: str = ""
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+    @staticmethod
+    def from_dict(payload: Dict[str, object]):
+        payload = dict(payload or {})
+        return GraphRuleDerivation(
+            relation_type=str(payload.get("relation_type") or payload.get("relationType") or ""),
+            target_kind=str(payload.get("target_kind") or payload.get("targetKind") or ""),
+            target_key=str(payload.get("target_key") or payload.get("targetKey") or ""),
+            target_label=str(payload.get("target_label") or payload.get("targetLabel") or ""),
+            tbox_class=str(payload.get("tbox_class") or payload.get("tboxClass") or ""),
+            tbox_classes=[str(item) for item in (payload.get("tbox_classes") or payload.get("tboxClasses") or [])],
+            polarity=str(payload.get("polarity") or "context"),
+            evidence_role=str(payload.get("evidence_role") or payload.get("evidenceRole") or payload.get("polarity") or "context"),
+            decision_effect=str(payload.get("decision_effect") or payload.get("decisionEffect") or ""),
+            belief_label=str(payload.get("belief_label") or payload.get("beliefLabel") or ""),
+            ai_influence_label=str(payload.get("ai_influence_label") or payload.get("aiInfluenceLabel") or ""),
+            action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),
+            action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
+            decision_stage=str(payload.get("decision_stage") or payload.get("decisionStage") or ""),
+            decision_label=str(payload.get("decision_label") or payload.get("decisionLabel") or ""),
+            decision_tone=str(payload.get("decision_tone") or payload.get("decisionTone") or ""),
+            target_role=str(payload.get("target_role") or payload.get("targetRole") or ""),
+            action_policy=str(payload.get("action_policy") or payload.get("actionPolicy") or ""),
+            allowed_actions=string_list(payload.get("allowed_actions") or payload.get("allowedActions")),
+            blocked_actions=string_list(payload.get("blocked_actions") or payload.get("blockedActions")),
+            primary_action=str(payload.get("primary_action") or payload.get("primaryAction") or ""),
+            primary_action_label=str(payload.get("primary_action_label") or payload.get("primaryActionLabel") or ""),
+            candidate_action=str(payload.get("candidate_action") or payload.get("candidateAction") or ""),
+            candidate_action_label=str(payload.get("candidate_action_label") or payload.get("candidateActionLabel") or ""),
+            blocked_action_labels=string_list(payload.get("blocked_action_labels") or payload.get("blockedActionLabels")),
+            strengthen_conditions=string_list(payload.get("strengthen_conditions") or payload.get("strengthenConditions")),
+            weaken_conditions=string_list(payload.get("weaken_conditions") or payload.get("weakenConditions")),
+            next_checks=string_list(payload.get("next_checks") or payload.get("nextChecks")),
+            notification_category=str(payload.get("notification_category") or payload.get("notificationCategory") or ""),
+            notification_severity=str(payload.get("notification_severity") or payload.get("notificationSeverity") or ""),
+        )
+
+
+@dataclass(frozen=True)
+class GraphInferenceRule:
+    rule_id: str
+    label: str
+    version: str
+    source_kind: str
+    conditions: List[GraphRuleCondition]
+    derivations: List[GraphRuleDerivation]
+    action_group: str
+    action_level: str
+    prompt_hint: str
+    # Optional governance key for safely grouping equivalent rule variants
+    # into one current-situation hypothesis family. Empty keeps the rule on
+    # the conservative structural-signature path.
+    hypothesis_family_key: str = ""
+    # Human-auditable theory, provenance and hypothesis eligibility.  The
+    # resolved value is metadata for governance and AI evidence boundaries;
+    # TypeDB remains the only evaluator of the market conditions above.
+    knowledge_basis: RuleKnowledgeBasis = dataclass_field(default_factory=RuleKnowledgeBasis)
+    # Every executable rule owns exactly one typed claim. Predictive rules own
+    # a falsifiable market hypothesis; guardrails own a policy, execution,
+    # reliability or context claim and cannot masquerade as price forecasts.
+    claim_contract: RuleClaimContract = dataclass_field(default_factory=RuleClaimContract)
+    # Lifecycle configuration is part of the editable RuleBox contract. The
+    # TypeDB native rule still decides whether a condition is active; this
+    # policy only records how a materialized path changes over generations.
+    hypothesis_lifecycle: HypothesisLifecyclePolicy = dataclass_field(default_factory=HypothesisLifecyclePolicy)
+    any_condition_min_count: int = 1
+    # Operational scheduling metadata is editable with the RuleBox. Empty
+    # values use the conservative profile derived from derivation semantics.
+    execution_stage: str = ""
+    failure_policy: str = ""
+    cost_hint: str = ""
+    # Predictive production rules replace market predicates with one exact
+    # model-evidence predicate. This immutable routing contract retains the
+    # original market dependencies so source changes still rescore the model
+    # without making TypeDB execute the removed predicates.
+    model_input_contract: Dict[str, object] = dataclass_field(default_factory=dict)
+    enabled: bool = True
+
+    def resolved_hypothesis_lifecycle(self) -> HypothesisLifecyclePolicy:
+        """Return the RuleBox lifecycle policy with safe formation defaults.
+
+        Bootstrap rules are constructed as Python objects, while edited rules
+        are reconstructed from TypeDB rows.  Both paths need the same visible
+        lifecycle contract, so an omitted formation list resolves to the
+        rule's non-optional conditions without mutating the source rule.
+        """
+
+        configured = self.hypothesis_lifecycle
+        formation = list(configured.formation_condition_ids or [])
+        if not formation:
+            formation = [
+                condition.condition_id
+                for condition in self.conditions
+                if str(condition.role or "required").lower() not in {"optional", "negative", "exclude", "not"}
+            ]
+        try:
+            validity_minutes = int(float(str(configured.validity_minutes or 0)))
+        except (TypeError, ValueError):
+            validity_minutes = 0
+        return HypothesisLifecyclePolicy(
+            formation_condition_ids=_unique_strings(formation),
+            invalidation_condition_ids=_unique_strings(configured.invalidation_condition_ids),
+            validity_minutes=max(0, min(60 * 24 * 365, validity_minutes)),
+            required_freshness_domains=_unique_strings(configured.required_freshness_domains),
+            next_data_requirements=_unique_strings(configured.next_data_requirements),
+            invalidation_mode=str(configured.invalidation_mode or "typedb-rule-not-materialized").strip()
+            or "typedb-rule-not-materialized",
+            outcome_contract=configured.outcome_contract.resolved(),
+        )
+
+    @cached_property
+    def resolved_knowledge_basis(self) -> RuleKnowledgeBasis:
+        return resolved_rule_knowledge_basis(self)
+
+    @cached_property
+    def resolved_claim_contract(self) -> RuleClaimContract:
+        return resolved_rule_claim_contract(self, self.resolved_knowledge_basis)
+
+    @cached_property
+    def resolved_execution_profile(self) -> Dict[str, object]:
+        from digital_twin.modules.model_registry.domain.ontology_rule_execution_policy import rule_execution_profile
+
+        return rule_execution_profile(self)
+
+    @cached_property
+    def resolved_domain_manifest(self) -> Dict[str, object]:
+        from digital_twin.modules.model_registry.domain.ontology_rule_manifest import rule_domain_manifest
+
+        return rule_domain_manifest(self, execution=self.resolved_execution_profile)
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["knowledge_basis"] = self.resolved_knowledge_basis.to_dict()
+        payload["claim_contract"] = self.resolved_claim_contract.to_dict()
+        payload["hypothesis_lifecycle"] = self.resolved_hypothesis_lifecycle().to_dict()
+        payload["execution_profile"] = dict(self.resolved_execution_profile)
+        payload["domain_manifest"] = dict(self.resolved_domain_manifest)
+        payload["conditionCount"] = len(self.conditions)
+        payload["derivationCount"] = len(self.derivations)
+        return payload
+
+    @staticmethod
+    def from_dict(payload: Dict[str, object]):
+        payload = dict(payload or {})
+        rule_id = str(payload.get("rule_id") or payload.get("ruleId") or "").strip()
+        if not rule_id:
+            raise ValueError("RuleBox rule_id is required.")
+        seen_condition_ids = set()
+        conditions = [
+            GraphRuleCondition.from_dict({
+                **item,
+                "condition_id": unique_rulebox_component_id(
+                    item.get("condition_id") or item.get("conditionId"),
+                    "condition",
+                    index,
+                    seen_condition_ids,
+                ),
+            })
+            for index, item in enumerate(payload.get("conditions") or [])
+            if isinstance(item, dict)
+        ]
+        derivations = [
+            GraphRuleDerivation.from_dict(item)
+            for item in (payload.get("derivations") or [])
+            if isinstance(item, dict)
+        ]
+        if not conditions:
+            raise ValueError("RuleBox rule must contain at least one condition.")
+        if not derivations:
+            raise ValueError("RuleBox rule must contain at least one derivation.")
+        default_formation_condition_ids = [
+            condition.condition_id
+            for condition in conditions
+            if str(condition.role or "required").lower() not in {"optional", "negative", "exclude", "not"}
+        ]
+        raw_model_input_contract = (
+            payload.get("model_input_contract")
+            or payload.get("modelInputContract")
+            or {}
+        )
+        return GraphInferenceRule(
+            rule_id=rule_id,
+            label=str(payload.get("label") or rule_id),
+            version=str(payload.get("version") or GRAPH_REASONER_VERSION),
+            source_kind=str(payload.get("source_kind") or payload.get("sourceKind") or "admin"),
+            conditions=conditions,
+            derivations=derivations,
+            action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),
+            action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
+            prompt_hint=str(payload.get("prompt_hint") or payload.get("promptHint") or ""),
+            hypothesis_family_key=str(
+                payload.get("hypothesis_family_key")
+                or payload.get("hypothesisFamilyKey")
+                or ""
+            ).strip(),
+            knowledge_basis=RuleKnowledgeBasis.from_dict(
+                payload.get("knowledge_basis")
+                or payload.get("knowledgeBasis")
+                or {}
+            ),
+            claim_contract=RuleClaimContract.from_dict(
+                payload.get("claim_contract")
+                or payload.get("claimContract")
+                or {}
+            ),
+            hypothesis_lifecycle=HypothesisLifecyclePolicy.from_dict(
+                payload.get("hypothesis_lifecycle")
+                or payload.get("hypothesisLifecycle")
+                or {},
+                default_formation_condition_ids=default_formation_condition_ids,
+            ),
+            any_condition_min_count=max(1, int(payload.get("any_condition_min_count") or payload.get("anyConditionMinCount") or 1)),
+            execution_stage=str(
+                payload.get("execution_stage")
+                or payload.get("executionStageOverride")
+                or ""
+            ).strip(),
+            failure_policy=str(
+                payload.get("failure_policy")
+                or payload.get("failurePolicyOverride")
+                or ""
+            ).strip(),
+            cost_hint=str(
+                payload.get("cost_hint")
+                or payload.get("costHintOverride")
+                or ""
+            ).strip(),
+            model_input_contract=(
+                dict(raw_model_input_contract)
+                if isinstance(raw_model_input_contract, Mapping)
+                else {}
+            ),
+            enabled=bool(payload.get("enabled")) if "enabled" in payload else True,
+        )

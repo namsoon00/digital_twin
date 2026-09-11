@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from digital_twin.domain.market_signal_transitions import (
-    MARKET_SIGNAL_TRANSITION_RESULTS_KEY,
-)
-from digital_twin.domain.market_signal_transitions import (
-    MARKET_SIGNAL_TRANSITION_STATE_KEY,
-)
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_projection_input import (
-    compact_external_signals_for_ontology,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
+from digital_twin.modules.market_data.contracts import MARKET_SIGNAL_TRANSITION_RESULTS_KEY
+from digital_twin.modules.market_data.contracts import MARKET_SIGNAL_TRANSITION_STATE_KEY
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.reasoning.domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
 from typing import Dict
 from typing import List
 from typing import Set

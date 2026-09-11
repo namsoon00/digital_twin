@@ -3,7 +3,7 @@
 import time
 from typing import Dict
 
-from digital_twin.domain.historical_replay import HistoricalReplayJob
+from digital_twin.modules.outcomes.domain.historical_replay import HistoricalReplayJob
 
 
 class HistoricalReplayJobService:

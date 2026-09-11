@@ -2,8 +2,8 @@
 
 from typing import Dict
 
-from digital_twin.domain.hypothesis_research_planning import apply_ai_research_guidance, baseline_research_plan, research_planner_input
-from digital_twin.domain.investment_evidence_governance import hypothesis_research_brief_from_brain
+from digital_twin.modules.outcomes.contracts import apply_ai_research_guidance, baseline_research_plan, research_planner_input
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import hypothesis_research_brief_from_brain
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

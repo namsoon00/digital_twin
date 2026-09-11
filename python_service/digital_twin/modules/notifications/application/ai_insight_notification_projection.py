@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
-from digital_twin.domain.investment_reasoning.ai_insight import ai_insight_handoff, reconciliation_after_delivery
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.decisions.contracts import ai_insight_handoff, reconciliation_after_delivery
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 AI_INSIGHT_NOTIFICATION_PROJECTION_VERSION = "ai-insight-notification-projection-v1"

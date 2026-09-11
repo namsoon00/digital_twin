@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Callable, Dict, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from digital_twin.domain.accounts import AccountConfig
+    from digital_twin.modules.accounts.domain.accounts import AccountConfig
     from digital_twin.modules.market_data.public import (
         ExternalDataCollectionService,
         KISRealtimeWebSocketRunner,
@@ -44,7 +44,7 @@ def build_monitor_runner(
 ) -> MonitorRunner:
     import os
     import uuid
-    from digital_twin.domain.monitoring import RealtimeMonitor
+    from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.events import monitor_event_bus
     from digital_twin.infrastructure.composition.outcomes import build_hypothesis_lifecycle_service
@@ -151,7 +151,7 @@ def build_monitor_runner(
 
 
 def build_market_data_collection_runner(settings=None, event_publisher=None) -> MarketDataCollectionRunner:
-    from digital_twin.application.data_pipeline_health_service import DataPipelineHealthService
+    from digital_twin.platform.application.data_pipeline_health_service import DataPipelineHealthService
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.events import data_pipeline_health_event_bus
     from digital_twin.infrastructure.composition.instruments import build_symbol_universe_service
@@ -182,7 +182,7 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
 
 def build_external_data_collection_runner(settings=None) -> ExternalDataCollectionService:
     import os
-    from digital_twin.domain.market_data import number
+    from digital_twin.modules.market_data.domain.market_data import number
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.events import news_event_bus
     from digital_twin.infrastructure.disclosure_analyzer import disclosure_analyzer_from_settings

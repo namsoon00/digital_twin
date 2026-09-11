@@ -1,12 +1,12 @@
 import time
 from typing import Dict, List
 
-from digital_twin.domain.events import market_data_collected_event
-from digital_twin.domain.fact_changes import market_fact_change
-from digital_twin.domain.market_hours import evaluate_market_hours
-from digital_twin.domain.message_types import INVESTMENT_INSIGHT
-from digital_twin.domain.materiality import market_change_materiality
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.market_data.domain.events import market_data_collected_event
+from digital_twin.modules.reasoning.contracts import market_fact_change
+from digital_twin.modules.market_data.domain.market_hours import evaluate_market_hours
+from digital_twin.modules.notifications.contracts import INVESTMENT_INSIGHT
+from digital_twin.modules.news_intelligence.contracts import market_change_materiality
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 KIS_CACHE_PROVIDER = "kis"
 KIS_CACHE_ACCOUNT_ID = "__market_signals__"

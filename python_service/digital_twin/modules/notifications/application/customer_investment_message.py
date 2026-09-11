@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 
-from digital_twin.domain.customer_investment_document import CustomerInvestmentDocument
+from digital_twin.modules.read_models.contracts import CustomerInvestmentDocument
 
 
 def render_customer_investment_document(

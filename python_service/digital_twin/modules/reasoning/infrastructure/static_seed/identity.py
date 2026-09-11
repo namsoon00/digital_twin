@@ -2,18 +2,12 @@
 
 from .artifact import graph_box_entity_counts, graph_box_relation_counts
 from .identity_ports import IdentityStore
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_rule_execution_policy import (
-    RULE_EXECUTION_POLICY_VERSION,
-    rule_execution_profile,
-)
-from digital_twin.domain.ontology_rule_manifest import rule_dependency_reverse_index
-from digital_twin.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION
-from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-from digital_twin.domain.ontology_schema import (
-    default_tbox_metadata,
-    normalize_tbox_metadata,
-)
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.model_registry.contracts import RULE_EXECUTION_POLICY_VERSION, rule_execution_profile
+from digital_twin.modules.model_registry.contracts import rule_dependency_reverse_index
+from digital_twin.modules.model_registry.contracts import GRAPH_REASONER_VERSION
+from digital_twin.modules.model_registry.contracts import rulebox_rules_hash
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_storage_id,
 )

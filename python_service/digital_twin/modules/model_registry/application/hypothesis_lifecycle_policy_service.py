@@ -8,8 +8,8 @@ generations.
 
 from typing import Dict, Mapping
 
-from digital_twin.domain.hypothesis_outcome_contract import SUPPORTED_OBSERVATION_DOMAINS, SUPPORTED_OUTCOME_CRITERION_METRICS, SUPPORTED_OUTCOME_CRITERION_FAILURE_OUTCOMES, SUPPORTED_OUTCOME_CRITERION_OPERATORS, SUPPORTED_OUTCOME_CRITERION_ROLES, list_values
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule, HypothesisLifecyclePolicy
+from digital_twin.modules.outcomes.contracts import SUPPORTED_OBSERVATION_DOMAINS, SUPPORTED_OUTCOME_CRITERION_METRICS, SUPPORTED_OUTCOME_CRITERION_FAILURE_OUTCOMES, SUPPORTED_OUTCOME_CRITERION_OPERATORS, SUPPORTED_OUTCOME_CRITERION_ROLES, list_values
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule, HypothesisLifecyclePolicy
 
 
 class HypothesisLifecyclePolicyService:

@@ -1,9 +1,9 @@
 """Capabilities for record; no runtime construction."""
 
 from __future__ import annotations
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Dict, List, Protocol
 
 

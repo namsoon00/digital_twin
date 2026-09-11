@@ -1,0 +1,844 @@
+from statistics import median
+from typing import Dict, Iterable, List, Tuple
+
+from digital_twin.modules.notifications.contracts import compact_number
+from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.reasoning.contracts import PortfolioOntology
+from digital_twin.modules.reasoning.contracts import profile_for_domain
+from digital_twin.modules.reasoning.contracts import add_entity, add_relation
+from digital_twin.modules.portfolio.domain.portfolio import Position
+from digital_twin.modules.reasoning.contracts import symbol_key
+from digital_twin.modules.reasoning.contracts import valuation_assumption_rows
+from digital_twin.modules.instruments.contracts import security_lines_for_symbol
+from digital_twin.modules.portfolio.domain.valuation.contracts import period_is_annual_per_share, scenario_margins, unique_missing, valuation_decision_eligible, valuation_freshness_status, valuation_input_state, valuation_reliability_label, valuation_reliability_state
+from digital_twin.modules.portfolio.domain.valuation.service import evaluate_valuation_models
+from digital_twin.modules.portfolio.domain.valuation.quality import apply_valuation_quality_gate
+
+
+VALUATION_NUMERIC_KEYS = {
+    "currentPrice": ("currentPrice", "price", "현재가"),
+    "fairValue": ("fairValue", "fairValuePrice", "적정가"),
+    "fairValueLow": ("fairValueLow", "fairValueLow", "보수적 적정가"),
+    "fairValueBase": ("fairValueBase", "fairValueBase", "기준 적정가"),
+    "fairValueHigh": ("fairValueHigh", "fairValueHigh", "낙관적 적정가"),
+    "fairValuePrice": ("fairValue", "fairValuePrice", "적정가"),
+    "targetPrice": ("fairValue", "fairValuePrice", "목표가"),
+    "analystTargetPrice": ("analystTargetPrice", "analystTargetPrice", "애널리스트 평균 목표가"),
+    "expectedEPS": ("expectedEPS", "expectedEPS", "예상 EPS"),
+    "expectedEps": ("expectedEPS", "expectedEPS", "예상 EPS"),
+    "eps": ("expectedEPS", "expectedEPS", "예상 EPS"),
+    "reportedEPS": ("reportedEPS", "reportedEPS", "발표 EPS"),
+    "estimatedEPS": ("estimatedEPS", "estimatedEPS", "예상 EPS"),
+    "targetPER": ("targetPER", "targetPER", "목표 PER"),
+    "targetPer": ("targetPER", "targetPER", "목표 PER"),
+    "targetPE": ("targetPER", "targetPER", "목표 PER"),
+    "peRatio": ("peRatio", "peRatio", "PER"),
+    "forwardPE": ("forwardPE", "forwardPE", "선행 PER"),
+    "pegRatio": ("pegRatio", "pegRatio", "PEG"),
+    "beta": ("beta", "beta", "베타"),
+    "dividendYield": ("dividendYield", "dividendYield", "배당수익률"),
+    "annualDividend": ("annualDividend", "annualDividend", "연간 배당"),
+    "annualDividendPerShare": ("annualDividend", "annualDividend", "연간 배당"),
+    "requiredYieldPct": ("requiredYieldPct", "requiredYieldPct", "요구수익률"),
+    "requiredYield": ("requiredYieldPct", "requiredYieldPct", "요구수익률"),
+    "couponPct": ("couponPct", "couponPct", "표면 배당률"),
+    "parValue": ("parValue", "parValue", "액면 기준가"),
+    "marginOfSafetyPct": ("marginOfSafetyPct", "marginOfSafetyPct", "안전마진"),
+    "conservativeMarginOfSafetyPct": ("conservativeMarginOfSafetyPct", "conservativeMarginOfSafetyPct", "보수적 안전마진"),
+    "optimisticMarginOfSafetyPct": ("optimisticMarginOfSafetyPct", "optimisticMarginOfSafetyPct", "낙관적 안전마진"),
+    "minimumMarginOfSafetyPct": ("minimumMarginOfSafetyPct", "minimumMarginOfSafetyPct", "요구 안전마진"),
+    "valuationDecisionEligible": ("valuationDecisionEligible", "valuationDecisionEligible", "투자 판단 사용 가능"),
+    "peerPER": ("peerPER", "peerPER", "피어 PER"),
+    "historicalMedianPER": ("historicalMedianPER", "historicalMedianPER", "과거 중앙 PER"),
+}
+
+
+def normalize_assumption_row(row: Dict[str, object]) -> Dict[str, object]:
+    payload = dict(row or {})
+    nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    payload.update(nested)
+    has_structured_formula_inputs = any(payload.get(key) not in (None, "") for key in ("expectedEPS", "expectedEps", "eps", "targetPER", "targetPer", "targetPE"))
+    for item in payload.get("values") or []:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if "=" in text:
+            key, value = text.split("=", 1)
+            payload[key.strip()] = value.strip()
+        elif not has_structured_formula_inputs and "fairValue" not in payload and "fairValuePrice" not in payload and number(text):
+            payload["fairValue"] = number(text)
+    return payload
+
+
+def normalized_symbol_set(row: Dict[str, object]) -> List[str]:
+    values = [
+        row.get("symbol"),
+        row.get("ticker"),
+        row.get("code"),
+        row.get("assumptionKey"),
+    ]
+    symbols = []
+    for value in values:
+        text = str(value or "").upper().strip()
+        if text and text not in {"PORTFOLIO", "ALL"} and text not in symbols:
+            symbols.append(text)
+    return symbols
+
+
+def position_runtime_valuation_rows(runtime_context: Dict[str, object], symbol: str) -> List[Dict[str, object]]:
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
+    rows = valuation_assumption_rows(settings.get("valuationAssumptions") if isinstance(settings, dict) else "")
+    normalized_symbol = str(symbol or "").upper().strip()
+    result = []
+    for raw_row in rows:
+        row = normalize_assumption_row(raw_row)
+        symbols = normalized_symbol_set(row)
+        if normalized_symbol in symbols:
+            row.setdefault("provider", "RuntimeSettings")
+            row.setdefault("source", "runtime-settings")
+            result.append(row)
+    return result
+
+
+def external_valuation_rows(external_signals: Dict[str, object], symbol: str) -> List[Dict[str, object]]:
+    normalized_symbol = str(symbol or "").upper().strip()
+    rows: List[Dict[str, object]] = []
+    source_symbols = [normalized_symbol]
+    for line in security_lines_for_symbol(normalized_symbol):
+        if line.symbol == normalized_symbol and line.is_adr and line.local_symbol not in source_symbols:
+            source_symbols.append(line.local_symbol)
+    overviews = external_signals.get("companyOverviews") if isinstance(external_signals.get("companyOverviews"), dict) else {}
+    for source_symbol in source_symbols:
+        overview = overviews.get(source_symbol)
+        if not isinstance(overview, dict):
+            continue
+        is_underlying = source_symbol != normalized_symbol
+        analyst_target = number(overview.get("analystTargetPrice"))
+        rows.append({
+            "assumptionKey": normalized_symbol + ":" + source_symbol + ":company-overview",
+            "symbol": normalized_symbol,
+            "sourceSymbol": source_symbol,
+            "label": (("본주 " + source_symbol + " 기반 ") if is_underlying else "") + str(overview.get("name") or normalized_symbol) + " 상대가치·목표가 참고",
+            "provider": str(overview.get("provider") or "External"),
+            "source": "company-overview",
+            "analystTargetPrice": analyst_target,
+            "analystTargetMedianPrice": number(overview.get("analystTargetMedianPrice")),
+            "analystTargetLowPrice": number(overview.get("analystTargetLowPrice")),
+            "analystTargetHighPrice": number(overview.get("analystTargetHighPrice")),
+            "analystOpinionCount": number(overview.get("analystOpinionCount")),
+            "peRatio": number(overview.get("peRatio")),
+            "forwardPE": number(overview.get("forwardPE")),
+            "pegRatio": number(overview.get("pegRatio")),
+            "beta": number(overview.get("beta")),
+            "dividendYield": number(overview.get("dividendYield")),
+            "valuationMethod": "analyst-consensus-reference",
+            "formula": "애널리스트 평균 목표가(세부 산식 미제공)" if analyst_target else "상대가치 지표 참고",
+            "valuationAsOf": str(overview.get("fetchedAt") or ""),
+            "valuationSourceType": "external",
+            "valuationCurrency": str(overview.get("currency") or ""),
+            "periodCompatible": True,
+            "valuationReferenceOnly": True,
+            "valuationReferenceReason": "애널리스트 목표가는 계산 산식이 공개된 적정가가 아니므로 안전마진 및 매수·매도 규칙에서 제외합니다.",
+            "valuationDecisionEligible": False,
+        })
+    earnings = external_signals.get("earningsReports") if isinstance(external_signals.get("earningsReports"), dict) else {}
+    for source_symbol in source_symbols:
+        report = earnings.get(source_symbol)
+        latest = report.get("latestQuarter") if isinstance(report, dict) and isinstance(report.get("latestQuarter"), dict) else {}
+        if not latest:
+            continue
+        is_underlying = source_symbol != normalized_symbol
+        rows.append({
+            "assumptionKey": normalized_symbol + ":" + source_symbol + ":earnings",
+            "symbol": normalized_symbol,
+            "sourceSymbol": source_symbol,
+            "label": (("본주 " + source_symbol + " 기반 ") if is_underlying else "") + normalized_symbol + " 실적 EPS 밸류에이션",
+            "provider": str(report.get("provider") or "External"),
+            "source": "earnings-report",
+            "reportedEPS": number(latest.get("reportedEPS")),
+            "estimatedEPS": number(latest.get("estimatedEPS")),
+            "epsPeriod": str(latest.get("epsPeriod") or "quarterly"),
+            "valuationAsOf": str(latest.get("fiscalDateEnding") or latest.get("reportedDate") or report.get("fetchedAt") or ""),
+            "valuationSourceType": "external",
+            "valuationMethod": "earnings-context",
+            "formula": "최근 실적 EPS 참고",
+        })
+    return rows
+
+
+def value_for(row: Dict[str, object], *keys: str) -> float:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, "") and number(value):
+            return number(value)
+    return 0.0
+
+
+def remaining_missing_inputs(
+    missing: Iterable[object],
+    *,
+    current_price: float = 0.0,
+    fair_value: float = 0.0,
+    expected_eps: float = 0.0,
+    target_per: float = 0.0,
+    current_per: float = 0.0,
+    pbr: float = 0.0,
+) -> List[str]:
+    """Remove stale missing-input labels once the normalized value exists."""
+
+    available_aliases = set()
+    if current_price:
+        available_aliases.update({"currentprice", "현재가"})
+    if fair_value:
+        available_aliases.update({"fairvalue", "fairvalueprice", "적정가"})
+    if expected_eps:
+        available_aliases.update({"expectedeps", "예상eps"})
+    if target_per:
+        available_aliases.update({"targetper", "목표per", "기준per"})
+    if current_per:
+        available_aliases.update({"per", "peratio", "currentper", "현재per"})
+    if pbr:
+        available_aliases.update({"pbr", "현재pbr"})
+    unresolved = []
+    for item in missing:
+        label = str(item or "").strip()
+        normalized = label.replace(" ", "").replace("_", "").casefold()
+        if label and normalized not in available_aliases:
+            unresolved.append(label)
+    return unique_missing(unresolved)
+
+
+def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, object]:
+    current_price = value_for(row, "currentPrice", "price") or number(position.current_price)
+    reference_only = bool(row.get("valuationReferenceOnly"))
+    analyst_target = value_for(row, "analystTargetPrice")
+    analyst_target_low = value_for(row, "analystTargetLowPrice")
+    analyst_target_high = value_for(row, "analystTargetHighPrice")
+    analyst_target_median = value_for(row, "analystTargetMedianPrice")
+    analyst_opinion_count = value_for(row, "analystOpinionCount")
+    fair_value = 0.0 if reference_only else value_for(row, "fairValue", "fairValuePrice", "targetPrice", "analystTargetPrice")
+    fair_value_low = value_for(row, "fairValueLow") or fair_value
+    fair_value_high = value_for(row, "fairValueHigh") or fair_value
+    expected_eps = value_for(row, "expectedEPS", "expectedEps", "eps", "estimatedEPS", "reportedEPS")
+    target_per = value_for(row, "targetPER", "targetPer", "targetPE")
+    current_per = value_for(row, "peRatio")
+    pbr = value_for(row, "pbr")
+    annual_dividend = value_for(row, "annualDividend", "annualDividendPerShare")
+    required_yield = value_for(row, "requiredYieldPct", "requiredYield")
+    coupon_pct = value_for(row, "couponPct", "coupon")
+    par_value = value_for(row, "parValue")
+    method = str(row.get("valuationMethod") or row.get("method") or "").strip()
+    method_lower = method.casefold()
+    eps_period = str(row.get("epsPeriod") or row.get("earningsPeriod") or "").strip()
+    if not eps_period and expected_eps and target_per and str(row.get("source") or "").casefold() == "runtime-settings":
+        eps_period = "annual"
+    multiple_period = str(row.get("multiplePeriod") or ("annual-compatible" if target_per else "")).strip()
+    uses_eps_multiple = bool(expected_eps and target_per) or "eps-per" in method_lower or "eps x per" in str(row.get("formula") or "").casefold()
+    period_compatible = bool(row.get("periodCompatible")) if "periodCompatible" in row else (period_is_annual_per_share(eps_period) if uses_eps_multiple else True)
+    if uses_eps_multiple and not period_compatible:
+        fair_value = 0.0
+        fair_value_low = 0.0
+        fair_value_high = 0.0
+    if not fair_value and expected_eps and target_per and period_compatible:
+        fair_value = expected_eps * target_per
+        fair_value_low = fair_value
+        fair_value_high = fair_value
+    if not fair_value and annual_dividend and required_yield:
+        fair_value = annual_dividend / (required_yield / 100.0)
+        fair_value_low = fair_value
+        fair_value_high = fair_value
+    margins = scenario_margins(current_price, fair_value_low, fair_value, fair_value_high)
+    margin = value_for(row, "marginOfSafetyPct") or number(margins.get("marginOfSafetyPct"))
+    conservative_margin = value_for(row, "conservativeMarginOfSafetyPct") or number(margins.get("conservativeMarginOfSafetyPct"))
+    optimistic_margin = value_for(row, "optimisticMarginOfSafetyPct") or number(margins.get("optimisticMarginOfSafetyPct"))
+    expensive_premium = ((current_price / fair_value) - 1) * 100 if current_price and fair_value else 0.0
+    if not method:
+        method = "eps-per" if expected_eps and target_per else "manual-fair-value" if fair_value else "valuation-context"
+    formula = str(row.get("formula") or "").strip()
+    if not formula and expected_eps and target_per:
+        formula = "적정가 = 예상 EPS x 목표 PER"
+    elif not formula and annual_dividend and required_yield:
+        formula = "AI 제안 적정가 = 연간 배당 / 요구수익률"
+    elif not formula and fair_value:
+        formula = "적정가 = 사용자가 입력한 적정가"
+    raw_missing = row.get("missingInputs")
+    if isinstance(raw_missing, list):
+        missing = [str(item).strip() for item in raw_missing if str(item or "").strip()]
+    elif raw_missing:
+        missing = [str(item).strip() for item in str(raw_missing).replace(";", ",").split(",") if str(item).strip()]
+    else:
+        missing = []
+    if not current_price:
+        missing.append("currentPrice")
+    if uses_eps_multiple and not period_compatible:
+        missing.append("연간/TTM EPS 기간 정보")
+    if not reference_only and not fair_value and not (expected_eps and target_per) and not (annual_dividend and required_yield):
+        if "preferred" in method_lower or "yield" in method_lower or annual_dividend or required_yield:
+            missing.extend(["fairValue", "annualDividend", "requiredYieldPct"])
+        else:
+            missing.extend(["fairValue", "expectedEPS", "targetPER"])
+    per_status = str(row.get("perValuationStatus") or "").strip()
+    per_reason = str(row.get("perValuationReason") or "").strip()
+    preferred_metric = str(row.get("preferredValuationMetric") or "").strip()
+    source_priority = str(row.get("fundamentalDataSourcePriority") or "").strip()
+    if not per_status:
+        if expected_eps and target_per:
+            per_status = "available"
+            per_reason = per_reason or "EPS와 PER가 있어 PER 기준 적정가 계산이 가능합니다."
+            preferred_metric = preferred_metric or "EPS x PER"
+        elif annual_dividend and required_yield:
+            per_status = "not_applicable"
+            per_reason = per_reason or "배당형 상품은 PER보다 배당과 요구수익률이 가격 설명에 더 직접적입니다."
+            preferred_metric = preferred_metric or "배당수익률/요구수익률"
+        else:
+            per_status = "missing"
+            per_reason = per_reason or "EPS 또는 PER가 없어 PER 기준 적정가를 계산하지 못했습니다."
+            preferred_metric = preferred_metric or "적정가 입력 또는 외부 PER/EPS"
+    missing = remaining_missing_inputs(
+        missing,
+        current_price=current_price,
+        fair_value=fair_value,
+        expected_eps=expected_eps,
+        target_per=target_per,
+        current_per=current_per,
+        pbr=pbr,
+    )
+    provider_text = str(row.get("sourceProvider") or row.get("provider") or "").casefold()
+    raw_source = str(row.get("valuationSourceType") or "").strip().lower()
+    if raw_source:
+        source_type = raw_source
+    elif bool(row.get("aiGenerated")) or str(row.get("source") or "").casefold() == "ai-valuation-proposal":
+        source_type = "ai"
+    elif "kis" in provider_text:
+        source_type = "broker"
+    elif str(row.get("source") or "").casefold() == "runtime-settings":
+        source_type = "user"
+    else:
+        source_type = "external"
+    valuation_as_of = str(row.get("valuationAsOf") or row.get("fetchedAt") or row.get("updatedAt") or "").strip()
+    freshness = str(row.get("valuationFreshnessStatus") or "").strip() or valuation_freshness_status(valuation_as_of)
+    required_inputs = ["currentPrice", "analystTargetPrice"] if reference_only else ["currentPrice", "fairValue"]
+    available_inputs = []
+    if current_price:
+        available_inputs.append("currentPrice")
+    if reference_only and analyst_target:
+        available_inputs.append("analystTargetPrice")
+    elif fair_value:
+        available_inputs.append("fairValue")
+    input_state = str(row.get("valuationInputState") or valuation_input_state(required_inputs, available_inputs))
+    scenario_complete = bool(value_for(row, "fairValueLow") and fair_value and value_for(row, "fairValueHigh"))
+    reliability_state = str(row.get("valuationReliabilityState") or row.get("valuationDataState") or valuation_reliability_state(
+        source_type,
+        input_state,
+        eps_period=eps_period,
+        freshness_status=freshness,
+        scenario_complete=scenario_complete,
+    ))
+    calculated_eligible = valuation_decision_eligible(
+        source_type,
+        reliability_state,
+        row.get("approvalStatus"),
+        freshness,
+        period_compatible,
+        fair_value,
+    )
+    decision_eligible = bool(row.get("valuationDecisionEligible")) if "valuationDecisionEligible" in row else calculated_eligible
+    if reference_only:
+        decision_eligible = False
+        reliability_state = "partial" if analyst_target else "unavailable"
+    target_upside = ((analyst_target / current_price) - 1.0) * 100.0 if analyst_target and current_price else 0.0
+    return {
+        "currentPrice": round(current_price, 4) if current_price else 0.0,
+        "fairValue": round(fair_value, 4) if fair_value else 0.0,
+        "fairValuePrice": round(fair_value, 4) if fair_value else 0.0,
+        "fairValueLow": round(fair_value_low, 4) if fair_value_low else 0.0,
+        "fairValueBase": round(fair_value, 4) if fair_value else 0.0,
+        "fairValueHigh": round(fair_value_high, 4) if fair_value_high else 0.0,
+        "expectedEPS": round(expected_eps, 4) if expected_eps else 0.0,
+        "targetPER": round(target_per, 4) if target_per else 0.0,
+        "peRatio": round(current_per, 4) if current_per else 0.0,
+        "pbr": round(pbr, 4) if pbr else 0.0,
+        "annualDividend": round(annual_dividend, 4) if annual_dividend else 0.0,
+        "requiredYieldPct": round(required_yield, 4) if required_yield else 0.0,
+        "couponPct": round(coupon_pct, 4) if coupon_pct else 0.0,
+        "parValue": round(par_value, 4) if par_value else 0.0,
+        "marginOfSafetyPct": round(margin, 2) if margin else 0.0,
+        "conservativeMarginOfSafetyPct": round(conservative_margin, 2) if conservative_margin else 0.0,
+        "optimisticMarginOfSafetyPct": round(optimistic_margin, 2) if optimistic_margin else 0.0,
+        "expensivePremiumPct": round(expensive_premium, 2) if expensive_premium else 0.0,
+        "minimumMarginOfSafetyPct": value_for(row, "minimumMarginOfSafetyPct") or 15.0,
+        "valuationMethod": method,
+        "formula": formula,
+        "missingInputs": missing,
+        "perValuationStatus": per_status,
+        "perValuationReason": per_reason,
+        "preferredValuationMetric": preferred_metric,
+        "fundamentalDataSourcePriority": source_priority,
+        "epsPeriod": eps_period,
+        "multiplePeriod": multiple_period,
+        "periodCompatible": period_compatible,
+        "valuationAsOf": valuation_as_of,
+        "valuationFreshnessStatus": freshness,
+        "valuationSourceType": source_type,
+        "valuationCurrency": str(row.get("valuationCurrency") or position.currency or ""),
+        "perShare": bool(row.get("perShare", True)),
+        "valuationInputState": input_state,
+        "valuationDataState": reliability_state,
+        "valuationReliabilityState": reliability_state,
+        "valuationDataStateLabel": str(row.get("valuationDataStateLabel") or valuation_reliability_label(reliability_state)),
+        "valuationDecisionEligible": decision_eligible,
+        "valuationQualityStatus": str(row.get("valuationQualityStatus") or "").strip(),
+        "valuationQualityIssues": [
+            dict(item)
+            for item in row.get("valuationQualityIssues") or []
+            if isinstance(item, dict)
+        ],
+        "scenarioComplete": scenario_complete,
+        "valuationReferenceOnly": reference_only,
+        "valuationReferenceReason": str(row.get("valuationReferenceReason") or ""),
+        "analystTargetPrice": round(analyst_target, 4) if analyst_target else 0.0,
+        "analystTargetMedianPrice": round(analyst_target_median, 4) if analyst_target_median else 0.0,
+        "analystTargetLowPrice": round(analyst_target_low, 4) if analyst_target_low else 0.0,
+        "analystTargetHighPrice": round(analyst_target_high, 4) if analyst_target_high else 0.0,
+        "analystTargetUpsidePct": round(target_upside, 2) if target_upside else 0.0,
+        "analystOpinionCount": int(analyst_opinion_count) if analyst_opinion_count else 0,
+    }
+
+
+def quality_checked_valuation_row(
+    row: Dict[str, object],
+    position: Position,
+) -> Tuple[Dict[str, object], Dict[str, object]]:
+    """Normalize a row, apply the quality gate, and return canonical values."""
+
+    normalized = normalize_assumption_row(row)
+    provisional = valuation_values(normalized, position)
+    checked = apply_valuation_quality_gate({**normalized, **provisional})
+    values = valuation_values(checked, position)
+    values["valuationQualityStatus"] = str(checked.get("valuationQualityStatus") or "")
+    values["valuationQualityIssues"] = list(checked.get("valuationQualityIssues") or [])
+    return checked, values
+
+
+def metric_rows(row: Dict[str, object]) -> Iterable[Tuple[str, str, float]]:
+    normalized = normalize_assumption_row(row)
+    for source_key, canonical in VALUATION_NUMERIC_KEYS.items():
+        if source_key not in normalized:
+            continue
+        _canonical_key, public_key, label = canonical
+        value = number(normalized.get(source_key))
+        if value:
+            yield public_key, label, value
+
+
+def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], label: str) -> Dict[str, object]:
+    multiple_band = row.get("multipleBand") if isinstance(row.get("multipleBand"), dict) else {}
+    eps_scenario = row.get("epsScenario") if isinstance(row.get("epsScenario"), dict) else {}
+    return {
+        "source": str(row.get("source") or row.get("provider") or "valuation"),
+        "provider": str(row.get("provider") or ""),
+        "polarity": "context",
+        "aiInfluenceLabel": label,
+        "valuationMethod": values.get("valuationMethod"),
+        "formula": values.get("formula"),
+        "marginOfSafetyPct": values.get("marginOfSafetyPct"),
+        "conservativeMarginOfSafetyPct": values.get("conservativeMarginOfSafetyPct"),
+        "optimisticMarginOfSafetyPct": values.get("optimisticMarginOfSafetyPct"),
+        "fairValue": values.get("fairValue"),
+        "fairValueLow": values.get("fairValueLow"),
+        "fairValueBase": values.get("fairValueBase"),
+        "fairValueHigh": values.get("fairValueHigh"),
+        "peRatio": values.get("peRatio"),
+        "pbr": values.get("pbr"),
+        "valuationDataState": values.get("valuationDataState"),
+        "valuationInputState": values.get("valuationInputState"),
+        "valuationReliabilityState": values.get("valuationReliabilityState"),
+        "valuationDataStateLabel": values.get("valuationDataStateLabel"),
+        "valuationDecisionEligible": values.get("valuationDecisionEligible"),
+        "valuationQualityStatus": values.get("valuationQualityStatus"),
+        "valuationQualityIssues": values.get("valuationQualityIssues"),
+        "valuationReferenceOnly": values.get("valuationReferenceOnly"),
+        "valuationReferenceReason": values.get("valuationReferenceReason"),
+        "analystTargetPrice": values.get("analystTargetPrice"),
+        "analystTargetMedianPrice": values.get("analystTargetMedianPrice"),
+        "analystTargetLowPrice": values.get("analystTargetLowPrice"),
+        "analystTargetHighPrice": values.get("analystTargetHighPrice"),
+        "analystTargetUpsidePct": values.get("analystTargetUpsidePct"),
+        "analystOpinionCount": values.get("analystOpinionCount"),
+        "valuationFreshnessStatus": values.get("valuationFreshnessStatus"),
+        "valuationAsOf": values.get("valuationAsOf"),
+        "valuationSourceType": values.get("valuationSourceType"),
+        "epsPeriod": values.get("epsPeriod"),
+        "multiplePeriod": values.get("multiplePeriod"),
+        "periodCompatible": values.get("periodCompatible"),
+        "approvalStatus": str(row.get("approvalStatus") or ""),
+        "activeStatus": str(row.get("activeStatus") or ""),
+        "requiresUserApproval": bool(row.get("requiresUserApproval")),
+        "autoApplied": bool(row.get("autoApplied")),
+        "perValuationStatus": values.get("perValuationStatus"),
+        "perValuationReason": values.get("perValuationReason"),
+        "preferredValuationMetric": values.get("preferredValuationMetric"),
+        "fundamentalDataSourcePriority": values.get("fundamentalDataSourcePriority"),
+        "modelVersion": str(row.get("modelVersion") or ""),
+        "valuationConfidence": str(row.get("valuationConfidence") or ""),
+        "epsScenarioMethod": str(eps_scenario.get("method") or ""),
+        "epsObservationCount": int(number(eps_scenario.get("observationCount"))),
+        "multipleBandBasis": str(multiple_band.get("basis") or ""),
+        "multipleSampleCount": int(number(multiple_band.get("sampleCount"))),
+        "multipleEvidenceBacked": bool(multiple_band.get("evidenceBacked")),
+    }
+
+
+def add_valuation_row_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    row: Dict[str, object],
+    observation_profiles: Dict[str, Dict[str, object]] = None,
+) -> None:
+    symbol = symbol_key(position)
+    row, values = quality_checked_valuation_row(row, position)
+    key = str(row.get("assumptionKey") or row.get("symbol") or symbol).strip()
+    label = str(row.get("label") or row.get("name") or (position.name or symbol) + " 밸류에이션").strip()
+    is_ai_proposal = str(row.get("source") or "").casefold() == "ai-valuation-proposal" or bool(row.get("aiGenerated"))
+    static_observation = profile_for_domain(observation_profiles or {}, "static")
+    quote_observation = profile_for_domain(observation_profiles or {}, "quote")
+    is_active = bool(values.get("fairValue")) and str(row.get("activeStatus") or "active").casefold() != "rejected"
+    tbox_classes = ["ValuationAssumption", "StrategySignal", "ValuationSignal"]
+    if is_ai_proposal:
+        tbox_classes.append("AIValuationProposal")
+    heavy_trace_fields = {"payload", "inputObservations", "formulaTrace", "epsScenario", "multipleBand", "familyEvidence"}
+    base_props = {
+        "symbol": symbol,
+        "provider": str(row.get("provider") or ""),
+        "source": str(row.get("source") or row.get("provider") or "valuation"),
+        "assumptionKey": key,
+        "label": label,
+        "payload": {k: v for k, v in row.items() if k not in heavy_trace_fields},
+        "approvalStatus": str(row.get("approvalStatus") or ""),
+        "activeStatus": str(row.get("activeStatus") or ""),
+        "requiresUserApproval": bool(row.get("requiresUserApproval")),
+        "autoApplied": bool(row.get("autoApplied")),
+        "reviewStatus": str(row.get("reviewStatus") or row.get("approvalStatus") or ""),
+        "userReviewNote": str(row.get("userReviewNote") or ""),
+        **static_observation,
+        **values,
+    }
+    model_label = str(row.get("valuationMethod") or values.get("valuationMethod") or "valuation-context")
+    model_version = str(row.get("modelVersion") or "unversioned")
+    model_id = add_entity(graph, "valuation-model", model_label + ":" + model_version, model_label + " 모델 " + model_version, {
+        "tboxClass": "ValuationModelVersion",
+        "tboxClasses": ["ValuationModel", "ValuationModelVersion", "StrategySignal", "ValuationSignal"],
+        "valuationMethod": model_label,
+        "modelVersion": model_version,
+        "formula": values.get("formula"),
+        "source": str(row.get("source") or row.get("provider") or "valuation"),
+        "provider": str(row.get("provider") or ""),
+    })
+    assumption_id = add_entity(graph, "valuation-assumption", symbol + ":" + key, label, {
+        "tboxClass": "AIValuationProposal" if is_ai_proposal else "ValuationAssumption",
+        "tboxClasses": tbox_classes,
+        **base_props,
+    })
+    props = valuation_relation_props(row, values, label)
+    add_relation(graph, stock_id, assumption_id, "HAS_VALUATION", weight=0.88, properties=props)
+    add_relation(graph, stock_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
+    add_relation(graph, assumption_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
+    for index, observation in enumerate(row.get("inputObservations") or []):
+        if not isinstance(observation, dict):
+            continue
+        metric = str(observation.get("metric") or "valuation-input")
+        observation_key = str(observation.get("observationId") or (metric + ":" + str(index)))
+        observation_value = number(observation.get("base") or observation.get("value"))
+        observation_id = add_entity(graph, "valuation-input-observation", symbol + ":" + key + ":" + observation_key, (position.name or symbol) + " " + metric + " " + compact_number(observation_value), {
+            "tboxClass": "ValuationInputObservation",
+            "tboxClasses": ["Observation", "FundamentalObservation", "ValuationEvidence", "ValuationInputObservation", "ValuationSignal"],
+            "symbol": symbol,
+            "field": metric,
+            "value": round(observation_value, 6),
+            "valueNumber": round(observation_value, 6),
+            "period": str(observation.get("period") or ""),
+            "asOf": str(observation.get("asOf") or ""),
+            "provider": str(observation.get("provider") or ""),
+            "source": str(observation.get("source") or ""),
+            "sourceType": str(observation.get("sourceType") or ""),
+            "basis": str(observation.get("basis") or ""),
+            "isEstimate": bool(observation.get("isEstimate")),
+            "payload": dict(observation),
+        })
+        input_props = {
+            **props,
+            "field": metric,
+            "provider": str(observation.get("provider") or ""),
+            "source": str(observation.get("source") or ""),
+            "valuationAsOf": str(observation.get("asOf") or ""),
+            "aiInfluenceLabel": "밸류에이션 입력 " + metric + " " + compact_number(observation_value),
+        }
+        add_relation(graph, stock_id, observation_id, "HAS_OBSERVATION", weight=0.8, properties=input_props)
+        add_relation(graph, model_id, observation_id, "USES_VALUATION_INPUT", weight=0.9, properties=input_props)
+        add_relation(graph, assumption_id, observation_id, "USES_VALUATION_INPUT", weight=0.9, properties=input_props)
+
+    eps_scenario = row.get("epsScenario") if isinstance(row.get("epsScenario"), dict) else {}
+    if eps_scenario:
+        eps_scenario_id = add_entity(graph, "earnings-scenario-observation", symbol + ":" + key, (position.name or symbol) + " EPS 시나리오", {
+            "tboxClass": "EarningsScenarioObservation",
+            "tboxClasses": ["Observation", "ValuationEvidence", "ValuationInputObservation", "EarningsScenarioObservation"],
+            "symbol": symbol,
+            "provider": "+".join(str(item) for item in eps_scenario.get("providers") or []),
+            "source": "valuation-evidence-model",
+            "asOf": str(eps_scenario.get("asOf") or ""),
+            "period": str(eps_scenario.get("period") or ""),
+            "expectedEPS": number(eps_scenario.get("base")),
+            "sampleCount": int(number(eps_scenario.get("observationCount"))),
+            "payload": dict(eps_scenario),
+        })
+        add_relation(graph, model_id, eps_scenario_id, "USES_EARNINGS_SCENARIO", weight=0.92, properties=props)
+        add_relation(graph, assumption_id, eps_scenario_id, "USES_EARNINGS_SCENARIO", weight=0.92, properties=props)
+
+    multiple_band = row.get("multipleBand") if isinstance(row.get("multipleBand"), dict) else {}
+    if multiple_band:
+        multiple_band_id = add_entity(graph, "multiple-band-observation", symbol + ":" + key, (position.name or symbol) + " PER 밴드", {
+            "tboxClass": "MultipleBandObservation",
+            "tboxClasses": ["Observation", "ValuationEvidence", "ValuationInputObservation", "MultipleBandObservation"],
+            "symbol": symbol,
+            "provider": "+".join(str(item) for item in multiple_band.get("providers") or []),
+            "source": "valuation-evidence-model",
+            "basis": str(multiple_band.get("basis") or ""),
+            "targetPER": number(multiple_band.get("base")),
+            "sampleCount": int(number(multiple_band.get("sampleCount"))),
+            "valuationDecisionEligible": bool(multiple_band.get("evidenceBacked")),
+            "payload": dict(multiple_band),
+        })
+        add_relation(graph, model_id, multiple_band_id, "USES_MULTIPLE_BAND", weight=0.92, properties=props)
+        add_relation(graph, assumption_id, multiple_band_id, "USES_MULTIPLE_BAND", weight=0.92, properties=props)
+
+    trace_id = ""
+    formula_trace = row.get("formulaTrace") if isinstance(row.get("formulaTrace"), dict) else {}
+    if formula_trace:
+        trace_id = add_entity(graph, "valuation-calculation-trace", symbol + ":" + key + ":" + model_version, (position.name or symbol) + " 밸류에이션 계산 추적", {
+            "tboxClass": "ValuationCalculationTrace",
+            "tboxClasses": ["ValuationAssumption", "ValuationCalculationTrace", "ValuationSignal"],
+            "symbol": symbol,
+            "modelVersion": model_version,
+            "valuationMethod": model_label,
+            "formula": values.get("formula"),
+            "source": "valuation-evidence-model",
+            "payload": dict(formula_trace),
+        })
+        add_relation(graph, assumption_id, trace_id, "HAS_VALUATION_CALCULATION_TRACE", weight=0.94, properties=props)
+    if is_ai_proposal:
+        add_relation(graph, stock_id, assumption_id, "HAS_AI_VALUATION_PROPOSAL", weight=0.86, properties={
+            **props,
+            "polarity": "context",
+            "aiInfluenceLabel": "AI 밸류에이션 제안: 자동 적용, 사용자 검토 전",
+        })
+    if is_active:
+        active_classes = ["ActiveValuation", "ValuationAssumption", "ValuationSignal"]
+        if is_ai_proposal:
+            active_classes.append("AIValuationProposal")
+        active_id = add_entity(graph, "active-valuation", symbol + ":" + key, label + " 활성 밸류에이션", {
+            "tboxClass": "ActiveValuation",
+            "tboxClasses": active_classes,
+            **base_props,
+        })
+        add_relation(graph, stock_id, active_id, "HAS_ACTIVE_VALUATION", weight=0.9, properties=props)
+        add_relation(graph, active_id, assumption_id, "DERIVED_FROM_AI_VALUATION_PROPOSAL" if is_ai_proposal else "DERIVED_FROM_VALUATION_ASSUMPTION", weight=0.88, properties=props)
+        if is_ai_proposal and bool(row.get("requiresUserApproval")):
+            review_id = add_entity(graph, "valuation-review", symbol + ":" + key, label + " 사용자 검토 대기", {
+                "tboxClass": "UserValuationReview",
+                "tboxClasses": ["UserValuationReview", "ValuationAssumption", "ValuationSignal"],
+                "symbol": symbol,
+                "approvalStatus": str(row.get("approvalStatus") or "ai_applied_pending_review"),
+                "reviewStatus": str(row.get("reviewStatus") or row.get("approvalStatus") or "ai_applied_pending_review"),
+                "userReviewNote": str(row.get("userReviewNote") or ""),
+                "requiresUserApproval": True,
+                "autoApplied": True,
+                "source": "valuation-review",
+            })
+            add_relation(graph, active_id, review_id, "AWAITS_USER_REVIEW", weight=0.86, properties={
+                **props,
+                "polarity": "context",
+                "aiInfluenceLabel": "사용자 검토 전까지 AI 초안으로 자동 적용",
+            })
+    for field, metric_label, value in metric_rows(row):
+        metric_id = add_entity(graph, "valuation-metric", symbol + ":" + key + ":" + field, metric_label + " " + compact_number(value), {
+            "tboxClass": "ValuationMetric",
+            "tboxClasses": ["Observation", "FundamentalObservation", "ValuationMetric", "ValuationSignal"],
+            "symbol": symbol,
+            "field": field,
+            "value": round(value, 4),
+            "valueNumber": round(value, 4),
+            **{field: round(value, 4)},
+            "provider": str(row.get("provider") or ""),
+            "source": str(row.get("source") or row.get("provider") or "valuation"),
+        })
+        metric_props = {**props, "field": field, "aiInfluenceLabel": metric_label}
+        add_relation(graph, stock_id, metric_id, "HAS_OBSERVATION", weight=0.82, properties=metric_props)
+        add_relation(graph, stock_id, metric_id, "HAS_VALUATION_METRIC", weight=0.82, properties=metric_props)
+    if number(values.get("fairValue")):
+        estimate_id = add_entity(graph, "fair-value-estimate", symbol + ":" + key, (position.name or symbol) + " 적정가 " + compact_number(values.get("fairValue")), {
+            "tboxClass": "FairValueEstimate",
+            "tboxClasses": ["ValuationAssumption", "FairValueEstimate", "ValuationSignal"],
+            **base_props,
+        })
+        add_relation(graph, stock_id, estimate_id, "HAS_FAIR_VALUE_ESTIMATE", weight=0.86, properties=props)
+        add_relation(graph, stock_id, estimate_id, "HAS_VALUATION", weight=0.86, properties=props)
+        if trace_id:
+            add_relation(graph, trace_id, estimate_id, "PRODUCES_VALUATION_ESTIMATE", weight=0.94, properties=props)
+        range_id = add_entity(graph, "fair-value-range", symbol + ":" + key, (position.name or symbol) + " 적정가 범위", {
+            "tboxClass": "FairValueRange",
+            "tboxClasses": ["ValuationAssumption", "FairValueRange", "ValuationSignal"],
+            **base_props,
+        })
+        add_relation(graph, stock_id, range_id, "HAS_FAIR_VALUE_RANGE", weight=0.88, properties=props)
+        add_relation(graph, range_id, assumption_id, "DERIVED_FROM_VALUATION_ASSUMPTION", weight=0.84, properties=props)
+        data_state_id = add_entity(graph, "valuation-data-state", symbol + ":" + key, (position.name or symbol) + " 밸류에이션 자료 상태", {
+            "tboxClass": "ValuationDataState",
+            "tboxClasses": ["ValuationAssumption", "ValuationDataState", "DataQualitySignal"],
+            **base_props,
+        })
+        add_relation(graph, stock_id, data_state_id, "HAS_VALUATION_DATA_STATE", weight=1.0, properties=props)
+    if number(values.get("marginOfSafetyPct")):
+        margin = number(values.get("marginOfSafetyPct"))
+        margin_id = add_entity(graph, "margin-of-safety", symbol + ":" + key, (position.name or symbol) + " 안전마진 " + str(round(margin, 1)) + "%", {
+            "tboxClass": "MarginOfSafety",
+            "tboxClasses": ["ValuationAssumption", "MarginOfSafety", "ValuationSignal"],
+            **base_props,
+            **quote_observation,
+        })
+        margin_props = {
+            **props,
+            "polarity": "support" if margin >= number(values.get("minimumMarginOfSafetyPct")) else "risk" if margin <= -10 else "context",
+            "evidenceRole": "support" if margin >= number(values.get("minimumMarginOfSafetyPct")) else "risk" if margin <= -10 else "context",
+            "reviewLevel": "check" if margin <= -10 else "observe" if margin < number(values.get("minimumMarginOfSafetyPct")) else "normal",
+            "dataState": values.get("valuationDataState") or "partial",
+            "aiInfluenceLabel": "안전마진 " + str(round(margin, 1)) + "%",
+        }
+        add_relation(graph, stock_id, margin_id, "HAS_MARGIN_OF_SAFETY", weight=0.9, properties=margin_props)
+        add_relation(graph, stock_id, margin_id, "HAS_VALUATION", weight=0.9, properties=margin_props)
+    if value_for(row, "peRatio", "forwardPE", "pegRatio", "peerPER", "historicalMedianPER"):
+        relative_id = add_entity(graph, "relative-valuation", symbol + ":" + key, (position.name or symbol) + " 상대 밸류에이션", {
+            "tboxClass": "RelativeValuation",
+            "tboxClasses": ["ValuationAssumption", "RelativeValuation", "ValuationSignal"],
+            **base_props,
+            "peRatio": value_for(row, "peRatio"),
+            "forwardPE": value_for(row, "forwardPE"),
+            "pegRatio": value_for(row, "pegRatio"),
+            "peerPER": value_for(row, "peerPER"),
+            "historicalMedianPER": value_for(row, "historicalMedianPER"),
+        })
+        add_relation(graph, stock_id, relative_id, "COMPARES_WITH_PEER_MULTIPLE", weight=0.78, properties=props)
+        add_relation(graph, stock_id, relative_id, "HAS_VALUATION", weight=0.78, properties=props)
+    if values.get("missingInputs"):
+        missing_id = add_entity(graph, "missing-data", symbol + ":valuation:" + key, (position.name or symbol) + " 밸류에이션 부족 데이터", {
+            "tboxClass": "MissingData",
+            "tboxClasses": ["Observation", "DataQuality", "MissingData", "CoverageGap", "DataQualitySignal"],
+            "symbol": symbol,
+            "field": "valuationInputs",
+            "missingInputs": values.get("missingInputs"),
+            "dataScope": "valuation",
+            "source": "valuation-gate",
+        })
+        add_relation(graph, stock_id, missing_id, "HAS_DATA_QUALITY", weight=0.72, properties={
+            "source": "valuation-gate",
+            "polarity": "risk",
+            "evidenceRole": "blocking",
+            "reviewLevel": "blocked",
+            "dataState": "insufficient",
+            "dataScope": "valuation",
+            "aiInfluenceLabel": "밸류에이션 부족 데이터: " + ", ".join(values.get("missingInputs") or []),
+        })
+    quality_issues = [
+        dict(item)
+        for item in values.get("valuationQualityIssues") or []
+        if isinstance(item, dict)
+    ]
+    if quality_issues:
+        quality_id = add_entity(graph, "valuation-data-quality", symbol + ":valuation-quality:" + key, (position.name or symbol) + " 밸류에이션 품질 차단", {
+            "tboxClass": "ValuationDataQuality",
+            "tboxClasses": ["Observation", "DataQuality", "ValuationDataQuality", "DataQualitySignal"],
+            "symbol": symbol,
+            "field": "valuationQuality",
+            "valuationQualityStatus": values.get("valuationQualityStatus"),
+            "valuationQualityIssues": quality_issues,
+            "dataScope": "valuation",
+            "source": "valuation-quality-gate",
+        })
+        add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties={
+            "source": "valuation-quality-gate",
+            "polarity": "risk",
+            "evidenceRole": "blocking",
+            "reviewLevel": "blocked",
+            "dataState": "insufficient",
+            "dataScope": "valuation",
+            "valuationQualityStatus": values.get("valuationQualityStatus"),
+            "aiInfluenceLabel": "밸류에이션 입력 또는 계산 품질 오류",
+        })
+
+
+def add_position_valuation_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    external_signals: Dict[str, object],
+    runtime_context: Dict[str, object],
+    observation_profiles: Dict[str, Dict[str, object]] = None,
+) -> None:
+    symbol = symbol_key(position)
+    rows = position_runtime_valuation_rows(runtime_context or {}, symbol)
+    rows.extend(external_valuation_rows(external_signals or {}, symbol))
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("settings"), dict) else {}
+    rows.extend(evaluate_valuation_models(position, external_signals or {}, settings))
+    unique_rows = []
+    seen = set()
+    for row in rows:
+        normalized, _values = quality_checked_valuation_row(row, position)
+        key = str(normalized.get("assumptionKey") or "") + "|" + str(normalized.get("valuationMethod") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_rows.append(normalized)
+    evaluated = [quality_checked_valuation_row(row, position) for row in unique_rows]
+    eligible_values = [
+        number(values.get("fairValue"))
+        for _row, values in evaluated
+        if bool(values.get("valuationDecisionEligible")) and number(values.get("fairValue"))
+    ]
+    consensus_mid = median(eligible_values) if eligible_values else 0.0
+    disagreement_pct = (
+        (max(eligible_values) - min(eligible_values)) / consensus_mid * 100.0
+        if len(eligible_values) >= 2 and consensus_mid
+        else 0.0
+    )
+    consensus_status = "conflict" if disagreement_pct > 35.0 else "agreement" if len(eligible_values) >= 2 else "single-model" if eligible_values else "missing"
+    if consensus_status == "conflict":
+        unique_rows = [
+            {**row, "valuationDecisionEligible": False, "valuationConsensusBlocked": True}
+            if bool(values.get("valuationDecisionEligible"))
+            else row
+            for row, values in evaluated
+        ]
+    consensus_id = add_entity(graph, "valuation-consensus", symbol, (position.name or symbol) + " 밸류에이션 모델 합의", {
+        "tboxClass": "ValuationConsensus",
+        "tboxClasses": ["ValuationAssumption", "ValuationConsensus", "ValuationSignal"],
+        "symbol": symbol,
+        "valuationModelCount": len(eligible_values),
+        "valuationConsensusPrice": round(consensus_mid, 4) if consensus_mid else 0.0,
+        "valuationDisagreementPct": round(disagreement_pct, 2),
+        "valuationConsensusStatus": consensus_status,
+        "valuationDecisionEligible": bool(eligible_values) and consensus_status != "conflict",
+        "source": "valuation-consensus",
+    })
+    add_relation(graph, stock_id, consensus_id, "HAS_VALUATION_CONSENSUS", weight=0.86, properties={
+        "source": "valuation-consensus",
+        "polarity": "risk" if consensus_status == "conflict" else "context",
+        "evidenceRole": "risk" if consensus_status == "conflict" else "context",
+        "reviewLevel": "check" if consensus_status == "conflict" else "observe",
+        "dataState": "partial" if consensus_status == "conflict" else "sufficient" if eligible_values else "insufficient",
+        "aiInfluenceLabel": "밸류에이션 모델 차이 " + str(round(disagreement_pct, 1)) + "%" if len(eligible_values) >= 2 else "검증 가능한 밸류에이션 모델 1개 이하",
+        "valuationModelCount": len(eligible_values),
+        "valuationDisagreementPct": round(disagreement_pct, 2),
+        "valuationConsensusStatus": consensus_status,
+    })
+    for row in unique_rows:
+        add_valuation_row_concepts(graph, stock_id, position, row, observation_profiles)

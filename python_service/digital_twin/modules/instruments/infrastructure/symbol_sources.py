@@ -5,7 +5,7 @@ import urllib.request
 from html.parser import HTMLParser
 from typing import Dict, List
 
-from digital_twin.domain.market_data import sector_from_symbol
+from digital_twin.modules.market_data.contracts import sector_from_symbol
 from digital_twin.modules.instruments.domain.symbol_universe import ListedSymbol, utc_now_iso
 from digital_twin.infrastructure.external_signal_utils import external_call_target, guarded_external_call
 from digital_twin.infrastructure.settings import runtime_settings

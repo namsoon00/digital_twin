@@ -6,11 +6,11 @@ import json
 from functools import lru_cache
 from unittest.mock import patch
 
-from digital_twin.domain.investment_ubiquitous_language import (
+from digital_twin.modules.model_registry.domain.investment_ubiquitous_language import (
     investment_language_registry,
 )
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
 from digital_twin.infrastructure.graph_store_lifecycle import (
     ontology_release_seed_artifact,
     ontology_seed_graph_from_artifact,

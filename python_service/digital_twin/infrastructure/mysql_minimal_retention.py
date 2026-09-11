@@ -13,7 +13,7 @@ import time
 import uuid
 from typing import Dict, List, Mapping, Sequence
 
-from ..domain.mysql_minimal_retention import MySQLMinimalRetentionPolicy, policy_cutoffs
+from digital_twin.platform.domain.mysql_minimal_retention import MySQLMinimalRetentionPolicy, policy_cutoffs
 from .mysql_schema_tuning import quote_identifier
 
 

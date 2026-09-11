@@ -1,12 +1,12 @@
 import copy
 import unittest
 
-from digital_twin.domain.investment_reasoning_detail import subject_reasoning_lineage
-from digital_twin.domain.notification_ai_context_router import (
+from digital_twin.modules.read_models.domain.investment_reasoning_detail import subject_reasoning_lineage
+from digital_twin.modules.decisions.domain.notification_ai_context_router import (
     fit_notification_ai_decision_core,
     route_notification_ai_decision_context,
 )
-from digital_twin.domain.notification_ai_decision_brief import (
+from digital_twin.modules.decisions.domain.notification_ai_decision_brief import (
     notification_ai_decision_brief,
 )
 

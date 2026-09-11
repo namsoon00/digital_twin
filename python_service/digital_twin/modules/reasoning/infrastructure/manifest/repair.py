@@ -1,7 +1,7 @@
 """manifest: repair through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_storage_id,
 )

@@ -2,8 +2,8 @@
 
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.domain.hypothesis_outcome_contract import outcome_contract_completeness
-from digital_twin.domain.investment_brain import parse_investment_timestamp
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import outcome_contract_completeness
+from digital_twin.modules.decisions.contracts import parse_investment_timestamp
 
 
 def as_dict(value: object) -> Dict[str, object]:

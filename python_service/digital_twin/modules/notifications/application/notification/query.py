@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, List, Mapping
 
-from digital_twin.domain.ontology_decision_quality import build_ontology_decision_quality_snapshot
+from digital_twin.modules.reasoning.contracts import build_ontology_decision_quality_snapshot
 
 
 PIPELINE_TRACE_VERSION = "notification-pipeline-trace-v2"

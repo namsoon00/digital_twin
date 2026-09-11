@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.ontology_inference_context import (
+from digital_twin.modules.reasoning.domain.ontology_inference_context import (
     _apply_decision_missing_data_boundary,
     action_envelope_from_inference,
     decision_from_inference,
@@ -15,23 +15,23 @@ from digital_twin.domain.ontology_inference_context import (
     relation_contexts_from_snapshot,
     signal_conflict_packet,
 )
-from digital_twin.domain.investment_reasoning.synthesis import (
+from digital_twin.modules.decisions.domain.investment_reasoning.synthesis import (
     decision_synthesis_from_relation_context,
 )
-from digital_twin.domain.ontology_decision_assessments import decision_assessment_bundle
-from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
-from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context, execution_plan_from_relation_context
-from digital_twin.domain.ontology_relation_facts import position_signal_facts
-from digital_twin.domain.instrument_profiles import InstrumentProfile, profile_settings
-from digital_twin.domain.ai_inference_queue import notification_ai_action_eligibility
-from digital_twin.domain.investment_ubiquitous_language import (
+from digital_twin.modules.reasoning.domain.ontology_decision_assessments import decision_assessment_bundle
+from digital_twin.modules.model_registry.domain.ontology_relation_contracts import OntologyRuleMatch
+from digital_twin.modules.reasoning.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context, execution_plan_from_relation_context
+from digital_twin.modules.reasoning.domain.ontology_relation_facts import position_signal_facts
+from digital_twin.modules.instruments.domain.instrument_profiles import InstrumentProfile, profile_settings
+from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_action_eligibility
+from digital_twin.modules.model_registry.domain.investment_ubiquitous_language import (
     investment_archetype_label,
     user_facing_investment_language,
 )
-from digital_twin.domain.investment_research import choose_action
-from digital_twin.domain.portfolio import AccountSnapshot, Position
-from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.domain.strategy import decisions_for_positions
+from digital_twin.modules.news_intelligence.domain.investment_research import choose_action
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, Position
+from digital_twin.modules.portfolio.domain.portfolio_calculations import portfolio_summary
+from digital_twin.modules.decisions.domain.strategy import decisions_for_positions
 from digital_twin.infrastructure.graph_store_inferencebox import inferencebox_relation_payload
 
 
@@ -128,7 +128,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
             },
         }
         with patch(
-            "digital_twin.domain.investment_reasoning.synthesis.hypothesis_decision_eligibility",
+            "digital_twin.modules.decisions.domain.investment_reasoning.synthesis.hypothesis_decision_eligibility",
             return_value={"eligible": True, "executionEligible": True},
         ):
             synthesis = decision_synthesis_from_relation_context("acct", relation_context)

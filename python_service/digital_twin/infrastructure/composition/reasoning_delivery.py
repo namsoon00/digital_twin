@@ -30,7 +30,7 @@ def wire_v2_decision_services(
     delivery_time_series_store,
     account_repository,
 ) -> ReasoningDelivery:
-    from digital_twin.domain.monitoring import RealtimeMonitor
+    from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.decisions import build_investment_brain_service
     from digital_twin.infrastructure.disclosure_analyzer import disclosure_analyzer_from_settings

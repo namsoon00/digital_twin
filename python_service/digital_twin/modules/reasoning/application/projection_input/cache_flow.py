@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.reasoning_shadow import unpack_projection_runtime_contexts
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.reasoning_shadow import unpack_projection_runtime_contexts
 import time
 from .ports import CacheFlowInputs, PreparedGraphInput
 

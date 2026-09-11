@@ -1,0 +1,688 @@
+from typing import Dict, List
+
+from digital_twin.modules.portfolio.contracts import investment_strategy_profile
+from digital_twin.modules.notifications.contracts import message_delivery_profile
+from digital_twin.modules.portfolio.contracts import InvestmentMandate
+from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.market_data.contracts import MARKET_SIGNAL_TRANSITION_RESULTS_KEY, MARKET_SIGNAL_TRANSITION_STATE_KEY, market_signal_transition_policy_snapshot
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology, entity_id
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
+from digital_twin.modules.portfolio.contracts import Position
+from digital_twin.modules.reasoning.domain.ontology_observation_quality import position_observation_profiles, static_observation_profile
+from digital_twin.modules.reasoning.domain.portfolio_ontology_catalog import INSIGHT_TYPES, OPERATIONAL_PIPELINES, SENSITIVE_SETTING_TOKENS, SETTING_CONCEPT_TYPES
+
+
+# Healthy and idle collection telemetry is operational observability. It is
+# available from the data-pipeline health read model, but it must not create a
+# new investment ABox generation on every successful polling cycle. Only a
+# state that limits data use belongs in the factual reasoning world.
+INFERENCE_RELEVANT_PIPELINE_HEALTH_STATES = {
+    "degraded",
+    "disabled",
+    "failed",
+    "stale",
+    "unknown",
+}
+
+
+def position_source(position: Position) -> str:
+    return str(getattr(position, "source", "") or "holding").strip().lower() or "holding"
+
+
+def is_watchlist_position(position: Position) -> bool:
+    return position_source(position) == "watchlist"
+
+
+def is_holding_position(position: Position) -> bool:
+    return not is_watchlist_position(position) and (number(position.market_value) > 0 or number(position.quantity) > 0)
+
+
+def safe_setting_value(key: str, value: object) -> object:
+    lowered = str(key or "").replace("-", "").replace("_", "").lower()
+    if any(token.replace("_", "") in lowered for token in SENSITIVE_SETTING_TOKENS):
+        return "configured" if value not in (None, "", False) else ""
+    text = str(value or "")
+    return text[:1200] if len(text) > 1200 else value
+
+def valuation_assumption_rows(value: object) -> List[Dict[str, object]]:
+    if isinstance(value, list):
+        rows = []
+        for index, item in enumerate(value):
+            if isinstance(item, dict):
+                row = dict(item)
+                row.setdefault("assumptionKey", str(row.get("symbol") or row.get("name") or index))
+                rows.append(row)
+            elif str(item or "").strip():
+                rows.extend(valuation_assumption_rows(str(item)))
+        return rows
+    if isinstance(value, dict):
+        rows = []
+        for key, item in sorted(value.items()):
+            row = dict(item) if isinstance(item, dict) else {"value": item}
+            row.setdefault("assumptionKey", str(key))
+            if not row.get("symbol") and str(key).upper() != "PORTFOLIO":
+                row["symbol"] = str(key).upper()
+            rows.append(row)
+        return rows
+    text = str(value or "").strip()
+    if not text:
+        return []
+    rows: List[Dict[str, object]] = []
+    normalized = text.replace("\r", "\n").replace(";", "\n")
+    for index, line in enumerate([item.strip() for item in normalized.split("\n") if item.strip()]):
+        parts = [item.strip() for item in line.replace("|", ",").replace("\t", ",").split(",")]
+        symbol = str(parts[0] if parts else "").upper().strip()
+        key = symbol or "line-" + str(index + 1)
+        row = {
+            "assumptionKey": key,
+            "symbol": symbol,
+            "rawLine": line,
+            "values": parts[1:] if len(parts) > 1 else [],
+        }
+        if len(parts) >= 3 and "=" not in ",".join(parts[1:]):
+            row["expectedEPS"] = parts[1]
+            row["targetPER"] = parts[2]
+            if len(parts) >= 4:
+                row["minimumMarginOfSafetyPct"] = parts[3]
+            row["formula"] = "적정가 = 예상 EPS x 목표 PER"
+        rows.append(row)
+    return rows
+
+def add_valuation_assumption_concepts(graph: PortfolioOntology, portfolio_node_id: str, value: object) -> None:
+    static_observation = static_observation_profile({}, "")
+    for row in valuation_assumption_rows(value):
+        key = str(row.get("assumptionKey") or row.get("symbol") or row.get("name") or "portfolio").strip()
+        if not key:
+            continue
+        symbol = str(row.get("symbol") or "").upper().strip()
+        label = str(row.get("label") or row.get("name") or (symbol + " 밸류에이션 가정" if symbol else "포트폴리오 밸류에이션 가정"))
+        assumption_id = add_entity(graph, "valuation-assumption", key, label, {
+            "tboxClass": "ValuationAssumption",
+            "tboxClasses": ["ValuationAssumption", "StrategySignal"],
+            "symbol": symbol,
+            "assumptionKey": key,
+            "label": label,
+            "rawLine": row.get("rawLine"),
+            "values": row.get("values") if isinstance(row.get("values"), list) else [],
+            "payload": {k: v for k, v in row.items() if k not in {"assumptionKey", "symbol", "label", "name"}},
+            **static_observation,
+        })
+        add_relation(graph, portfolio_node_id, assumption_id, "HAS_VALUATION", weight=1.0, properties={"source": "runtime-settings", "aiInfluenceLabel": label})
+
+def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
+    if not isinstance(settings, dict):
+        return
+    # Runtime settings include credentials, database addresses, worker
+    # intervals and TypeDB transport limits. They are operational wiring, not
+    # investment facts. Projecting every setting made an otherwise unchanged
+    # market snapshot produce a new ABox generation after an infrastructure
+    # change. Only settings explicitly modelled as investment/notification
+    # policy concepts belong in the factual ontology. Other settings remain
+    # available through the runtime settings API and operational diagnostics.
+    for key, value in sorted(settings.items()):
+        if str(key) not in SETTING_CONCEPT_TYPES:
+            continue
+        if value in (None, "", False):
+            continue
+        tbox_class, relation_type = SETTING_CONCEPT_TYPES[str(key)]
+        setting_id = add_entity(graph, "runtime-setting", key, str(key), {
+            "tboxClass": tbox_class,
+            "key": str(key),
+            "value": safe_setting_value(str(key), value),
+        })
+        add_relation(graph, portfolio_node_id, setting_id, relation_type, weight=1.0, properties={"source": "runtime-settings", "aiInfluenceLabel": str(key)})
+    add_valuation_assumption_concepts(graph, portfolio_node_id, settings.get("valuationAssumptions"))
+
+def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
+    metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
+    if not isinstance(metadata, dict):
+        return
+    transition_states = metadata.get(MARKET_SIGNAL_TRANSITION_STATE_KEY)
+    transition_results = metadata.get(MARKET_SIGNAL_TRANSITION_RESULTS_KEY)
+    for key, value in sorted(metadata.items()):
+        if key in {MARKET_SIGNAL_TRANSITION_STATE_KEY, MARKET_SIGNAL_TRANSITION_RESULTS_KEY}:
+            continue
+        if value in (None, "", False):
+            continue
+        metadata_id = add_entity(graph, "runtime-metadata", key, "metadata:" + str(key), {
+            "tboxClass": "RuntimeSetting",
+            "key": str(key),
+            "value": safe_setting_value(str(key), value),
+        })
+        add_relation(graph, portfolio_node_id, metadata_id, "HAS_RUNTIME_SETTING", weight=1.0, properties={"source": "runtime-metadata", "aiInfluenceLabel": "metadata:" + str(key)})
+    state_rows = transition_states if isinstance(transition_states, dict) else {}
+    result_rows = transition_results if isinstance(transition_results, dict) else {}
+    for symbol, state_payload in sorted(state_rows.items()):
+        if not isinstance(state_payload, dict):
+            continue
+        stock_id = entity_id("stock", str(symbol or "").upper())
+        signals = state_payload.get("signals") if isinstance(state_payload.get("signals"), dict) else {}
+        state_ids = {}
+        for signal_id, signal_state in sorted(signals.items()):
+            if not isinstance(signal_state, dict):
+                continue
+            confirmed_state = str(signal_state.get("confirmedState") or "").strip()
+            if not confirmed_state:
+                continue
+            state_id = add_entity(graph, "signal-state", str(symbol) + ":" + str(signal_id), str(symbol) + " " + str(signal_id) + " " + confirmed_state, {
+                "tboxClass": "SignalState",
+                "symbol": str(symbol),
+                "signalId": str(signal_id),
+                "state": confirmed_state,
+                "lastConfirmedAt": signal_state.get("lastConfirmedAt"),
+                "policyVersion": signal_state.get("policyVersion"),
+            })
+            state_ids[str(signal_id)] = state_id
+            add_relation(graph, stock_id, state_id, "HAS_SIGNAL_STATE", properties={"source": "market-signal-transition"})
+        result_payload = result_rows.get(symbol) if isinstance(result_rows.get(symbol), dict) else {}
+        for index, transition in enumerate(result_payload.get("confirmedTransitions") or []):
+            if not isinstance(transition, dict):
+                continue
+            signal_id = str(transition.get("signalId") or "signal")
+            transition_key = ":".join([
+                str(symbol), signal_id, str(transition.get("fromState") or "unknown"),
+                str(transition.get("toState") or "unknown"), str(index),
+            ])
+            transition_class = "ImmediateSignalTransition" if transition.get("immediate") else "ConfirmedSignalTransition"
+            transition_id = add_entity(graph, "signal-transition", transition_key, str(symbol) + " " + signal_id + " 상태 전이", {
+                "tboxClass": transition_class,
+                "symbol": str(symbol),
+                **dict(transition),
+            })
+            add_relation(graph, stock_id, transition_id, "HAS_SIGNAL_TRANSITION", properties={"source": "market-signal-transition"})
+            if signal_id.endswith("-cross"):
+                policy_key = "trend-cross"
+            elif signal_id.endswith("-distance"):
+                policy_key = "trend-distance"
+            else:
+                policy_key = signal_id
+            policy_id = entity_id("signal-transition-policy", policy_key)
+            add_relation(graph, transition_id, policy_id, "GOVERNED_BY_SIGNAL_POLICY", properties={"source": "market-signal-transition"})
+            if signal_id != "price" and state_ids.get(signal_id):
+                add_relation(graph, transition_id, state_ids[signal_id], "CONFIRMS_SIGNAL_STATE", properties={"source": "market-signal-transition"})
+
+def add_account_delivery_profile_concepts(
+    graph: PortfolioOntology,
+    account_node_id: str,
+    portfolio_node_id: str,
+    account_context: Dict[str, object],
+) -> None:
+    profile_payload = account_context.get("messageDeliveryProfile") if isinstance(account_context.get("messageDeliveryProfile"), dict) else {}
+    level = profile_payload.get("level") or account_context.get("messageDeliveryLevel")
+    profile = message_delivery_profile(level)
+    profile_id = add_entity(graph, "message-delivery-profile", str(profile.get("level") or "absoluteBeginner"), str(profile.get("label") or "메시지 전달 수준"), {
+        "tboxClass": "MessageDeliveryProfile",
+        "level": profile.get("level"),
+        "label": profile.get("label"),
+        "detailLevel": profile.get("detailLevel"),
+        "terminology": profile.get("terminology"),
+        "decisionStateVisibility": profile.get("decisionStateVisibility"),
+        "ruleVisibility": profile.get("ruleVisibility"),
+        "description": profile.get("description"),
+    })
+    add_relation(graph, account_node_id, profile_id, "HAS_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, portfolio_node_id, profile_id, "USES_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
+
+
+def account_investment_strategy_profile(account_context: Dict[str, object]) -> Dict[str, object]:
+    profile_payload = account_context.get("investmentStrategy") if isinstance(account_context.get("investmentStrategy"), dict) else {}
+    profile_key = profile_payload.get("profile") or account_context.get("investmentStrategyProfile")
+    return investment_strategy_profile(profile_key)
+
+
+def add_account_investment_strategy_concepts(
+    graph: PortfolioOntology,
+    account_node_id: str,
+    portfolio_node_id: str,
+    account_context: Dict[str, object],
+) -> Dict[str, object]:
+    profile = account_investment_strategy_profile(account_context)
+    profile_key = str(profile.get("profile") or "balanced")
+    account_id = str(account_context.get("accountId") or account_context.get("id") or graph.portfolio_id or "default")
+    mandate = InvestmentMandate.from_profile(account_id, graph.portfolio_id, profile)
+    profile_id = add_entity(graph, "investment-strategy-profile", profile_key, str(profile.get("label") or "투자 전략 성향"), {
+        "tboxClass": "InvestmentStrategyProfile",
+        "tboxClasses": ["InvestmentStrategyProfile", "InvestorProfile", "StrategySignal"],
+        "profile": profile_key,
+        "label": profile.get("label"),
+        "riskTolerance": profile.get("riskTolerance"),
+        "timeHorizon": profile.get("timeHorizon"),
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
+        "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
+        "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+        "minCashWeightPct": number(profile.get("minCashWeightPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
+        "defaultHoldingRole": profile.get("defaultHoldingRole"),
+        "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+        "description": profile.get("description"),
+        "promptInstruction": profile.get("promptInstruction"),
+    })
+    risk_budget_id = add_entity(graph, "risk-budget", profile_key, str(profile.get("label") or "투자 전략") + " 손실 허용 기준", {
+        "tboxClass": "RiskBudget",
+        "profile": profile_key,
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
+        "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
+        "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+        "minCashWeightPct": number(profile.get("minCashWeightPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
+    })
+    profit_policy_id = add_entity(graph, "profit-policy", profile_key, str(profile.get("label") or "투자 전략") + " 수익 보호 기준", {
+        "tboxClass": "ProfitPolicy",
+        "profile": profile_key,
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+    })
+    add_relation(graph, account_node_id, profile_id, "HAS_INVESTOR_PROFILE", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, portfolio_node_id, profile_id, "USES_INVESTMENT_STRATEGY_PROFILE", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, profile_id, risk_budget_id, "HAS_RISK_BUDGET", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, profile_id, profit_policy_id, "HAS_PROFIT_POLICY", weight=1.0, properties={"source": "account-context"})
+    mandate_id = add_entity(graph, "investment-mandate", mandate.mandate_id, str(profile.get("label") or "투자 전략") + " 투자 정책", mandate.to_abox())
+    add_relation(graph, account_node_id, mandate_id, "GOVERNED_BY_MANDATE", weight=1.0, properties={"source": "account-policy"})
+    add_relation(graph, portfolio_node_id, mandate_id, "GOVERNED_BY_MANDATE", weight=1.0, properties={"source": "account-policy"})
+    limit_rows = [
+        ("position", "PositionLimit", mandate.max_position_weight_pct),
+        ("sector", "SectorLimit", mandate.max_sector_weight_pct),
+        ("currency", "CurrencyLimit", mandate.fx_exposure_review_pct),
+        ("cash", "CashFloor", mandate.min_cash_weight_pct),
+        ("loss", "LossBudget", abs(mandate.loss_tolerance_pct)),
+    ]
+    limit_ids = []
+    for limit_key, tbox_class, limit_value in limit_rows:
+        limit_id = add_entity(graph, "mandate-limit", mandate.mandate_id + ":" + limit_key, limit_key + " policy limit", {
+            "tboxClass": tbox_class,
+            "mandateId": mandate.mandate_id,
+            "policyVersion": mandate.policy_version,
+            "limitType": limit_key,
+            "limitValuePct": number(limit_value),
+        })
+        add_relation(graph, mandate_id, limit_id, "HAS_RISK_LIMIT", weight=1.0, properties={"source": "account-policy", "limitType": limit_key})
+        limit_ids.append(limit_id)
+    return {
+        "profileId": profile_id,
+        "riskBudgetId": risk_budget_id,
+        "profitPolicyId": profit_policy_id,
+        "mandateId": mandate_id,
+        "mandate": mandate.to_dict(),
+        "mandateLimitIds": limit_ids,
+        "profile": profile,
+    }
+
+
+def role_key_for_position(position: Position, strategy_profile: Dict[str, object]) -> str:
+    if is_watchlist_position(position):
+        return "watchlistEntry"
+    role = str((strategy_profile or {}).get("defaultHoldingRole") or "coreSatellite").strip()
+    return role or "coreSatellite"
+
+
+def role_label(role_key: str) -> str:
+    labels = {
+        "core": "핵심 보유",
+        "coreSatellite": "핵심·위성 보유",
+        "growthCore": "성장 핵심 보유",
+        "highConviction": "고확신 보유",
+        "watchlistEntry": "관심 진입 후보",
+    }
+    return labels.get(str(role_key or ""), str(role_key or "포지션 역할"))
+
+
+def add_position_strategy_role_concepts(
+    graph: PortfolioOntology,
+    position_node_id: str,
+    stock_node_id: str,
+    strategy_context: Dict[str, object],
+    position: Position,
+) -> None:
+    if not strategy_context:
+        return
+    profile = strategy_context.get("profile") if isinstance(strategy_context.get("profile"), dict) else {}
+    profile_id = str(strategy_context.get("profileId") or "")
+    risk_budget_id = str(strategy_context.get("riskBudgetId") or "")
+    profit_policy_id = str(strategy_context.get("profitPolicyId") or "")
+    profile_key = str(profile.get("profile") or "balanced")
+    role_key = role_key_for_position(position, profile)
+    strategy_relation_props = {
+        "source": "account-strategy",
+        "profile": profile_key,
+        "role": role_key,
+        "positionSource": position_source(position),
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
+        "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+    }
+    role_id = add_entity(graph, "position-role", profile_key + ":" + role_key, role_label(role_key), {
+        "tboxClass": "PositionRole",
+        "profile": profile_key,
+        "role": role_key,
+        "source": position_source(position),
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
+        "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+    })
+    for node_id in [position_node_id, stock_node_id]:
+        if not node_id:
+            continue
+        add_relation(graph, node_id, role_id, "HAS_POSITION_ROLE", weight=1.0, properties=strategy_relation_props)
+        if risk_budget_id:
+            add_relation(graph, node_id, risk_budget_id, "HAS_RISK_BUDGET", weight=1.0, properties=strategy_relation_props)
+        if profit_policy_id:
+            add_relation(graph, node_id, profit_policy_id, "HAS_PROFIT_POLICY", weight=1.0, properties=strategy_relation_props)
+        if profile_id:
+            add_relation(graph, node_id, profile_id, "EVALUATED_UNDER_STRATEGY", weight=1.0, properties=strategy_relation_props)
+    if profile_id:
+        add_relation(graph, profile_id, role_id, "HAS_POSITION_ROLE", weight=1.0, properties={"source": "account-strategy", "profile": profile_key, "role": role_key})
+
+def runtime_settings(runtime_context: Dict[str, object]) -> Dict[str, object]:
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
+    return settings if isinstance(settings, dict) else {}
+
+def configured_minutes(settings: Dict[str, object], primary_key: str, fallback: float, secondary_key: str = "") -> float:
+    raw = settings.get(primary_key)
+    if raw in (None, "") and secondary_key:
+        raw = settings.get(secondary_key)
+    value = number(raw)
+    return value if value > 0 else number(fallback)
+
+def add_operational_world_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    runtime_context: Dict[str, object],
+    observed_positions: List[Position],
+) -> None:
+    settings = runtime_settings(runtime_context)
+    health_payload = runtime_context.get("dataPipelineHealth") if isinstance(runtime_context, dict) else {}
+    health_pipelines = health_payload.get("pipelines") if isinstance(health_payload, dict) else {}
+    health_pipelines = health_pipelines if isinstance(health_pipelines, dict) else {}
+    session_rows = []
+    seen_sessions = set()
+    for position in observed_positions:
+        quote_profile = position_observation_profiles(position, runtime_context).get("quote") or {}
+        key = "|".join([
+            str(quote_profile.get("market") or ""),
+            str(quote_profile.get("marketSessionStatus") or ""),
+        ])
+        if key in seen_sessions:
+            continue
+        seen_sessions.add(key)
+        session_rows.append({
+            "market": quote_profile.get("market"),
+            "status": quote_profile.get("marketSessionStatus"),
+            "label": quote_profile.get("marketSessionLabel"),
+            "reason": quote_profile.get("marketSessionReason"),
+            "timezone": quote_profile.get("marketSessionTimezone"),
+        })
+    collection_policy_id = add_entity(graph, "collection-policy", "adaptive-polling", "적응형 데이터 수집 정책", {
+        "tboxClass": "CollectionPolicy",
+        "mode": "adaptive",
+        "newsQualityGateEnabled": str(settings.get("newsCollectionQualityGateEnabled") or "1") not in {"0", "false", "False", "off"},
+        "newsMinimumRelevanceState": str(settings.get("newsCollectionMinimumRelevanceState") or "direct"),
+        "newsMinimumMaterialityState": str(settings.get("newsCollectionMinimumMaterialityState") or "material"),
+        "newsMinimumSourceTrustState": str(settings.get("newsCollectionMinimumSourceTrustState") or "standard"),
+        "newsRequireArticleBody": str(settings.get("newsCollectionRequireArticleBody") or "1") not in {"0", "false", "False", "off"},
+        "description": "데이터는 성격별 목표 주기로 갱신하고, 알림은 의미 변화가 있을 때만 검토합니다.",
+    })
+    market_session_id = add_entity(graph, "market-session", "runtime-market-session", "현재 시장 세션", {
+        "tboxClass": "MarketSession",
+        "mode": str(runtime_context.get("mode") or ""),
+        "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
+        "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+        "asOf": str(runtime_context.get("asOf") or ""),
+        "sessions": session_rows,
+    })
+    reasoning_id = add_entity(graph, "reasoning-cycle", "ontologyReasoning", "ontologyReasoning", {
+        "tboxClass": "ReasoningCycle",
+        "trigger": "every-data-update",
+        "description": "데이터 갱신 직후 관계 영향과 인사이트를 재계산합니다.",
+    })
+    strategy_analysis_id = add_entity(graph, "analysis-job", "strategyAnalysis", "전략 분석", {
+        "tboxClass": "AnalysisJob",
+        "role": "supporting-analysis",
+        "description": "실제 측정값과 관계 상태를 보조 분석으로 정리합니다.",
+    })
+    insight_policy_id = add_entity(graph, "insight-policy", "meaningful-change", "의미 변화 인사이트 정책", {
+        "tboxClass": "InsightPolicy",
+        "mode": "meaningful-change",
+        "minimumReviewLevel": "check",
+        "usableDataStates": ["sufficient", "partial"],
+        "allowedValidationStates": ["ready", "conditional"],
+        "meaningfulChangeStates": ["new-condition", "improving", "worsening", "direction-changed", "new-evidence"],
+    })
+    importance_gate_id = add_entity(graph, "importance-gate", "materiality-first", "중요 변경 게이트", {
+        "tboxClass": "ImportanceGate",
+        "mode": "materiality-first",
+        "enabled": str(settings.get("materialityGateEnabled") or "1") not in {"0", "false", "False", "off"},
+        "marketReviewLevel": "check",
+        "newsReviewLevel": "check",
+        "priceChangePct": number(settings.get("marketMaterialityPriceChangePct")) or 0.6,
+        "trendDistancePct": number(settings.get("marketMaterialityTrendDistancePct")) or 2.0,
+        "trendDistanceChangePct": number(settings.get("marketMaterialityTrendDistanceChangePct")) or 1.0,
+        "volumeRatio": number(settings.get("marketMaterialityVolumeRatio")) or 1.5,
+        "investorFlowRatioPct": number(settings.get("marketMaterialityInvestorFlowRatioPct")) or 15.0,
+        "description": "데이터 변경이 투자 판단에 충분히 중요한 경우에만 추론과 알림 의도로 승격합니다.",
+    })
+    transition_policy_snapshot = market_signal_transition_policy_snapshot(settings)
+    for policy in transition_policy_snapshot.get("policies") or []:
+        signal_id = str(policy.get("signalId") or "signal")
+        policy_id = add_entity(graph, "signal-transition-policy", signal_id, str(policy.get("label") or signal_id) + " 전이 정책", {
+            "tboxClass": "SignalTransitionPolicy",
+            "enabled": bool(transition_policy_snapshot.get("enabled")),
+            **dict(policy),
+        })
+        add_relation(graph, importance_gate_id, policy_id, "GOVERNS_SIGNAL_TRANSITION", properties={"source": "operational-ontology"})
+    novelty_policy_id = add_entity(graph, "novelty-policy", "relation-novelty", "관계 신규성 정책", {
+        "tboxClass": "NoveltyPolicy",
+        "meaningfulChangeStates": ["new-condition", "improving", "worsening", "direction-changed", "new-evidence"],
+    })
+    cooldown_policy_id = add_entity(graph, "cooldown-policy", "insight-cooldown", "인사이트 발송 쿨다운", {
+        "tboxClass": "CooldownPolicy",
+        "fallbackMinutes": number(settings.get("notificationCooldownMinutes")) or 10,
+        "legacyAlertCadence": safe_setting_value("alertCadenceMinutes", settings.get("alertCadenceMinutes") or ""),
+        "configurationSource": "notification_rules",
+        "decisionBoundary": "delivery-only",
+    })
+    for tier_key, tier_label, tier_basis in (
+        ("immediate", "즉시 변화", "손익·행동·주요 기준선 전환"),
+        ("material", "중요 근거", "새 원문·공시 또는 중요 TypeDB 관계 전이"),
+        ("summary", "정기 요약", "같은 판단 상태의 설정 주기 재확인"),
+        ("web-only", "웹 기록", "새 사용자 행동 가치가 없는 참고·반복 상태"),
+    ):
+        tier_id = add_entity(graph, "delivery-cadence-tier", tier_key, tier_label, {
+            "tboxClass": "DeliveryCadenceTier",
+            "cadenceTier": tier_key,
+            "basis": tier_basis,
+            "configurationSource": "notification_rules",
+            "decisionBoundary": "delivery-only",
+        })
+        add_relation(
+            graph,
+            cooldown_policy_id,
+            tier_id,
+            "HAS_DELIVERY_CADENCE_TIER",
+            properties={"source": "operational-ontology"},
+        )
+    suppression_policy_id = add_entity(graph, "suppression-policy", "duplicate-insight", "중복 인사이트 억제 정책", {
+        "tboxClass": "SuppressionPolicy",
+        "basis": "same-subject-same-insight-type-without-material-relation-change",
+    })
+    dispatch_id = add_entity(graph, "notification-dispatch", "investmentInsight", "investmentInsight 디스패치", {
+        "tboxClass": "NotificationDispatch",
+        "mode": "insight-driven-only",
+        "legacyAlertTypesRole": "presentation-and-compatibility",
+        "description": "투자 알림은 알림 타입별 폴링이 아니라 온톨로지 인사이트를 전달합니다.",
+    })
+    add_relation(graph, portfolio_node_id, collection_policy_id, "USES_COLLECTION_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, portfolio_node_id, market_session_id, "OBSERVES_MARKET_SESSION", properties={"source": "operational-ontology"})
+    add_relation(graph, portfolio_node_id, reasoning_id, "HAS_REASONING_CYCLE", properties={"source": "operational-ontology"})
+    add_relation(graph, portfolio_node_id, dispatch_id, "HAS_NOTIFICATION_DISPATCH", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, insight_policy_id, "USES_INSIGHT_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, importance_gate_id, "USES_IMPORTANCE_GATE", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, cooldown_policy_id, "HAS_COOLDOWN_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, novelty_policy_id, "HAS_NOVELTY_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, suppression_policy_id, "SUPPRESSED_BY_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, reasoning_id, strategy_analysis_id, "SCHEDULES_ANALYSIS", properties={"source": "operational-ontology"})
+    add_relation(graph, reasoning_id, importance_gate_id, "USES_IMPORTANCE_GATE", properties={"source": "operational-ontology"})
+    for key, label in INSIGHT_TYPES:
+        add_entity(graph, "insight-type", key, label, {"tboxClass": "InsightType", "key": key})
+    for pipeline in OPERATIONAL_PIPELINES:
+        key = str(pipeline["key"])
+        fallback_key = str(pipeline.get("fallbackSettingKey") or "")
+        target_minutes = number(pipeline.get("defaultMinutes"))
+        minutes = configured_minutes(settings, str(pipeline["scheduleKey"]), target_minutes, fallback_key)
+        pipeline_id = add_entity(graph, "data-pipeline", key, str(pipeline["label"]), {
+            "tboxClass": "DataPipeline",
+            "tboxClasses": list(pipeline.get("tboxClasses") or ["DataPipeline"]),
+            "key": key,
+            "dataKinds": list(pipeline.get("dataKinds") or []),
+            "targetMinutes": target_minutes,
+            "configuredMinutes": minutes,
+            "description": str(pipeline.get("description") or ""),
+        })
+        source_id = add_entity(graph, "data-source", str(pipeline["sourceKey"]), str(pipeline["sourceLabel"]), {
+            "tboxClass": "DataSource",
+            "dataKinds": list(pipeline.get("dataKinds") or []),
+        })
+        schedule_id = add_entity(graph, "collection-schedule", key + ":" + str(int(minutes)), str(pipeline["label"]) + " " + str(int(minutes)) + "분", {
+            "tboxClass": "CollectionSchedule",
+            "pipeline": key,
+            "targetMinutes": target_minutes,
+            "configuredMinutes": minutes,
+            "settingKey": str(pipeline.get("scheduleKey") or ""),
+            "fallbackSettingKey": fallback_key,
+        })
+        freshness_id = add_entity(graph, "data-freshness", key, str(pipeline["label"]) + " freshness", {
+            "tboxClass": "DataFreshness",
+            "targetMinutes": target_minutes,
+            "configuredMinutes": minutes,
+            "freshnessRole": "ai-validation-input",
+        })
+        add_relation(graph, portfolio_node_id, pipeline_id, "HAS_PIPELINE", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, source_id, "COLLECTS_DATA_FROM", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, schedule_id, "RUNS_ON_SCHEDULE", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, freshness_id, "HAS_DATA_FRESHNESS", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, collection_policy_id, "USES_COLLECTION_POLICY", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, portfolio_node_id, "UPDATES_GRAPH", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, reasoning_id, "TRIGGERS_REASONING", properties={"source": "operational-ontology"})
+        health_key = "newsCollection" if key == "externalSignals" else key
+        observed_health = health_pipelines.get(health_key) if isinstance(health_pipelines.get(health_key), dict) else {}
+        health_state = str(observed_health.get("state") or "").strip().lower()
+        if observed_health and health_state in INFERENCE_RELEVANT_PIPELINE_HEALTH_STATES:
+            health_id = add_entity(graph, "data-pipeline-health", health_key, str(pipeline["label"]) + " 상태", {
+                "tboxClass": "DataPipelineHealth",
+                "pipeline": health_key,
+                "state": health_state,
+                "reasonCode": str(observed_health.get("reasonCode") or ""),
+                "reason": str(observed_health.get("reason") or ""),
+                "consecutiveZeroRuns": int(observed_health.get("consecutiveZeroRuns") or 0),
+                "providerFailureCount": int(observed_health.get("providerFailureCount") or 0),
+                "providerCandidateCount": int(observed_health.get("providerCandidateCount") or 0),
+            })
+            add_relation(graph, pipeline_id, health_id, "HAS_PIPELINE_HEALTH", properties={"source": "operational-observation"})
+
+def add_strategy_world_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    runtime_context: Dict[str, object],
+) -> str:
+    strategy_id = add_entity(graph, "strategy", "ontology-first-investment-strategy", "온톨로지 투자전략", {
+        "tboxClass": "Strategy",
+        "mode": "ontology-first",
+        "description": "최종 판단은 TBox/ABox 관계 규칙, 근거 충돌, 데이터 상태와 운영 정책으로 결정합니다.",
+    })
+    thesis_id = add_entity(graph, "investment-thesis", "portfolio-relation-thesis", "포트폴리오 관계 투자 가설", {
+        "tboxClass": "InvestmentThesis",
+        "scope": "portfolio",
+        "thesis": "실세계 관측값과 포트폴리오 노출을 근거로 투자 의견과 행동 조건을 결정하며 합산 점수는 사용하지 않습니다.",
+    })
+    entry_id = add_entity(graph, "entry-condition", "evidence-confirmed-entry", "근거 확인 진입 조건", {
+        "tboxClass": "EntryCondition",
+        "requires": ["price-observation", "trend-signal", "flow-signal", "data-quality"],
+    })
+    exit_id = add_entity(graph, "exit-condition", "risk-invalidates-thesis", "가설 약화 청산 조건", {
+        "tboxClass": "ExitCondition",
+        "requires": ["risk-amplification", "contradiction", "position-sizing-check"],
+    })
+    risk_rule_id = add_entity(graph, "risk-management-rule", "relation-risk-first", "관계 리스크 우선 규칙", {
+        "tboxClass": "RiskManagementRule",
+        "usableDataStates": ["sufficient", "partial"],
+        "riskReviewLevels": ["check", "act", "immediate"],
+    })
+    sizing_id = add_entity(graph, "position-sizing-rule", "exposure-aware-sizing", "노출 기반 비중 규칙", {
+        "tboxClass": "PositionSizingRule",
+        "uses": ["positionWeight", "sectorWeight", "cashRatio"],
+    })
+    rebalance_id = add_entity(graph, "rebalancing-rule", "meaningful-exposure-change", "의미 있는 노출 변화 리밸런싱", {
+        "tboxClass": "RebalancingRule",
+        "changeStates": ["new-condition", "improving", "worsening", "direction-changed"],
+    })
+    add_relation(graph, portfolio_node_id, strategy_id, "USES_STRATEGY", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, thesis_id, "BASED_ON_THESIS", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, entry_id, "HAS_ENTRY_CONDITION", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, exit_id, "HAS_EXIT_CONDITION", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, risk_rule_id, "HAS_RISK_MANAGEMENT_RULE", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, sizing_id, "HAS_POSITION_SIZING_RULE", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, rebalance_id, "HAS_REBALANCING_RULE", properties={"source": "strategy-ontology"})
+    return strategy_id
+
+def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[str, object]) -> None:
+    items = runtime_context.get("decisionItems") if isinstance(runtime_context, dict) else []
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        stock_id = entity_id("stock", symbol)
+        signal_id = add_entity(graph, "strategy-signal", symbol + ":" + str(item.get("decision") or "decision"), str(item.get("decision") or "전략 판단"), {
+            "tboxClass": "StrategySignal",
+            "tboxClasses": ["Signal", "StrategySignal"],
+            "source": str(item.get("source") or ""),
+            "tone": str(item.get("tone") or ""),
+            "priority": number(item.get("priority")),
+            "reviewLevel": str(item.get("reviewLevel") or item.get("review_level") or "check"),
+            "dataState": str(item.get("dataState") or item.get("data_state") or "partial"),
+            "changeState": str(item.get("changeState") or item.get("change_state") or "unchanged"),
+            "conflictState": str(item.get("conflictState") or item.get("conflict_state") or "context-only"),
+            "validationState": str(item.get("validationState") or item.get("validation_state") or "conditional"),
+            "reasons": list(item.get("reasons") or [])[:5],
+            "triggers": list(item.get("triggers") or [])[:8],
+        })
+        review_level = str(item.get("reviewLevel") or item.get("review_level") or "check")
+        data_state = str(item.get("dataState") or item.get("data_state") or "partial")
+        properties = {
+            "source": "decision-item",
+            "aiInfluenceLabel": str(item.get("decision") or "전략 판단"),
+            "reviewLevel": review_level,
+            "dataState": data_state,
+            "evidenceRole": "blocking" if data_state in {"insufficient", "unavailable"} else (
+                "risk" if review_level in {"act", "immediate"} else "context"
+            ),
+        }
+        add_relation(graph, stock_id, signal_id, "DERIVES", weight=1.0, properties=properties)
+        add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=1.0, properties={
+            "source": "decision-item",
+            "evidenceRole": properties["evidenceRole"],
+        })

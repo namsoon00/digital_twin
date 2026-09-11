@@ -5,15 +5,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from digital_twin.modules.accounts.contracts import AccountConfig
-from digital_twin.domain.data_freshness import age_minutes, parse_datetime, utc_iso
-from digital_twin.domain.events import DomainEvent, news_article_analyzed_event, ontology_reasoning_requested_event, research_evidence_collected_event, research_evidence_lifecycle_events
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, stable_evidence_token
-from digital_twin.domain.investment_evidence_governance import canonical_evidence_url, claim_policy, claim_quality_summary, governed_evidence
-from digital_twin.domain.market_data import known_stock, number
-from digital_twin.domain.materiality import evidence_materiality
-from digital_twin.domain.news_collection_quality import annotate_news_collection_admission, assess_news_collection_admission, news_collection_admission_summary
-from digital_twin.domain.news_ai_analysis import news_ai_analysis_is_current
-from digital_twin.domain.prompt_evidence_admission import assess_prompt_evidence, attach_prompt_evidence_admission
+from digital_twin.modules.market_data.contracts import age_minutes, parse_datetime, utc_iso
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.news_intelligence.domain.integration_events import news_article_analyzed_event, research_evidence_collected_event, research_evidence_lifecycle_events
+from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, stable_evidence_token
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import canonical_evidence_url, claim_policy, claim_quality_summary, governed_evidence
+from digital_twin.modules.market_data.contracts import known_stock, number
+from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
+from digital_twin.modules.news_intelligence.domain.news_collection_quality import annotate_news_collection_admission, assess_news_collection_admission, news_collection_admission_summary
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import news_ai_analysis_is_current
+from digital_twin.modules.decisions.contracts import assess_prompt_evidence, attach_prompt_evidence_admission
 from digital_twin.modules.portfolio.contracts import MonitorSnapshotReader
 from digital_twin.modules.news_intelligence.contracts import ResearchEvidenceGateway, ResearchEvidenceRepository
 from digital_twin.modules.instruments.contracts import SymbolUniverseRepository

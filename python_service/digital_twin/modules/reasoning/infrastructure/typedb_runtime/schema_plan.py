@@ -1,6 +1,6 @@
 """Pure, resumable TypeQL storage-schema planning without a database driver."""
 import re
-from digital_twin.domain.ontology_semantics import semantic_class_types, semantic_relation_types
+from digital_twin.modules.reasoning.domain.ontology_semantics import semantic_class_types, semantic_relation_types
 
 from typing import Dict, Iterable, List, Tuple
 from .constants import DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE

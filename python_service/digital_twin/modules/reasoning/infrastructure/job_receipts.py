@@ -1,13 +1,7 @@
 """Atomic receipt/anchor writes shared by completion and persisted-result repair."""
 
 from typing import Dict, Mapping
-from digital_twin.domain.market_observation_reasoning import (
-    COMPLETION_MODE_VERIFIED_LATER_BOUNDARY,
-    MARKET_OBSERVATION_REASONING_RECEIPT_VERSION,
-    MarketObservationReasoningReceipt,
-    completion_mode,
-    market_observation_completion_scope,
-)
+from digital_twin.modules.market_data.contracts import COMPLETION_MODE_VERIFIED_LATER_BOUNDARY, MARKET_OBSERVATION_REASONING_RECEIPT_VERSION, MarketObservationReasoningReceipt, completion_mode, market_observation_completion_scope
 from digital_twin.infrastructure.storage_values import json_value
 from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 

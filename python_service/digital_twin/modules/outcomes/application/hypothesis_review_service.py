@@ -7,9 +7,9 @@ an investment action.
 
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.domain.hypothesis_review import lifecycle_references_from_episodes, lifecycle_review_item, outcome_assessment_for_lifecycle, text, upper, values
-from digital_twin.domain.hypothesis_outcome_contract import merge_outcome_contracts
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.outcomes.domain.hypothesis_review import lifecycle_references_from_episodes, lifecycle_review_item, outcome_assessment_for_lifecycle, text, upper, values
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import merge_outcome_contracts
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 
 
 HYPOTHESIS_DECISION_BRIEF_VERSION = "hypothesis-decision-brief-v2"

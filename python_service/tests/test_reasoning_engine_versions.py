@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from digital_twin.modules.reasoning.application.independent_reasoning_comparison_service import IndependentReasoningComparisonService
 from digital_twin.modules.reasoning.application.reasoning_engine_platform import ReasoningEnginePlatformService
-from digital_twin.domain.reasoning_engine_versions import (
+from digital_twin.modules.reasoning.domain.reasoning_engine_versions import (
     EngineControlState,
     EngineReleaseBundle,
     ReasoningEngineDescriptor,
@@ -19,7 +19,7 @@ from digital_twin.infrastructure.mysql_versioned_runtime import (
     MySQLReasoningEngineJobStore,
     merge_reasoning_deployment_health,
 )
-from digital_twin.domain.reasoning_shadow import (
+from digital_twin.modules.reasoning.domain.reasoning_shadow import (
     compare_engine_outcomes,
     independent_reasoning_outcome_packet,
     reasoning_comparison_summary,
@@ -289,13 +289,13 @@ class ReasoningEngineVersionTests(unittest.TestCase):
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock
 
-        from digital_twin.domain.investment_ubiquitous_language import (
+        from digital_twin.modules.model_registry.domain.investment_ubiquitous_language import (
             investment_language_registry,
         )
-        from digital_twin.domain.ontology_rulebox_catalog import (
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import (
             default_graph_inference_rules,
         )
-        from digital_twin.domain.ontology_rulebox_governance import (
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import (
             rulebox_rules_hash,
         )
         from digital_twin.infrastructure.graph_store_lifecycle import (
@@ -413,8 +413,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual(0, result["sampleCount"])
 
     def test_v2_release_preflight_reuses_exact_immutable_release_without_migration(self):
-        from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-        from digital_twin.domain.ontology_schema import default_tbox_metadata
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
+        from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
         from digital_twin.infrastructure.ontology_projection import (
             PortfolioOntologyProjectionRecorder,
             bootstrap_rule_catalog,
@@ -474,7 +474,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("ready", recorder.ensure_rulebox_ready()["status"])
 
     def test_v2_release_preflight_bootstraps_an_isolated_empty_database(self):
-        from digital_twin.domain.ontology_schema import default_tbox_metadata
+        from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
         from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog
         from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
 

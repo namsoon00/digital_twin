@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from digital_twin.application.operational_storage_capacity_service import OperationalStorageCapacityService
+    from digital_twin.platform.application.operational_storage_capacity_service import OperationalStorageCapacityService
 
 
 def build_operational_storage_capacity_service(settings=None) -> OperationalStorageCapacityService:
-    from digital_twin.application.operational_storage_capacity_service import OperationalStorageCapacityService
+    from digital_twin.platform.application.operational_storage_capacity_service import OperationalStorageCapacityService
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.settings import runtime_settings
 

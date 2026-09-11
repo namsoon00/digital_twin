@@ -1,11 +1,13 @@
 from datetime import datetime, timezone
 from typing import Dict, Tuple
 
-from digital_twin.domain.events import ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED, DomainEvent, ontology_reasoning_queue_health_changed_event
-from digital_twin.domain.ontology_reasoning_queue_health import ACTIVE_QUEUE_STATES, INCIDENT_QUEUE_STATES, evaluate_ontology_reasoning_queue_health
-from digital_twin.domain.message_types import ONTOLOGY_REASONING_QUEUE
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.data_freshness import parse_datetime
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_queue_health_changed_event
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue_health import ACTIVE_QUEUE_STATES, INCIDENT_QUEUE_STATES, evaluate_ontology_reasoning_queue_health
+from digital_twin.modules.notifications.contracts import ONTOLOGY_REASONING_QUEUE
+from digital_twin.modules.notifications.contracts import NotificationJob
+from digital_twin.modules.market_data.contracts import parse_datetime
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

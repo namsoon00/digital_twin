@@ -1,17 +1,17 @@
 import unittest
 
-from digital_twin.domain.ontology_compiler import compile_ontology_release
-from digital_twin.domain.ontology_rule_manifest import (
+from digital_twin.modules.model_registry.domain.ontology_compiler import compile_ontology_release
+from digital_twin.modules.model_registry.domain.ontology_rule_manifest import (
     ASSESSMENT_SCOPES,
     rule_dependency_reverse_index,
     rule_assessment_scope,
     validate_rule_domain_manifests,
 )
-from digital_twin.domain.ontology_schema_capabilities import (
+from digital_twin.modules.reasoning.domain.ontology_schema_capabilities import (
     rule_schema_capability_manifest,
 )
-from digital_twin.domain.ontology_rulebox_contracts import GraphRuleCondition
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphRuleCondition
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
 
 
 class OntologyRuleManifestTests(unittest.TestCase):

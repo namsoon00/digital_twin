@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from .current_state_ports import CurrentStatePort
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
 from typing import Dict
 
 

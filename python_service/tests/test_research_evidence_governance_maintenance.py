@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.news_intelligence.application.research_evidence_governance_service import ResearchEvidenceGovernanceService, payload_signature
-from digital_twin.domain.investment_research import ResearchEvidence, disclosure_evidence_payload, research_evidence_from_external_signals
-from digital_twin.domain.market_data import normalize_position
+from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence, disclosure_evidence_payload, research_evidence_from_external_signals
+from digital_twin.modules.market_data.domain.market_data import normalize_position
 from digital_twin.infrastructure.external_signal_provider_market import dart_document_text
 from digital_twin.infrastructure.external_signal_provider_sec import sec_document_text
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider

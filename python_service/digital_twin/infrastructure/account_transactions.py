@@ -1,6 +1,6 @@
 """Explicit transaction coordinator for account edits spanning several owners."""
 
-from digital_twin.domain.events import DomainEvent
+from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
 from digital_twin.infrastructure.settings import utc_now
 from digital_twin.modules.accounts.domain.account_patch import ACCOUNT_FIELDS

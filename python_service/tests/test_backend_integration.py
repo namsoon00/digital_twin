@@ -15,6 +15,8 @@ import sys
 from types import SimpleNamespace
 import typing
 import unittest
+from module_migration_fixtures import restore_domain_imports
+from internal_coordinator_parity import decision_history_members
 from unittest.mock import Mock, patch
 from backend_stabilization_fixtures import (
     ADDED_METHODS,
@@ -57,7 +59,7 @@ class WithoutImports(ast.NodeTransformer):
 
 
 def body_hash(node):
-    node = NormalizeBindings().visit(copy.deepcopy(node))
+    node = NormalizeBindings().visit(restore_domain_imports(node))
     if (
         node.body
         and isinstance(node.body[0], ast.Expr)
@@ -80,6 +82,7 @@ def implementations():
     paths = {ROOT / entry["path"] for entry in STORAGE["adapters"].values()}
     for package in ("graph_writes", "projection_write", "projection_policy"):
         paths.update((ROOT / "modules/reasoning/infrastructure" / package).glob("*.py"))
+    paths.update((ROOT / "infrastructure/transactions/decision_history_parts").glob("*.py"))
     return sorted(paths)
 
 
@@ -218,6 +221,8 @@ class BackendIntegrationTests(unittest.TestCase):
                 for n in tree.body
                 if isinstance(n, (ast.ClassDef, ast.FunctionDef))
             }
+            if entry["path"] == "infrastructure/transactions/decision_history.py":
+                declarations = decision_history_members()
             self.assertEqual(
                 set(entry["declarations"]), set(declarations), entry["path"]
             )
@@ -257,8 +262,7 @@ class BackendIntegrationTests(unittest.TestCase):
                 ).hexdigest()
                 self.assertEqual(expected, actual, (entry["path"], name))
 
-    def test_integrated_repository_contracts_have_one_owner_and_legacy_identity(self):
-        legacy = importlib.import_module("digital_twin.domain.repositories")
+    def test_integrated_repository_contracts_have_one_owner(self):
         for name, entry in STORAGE["ports"].items():
             path = Path(entry["path"])
             owner = path.parts[1]
@@ -267,7 +271,6 @@ class BackendIntegrationTests(unittest.TestCase):
                 "digital_twin.modules." + owner + ".contracts"
             )
             self.assertIs(getattr(owned, name), getattr(contract, name))
-            self.assertIs(getattr(owned, name), getattr(legacy, name))
             node = next(
                 n
                 for n in ast.parse((ROOT / path).read_text()).body
@@ -281,12 +284,9 @@ class BackendIntegrationTests(unittest.TestCase):
                 ).hexdigest(),
                 name,
             )
-        self.assertIs(
-            legacy.MarketDataProviderFactory,
-            importlib.import_module(
-                "digital_twin.modules.market_data.contracts"
-            ).MarketDataProviderFactory,
-        )
+        self.assertTrue(callable(importlib.import_module(
+            "digital_twin.modules.market_data.contracts"
+        ).MarketDataProviderFactory))
 
     def test_integrated_storage_facades_resolve_the_same_adapter_objects(self):
         for source, entry in STORAGE["adapters"].items():
@@ -314,16 +314,14 @@ assert 'digital_twin.infrastructure.service_factory' not in sys.modules
         )
         self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_integrated_shared_domain_repository_is_exports_only(self):
-        tree = ast.parse((ROOT / "domain/repositories.py").read_text())
-        self.assertTrue(
-            all(isinstance(n, (ast.Expr, ast.ImportFrom)) for n in tree.body)
-        )
+    def test_integrated_shared_domain_repository_is_removed(self):
+        self.assertFalse((ROOT / "domain/repositories.py").exists())
+        self.assertFalse((ROOT / "platform/contracts_legacy.py").exists())
         for path in (ROOT / "modules").rglob("*.py"):
             for node in ast.walk(ast.parse(path.read_text())):
                 self.assertFalse(
                     isinstance(node, ast.ImportFrom)
-                    and node.module == "digital_twin.domain.repositories",
+                    and node.module == "digital_twin.platform.contracts_legacy",
                     str(path),
                 )
 

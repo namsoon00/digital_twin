@@ -4,12 +4,15 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.events import EXTERNAL_FACT_CHANGED, DomainEvent, ontology_reasoning_requested_event, research_evidence_collected_event
-from digital_twin.domain.disclosure_analysis import DISCLOSURE_ANALYSIS_PROMPT_VERSION, disclosure_analysis_payload
-from digital_twin.domain.investment_evidence_governance import claim_policy, governed_evidence
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_external_signals
-from digital_twin.domain.materiality import evidence_materiality
-from digital_twin.domain.prompt_evidence_admission import assess_prompt_evidence, attach_prompt_evidence_admission
+from digital_twin.modules.market_data.domain.event_types import EXTERNAL_FACT_CHANGED
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
+from digital_twin.modules.news_intelligence.contracts import research_evidence_collected_event
+from digital_twin.modules.news_intelligence.contracts import DISCLOSURE_ANALYSIS_PROMPT_VERSION, disclosure_analysis_payload
+from digital_twin.modules.news_intelligence.contracts import claim_policy, governed_evidence
+from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget, ResearchEvidence, research_evidence_from_external_signals
+from digital_twin.modules.news_intelligence.contracts import evidence_materiality
+from digital_twin.modules.decisions.contracts import assess_prompt_evidence, attach_prompt_evidence_admission
 
 
 OFFICIAL_DATASET_IDS = {

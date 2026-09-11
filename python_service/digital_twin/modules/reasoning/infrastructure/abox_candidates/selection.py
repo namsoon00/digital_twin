@@ -2,9 +2,9 @@
 
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.domain.ontology_change_impact import scope_symbol
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_change_impact import scope_symbol
 from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 

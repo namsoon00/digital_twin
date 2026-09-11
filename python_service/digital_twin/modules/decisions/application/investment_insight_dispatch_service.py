@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.domain.events import investment_inference_episode_completed_event
-from digital_twin.domain.investment_reasoning import ARCHIVE, HANDOFF_AI, INVALID, PUBLISH_TYPEDB, inference_dispatch_decision
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.decisions.domain.events import investment_inference_episode_completed_event
+from digital_twin.modules.decisions.domain.investment_reasoning import ARCHIVE, HANDOFF_AI, INVALID, PUBLISH_TYPEDB, inference_dispatch_decision
+from digital_twin.modules.portfolio.contracts import AlertEvent
 
 
 AI_QUEUED_STATES = frozenset({

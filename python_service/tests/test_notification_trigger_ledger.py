@@ -1,15 +1,15 @@
 import copy
 import unittest
 
-from digital_twin.domain.notification_reasoning_report import customer_alert_reason_lines
-from digital_twin.domain.notification_rule_evaluator import evaluate_notification_rule
-from digital_twin.domain.notification_rule_models import (
+from digital_twin.modules.notifications.domain.notification_reasoning_report import customer_alert_reason_lines
+from digital_twin.modules.notifications.domain.notification_rule_evaluator import evaluate_notification_rule
+from digital_twin.modules.notifications.domain.notification_rule_models import (
     NotificationRuleCondition,
     NotificationRuleConfig,
 )
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy, _relation_trigger_provenance
-from digital_twin.domain.notification_rules import default_notification_rule
+from digital_twin.modules.notifications.domain.notification_rules import default_notification_rule
 
 
 class NotificationTriggerLedgerTests(unittest.TestCase):

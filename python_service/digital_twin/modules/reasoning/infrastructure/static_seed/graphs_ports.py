@@ -1,7 +1,7 @@
 """Capabilities used only by static-seed graphs."""
 
 from typing import Dict, Iterable, List, Protocol, Tuple
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 class GraphsStore(Protocol):

@@ -13,15 +13,16 @@ import socket
 from typing import Dict, Iterable, List
 import uuid
 
-from digital_twin.domain.data_freshness import age_minutes, parse_datetime
-from digital_twin.domain.events import news_article_analyzed_event, ontology_reasoning_requested_event, research_evidence_collected_event
-from digital_twin.domain.evidence_delta import evidence_story_key
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.materiality import evidence_materiality
-from digital_twin.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_body_quality_needs_refresh, article_summary_quality_needs_refresh, article_text_parts, news_ai_analysis_is_current, news_ai_analysis_retryable, refreshed_article_summary_quality, source_language, summary_quality_payload
+from digital_twin.modules.market_data.contracts import age_minutes, parse_datetime
+from digital_twin.modules.news_intelligence.domain.integration_events import news_article_analyzed_event, research_evidence_collected_event
+from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
+from digital_twin.modules.news_intelligence.domain.evidence_delta import evidence_story_key
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_body_quality_needs_refresh, article_summary_quality_needs_refresh, article_text_parts, news_ai_analysis_is_current, news_ai_analysis_retryable, refreshed_article_summary_quality, source_language, summary_quality_payload
 from digital_twin.modules.news_intelligence.domain.article import article_source_revision
-from digital_twin.domain.prompt_evidence_admission import assess_prompt_evidence
-from digital_twin.domain import news_analysis as news_domain
+from digital_twin.modules.decisions.contracts import assess_prompt_evidence
+import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
 from digital_twin.modules.news_intelligence.application.analyze_article import annotate_evidence_eligibility
 
 

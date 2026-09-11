@@ -9,6 +9,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
+from module_migration_fixtures import restore_domain_imports
 from unittest.mock import Mock, patch
 
 from digital_twin.infrastructure import typedb_ontology as api
@@ -40,7 +41,7 @@ def body_hash(node):
                 value.id = "self"
             return value
 
-    node = Restore().visit(copy.deepcopy(node))
+    node = Restore().visit(restore_domain_imports(node))
     first = node.body[0]
     if (
         isinstance(first, ast.Expr)

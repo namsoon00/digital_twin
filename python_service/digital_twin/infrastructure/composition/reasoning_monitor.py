@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
-    from digital_twin.domain.ontology_worlds import portfolio_world_id
+    from digital_twin.modules.reasoning.domain.ontology_worlds import portfolio_world_id
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.events import ontology_reasoning_event_bus
     from digital_twin.infrastructure.composition.instruments import ontology_reasoning_priority_symbols

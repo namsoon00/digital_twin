@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Dict, List
 
-from digital_twin.domain import news_analysis as news_analysis_domain
+import digital_twin.modules.news_intelligence.domain.news_analysis as news_analysis_domain
 from digital_twin.modules.news_intelligence.application.analyze_article import annotate_evidence_eligibility
 from digital_twin.modules.news_intelligence.application.normalize_sources import normalize_evidence_sources
 from digital_twin.modules.news_intelligence.domain.article_quality import inspect_article_body

@@ -7,8 +7,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
-from digital_twin.domain.ontology_worlds import world_from_snapshot
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_from_snapshot
 
 
 AS_OF = "2026-07-20T00:01:00Z"

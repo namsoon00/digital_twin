@@ -3,7 +3,7 @@
 from collections import Counter, defaultdict
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.investment_flow import FLOW_STAGE_LABELS, FLOW_STATE_LABELS, INVESTMENT_FLOW_VERSION, decision_flow_projection, flow_nodes_and_links, item_dict, text
+from digital_twin.modules.read_models.domain.investment_flow import FLOW_STAGE_LABELS, FLOW_STATE_LABELS, INVESTMENT_FLOW_VERSION, decision_flow_projection, flow_nodes_and_links, item_dict, text
 
 
 class InvestmentFlowQueryService:

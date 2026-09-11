@@ -1,3 +1,8 @@
+"""Compatibility API and transaction wiring for decision history.
+
+Private helpers receive individual capabilities, never this repository.
+"""
+
 from digital_twin.modules.decisions.infrastructure import (
     transaction_writes as decisions_writes,
 )
@@ -11,138 +16,96 @@ from contextlib import nullcontext
 from datetime import timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
-from digital_twin.domain.investment_brain import DecisionEpisode, LearningProposal, ObservedOutcome, canonical_investment_timestamp, parse_investment_timestamp, stable_id, scoped_decision_follow_ups, utc_now_iso
-from digital_twin.domain.investment_decision_history import compact_decision_episode_memory
-from digital_twin.domain.hypothesis_observation import ShadowHypothesisObservationEpisode
-from digital_twin.domain.investment_decision_actionability import persisted_decision_authorization
-from digital_twin.domain.decision_follow_up import evaluate_follow_up_conditions
-from digital_twin.domain.hypothesis_outcome_contract import observation_domain_status, outcome_contract_completeness, resolved_outcome_contract
+from digital_twin.modules.decisions.domain.investment_brain import (
+    DecisionEpisode,
+    LearningProposal,
+    ObservedOutcome,
+    canonical_investment_timestamp,
+    parse_investment_timestamp,
+    stable_id,
+    scoped_decision_follow_ups,
+    utc_now_iso,
+)
+from digital_twin.modules.decisions.domain.investment_decision_history import (
+    compact_decision_episode_memory,
+)
+from digital_twin.modules.outcomes.domain.hypothesis_observation import (
+    ShadowHypothesisObservationEpisode,
+)
+from digital_twin.modules.decisions.domain.investment_decision_actionability import (
+    persisted_decision_authorization,
+)
+from digital_twin.modules.outcomes.domain.decision_follow_up import evaluate_follow_up_conditions
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import (
+    observation_domain_status,
+    outcome_contract_completeness,
+    resolved_outcome_contract,
+)
 from digital_twin.modules.outcomes.contracts import evaluate_hypothesis_outcome
-from digital_twin.domain.market_time_series import market_timezone
-from digital_twin.domain.market_hours import infer_market_from_context
-from digital_twin.domain.decision_performance import contradiction_learning_candidates, evaluate_decision_performance
-from digital_twin.domain.trade_execution import ActionPlan
-from digital_twin.domain.events import investment_decision_changed_event, investment_validation_changed_event
-from digital_twin.domain.investment_flow import investment_flow_id
+from digital_twin.modules.market_data.domain.market_time_series import market_timezone
+from digital_twin.modules.market_data.domain.market_hours import infer_market_from_context
+from digital_twin.modules.outcomes.domain.decision_performance import (
+    contradiction_learning_candidates,
+    evaluate_decision_performance,
+)
+from digital_twin.modules.portfolio.domain.trade_execution import ActionPlan
+from digital_twin.modules.decisions.domain.events import (
+    investment_decision_changed_event,
+    investment_validation_changed_event,
+)
+from digital_twin.modules.read_models.domain.investment_flow import investment_flow_id
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
 from digital_twin.infrastructure.operational_common import json_dumps
 
 
+from .decision_history_parts import (
+    decision_write,
+    legacy_repair,
+    outcome_schedule,
+    target_repair,
+    outcome_policy,
+    episode_queries,
+    episode_hydration,
+    replay_queries,
+    performance,
+    target_queries,
+    follow_ups,
+    observation_records,
+    shadow_observations,
+    learning,
+)
+from .decision_history_parts.outcome_policy import (
+    selected_hypothesis_stance,
+    selected_hypothesis_payload,
+    directional_hypothesis_status,
+    contract_benchmark_symbol,
+    due_outcome_horizon_minutes,
+    due_outcome_horizon_minutes_all,
+    outcome_horizon_minutes,
+    outcome_horizon_recorded,
+    outcome_target_at,
+    market_outcome_target_at,
+    outcome_observation_is_usable,
+    outcome_is_calibration_eligible,
+    parse_datetime,
+    number,
+)
+
+
 class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
     def save(self, episode: DecisionEpisode, connection=None) -> DecisionEpisode:
-        action = str(episode.action or "").upper()
-        if action == "NO_ACTION":
-            raise ValueError("NO_ACTION is an operational disposition and cannot be a DecisionEpisode.")
-        if episode.source == "v2-reasoning-case" and not str(episode.selected_hypothesis_id or "").strip():
-            raise ValueError("V2 DecisionEpisode requires a selected subject-scoped hypothesis.")
-        episode.decided_at = canonical_investment_timestamp(episode.decided_at) or utc_now_iso()
-        episode.status = str(episode.status or "active")
-        episode.follow_up_conditions = scoped_decision_follow_ups(
-            episode.episode_id,
-            episode.follow_up_conditions,
-        )
-        episode.unsupported_follow_ups = scoped_decision_follow_ups(
-            episode.episode_id,
-            episode.unsupported_follow_ups,
-        )
-        episode.portfolio_id = episode.portfolio_id or "portfolio:" + str(episode.account_id or "default")
-        plan = None
-        if action in {"BUY", "ADD", "TRIM", "SELL"}:
-            authorization = persisted_decision_authorization(episode)
-            if not authorization.get("authorized"):
-                raise ValueError(
-                    "Executable DecisionEpisode requires a complete actionability contract."
-                )
-            plan = ActionPlan.create(
-                portfolio_id=episode.portfolio_id,
-                decision_episode_id=episode.episode_id,
-                action=episode.action,
-                policy_version=episode.mandate_version,
-                inference_generation_id=episode.inference_generation_id,
-                created_at=episode.decided_at,
-            )
-            episode.action_plan_id = plan.plan_id
-        else:
-            episode.action_plan_id = ""
-        stamp = utc_now_iso()
-        payload = episode.to_dict()
-        flow_id = investment_flow_id(episode.account_id, episode.symbol, episode.episode_id)
-        payload["flowId"] = flow_id
+        prepared = decision_write.prepare_decision(episode, utc_now_iso=utc_now_iso)
         transaction = self.transaction() if connection is None else nullcontext(connection)
         with transaction as connection:
-            current_row = connection.execute(
-                "SELECT payload_json FROM investment_decision_episodes WHERE episode_id = %s",
-                (episode.episode_id,),
-            ).fetchone()
-            prior_row = current_row or connection.execute(
-                "SELECT payload_json FROM investment_decision_episodes "
-                "WHERE account_id = %s AND symbol = %s ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
-                (episode.account_id, episode.symbol),
-            ).fetchone()
-            previous_payload = _json_loads(prior_row.get("payload_json"), {}) if prior_row else {}
-            decisions_writes.upsert_decision_episode(
-                connection=connection,
-                episode=episode,
-                payload=payload,
-                stamp=stamp,
-            )
-            decisions_writes.advance_current_decision_flow(
-                connection=connection,
-                episode=episode,
-                flow_id=flow_id,
-                stamp=stamp,
-            )
-            self.supersede_prior_follow_ups_for_current(
+            decision_write.write_decision(
                 connection,
-                episode.account_id,
-                episode.symbol,
-                episode.episode_id,
-                stamp,
+                prepared,
+                _supersede_prior_follow_ups_for_current=self.supersede_prior_follow_ups_for_current,
+                _sync_outcome_targets=self.sync_outcome_targets,
+                insert_domain_event_with_connection=insert_domain_event_with_connection,
             )
-            decisions_writes.upsert_decision_flow_head(
-                connection=connection,
-                episode=episode,
-                flow_id=flow_id,
-                stamp=stamp,
-            )
-            if plan is not None:
-                portfolio_writes.upsert_decision_action_plan(
-                    connection=connection,
-                    plan=plan,
-                    stamp=stamp,
-                )
-            self.sync_outcome_targets(connection, episode, stamp)
-            for condition in list(episode.follow_up_conditions or []) + list(episode.unsupported_follow_ups or []):
-                if not isinstance(condition, dict) or not str(condition.get("conditionId") or "").strip():
-                    continue
-                outcomes_writes.upsert_decision_followup(
-                    connection=connection,
-                    condition=condition,
-                    episode=episode,
-                    stamp=stamp,
-                    _bound_number=number,
-                )
-            decision_fields = ("action", "reviewLevel", "dataState", "validationState", "selectedHypothesisId")
-            decision_changed = not previous_payload or any(
-                str(previous_payload.get(key) or "") != str(payload.get(key) or "")
-                for key in decision_fields
-            )
-            validation_changed = not previous_payload or any(
-                str(previous_payload.get(key) or "") != str(payload.get(key) or "")
-                for key in ("dataState", "validationState")
-            )
-            if decision_changed:
-                insert_domain_event_with_connection(
-                    connection,
-                    investment_decision_changed_event(previous_payload, payload),
-                )
-            if validation_changed:
-                insert_domain_event_with_connection(
-                    connection,
-                    investment_validation_changed_event(previous_payload, payload),
-                )
         return episode
 
     @staticmethod
@@ -153,282 +116,51 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episode_id: str,
         stamp: str,
     ) -> int:
-        return outcomes_writes.supersede_prior_followups(
-            connection=connection,
-            account_id=account_id,
-            symbol=symbol,
-            episode_id=episode_id,
-            stamp=stamp,
+        return outcome_schedule.supersede_prior_follow_ups_for_current(
+            connection,
+            account_id,
+            symbol,
+            episode_id,
+            stamp,
         )
 
     def supersede_noncurrent_follow_ups(self, limit: int = 5000) -> Dict[str, object]:
-        """One-time repair for conditions created before single-owner tracking."""
-
-        maximum = max(1, min(50000, int(limit or 5000)))
-        stamp = utc_now_iso()
-        with self.transaction() as connection:
-            rows = connection.execute(
-                "SELECT follow_up.condition_id, follow_up.episode_id, follow_up.payload_json, "
-                "current_flow.decision_episode_id AS current_episode_id "
-                "FROM investment_decision_follow_ups follow_up "
-                "JOIN investment_flow_current current_flow "
-                "ON current_flow.account_id = follow_up.account_id "
-                "AND current_flow.symbol = follow_up.symbol "
-                "WHERE follow_up.status = 'pending' "
-                "AND follow_up.episode_id <> current_flow.decision_episode_id "
-                "ORDER BY follow_up.updated_at, follow_up.condition_id LIMIT %s",
-                (maximum,),
-            ).fetchall()
-            changed = 0
-            for row in rows or []:
-                payload = _json_loads(row.get("payload_json"), {})
-                payload.update({
-                    "status": "superseded",
-                    "trackingStatus": "stopped-newer-decision",
-                    "supersededByEpisodeId": str(row.get("current_episode_id") or ""),
-                    "supersededAt": stamp,
-                })
-                cursor = connection.execute(
-                    "UPDATE investment_decision_follow_ups SET status = 'superseded', "
-                    "payload_json = %s, updated_at = %s WHERE condition_id = %s "
-                    "AND status = 'pending'",
-                    (json_dumps(payload), stamp, str(row.get("condition_id") or "")),
-                )
-                changed += max(0, int(getattr(cursor, "rowcount", 0) or 0))
-        return {
-            "status": "repaired",
-            "candidateCount": len(rows or []),
-            "supersededCount": changed,
-        }
+        return legacy_repair.supersede_noncurrent_follow_ups(
+            limit,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
+        )
 
     def quarantine_invalid_legacy_outcomes(self, limit: int = 5000) -> Dict[str, object]:
-        """Remove operational observations from active decision continuity.
+        return legacy_repair.quarantine_invalid_legacy_outcomes(
+            limit,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
+        )
 
-        Rows are retained for audit, but they can no longer become the current
-        investment decision, produce follow-up work, or open an action plan.
-        """
-
-        maximum = max(1, min(50000, int(limit or 5000)))
-        quarantine_status = "invalid-legacy-outcome"
-        stamp = utc_now_iso()
-        with self.transaction() as connection:
-            rows = connection.execute(
-                "SELECT episode_id, account_id, symbol, payload_json FROM investment_decision_episodes "
-                "WHERE status <> %s AND (action = 'NO_ACTION' OR "
-                "(source = 'v2-reasoning-case' AND selected_hypothesis_id = '')) "
-                "ORDER BY decided_at, episode_id LIMIT %s",
-                (quarantine_status, maximum),
-            ).fetchall()
-            episode_ids = []
-            affected_scopes = set()
-            for row in rows or []:
-                episode_id = str(row.get("episode_id") or "")
-                if not episode_id:
-                    continue
-                affected_scopes.add((
-                    str(row.get("account_id") or ""),
-                    str(row.get("symbol") or "").upper(),
-                ))
-                payload = _json_loads(row.get("payload_json"), {})
-                payload["status"] = quarantine_status
-                payload["validationState"] = "invalid"
-                facts = payload.get("factsAtDecision")
-                facts = dict(facts or {}) if isinstance(facts, dict) else {}
-                facts["legacyOutcomeQuarantine"] = {
-                    "reason": "Operational observation is not a final investment decision.",
-                    "quarantinedAt": stamp,
-                }
-                payload["factsAtDecision"] = facts
-                connection.execute(
-                    "UPDATE investment_decision_episodes SET status = %s, "
-                    "validation_state = 'invalid', payload_json = %s, updated_at = %s "
-                    "WHERE episode_id = %s",
-                    (quarantine_status, json_dumps(payload), stamp, episode_id),
-                )
-                episode_ids.append(episode_id)
-            if not episode_ids:
-                return {
-                    "status": "unchanged",
-                    "quarantinedCount": 0,
-                    "currentPointersRemoved": 0,
-                    "currentPointersRepaired": 0,
-                    "followUpsCanceled": 0,
-                    "outcomeTargetsExcluded": 0,
-                    "actionPlansCanceled": 0,
-                }
-            placeholders = ", ".join(["%s"] * len(episode_ids))
-            cursor = connection.execute(
-                "DELETE FROM investment_flow_current WHERE decision_episode_id IN ("
-                + placeholders + ")",
-                tuple(episode_ids),
-            )
-            current_removed = max(0, int(getattr(cursor, "rowcount", 0) or 0))
-            current_repaired = 0
-            for account_id, symbol in sorted(affected_scopes):
-                replacement = connection.execute(
-                    "SELECT episode_id, selected_hypothesis_id, action, data_state, "
-                    "validation_state, inference_generation_id, decided_at, payload_json, updated_at "
-                    "FROM investment_decision_episodes WHERE account_id = %s AND symbol = %s "
-                    "AND action IN ('BUY', 'ADD', 'HOLD', 'TRIM', 'SELL', 'AVOID', 'WATCH') "
-                    "AND selected_hypothesis_id <> '' "
-                    "AND status NOT IN ('blocked', 'failed', 'expired', 'suppressed', 'superseded', "
-                    "'reference-only', 'invalid-legacy-outcome') "
-                    "AND validation_state NOT IN ('blocked', 'invalid', 'failed', 'error') "
-                    "ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
-                    (account_id, symbol),
-                ).fetchone()
-                if not replacement:
-                    continue
-                replacement_payload = _json_loads(replacement.get("payload_json"), {})
-                replacement_id = str(replacement.get("episode_id") or "")
-                connection.execute(
-                    """
-                    INSERT INTO investment_flow_current (
-                        account_id, symbol, flow_id, decision_episode_id,
-                        source_abox_snapshot_id, inference_generation_id,
-                        selected_hypothesis_id, action, data_state,
-                        validation_state, decided_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        flow_id = VALUES(flow_id), decision_episode_id = VALUES(decision_episode_id),
-                        source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
-                        inference_generation_id = VALUES(inference_generation_id),
-                        selected_hypothesis_id = VALUES(selected_hypothesis_id), action = VALUES(action),
-                        data_state = VALUES(data_state), validation_state = VALUES(validation_state),
-                        decided_at = VALUES(decided_at), updated_at = VALUES(updated_at)
-                    """,
-                    (
-                        account_id,
-                        symbol,
-                        investment_flow_id(account_id, symbol, replacement_id),
-                        replacement_id,
-                        str(replacement_payload.get("sourceAboxSnapshotId") or ""),
-                        str(replacement.get("inference_generation_id") or ""),
-                        str(replacement.get("selected_hypothesis_id") or ""),
-                        str(replacement.get("action") or ""),
-                        str(replacement.get("data_state") or ""),
-                        str(replacement.get("validation_state") or ""),
-                        str(replacement.get("decided_at") or ""),
-                        str(replacement.get("updated_at") or stamp),
-                    ),
-                )
-                current_repaired += 1
-            cursor = connection.execute(
-                "UPDATE investment_decision_follow_ups SET status = 'canceled', "
-                "updated_at = %s, transitioned_at = %s WHERE episode_id IN ("
-                + placeholders + ") AND status IN ('pending', 'ready')",
-                (stamp, stamp, *episode_ids),
-            )
-            follow_ups = max(0, int(getattr(cursor, "rowcount", 0) or 0))
-            cursor = connection.execute(
-                "UPDATE investment_decision_outcome_targets SET status = 'excluded', "
-                "exclusion_reason = 'invalid-legacy-outcome', updated_at = %s "
-                "WHERE episode_id IN (" + placeholders + ") AND status <> 'observed'",
-                (stamp, *episode_ids),
-            )
-            targets = max(0, int(getattr(cursor, "rowcount", 0) or 0))
-            cursor = connection.execute(
-                "UPDATE investment_action_plans SET status = 'canceled', updated_at = %s "
-                "WHERE decision_episode_id IN (" + placeholders + ") "
-                "AND NOT EXISTS (SELECT 1 FROM trade_execution_episodes execution "
-                "WHERE execution.action_plan_id = investment_action_plans.plan_id)",
-                (stamp, *episode_ids),
-            )
-            plans = max(0, int(getattr(cursor, "rowcount", 0) or 0))
-        return {
-            "status": "quarantined",
-            "quarantinedCount": len(episode_ids),
-            "currentPointersRemoved": current_removed,
-            "currentPointersRepaired": current_repaired,
-            "followUpsCanceled": follow_ups,
-            "outcomeTargetsExcluded": targets,
-            "actionPlansCanceled": plans,
-            "episodeIds": episode_ids,
-        }
-
-    def sync_outcome_targets(self, connection, episode: DecisionEpisode, stamp: str = "") -> Dict[str, object]:
-        return outcomes_writes.schedule_decision_outcomes(
-            connection=connection,
-            episode=episode,
-            stamp=stamp,
+    def sync_outcome_targets(
+        self, connection, episode: DecisionEpisode, stamp: str = ""
+    ) -> Dict[str, object]:
+        return outcome_schedule.sync_outcome_targets(
+            connection,
+            episode,
+            stamp,
             _episode_outcome_contract=self.episode_outcome_contract,
             _episode_outcome_contract_completeness=self.episode_outcome_contract_completeness,
             _episode_outcome_horizons=self.episode_outcome_horizons,
             _upsert_outcome_target=self.upsert_outcome_target,
-            _bound_contract_benchmark_symbol=contract_benchmark_symbol,
-            _bound_number=number,
-            _bound_outcome_target_at=outcome_target_at,
         )
 
     def save_shadow_hypothesis_observations(
         self,
         episodes: Iterable[ShadowHypothesisObservationEpisode],
     ) -> List[ShadowHypothesisObservationEpisode]:
-        """Persist research-only predictions without creating decision authority."""
-
-        rows = [
-            item
-            for item in episodes or []
-            if isinstance(item, ShadowHypothesisObservationEpisode)
-            and item.episode_id
-        ]
-        if not rows:
-            return []
-        stamp = utc_now_iso()
-        with self.transaction() as connection:
-            for episode in rows:
-                payload = episode.to_dict()
-                connection.execute(
-                    """
-                    INSERT INTO investment_hypothesis_observation_episodes (
-                        episode_id, candidate_set_id, account_id, symbol,
-                        hypothesis_id, claim_identity, family_id, claim_contract_id,
-                        source_abox_snapshot_id, inference_generation_id,
-                        independence_bucket, market_independence_key,
-                        account_independence_key, status, observed_from_at,
-                        payload_json, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        candidate_set_id = VALUES(candidate_set_id),
-                        hypothesis_id = VALUES(hypothesis_id),
-                        source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
-                        inference_generation_id = VALUES(inference_generation_id),
-                        status = IF(
-                            investment_hypothesis_observation_episodes.status = 'observed',
-                            investment_hypothesis_observation_episodes.status,
-                            VALUES(status)
-                        ),
-                        payload_json = VALUES(payload_json),
-                        updated_at = VALUES(updated_at)
-                    """,
-                    (
-                        episode.episode_id,
-                        episode.candidate_set_id,
-                        episode.account_id,
-                        episode.symbol,
-                        episode.hypothesis_id,
-                        episode.claim_identity,
-                        episode.family_id,
-                        episode.claim_contract_id,
-                        episode.source_abox_snapshot_id,
-                        episode.inference_generation_id,
-                        episode.independence_bucket,
-                        episode.market_independence_key,
-                        episode.account_independence_key,
-                        episode.status,
-                        episode.observed_from_at,
-                        json_dumps(payload),
-                        stamp,
-                        stamp,
-                    ),
-                )
-                if episode.observation_eligible:
-                    self.sync_shadow_hypothesis_observation_targets(
-                        connection,
-                        episode,
-                        stamp,
-                    )
-        return rows
+        return shadow_observations.save_shadow_hypothesis_observations(
+            episodes,
+            _sync_shadow_hypothesis_observation_targets=self.sync_shadow_hypothesis_observation_targets,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
+        )
 
     def sync_shadow_hypothesis_observation_targets(
         self,
@@ -436,120 +168,22 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episode: ShadowHypothesisObservationEpisode,
         stamp: str = "",
     ) -> Dict[str, object]:
-        contract = dict(episode.outcome_contract or {})
-        completeness = outcome_contract_completeness(contract)
-        if not episode.observation_eligible or not completeness.get("complete"):
-            return {
-                "status": "excluded",
-                "targetCount": 0,
-                "reason": str((episode.readiness or {}).get("reason") or "outcome-contract-incomplete"),
-            }
-        stamp = canonical_investment_timestamp(stamp) or utc_now_iso()
-        fingerprint = str(contract.get("contractFingerprint") or "")
-        maximum_delay = int(
-            contract.get("maximumObservationDelayMinutes")
-            or self.outcome_max_delay_minutes()
+        return outcome_schedule.sync_shadow_hypothesis_observation_targets(
+            connection,
+            episode,
+            stamp,
+            _outcome_max_delay_minutes=self.outcome_max_delay_minutes,
+            utc_now_iso=utc_now_iso,
         )
-        target_count = 0
-        for horizon_minutes in outcome_horizon_minutes(
-            contract.get("outcomeHorizonMinutes")
-        ):
-            target_at = market_outcome_target_at(
-                episode.observed_from_at,
-                episode.symbol,
-                episode.market,
-                episode.currency,
-                horizon_minutes,
-            )
-            if not target_at:
-                continue
-            target_id = stable_id(
-                "shadow-hypothesis-observation-target",
-                episode.episode_id,
-                horizon_minutes,
-                fingerprint,
-            )
-            payload = {
-                "episodeKind": "shadow-hypothesis",
-                "requestId": target_id,
-                "episodeId": episode.episode_id,
-                "shadowObservationEpisodeId": episode.episode_id,
-                "symbol": episode.symbol,
-                "market": episode.market,
-                "currency": episode.currency,
-                "horizonMinutes": horizon_minutes,
-                "decidedAt": episode.observed_from_at,
-                "baselineAt": episode.observed_from_at,
-                "targetAt": target_at,
-                "maximumObservationDelayMinutes": maximum_delay,
-                "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
-                "hypothesisOutcomeContract": contract,
-                "benchmarkSymbol": contract_benchmark_symbol(contract),
-                "requiresInstrumentBaseline": True,
-            }
-            connection.execute(
-                """
-                INSERT INTO investment_hypothesis_observation_targets (
-                    target_id, observation_episode_id, account_id, symbol,
-                    horizon_minutes, target_at, maximum_delay_minutes,
-                    contract_fingerprint, status, exclusion_reason, outcome_id,
-                    payload_json, created_at, updated_at, observed_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', '', '', %s, %s, %s, '')
-                ON DUPLICATE KEY UPDATE
-                    target_at = VALUES(target_at),
-                    maximum_delay_minutes = VALUES(maximum_delay_minutes),
-                    payload_json = VALUES(payload_json),
-                    updated_at = VALUES(updated_at)
-                """,
-                (
-                    target_id,
-                    episode.episode_id,
-                    episode.account_id,
-                    episode.symbol,
-                    horizon_minutes,
-                    target_at,
-                    maximum_delay,
-                    fingerprint,
-                    json_dumps(payload),
-                    stamp,
-                    stamp,
-                ),
-            )
-            target_count += 1
-        return {"status": "scheduled", "targetCount": target_count}
 
     def shadow_observation_episodes_by_ids(
         self,
         episode_ids: Iterable[str],
     ) -> Dict[str, ShadowHypothesisObservationEpisode]:
-        clean_ids = list(dict.fromkeys(
-            str(item or "").strip()
-            for item in episode_ids or []
-            if str(item or "").strip()
-        ))
-        if not clean_ids:
-            return {}
-        placeholders = ",".join(["%s"] * len(clean_ids))
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT payload_json, status, observed_from_at "
-                "FROM investment_hypothesis_observation_episodes "
-                "WHERE episode_id IN (" + placeholders + ")",
-                tuple(clean_ids),
-            ).fetchall()
-        result = {}
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if not payload:
-                continue
-            payload["status"] = str(row.get("status") or payload.get("status") or "")
-            payload["observedFromAt"] = canonical_investment_timestamp(
-                row.get("observed_from_at") or payload.get("observedFromAt")
-            )
-            episode = ShadowHypothesisObservationEpisode.from_dict(payload)
-            if episode.episode_id:
-                result[episode.episode_id] = episode
-        return result
+        return shadow_observations.shadow_observation_episodes_by_ids(
+            episode_ids,
+            _connect=self.connect,
+        )
 
     def shadow_observation_episodes_for_claims(
         self,
@@ -558,46 +192,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         claim_contract_ids: Iterable[str],
         limit: int = 100,
     ) -> List[ShadowHypothesisObservationEpisode]:
-        """Read reused shadow samples by stable claim identity.
-
-        A shadow episode is intentionally deduplicated across candidate sets in
-        one independence bucket. Querying only by the latest candidate-set id
-        therefore hides valid observation history from the current hypothesis.
-        """
-
-        claim_ids = list(dict.fromkeys(
-            str(item or "").strip()
-            for item in claim_contract_ids or []
-            if str(item or "").strip()
-        ))
-        normalized_account = str(account_id or "").strip() or "default"
-        normalized_symbol = str(symbol or "").upper().strip()
-        if not normalized_symbol or not claim_ids:
-            return []
-        placeholders = ",".join(["%s"] * len(claim_ids))
-        bounded_limit = max(1, min(500, int(limit or 100)))
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT payload_json, status, observed_from_at "
-                "FROM investment_hypothesis_observation_episodes "
-                "WHERE account_id = %s AND symbol = %s "
-                "AND claim_contract_id IN (" + placeholders + ") "
-                "ORDER BY observed_from_at DESC, episode_id DESC LIMIT %s",
-                (normalized_account, normalized_symbol, *claim_ids, bounded_limit),
-            ).fetchall()
-        result = []
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if not payload:
-                continue
-            payload["status"] = str(row.get("status") or payload.get("status") or "")
-            payload["observedFromAt"] = canonical_investment_timestamp(
-                row.get("observed_from_at") or payload.get("observedFromAt")
-            )
-            episode = ShadowHypothesisObservationEpisode.from_dict(payload)
-            if episode.episode_id:
-                result.append(episode)
-        return result
+        return shadow_observations.shadow_observation_episodes_for_claims(
+            account_id,
+            symbol,
+            claim_contract_ids,
+            limit,
+            _connect=self.connect,
+        )
 
     @staticmethod
     def upsert_outcome_target(
@@ -613,575 +214,159 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         payload: Dict[str, object],
         stamp: str,
     ) -> None:
-        return outcomes_writes.upsert_decision_outcome_target(
-            connection=connection,
-            target_id=target_id,
-            episode=episode,
-            horizon_minutes=horizon_minutes,
-            target_at=target_at,
-            maximum_delay_minutes=maximum_delay_minutes,
-            contract_fingerprint=contract_fingerprint,
-            status=status,
-            exclusion_reason=exclusion_reason,
-            payload=payload,
-            stamp=stamp,
+        return outcome_schedule.upsert_outcome_target(
+            connection,
+            target_id,
+            episode,
+            horizon_minutes,
+            target_at,
+            maximum_delay_minutes,
+            contract_fingerprint,
+            status,
+            exclusion_reason,
+            payload,
+            stamp,
         )
 
     def backfill_outcome_targets(self, account_id: str, limit: int = 2000) -> Dict[str, object]:
-        """One-time safe migration using only contracts frozen in each episode."""
-
-        account_id = str(account_id or "")
-        with self.transaction() as connection:
-            # This migration check runs from the market-data cycle. Keep its
-            # steady-state query index-only: selecting the large episode JSON
-            # before proving a target is missing repeatedly read the complete
-            # decision archive even after migration had finished.
-            candidates = connection.execute(
-                "SELECT episodes.episode_id "
-                "FROM investment_decision_episodes AS episodes "
-                "WHERE episodes.account_id = %s "
-                "AND NOT EXISTS ("
-                "SELECT 1 FROM investment_decision_outcome_targets AS targets "
-                "WHERE targets.episode_id = episodes.episode_id"
-                ") ORDER BY episodes.decided_at ASC, episodes.episode_id ASC LIMIT %s",
-                (account_id, max(1, min(10000, int(limit or 2000)))),
-            ).fetchall()
-            episode_ids = [
-                str(row.get("episode_id") or "").strip()
-                for row in candidates or []
-                if str(row.get("episode_id") or "").strip()
-            ]
-            rows = []
-            if episode_ids:
-                placeholders = ", ".join(["%s"] * len(episode_ids))
-                payload_rows = connection.execute(
-                    "SELECT episode_id, payload_json, status, decided_at "
-                    "FROM investment_decision_episodes WHERE episode_id IN ("
-                    + placeholders
-                    + ")",
-                    tuple(episode_ids),
-                ).fetchall()
-                by_id = {
-                    str(row.get("episode_id") or ""): row
-                    for row in payload_rows or []
-                }
-                rows = [by_id[episode_id] for episode_id in episode_ids if episode_id in by_id]
-            stamp = utc_now_iso()
-            scheduled = 0
-            excluded = 0
-            for row in rows or []:
-                episode = self.episode_from_row(row)
-                result = self.sync_outcome_targets(connection, episode, stamp)
-                scheduled += int(result.get("targetCount") or 0)
-                excluded += 1 if result.get("status") == "excluded" else 0
-        return {
-            "status": "backfilled" if rows else "already-initialized",
-            "episodeCount": len(rows or []),
-            "scheduledTargetCount": scheduled,
-            "excludedEpisodeCount": excluded,
-        }
+        return target_repair.backfill_outcome_targets(
+            account_id,
+            limit,
+            _episode_from_row=self.episode_from_row,
+            _sync_outcome_targets=self.sync_outcome_targets,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
+        )
 
     def repair_pending_outcome_target_schedules(
         self,
         account_id: str,
         limit: int = 1000,
     ) -> Dict[str, object]:
-        """Realign valid targets and retire targets with invalid contracts.
-
-        Older decision payloads sometimes omitted market and currency. Their
-        short horizon was therefore scheduled during closed hours and a later
-        ingestion of the unchanged close could be mistaken for a new quote.
-        Older prediction contracts can also lack a criterion for one of their
-        scheduled horizons. Only pending targets are mutable; observed and
-        excluded audit rows are deliberately left untouched.
-        """
-
-        maximum = max(1, min(5000, int(limit or 1000)))
-        repaired = []
-        excluded = []
-        stamp = utc_now_iso()
-        with self.transaction() as connection:
-            rows = connection.execute(
-                "SELECT targets.target_id, targets.horizon_minutes, targets.target_at, "
-                "targets.payload_json AS target_json, episodes.payload_json AS episode_json, "
-                "episodes.status AS episode_status, episodes.decided_at "
-                "FROM investment_decision_outcome_targets AS targets "
-                "JOIN investment_decision_episodes AS episodes ON episodes.episode_id = targets.episode_id "
-                "WHERE targets.account_id = %s AND targets.status = 'pending' "
-                "ORDER BY targets.target_at ASC, targets.target_id ASC LIMIT %s",
-                (str(account_id or ""), maximum),
-            ).fetchall()
-            for row in rows or []:
-                episode_payload = _json_loads(row.get("episode_json"), {})
-                if not episode_payload:
-                    continue
-                episode = DecisionEpisode.from_dict(episode_payload)
-                stored_decided_at = canonical_investment_timestamp(row.get("decided_at"))
-                if stored_decided_at:
-                    episode.decided_at = stored_decided_at
-                try:
-                    horizon_minutes = int(float(row.get("horizon_minutes") or 0))
-                except (TypeError, ValueError):
-                    horizon_minutes = 0
-                target_payload = _json_loads(row.get("target_json"), {})
-                original_payload = dict(target_payload)
-                completeness = self.episode_outcome_contract_completeness(episode)
-                facts = (
-                    episode.facts_at_decision
-                    if isinstance(episode.facts_at_decision, dict)
-                    else {}
-                )
-                calibration = (
-                    facts.get("calibrationPolicy")
-                    if isinstance(facts.get("calibrationPolicy"), dict)
-                    else {}
-                )
-                if (
-                    not completeness.get("complete")
-                    or calibration.get("eligible") is not True
-                ):
-                    reason = str(
-                        "no-selected-hypothesis"
-                        if not episode.selected_hypothesis_id
-                        else "outcome-contract-incomplete"
-                        if not completeness.get("complete")
-                        else calibration.get("reason") or "calibration-ineligible"
-                    )[:191]
-                    target_payload.update({
-                        "status": "excluded",
-                        "exclusionReason": reason,
-                        "predictionContractCompleteness": completeness,
-                    })
-                    cursor = connection.execute(
-                        "UPDATE investment_decision_outcome_targets "
-                        "SET status = 'excluded', exclusion_reason = %s, "
-                        "payload_json = %s, updated_at = %s "
-                        "WHERE target_id = %s AND status = 'pending'",
-                        (
-                            reason,
-                            json_dumps(target_payload),
-                            stamp,
-                            str(row.get("target_id") or ""),
-                        ),
-                    )
-                    if int(getattr(cursor, "rowcount", 0) or 0) > 0:
-                        excluded.append(str(row.get("target_id") or ""))
-                    continue
-                target_at = outcome_target_at(episode, horizon_minutes)
-                if not target_at:
-                    continue
-                target_payload.setdefault("episodeKind", "decision")
-                target_payload.setdefault("requiresInstrumentBaseline", True)
-                target_payload["targetAt"] = target_at
-                fact_delta = (
-                    facts.get("factDelta")
-                    if isinstance(facts.get("factDelta"), dict)
-                    else {}
-                )
-                baseline_at = canonical_investment_timestamp(
-                    fact_delta.get("source_observed_at")
-                    or fact_delta.get("sourceObservedAt")
-                    or facts.get("sourceAsOf")
-                )
-                if baseline_at:
-                    target_payload.setdefault("baselineAt", baseline_at)
-                decision_price = number(facts.get("currentPrice"))
-                if decision_price > 0:
-                    target_payload.setdefault("decisionPrice", decision_price)
-                    if facts.get("sourceAsOf"):
-                        target_payload.setdefault(
-                            "decisionPriceSourceAsOf",
-                            facts.get("sourceAsOf"),
-                        )
-                inferred_market = infer_market_from_context(
-                    "investmentInsight",
-                    {
-                        "symbol": episode.symbol,
-                        "market": target_payload.get("market"),
-                        "currency": target_payload.get("currency"),
-                    },
-                )
-                if inferred_market and not str(target_payload.get("market") or "").strip():
-                    target_payload["market"] = inferred_market
-                if not str(target_payload.get("currency") or "").strip():
-                    target_payload["currency"] = (
-                        "KRW" if inferred_market == "KR" else "USD" if inferred_market == "US" else ""
-                    )
-                target_changed = (
-                    target_at != canonical_investment_timestamp(row.get("target_at"))
-                )
-                if not target_changed and target_payload == original_payload:
-                    continue
-                cursor = connection.execute(
-                    "UPDATE investment_decision_outcome_targets SET target_at = %s, "
-                    "payload_json = %s, updated_at = %s "
-                    "WHERE target_id = %s AND status = 'pending'",
-                    (
-                        target_at,
-                        json_dumps(target_payload),
-                        stamp,
-                        str(row.get("target_id") or ""),
-                    ),
-                )
-                if int(getattr(cursor, "rowcount", 0) or 0) > 0:
-                    repaired.append(str(row.get("target_id") or ""))
-
-            shadow_rows = connection.execute(
-                "SELECT targets.target_id, targets.horizon_minutes, targets.target_at, "
-                "targets.payload_json AS target_json, episodes.payload_json AS episode_json "
-                "FROM investment_hypothesis_observation_targets AS targets "
-                "JOIN investment_hypothesis_observation_episodes AS episodes "
-                "ON episodes.episode_id = targets.observation_episode_id "
-                "WHERE targets.account_id = %s AND targets.status = 'pending' "
-                "ORDER BY targets.target_at ASC, targets.target_id ASC LIMIT %s",
-                (str(account_id or ""), maximum),
-            ).fetchall()
-            for row in shadow_rows or []:
-                episode_payload = _json_loads(row.get("episode_json"), {})
-                episode = ShadowHypothesisObservationEpisode.from_dict(
-                    episode_payload
-                )
-                target_payload = _json_loads(row.get("target_json"), {})
-                original_payload = dict(target_payload)
-                completeness = outcome_contract_completeness(
-                    episode.outcome_contract
-                )
-                if not episode.observation_eligible or not completeness.get("complete"):
-                    reason = str(
-                        "outcome-contract-incomplete"
-                        if not completeness.get("complete")
-                        else (episode.readiness or {}).get("reason")
-                        or "observation-ineligible"
-                    )[:191]
-                    target_payload.update({
-                        "status": "excluded",
-                        "exclusionReason": reason,
-                        "predictionContractCompleteness": completeness,
-                    })
-                    cursor = connection.execute(
-                        "UPDATE investment_hypothesis_observation_targets "
-                        "SET status = 'excluded', exclusion_reason = %s, "
-                        "payload_json = %s, updated_at = %s "
-                        "WHERE target_id = %s AND status = 'pending'",
-                        (
-                            reason,
-                            json_dumps(target_payload),
-                            stamp,
-                            str(row.get("target_id") or ""),
-                        ),
-                    )
-                    if int(getattr(cursor, "rowcount", 0) or 0) > 0:
-                        excluded.append(str(row.get("target_id") or ""))
-                    continue
-                try:
-                    horizon_minutes = int(float(row.get("horizon_minutes") or 0))
-                except (TypeError, ValueError):
-                    horizon_minutes = 0
-                target_at = market_outcome_target_at(
-                    episode.observed_from_at,
-                    episode.symbol,
-                    episode.market,
-                    episode.currency,
-                    horizon_minutes,
-                )
-                if not target_at:
-                    continue
-                target_payload.setdefault("episodeKind", "shadow-hypothesis")
-                target_payload.setdefault("requiresInstrumentBaseline", True)
-                target_payload.setdefault("baselineAt", episode.observed_from_at)
-                target_payload["targetAt"] = target_at
-                target_changed = (
-                    target_at != canonical_investment_timestamp(row.get("target_at"))
-                )
-                if not target_changed and target_payload == original_payload:
-                    continue
-                cursor = connection.execute(
-                    "UPDATE investment_hypothesis_observation_targets "
-                    "SET target_at = %s, payload_json = %s, updated_at = %s "
-                    "WHERE target_id = %s AND status = 'pending'",
-                    (
-                        target_at,
-                        json_dumps(target_payload),
-                        stamp,
-                        str(row.get("target_id") or ""),
-                    ),
-                )
-                if int(getattr(cursor, "rowcount", 0) or 0) > 0:
-                    repaired.append(str(row.get("target_id") or ""))
-        return {
-            "status": "repaired" if repaired or excluded else "unchanged",
-            "checkedCount": len(rows or []) + len(shadow_rows or []),
-            "repairedCount": len(repaired),
-            "excludedCount": len(excluded),
-            "targetIds": repaired,
-            "excludedTargetIds": excluded,
-        }
+        return target_repair.repair_pending_outcome_target_schedules(
+            account_id,
+            limit,
+            _episode_outcome_contract_completeness=self.episode_outcome_contract_completeness,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
+        )
 
     def outcome_horizons(self) -> List[int]:
-        return outcome_horizon_minutes(
-            self.runtime_settings.get("investmentBrainOutcomeObservationMinutes") or "60,1440,7200,28800",
+        return outcome_policy.outcome_horizons(
+            _runtime_settings=self.runtime_settings,
         )
 
     def outcome_minimum_samples(self) -> int:
-        try:
-            value = int(float(str(
-                self.runtime_settings.get("hypothesisOutcomeReviewMinimumSamples")
-                or self.runtime_settings.get("investmentBrainOutcomeReviewMinimumSamples")
-                or "3"
-            )))
-        except (TypeError, ValueError):
-            value = 3
-        return max(1, min(1000, value))
+        return outcome_policy.outcome_minimum_samples(
+            _runtime_settings=self.runtime_settings,
+        )
 
     def episode_outcome_contract(self, episode: DecisionEpisode) -> Dict[str, object]:
-        facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
-        raw = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), dict) else {}
-        resolved = resolved_outcome_contract(
-            raw,
-            fallback_horizons=self.outcome_horizons(),
-            fallback_minimum_samples=self.outcome_minimum_samples(),
-            fallback_maximum_delay_minutes=self.outcome_max_delay_minutes(),
+        return outcome_policy.episode_outcome_contract(
+            episode,
+            _outcome_horizons=self.outcome_horizons,
+            _outcome_max_delay_minutes=self.outcome_max_delay_minutes,
+            _outcome_minimum_samples=self.outcome_minimum_samples,
         )
-        for key in [
-            "contractVersion",
-            "contractFingerprint",
-            "criteriaOrigin",
-            "effectiveAt",
-            "selectedHypothesisId",
-            "sourceRuleIds",
-            "marketHypothesisId",
-            "accountHypothesisOverlayId",
-            "inferenceGenerationId",
-            "marketIndependenceKey",
-            "accountIndependenceKey",
-            "sourceFactIndependenceKey",
-            "predictionTarget",
-            "expectedDirection",
-            "expectedOutcome",
-            "outcomeMetric",
-            "falsificationContract",
-        ]:
-            if raw.get(key) not in (None, "", [], {}):
-                resolved[key] = raw.get(key)
-        return resolved
 
     @staticmethod
     def episode_outcome_contract_completeness(episode: DecisionEpisode) -> Dict[str, object]:
-        facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
-        raw = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), dict) else {}
-        return outcome_contract_completeness(raw)
+        return outcome_policy.episode_outcome_contract_completeness(
+            episode,
+        )
 
     def episode_outcome_horizons(self, episode: DecisionEpisode) -> List[int]:
-        return outcome_horizon_minutes(self.episode_outcome_contract(episode).get("outcomeHorizonMinutes"))
+        return outcome_policy.episode_outcome_horizons(
+            episode,
+            _episode_outcome_contract=self.episode_outcome_contract,
+        )
 
     def episode_outcome_max_delay_minutes(self, episode: DecisionEpisode) -> int:
-        return int(self.episode_outcome_contract(episode).get("maximumObservationDelayMinutes") or self.outcome_max_delay_minutes())
+        return outcome_policy.episode_outcome_max_delay_minutes(
+            episode,
+            _episode_outcome_contract=self.episode_outcome_contract,
+            _outcome_max_delay_minutes=self.outcome_max_delay_minutes,
+        )
 
     def outcome_batch_size(self) -> int:
-        try:
-            value = int(float(str(self.runtime_settings.get("investmentBrainOutcomeEpisodeBatchSize") or "200")))
-        except (TypeError, ValueError):
-            value = 200
-        return max(10, min(1000, value))
+        return outcome_policy.outcome_batch_size(
+            _runtime_settings=self.runtime_settings,
+        )
 
     def episode_from_row(self, row: Dict[str, object]) -> DecisionEpisode:
-        episode = DecisionEpisode.from_dict(_json_loads(row.get("payload_json"), {}))
-        stored_status = str(row.get("status") or "").strip()
-        stored_decided_at = canonical_investment_timestamp(row.get("decided_at"))
-        if stored_status:
-            episode.status = stored_status
-        if stored_decided_at:
-            episode.decided_at = stored_decided_at
-        else:
-            episode.decided_at = canonical_investment_timestamp(episode.decided_at) or episode.decided_at
-        return episode
+        return episode_hydration.episode_from_row(
+            row,
+        )
 
-    def outcomes_from_rows(self, rows: Iterable[Dict[str, object]], default_episode_id: str = "") -> List[ObservedOutcome]:
-        outcomes: List[ObservedOutcome] = []
-        for row in rows or []:
-            item = _json_loads(row.get("payload_json"), {})
-            if not item:
-                continue
-            outcomes.append(ObservedOutcome(
-                outcome_id=str(item.get("outcomeId") or ""),
-                episode_id=str(item.get("episodeId") or row.get("episode_id") or default_episode_id),
-                observed_at=canonical_investment_timestamp(item.get("observedAt") or row.get("observed_at")) or str(item.get("observedAt") or ""),
-                price=number(item.get("price")),
-                profit_loss_rate=number(item.get("profitLossRate")),
-                price_change_from_decision_pct=number(item.get("priceChangeFromDecisionPct")),
-                selected_hypothesis_status=str(item.get("selectedHypothesisStatus") or "pending"),
-                contradicted_evidence_ids=list(item.get("contradictedEvidenceIds") or []),
-                payload=dict(item.get("payload") or {}),
-            ))
-        return outcomes
+    def outcomes_from_rows(
+        self, rows: Iterable[Dict[str, object]], default_episode_id: str = ""
+    ) -> List[ObservedOutcome]:
+        return episode_hydration.outcomes_from_rows(
+            rows,
+            default_episode_id,
+        )
 
     def hydrate_outcomes(
         self,
         episodes: Iterable[DecisionEpisode],
         as_of: str = "",
     ) -> List[DecisionEpisode]:
-        result = self.hydrate_follow_ups(episodes, as_of=as_of)
-        episode_ids = [item.episode_id for item in result if item.episode_id]
-        if not episode_ids:
-            return result
-        placeholders = ",".join(["%s"] * len(episode_ids))
-        normalized_as_of = canonical_investment_timestamp(as_of)
-        params: List[object] = list(episode_ids)
-        cutoff = " AND observed_at <= %s" if normalized_as_of else ""
-        if normalized_as_of:
-            params.append(normalized_as_of)
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT episode_id, observed_at, payload_json FROM investment_decision_outcomes "
-                "WHERE episode_id IN (" + placeholders + ") "
-                + cutoff
-                + " "
-                "ORDER BY observed_at ASC, outcome_id ASC",
-                tuple(params),
-            ).fetchall()
-        grouped: Dict[str, List[Dict[str, object]]] = {}
-        for row in rows or []:
-            grouped.setdefault(str(row.get("episode_id") or ""), []).append(row)
-        for episode in result:
-            episode.outcomes = self.outcomes_from_rows(grouped.get(episode.episode_id, []), episode.episode_id)
-        return result
+        return episode_hydration.hydrate_outcomes(
+            episodes,
+            as_of,
+            _connect=self.connect,
+            _hydrate_follow_ups=self.hydrate_follow_ups,
+            _outcomes_from_rows=self.outcomes_from_rows,
+        )
 
     def hydrate_follow_ups(
         self,
         episodes: Iterable[DecisionEpisode],
         as_of: str = "",
     ) -> List[DecisionEpisode]:
-        """Merge mutable follow-up state into immutable decision payloads.
-
-        DecisionEpisode keeps the facts and AI answer at decision time. Follow-up
-        status changes later, so the normalized table is authoritative for that
-        small mutable slice and is joined only for the bounded episodes being
-        projected or reviewed.
-        """
-
-        result = list(episodes or [])
-        episode_ids = [item.episode_id for item in result if item.episode_id]
-        if not episode_ids:
-            return result
-        placeholders = ",".join(["%s"] * len(episode_ids))
-        normalized_as_of = canonical_investment_timestamp(as_of)
-        params: List[object] = list(episode_ids)
-        cutoff = " AND created_at <= %s" if normalized_as_of else ""
-        if normalized_as_of:
-            params.append(normalized_as_of)
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT episode_id, observable, payload_json "
-                "FROM investment_decision_follow_ups WHERE episode_id IN (" + placeholders + ") "
-                + cutoff
-                + " "
-                "ORDER BY created_at ASC, condition_id ASC",
-                tuple(params),
-            ).fetchall()
-        grouped: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if not payload:
-                continue
-            buckets = grouped.setdefault(
-                str(row.get("episode_id") or ""),
-                {"tracked": [], "unsupported": []},
-            )
-            key = "tracked" if bool(row.get("observable")) else "unsupported"
-            if (
-                str(payload.get("status") or "") in {"satisfied", "invalidated", "expired"}
-                and not bool(payload.get("transitionVerified"))
-            ):
-                payload["legacyTransitionState"] = "unverified"
-            buckets[key].append(payload)
-        for episode in result:
-            buckets = grouped.get(episode.episode_id)
-            if not buckets:
-                continue
-            episode.follow_up_conditions = list(buckets["tracked"])
-            episode.unsupported_follow_ups = list(buckets["unsupported"])
-        return result
+        return episode_hydration.hydrate_follow_ups(
+            episodes,
+            as_of,
+            _connect=self.connect,
+        )
 
     def episodes_by_ids(self, episode_ids: Iterable[str]) -> Dict[str, DecisionEpisode]:
-        clean_ids = list(dict.fromkeys(str(item or "").strip() for item in episode_ids or [] if str(item or "").strip()))
-        if not clean_ids:
-            return {}
-        placeholders = ",".join(["%s"] * len(clean_ids))
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT payload_json, status, decided_at FROM investment_decision_episodes "
-                "WHERE episode_id IN (" + placeholders + ")",
-                clean_ids,
-            ).fetchall()
-        episodes = self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
-        return {item.episode_id: item for item in episodes if item.episode_id}
+        return episode_queries.episodes_by_ids(
+            episode_ids,
+            _connect=self.connect,
+            _episode_from_row=self.episode_from_row,
+            _hydrate_outcomes=self.hydrate_outcomes,
+        )
 
     def get(self, episode_id: str) -> Optional[DecisionEpisode]:
-        with self.connect() as connection:
-            row = connection.execute(
-                "SELECT payload_json, status, decided_at FROM investment_decision_episodes WHERE episode_id = %s",
-                (str(episode_id or ""),),
-            ).fetchone()
-        if not row:
-            return None
-        return self.hydrate_outcomes([self.episode_from_row(row)])[0]
-
-    def list(self, account_id: str = "", symbol: str = "", limit: int = 50) -> List[DecisionEpisode]:
-        where = []
-        params: List[object] = []
-        if account_id:
-            where.append("account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            where.append("symbol = %s")
-            params.append(str(symbol).upper())
-        params.append(max(1, min(2000, int(limit or 50))))
-        sql = "SELECT payload_json, status, decided_at FROM investment_decision_episodes"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY decided_at DESC, episode_id DESC LIMIT %s"
-        with self.connect() as connection:
-            rows = connection.execute(sql, tuple(params)).fetchall()
-        return self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
-
-    def list_summaries(self, account_id: str = "", symbol: str = "", limit: int = 50) -> List[Dict[str, object]]:
-        where = []
-        params: List[object] = []
-        if account_id:
-            where.append("account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            where.append("symbol = %s")
-            params.append(str(symbol).upper())
-        params.append(max(1, min(500, int(limit or 50))))
-        sql = (
-            "SELECT episode_id, account_id, symbol, subject_name, question_id, selected_hypothesis_id, "
-            "action, review_level, data_state, validation_state, inference_generation_id, status, "
-            "decided_at, source, updated_at FROM investment_decision_episodes"
+        return episode_queries.get_episode(
+            episode_id,
+            _connect=self.connect,
+            _episode_from_row=self.episode_from_row,
+            _hydrate_outcomes=self.hydrate_outcomes,
         )
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY decided_at DESC, episode_id DESC LIMIT %s"
-        with self.connect() as connection:
-            rows = connection.execute(sql, tuple(params)).fetchall()
-        return [{
-            "episodeId": str(row.get("episode_id") or ""),
-            "accountId": str(row.get("account_id") or ""),
-            "symbol": str(row.get("symbol") or "").upper(),
-            "subjectName": str(row.get("subject_name") or row.get("symbol") or ""),
-            "questionId": str(row.get("question_id") or ""),
-            "selectedHypothesisId": str(row.get("selected_hypothesis_id") or ""),
-            "action": str(row.get("action") or "HOLD"),
-            "reviewLevel": str(row.get("review_level") or "check"),
-            "dataState": str(row.get("data_state") or "partial"),
-            "validationState": str(row.get("validation_state") or "conditional"),
-            "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
-            "status": str(row.get("status") or "active"),
-            "decidedAt": canonical_investment_timestamp(row.get("decided_at")),
-            "source": str(row.get("source") or ""),
-            "updatedAt": str(row.get("updated_at") or ""),
-            "detailRequired": True,
-        } for row in rows or []]
+
+    def list(
+        self, account_id: str = "", symbol: str = "", limit: int = 50
+    ) -> List[DecisionEpisode]:
+        return episode_queries.list_episodes(
+            account_id,
+            symbol,
+            limit,
+            _connect=self.connect,
+            _episode_from_row=self.episode_from_row,
+            _hydrate_outcomes=self.hydrate_outcomes,
+        )
+
+    def list_summaries(
+        self, account_id: str = "", symbol: str = "", limit: int = 50
+    ) -> List[Dict[str, object]]:
+        return episode_queries.list_summaries(
+            account_id,
+            symbol,
+            limit,
+            _connect=self.connect,
+        )
 
     def list_flow_heads(
         self,
@@ -1189,42 +374,12 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         symbol: str = "",
         limit: int = 200,
     ) -> List[Dict[str, object]]:
-        """Return one compact current decision per account instrument."""
-
-        clauses = []
-        params: List[object] = []
-        if account_id:
-            clauses.append("current.account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            clauses.append("current.symbol = %s")
-            params.append(str(symbol).upper())
-        where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        params.append(max(1, min(500, int(limit or 200))))
-        sql = (
-            "SELECT current.flow_id, current.account_id, current.symbol, current.updated_at AS flow_updated_at, "
-            "episodes.payload_json, episodes.status, episodes.decided_at "
-            "FROM investment_flow_current AS current JOIN investment_decision_episodes AS episodes "
-            "ON episodes.episode_id = current.decision_episode_id "
-            + where
-            + " ORDER BY current.updated_at DESC, current.flow_id DESC LIMIT %s"
+        return episode_queries.list_flow_heads(
+            account_id,
+            symbol,
+            limit,
+            _connect=self.connect,
         )
-        with self.connect() as connection:
-            rows = connection.execute(sql, tuple(params)).fetchall()
-        result = []
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if not isinstance(payload, dict):
-                continue
-            payload = dict(payload)
-            payload["flowId"] = str(row.get("flow_id") or payload.get("flowId") or "")
-            payload["accountId"] = str(row.get("account_id") or payload.get("accountId") or "")
-            payload["symbol"] = str(row.get("symbol") or payload.get("symbol") or "").upper()
-            payload["status"] = str(row.get("status") or payload.get("status") or "active")
-            payload["decidedAt"] = canonical_investment_timestamp(row.get("decided_at")) or str(payload.get("decidedAt") or "")
-            payload["updatedAt"] = str(row.get("flow_updated_at") or payload.get("updatedAt") or payload.get("decidedAt") or "")
-            result.append(payload)
-        return result
 
     def list_replay_records(
         self,
@@ -1232,90 +387,12 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         symbol: str = "",
         limit: int = 500,
     ) -> List[Dict[str, object]]:
-        """Read immutable decision payloads separately from later observations.
-
-        The normal list view intentionally hydrates current follow-up state and
-        outcomes. Historical replay needs the original payload plus those
-        mutable records as separate streams so an application service can apply
-        an explicit point-in-time cutoff.
-        """
-
-        where = []
-        params: List[object] = []
-        if account_id:
-            where.append("account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            where.append("symbol = %s")
-            params.append(str(symbol).upper())
-        params.append(max(1, min(2000, int(limit or 500))))
-        sql = "SELECT episode_id, payload_json, status, decided_at, created_at FROM investment_decision_episodes"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY decided_at DESC, episode_id DESC LIMIT %s"
-        with self.connect() as connection:
-            episode_rows = connection.execute(sql, tuple(params)).fetchall()
-            episode_ids = [
-                str(row.get("episode_id") or "")
-                for row in episode_rows or []
-                if str(row.get("episode_id") or "")
-            ]
-            outcome_rows = []
-            follow_up_rows = []
-            if episode_ids:
-                placeholders = ",".join(["%s"] * len(episode_ids))
-                outcome_rows = connection.execute(
-                    "SELECT episode_id, observed_at, payload_json FROM investment_decision_outcomes "
-                    "WHERE episode_id IN (" + placeholders + ") "
-                    "ORDER BY observed_at ASC, outcome_id ASC",
-                    tuple(episode_ids),
-                ).fetchall()
-                follow_up_rows = connection.execute(
-                    "SELECT episode_id, observable, transitioned_at, payload_json "
-                    "FROM investment_decision_follow_ups WHERE episode_id IN (" + placeholders + ") "
-                    "ORDER BY created_at ASC, condition_id ASC",
-                    tuple(episode_ids),
-                ).fetchall()
-
-        outcomes: Dict[str, List[Dict[str, object]]] = {}
-        for row in outcome_rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if not payload:
-                continue
-            if not payload.get("observedAt"):
-                payload["observedAt"] = canonical_investment_timestamp(row.get("observed_at"))
-            outcomes.setdefault(str(row.get("episode_id") or ""), []).append(payload)
-
-        follow_ups: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
-        for row in follow_up_rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if not payload:
-                continue
-            if not payload.get("transitionAt") and row.get("transitioned_at"):
-                payload["transitionAt"] = canonical_investment_timestamp(row.get("transitioned_at"))
-            buckets = follow_ups.setdefault(
-                str(row.get("episode_id") or ""),
-                {"tracked": [], "unsupported": []},
-            )
-            buckets["tracked" if bool(row.get("observable")) else "unsupported"].append(payload)
-
-        result = []
-        for row in episode_rows or []:
-            episode_id = str(row.get("episode_id") or "")
-            snapshot = _json_loads(row.get("payload_json"), {})
-            stored_decided_at = canonical_investment_timestamp(row.get("decided_at"))
-            if stored_decided_at:
-                snapshot["decidedAt"] = stored_decided_at
-            snapshot["recordedAt"] = canonical_investment_timestamp(row.get("created_at"))
-            buckets = follow_ups.get(episode_id, {"tracked": [], "unsupported": []})
-            result.append({
-                "episodeSnapshot": snapshot,
-                "persistedStatus": str(row.get("status") or ""),
-                "outcomes": list(outcomes.get(episode_id, [])),
-                "followUps": list(buckets["tracked"]),
-                "unsupportedFollowUps": list(buckets["unsupported"]),
-            })
-        return result
+        return replay_queries.list_replay_records(
+            account_id,
+            symbol,
+            limit,
+            _connect=self.connect,
+        )
 
     def latest_decision_memory(
         self,
@@ -1323,59 +400,12 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         symbol: str,
         exclude_episode_id: str = "",
     ) -> Dict[str, object]:
-        """Read the compact prior decision used by the next notification AI run.
-
-        Notification continuity needs one valid prior action and its audit
-        identity, not outcome history. A bounded payload scan skips legacy
-        executable opinions that cannot reproduce the current actionability
-        contract without hydrating the heavier learning model.
-        """
-
-        where = [
-            "account_id = %s",
-            "symbol = %s",
-            "action IN ('BUY', 'ADD', 'HOLD', 'TRIM', 'SELL', 'AVOID', 'WATCH')",
-            "selected_hypothesis_id <> ''",
-            "status NOT IN ('blocked', 'failed', 'expired', 'suppressed', 'superseded', 'reference-only', 'invalid-legacy-outcome')",
-            "validation_state NOT IN ('blocked', 'invalid', 'failed', 'error')",
-        ]
-        params: List[object] = [str(account_id or ""), str(symbol or "").upper()]
-        if str(exclude_episode_id or "").strip():
-            where.append("episode_id <> %s")
-            params.append(str(exclude_episode_id).strip())
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT episode_id, account_id, symbol, subject_name, selected_hypothesis_id, "
-                "action, review_level, data_state, validation_state, inference_generation_id, "
-                "status, decided_at, source, payload_json "
-                "FROM investment_decision_episodes WHERE " + " AND ".join(where)
-                + " ORDER BY decided_at DESC, episode_id DESC LIMIT 12",
-                tuple(params),
-            ).fetchall()
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            payload.update({
-                "episodeId": str(row.get("episode_id") or ""),
-                "accountId": str(row.get("account_id") or ""),
-                "symbol": str(row.get("symbol") or "").upper(),
-                "subjectName": str(row.get("subject_name") or ""),
-                "selectedHypothesisId": str(row.get("selected_hypothesis_id") or ""),
-                "action": str(row.get("action") or "").upper(),
-                "reviewLevel": str(row.get("review_level") or ""),
-                "dataState": str(row.get("data_state") or ""),
-                "validationState": str(row.get("validation_state") or ""),
-                "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
-                "status": str(row.get("status") or ""),
-                "decidedAt": (
-                    canonical_investment_timestamp(row.get("decided_at"))
-                    or str(row.get("decided_at") or "")
-                ),
-                "source": str(row.get("source") or ""),
-            })
-            memory = compact_decision_episode_memory(payload)
-            if memory:
-                return memory
-        return {}
+        return episode_queries.latest_decision_memory(
+            account_id,
+            symbol,
+            exclude_episode_id,
+            _connect=self.connect,
+        )
 
     def list_for_symbols(
         self,
@@ -1384,48 +414,14 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         limit_per_symbol: int = 20,
         as_of: str = "",
     ) -> List[DecisionEpisode]:
-        """Fetch bounded episode history for many symbols without N+1 reads.
-
-        A workspace can include many holdings and market hypotheses.  A union
-        keeps the latest bounded history per symbol in a small number of
-        database round trips instead of issuing one query for every card.
-        """
-        clean_symbols = list(dict.fromkeys(
-            str(item or "").upper().strip()
-            for item in symbols or []
-            if str(item or "").strip()
-        ))[:120]
-        if not clean_symbols:
-            return []
-        per_symbol = max(1, min(80, int(limit_per_symbol or 20)))
-        normalized_as_of = canonical_investment_timestamp(as_of)
-        rows: List[Dict[str, object]] = []
-        # Keep a generated query below operational limits for large accounts.
-        for offset in range(0, len(clean_symbols), 24):
-            chunk = clean_symbols[offset:offset + 24]
-            statements = []
-            params: List[object] = []
-            for symbol in chunk:
-                where = "symbol = %s"
-                statement_params: List[object] = [symbol]
-                if account_id:
-                    where += " AND account_id = %s"
-                    statement_params.append(str(account_id))
-                if normalized_as_of:
-                    where += " AND decided_at <= %s"
-                    statement_params.append(normalized_as_of)
-                statements.append(
-                    "(SELECT payload_json, status, decided_at FROM investment_decision_episodes "
-                    "WHERE " + where + " ORDER BY decided_at DESC, episode_id DESC LIMIT %s)"
-                )
-                params.extend(statement_params)
-                params.append(per_symbol)
-            sql = " UNION ALL ".join(statements)
-            with self.connect() as connection:
-                rows.extend(connection.execute(sql, tuple(params)).fetchall() or [])
-        return self.hydrate_outcomes(
-            (self.episode_from_row(row) for row in rows),
-            as_of=normalized_as_of,
+        return episode_queries.list_for_symbols(
+            symbols,
+            account_id,
+            limit_per_symbol,
+            as_of,
+            _connect=self.connect,
+            _episode_from_row=self.episode_from_row,
+            _hydrate_outcomes=self.hydrate_outcomes,
         )
 
     def performance(
@@ -1435,47 +431,17 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         limit: int = 500,
         as_of: str = "",
     ) -> Dict[str, object]:
-        try:
-            minimum_samples = int(float(str(self.runtime_settings.get("investmentBrainPerformanceMinimumSamples") or "5")))
-        except ValueError:
-            minimum_samples = 5
-        episodes = self.performance_episodes(
-            account_id=account_id,
-            symbol=symbol,
-            limit=max(1, min(2000, int(limit or 500))),
-            as_of=as_of,
+        return performance.performance(
+            account_id,
+            symbol,
+            limit,
+            as_of,
+            _outcome_coverage_population=self.outcome_coverage_population,
+            _performance_archive_episode_count=self.performance_archive_episode_count,
+            _performance_episodes=self.performance_episodes,
+            _runtime_settings=self.runtime_settings,
+            evaluate_decision_performance=evaluate_decision_performance,
         )
-        result = evaluate_decision_performance(
-            episodes,
-            minimum_sample_count=max(2, min(100, minimum_samples)),
-        )
-        archive_count = self.performance_archive_episode_count(account_id, symbol, as_of=as_of)
-        evaluated_count = int(result.get("episodeCount") or 0)
-        result["evaluatedEpisodeCount"] = evaluated_count
-        result["episodeCount"] = archive_count
-        coverage_population = self.outcome_coverage_population(
-            account_id=account_id,
-            symbol=symbol,
-            as_of=as_of,
-        )
-        calibration_eligible = int(result.get("calibrationEligibleEpisodeCount") or 0)
-        observed_population = max(
-            calibration_eligible,
-            int(coverage_population.get("observedEpisodeCount") or 0),
-        )
-        due_unobserved = int(coverage_population.get("dueUnobservedEpisodeCount") or 0)
-        coverage_denominator = observed_population + due_unobserved
-        result["outcomeCoveragePct"] = round(
-            (calibration_eligible / coverage_denominator) * 100,
-            2,
-        ) if coverage_denominator else 0.0
-        result["outcomeCoverageEligibleEpisodeCount"] = calibration_eligible
-        result["outcomeCoverageObservedEpisodeCount"] = observed_population
-        result["outcomeCoverageDueUnobservedEpisodeCount"] = due_unobserved
-        result["outcomeCoveragePopulationEpisodeCount"] = coverage_denominator
-        result["outcomeCoverageBasis"] = "eligible-due-outcome-targets-v1"
-        result["historySelection"] = "outcome-led-bounded-history"
-        return result
 
     def outcome_coverage_population(
         self,
@@ -1483,63 +449,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         symbol: str = "",
         as_of: str = "",
     ) -> Dict[str, int]:
-        """Count only observable episodes whose outcome contract is in force."""
-
-        cutoff = canonical_investment_timestamp(as_of) or utc_now_iso()
-
-        def counts_for(
-            connection,
-            target_table: str,
-            outcome_table: str,
-            episode_column: str,
-        ) -> Dict[str, int]:
-            scope = []
-            params: List[object] = []
-            if account_id:
-                scope.append("targets.account_id = %s")
-                params.append(str(account_id))
-            if symbol:
-                scope.append("targets.symbol = %s")
-                params.append(str(symbol).upper())
-            scope_sql = (" AND " + " AND ".join(scope)) if scope else ""
-            observed = connection.execute(
-                "SELECT COUNT(DISTINCT targets." + episode_column + ") AS count "
-                "FROM " + target_table + " AS targets "
-                "WHERE targets.status = 'observed' AND targets.observed_at <= %s"
-                + scope_sql,
-                tuple([cutoff] + params),
-            ).fetchone() or {}
-            due = connection.execute(
-                "SELECT COUNT(DISTINCT targets." + episode_column + ") AS count "
-                "FROM " + target_table + " AS targets "
-                "WHERE targets.status = 'pending' AND targets.target_at <= %s"
-                + scope_sql
-                + " AND NOT EXISTS (SELECT 1 FROM " + outcome_table + " AS outcomes "
-                "WHERE outcomes." + episode_column + " = targets." + episode_column + ")",
-                tuple([cutoff] + params),
-            ).fetchone() or {}
-            return {
-                "observed": int(observed.get("count") or 0),
-                "due": int(due.get("count") or 0),
-            }
-
-        with self.connect() as connection:
-            decision = counts_for(
-                connection,
-                "investment_decision_outcome_targets",
-                "investment_decision_outcomes",
-                "episode_id",
-            )
-            shadow = counts_for(
-                connection,
-                "investment_hypothesis_observation_targets",
-                "investment_hypothesis_observation_outcomes",
-                "observation_episode_id",
-            )
-        return {
-            "observedEpisodeCount": decision["observed"] + shadow["observed"],
-            "dueUnobservedEpisodeCount": decision["due"] + shadow["due"],
-        }
+        return performance.outcome_coverage_population(
+            account_id,
+            symbol,
+            as_of,
+            _connect=self.connect,
+            utc_now_iso=utc_now_iso,
+        )
 
     def performance_archive_episode_count(
         self,
@@ -1547,32 +463,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         symbol: str = "",
         as_of: str = "",
     ) -> int:
-        clauses = []
-        params: List[object] = []
-        if account_id:
-            clauses.append("account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            clauses.append("symbol = %s")
-            params.append(str(symbol).upper())
-        normalized_as_of = canonical_investment_timestamp(as_of)
-        if normalized_as_of:
-            clauses.append("decided_at <= %s")
-            params.append(normalized_as_of)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        with self.connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) AS count FROM investment_decision_episodes" + where,
-                tuple(params),
-            ).fetchone() or {}
-            shadow_row = connection.execute(
-                "SELECT COUNT(*) AS count FROM investment_hypothesis_observation_episodes"
-                + where.replace("decided_at", "observed_from_at"),
-                tuple(params),
-            ).fetchone() or {}
-        return max(
-            0,
-            int(row.get("count") or 0) + int(shadow_row.get("count") or 0),
+        return performance.performance_archive_episode_count(
+            account_id,
+            symbol,
+            as_of,
+            _connect=self.connect,
         )
 
     def performance_episodes(
@@ -1582,131 +477,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         limit: int = 500,
         as_of: str = "",
     ) -> List[Dict[str, object]]:
-        """Load a bounded outcome-led history for performance calibration.
-
-        The decision table grows much faster than its delayed outcome table.
-        Reading only the latest decision rows eventually hides every observed
-        result and resets all hypothesis qualification to ``shadow``. Outcome
-        metrics do not need pending decisions or mutable follow-up rows, so
-        load only episodes that own an observation and obtain the archive
-        denominator with a separate count query.
-        """
-
-        clauses = []
-        params: List[object] = []
-        if account_id:
-            clauses.append("account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            clauses.append("symbol = %s")
-            params.append(str(symbol).upper())
-        normalized_as_of = canonical_investment_timestamp(as_of)
-        if normalized_as_of:
-            clauses.append("observed_at <= %s")
-            params.append(normalized_as_of)
-        try:
-            outcome_limit = int(float(str(
-                self.runtime_settings.get("investmentBrainPerformanceOutcomeEpisodeLimit")
-                or "2000"
-            )))
-        except (TypeError, ValueError):
-            outcome_limit = 2000
-        requested_limit = max(1, min(5000, int(limit or 500)))
-        outcome_limit = max(1, min(5000, outcome_limit, requested_limit))
-        params.append(outcome_limit)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        outer_where = " WHERE outcomes.observed_at <= %s" if normalized_as_of else ""
-        if normalized_as_of:
-            params.append(normalized_as_of)
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT outcomes.episode_id, outcomes.observed_at, outcomes.payload_json AS outcome_json, "
-                "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
-                "episodes.selected_hypothesis_id, episodes.decided_at, "
-                "JSON_EXTRACT(episodes.payload_json, '$.hypothesisSet.hypotheses') AS hypotheses_json "
-                "FROM investment_decision_outcomes AS outcomes JOIN ("
-                "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
-                "FROM investment_decision_outcomes"
-                + where
-                + " GROUP BY episode_id ORDER BY latest_observed_at DESC LIMIT %s"
-                ") AS selected ON selected.episode_id = outcomes.episode_id "
-                "JOIN investment_decision_episodes AS episodes ON episodes.episode_id = outcomes.episode_id "
-                + outer_where
-                + " "
-                "ORDER BY selected.latest_observed_at DESC, outcomes.observed_at ASC, outcomes.outcome_id ASC",
-                tuple(params),
-            ).fetchall()
-        grouped: Dict[str, Dict[str, object]] = {}
-        for row in rows or []:
-            episode_id = str(row.get("episode_id") or "").strip()
-            outcome = _json_loads(row.get("outcome_json"), {})
-            if not episode_id or not outcome:
-                continue
-            if not outcome.get("observedAt"):
-                outcome["observedAt"] = canonical_investment_timestamp(row.get("observed_at"))
-            payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
-            contract = payload.get("hypothesisOutcomeContract") if isinstance(payload.get("hypothesisOutcomeContract"), dict) else {}
-            selected_hypothesis_id = str(
-                payload.get("selectedHypothesisId")
-                or row.get("selected_hypothesis_id")
-                or ""
-            )
-            original_hypotheses = _json_loads(row.get("hypotheses_json"), [])
-            original_hypothesis = next((
-                item for item in original_hypotheses if isinstance(item, dict)
-                and str(item.get("hypothesisId") or "") == selected_hypothesis_id
-            ), {}) if isinstance(original_hypotheses, list) else {}
-            episode = grouped.setdefault(episode_id, {
-                "episodeId": episode_id,
-                "accountId": str(row.get("account_id") or ""),
-                "symbol": str(row.get("symbol") or "").upper(),
-                "subjectName": str(row.get("subject_name") or row.get("symbol") or ""),
-                "action": str(row.get("action") or "HOLD").upper(),
-                "selectedHypothesisId": selected_hypothesis_id,
-                "decidedAt": canonical_investment_timestamp(row.get("decided_at")),
-                "hypothesisSet": {
-                    "hypotheses": [{
-                        "claimContract": dict(original_hypothesis.get("claimContract") or {}),
-                        "hypothesisId": selected_hypothesis_id,
-                        "templateId": str(payload.get("hypothesisTemplateId") or ""),
-                        "templateLabel": str(payload.get("hypothesisTemplateLabel") or ""),
-                        "familyId": str(payload.get("hypothesisFamilyId") or ""),
-                        "stance": str(payload.get("selectedHypothesisStance") or "uncertain"),
-                        "predictionTarget": str(payload.get("predictionTarget") or contract.get("predictionTarget") or ""),
-                        "expectedDirection": str(payload.get("expectedDirection") or contract.get("expectedDirection") or ""),
-                        "expectedOutcome": str(payload.get("expectedOutcome") or contract.get("expectedOutcome") or ""),
-                        "outcomeMetric": str(payload.get("outcomeMetric") or contract.get("outcomeMetric") or ""),
-                        "falsificationContract": str(payload.get("falsificationContract") or contract.get("falsificationContract") or ""),
-                        "supportingRuleIds": list(contract.get("sourceRuleIds") or []),
-                    }],
-                },
-                "factsAtDecision": {"hypothesisOutcomeContract": contract},
-                "outcomes": [],
-            })
-            episode["outcomes"].append(outcome)
-        combined = list(grouped.values())
-        combined.extend(self.shadow_performance_episodes(
-            account_id=account_id,
-            symbol=symbol,
-            limit=outcome_limit,
-            as_of=as_of,
-        ))
-
-        def latest_observation(item: Dict[str, object]) -> str:
-            return max((
-                str(outcome.get("observedAt") or "")
-                for outcome in item.get("outcomes") or []
-                if isinstance(outcome, dict)
-            ), default="")
-
-        return sorted(
-            combined,
-            key=lambda item: (
-                latest_observation(item),
-                str(item.get("episodeId") or ""),
-            ),
-            reverse=True,
-        )[:outcome_limit]
+        return performance.performance_episodes(
+            account_id,
+            symbol,
+            limit,
+            as_of,
+            _connect=self.connect,
+            _runtime_settings=self.runtime_settings,
+            _shadow_performance_episodes=self.shadow_performance_episodes,
+        )
 
     def shadow_performance_episodes(
         self,
@@ -1715,68 +494,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         limit: int = 500,
         as_of: str = "",
     ) -> List[Dict[str, object]]:
-        clauses = []
-        params: List[object] = []
-        if account_id:
-            clauses.append("episodes.account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            clauses.append("episodes.symbol = %s")
-            params.append(str(symbol).upper())
-        normalized_as_of = canonical_investment_timestamp(as_of)
-        if normalized_as_of:
-            clauses.append("outcomes.observed_at <= %s")
-            params.append(normalized_as_of)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        params.append(max(1, min(5000, int(limit or 500))))
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT outcomes.observation_episode_id AS episode_id, "
-                "outcomes.observed_at, outcomes.payload_json AS outcome_json, "
-                "episodes.payload_json AS episode_json "
-                "FROM investment_hypothesis_observation_outcomes AS outcomes "
-                "JOIN investment_hypothesis_observation_episodes AS episodes "
-                "ON episodes.episode_id = outcomes.observation_episode_id"
-                + where
-                + " ORDER BY outcomes.observed_at DESC, outcomes.outcome_id DESC LIMIT %s",
-                tuple(params),
-            ).fetchall()
-        grouped: Dict[str, Dict[str, object]] = {}
-        for row in rows or []:
-            episode_payload = _json_loads(row.get("episode_json"), {})
-            outcome = _json_loads(row.get("outcome_json"), {})
-            episode_id = str(
-                row.get("episode_id") or episode_payload.get("episodeId") or ""
-            ).strip()
-            if not episode_id or not episode_payload or not outcome:
-                continue
-            if not outcome.get("observedAt"):
-                outcome["observedAt"] = canonical_investment_timestamp(
-                    row.get("observed_at")
-                )
-            hypothesis = dict(episode_payload.get("hypothesis") or {})
-            contract = dict(episode_payload.get("outcomeContract") or {})
-            item = grouped.setdefault(episode_id, {
-                "episodeId": episode_id,
-                "episodeKind": "shadow-hypothesis",
-                "accountId": str(episode_payload.get("accountId") or ""),
-                "symbol": str(episode_payload.get("symbol") or "").upper(),
-                "subjectName": str(episode_payload.get("symbol") or ""),
-                "action": str(
-                    episode_payload.get("candidateAction") or "HOLD"
-                ).upper(),
-                "selectedHypothesisId": str(
-                    episode_payload.get("hypothesisId") or ""
-                ),
-                "decidedAt": canonical_investment_timestamp(
-                    episode_payload.get("observedFromAt")
-                ),
-                "hypothesisSet": {"hypotheses": [hypothesis]},
-                "factsAtDecision": {"hypothesisOutcomeContract": contract},
-                "outcomes": [],
-            })
-            item["outcomes"].append(outcome)
-        return list(grouped.values())
+        return performance.shadow_performance_episodes(
+            account_id,
+            symbol,
+            limit,
+            as_of,
+            _connect=self.connect,
+        )
 
     def outcome_history_for_symbols(
         self,
@@ -1786,57 +510,22 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         limit_per_symbol: int = 120,
         maximum_episode_count: int = 600,
     ) -> List[Dict[str, object]]:
-        """Load compact, point-in-time outcome history for ABox calibration.
-
-        Recent decision memory and historical calibration have different
-        retention needs. This read keeps enough independent result episodes
-        for qualification while returning no prompts, research documents, or
-        mutable follow-up state from the original decision payload.
-        """
-
-        clean_symbols = list(dict.fromkeys(
-            str(item or "").upper().strip()
-            for item in symbols or []
-            if str(item or "").strip()
-        ))[:24]
-        if not clean_symbols:
-            return []
-        per_symbol = max(3, min(500, int(limit_per_symbol or 120)))
-        maximum = max(3, min(2000, int(maximum_episode_count or 600)))
-        rows: List[Dict[str, object]] = []
-        for clean_symbol in clean_symbols:
-            rows.extend(self.performance_episodes(
-                account_id=account_id,
-                symbol=clean_symbol,
-                limit=per_symbol,
-                as_of=as_of,
-            ))
-
-        def latest_observed_at(item: Dict[str, object]) -> str:
-            return max((
-                str(outcome.get("observedAt") or "")
-                for outcome in item.get("outcomes") or []
-                if isinstance(outcome, dict)
-            ), default="")
-
-        return sorted(
-            rows,
-            key=lambda item: (latest_observed_at(item), str(item.get("episodeId") or "")),
-            reverse=True,
-        )[:maximum]
+        return performance.outcome_history_for_symbols(
+            symbols,
+            account_id,
+            as_of,
+            limit_per_symbol,
+            maximum_episode_count,
+            _performance_episodes=self.performance_episodes,
+        )
 
     def outcomes_for_episode(self, episode_id: str, limit: int = 30) -> List[ObservedOutcome]:
-        with self.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT payload_json FROM investment_decision_outcomes
-                WHERE episode_id = %s
-                ORDER BY observed_at ASC, outcome_id ASC
-                LIMIT %s
-                """,
-                (str(episode_id or ""), max(1, min(200, int(limit or 30)))),
-            ).fetchall()
-        return self.outcomes_from_rows(rows, str(episode_id or ""))
+        return episode_hydration.outcomes_for_episode(
+            episode_id,
+            limit,
+            _connect=self.connect,
+            _outcomes_from_rows=self.outcomes_from_rows,
+        )
 
     def pending_outcome_targets(
         self,
@@ -1853,213 +542,25 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             if str(backfill.get("status") or "") == "already-initialized":
                 completed_accounts.add(normalized_account_id)
                 self._outcome_target_backfill_completed_accounts = completed_accounts
-        repaired_accounts = getattr(self, "_outcome_target_schedule_repair_completed_accounts", set())
+        repaired_accounts = getattr(
+            self, "_outcome_target_schedule_repair_completed_accounts", set()
+        )
         if normalized_account_id not in repaired_accounts:
             self.repair_pending_outcome_target_schedules(normalized_account_id, limit=5000)
             repaired_accounts.add(normalized_account_id)
             self._outcome_target_schedule_repair_completed_accounts = repaired_accounts
-        with self.connect() as connection:
-            decision_rows = connection.execute(
-                """
-                SELECT targets.payload_json,
-                       episodes.payload_json AS episode_json
-                FROM investment_decision_outcome_targets AS targets
-                JOIN investment_decision_episodes AS episodes
-                  ON episodes.episode_id = targets.episode_id
-                WHERE targets.account_id = %s
-                  AND targets.status = 'pending'
-                  AND targets.target_at <= %s
-                ORDER BY targets.target_at ASC, targets.target_id ASC
-                LIMIT %s
-                """,
-                (normalized_account_id, observed_stamp, target_limit),
-            ).fetchall()
-            shadow_rows = connection.execute(
-                """
-                SELECT payload_json
-                FROM investment_hypothesis_observation_targets
-                WHERE account_id = %s AND status = 'pending' AND target_at <= %s
-                ORDER BY target_at ASC, target_id ASC
-                LIMIT %s
-                """,
-                (normalized_account_id, observed_stamp, target_limit),
-            ).fetchall()
-        targets: List[Dict[str, object]] = []
-        for row in decision_rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if payload:
-                # Older pending decision targets predate the explicit baseline
-                # flag. They still need the quote at decidedAt because V2
-                # decision episodes intentionally keep large market facts out
-                # of their compact immutable payload.
-                payload.setdefault("episodeKind", "decision")
-                payload.setdefault("requiresInstrumentBaseline", True)
-                episode_payload = _json_loads(row.get("episode_json"), {})
-                facts = (
-                    episode_payload.get("factsAtDecision")
-                    if isinstance(episode_payload.get("factsAtDecision"), dict)
-                    else {}
-                )
-                fact_delta = (
-                    facts.get("factDelta")
-                    if isinstance(facts.get("factDelta"), dict)
-                    else {}
-                )
-                baseline_at = canonical_investment_timestamp(
-                    fact_delta.get("source_observed_at")
-                    or fact_delta.get("sourceObservedAt")
-                    or facts.get("sourceAsOf")
-                )
-                if baseline_at:
-                    payload.setdefault("baselineAt", baseline_at)
-                decision_price = number(facts.get("currentPrice"))
-                if decision_price > 0:
-                    payload.setdefault("decisionPrice", decision_price)
-                    if facts.get("sourceAsOf"):
-                        payload.setdefault(
-                            "decisionPriceSourceAsOf",
-                            facts.get("sourceAsOf"),
-                        )
-                targets.append(payload)
-        for row in shadow_rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            if payload:
-                payload.setdefault("episodeKind", "shadow-hypothesis")
-                payload.setdefault("requiresInstrumentBaseline", True)
-                targets.append(payload)
-        return sorted(
-            targets,
-            key=lambda item: (
-                str(item.get("targetAt") or ""),
-                str(item.get("requestId") or ""),
-            ),
-        )[:target_limit]
+        return target_queries.pending_outcome_targets(
+            target_queries.PendingTargetRead(normalized_account_id, observed_stamp, target_limit),
+            _connect=self.connect,
+        )
 
     def outcome_target_summary(self, account_id: str = "", symbol: str = "") -> Dict[str, object]:
-        clauses = []
-        params: List[object] = []
-        if account_id:
-            clauses.append("account_id = %s")
-            params.append(str(account_id))
-        if symbol:
-            clauses.append("symbol = %s")
-            params.append(str(symbol).upper())
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        due_clause = (" AND " + " AND ".join(clauses)) if clauses else ""
-        now = utc_now_iso()
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT status, COUNT(*) AS count, MIN(target_at) AS oldest_target_at, "
-                "MAX(updated_at) AS latest_updated_at "
-                "FROM investment_decision_outcome_targets" + where + " GROUP BY status",
-                tuple(params),
-            ).fetchall()
-            due = connection.execute(
-                "SELECT COUNT(*) AS count, MIN(target_at) AS oldest_target_at "
-                "FROM investment_decision_outcome_targets WHERE status = 'pending' "
-                "AND target_at <= %s" + due_clause,
-                tuple([now] + params),
-            ).fetchone()
-            latest = connection.execute(
-                "SELECT MAX(observed_at) AS latest_observed_at FROM investment_decision_outcomes"
-                + where,
-                tuple(params),
-            ).fetchone()
-            shadow_rows = connection.execute(
-                "SELECT status, COUNT(*) AS count, MIN(target_at) AS oldest_target_at, "
-                "MAX(updated_at) AS latest_updated_at "
-                "FROM investment_hypothesis_observation_targets" + where + " GROUP BY status",
-                tuple(params),
-            ).fetchall()
-            shadow_due = connection.execute(
-                "SELECT COUNT(*) AS count, MIN(target_at) AS oldest_target_at "
-                "FROM investment_hypothesis_observation_targets WHERE status = 'pending' "
-                "AND target_at <= %s" + due_clause,
-                tuple([now] + params),
-            ).fetchone()
-            shadow_latest = connection.execute(
-                "SELECT MAX(observed_at) AS latest_observed_at "
-                "FROM investment_hypothesis_observation_outcomes" + where,
-                tuple(params),
-            ).fetchone()
-        decision_states = {
-            str(row.get("status") or "unknown"): {
-                "count": int(row.get("count") or 0),
-                "oldestTargetAt": str(row.get("oldest_target_at") or ""),
-                "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
-            }
-            for row in rows or []
-        }
-        shadow_states = {
-            str(row.get("status") or "unknown"): {
-                "count": int(row.get("count") or 0),
-                "oldestTargetAt": str(row.get("oldest_target_at") or ""),
-                "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
-            }
-            for row in shadow_rows or []
-        }
-        states = {}
-        for state in sorted(set(decision_states) | set(shadow_states)):
-            decision_state = decision_states.get(state) or {}
-            shadow_state = shadow_states.get(state) or {}
-            states[state] = {
-                "count": int(decision_state.get("count") or 0)
-                + int(shadow_state.get("count") or 0),
-                "oldestTargetAt": min(
-                    [
-                        value
-                        for value in (
-                            str(decision_state.get("oldestTargetAt") or ""),
-                            str(shadow_state.get("oldestTargetAt") or ""),
-                        )
-                        if value
-                    ],
-                    default="",
-                ),
-                "latestUpdatedAt": max(
-                    str(decision_state.get("latestUpdatedAt") or ""),
-                    str(shadow_state.get("latestUpdatedAt") or ""),
-                ),
-            }
-        due_count = int((due or {}).get("count") or 0) + int(
-            (shadow_due or {}).get("count") or 0
+        return target_queries.outcome_target_summary(
+            account_id,
+            symbol,
+            _connect=self.connect,
+            utc_now_iso=utc_now_iso,
         )
-        oldest_due = min(
-            [
-                value
-                for value in (
-                    str((due or {}).get("oldest_target_at") or ""),
-                    str((shadow_due or {}).get("oldest_target_at") or ""),
-                )
-                if value
-            ],
-            default="",
-        )
-        latest_observed = max(
-            str((latest or {}).get("latest_observed_at") or ""),
-            str((shadow_latest or {}).get("latest_observed_at") or ""),
-        )
-        return {
-            "status": "warning" if due_count else "ok",
-            "checkedAt": now,
-            "accountId": str(account_id or ""),
-            "symbol": str(symbol or "").upper(),
-            "pendingTargetCount": int((states.get("pending") or {}).get("count") or 0),
-            "dueTargetCount": due_count,
-            "oldestDueTargetAt": oldest_due,
-            "observedTargetCount": int((states.get("observed") or {}).get("count") or 0),
-            "excludedTargetCount": int((states.get("excluded") or {}).get("count") or 0),
-            "latestOutcomeObservedAt": latest_observed,
-            "states": states,
-            "decisionTargetCount": sum(
-                int(item.get("count") or 0) for item in decision_states.values()
-            ),
-            "shadowHypothesisTargetCount": sum(
-                int(item.get("count") or 0) for item in shadow_states.values()
-            ),
-            "shadowDueTargetCount": int((shadow_due or {}).get("count") or 0),
-            "contract": "durable-decision-and-shadow-hypothesis-outcome-target-v3",
-        }
 
     def record_observation(
         self,
@@ -2068,35 +569,19 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         facts: Dict[str, object],
         observed_at: str = "",
     ) -> List[ObservedOutcome]:
-        symbol = str(symbol or "").upper().strip()
-        if not symbol:
-            return []
-        observed_at = canonical_investment_timestamp(observed_at or facts.get("observedAt")) or utc_now_iso()
-        transitions = self.evaluate_follow_up_observation(account_id, symbol, facts, observed_at)
-        if transitions:
-            facts["followUpTransitions"] = transitions
-            facts["followUpTransitionCount"] = len(transitions)
-        if not outcome_observation_is_usable(facts, observed_at):
-            return []
-        episodes = self.list(account_id=account_id, symbol=symbol, limit=self.outcome_batch_size())
-        requests: List[Dict[str, object]] = []
-        for episode in episodes:
-            if not self.episode_outcome_contract_completeness(episode).get("complete"):
-                continue
-            outcome_horizon_minutes = due_outcome_horizon_minutes(
-                episode,
-                observed_at,
-                self.episode_outcome_horizons(episode),
-            )
-            if not outcome_horizon_minutes:
-                continue
-            requests.append({
-                "episodeId": episode.episode_id,
-                "horizonMinutes": outcome_horizon_minutes,
-                "facts": dict(facts or {}),
-                "observedAt": observed_at,
-            })
-        return self.record_outcome_observations(account_id, requests)
+        return observation_records.record_observation(
+            account_id,
+            symbol,
+            facts,
+            observed_at,
+            _episode_outcome_contract_completeness=self.episode_outcome_contract_completeness,
+            _episode_outcome_horizons=self.episode_outcome_horizons,
+            _evaluate_follow_up_observation=self.evaluate_follow_up_observation,
+            _list=self.list,
+            _outcome_batch_size=self.outcome_batch_size,
+            _record_outcome_observations=self.record_outcome_observations,
+            utc_now_iso=utc_now_iso,
+        )
 
     def evaluate_follow_up_observation(
         self,
@@ -2105,816 +590,114 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         facts: Dict[str, object],
         observed_at: str,
     ) -> List[Dict[str, object]]:
-        """Advance only pending, observable conditions for one scoped subject."""
-
-        with self.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT follow_up.condition_id, follow_up.episode_id,
-                       follow_up.account_id, follow_up.symbol, follow_up.payload_json
-                FROM investment_decision_follow_ups follow_up
-                JOIN investment_flow_current current_flow
-                  ON current_flow.account_id = follow_up.account_id
-                 AND current_flow.symbol = follow_up.symbol
-                 AND current_flow.decision_episode_id = follow_up.episode_id
-                WHERE follow_up.account_id = %s AND follow_up.symbol = %s
-                  AND follow_up.status = 'pending' AND follow_up.observable = 1
-                ORDER BY follow_up.updated_at ASC, follow_up.condition_id ASC
-                LIMIT 80
-                """,
-                (str(account_id or ""), str(symbol or "").upper()),
-            ).fetchall()
-        transitions: List[Dict[str, object]] = []
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            payload.update({
-                "episodeId": str(row.get("episode_id") or ""),
-                "accountId": str(row.get("account_id") or account_id or ""),
-                "symbol": str(row.get("symbol") or symbol or "").upper(),
-                "trackingOwner": "system",
-                "trackingCadence": "each-live-snapshot",
-                "trackingStatus": "active",
-                "notificationOnTransition": True,
-            })
-            updated, material = evaluate_follow_up_conditions([payload], facts, observed_at)
-            if not updated or updated[0] == payload:
-                continue
-            condition = updated[0]
-            stamp = utc_now_iso()
-            transition_at = str(condition.get("transitionAt") or "") if material else ""
-            with self.connect() as connection:
-                cursor = connection.execute(
-                    """
-                    UPDATE investment_decision_follow_ups
-                    SET status = %s, payload_json = %s, updated_at = %s,
-                        transitioned_at = CASE WHEN %s <> '' THEN %s ELSE transitioned_at END
-                    WHERE condition_id = %s AND status = 'pending'
-                    """,
-                    (
-                        str(condition.get("status") or "pending"),
-                        json_dumps(condition),
-                        stamp,
-                        transition_at,
-                        transition_at,
-                        str(row.get("condition_id") or ""),
-                    ),
-                )
-            if material and int(getattr(cursor, "rowcount", 0) or 0) > 0:
-                transitions.append(condition)
-        return transitions
+        return follow_ups.evaluate_follow_up_observation(
+            account_id,
+            symbol,
+            facts,
+            observed_at,
+            _connect=self.connect,
+            utc_now_iso=utc_now_iso,
+        )
 
     def quarantine_unverified_legacy_follow_up_transitions(
         self,
         limit: int = 5000,
     ) -> Dict[str, object]:
-        """Keep legacy terminal rows for audit without treating them as edges."""
-
-        maximum = max(1, min(50000, int(limit or 5000)))
-        stamp = utc_now_iso()
-        quarantined = []
-        with self.transaction() as connection:
-            rows = connection.execute(
-                "SELECT condition_id, payload_json FROM investment_decision_follow_ups "
-                "WHERE status IN ('satisfied', 'invalidated', 'expired') "
-                "ORDER BY updated_at, condition_id LIMIT %s",
-                (maximum,),
-            ).fetchall()
-            for row in rows or []:
-                payload = _json_loads(row.get("payload_json"), {})
-                if bool(payload.get("transitionVerified")):
-                    continue
-                condition_id = str(row.get("condition_id") or "")
-                payload.update({
-                    "status": "legacy-unverified",
-                    "transitionVerified": False,
-                    "legacyTransitionState": "unverified",
-                    "legacyTransitionQuarantinedAt": stamp,
-                })
-                cursor = connection.execute(
-                    "UPDATE investment_decision_follow_ups SET status = 'legacy-unverified', "
-                    "payload_json = %s, updated_at = %s WHERE condition_id = %s "
-                    "AND status IN ('satisfied', 'invalidated', 'expired')",
-                    (json_dumps(payload), stamp, condition_id),
-                )
-                if int(getattr(cursor, "rowcount", 0) or 0) > 0:
-                    quarantined.append(condition_id)
-        return {
-            "status": "quarantined" if quarantined else "unchanged",
-            "quarantinedCount": len(quarantined),
-            "conditionIds": quarantined,
-        }
+        return legacy_repair.quarantine_unverified_legacy_follow_up_transitions(
+            limit,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
+        )
 
     def record_outcome_observations(
         self,
         account_id: str,
         observations: Iterable[Dict[str, object]],
     ) -> List[ObservedOutcome]:
-        normalized: List[Dict[str, object]] = []
-        for raw in observations or []:
-            item = dict(raw or {}) if isinstance(raw, dict) else {}
-            episode_id = str(item.get("episodeId") or "").strip()
-            try:
-                horizon_minutes = int(float(item.get("horizonMinutes") or 0))
-            except (TypeError, ValueError):
-                horizon_minutes = 0
-            facts = dict(item.get("facts") or {})
-            observed_at = canonical_investment_timestamp(item.get("observedAt") or facts.get("observedAt"))
-            if not episode_id or horizon_minutes <= 0 or not observed_at or not outcome_observation_is_usable(facts, observed_at):
-                continue
-            normalized.append({
-                "episodeId": episode_id,
-                "episodeKind": str(item.get("episodeKind") or "decision"),
-                "horizonMinutes": horizon_minutes,
-                "facts": facts,
-                "observedAt": observed_at,
-            })
-        if not normalized:
-            return []
-        decision_observations = [
-            item for item in normalized
-            if item.get("episodeKind") != "shadow-hypothesis"
-        ]
-        shadow_observations = [
-            item for item in normalized
-            if item.get("episodeKind") == "shadow-hypothesis"
-        ]
-        episodes = self.episodes_by_ids(
-            item["episodeId"] for item in decision_observations
+        return observation_records.record_outcome_observations(
+            account_id,
+            observations,
+            _episode_outcome_contract=self.episode_outcome_contract,
+            _episode_outcome_contract_completeness=self.episode_outcome_contract_completeness,
+            _episode_outcome_horizons=self.episode_outcome_horizons,
+            _episode_outcome_max_delay_minutes=self.episode_outcome_max_delay_minutes,
+            _episodes_by_ids=self.episodes_by_ids,
+            _propose_learning_from_outcomes=self.propose_learning_from_outcomes,
+            _record_shadow_hypothesis_outcome_observations=self.record_shadow_hypothesis_outcome_observations,
+            _save_outcome=self.save_outcome,
         )
-        outcomes: List[ObservedOutcome] = []
-        changed_symbols = set()
-        for item in decision_observations:
-            episode = episodes.get(item["episodeId"])
-            if not episode or str(episode.account_id or "") != str(account_id or ""):
-                continue
-            horizon_minutes = int(item["horizonMinutes"])
-            contract = self.episode_outcome_contract(episode)
-            contract_completeness = self.episode_outcome_contract_completeness(episode)
-            if horizon_minutes not in self.episode_outcome_horizons(episode) or outcome_horizon_recorded(episode, horizon_minutes):
-                continue
-            target_at = outcome_target_at(episode, horizon_minutes)
-            observed_at = str(item["observedAt"])
-            target_time = parse_datetime(target_at)
-            observed_time = parse_datetime(observed_at)
-            if not target_time or not observed_time or observed_time < target_time:
-                continue
-            facts = dict(item["facts"] or {})
-            current_price = number(facts.get("currentPrice"))
-            decision_price = number(
-                facts.get("decisionPrice")
-                or (episode.facts_at_decision or {}).get("currentPrice")
-            )
-            change_pct = round(((current_price / decision_price) - 1) * 100, 4) if current_price and decision_price else 0.0
-            selected_hypothesis = selected_hypothesis_payload(episode)
-            stance = str(selected_hypothesis.get("stance") or "uncertain")
-            delay_minutes = max(0.0, (observed_time - target_time).total_seconds() / 60.0)
-            contract_observation = observation_domain_status(facts, contract)
-            evaluation = evaluate_hypothesis_outcome(
-                contract,
-                stance,
-                facts,
-                change_pct,
-                horizon_minutes,
-            )
-            missing_criterion_metrics = list(evaluation.get("missingRequiredMetricIds") or [])
-            calibration_eligible = (
-                bool(contract_completeness.get("complete"))
-                and delay_minutes <= self.episode_outcome_max_delay_minutes(episode)
-                and not list(contract_observation.get("missingObservationDomains") or [])
-                and not missing_criterion_metrics
-            )
-            eligibility = (
-                "eligible" if calibration_eligible
-                else "excluded-incomplete-prediction-contract" if not contract_completeness.get("complete")
-                else "excluded-contract-data-gap" if contract_observation.get("missingObservationDomains")
-                else "excluded-criterion-data-gap" if missing_criterion_metrics
-                else "excluded-delayed-observation"
-            )
-            outcome = ObservedOutcome(
-                outcome_id=stable_id("decision-outcome", episode.episode_id, horizon_minutes),
-                episode_id=episode.episode_id,
-                observed_at=observed_at,
-                price=current_price,
-                profit_loss_rate=number(facts.get("profitLossRate")),
-                price_change_from_decision_pct=change_pct,
-                selected_hypothesis_status=str(evaluation.get("selectedHypothesisStatus") or "inconclusive"),
-                payload={
-                    "selectedHypothesisId": episode.selected_hypothesis_id,
-                    "selectedHypothesisStance": stance,
-                    "hypothesisFamilyId": selected_hypothesis.get("familyId") or "",
-                    "hypothesisTemplateId": selected_hypothesis.get("templateId") or "",
-                    "predictionTarget": selected_hypothesis.get("predictionTarget") or "",
-                    "expectedDirection": selected_hypothesis.get("expectedDirection") or "",
-                    "expectedOutcome": selected_hypothesis.get("expectedOutcome") or "",
-                    "outcomeMetric": selected_hypothesis.get("outcomeMetric") or "",
-                    "falsificationContract": selected_hypothesis.get("falsificationContract") or "",
-                    "inferenceGenerationId": facts.get("inferenceGenerationId") or "",
-                    "decisionPrice": decision_price,
-                    "decisionPriceSourceAsOf": facts.get("decisionPriceSourceAsOf") or "",
-                    "observationBasis": str(facts.get("observationBasis") or "subsequent-market-observation"),
-                    "observationSource": str(facts.get("observationSource") or facts.get("provider") or ""),
-                    "sourceAsOf": canonical_investment_timestamp(facts.get("sourceAsOf")) or observed_at,
-                    "dataQuality": str(facts.get("dataQuality") or "unknown"),
-                    "hypothesisOutcomeContract": contract,
-                    "contractFingerprint": contract.get("contractFingerprint") or "",
-                    "marketIndependenceKey": contract.get("marketIndependenceKey") or "",
-                    "accountIndependenceKey": contract.get("accountIndependenceKey") or "",
-                    **contract_observation,
-                    **evaluation,
-                    "missingRequiredMetricIds": missing_criterion_metrics,
-                    "benchmarkSymbol": contract_benchmark_symbol(contract, episode.facts_at_decision),
-                    "benchmarkReturnPct": facts.get("benchmarkReturnPct"),
-                    "excessReturnPct": (
-                        round(change_pct - number(facts.get("benchmarkReturnPct")), 6)
-                        if facts.get("benchmarkReturnPct") not in (None, "")
-                        else None
-                    ),
-                    "benchmarkObservationSource": facts.get("benchmarkObservationSource") or "",
-                    "benchmarkStartAsOf": facts.get("benchmarkStartAsOf") or "",
-                    "benchmarkEndAsOf": facts.get("benchmarkEndAsOf") or "",
-                    "horizonMinutes": horizon_minutes,
-                    "targetAt": target_at,
-                    "actualElapsedMinutes": round((observed_time - parse_datetime(episode.decided_at)).total_seconds() / 60.0, 2),
-                    "observationDelayMinutes": round(delay_minutes, 2),
-                    "observationTiming": "on-time" if delay_minutes <= self.episode_outcome_max_delay_minutes(episode) else "delayed",
-                    "calibrationEligibility": eligibility,
-                    "predictionContractCompleteness": contract_completeness,
-                },
-            )
-            self.save_outcome(episode, outcome)
-            outcomes.append(outcome)
-            changed_symbols.add(episode.symbol)
-        outcomes.extend(
-            self.record_shadow_hypothesis_outcome_observations(
-                account_id,
-                shadow_observations,
-            )
-        )
-        for symbol in sorted(changed_symbols):
-            self.propose_learning_from_outcomes(account_id, symbol)
-        return outcomes
 
     def record_shadow_hypothesis_outcome_observations(
         self,
         account_id: str,
         observations: Iterable[Dict[str, object]],
     ) -> List[ObservedOutcome]:
-        rows = [dict(item or {}) for item in observations or []]
-        episodes = self.shadow_observation_episodes_by_ids(
-            item.get("episodeId") for item in rows
+        return shadow_observations.record_shadow_hypothesis_outcome_observations(
+            account_id,
+            observations,
+            _outcome_max_delay_minutes=self.outcome_max_delay_minutes,
+            _save_shadow_hypothesis_outcome=self.save_shadow_hypothesis_outcome,
+            _shadow_observation_episodes_by_ids=self.shadow_observation_episodes_by_ids,
         )
-        outcomes = []
-        for item in rows:
-            episode = episodes.get(str(item.get("episodeId") or ""))
-            if not episode or episode.account_id != str(account_id or ""):
-                continue
-            horizon_minutes = int(item.get("horizonMinutes") or 0)
-            contract = dict(episode.outcome_contract or {})
-            completeness = outcome_contract_completeness(contract)
-            if (
-                horizon_minutes not in outcome_horizon_minutes(
-                    contract.get("outcomeHorizonMinutes")
-                )
-                or not completeness.get("complete")
-            ):
-                continue
-            target_at = market_outcome_target_at(
-                episode.observed_from_at,
-                episode.symbol,
-                episode.market,
-                episode.currency,
-                horizon_minutes,
-            )
-            observed_at = str(item.get("observedAt") or "")
-            target_time = parse_datetime(target_at)
-            observed_time = parse_datetime(observed_at)
-            if not target_time or not observed_time or observed_time < target_time:
-                continue
-            facts = dict(item.get("facts") or {})
-            current_price = number(facts.get("currentPrice"))
-            decision_price = number(facts.get("decisionPrice"))
-            if not current_price or not decision_price:
-                continue
-            change_pct = round(((current_price / decision_price) - 1) * 100, 4)
-            contract_observation = observation_domain_status(facts, contract)
-            evaluation = evaluate_hypothesis_outcome(
-                contract,
-                episode.stance,
-                facts,
-                change_pct,
-                horizon_minutes,
-            )
-            missing_metrics = list(evaluation.get("missingRequiredMetricIds") or [])
-            delay_minutes = max(
-                0.0,
-                (observed_time - target_time).total_seconds() / 60.0,
-            )
-            maximum_delay = int(
-                contract.get("maximumObservationDelayMinutes")
-                or self.outcome_max_delay_minutes()
-            )
-            calibration_eligible = bool(
-                delay_minutes <= maximum_delay
-                and not list(contract_observation.get("missingObservationDomains") or [])
-                and not missing_metrics
-            )
-            eligibility = (
-                "eligible"
-                if calibration_eligible
-                else "excluded-contract-data-gap"
-                if contract_observation.get("missingObservationDomains")
-                else "excluded-criterion-data-gap"
-                if missing_metrics
-                else "excluded-delayed-observation"
-            )
-            hypothesis = dict(episode.hypothesis or {})
-            outcome = ObservedOutcome(
-                outcome_id=stable_id(
-                    "shadow-hypothesis-outcome",
-                    episode.episode_id,
-                    horizon_minutes,
-                ),
-                episode_id=episode.episode_id,
-                observed_at=observed_at,
-                price=current_price,
-                profit_loss_rate=0.0,
-                price_change_from_decision_pct=change_pct,
-                selected_hypothesis_status=str(
-                    evaluation.get("selectedHypothesisStatus") or "inconclusive"
-                ),
-                payload={
-                    "episodeKind": "shadow-hypothesis",
-                    "selectedHypothesisId": episode.hypothesis_id,
-                    "selectedHypothesisStance": episode.stance,
-                    "hypothesisFamilyId": episode.family_id,
-                    "hypothesisTemplateId": hypothesis.get("templateId") or episode.family_id,
-                    "hypothesisTemplateLabel": hypothesis.get("templateLabel") or hypothesis.get("claim") or "",
-                    "predictionTarget": hypothesis.get("predictionTarget") or contract.get("predictionTarget") or "",
-                    "expectedDirection": hypothesis.get("expectedDirection") or contract.get("expectedDirection") or "",
-                    "expectedOutcome": hypothesis.get("expectedOutcome") or contract.get("expectedOutcome") or "",
-                    "outcomeMetric": hypothesis.get("outcomeMetric") or contract.get("outcomeMetric") or "",
-                    "falsificationContract": hypothesis.get("falsificationContract") or contract.get("falsificationContract") or "",
-                    "hypothesisOutcomeContract": contract,
-                    "contractFingerprint": contract.get("contractFingerprint") or "",
-                    "marketIndependenceKey": episode.market_independence_key,
-                    "accountIndependenceKey": episode.account_independence_key,
-                    "independenceBucket": episode.independence_bucket,
-                    "sourceAboxSnapshotId": episode.source_abox_snapshot_id,
-                    "inferenceGenerationId": episode.inference_generation_id,
-                    "decisionPrice": decision_price,
-                    "decisionPriceSourceAsOf": facts.get("decisionPriceSourceAsOf") or "",
-                    "observationBasis": str(
-                        facts.get("observationBasis") or "historical-market-time-series"
-                    ),
-                    "observationSource": str(
-                        facts.get("observationSource") or facts.get("provider") or ""
-                    ),
-                    "sourceAsOf": canonical_investment_timestamp(
-                        facts.get("sourceAsOf")
-                    ) or observed_at,
-                    "dataQuality": str(facts.get("dataQuality") or "unknown"),
-                    **contract_observation,
-                    **evaluation,
-                    "missingRequiredMetricIds": missing_metrics,
-                    "benchmarkSymbol": contract_benchmark_symbol(contract),
-                    "benchmarkReturnPct": facts.get("benchmarkReturnPct"),
-                    "excessReturnPct": (
-                        round(change_pct - number(facts.get("benchmarkReturnPct")), 6)
-                        if facts.get("benchmarkReturnPct") not in (None, "")
-                        else None
-                    ),
-                    "horizonMinutes": horizon_minutes,
-                    "targetAt": target_at,
-                    "actualElapsedMinutes": round(
-                        (
-                            observed_time
-                            - parse_datetime(episode.observed_from_at)
-                        ).total_seconds()
-                        / 60.0,
-                        2,
-                    ),
-                    "observationDelayMinutes": round(delay_minutes, 2),
-                    "observationTiming": (
-                        "on-time" if delay_minutes <= maximum_delay else "delayed"
-                    ),
-                    "calibrationEligibility": eligibility,
-                    "predictionContractCompleteness": completeness,
-                },
-            )
-            self.save_shadow_hypothesis_outcome(episode, outcome)
-            outcomes.append(outcome)
-        return outcomes
 
     def save_shadow_hypothesis_outcome(
         self,
         episode: ShadowHypothesisObservationEpisode,
         outcome: ObservedOutcome,
     ) -> ObservedOutcome:
-        payload = outcome.to_dict()
-        stamp = utc_now_iso()
-        horizon_minutes = int((outcome.payload or {}).get("horizonMinutes") or 0)
-        fingerprint = str((outcome.payload or {}).get("contractFingerprint") or "")
-        with self.transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO investment_hypothesis_observation_outcomes (
-                    outcome_id, observation_episode_id, account_id, symbol,
-                    observed_at, selected_hypothesis_status, price,
-                    price_change_from_decision_pct, payload_json, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    selected_hypothesis_status = VALUES(selected_hypothesis_status),
-                    price = VALUES(price),
-                    price_change_from_decision_pct = VALUES(price_change_from_decision_pct),
-                    payload_json = VALUES(payload_json)
-                """,
-                (
-                    outcome.outcome_id,
-                    episode.episode_id,
-                    episode.account_id,
-                    episode.symbol,
-                    outcome.observed_at,
-                    outcome.selected_hypothesis_status,
-                    outcome.price,
-                    outcome.price_change_from_decision_pct,
-                    json_dumps(payload),
-                    stamp,
-                ),
-            )
-            connection.execute(
-                "UPDATE investment_hypothesis_observation_episodes "
-                "SET status = 'observed', updated_at = %s WHERE episode_id = %s",
-                (stamp, episode.episode_id),
-            )
-            connection.execute(
-                "UPDATE investment_hypothesis_observation_targets "
-                "SET status = 'observed', outcome_id = %s, observed_at = %s, updated_at = %s "
-                "WHERE observation_episode_id = %s AND horizon_minutes = %s "
-                "AND contract_fingerprint = %s",
-                (
-                    outcome.outcome_id,
-                    outcome.observed_at,
-                    stamp,
-                    episode.episode_id,
-                    horizon_minutes,
-                    fingerprint,
-                ),
-            )
-        return outcome
+        return shadow_observations.save_shadow_hypothesis_outcome(
+            episode,
+            outcome,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
+        )
 
     def outcome_max_delay_minutes(self) -> int:
-        try:
-            value = int(float(str(self.runtime_settings.get("investmentBrainOutcomeMaxDelayMinutes") or "180")))
-        except (TypeError, ValueError):
-            value = 180
-        return max(1, min(60 * 24 * 14, value))
+        return outcome_policy.outcome_max_delay_minutes(
+            _runtime_settings=self.runtime_settings,
+        )
 
     def save_outcome(self, episode: DecisionEpisode, outcome: ObservedOutcome) -> ObservedOutcome:
-        outcome.observed_at = canonical_investment_timestamp(outcome.observed_at) or utc_now_iso()
-        episode.status = "observed"
-        episode.outcomes = [
-            item for item in episode.outcomes
-            if item.outcome_id != outcome.outcome_id
-        ] + [outcome]
-        payload = outcome.to_dict()
-        episode_payload = episode.to_dict()
-        with self.transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO investment_decision_outcomes (
-                    outcome_id, episode_id, account_id, symbol, observed_at,
-                    selected_hypothesis_status, price, profit_loss_rate,
-                    price_change_from_decision_pct, payload_json, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE selected_hypothesis_status = VALUES(selected_hypothesis_status),
-                    price = VALUES(price), profit_loss_rate = VALUES(profit_loss_rate),
-                    price_change_from_decision_pct = VALUES(price_change_from_decision_pct),
-                    payload_json = VALUES(payload_json)
-                """,
-                (
-                    outcome.outcome_id,
-                    outcome.episode_id,
-                    episode.account_id,
-                    episode.symbol,
-                    outcome.observed_at,
-                    outcome.selected_hypothesis_status,
-                    outcome.price,
-                    outcome.profit_loss_rate,
-                    outcome.price_change_from_decision_pct,
-                    json_dumps(payload),
-                    utc_now_iso(),
-                ),
-            )
-            connection.execute(
-                "UPDATE investment_decision_episodes SET status = %s, decided_at = %s, payload_json = %s, updated_at = %s WHERE episode_id = %s",
-                ("observed", episode.decided_at, json_dumps(episode_payload), utc_now_iso(), episode.episode_id),
-            )
-            horizon_minutes = int((outcome.payload or {}).get("horizonMinutes") or 0)
-            fingerprint = str((outcome.payload or {}).get("contractFingerprint") or "")
-            connection.execute(
-                "UPDATE investment_decision_outcome_targets "
-                "SET status = 'observed', outcome_id = %s, observed_at = %s, updated_at = %s "
-                "WHERE episode_id = %s AND horizon_minutes = %s AND contract_fingerprint = %s",
-                (
-                    outcome.outcome_id,
-                    outcome.observed_at,
-                    utc_now_iso(),
-                    episode.episode_id,
-                    horizon_minutes,
-                    fingerprint,
-                ),
-            )
-        return outcome
-
-    def propose_learning_from_outcomes(self, account_id: str, symbol: str) -> Optional[LearningProposal]:
-        try:
-            minimum = int(float(str(self.runtime_settings.get("investmentBrainLearningMinContradictions") or "3")))
-        except ValueError:
-            minimum = 3
-        minimum = max(2, min(20, minimum))
-        with self.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT e.payload_json AS episode_json, o.payload_json AS outcome_json
-                FROM investment_decision_outcomes o
-                JOIN investment_decision_episodes e ON e.episode_id = o.episode_id
-                WHERE e.account_id = %s AND e.symbol = %s
-                  AND o.selected_hypothesis_status = 'directionally-contradicted'
-                ORDER BY o.observed_at DESC
-                LIMIT %s
-                """,
-                (str(account_id or ""), str(symbol or "").upper(), min(200, minimum * 10)),
-            ).fetchall()
-        episode_rows = []
-        for row in rows or []:
-            outcome_payload = _json_loads(row.get("outcome_json"), {})
-            if not outcome_is_calibration_eligible(outcome_payload):
-                continue
-            episode_payload = _json_loads(row.get("episode_json"), {})
-            if not str(episode_payload.get("episodeId") or ""):
-                continue
-            episode_payload["outcomes"] = [outcome_payload]
-            episode_rows.append(episode_payload)
-        candidates = contradiction_learning_candidates(episode_rows, minimum)
-        if not candidates:
-            return None
-        candidate = candidates[0]
-        episode_ids = list(candidate.get("sourceEpisodeIds") or [])
-        rule_ids = list(candidate.get("affectedRuleIds") or [])
-        family_label = str(candidate.get("templateLabel") or candidate.get("familyId") or "선택 가설")
-        horizon_minutes = int(candidate.get("horizonMinutes") or 0)
-        proposal = LearningProposal(
-            proposal_id=stable_id("learning-proposal", account_id, symbol, str(candidate.get("groupKey") or ""), ",".join(episode_ids)),
-            title=str(symbol or "") + " " + family_label + " 반복 반증 검토",
-            reason=(
-                "동일 가설 가족군·동일 관찰 기간의 서로 독립된 최근 사건 "
-                + str(candidate.get("contradictedCount") or minimum)
-                + "건에서 계약 기반 사후 관측이 반복 반증됐습니다. 원천 데이터와 가설 기준을 재검토해야 합니다."
-            ),
-            source_episode_ids=episode_ids,
-            affected_rule_ids=rule_ids,
-            proposed_change={
-                "changeType": "review-hypothesis-prior-and-evidence-coverage",
-                "familyId": candidate.get("familyId"),
-                "templateId": candidate.get("templateId"),
-                "predictionTarget": candidate.get("predictionTarget"),
-                "expectedDirection": candidate.get("expectedDirection"),
-                "expectedOutcome": candidate.get("expectedOutcome"),
-                "outcomeMetric": candidate.get("outcomeMetric"),
-                "falsificationContract": candidate.get("falsificationContract"),
-                "horizonMinutes": horizon_minutes,
-                "contradictedCount": candidate.get("contradictedCount"),
-                "automaticDeployment": False,
-                "requiredValidation": ["historical-replay", "TypeDB-rule-preview", "human-approval"],
-            },
+        return observation_records.save_outcome(
+            episode,
+            outcome,
+            _transaction=self.transaction,
+            utc_now_iso=utc_now_iso,
         )
-        return self.save_learning_proposal(proposal)
+
+    def propose_learning_from_outcomes(
+        self, account_id: str, symbol: str
+    ) -> Optional[LearningProposal]:
+        return learning.propose_learning_from_outcomes(
+            account_id,
+            symbol,
+            _connect=self.connect,
+            _runtime_settings=self.runtime_settings,
+            _save_learning_proposal=self.save_learning_proposal,
+        )
 
     def save_learning_proposal(self, proposal: LearningProposal) -> LearningProposal:
-        stamp = utc_now_iso()
-        with self.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO investment_learning_proposals (
-                    proposal_id, status, title, reason, affected_rule_ids_json,
-                    source_episode_ids_json, payload_json, created_at, updated_at,
-                    reviewed_at, review_note
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '', '')
-                ON DUPLICATE KEY UPDATE title = VALUES(title), reason = VALUES(reason),
-                    affected_rule_ids_json = VALUES(affected_rule_ids_json),
-                    source_episode_ids_json = VALUES(source_episode_ids_json),
-                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
-                """,
-                (
-                    proposal.proposal_id,
-                    proposal.status,
-                    proposal.title,
-                    proposal.reason,
-                    json_dumps(proposal.affected_rule_ids),
-                    json_dumps(proposal.source_episode_ids),
-                    json_dumps(proposal.to_dict()),
-                    proposal.created_at,
-                    stamp,
-                ),
-            )
-        return proposal
+        return learning.save_learning_proposal(
+            proposal,
+            _connect=self.connect,
+            utc_now_iso=utc_now_iso,
+        )
 
     def list_learning_proposals(self, status: str = "", limit: int = 50) -> List[Dict[str, object]]:
-        params: List[object] = []
-        sql = "SELECT payload_json, status, reviewed_at, review_note FROM investment_learning_proposals"
-        if status:
-            sql += " WHERE status = %s"
-            params.append(str(status))
-        sql += " ORDER BY updated_at DESC, proposal_id DESC LIMIT %s"
-        params.append(max(1, min(500, int(limit or 50))))
-        with self.connect() as connection:
-            rows = connection.execute(sql, tuple(params)).fetchall()
-        results = []
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            payload["status"] = row.get("status") or payload.get("status")
-            payload["reviewedAt"] = row.get("reviewed_at") or ""
-            payload["reviewNote"] = row.get("review_note") or ""
-            results.append(payload)
-        return results
-
-    def review_learning_proposal(self, proposal_id: str, status: str, note: str = "") -> Dict[str, object]:
-        status = str(status or "").strip().lower()
-        if status not in {"approved", "rejected", "review-required"}:
-            raise ValueError("학습 제안 상태는 approved, rejected, review-required 중 하나여야 합니다.")
-        stamp = utc_now_iso()
-        with self.connect() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE investment_learning_proposals
-                SET status = %s, reviewed_at = %s, review_note = %s, updated_at = %s
-                WHERE proposal_id = %s
-                """,
-                (status, stamp if status != "review-required" else "", str(note or "")[:2000], stamp, str(proposal_id or "")),
-            )
-            if not cursor.rowcount:
-                raise KeyError("학습 제안을 찾지 못했습니다.")
-        rows = self.list_learning_proposals(status=status, limit=500)
-        return next((item for item in rows if str(item.get("proposalId") or "") == str(proposal_id)), {})
-
-
-def selected_hypothesis_stance(episode: DecisionEpisode) -> str:
-    return str(selected_hypothesis_payload(episode).get("stance") or "uncertain")
-
-
-def selected_hypothesis_payload(episode: DecisionEpisode) -> Dict[str, object]:
-    for item in episode.hypothesis_set.hypotheses:
-        if item.hypothesis_id == episode.selected_hypothesis_id:
-            return item.to_dict()
-    return {}
-
-
-def directional_hypothesis_status(stance: str, price_change_pct: float) -> str:
-    if not price_change_pct or stance not in {"risk", "support"}:
-        return "inconclusive"
-    if stance == "risk":
-        return "directionally-corroborated" if price_change_pct < 0 else "directionally-contradicted"
-    return "directionally-corroborated" if price_change_pct > 0 else "directionally-contradicted"
-
-
-def contract_benchmark_symbol(contract: Dict[str, object], facts: Dict[str, object] = None) -> str:
-    source = dict(facts or {})
-    explicit = str(source.get("benchmarkSymbol") or "").upper().strip()
-    if explicit:
-        return explicit
-    for criterion in contract.get("criteria") or []:
-        if not isinstance(criterion, dict):
-            continue
-        symbol = str(criterion.get("benchmarkSymbol") or "").upper().strip()
-        if symbol:
-            return symbol
-    return ""
-
-
-def due_outcome_horizon_minutes(episode: DecisionEpisode, observed_at: str, raw_horizons: object) -> int:
-    horizons = due_outcome_horizon_minutes_all(episode, observed_at, raw_horizons)
-    return horizons[0] if horizons else 0
-
-
-def due_outcome_horizon_minutes_all(
-    episode: DecisionEpisode,
-    observed_at: str,
-    raw_horizons: object,
-) -> List[int]:
-    decided = parse_datetime(episode.decided_at)
-    observed = parse_datetime(observed_at)
-    if not decided or not observed or observed <= decided:
-        return []
-    due = []
-    for value in outcome_horizon_minutes(raw_horizons):
-        target = parse_datetime(outcome_target_at(episode, value))
-        if target and observed >= target and not outcome_horizon_recorded(episode, value):
-            due.append(value)
-    return due
-
-
-def outcome_horizon_minutes(raw_horizons: object) -> List[int]:
-    if isinstance(raw_horizons, (list, tuple, set)):
-        raw_values = raw_horizons
-    else:
-        raw_values = str(raw_horizons or "").replace("\n", ",").split(",")
-    horizons: List[int] = []
-    for raw in raw_values:
-        try:
-            value = int(float(str(raw).strip()))
-        except (TypeError, ValueError):
-            continue
-        if value > 0 and value not in horizons:
-            horizons.append(value)
-    return sorted(horizons) or [60, 1440, 10080]
-
-
-def outcome_horizon_recorded(episode: DecisionEpisode, horizon_minutes: int) -> bool:
-    return int(horizon_minutes or 0) in {
-        int(float((item.payload or {}).get("horizonMinutes") or 0))
-        for item in episode.outcomes or []
-        if (item.payload or {}).get("horizonMinutes")
-    }
-
-
-def outcome_target_at(episode: DecisionEpisode, horizon_minutes: int) -> str:
-    facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
-    return market_outcome_target_at(
-        episode.decided_at,
-        episode.symbol,
-        str(facts.get("market") or ""),
-        str(facts.get("currency") or ""),
-        horizon_minutes,
-    )
-
-
-def market_outcome_target_at(
-    decided_at: str,
-    symbol: str,
-    market: str,
-    currency: str,
-    horizon_minutes: int,
-) -> str:
-    decided = parse_datetime(decided_at)
-    if not decided or int(horizon_minutes or 0) <= 0:
-        return ""
-    target = decided + timedelta(minutes=int(horizon_minutes))
-    market = str(market or "").upper().strip()
-    currency = str(currency or "").upper().strip()
-    if not market:
-        market = infer_market_from_context(
-            "investmentInsight",
-            {
-                "symbol": symbol,
-                "market": market,
-                "currency": currency,
-            },
+        return learning.list_learning_proposals(
+            status,
+            limit,
+            _connect=self.connect,
         )
-    is_crypto_market = market in {"CRYPTO", "COIN"} or currency in {"BTC", "ETH", "USDT", "USDC"}
-    traditional_market = not is_crypto_market and (market in {
-        "KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX", "KRX", "XKRX",
-        "US", "USA", "NASDAQ", "NYSE", "AMEX", "ARCA", "BATS", "XNYS", "XNAS",
-    } or currency in {"KRW", "USD"})
-    if traditional_market:
-        local_target = target.astimezone(market_timezone(market, currency))
-        while local_target.weekday() >= 5:
-            local_target += timedelta(days=1)
-        is_kr_market = market in {
-            "KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX", "KRX", "XKRX",
-        } or currency == "KRW"
-        open_hour, open_minute = (9, 0) if is_kr_market else (9, 30)
-        close_hour, close_minute = (15, 30) if is_kr_market else (16, 0)
-        session_open = local_target.replace(hour=open_hour, minute=open_minute, second=0, microsecond=0)
-        session_close = local_target.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
-        if local_target < session_open:
-            local_target = session_open
-        elif local_target > session_close:
-            local_target = session_open + timedelta(days=1)
-            while local_target.weekday() >= 5:
-                local_target += timedelta(days=1)
-        target = local_target.astimezone(timezone.utc)
-    return target.isoformat().replace("+00:00", "Z")
 
-
-def outcome_observation_is_usable(facts: Dict[str, object], observed_at: str) -> bool:
-    if not number((facts or {}).get("currentPrice")) or not parse_datetime(observed_at):
-        return False
-    quality = str((facts or {}).get("dataQuality") or "").strip().lower()
-    return quality not in {"stale", "cached", "invalid", "unavailable", "error", "mock", "estimated"}
-
-
-def outcome_is_calibration_eligible(outcome_payload: Dict[str, object]) -> bool:
-    payload = outcome_payload.get("payload") if isinstance(outcome_payload, dict) else {}
-    eligibility = str((payload or {}).get("calibrationEligibility") or "").strip().lower()
-    return eligibility == "eligible"
-
-
-def parse_datetime(value: object):
-    return parse_investment_timestamp(value)
-
-
-def number(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
+    def review_learning_proposal(
+        self, proposal_id: str, status: str, note: str = ""
+    ) -> Dict[str, object]:
+        return learning.review_learning_proposal(
+            proposal_id,
+            status,
+            note,
+            _connect=self.connect,
+            _list_learning_proposals=self.list_learning_proposals,
+            utc_now_iso=utc_now_iso,
+        )

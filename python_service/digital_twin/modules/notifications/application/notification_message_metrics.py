@@ -1,7 +1,7 @@
 import re
 from typing import Dict, List
 
-from digital_twin.domain.notification_ai_gate_text import _number
+from digital_twin.modules.decisions.contracts import _number
 
 
 def _context_path_value(context: Dict[str, object], path: str):

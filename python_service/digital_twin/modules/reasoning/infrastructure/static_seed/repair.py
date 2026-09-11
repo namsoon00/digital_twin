@@ -1,7 +1,7 @@
 """TypeDB static-seed repair owner; no facade or runtime construction."""
 
 from .repair_ports import RepairStore, RepairBindings
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from typing import Dict
 
 

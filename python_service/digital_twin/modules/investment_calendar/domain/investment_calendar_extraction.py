@@ -6,7 +6,7 @@ from typing import Dict, Iterable, List, Tuple
 from urllib.parse import urlparse
 
 from digital_twin.modules.investment_calendar.domain.investment_calendar import calendar_timezone_for, event_timezone, normalized_event_markets, utc_iso
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 KST = timezone(timedelta(hours=9))

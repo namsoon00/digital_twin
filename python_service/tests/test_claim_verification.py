@@ -1,15 +1,15 @@
 import unittest
 from datetime import datetime, timezone
 
-from digital_twin.domain.investment_evidence_governance import (
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import (
     claim_quality_summary,
     governed_evidence,
     primary_source,
 )
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_schema import add_entity
-from digital_twin.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+from digital_twin.modules.reasoning.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
 from digital_twin.modules.news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 

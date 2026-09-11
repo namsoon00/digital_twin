@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.domain.investment_insight_assessment import (
+from digital_twin.modules.decisions.domain.investment_insight_assessment import (
     compact_previous_investment_insight_episode,
     investment_insight_assessment,
     investment_insight_transition,

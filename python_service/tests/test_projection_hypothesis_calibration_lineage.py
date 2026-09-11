@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.domain.ontology_contracts import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
     PortfolioOntology,

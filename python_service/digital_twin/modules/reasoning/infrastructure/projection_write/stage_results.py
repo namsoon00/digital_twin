@@ -8,10 +8,10 @@ from __future__ import annotations
 from typing import Optional, Union
 from dataclasses import dataclass
 from typing import Dict, List
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_worlds import OntologyWorld
-from digital_twin.domain.ontology_validator import OntologyValidationReport
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_worlds import OntologyWorld
+from digital_twin.modules.reasoning.domain.ontology_validator import OntologyValidationReport
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
 
 
 @dataclass(frozen=True)

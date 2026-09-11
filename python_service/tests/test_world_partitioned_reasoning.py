@@ -2,21 +2,22 @@ import unittest
 from types import SimpleNamespace
 
 from digital_twin.modules.reasoning.application.independent_reasoning_engine import ScopedTypeDBInferenceExecutor
-from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
-from digital_twin.domain.independent_reasoning import independent_reasoning_request
-from digital_twin.domain.ontology_contracts import (
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.independent_reasoning import independent_reasoning_request
+from digital_twin.modules.reasoning.domain.ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
     PortfolioOntology,
     entity_id,
 )
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_rulebox_contracts import (
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
     GraphRuleDerivation,
 )
-from digital_twin.domain.world_partitioned_reasoning import (
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import (
     SHARED_PREMISE_RELATION,
     account_overlay_graph,
     attach_shared_premise_evidence,
@@ -25,7 +26,7 @@ from digital_twin.domain.world_partitioned_reasoning import (
     shared_premise_matches,
     shared_premise_world_graph,
 )
-from digital_twin.domain.ontology_worlds import shared_premise_world
+from digital_twin.modules.reasoning.domain.ontology_worlds import shared_premise_world
 
 
 def source_event(symbol="NVDA", account_ids=None):

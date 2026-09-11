@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.domain.market_time_series import (
+from digital_twin.modules.market_data.domain.market_time_series import (
     MarketTimeSeriesObservation,
     preserved_daily_observed_at,
 )

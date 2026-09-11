@@ -3,16 +3,7 @@
 import re
 from typing import Dict, Iterable, List, Set
 
-from digital_twin.domain.model_signal_interpretation import (
-    MODEL_SIGNAL_BRIDGE_VERSION,
-    is_batchable_model_signal_interpretation_rule,
-    is_model_signal_interpretation_rule,
-    model_signal_bridge_conditions,
-    model_signal_bridge_source_scope,
-    model_signal_conditions,
-    model_signal_interpretation_contract_id,
-    model_signal_residual_conditions,
-)
+from digital_twin.modules.model_registry.contracts import MODEL_SIGNAL_BRIDGE_VERSION, is_batchable_model_signal_interpretation_rule, is_model_signal_interpretation_rule, model_signal_bridge_conditions, model_signal_bridge_source_scope, model_signal_conditions, model_signal_interpretation_contract_id, model_signal_residual_conditions
 from digital_twin.modules.reasoning.infrastructure.typeql.condition_queries import (
     typedb_condition_pattern,
     typedb_entity_match_type,

@@ -1,11 +1,11 @@
 import unittest
 
-from digital_twin.domain.decision_evidence_assertion import (
+from digital_twin.modules.decisions.domain.decision_evidence_assertion import (
     inference_evidence_assertions,
     rebind_hypothesis_evidence_ids,
 )
-from digital_twin.domain.decision_evidence_contract import hypothesis_decision_eligibility
-from digital_twin.domain.notification_narrative import (
+from digital_twin.modules.decisions.domain.decision_evidence_contract import hypothesis_decision_eligibility
+from digital_twin.modules.notifications.domain.notification_narrative import (
     build_decision_core_evidence_ledger,
 )
 

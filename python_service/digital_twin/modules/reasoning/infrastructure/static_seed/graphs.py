@@ -1,7 +1,7 @@
 """TypeDB static-seed graphs owner; no facade or runtime construction."""
 
 from .graphs_ports import GraphsStore
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_storage_id,
     relation_row_id,

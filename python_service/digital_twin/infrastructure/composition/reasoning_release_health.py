@@ -18,7 +18,7 @@ def record_v2_release_health(
     compiled_ontology_release,
     runtime_world_partition,
 ) -> None:
-    from digital_twin.domain.investment_reasoning import reasoning_rule_inventory
+    from digital_twin.modules.decisions.domain.investment_reasoning import reasoning_rule_inventory
 
     existing_health = dict((registry_store.get(descriptor.deployment_id) or {}).get("health") or {})
     frozen_rulebox_fingerprint = str(existing_health.get("ruleboxFingerprint") or "")

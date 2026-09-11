@@ -2,17 +2,17 @@
 
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Protocol
-from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent
-from digital_twin.domain.investment_mandate import InvestmentMandate
-from digital_twin.domain.investment_outcomes import DecisionReview, PerformanceAttribution
-from digital_twin.domain.portfolio_decision_cycle import PortfolioDecisionCycle
-from digital_twin.domain.portfolio_analytics import PortfolioRiskSnapshot
+from digital_twin.modules.accounts.contracts import AccountConfig
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent
+from digital_twin.modules.portfolio.domain.investment_mandate import InvestmentMandate
+from digital_twin.modules.outcomes.contracts import DecisionReview, PerformanceAttribution
+from digital_twin.modules.portfolio.domain.portfolio_decision_cycle import PortfolioDecisionCycle
+from digital_twin.modules.portfolio.domain.portfolio_analytics import PortfolioRiskSnapshot
 from digital_twin.modules.portfolio.contracts import PortfolioLedgerEntry, PortfolioReconciliation
-from digital_twin.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
-from digital_twin.domain.portfolio_rebalancing import RebalanceProposal
-from digital_twin.domain.risk_exposure import ExposureSnapshot
-from digital_twin.domain.trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
+from digital_twin.modules.portfolio.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
+from digital_twin.modules.portfolio.domain.portfolio_rebalancing import RebalanceProposal
+from digital_twin.modules.portfolio.domain.risk_exposure import ExposureSnapshot
+from digital_twin.modules.portfolio.domain.trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
 
 
 class InvestmentDomainRepository(Protocol):

@@ -1,6 +1,6 @@
 from typing import Dict, List
 
-from digital_twin.domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
+from digital_twin.modules.reasoning.domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.infrastructure.settings import utc_now
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection

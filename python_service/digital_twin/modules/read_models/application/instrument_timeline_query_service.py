@@ -4,7 +4,7 @@ import re
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.read_models.domain.instrument_timeline import InstrumentTimelineQuery
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 def text(value: object) -> str:

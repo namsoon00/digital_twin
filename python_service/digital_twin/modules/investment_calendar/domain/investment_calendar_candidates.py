@@ -2,7 +2,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.investment_calendar.domain.investment_calendar import calendar_timezone_for, clean_text, local_date_text, normalized_event_markets, normalized_list, normalize_market, normalize_symbol, reminder_offsets_from_payload
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 CANDIDATE_STATUS_PENDING = "pending"

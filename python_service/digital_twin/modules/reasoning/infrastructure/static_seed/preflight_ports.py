@@ -1,7 +1,7 @@
 """Capabilities used only by static-seed preflight."""
 
 from typing import Dict, List, Protocol
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 class PreflightStore(Protocol):

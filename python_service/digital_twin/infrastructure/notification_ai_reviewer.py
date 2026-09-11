@@ -6,13 +6,10 @@ import threading
 import time
 from typing import Dict
 
-from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from ..domain.notification_ai_decision_brief import build_notification_ai_decision_prompt
-from ..domain.notification_ai_prompt_release import active_notification_ai_prompt_release
-from ..domain.notification_ai_gate_validation import (
-    local_validated_ai_response,
-    validated_response_from_text,
-)
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.modules.decisions.domain.notification_ai_decision_brief import build_notification_ai_decision_prompt
+from digital_twin.modules.decisions.domain.notification_ai_prompt_release import active_notification_ai_prompt_release
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import local_validated_ai_response, validated_response_from_text
 from .local_ai_process_guard import forward_termination_signals, local_ai_capacity_lease
 from .codex_execution_output import codex_execution_output
 from digital_twin.modules.model_registry.infrastructure.model_reviewer import codex_model_label, codex_process_arguments, notification_ai_runtime_dir

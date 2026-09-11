@@ -2,12 +2,13 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Tuple
 
-from digital_twin.domain.events import hypothesis_research_completed_event, ontology_reasoning_requested_event
-from digital_twin.domain.investment_brain import InvestmentQuestion, stable_id, utc_now_iso
-from digital_twin.domain.investment_evidence_governance import HypothesisResearchBrief, ResearchReasoningHandoff, ResearchRun, claim_policy, claim_quality_summary, governed_evidence, hypothesis_research_brief_from_brain, normalized_source_trust_state, reasoning_handoff_from_context
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.data_freshness import parse_datetime
-from digital_twin.domain.materiality import evidence_materiality
+from digital_twin.modules.news_intelligence.domain.integration_events import hypothesis_research_completed_event
+from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
+from digital_twin.modules.decisions.contracts import InvestmentQuestion, stable_id, utc_now_iso
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import HypothesisResearchBrief, ResearchReasoningHandoff, ResearchRun, claim_policy, claim_quality_summary, governed_evidence, hypothesis_research_brief_from_brain, normalized_source_trust_state, reasoning_handoff_from_context
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.market_data.contracts import parse_datetime
+from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

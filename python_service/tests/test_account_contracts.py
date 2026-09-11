@@ -7,16 +7,14 @@ from zoneinfo import ZoneInfo
 
 class AccountContractTests(unittest.TestCase):
     def test_account_contract_and_policies_have_one_owner(self):
-        from digital_twin.domain import accounts as legacy
-        from digital_twin.domain.repositories import AccountRepository as legacy_repository
+        from digital_twin.modules.accounts.domain.configuration import AccountConfig as owned_config
+        from digital_twin.modules.accounts.domain.ports import AccountRepository as owned_repository
         from digital_twin.modules.accounts.contracts import AccountConfig, AccountRepository
         from digital_twin.modules.notifications.contracts import is_quiet_time
         from digital_twin.modules.portfolio.contracts import investment_strategy_profile
 
-        self.assertIs(legacy.AccountConfig, AccountConfig)
-        self.assertIs(legacy_repository, AccountRepository)
-        self.assertIs(legacy.is_quiet_time, is_quiet_time)
-        self.assertIs(legacy.investment_strategy_profile, investment_strategy_profile)
+        self.assertIs(owned_config, AccountConfig)
+        self.assertIs(owned_repository, AccountRepository)
         self.assertEqual(
             "digital_twin.modules.accounts.domain.configuration", AccountConfig.__module__
         )

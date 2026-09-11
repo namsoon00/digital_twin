@@ -7,9 +7,11 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner
-from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_requested_event
-from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_requested_event
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import durable_mailbox_entries
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.mysql_reasoning_mailbox import (
     MySQLOntologyReasoningMailboxStore,
     local_reasoning_watch_is_dead,

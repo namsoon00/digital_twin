@@ -1,9 +1,9 @@
 import copy
 import unittest
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
-from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
-from digital_twin.domain.ontology_worlds import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import apply_scoped_abox_identity
+from digital_twin.modules.reasoning.domain.ontology_worlds import (
     knowledge_world,
     market_world,
     portfolio_world,
@@ -12,20 +12,20 @@ from digital_twin.domain.ontology_worlds import (
     world_scope_suffix,
     world_from_snapshot,
 )
-from digital_twin.domain.knowledge_world_projection import build_knowledge_world_graph
-from digital_twin.domain.market_world_projection import (
+from digital_twin.modules.reasoning.domain.knowledge_world_projection import build_knowledge_world_graph
+from digital_twin.modules.reasoning.domain.market_world_projection import (
     build_market_world_graph,
     merge_market_world_scope_manifest,
     merge_market_world_graph,
 )
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_runtime_operations import (
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import (
     active_reasoning_lease_count,
     background_queue_backlog,
 )
-from digital_twin.domain.ontology_world_routing import route_world_impact
+from digital_twin.modules.reasoning.domain.ontology_world_routing import route_world_impact
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_to_payload
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.typedb_ontology import (
@@ -34,7 +34,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     ontology_storage_id,
     typedb_active_worldview_manifest_clause,
 )
-from digital_twin.infrastructure.web_server import run_ontology_rulebox_payload
+from digital_twin.infrastructure.web.adapters.ontology_governance import run_ontology_rulebox_payload
 
 
 def sample_graph(symbol="005930", source_observed_at=""):

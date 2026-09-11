@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, Callable, ContextManager, Dict, Iterable, List, Optional, Protocol, Tuple, TypeVar
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 Row = Dict[str, object]

@@ -1,5 +1,11 @@
 {
   "tests": [
+    {"file": "test_domain_ownership_completion.py", "tier": "contract", "core": true},
+    {"file": "test_integrated_load.py", "tier": "integration", "core": true},
+    {"file": "test_internal_decision_history.py", "tier": "integration", "core": true},
+    {"file": "test_internal_patch_manifest.py", "tier": "contract", "core": true},
+    {"file": "test_web_router_boundaries.py", "tier": "system", "core": true},
+    {"file": "test_web_router_payloads.py", "tier": "contract", "core": true},
     {"file": "test_position_identity.py", "tier": "unit", "core": true},
     {"file": "test_portfolio_valuation_contract.py", "tier": "unit", "core": true},
     {"file": "test_toss_base_currency_values.py", "tier": "unit", "core": true},

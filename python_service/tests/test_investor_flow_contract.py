@@ -5,14 +5,14 @@ from digital_twin.modules.read_models.application.flow_lens_service import posit
 from digital_twin.modules.market_data.application.capital_flow_service import CapitalFlowService
 from digital_twin.modules.notifications.application.notification_ai_gate_message import _investor_text_from_relation_facts, compact_investor_flow_line
 from digital_twin.modules.market_data.domain.capital_flow import CapitalFlowObservation, canonical_observations, subject_flow_summary
-from digital_twin.domain.investor_flow_psychology import (
+from digital_twin.modules.market_data.domain.investor_flow_psychology import (
     investor_flow_contract,
     investor_flow_observation,
 )
-from digital_twin.domain.ontology_relation_facts import position_signal_facts
-from digital_twin.domain.market_time_series import MarketTimeSeriesObservation
-from digital_twin.domain.portfolio import PortfolioSummary, Position
-from digital_twin.domain.portfolio_ontology_temporal_concepts import (
+from digital_twin.modules.reasoning.domain.ontology_relation_facts import position_signal_facts
+from digital_twin.modules.market_data.domain.market_time_series import MarketTimeSeriesObservation
+from digital_twin.modules.portfolio.domain.portfolio import PortfolioSummary, Position
+from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import (
     has_smart_money_flow_observation,
 )
 from digital_twin.infrastructure.mysql_market_time_series import (

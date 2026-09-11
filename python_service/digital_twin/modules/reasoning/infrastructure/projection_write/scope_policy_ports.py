@@ -1,7 +1,7 @@
 """Capabilities for scope policy; no runtime construction."""
 
 from __future__ import annotations
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Protocol, Set, Tuple
 

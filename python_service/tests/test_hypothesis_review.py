@@ -4,19 +4,19 @@ from copy import deepcopy
 from digital_twin.modules.model_registry.application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
 from digital_twin.modules.outcomes.application.hypothesis_review_service import HypothesisReviewService
 from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message
-from digital_twin.domain.hypothesis_review import (
+from digital_twin.modules.outcomes.domain.hypothesis_review import (
     lifecycle_review_item,
     outcome_assessment_for_lifecycle,
 )
-from digital_twin.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
-from digital_twin.domain.hypothesis_quality_review import quality_review_for_item
-from digital_twin.domain.notification_ai import notification_ai_prompt_context
-from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_schema import add_entity
-from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
+from digital_twin.modules.outcomes.domain.hypothesis_quality_review import quality_review_for_item
+from digital_twin.modules.decisions.domain.notification_ai import notification_ai_prompt_context
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+from digital_twin.modules.reasoning.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 
 
 MARKET_ID = "market:AAPL:trend-recovery"

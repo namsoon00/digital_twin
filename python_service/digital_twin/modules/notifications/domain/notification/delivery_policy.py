@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
-from digital_twin.domain.investment_reasoning.decision_delta import DecisionDelta
+from digital_twin.modules.decisions.contracts import DecisionDelta
 
 
 FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v18"

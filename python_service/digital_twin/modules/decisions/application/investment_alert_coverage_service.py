@@ -6,9 +6,10 @@ from datetime import datetime, timedelta, timezone
 import time
 from typing import Dict, Mapping, Tuple
 
-from digital_twin.domain.events import INVESTMENT_ALERT_COVERAGE_CHANGED, DomainEvent, investment_alert_coverage_changed_event
-from digital_twin.domain.message_types import INVESTMENT_ALERT_COVERAGE
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.reasoning.contracts import INVESTMENT_ALERT_COVERAGE_CHANGED, investment_alert_coverage_changed_event
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.notifications.contracts import INVESTMENT_ALERT_COVERAGE
+from digital_twin.modules.notifications.contracts import NotificationJob
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

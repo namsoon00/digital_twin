@@ -4,19 +4,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from digital_twin.application.operational_storage_capacity_service import (
+from digital_twin.platform.application.operational_storage_capacity_service import (
     OperationalStorageCapacityNotificationEnqueuer,
     OperationalStorageCapacityService,
 )
-from digital_twin.domain.events import operational_storage_capacity_changed_event
-from digital_twin.domain.operational_storage_capacity import (
+from digital_twin.platform.domain.events import operational_storage_capacity_changed_event
+from digital_twin.platform.domain.operational_storage_capacity import (
     operational_storage_capacity_read_model,
 )
-from digital_twin.domain.message_types import (
+from digital_twin.modules.notifications.domain.message_types import (
     OPERATIONAL_STORAGE_CAPACITY,
     is_operations_delivery_message_type,
 )
-from digital_twin.domain.operational_notification_presentation import operational_notification_presentation
+from digital_twin.modules.notifications.domain.operational_notification_presentation import operational_notification_presentation
 from digital_twin.infrastructure.operational_storage_guard import (
     accelerated_mysql_cleanup_settings,
     operational_storage_inventory,

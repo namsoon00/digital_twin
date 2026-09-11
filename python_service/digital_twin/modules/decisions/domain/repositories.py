@@ -1,7 +1,7 @@
 """Repository capabilities owned by decisions."""
 
 from typing import Dict, Iterable, List, Optional, Protocol
-from digital_twin.domain.investment_brain import DecisionEpisode, LearningProposal, ObservedOutcome
+from digital_twin.modules.decisions.domain.investment_brain import DecisionEpisode, LearningProposal, ObservedOutcome
 
 
 class DecisionEpisodeRepository(Protocol):

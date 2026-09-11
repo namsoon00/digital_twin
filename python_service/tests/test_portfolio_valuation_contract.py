@@ -1,15 +1,15 @@
 import unittest
 
-from digital_twin.domain.market_data import normalize_position
-from digital_twin.domain.portfolio import account_snapshot_from_monitor_state
-from digital_twin.domain.portfolio_calculations import (
+from digital_twin.modules.market_data.domain.market_data import normalize_position
+from digital_twin.modules.portfolio.domain.portfolio import account_snapshot_from_monitor_state
+from digital_twin.modules.portfolio.domain.portfolio_calculations import (
     apply_position_base_currency_values,
     portfolio_summary,
     runtime_fx_currencies_from_external_signals,
 )
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio_ontology_exposure_concepts import position_weight
-from digital_twin.domain.portfolio_valuation import BROKER_NET_BASIS
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.reasoning.domain.portfolio_ontology_exposure_concepts import position_weight
+from digital_twin.modules.portfolio.domain.portfolio_valuation import BROKER_NET_BASIS
 from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_rates_from_external_signals
 
 

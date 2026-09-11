@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 from .rulebox_history_ports import RuleboxHistoryPort, AppendRuleboxVersionBindings
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_rulebox_governance import (
-    normalize_rule_change_candidate,
-)
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.model_registry.contracts import normalize_rule_change_candidate
 from digital_twin.infrastructure.graph_store_rulebox import (
     add_rulebox_version_concept,
     rulebox_rules_from_payload,
@@ -112,7 +110,7 @@ def save_rule_change_candidates(
         }
     graph = PortfolioOntology("typedb-rule-change-candidates")
     for item in normalized:
-        from digital_twin.domain.ontology_contracts import OntologyEntity
+        from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity
 
         graph.entities.append(
             OntologyEntity(

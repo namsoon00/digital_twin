@@ -2,7 +2,7 @@ import hashlib
 import json
 from typing import Dict
 
-from ..domain.fact_changes import research_evidence_fact_payload
+from digital_twin.modules.reasoning.domain.fact_changes import research_evidence_fact_payload
 
 
 def _json_loads(value, fallback):

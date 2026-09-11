@@ -5,16 +5,16 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.investor_flow_psychology import investor_flow_values_reliable
-from digital_twin.domain.market_data import normalize_position
-from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.portfolio_calculations import (
+from digital_twin.modules.market_data.domain.investor_flow_psychology import investor_flow_values_reliable
+from digital_twin.modules.market_data.domain.market_data import normalize_position
+from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
+from digital_twin.modules.portfolio.domain.portfolio_calculations import (
     apply_position_base_currency_values,
     broker_fx_rates_from_positions,
     portfolio_summary,
     runtime_fx_currencies_from_external_signals,
 )
-from digital_twin.domain.volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
+from digital_twin.modules.market_data.domain.volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_rates_from_external_signals
 

@@ -2,9 +2,9 @@ import json
 import re
 from typing import Dict, Iterable, List
 
-from ..domain.ontology_contracts import PortfolioOntology
-from ..domain.ontology_decision_state import without_aggregate_decision_fields
-from ..domain.ontology_schema import default_tbox_metadata
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_decision_state import without_aggregate_decision_fields
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
 
 
 def safe_relation_type(value: str) -> str:

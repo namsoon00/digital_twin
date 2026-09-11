@@ -1,5 +1,5 @@
-from .domain.accounts import AccountConfig, configured, split_symbols
-from .domain.parsing import parse_assignments
+from digital_twin.modules.accounts.domain.accounts import AccountConfig, configured, split_symbols
+from digital_twin.shared_kernel.parsing import parse_assignments
 from .infrastructure.settings import (
     DEFAULT_DATA_DIR,
     ROOT_DIR,

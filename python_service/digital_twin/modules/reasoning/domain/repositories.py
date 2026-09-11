@@ -2,9 +2,9 @@
 
 import inspect
 from typing import Dict, List, Protocol, Tuple, runtime_checkable
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 
 
 ONTOLOGY_GRAPH_REPOSITORY_CONTRACT: Dict[str, Tuple[str, ...]] = {

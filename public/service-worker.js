@@ -1,15 +1,15 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260909-tab-preload-v1";
+const SHELL_CACHE = "orbit-alpha-shell-modules-7aa796120a6e3e92";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=20260909-tab-preload-v1",
-  "./console-workspaces.css?v=20260909-tab-preload-v1",
-  "./app-default-settings.js?v=20260821-stable-share-v1",
-  "./console-workspaces.js?v=20260909-tab-preload-v1",
-  "./web-runtime.js?v=20260909-tab-preload-v1",
-  "./app.js?v=20260909-tab-preload-v1",
+  "./styles.css?v=modules-7aa796120a6e3e92",
+  "./console-workspaces.css?v=modules-7aa796120a6e3e92",
+  "./app-default-settings.js?v=modules-7aa796120a6e3e92",
+  "./console-workspaces.js?v=modules-7aa796120a6e3e92",
+  "./web-runtime.js?v=modules-7aa796120a6e3e92",
+  "./app.js?v=modules-7aa796120a6e3e92",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",
   "./icons/brain-circuit.svg",
@@ -75,7 +75,7 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  const isMutableAppAsset = ["/app.js", "/app-default-settings.js", "/styles.css", "/console-workspaces.js", "/console-workspaces.css", "/web-runtime.js"].some(function (pathname) {
+  const isMutableAppAsset = url.pathname.indexOf("/modules/") >= 0 || ["/app.js", "/app-default-settings.js", "/styles.css", "/console-workspaces.js", "/console-workspaces.css", "/web-runtime.js"].some(function (pathname) {
     return url.pathname.endsWith(pathname);
   });
   if (isMutableAppAsset) {
@@ -101,7 +101,7 @@ self.addEventListener("fetch", function (event) {
           caches.open(SHELL_CACHE).then(function (cache) { cache.put(request, copy); });
         }
         return response;
-      });
+      }).catch(function () { return cached; });
       return cached || network;
     })
   );

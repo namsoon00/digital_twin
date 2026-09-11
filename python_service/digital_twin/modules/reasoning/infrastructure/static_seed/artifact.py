@@ -1,18 +1,11 @@
 """Exact release artifact serialization and rehydration; no runtime reads."""
 
 from typing import Dict, Iterable, Mapping
-from digital_twin.domain.ontology_contracts import (
-    OntologyEntity,
-    OntologyRelation,
-    PortfolioOntology,
-)
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
-from digital_twin.domain.ontology_schema import (
-    default_tbox_metadata,
-    normalize_tbox_metadata,
-)
-from digital_twin.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
+from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata
+from digital_twin.modules.reasoning.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION
 from digital_twin.infrastructure.graph_store_rulebox import (
     rulebox_graph_from_rules,
     rulebox_rules_to_payload,
@@ -50,7 +43,7 @@ def ontology_release_seed_artifact(
     graph = ontology_seed_graph(frozen_rules, language_registry=language_registry)
     tbox = normalize_tbox_metadata(dict(tbox_metadata or default_tbox_metadata()))
     rules_payload = rulebox_rules_to_payload(frozen_rules)
-    from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
+    from digital_twin.modules.model_registry.contracts import rulebox_rules_hash
 
     return {
         "version": "ontology-release-seed-artifact-v2",

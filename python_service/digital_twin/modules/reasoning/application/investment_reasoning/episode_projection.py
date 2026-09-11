@@ -5,14 +5,14 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Dict, Iterable, List, Mapping, Tuple
 
-from digital_twin.domain.investment_brain import DecisionEpisode, canonical_investment_timestamp, reasoning_case_decision_episode_id, scoped_decision_follow_ups, stable_id
-from digital_twin.domain.hypothesis_outcome_contract import HYPOTHESIS_OUTCOME_CONTRACT_VERSION, outcome_contract_completeness, outcome_contract_fingerprint, resolve_market_outcome_benchmarks
-from digital_twin.domain.hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
-from digital_twin.domain.investment_decision_actionability import investment_decision_actionability
-from digital_twin.domain.hypothesis_observation import ShadowHypothesisObservationEpisode, hypothesis_observation_bucket
-from digital_twin.domain.rule_claim_contract import RuleClaimContract, authored_outcome_contract_complete
-from digital_twin.domain.investment_reasoning import CASE_BLOCKED, CASE_COMPLETED, CASE_EXPIRED, CASE_FAILED, CASE_PUBLISHED, CASE_SUPPRESSED, CASE_SUPERSEDED, CASE_VALIDATED, ReasoningCase, SubjectDecisionCase
-from digital_twin.domain.investment_reasoning.disposition import RULE_COVERAGE_GAP_CANDIDATE
+from digital_twin.modules.decisions.contracts import DecisionEpisode, canonical_investment_timestamp, reasoning_case_decision_episode_id, scoped_decision_follow_ups, stable_id
+from digital_twin.modules.outcomes.contracts import HYPOTHESIS_OUTCOME_CONTRACT_VERSION, outcome_contract_completeness, outcome_contract_fingerprint, resolve_market_outcome_benchmarks
+from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint, claim_revision_identity
+from digital_twin.modules.decisions.contracts import investment_decision_actionability
+from digital_twin.modules.outcomes.contracts import ShadowHypothesisObservationEpisode, hypothesis_observation_bucket
+from digital_twin.modules.model_registry.contracts import RuleClaimContract, authored_outcome_contract_complete
+from digital_twin.modules.decisions.contracts import CASE_BLOCKED, CASE_COMPLETED, CASE_EXPIRED, CASE_FAILED, CASE_PUBLISHED, CASE_SUPPRESSED, CASE_SUPERSEDED, CASE_VALIDATED, ReasoningCase, SubjectDecisionCase
+from digital_twin.modules.decisions.contracts import RULE_COVERAGE_GAP_CANDIDATE
 
 
 PROJECTABLE_STAGES = {

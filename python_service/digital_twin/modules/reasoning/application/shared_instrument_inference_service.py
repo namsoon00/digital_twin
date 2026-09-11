@@ -7,7 +7,7 @@ import json
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.reasoning.domain.shared_instrument_inference import SHARED_EXECUTION_REUSE_VERSION, SHARED_INSTRUMENT_INFERENCE_VERSION, account_overlay_input_fingerprint, build_shared_instrument_inference, decision_input_fingerprint, market_shared_rule_ids, market_snapshot_input_fingerprint, market_source_revision_fingerprint
-from digital_twin.domain.portfolio import account_snapshot_from_monitor_state
+from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state
 
 
 def _text(value: object) -> str:

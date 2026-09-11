@@ -1,7 +1,7 @@
 """Repository capabilities owned by model registry."""
 
 from typing import Dict, Iterable, List, Protocol
-from digital_twin.domain.hypothesis_lifecycle import HypothesisLifecycleRecord, HypothesisLifecycleTransition
+from digital_twin.modules.model_registry.domain.hypothesis_lifecycle import HypothesisLifecycleRecord, HypothesisLifecycleTransition
 
 
 class HypothesisLifecycleRepository(Protocol):

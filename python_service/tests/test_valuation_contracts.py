@@ -4,36 +4,36 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.instrument_profiles import instrument_profile_for_position
-from digital_twin.domain.company_knowledge import build_company_knowledge
-from digital_twin.domain.market_data import known_stock, normalize_position
-from digital_twin.domain.portfolio import Position
-from digital_twin.domain.ontology_relation_facts import position_signal_facts
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.domain.portfolio_ontology_valuation_concepts import external_valuation_rows, valuation_values
-from digital_twin.domain.valuation_ai_proposals import ai_valuation_proposal_rows
+from digital_twin.modules.instruments.domain.instrument_profiles import instrument_profile_for_position
+from digital_twin.modules.news_intelligence.domain.company_knowledge import build_company_knowledge
+from digital_twin.modules.market_data.domain.market_data import known_stock, normalize_position
+from digital_twin.modules.portfolio.domain.portfolio import Position
+from digital_twin.modules.reasoning.domain.ontology_relation_facts import position_signal_facts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.portfolio.domain.portfolio_calculations import portfolio_summary
+from digital_twin.modules.portfolio.domain.valuation.projection import external_valuation_rows, valuation_values
+from digital_twin.modules.portfolio.domain.valuation_ai_proposals import ai_valuation_proposal_rows
 from digital_twin.modules.notifications.application.notification_ai_gate_message import compact_valuation_detail_rows
-from digital_twin.domain.valuation_contracts import (
+from digital_twin.modules.portfolio.domain.valuation_contracts import (
     annual_eps_observation,
     fair_value_scenarios,
     valuation_decision_eligible,
 )
-from digital_twin.domain.valuation_model_evidence import (
+from digital_twin.modules.portfolio.domain.valuation_model_evidence import (
     FUNDAMENTAL_MODEL_VERSION,
     collect_earnings_observations,
     earnings_scenario,
     fair_value_from_evidence,
     multiple_evidence_band,
 )
-from digital_twin.domain.valuation import (
+from digital_twin.modules.portfolio.domain.valuation import (
     VALUATION_MODEL_SERVICE_VERSION,
     ValuationModelRequest,
     ValuationModelService,
     apply_valuation_quality_gate,
     normalize_dividend_yield,
 )
-from digital_twin.domain.valuation.projection import add_valuation_row_concepts, quality_checked_valuation_row
+from digital_twin.modules.portfolio.domain.valuation.projection import add_valuation_row_concepts, quality_checked_valuation_row
 
 
 class ValuationContractTests(unittest.TestCase):

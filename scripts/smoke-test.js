@@ -6,6 +6,7 @@ const net = require("net");
 const os = require("os");
 const path = require("path");
 const vm = require("vm");
+const { readFrontendContractSource } = require("./frontend-source-contract.cjs");
 const { publicTargetPayload, validTunnelBaseUrl } = require("./publish-live-target");
 const {
   healthRotationRequired,
@@ -249,7 +250,8 @@ function assertOk(condition, message) {
 
 function checkWorkflowConsoleContract() {
   const appDefaultsCode = fs.readFileSync(path.join(rootDir, "public", "app-default-settings.js"), "utf8");
-  const code = appDefaultsCode + "\n" + fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
+  const code = appDefaultsCode + "\n" + readFrontendContractSource();
+  const bundle = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
   const consoleStyles = fs.readFileSync(path.join(rootDir, "public", "console-workspaces.css"), "utf8");
   const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
@@ -267,7 +269,14 @@ function checkWorkflowConsoleContract() {
   const calendarSymbolProjection = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "read_models", "application", "symbol_display_projection.py"), "utf8");
   const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "notifications", "infrastructure", "mysql_notification_jobs.py"), "utf8");
   const symbolStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "instruments", "infrastructure", "mysql_symbol_universe.py"), "utf8");
-  const webServer = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "web_server.py"), "utf8");
+  const readWebSource = name => fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "web", name + ".py"), "utf8");
+  const webStatic = readWebSource("static");
+  const webShare = readWebSource("routes/share");
+  const webOperations = readWebSource("routes/operations");
+  const webCalendar = readWebSource("adapters/calendar");
+  const webReadModels = readWebSource("routes/read_models");
+  const webInstrumentRoutes = readWebSource("routes/instruments");
+  const webInstruments = readWebSource("adapters/instruments");
   const webRestart = fs.readFileSync(path.join(rootDir, "scripts", "restart-web-service.js"), "utf8");
   const shareLifecycle = fs.readFileSync(path.join(rootDir, "scripts", "share-local.js"), "utf8");
   const fixedEntry = fs.readFileSync(path.join(rootDir, "public", "live", "index.html"), "utf8");
@@ -336,7 +345,7 @@ function checkWorkflowConsoleContract() {
     "앱 셸 오프라인 재진입, API 캐시 제외 또는 업데이트 적용 계약이 없습니다."
   );
   const appAssetVersion = (indexHtml.match(/app\.js\?v=([^"']+)/) || [])[1] || "";
-  const serviceWorkerVersion = (code.match(/service-worker\.js\?v=([^"']+)/) || [])[1] || "";
+  const serviceWorkerVersion = (bundle.match(/service-worker\.js\?v=([^"']+)/) || [])[1] || "";
   assertOk(
     appAssetVersion
       && appAssetVersion === serviceWorkerVersion
@@ -344,8 +353,8 @@ function checkWorkflowConsoleContract() {
       && indexHtml.indexOf("console-workspaces.js?v=" + appAssetVersion) >= 0
       && indexHtml.indexOf("console-workspaces.css?v=" + appAssetVersion) >= 0
       && serviceWorker.indexOf('cache.put(request, copy)') >= 0
-      && webServer.indexOf('"app.js",') >= 0
-      && webServer.indexOf('"styles.css",') >= 0,
+      && webStatic.indexOf('"app.js",') >= 0
+      && webStatic.indexOf('"styles.css",') >= 0,
     "앱 셸 핵심 자산의 버전 동기화 또는 네트워크 우선 갱신 계약이 없습니다."
   );
   const consoleWorkspacesSandbox = { window: {} };
@@ -378,8 +387,8 @@ function checkWorkflowConsoleContract() {
     code.indexOf("function renderShareRuntimePanel") >= 0
       && code.indexOf("data-copy-share-url") >= 0
       && code.indexOf("고정 접속 전체 링크를 복사했습니다") >= 0
-      && webServer.indexOf('path == "/api/share/status"') >= 0
-      && webServer.indexOf('path == "/api/version"') >= 0
+      && webShare.indexOf('path == "/api/share/status"') >= 0
+      && webOperations.indexOf('path == "/api/version"') >= 0
       && webRestart.indexOf("writeManagedPid(child.pid)") >= 0,
     "고정 공유 주소 상태, 버전 확인 또는 전체 링크 복사 UI 계약이 없습니다."
   );
@@ -410,10 +419,10 @@ function checkWorkflowConsoleContract() {
     "고정 주소 무중단 전환 확인, 자동 갱신 또는 진입 페이지 자동 복구 계약이 없습니다."
   );
   assertOk(
-    webServer.indexOf("def investment_calendar_read_service") >= 0
-      && webServer.indexOf("def investment_calendar_candidate_read_service") >= 0
-      && webServer.indexOf("investment_calendar_read_service().list_events") >= 0
-      && webServer.indexOf("investment_calendar_candidate_read_service().list_candidates") >= 0,
+    webCalendar.indexOf("def investment_calendar_read_service") >= 0
+      && webCalendar.indexOf("def investment_calendar_candidate_read_service") >= 0
+      && webCalendar.indexOf("investment_calendar_read_service().list_events") >= 0
+      && webCalendar.indexOf("investment_calendar_candidate_read_service().list_candidates") >= 0,
     "캘린더 GET API가 읽기 전용 운영 경로를 사용하지 않습니다."
   );
   assertOk(
@@ -491,14 +500,14 @@ function checkWorkflowConsoleContract() {
     "앱형 화면 전환, 선로딩, 상세 영역 패치, 스크롤 유지 또는 콘텐츠 유지형 지연 로딩 계약이 없습니다."
   );
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
-  assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
+  assertOk(webReadModels.indexOf('/api/instruments/') >= 0 && webReadModels.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
   assertOk(
     code.indexOf("function loadInstrumentValuation") >= 0
       && code.indexOf('["valuation", "기업가치"]') >= 0
       && code.indexOf("function renderInstrumentValuation") >= 0
       && styles.indexOf(".instrument-valuation-workspace") >= 0
-      && webServer.indexOf("InstrumentValuationQuery") >= 0
-      && webServer.indexOf('/valuation$') >= 0,
+      && webReadModels.indexOf("InstrumentValuationQuery") >= 0
+      && webReadModels.indexOf('/valuation$') >= 0,
     "종목 기업가치 탭, 지연 조회 또는 읽기 전용 API 계약이 없습니다."
   );
   assertOk(
@@ -606,7 +615,7 @@ function checkWorkflowConsoleContract() {
       indexHtml.indexOf('document.documentElement.setAttribute("data-theme", theme)') >= 0 &&
       manifest.background_color === "#0c1117" &&
       manifest.theme_color === "#0c1117" &&
-      /const SHELL_CACHE = "orbit-alpha-shell-\d{8}-[a-z0-9-]+-v\d+";/.test(serviceWorker),
+      serviceWorker.includes('const SHELL_CACHE = "orbit-alpha-shell-' + appAssetVersion + '";'),
     "다크 기본 테마가 초기 화면과 설치형 웹 앱에 먼저 적용되지 않습니다."
   );
   assertOk(
@@ -663,16 +672,16 @@ function checkWorkflowConsoleContract() {
     "시장 탭의 내 종목·전체 종목·뉴스/수급 보기 또는 관심종목 직접 관리 경로가 없습니다."
   );
   assertOk(
-    webServer.indexOf('/api/service-accounts/([^/]+)/watchlist') >= 0 &&
-      webServer.indexOf("request_watchlist_refresh") >= 0 &&
-      webServer.indexOf("build_account_watchlist_service") >= 0 &&
+    webInstrumentRoutes.indexOf('/api/service-accounts/([^/]+)/watchlist') >= 0 &&
+      webInstruments.indexOf("request_watchlist_refresh") >= 0 &&
+      webInstruments.indexOf("build_account_watchlist_service") >= 0 &&
       watchlistStore.indexOf("account_watchlist_symbols") >= 0,
     "계정별 관심종목 전용 API, 고유 저장소 또는 후속 수집 요청이 없습니다."
   );
   assertOk(
-    webServer.indexOf("def request_symbol_universe_refresh") >= 0 &&
-      webServer.indexOf('path == "/api/symbol-universe/refresh/status"') >= 0 &&
-      webServer.indexOf("self.send_payload(202, request_symbol_universe_refresh") >= 0 &&
+    webInstruments.indexOf("def request_symbol_universe_refresh") >= 0 &&
+      webInstrumentRoutes.indexOf('path == "/api/symbol-universe/refresh/status"') >= 0 &&
+      webInstrumentRoutes.indexOf("request.send_payload(202, self.request_symbol_universe_refresh") >= 0 &&
       code.indexOf("function loadSymbolUniverseRefreshStatus") >= 0 &&
       code.indexOf("silent: true") >= 0 &&
       code.indexOf("function renderSymbolUniverseRefreshStatus") >= 0 &&
@@ -684,8 +693,8 @@ function checkWorkflowConsoleContract() {
       code.indexOf("snapshotSymbolUniverseRefreshContext") >= 0 &&
       code.indexOf("symbolUniverseChangedKeys") >= 0 &&
       code.indexOf('eventType === "symbol_universe.refresh_requested" ? "websocket-request" : "websocket"') >= 0 &&
-      webServer.indexOf('"stageItemCount"') >= 0 &&
-      webServer.indexOf("on_progress=update_progress") >= 0 &&
+      webInstruments.indexOf('"stageItemCount"') >= 0 &&
+      webInstruments.indexOf("on_progress=update_progress") >= 0 &&
       styles.indexOf(".symbol-refresh-track") >= 0 &&
       styles.indexOf(".symbol-refresh-stage-rail") >= 0 &&
       styles.indexOf(".symbol-refresh-nav-task") >= 0,
@@ -781,7 +790,8 @@ function checkWorkflowConsoleContract() {
       code.indexOf("function bindMobileInfiniteScroll") >= 0 &&
       code.indexOf("data-mobile-infinite-sentinel") >= 0 &&
       code.indexOf('data-mobile-infinite-prefetch="next-page"') >= 0 &&
-      code.indexOf('rootMargin: "0px 0px " + mobileInfiniteScrollPrefetchDistance() + "px 0px"') >= 0 &&
+      code.indexOf('prefetchDistance: mobileInfiniteScrollPrefetchDistance()') >= 0 &&
+      code.indexOf('rootMargin: "0px 0px " + prefetchDistance + "px 0px"') >= 0 &&
       code.indexOf('button.textContent = "다음 페이지 준비 중"') >= 0 &&
       code.indexOf("restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition)") >= 0 &&
       code.indexOf("preferredPosition && preferredPosition.key === key") >= 0 &&
@@ -942,8 +952,9 @@ function checkWorkflowConsoleContract() {
     "서버 페이징 목록의 변경일 필드 또는 최신순 정렬 계약이 없습니다."
   );
   assertOk(
-    /styles\.css\?v=\d{8}-[a-z0-9-]+-v\d+/.test(indexHtml) &&
-      /app\.js\?v=\d{8}-[a-z0-9-]+-v\d+/.test(indexHtml),
+    /^modules-[a-f0-9]{16}$/.test(appAssetVersion) &&
+      indexHtml.includes("styles.css?v=" + appAssetVersion) &&
+      indexHtml.includes("app.js?v=" + appAssetVersion),
     "정적 자산 cache key 버전 규칙이 반영되지 않았습니다."
   );
   assertOk(

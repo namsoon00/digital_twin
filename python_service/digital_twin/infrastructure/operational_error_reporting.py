@@ -5,8 +5,8 @@ import threading
 import time
 from typing import Callable, Dict
 
-from ..domain.events import system_error_reported_event
-from ..domain.operational_notification_presentation import operational_notification_presentation
+from digital_twin.platform.domain.events import system_error_reported_event
+from digital_twin.modules.notifications.domain.operational_notification_presentation import operational_notification_presentation
 from .external_signal_utils import sanitize_sensitive_text
 from .notifications import notifier_for_operations
 from .settings import SECRET_SETTING_KEYS, runtime_settings, utc_now

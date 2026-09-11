@@ -2,7 +2,7 @@
 
 from typing import Callable, Dict, Iterable
 
-from digital_twin.domain.ontology_worlds import SHARED_PREMISE_WORLD_TYPE, world_type_from_id
+from digital_twin.modules.reasoning.domain.ontology_worlds import SHARED_PREMISE_WORLD_TYPE, world_type_from_id
 from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import typedb_call_for_world
 from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
 from .ports import CandidateRecoveryStore

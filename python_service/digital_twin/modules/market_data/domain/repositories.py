@@ -2,7 +2,7 @@
 
 from typing import Callable, Dict, Iterable, List, Protocol, Tuple
 from digital_twin.modules.accounts.contracts import AccountConfig
-from digital_twin.domain.portfolio import AccountSnapshot, Position
+from digital_twin.modules.portfolio.contracts import AccountSnapshot, Position
 
 
 class MarketQuoteRepository(Protocol):

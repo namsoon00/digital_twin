@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
-from ..domain.accounts import AccountConfig
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
 from digital_twin.modules.portfolio.contracts import MonitorAccountJob
 from .mysql_schema_tuning import ensure_mysql_monitoring_schema_tuning
 from .mysql_connection_pool import pooled_mysql_connection

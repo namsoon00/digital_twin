@@ -1,7 +1,7 @@
 """Repository capabilities owned by notifications."""
 
 from typing import List, Protocol
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.portfolio.contracts import AlertEvent
 
 
 class NotificationGateway(Protocol):

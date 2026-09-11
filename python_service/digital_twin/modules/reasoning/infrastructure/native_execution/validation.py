@@ -1,6 +1,6 @@
 """native_execution: validation through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_from_payload
 from digital_twin.modules.reasoning.infrastructure.backend_constants import (

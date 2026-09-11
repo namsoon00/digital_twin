@@ -5,8 +5,8 @@ import inspect
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.domain.reasoning_engine_versions import EngineReleaseBundle, ReasoningEngineDescriptor, promotion_blockers, reasoning_release_identity
-from digital_twin.domain.time_series_storage import TEMPORAL_FEATURE_SET_VERSION
+from digital_twin.modules.reasoning.domain.reasoning_engine_versions import EngineReleaseBundle, ReasoningEngineDescriptor, promotion_blockers, reasoning_release_identity
+from digital_twin.modules.market_data.contracts import TEMPORAL_FEATURE_SET_VERSION
 
 
 class ReasoningEnginePlatformService:
@@ -268,11 +268,11 @@ class ReasoningEnginePlatformService:
         return self.independent_job_store.summary(deployment_id, **kwargs)
 
     def descriptors(self):
-        from digital_twin.domain.ontology_rulebox_release_manifest import RULEBOX_RELEASE_MANIFEST_VERSION
-        from digital_twin.domain.ontology_schema import ONTOLOGY_TBOX_VERSION, tbox_fingerprint
-        from digital_twin.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
+        from digital_twin.modules.model_registry.contracts import RULEBOX_RELEASE_MANIFEST_VERSION
+        from digital_twin.modules.reasoning.domain.ontology_schema import ONTOLOGY_TBOX_VERSION, tbox_fingerprint
+        from digital_twin.modules.decisions.contracts import AI_DECISION_PROMPT_VERSION
         from digital_twin.infrastructure.typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
-        from digital_twin.domain.statistical_signals import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, MODEL_SIGNAL_CONTRACT_VERSION
+        from digital_twin.modules.model_registry.contracts import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, MODEL_SIGNAL_CONTRACT_VERSION
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
         shadow_backend = str(self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow")
@@ -1216,9 +1216,9 @@ class ReasoningEnginePlatformService:
         save_release_artifact = getattr(self.registry, "save_release_artifact", None)
         release_artifact_persistence = {"status": "unsupported"}
         if callable(save_release_artifact):
-            from digital_twin.domain.investment_ubiquitous_language import investment_language_registry
-            from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-            from digital_twin.domain.ontology_schema import default_tbox_metadata
+            from digital_twin.modules.model_registry.contracts import investment_language_registry
+            from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+            from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
             from digital_twin.infrastructure.graph_store_lifecycle import ontology_release_seed_artifact
 
             release_artifact = ontology_release_seed_artifact(

@@ -1,0 +1,1314 @@
+from typing import Dict, Iterable, List
+
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology, entity_id
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
+from digital_twin.modules.outcomes.contracts import outcome_assessments_from_episodes
+from digital_twin.modules.outcomes.contracts import outcome_contract_completeness
+from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint, claim_revision_identity
+from digital_twin.modules.outcomes.contracts import action_adjusted_return, action_return_state, binomial_confidence_interval, number
+
+
+def add_investment_brain_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    decision_episodes: Iterable[Dict[str, object]],
+    hypothesis_proposals: Iterable[Dict[str, object]] = None,
+    decision_performance: Dict[str, object] = None,
+    hypothesis_lifecycles: Iterable[Dict[str, object]] = None,
+    hypothesis_outcome_minimum_samples: int = 3,
+    decision_outcome_history: Iterable[Dict[str, object]] = None,
+) -> None:
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    episode_rows = [item for item in decision_episodes or [] if isinstance(item, dict)]
+    outcome_history_rows = [
+        item for item in decision_outcome_history or [] if isinstance(item, dict)
+    ]
+    for episode in episode_rows:
+        if not isinstance(episode, dict):
+            continue
+        episode_key = str(episode.get("episodeId") or "").strip()
+        symbol = str(episode.get("symbol") or "").upper().strip()
+        if not episode_key or not symbol:
+            continue
+        stock_id = entity_id("stock", symbol)
+        question = episode.get("question") if isinstance(episode.get("question"), dict) else {}
+        hypothesis_set = episode.get("hypothesisSet") if isinstance(episode.get("hypothesisSet"), dict) else {}
+        hypothesis_reviews = [
+            item for item in episode.get("hypothesisReviews") or []
+            if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+        ]
+        review_by_hypothesis_id = {
+            str(item.get("hypothesisId") or "").strip(): item
+            for item in hypothesis_reviews
+        }
+        research_plan = episode.get("researchPlan") if isinstance(episode.get("researchPlan"), dict) else {}
+        research_audit = episode.get("researchAudit") if isinstance(episode.get("researchAudit"), dict) else {}
+        episode_id = add_entity(graph, "decision-episode", episode_key, str(episode.get("subjectName") or symbol) + " 판단 에피소드", {
+            "tboxClass": "DecisionEpisode",
+            "symbol": symbol,
+            "action": episode.get("action"),
+            "reviewLevel": episode.get("reviewLevel"),
+            "dataState": episode.get("dataState"),
+            "validationState": episode.get("validationState"),
+            "selectedHypothesisId": episode.get("selectedHypothesisId"),
+            "hypothesisComparisonState": episode.get("hypothesisComparisonState"),
+            "hypothesisSelectionSource": episode.get("hypothesisSelectionSource"),
+            "hypothesisReviewCount": len(hypothesis_reviews),
+            "inferenceGenerationId": episode.get("inferenceGenerationId"),
+            "portfolioId": episode.get("portfolioId") or portfolio_id,
+            "mandateId": episode.get("mandateId"),
+            "mandateVersion": episode.get("mandateVersion"),
+            "sourceAboxSnapshotId": episode.get("sourceAboxSnapshotId"),
+            "actionPlanId": episode.get("actionPlanId"),
+            "executionEpisodeIds": episode.get("executionEpisodeIds") or [],
+            "decidedAt": episode.get("decidedAt"),
+            "status": episode.get("status"),
+            "source": episode.get("source"),
+        })
+        add_relation(graph, stock_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
+        add_relation(graph, portfolio_node_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
+        for follow_up in list(episode.get("followUpConditions") or []) + list(episode.get("unsupportedFollowUps") or []):
+            if not isinstance(follow_up, dict):
+                continue
+            condition_key = str(follow_up.get("conditionId") or "").strip()
+            if not condition_key:
+                continue
+            follow_up_id = add_entity(
+                graph,
+                "decision-follow-up-condition",
+                condition_key,
+                str(follow_up.get("label") or follow_up.get("field") or "판단 후속 관찰 조건"),
+                {
+                    "tboxClass": "DecisionFollowUpCondition",
+                    "symbol": symbol,
+                    "field": follow_up.get("field"),
+                    "operator": follow_up.get("operator"),
+                    "threshold": follow_up.get("threshold"),
+                    "purpose": follow_up.get("purpose"),
+                    "status": follow_up.get("status"),
+                    "observable": follow_up.get("observable"),
+                    "currentValue": follow_up.get("currentValue"),
+                    "observedAt": follow_up.get("observedAt"),
+                    "expiresAt": follow_up.get("expiresAt"),
+                    "trackingOwner": follow_up.get("trackingOwner"),
+                    "trackingCadence": follow_up.get("trackingCadence"),
+                    "trackingStatus": follow_up.get("trackingStatus"),
+                    "notificationOnTransition": follow_up.get("notificationOnTransition"),
+                    "transitionId": follow_up.get("transitionId"),
+                    "transitionAt": follow_up.get("transitionAt"),
+                    "supersededByEpisodeId": follow_up.get("supersededByEpisodeId"),
+                    "onSatisfied": follow_up.get("onSatisfied"),
+                    "reason": follow_up.get("reason"),
+                    "source": "decision-follow-up-tracker",
+                },
+            )
+            add_relation(graph, episode_id, follow_up_id, "TRACKS_FOLLOW_UP", weight=1.0, properties={
+                "source": "decision-follow-up-tracker",
+                "field": follow_up.get("field") or "",
+                "dataState": "available" if follow_up.get("observable") is not False else "unavailable",
+            })
+        guardrail_rows = [
+            item
+            for item in (
+                episode.get("decisionGuardrails")
+                or hypothesis_set.get("decisionGuardrails")
+                or []
+            )
+            if isinstance(item, dict)
+        ]
+        for index, guardrail in enumerate(guardrail_rows):
+            guardrail_key = str(guardrail.get("guardrailId") or (episode_key + ":guardrail:" + str(index))).strip()
+            guardrail_id = add_entity(graph, "decision-guardrail", guardrail_key, str(guardrail.get("label") or "판단 안전 제한"), {
+                "tboxClass": "DecisionGuardrail",
+                "guardrailType": guardrail.get("guardrailType") or "decision-integrity",
+                "reason": guardrail.get("reason") or "",
+                "status": guardrail.get("status") or "active",
+                "requiredChecks": guardrail.get("requiredChecks") or [],
+                "missingData": guardrail.get("missingData") or [],
+                "blockedActions": guardrail.get("blockedActions") or [],
+                "source": guardrail.get("source") or "system-safety-policy",
+            })
+            add_relation(graph, episode_id, guardrail_id, "HAS_DECISION_GUARDRAIL", weight=1.0, properties={
+                "source": "investment-brain-memory",
+                "guardrailType": guardrail.get("guardrailType") or "decision-integrity",
+            })
+        abstention = episode.get("decisionAbstention") if isinstance(episode.get("decisionAbstention"), dict) else {}
+        if abstention.get("abstained"):
+            abstention_id = add_entity(graph, "decision-abstention", episode_key, "선택 가설 없는 판단 유보", {
+                "tboxClass": "DecisionAbstention",
+                "reason": abstention.get("reason") or "",
+                "comparisonState": abstention.get("comparisonState") or episode.get("hypothesisComparisonState") or "unavailable",
+                "unreviewedHypothesisIds": abstention.get("unreviewedHypothesisIds") or [],
+                "invalidHypothesisIds": abstention.get("invalidHypothesisIds") or [],
+                "invalidEvidenceIds": abstention.get("invalidEvidenceIds") or [],
+                "duplicateHypothesisIds": abstention.get("duplicateHypothesisIds") or [],
+                "source": "ai-hypothesis-comparison-audit",
+            })
+            add_relation(graph, episode_id, abstention_id, "ABSTAINS_FROM_HYPOTHESIS_SELECTION", weight=1.0, properties={
+                "source": "ai-hypothesis-comparison-audit",
+            })
+        action_plan_key = str(episode.get("actionPlanId") or "").strip()
+        if action_plan_key:
+            action_plan_id = add_entity(graph, "action-plan", action_plan_key, str(episode.get("subjectName") or symbol) + " 실행 계획", {
+                "tboxClass": "ActionPlan",
+                "portfolioId": episode.get("portfolioId") or portfolio_id,
+                "decisionEpisodeId": episode_key,
+                "action": episode.get("action"),
+                "policyVersion": episode.get("mandateVersion"),
+                "inferenceGenerationId": episode.get("inferenceGenerationId"),
+                "status": "review-required" if str(episode.get("action") or "").upper() in {"BUY", "ADD", "TRIM", "SELL"} else "informational",
+                "source": "investment-action-plan",
+            })
+            add_relation(graph, episode_id, action_plan_id, "PROPOSES_ACTION_PLAN", weight=1.0, properties={
+                "source": "investment-action-plan",
+                "policyVersion": episode.get("mandateVersion") or "",
+            })
+            for execution_key in episode.get("executionEpisodeIds") or []:
+                execution_key = str(execution_key or "").strip()
+                if not execution_key:
+                    continue
+                execution_id = add_entity(graph, "execution-episode", execution_key, str(episode.get("subjectName") or symbol) + " 실행 에피소드", {
+                    "tboxClass": "ExecutionEpisode",
+                    "portfolioId": episode.get("portfolioId") or portfolio_id,
+                    "actionPlanId": action_plan_key,
+                    "source": "trade-execution-memory",
+                })
+                add_relation(graph, action_plan_id, execution_id, "EXECUTES_ACTION_PLAN", weight=1.0, properties={
+                    "source": "trade-execution-memory",
+                })
+                add_relation(graph, execution_id, episode_id, "MATCHES_DECISION", weight=1.0, properties={
+                    "source": "trade-execution-memory",
+                })
+        facts_at_decision = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), dict) else {}
+        outcome_contract = facts_at_decision.get("hypothesisOutcomeContract") if isinstance(facts_at_decision.get("hypothesisOutcomeContract"), dict) else {}
+        contract_id = ""
+        contract_criterion_ids: Dict[str, str] = {}
+        if outcome_contract:
+            contract_key = str(episode.get("episodeId") or episode_key) + ":outcome-contract"
+            contract_id = add_entity(graph, "hypothesis-outcome-contract", contract_key, symbol + " 사후 관측 계약", {
+                "tboxClass": "HypothesisOutcomeContract",
+                **dict(outcome_contract),
+                "symbol": symbol,
+                "accountId": portfolio_id,
+                "decisionEligibility": "review-only-not-action-selector",
+                "automaticDeployment": False,
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
+            add_relation(graph, episode_id, contract_id, "USES_HYPOTHESIS_OUTCOME_CONTRACT", weight=1.0, properties={
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
+            add_relation(graph, stock_id, contract_id, "HAS_HYPOTHESIS_OUTCOME_CONTRACT", weight=1.0, properties={
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
+            add_relation(graph, portfolio_node_id, contract_id, "HAS_HYPOTHESIS_OUTCOME_CONTRACT", weight=1.0, properties={
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
+            for index, criterion in enumerate(outcome_contract.get("criteria") or []):
+                if not isinstance(criterion, dict):
+                    continue
+                criterion_key = contract_key + ":" + str(criterion.get("criterionId") or index)
+                criterion_id = add_entity(
+                    graph,
+                    "hypothesis-outcome-criterion",
+                    criterion_key,
+                    str(criterion.get("label") or "가설 사후 검증 기준"),
+                    {
+                        "tboxClass": "HypothesisOutcomeCriterion",
+                        **dict(criterion),
+                        "contractFingerprint": outcome_contract.get("contractFingerprint") or "",
+                        "decisionEligibility": "review-only-not-action-selector",
+                        "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+                    },
+                )
+                add_relation(graph, contract_id, criterion_id, "HAS_OUTCOME_CRITERION", weight=1.0, properties={
+                    "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+                })
+                contract_criterion_ids[str(criterion.get("criterionId") or index)] = criterion_id
+        question_key = str(question.get("questionId") or "").strip()
+        if question_key:
+            question_id = add_entity(graph, "investment-question", question_key, str(question.get("text") or "투자 질문"), {
+                "tboxClass": "InvestmentQuestion" if question.get("source") != "system-self-question" else "SelfQuestion",
+                "intent": question.get("intent"),
+                "horizon": question.get("horizon"),
+                "askedAt": question.get("askedAt"),
+                "source": question.get("source"),
+            })
+            add_relation(graph, question_id, stock_id, "ASKS_ABOUT", weight=1.0, properties={"source": "investment-brain-memory"})
+            add_relation(graph, question_id, episode_id, "ANSWERED_BY", weight=1.0, properties={"source": "investment-brain-memory"})
+        else:
+            question_id = ""
+        set_key = str(hypothesis_set.get("hypothesisSetId") or "").strip()
+        if set_key:
+            set_id = add_entity(graph, "hypothesis-set", set_key, str(episode.get("subjectName") or symbol) + " 경쟁 가설", {
+                "tboxClass": "HypothesisSet",
+                "minimumComparisonCount": hypothesis_set.get("minimumComparisonCount"),
+                "comparisonRequired": hypothesis_set.get("comparisonRequired"),
+                "inferenceGenerationId": hypothesis_set.get("inferenceGenerationId"),
+                "version": hypothesis_set.get("version"),
+            })
+            if question_id:
+                add_relation(graph, question_id, set_id, "HAS_HYPOTHESIS_SET", weight=1.0, properties={"source": "investment-brain-memory"})
+        else:
+            set_id = ""
+        plan_key = str(research_plan.get("planId") or "").strip()
+        if plan_key:
+            plan_id = add_entity(graph, "research-plan", plan_key, str(episode.get("subjectName") or symbol) + " 근거 조사 계획", {
+                "tboxClass": "ResearchPlan",
+                "status": research_plan.get("status"),
+                "maxRounds": research_plan.get("maxRounds"),
+                "createdAt": research_plan.get("createdAt"),
+            })
+            if question_id:
+                add_relation(graph, question_id, plan_id, "HAS_RESEARCH_PLAN", weight=1.0, properties={"source": "investment-brain-memory"})
+            policy_id = add_research_source_policy(graph, plan_key, research_plan)
+        else:
+            plan_id = ""
+            policy_id = ""
+        research_task_ids = {}
+        for task in research_plan.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            task_key = str(task.get("taskId") or "").strip()
+            if not task_key:
+                continue
+            task_id = add_entity(graph, "research-task", task_key, str(task.get("question") or "조사 작업"), {
+                "tboxClass": "ResearchTask",
+                "purpose": task.get("purpose"),
+                "priority": task.get("priority"),
+                "status": task.get("status"),
+                "sourceTypes": task.get("sourceTypes") or [],
+                "maxAgeMinutes": task.get("maxAgeMinutes"),
+                "decisionRelevance": task.get("decisionRelevance"),
+                "executionMode": task.get("executionMode"),
+                "resultEvidenceIds": task.get("resultEvidenceIds") or [],
+            })
+            research_task_ids[task_key] = task_id
+            if plan_id:
+                add_relation(graph, plan_id, task_id, "DECOMPOSES_INTO", weight=1.0, properties={"source": "investment-brain-memory"})
+            if policy_id:
+                add_relation(graph, task_id, policy_id, "USES_SOURCE_POLICY", weight=1.0, properties={"source": "investment-brain-research"})
+            for evidence_type in task.get("requiredEvidenceTypes") or []:
+                need_id = add_entity(graph, "information-need", task_key + ":" + str(evidence_type), str(evidence_type), {
+                    "tboxClass": "InformationNeed",
+                    "status": task.get("status"),
+                })
+                add_relation(graph, task_id, need_id, "REQUIRES_EVIDENCE", weight=1.0, properties={"source": "investment-brain-memory"})
+        hypothesis_ids = []
+        hypothesis_id_by_key = {}
+        family_rows = {
+            str(item.get("familyId") or "").strip(): item
+            for item in hypothesis_set.get("families") or []
+            if isinstance(item, dict) and str(item.get("familyId") or "").strip()
+        }
+        family_node_ids = {}
+        market_hypothesis_node_ids = {}
+        for market_hypothesis in hypothesis_set.get("marketHypotheses") or []:
+            if not isinstance(market_hypothesis, dict):
+                continue
+            market_key = str(market_hypothesis.get("marketHypothesisId") or "").strip()
+            if not market_key:
+                continue
+            market_hypothesis_node_ids[market_key] = add_entity(
+                graph,
+                "market-hypothesis",
+                market_key,
+                str(market_hypothesis.get("subjectSymbol") or symbol) + " 시장 공통 가설",
+                {
+                    "tboxClass": "MarketHypothesis",
+                    "marketHypothesisId": market_key,
+                    "marketWorldId": market_hypothesis.get("marketWorldId"),
+                    "marketId": market_hypothesis.get("marketId"),
+                    "symbol": market_hypothesis.get("subjectSymbol") or symbol,
+                    "horizon": market_hypothesis.get("horizon"),
+                    "causalSignature": market_hypothesis.get("causalSignature"),
+                    "stance": market_hypothesis.get("stance"),
+                    "sourceRuleIds": market_hypothesis.get("sourceRuleIds") or [],
+                    "marketConditionIds": market_hypothesis.get("marketConditionIds") or [],
+                    "marketRelationTypes": market_hypothesis.get("marketRelationTypes") or [],
+                    "scopeState": market_hypothesis.get("scopeState"),
+                    "scopeVersion": market_hypothesis.get("scopeVersion"),
+                    "source": market_hypothesis.get("source") or "typedb-market-scope-projection",
+                },
+            )
+        account_overlay_node_ids = {}
+        for overlay in hypothesis_set.get("accountOverlays") or []:
+            if not isinstance(overlay, dict):
+                continue
+            overlay_key = str(overlay.get("accountOverlayId") or "").strip()
+            if not overlay_key:
+                continue
+            account_overlay_node_ids[overlay_key] = add_entity(
+                graph,
+                "account-hypothesis-overlay",
+                overlay_key,
+                str(episode.get("subjectName") or symbol) + " 계정 판단 맥락",
+                {
+                    "tboxClass": "AccountHypothesisOverlay",
+                    "accountOverlayId": overlay_key,
+                    "accountId": overlay.get("accountId"),
+                    "portfolioWorldId": overlay.get("portfolioWorldId"),
+                    "familyId": overlay.get("familyId"),
+                    "scopeState": overlay.get("scopeState"),
+                    "marketHypothesisId": overlay.get("marketHypothesisId"),
+                    "targetRoles": overlay.get("targetRoles") or [],
+                    "actionPolicies": overlay.get("actionPolicies") or [],
+                    "allowedActions": overlay.get("allowedActions") or [],
+                    "blockedActions": overlay.get("blockedActions") or [],
+                    "accountConditionIds": overlay.get("accountConditionIds") or [],
+                    "accountFields": overlay.get("accountFields") or [],
+                    "accountRelationTypes": overlay.get("accountRelationTypes") or [],
+                    "accountTargetKinds": overlay.get("accountTargetKinds") or [],
+                    "sourceRuleIds": overlay.get("sourceRuleIds") or [],
+                    "scopeVersion": overlay.get("scopeVersion"),
+                    "source": overlay.get("source") or "typedb-account-context-projection",
+                },
+            )
+        for overlay in hypothesis_set.get("accountOverlays") or []:
+            if not isinstance(overlay, dict):
+                continue
+            overlay_key = str(overlay.get("accountOverlayId") or "").strip()
+            market_key = str(overlay.get("marketHypothesisId") or "").strip()
+            overlay_id = account_overlay_node_ids.get(overlay_key)
+            market_id = market_hypothesis_node_ids.get(market_key)
+            if overlay_id and market_id:
+                add_relation(graph, overlay_id, market_id, "CONTEXTUALIZES_MARKET_HYPOTHESIS", weight=1.0, properties={
+                    "source": "typedb-hypothesis-scope-projection",
+                    "scopeState": overlay.get("scopeState") or "",
+                })
+        for hypothesis in hypothesis_set.get("hypotheses") or []:
+            if not isinstance(hypothesis, dict):
+                continue
+            hypothesis_key = str(hypothesis.get("hypothesisId") or "").strip()
+            if not hypothesis_key:
+                continue
+            hypothesis_id = add_entity(graph, "competing-hypothesis", hypothesis_key, str(hypothesis.get("claim") or hypothesis_key), {
+                "tboxClass": "CompetingHypothesis",
+                "stance": hypothesis.get("stance"),
+                "horizon": hypothesis.get("horizon"),
+                "evidenceState": hypothesis.get("evidenceState"),
+                "evidenceStateLabel": hypothesis.get("evidenceStateLabel"),
+                "status": hypothesis.get("status"),
+                "templateId": hypothesis.get("templateId"),
+                "templateLabel": hypothesis.get("templateLabel"),
+                "approvalStatus": hypothesis.get("approvalStatus"),
+                "verificationStatus": hypothesis.get("verificationStatus"),
+                "historicalCalibration": hypothesis.get("historicalCalibration") or {},
+                "familyId": hypothesis.get("familyId") or "",
+                "causalSignature": hypothesis.get("causalSignature") or "",
+                "familySource": hypothesis.get("familySource") or "",
+                "mergedRuleCount": hypothesis.get("mergedRuleCount") or 0,
+                "scopeState": hypothesis.get("scopeState") or "",
+                "scopeVersion": hypothesis.get("scopeVersion") or "",
+                "marketHypothesisId": hypothesis.get("marketHypothesisId") or "",
+                "marketWorldId": hypothesis.get("marketWorldId") or "",
+                "marketId": hypothesis.get("marketId") or "",
+                "marketCausalSignature": hypothesis.get("marketCausalSignature") or "",
+                "marketConditionIds": hypothesis.get("marketConditionIds") or [],
+                "marketRelationTypes": hypothesis.get("marketRelationTypes") or [],
+                "accountHypothesisOverlayId": hypothesis.get("accountHypothesisOverlayId") or "",
+                "accountConditionIds": hypothesis.get("accountConditionIds") or [],
+                "accountFields": hypothesis.get("accountFields") or [],
+                "accountRelationTypes": hypothesis.get("accountRelationTypes") or [],
+                "accountTargetKinds": hypothesis.get("accountTargetKinds") or [],
+                "targetRoles": hypothesis.get("targetRoles") or [],
+                "actionPolicies": hypothesis.get("actionPolicies") or [],
+                "supportingRuleIds": hypothesis.get("supportingRuleIds") or [],
+                "counterRuleIds": hypothesis.get("counterRuleIds") or [],
+                "invalidationConditions": hypothesis.get("invalidationConditions") or [],
+                "causalPathIds": hypothesis.get("causalPathIds") or [],
+                "requiredEvidenceTypes": hypothesis.get("requiredEvidenceTypes") or [],
+            })
+            hypothesis_ids.append(hypothesis_id)
+            hypothesis_id_by_key[hypothesis_key] = hypothesis_id
+            family_key = str(hypothesis.get("familyId") or "").strip()
+            if not family_key:
+                family_key = "legacy:" + str(hypothesis.get("templateId") or hypothesis_key)
+            family_id = family_node_ids.get(family_key)
+            if not family_id:
+                family = family_rows.get(family_key) if isinstance(family_rows.get(family_key), dict) else {}
+                family_id = add_entity(graph, "hypothesis-family", family_key, str(
+                    family.get("label")
+                    or hypothesis.get("templateLabel")
+                    or hypothesis.get("claim")
+                    or family_key
+                ), {
+                    "tboxClass": "HypothesisFamily",
+                    "familyId": family_key,
+                    "causalSignature": family.get("causalSignature") or hypothesis.get("causalSignature") or "",
+                    "stance": family.get("stance") or hypothesis.get("stance") or "context",
+                    "horizon": family.get("horizon") or hypothesis.get("horizon") or "",
+                    "sourceRuleIds": family.get("sourceRuleIds") or hypothesis.get("supportingRuleIds") or [],
+                    "candidateHypothesisIds": family.get("candidateHypothesisIds") or [hypothesis_key],
+                    "source": family.get("source") or hypothesis.get("familySource") or "typedb-structural-signature",
+                    "mergedRuleCount": family.get("mergedRuleCount") or hypothesis.get("mergedRuleCount") or 0,
+                    "scopeState": family.get("scopeState") or hypothesis.get("scopeState") or "",
+                    "marketHypothesisId": family.get("marketHypothesisId") or hypothesis.get("marketHypothesisId") or "",
+                    "accountOverlayIds": family.get("accountOverlayIds") or [],
+                })
+                family_node_ids[family_key] = family_id
+            add_relation(graph, hypothesis_id, family_id, "INSTANTIATES_HYPOTHESIS_FAMILY", weight=1.0, properties={
+                "source": "typedb-hypothesis-family-compaction",
+                "familyId": family_key,
+                "causalSignature": hypothesis.get("causalSignature") or "",
+                "mergedRuleCount": hypothesis.get("mergedRuleCount") or 0,
+            })
+            market_id = market_hypothesis_node_ids.get(str(hypothesis.get("marketHypothesisId") or "").strip())
+            if market_id:
+                add_relation(graph, hypothesis_id, market_id, "USES_MARKET_HYPOTHESIS", weight=1.0, properties={
+                    "source": "typedb-hypothesis-scope-projection",
+                    "scopeState": hypothesis.get("scopeState") or "",
+                    "marketHypothesisId": hypothesis.get("marketHypothesisId") or "",
+                })
+            overlay_id = account_overlay_node_ids.get(str(hypothesis.get("accountHypothesisOverlayId") or "").strip())
+            if overlay_id:
+                add_relation(graph, hypothesis_id, overlay_id, "HAS_ACCOUNT_HYPOTHESIS_OVERLAY", weight=1.0, properties={
+                    "source": "typedb-hypothesis-scope-projection",
+                    "scopeState": hypothesis.get("scopeState") or "",
+                    "accountOverlayId": hypothesis.get("accountHypothesisOverlayId") or "",
+                })
+            review = review_by_hypothesis_id.get(hypothesis_key, {})
+            if set_id:
+                add_relation(graph, set_id, hypothesis_id, "CONTAINS_HYPOTHESIS", weight=1.0, properties={
+                    "source": "investment-brain-memory",
+                    "reviewVerdict": review.get("verdict") or "unreviewed",
+                    "reviewReasoning": review.get("reasoning") or "",
+                    "reviewedSupportingEvidenceIds": review.get("reviewedSupportingEvidenceIds") or [],
+                    "reviewedCounterEvidenceIds": review.get("reviewedCounterEvidenceIds") or [],
+                })
+            template_key = str(hypothesis.get("templateId") or "").strip()
+            if template_key:
+                template_id = add_entity(graph, "hypothesis-template", template_key, str(hypothesis.get("templateLabel") or template_key), {
+                    "tboxClass": "ApprovedHypothesisTemplate",
+                    "approvalStatus": hypothesis.get("approvalStatus"),
+                    "sourceRuleIds": hypothesis.get("supportingRuleIds") or [],
+                    "stance": hypothesis.get("stance"),
+                    "requiredEvidenceTypes": hypothesis.get("requiredEvidenceTypes") or [],
+                })
+                add_relation(graph, hypothesis_id, template_id, "INSTANTIATES_HYPOTHESIS_TEMPLATE", weight=1.0, properties={"source": "typedb-hypothesis-template"})
+                add_relation(graph, template_id, stock_id, "APPLICABLE_TO", weight=1.0, properties={"source": "typedb-current-generation"})
+            if hypothesis_key == str(episode.get("selectedHypothesisId") or ""):
+                selection_source = str(episode.get("hypothesisSelectionSource") or "not-selected")
+                add_relation(graph, episode_id, hypothesis_id, "SELECTS_HYPOTHESIS", weight=1.0, properties={
+                    "source": "ai-hypothesis-competition" if selection_source == "ai-comparison" else "hypothesis-comparison-abstention",
+                    "selectionSource": selection_source,
+                    "comparisonState": episode.get("hypothesisComparisonState") or "unavailable",
+                })
+            for assumption_index, assumption in enumerate(hypothesis.get("assumptions") or []):
+                assumption_id = add_entity(graph, "assumption", hypothesis_key + ":" + str(assumption_index), str(assumption), {
+                    "tboxClass": "Assumption",
+                    "source": "investment-brain-memory",
+                })
+                add_relation(graph, hypothesis_id, assumption_id, "DEPENDS_ON_ASSUMPTION", weight=1.0, properties={"source": "investment-brain-memory"})
+            for evidence_key in hypothesis.get("supportingEvidenceIds") or []:
+                evidence_id = add_entity(graph, "evidence-reference", str(evidence_key), str(evidence_key), {
+                    "tboxClass": "Evidence",
+                    "source": "typedb-inference-reference",
+                })
+                add_relation(graph, hypothesis_id, evidence_id, "USED_AS_EVIDENCE", weight=1.0, properties={"polarity": "support"})
+            for evidence_key in hypothesis.get("counterEvidenceIds") or []:
+                evidence_id = add_entity(graph, "evidence-reference", str(evidence_key), str(evidence_key), {
+                    "tboxClass": "Evidence",
+                    "source": "typedb-inference-reference",
+                })
+                add_relation(graph, evidence_id, hypothesis_id, "CONTRADICTS", weight=1.0, properties={"polarity": "risk"})
+            for path_key in hypothesis.get("causalPathIds") or []:
+                path_id = add_entity(graph, "inference-trace-reference", str(path_key), str(path_key), {
+                    "tboxClass": "InferenceTrace",
+                    "source": "typedb-inference-reference",
+                })
+                add_relation(graph, hypothesis_id, path_id, "EXPLAINED_BY_TRACE", weight=1.0, properties={"source": "investment-brain-memory"})
+        for task in research_plan.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            task_id = research_task_ids.get(str(task.get("taskId") or ""))
+            if not task_id:
+                continue
+            for hypothesis_key in task.get("relatedHypothesisIds") or []:
+                hypothesis_id = hypothesis_id_by_key.get(str(hypothesis_key))
+                if hypothesis_id:
+                    add_relation(graph, task_id, hypothesis_id, "TESTS_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-memory"})
+        run_key = str(research_audit.get("runId") or "").strip()
+        if run_key:
+            run_id = add_entity(graph, "verification-run", run_key, str(episode.get("subjectName") or symbol) + " 근거 검증 실행", {
+                "tboxClass": "VerificationRun",
+                "status": research_audit.get("status"),
+                "roundCount": research_audit.get("roundCount"),
+                "changedEvidenceCount": research_audit.get("changedEvidenceCount"),
+                "startedAt": research_audit.get("startedAt"),
+                "completedAt": research_audit.get("completedAt"),
+                "reasoningRefreshed": research_audit.get("reasoningRefreshed"),
+                "verifiedClaimCount": len(research_audit.get("verifiedClaims") or []),
+                "rejectedClaimCount": len(research_audit.get("rejectedClaims") or []),
+            })
+            add_relation(graph, episode_id, run_id, "HAS_VERIFICATION_RUN", weight=1.0, properties={"source": "investment-brain-research"})
+            if question_id:
+                add_relation(graph, question_id, run_id, "HAS_VERIFICATION_RUN", weight=1.0, properties={"source": "investment-brain-research"})
+            add_verified_claim_concepts(
+                graph,
+                run_id,
+                stock_id,
+                research_audit.get("verifiedClaims") or [],
+            )
+        for index, hypothesis_id in enumerate(hypothesis_ids):
+            for competitor_id in hypothesis_ids[index + 1:]:
+                add_relation(graph, hypothesis_id, competitor_id, "COMPETES_WITH_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-memory"})
+        for index, question_text in enumerate(episode.get("unresolvedQuestions") or []):
+            unresolved_id = add_entity(graph, "self-question", episode_key + ":" + str(index), str(question_text), {
+                "tboxClass": "SelfQuestion",
+                "status": "unresolved",
+                "source": "investment-brain-memory",
+            })
+            add_relation(graph, episode_id, unresolved_id, "HAS_UNRESOLVED_QUESTION", weight=1.0, properties={"source": "investment-brain-memory"})
+            add_relation(graph, unresolved_id, stock_id, "ASKS_ABOUT", weight=1.0, properties={"source": "investment-brain-memory"})
+        for outcome in episode.get("outcomes") or []:
+            if not isinstance(outcome, dict):
+                continue
+            outcome_key = str(outcome.get("outcomeId") or "").strip()
+            if not outcome_key:
+                continue
+            outcome_payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
+            outcome_id = add_entity(graph, "observed-outcome", outcome_key, str(episode.get("subjectName") or symbol) + " 판단 후 결과", {
+                "tboxClass": "ObservedOutcome",
+                "observedAt": outcome.get("observedAt"),
+                "price": outcome.get("price"),
+                "profitLossRate": outcome.get("profitLossRate"),
+                "priceChangeFromDecisionPct": outcome.get("priceChangeFromDecisionPct"),
+                "selectedHypothesisStatus": outcome.get("selectedHypothesisStatus"),
+                "horizonMinutes": outcome_payload.get("horizonMinutes"),
+                "targetAt": outcome_payload.get("targetAt") or "",
+                "observationTiming": outcome_payload.get("observationTiming") or "legacy-unknown",
+                "calibrationEligibility": outcome_payload.get("calibrationEligibility") or "legacy-unverified",
+                "observationSource": outcome_payload.get("observationSource") or "",
+                "sourceAsOf": outcome_payload.get("sourceAsOf") or "",
+                "dataQuality": outcome_payload.get("dataQuality") or "",
+                "evaluationMode": outcome_payload.get("mode") or "legacy-directional-fallback",
+                "contractFingerprint": outcome_payload.get("contractFingerprint") or "",
+                "marketIndependenceKey": outcome_payload.get("marketIndependenceKey") or "",
+                "accountIndependenceKey": outcome_payload.get("accountIndependenceKey") or "",
+                "benchmarkSymbol": outcome_payload.get("benchmarkSymbol") or "",
+                "benchmarkReturnPct": outcome_payload.get("benchmarkReturnPct"),
+                "excessReturnPct": outcome_payload.get("excessReturnPct"),
+                "benchmarkObservationSource": outcome_payload.get("benchmarkObservationSource") or "",
+                "source": "investment-brain-feedback",
+            })
+            add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
+            add_relation(graph, episode_id, outcome_id, "PRODUCES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
+            add_relation(graph, stock_id, outcome_id, "OBSERVES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
+            for index, assessment in enumerate(outcome_payload.get("criterionAssessments") or []):
+                if not isinstance(assessment, dict):
+                    continue
+                assessment_key = outcome_key + ":" + str(assessment.get("criterionId") or index)
+                assessment_id = add_entity(
+                    graph,
+                    "outcome-criterion-observation",
+                    assessment_key,
+                    str(assessment.get("label") or "가설 기준 관측"),
+                    {
+                        "tboxClass": "OutcomeCriterionObservation",
+                        **dict(assessment),
+                        "outcomeId": outcome_key,
+                        "observedAt": outcome.get("observedAt"),
+                        "decisionEligibility": "historical-review-only",
+                        "source": "investment-brain-feedback",
+                    },
+                )
+                add_relation(graph, outcome_id, assessment_id, "EVALUATES_OUTCOME_CRITERION", weight=1.0, properties={
+                    "source": "investment-brain-feedback",
+                    "criterionState": assessment.get("state") or "unknown",
+                })
+                criterion_entity = contract_criterion_ids.get(str(assessment.get("criterionId") or index))
+                if criterion_entity:
+                    add_relation(graph, assessment_id, criterion_entity, "OBSERVES_OUTCOME_CRITERION", weight=1.0, properties={
+                        "source": "investment-brain-feedback",
+                    })
+        for attribution in episode.get("performanceAttributions") or []:
+            if not isinstance(attribution, dict):
+                continue
+            attribution_key = str(attribution.get("attribution_id") or attribution.get("attributionId") or "").strip()
+            if not attribution_key:
+                continue
+            attribution_id = add_entity(
+                graph,
+                "performance-attribution",
+                attribution_key,
+                str(episode.get("subjectName") or symbol) + " 성과 귀속",
+                {
+                    "tboxClass": "PerformanceAttribution",
+                    "marketReturnPct": attribution.get("market_return_pct") or attribution.get("marketReturnPct"),
+                    "instrumentReturnPct": attribution.get("instrument_return_pct") or attribution.get("instrumentReturnPct"),
+                    "activeReturnPct": attribution.get("activeReturnPct"),
+                    "executionCost": attribution.get("execution_cost") or attribution.get("executionCost"),
+                    "horizonMinutes": attribution.get("horizon_minutes") or attribution.get("horizonMinutes"),
+                    "dataState": attribution.get("data_state") or attribution.get("dataState"),
+                    "missingData": attribution.get("missing_data") or attribution.get("missingData") or [],
+                    "observedAt": attribution.get("observed_at") or attribution.get("observedAt"),
+                    "source": "investment-outcome-attribution",
+                },
+            )
+            add_relation(graph, attribution_id, episode_id, "ATTRIBUTED_TO", weight=1.0, properties={"source": "investment-outcome-attribution"})
+        for review in episode.get("decisionReviews") or []:
+            if not isinstance(review, dict):
+                continue
+            review_key = str(review.get("review_id") or review.get("reviewId") or "").strip()
+            if not review_key:
+                continue
+            review_id = add_entity(
+                graph,
+                "decision-review",
+                review_key,
+                str(episode.get("subjectName") or symbol) + " 판단 리뷰",
+                {
+                    "tboxClass": "DecisionReview",
+                    "selectedHypothesisStatus": review.get("selected_hypothesis_status") or review.get("selectedHypothesisStatus"),
+                    "policyCompliant": review.get("policy_compliant") if "policy_compliant" in review else review.get("policyCompliant"),
+                    "executionCompliant": review.get("execution_compliant") if "execution_compliant" in review else review.get("executionCompliant"),
+                    "evidenceStillValid": review.get("evidence_still_valid") if "evidence_still_valid" in review else review.get("evidenceStillValid"),
+                    "observations": review.get("observations") or [],
+                    "reviewedAt": review.get("reviewed_at") or review.get("reviewedAt"),
+                    "source": "investment-decision-review",
+                },
+            )
+            add_relation(graph, review_id, episode_id, "REVIEWS_DECISION", weight=1.0, properties={"source": "investment-decision-review"})
+    calibration_rows = outcome_history_rows or episode_rows
+    add_hypothesis_calibration_concepts(graph, portfolio_id, calibration_rows)
+    add_hypothesis_outcome_assessment_concepts(
+        graph,
+        portfolio_id,
+        calibration_rows,
+        hypothesis_outcome_minimum_samples,
+    )
+    add_decision_performance_concepts(graph, portfolio_id, decision_performance or {})
+    add_novel_hypothesis_proposal_concepts(graph, portfolio_id, hypothesis_proposals or [])
+    add_hypothesis_lifecycle_concepts(graph, portfolio_id, hypothesis_lifecycles or [])
+
+
+def add_hypothesis_lifecycle_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    lifecycles: Iterable[Dict[str, object]],
+) -> None:
+    """Project lifecycle audit facts without using them as investment rules."""
+
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    for row in lifecycles or []:
+        if not isinstance(row, dict):
+            continue
+        lifecycle_key = str(row.get("lifecycleKey") or "").strip()
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not lifecycle_key or not symbol:
+            continue
+        lifecycle_id = add_entity(graph, "hypothesis-lifecycle", lifecycle_key, symbol + " 가설 수명주기", {
+            "tboxClass": "HypothesisLifecycle",
+            "lifecycleKey": lifecycle_key,
+            "lifecycleId": row.get("lifecycleId"),
+            "scope": row.get("scope"),
+            "state": row.get("state"),
+            "stateLabel": row.get("stateLabel"),
+            "familyId": row.get("familyId"),
+            "marketWorldId": row.get("marketWorldId"),
+            "portfolioWorldId": row.get("portfolioWorldId"),
+            "inferenceGenerationId": row.get("inferenceGenerationId"),
+            "previousGenerationId": row.get("previousGenerationId"),
+            "firstObservedAt": row.get("firstObservedAt"),
+            "lastObservedAt": row.get("lastObservedAt"),
+            "lastTransitionAt": row.get("lastTransitionAt"),
+            "transitionReason": row.get("transitionReason"),
+            "materialChange": bool(row.get("materialChange")),
+            "source": "typedb-hypothesis-lifecycle-audit",
+        })
+        stock_id = entity_id("stock", symbol)
+        add_relation(graph, stock_id, lifecycle_id, "HAS_HYPOTHESIS_LIFECYCLE", weight=1.0, properties={
+            "source": "typedb-hypothesis-lifecycle-audit",
+            "scope": row.get("scope"),
+            "state": row.get("state"),
+        })
+        add_relation(graph, portfolio_node_id, lifecycle_id, "HAS_HYPOTHESIS_LIFECYCLE", weight=1.0, properties={
+            "source": "typedb-hypothesis-lifecycle-audit",
+            "scope": row.get("scope"),
+        })
+        transition_at = str(row.get("lastTransitionAt") or "").strip()
+        transition_state = str(row.get("state") or "").strip()
+        transition_reason = str(row.get("transitionReason") or "").strip()
+        if transition_at and transition_state and transition_reason:
+            transition_key = "|".join([lifecycle_key, transition_at, transition_state])
+            transition_id = add_entity(
+                graph,
+                "hypothesis-lifecycle-transition",
+                transition_key,
+                symbol + " " + str(row.get("stateLabel") or transition_state),
+                {
+                    "tboxClass": "HypothesisLifecycleTransition",
+                    "lifecycleKey": lifecycle_key,
+                    "currentState": transition_state,
+                    "occurredAt": transition_at,
+                    "reason": transition_reason,
+                    "materialChange": bool(row.get("materialChange")),
+                    "inferenceGenerationId": row.get("inferenceGenerationId"),
+                    "previousGenerationId": row.get("previousGenerationId"),
+                    "source": "typedb-hypothesis-lifecycle-audit",
+                },
+            )
+            add_relation(
+                graph,
+                transition_id,
+                lifecycle_id,
+                "TRANSITIONS_HYPOTHESIS_LIFECYCLE",
+                weight=1.0,
+                properties={
+                    "source": "typedb-hypothesis-lifecycle-audit",
+                    "currentState": transition_state,
+                    "materialChange": bool(row.get("materialChange")),
+                },
+            )
+        policy = row.get("snapshot", {}).get("policy") if isinstance(row.get("snapshot"), dict) else {}
+        if isinstance(policy, dict):
+            policy_id = add_entity(graph, "hypothesis-lifecycle-policy", lifecycle_key, "가설 수명주기 정책", {
+                "tboxClass": "HypothesisLifecyclePolicy",
+                **dict(policy),
+                "source": "typedb-rulebox-lifecycle-policy",
+            })
+            add_relation(graph, lifecycle_id, policy_id, "GOVERNED_BY_LIFECYCLE_POLICY", weight=1.0, properties={
+                "source": "typedb-rulebox-lifecycle-policy",
+            })
+            for index, requirement in enumerate(policy.get("nextDataRequirements") or []):
+                requirement_id = add_entity(graph, "information-need", lifecycle_key + ":" + str(index), str(requirement), {
+                    "tboxClass": "InformationNeed",
+                    "status": "next-generation-check",
+                    "source": "typedb-rulebox-lifecycle-policy",
+                })
+                add_relation(graph, lifecycle_id, requirement_id, "REQUIRES_NEXT_DATA", weight=1.0, properties={
+                    "source": "typedb-rulebox-lifecycle-policy",
+                })
+        delta = row.get("evidenceDelta") if isinstance(row.get("evidenceDelta"), dict) else {}
+        if delta:
+            delta_id = add_entity(graph, "hypothesis-evidence-delta", lifecycle_key + ":" + str(row.get("inferenceGenerationId") or "current"), "가설 근거 변화", {
+                "tboxClass": "HypothesisEvidenceDelta",
+                "delta": dict(delta),
+                "source": "typedb-hypothesis-lifecycle-audit",
+            })
+            add_relation(graph, lifecycle_id, delta_id, "HAS_EVIDENCE_DELTA", weight=1.0, properties={
+                "source": "typedb-hypothesis-lifecycle-audit",
+            })
+
+
+def add_hypothesis_outcome_assessment_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    decision_episodes: Iterable[Dict[str, object]],
+    minimum_samples: int = 3,
+) -> None:
+    """Project post-decision observations without feeding them back into action selection.
+
+    A portfolio projection only has that portfolio's decision episodes.  A
+    market-scoped row is therefore explicitly marked portfolio-local rather
+    than being presented as a cross-account market conclusion.  Account
+    overlays retain their account id and cannot be merged into the market row.
+    """
+
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    for assessment in outcome_assessments_from_episodes(decision_episodes or [], minimum_samples=minimum_samples):
+        scope = str(assessment.get("scope") or "account")
+        lifecycle_id = str(assessment.get("lifecycleId") or "").strip()
+        symbol = str(assessment.get("symbol") or "").upper().strip()
+        account_id = str(assessment.get("accountId") or "").strip() if scope == "account" else ""
+        if not lifecycle_id or not symbol:
+            continue
+        assessment_key = "|".join([scope, account_id, symbol, lifecycle_id])
+        label = symbol + " " + str(assessment.get("scopeLabel") or "가설") + " 사후 결과"
+        assessment_id = add_entity(graph, "hypothesis-outcome-assessment", assessment_key, label, {
+            "tboxClass": "HypothesisOutcomeAssessment",
+            "lifecycleId": lifecycle_id,
+            "lifecycleKey": assessment.get("lifecycleKey"),
+            "scope": scope,
+            "scopeLabel": assessment.get("scopeLabel"),
+            "accountId": account_id,
+            "symbol": symbol,
+            "familyId": assessment.get("familyId"),
+            "predictionTarget": assessment.get("predictionTarget"),
+            "expectedDirection": assessment.get("expectedDirection"),
+            "expectedOutcome": assessment.get("expectedOutcome"),
+            "outcomeMetric": assessment.get("outcomeMetric"),
+            "falsificationContract": assessment.get("falsificationContract"),
+            "competingFamilyIds": assessment.get("competingFamilyIds") or [],
+            "outcomeState": assessment.get("outcomeState"),
+            "outcomeStateLabel": assessment.get("outcomeStateLabel"),
+            "summary": assessment.get("summary"),
+            "minimumSampleCount": assessment.get("minimumSampleCount"),
+            "matchedEpisodeCount": assessment.get("matchedEpisodeCount"),
+            "sampleCount": assessment.get("sampleCount"),
+            "supportedCount": assessment.get("supportedCount"),
+            "contradictedCount": assessment.get("contradictedCount"),
+            "inconclusiveCount": assessment.get("inconclusiveCount"),
+            "excludedOutcomeCount": assessment.get("excludedOutcomeCount"),
+            "excludedOutcomeReasons": assessment.get("excludedOutcomeReasons") or {},
+            "missingObservationDomains": assessment.get("missingObservationDomains") or [],
+            "outcomeContract": assessment.get("outcomeContract") or {},
+            "horizonAssessments": assessment.get("horizonAssessments") or [],
+            "latestObservedAt": assessment.get("latestObservedAt"),
+            "observationCohort": "portfolio-local",
+            "decisionEligibility": "historical-review-only",
+            "automaticDeployment": False,
+            "source": "DecisionEpisode+ObservedOutcome",
+        })
+        stock_id = entity_id("stock", symbol)
+        add_relation(graph, stock_id, assessment_id, "HAS_HYPOTHESIS_OUTCOME_ASSESSMENT", weight=1.0, properties={
+            "source": "investment-brain-hypothesis-review",
+            "scope": scope,
+            "observationCohort": "portfolio-local",
+        })
+        add_relation(graph, portfolio_node_id, assessment_id, "HAS_HYPOTHESIS_OUTCOME_ASSESSMENT", weight=1.0, properties={
+            "source": "investment-brain-hypothesis-review",
+            "scope": scope,
+            "observationCohort": "portfolio-local",
+        })
+
+
+def add_decision_performance_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    performance: Dict[str, object],
+) -> None:
+    if not isinstance(performance, dict) or not int(performance.get("outcomeCount") or 0):
+        return
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    summary = performance.get("summary") if isinstance(performance.get("summary"), dict) else {}
+    summary_id = add_entity(graph, "decision-performance", portfolio_id, "투자 판단 성과", {
+        "tboxClass": "DecisionPerformance",
+        **dict(summary),
+        "episodeCount": performance.get("episodeCount"),
+        "episodeWithOutcomeCount": performance.get("episodeWithOutcomeCount"),
+        "outcomeCoveragePct": performance.get("outcomeCoveragePct"),
+        "byHorizon": list(performance.get("byHorizon") or []),
+        "byAction": list(performance.get("byAction") or []),
+        "byHypothesisFamily": list(performance.get("byHypothesisFamily") or []),
+        "byHypothesisFamilyAndHorizon": list(performance.get("byHypothesisFamilyAndHorizon") or []),
+        "byPredictionTarget": list(performance.get("byPredictionTarget") or []),
+        "byOutcomeMetric": list(performance.get("byOutcomeMetric") or []),
+        "investmentInsightPerformance": dict(
+            performance.get("investmentInsightPerformance") or {}
+        ),
+        "automaticDeployment": False,
+        "source": "DecisionEpisode+ObservedOutcome",
+    })
+    add_relation(graph, portfolio_node_id, summary_id, "HAS_DECISION_PERFORMANCE", weight=1.0, properties={"source": "investment-brain-feedback"})
+    for metric in performance.get("byRule") or []:
+        if not isinstance(metric, dict) or not str(metric.get("key") or "").strip():
+            continue
+        rule_key = str(metric.get("key") or "")
+        performance_id = add_entity(graph, "rule-performance", rule_key, rule_key + " 성과", {
+            "tboxClass": "RulePerformance",
+            **dict(metric),
+            "automaticDeployment": False,
+        })
+        rule_id = entity_id("graph-inference-rule", rule_key)
+        if not any(item.entity_id == rule_id for item in graph.entities):
+            add_entity(graph, "graph-inference-rule", rule_key, rule_key, {"tboxClass": "GraphInferenceRule", "ruleId": rule_key})
+        add_relation(graph, summary_id, performance_id, "HAS_PERFORMANCE_SLICE", weight=1.0, properties={"source": "investment-brain-feedback"})
+        add_relation(graph, performance_id, rule_id, "EVALUATES_RULE", weight=1.0, properties={"source": "investment-brain-feedback"})
+    for metric in performance.get("byHypothesis") or []:
+        if not isinstance(metric, dict) or not str(metric.get("key") or "").strip():
+            continue
+        template_key = str(metric.get("key") or "")
+        performance_id = add_entity(graph, "hypothesis-performance", template_key, str(metric.get("label") or template_key) + " 성과", {
+            "tboxClass": "HypothesisPerformance",
+            **dict(metric),
+            "automaticDeployment": False,
+        })
+        template_id = entity_id("hypothesis-template", template_key)
+        if not any(item.entity_id == template_id for item in graph.entities):
+            add_entity(graph, "hypothesis-template", template_key, str(metric.get("label") or template_key), {"tboxClass": "ApprovedHypothesisTemplate"})
+        add_relation(graph, summary_id, performance_id, "HAS_PERFORMANCE_SLICE", weight=1.0, properties={"source": "investment-brain-feedback"})
+        add_relation(graph, performance_id, template_id, "EVALUATES_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-feedback"})
+    for metric in performance.get("byHypothesisFamilyAndHorizon") or []:
+        if not isinstance(metric, dict) or not str(metric.get("key") or "").strip():
+            continue
+        metric_key = str(metric.get("key") or "")
+        family_key = metric_key.split("|", 1)[0]
+        performance_id = add_entity(graph, "hypothesis-performance", "family-horizon|" + metric_key, str(metric.get("label") or metric_key) + " 성과", {
+            "tboxClass": "HypothesisPerformance",
+            "performanceScope": "hypothesis-family+horizon+outcome-metric",
+            **dict(metric),
+            "automaticDeployment": False,
+        })
+        family_id = entity_id("hypothesis-family", family_key)
+        if not any(item.entity_id == family_id for item in graph.entities):
+            add_entity(graph, "hypothesis-family", family_key, family_key, {"tboxClass": "HypothesisFamily", "familyId": family_key})
+        add_relation(graph, summary_id, performance_id, "HAS_PERFORMANCE_SLICE", weight=1.0, properties={"source": "investment-brain-feedback"})
+        add_relation(graph, performance_id, family_id, "EVALUATES_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-feedback"})
+
+
+def add_hypothesis_calibration_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    decision_episodes: Iterable[Dict[str, object]],
+) -> None:
+    grouped: Dict[str, Dict[str, object]] = {}
+    for episode in decision_episodes or []:
+        symbol = str(episode.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        facts = (
+            episode.get("factsAtDecision")
+            if isinstance(episode.get("factsAtDecision"), dict)
+            else {}
+        )
+        episode_contract = (
+            facts.get("hypothesisOutcomeContract")
+            if isinstance(facts.get("hypothesisOutcomeContract"), dict)
+            else {}
+        )
+        if not outcome_contract_completeness(episode_contract).get("complete"):
+            continue
+        hypothesis_set = episode.get("hypothesisSet") if isinstance(episode.get("hypothesisSet"), dict) else {}
+        selected_id = str(episode.get("selectedHypothesisId") or "")
+        selected = next((
+            item for item in hypothesis_set.get("hypotheses") or []
+            if isinstance(item, dict) and str(item.get("hypothesisId") or "") == selected_id
+        ), None)
+        outcomes = [
+            item for item in episode.get("outcomes") or []
+            if isinstance(item, dict)
+            and isinstance(item.get("payload"), dict)
+            and str((item.get("payload") or {}).get("calibrationEligibility") or "") == "eligible"
+            and outcome_contract_completeness(
+                (item.get("payload") or {}).get("hypothesisOutcomeContract")
+                if isinstance(
+                    (item.get("payload") or {}).get("hypothesisOutcomeContract"),
+                    dict,
+                )
+                else episode_contract
+            ).get("complete")
+        ]
+        if not selected or not outcomes:
+            continue
+        latest = sorted(outcomes, key=lambda item: str(item.get("observedAt") or ""))[-1]
+        status = str(latest.get("selectedHypothesisStatus") or "")
+        claim_contract = (
+            selected.get("claimContract")
+            if isinstance(selected.get("claimContract"), dict)
+            else {}
+        )
+        claim_contract_id = str(
+            selected.get("claimContractId")
+            or claim_contract.get("claimContractId")
+            or episode_contract.get("claimContractId")
+            or episode_contract.get("hypothesisContractId")
+            or ""
+        ).strip()
+        family_id = str(selected.get("familyId") or "").strip()
+        template_id = str(
+            selected.get("templateId")
+            or family_id
+            or claim_contract_id
+            or ""
+        ).strip()
+        claim_fingerprint = claim_validation_fingerprint(claim_contract)
+        frozen_fingerprint = str(episode_contract.get("claimContractFingerprint") or "")
+        if claim_fingerprint and frozen_fingerprint and claim_fingerprint != frozen_fingerprint:
+            continue
+        claim_fingerprint = claim_fingerprint or frozen_fingerprint
+        calibration_identity = claim_revision_identity(claim_contract_id, claim_fingerprint)
+        if not calibration_identity:
+            continue
+        calibration_identity_type = "claim-revision"
+        episode_id = str(episode.get("episodeId") or "").strip()
+        latest_payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
+        latest_adjusted_return = action_adjusted_return(
+            str(episode.get("action") or ""),
+            number(latest.get("priceChangeFromDecisionPct")),
+        )
+        independence_key = str(latest_payload.get("accountIndependenceKey") or episode_id).strip()
+        if not episode_id or not calibration_identity or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
+            continue
+        scope_key = symbol + "|" + calibration_identity_type + "|" + calibration_identity
+        row = grouped.setdefault(scope_key, {
+            "symbol": symbol,
+            "subjectName": str(episode.get("subjectName") or symbol),
+            "templateId": template_id,
+            "familyId": family_id,
+            "claimContractId": claim_contract_id,
+            "claimContractFingerprint": claim_fingerprint,
+            "calibrationIdentity": calibration_identity,
+            "calibrationIdentityType": calibration_identity_type,
+            "templateLabel": str(selected.get("templateLabel") or template_id),
+            "episodeOutcomes": {},
+            "episodeHorizonOutcomes": {},
+        })
+        previous = row["episodeOutcomes"].get(independence_key) or {}
+        if str(latest.get("observedAt") or "") >= str(previous.get("observedAt") or ""):
+            row["episodeOutcomes"][independence_key] = {
+                "status": status,
+                "observedAt": str(latest.get("observedAt") or ""),
+                "horizonMinutes": positive_int(latest_payload.get("horizonMinutes")),
+                "sourceEpisodeId": episode_id,
+                "independenceKey": independence_key,
+                "actionAdjustedReturnPct": latest_adjusted_return,
+            }
+        # Overall calibration uses one latest result per independent event. For
+        # each horizon, however, retain that horizon's latest result so a
+        # longer observation does not erase the shorter-horizon evidence.
+        for outcome in outcomes:
+            outcome_status = str(outcome.get("selectedHypothesisStatus") or "")
+            if outcome_status not in {
+                "directionally-corroborated",
+                "directionally-contradicted",
+                "inconclusive",
+            }:
+                continue
+            horizon = positive_int((outcome.get("payload") or {}).get("horizonMinutes"))
+            if not horizon:
+                continue
+            outcome_payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
+            horizon_independence_key = str(outcome_payload.get("accountIndependenceKey") or episode_id).strip()
+            per_horizon = row["episodeHorizonOutcomes"].setdefault(horizon, {})
+            previous_horizon = per_horizon.get(horizon_independence_key) or {}
+            if str(outcome.get("observedAt") or "") >= str(previous_horizon.get("observedAt") or ""):
+                per_horizon[horizon_independence_key] = {
+                    "status": outcome_status,
+                    "observedAt": str(outcome.get("observedAt") or ""),
+                    "horizonMinutes": horizon,
+                    "sourceEpisodeId": episode_id,
+                    "independenceKey": horizon_independence_key,
+                }
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    for _, row in sorted(grouped.items()):
+        template_id = str(row["templateId"])
+        symbol = str(row["symbol"])
+        statuses = [str(item.get("status") or "") for item in row["episodeOutcomes"].values()]
+        corroborated_count = statuses.count("directionally-corroborated")
+        contradicted_count = statuses.count("directionally-contradicted")
+        inconclusive_count = statuses.count("inconclusive")
+        decisive_count = corroborated_count + contradicted_count
+        independent_count = len(row["episodeOutcomes"])
+        adjusted_returns = [
+            number(item.get("actionAdjustedReturnPct"))
+            for item in row["episodeOutcomes"].values()
+            if item.get("actionAdjustedReturnPct") is not None
+        ]
+        average_adjusted_return = (
+            sum(adjusted_returns) / len(adjusted_returns)
+            if adjusted_returns else 0.0
+        )
+        confidence = binomial_confidence_interval(corroborated_count, decisive_count)
+        outcome_state, review_recommendation = hypothesis_calibration_state(
+            corroborated_count,
+            contradicted_count,
+            decisive_count,
+        )
+        outcome_rows = list(row["episodeOutcomes"].values())
+        horizon_outcome_rows = [
+            outcome
+            for per_episode in row["episodeHorizonOutcomes"].values()
+            for outcome in per_episode.values()
+        ]
+        calibration_identity = str(row["calibrationIdentity"])
+        calibration_identity_type = str(row["calibrationIdentityType"])
+        calibration_id = add_entity(graph, "hypothesis-calibration", symbol + "|" + calibration_identity_type + "|" + calibration_identity, str(row["subjectName"]) + " " + str(row["templateLabel"]) + " 결과 보정", {
+            "tboxClass": "HypothesisCalibration",
+            "calibrationScope": "account-symbol-template",
+            "accountId": portfolio_id,
+            "symbol": symbol,
+            "templateId": template_id,
+            "familyId": str(row.get("familyId") or ""),
+            "claimContractId": str(row.get("claimContractId") or ""),
+            "claimContractFingerprint": str(row.get("claimContractFingerprint") or ""),
+            "calibrationIdentity": calibration_identity,
+            "calibrationIdentityType": calibration_identity_type,
+            "templateLabel": str(row["templateLabel"]),
+            "independentEpisodeCount": independent_count,
+            "decisiveOutcomeCount": decisive_count,
+            "corroboratedCount": corroborated_count,
+            "contradictedCount": contradicted_count,
+            "inconclusiveCount": inconclusive_count,
+            "directionalHitRate": confidence["rate"],
+            "directionalHitRateConfidence95": {
+                "lower": confidence["lower"],
+                "upper": confidence["upper"],
+            },
+            "averageActionAdjustedReturnPct": round(average_adjusted_return, 4),
+            "actionReturnState": action_return_state(adjusted_returns),
+            "latestObservedAt": max((str(item.get("observedAt") or "") for item in outcome_rows), default=""),
+            "outcomeHorizonMinutes": sorted({positive_int(item.get("horizonMinutes")) for item in horizon_outcome_rows if positive_int(item.get("horizonMinutes"))}),
+            "horizonSlices": hypothesis_calibration_horizon_slices(horizon_outcome_rows),
+            "outcomeState": outcome_state,
+            "reviewRecommendation": review_recommendation,
+            "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-history",
+            "minimumDecisiveOutcomes": 3,
+            "automaticQualification": True,
+            "automaticDeployment": False,
+            "source": "investment-brain-feedback",
+        })
+        template_id_node = entity_id("hypothesis-template", template_id)
+        if not any(item.entity_id == template_id_node for item in graph.entities):
+            add_entity(graph, "hypothesis-template", template_id, str(row["templateLabel"]), {
+                "tboxClass": "ApprovedHypothesisTemplate",
+                "source": "investment-brain-feedback",
+            })
+        add_relation(graph, template_id_node, calibration_id, "CALIBRATED_BY_OUTCOME", weight=1.0, properties={
+            "source": "investment-brain-feedback",
+            "automaticDeployment": False,
+        })
+        stock_id = entity_id("stock", symbol)
+        if not any(item.entity_id == stock_id for item in graph.entities):
+            add_entity(graph, "stock", symbol, str(row["subjectName"]) or symbol, {
+                "tboxClass": "Stock",
+                "symbol": symbol,
+                "source": "investment-brain-feedback",
+            })
+        add_relation(graph, stock_id, calibration_id, "HAS_HYPOTHESIS_CALIBRATION", weight=1.0, properties={
+            "source": "investment-brain-feedback",
+            "calibrationScope": "account-symbol-template",
+        })
+        add_relation(graph, portfolio_node_id, calibration_id, "HAS_HYPOTHESIS_CALIBRATION", weight=1.0, properties={
+            "source": "investment-brain-feedback",
+        })
+
+
+def hypothesis_calibration_state(
+    corroborated_count: int,
+    contradicted_count: int,
+    decisive_count: int,
+):
+    if decisive_count < 3:
+        return "insufficient-history", "continue-observation"
+    if corroborated_count > contradicted_count:
+        return "more-corroborated", "eligible-for-human-review"
+    if contradicted_count > corroborated_count:
+        return "more-contradicted", "review-for-revision"
+    return "mixed", "continue-observation"
+
+
+def hypothesis_calibration_horizon_slices(outcomes: Iterable[Dict[str, object]]):
+    grouped: Dict[int, List[Dict[str, object]]] = {}
+    for outcome in outcomes or []:
+        horizon = positive_int(outcome.get("horizonMinutes"))
+        if not horizon:
+            continue
+        grouped.setdefault(horizon, []).append(outcome)
+    slices = []
+    for horizon, rows in sorted(grouped.items()):
+        statuses = [str(item.get("status") or "") for item in rows]
+        corroborated_count = statuses.count("directionally-corroborated")
+        contradicted_count = statuses.count("directionally-contradicted")
+        decisive_count = corroborated_count + contradicted_count
+        outcome_state, _ = hypothesis_calibration_state(corroborated_count, contradicted_count, decisive_count)
+        slices.append({
+            "horizonMinutes": horizon,
+            "independentEpisodeCount": len(rows),
+            "decisiveOutcomeCount": decisive_count,
+            "corroboratedCount": corroborated_count,
+            "contradictedCount": contradicted_count,
+            "inconclusiveCount": statuses.count("inconclusive"),
+            "outcomeState": outcome_state,
+            "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-history",
+        })
+    return slices
+
+
+def add_research_source_policy(graph: PortfolioOntology, plan_key: str, research_plan: Dict[str, object]) -> str:
+    tasks = [item for item in research_plan.get("tasks") or [] if isinstance(item, dict)]
+    source_types = sorted({
+        str(source or "").strip()
+        for task in tasks
+        for source in task.get("sourceTypes") or []
+        if str(source or "").strip()
+    })
+    max_ages = [positive_int(task.get("maxAgeMinutes")) for task in tasks if positive_int(task.get("maxAgeMinutes")) > 0]
+    return add_entity(graph, "research-source-policy", plan_key, "공식 원문 우선 조사 정책", {
+        "tboxClass": "ResearchSourcePolicy",
+        "approvedSourceTypes": source_types,
+        "maximumAgeMinutes": min(max_ages) if max_ages else 360,
+        "cachePolicy": "cache-first",
+        "maximumRounds": research_plan.get("maxRounds"),
+        "investmentJudgmentEligibility": "verified-claims-only",
+    })
+
+
+def positive_int(value: object) -> int:
+    try:
+        return max(0, int(float(str(value or 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def add_verified_claim_concepts(
+    graph: PortfolioOntology,
+    run_id: str,
+    stock_id: str,
+    claims: Iterable[Dict[str, object]],
+) -> None:
+    for claim in claims or []:
+        if not isinstance(claim, dict) or not str(claim.get("claimId") or "").strip():
+            continue
+        claim_key = str(claim.get("claimId") or "").strip()
+        evidence_key = str(claim.get("evidenceId") or claim_key).strip()
+        document_id = add_entity(graph, "retrieved-document", evidence_key, str(claim.get("statement") or evidence_key), {
+            "tboxClass": "RetrievedDocument",
+            "source": claim.get("source"),
+            "sourceUrl": claim.get("sourceUrl"),
+            "publishedAt": claim.get("publishedAt"),
+            "observedAt": claim.get("observedAt"),
+        })
+        claim_id = add_entity(graph, "verified-claim", claim_key, str(claim.get("statement") or claim_key), {
+            "tboxClass": "VerifiedClaim",
+            "verificationStatus": claim.get("verificationStatus"),
+            "entityResolutionStatus": claim.get("entityResolutionStatus"),
+            "sourceTrustState": claim.get("sourceTrustState"),
+            "dataState": claim.get("dataState"),
+            "validationState": claim.get("validationState"),
+            "evidenceId": evidence_key,
+        })
+        assessment_id = add_entity(graph, "evidence-assessment", claim_key, "근거 품질 검증", {
+            "tboxClass": "EvidenceAssessment",
+            "verificationStatus": claim.get("verificationStatus"),
+            "entityResolutionStatus": claim.get("entityResolutionStatus"),
+            "sourceTrustState": claim.get("sourceTrustState"),
+            "dataState": claim.get("dataState"),
+            "validationState": claim.get("validationState"),
+            "reasons": claim.get("reasons") or [],
+        })
+        source_id = add_entity(graph, "research-source", str(claim.get("source") or "unknown"), str(claim.get("source") or "출처 미상"), {
+            "tboxClass": "DataSource",
+            "sourceUrl": claim.get("sourceUrl"),
+        })
+        add_relation(graph, run_id, claim_id, "PRODUCES_VERIFICATION_RESULT", weight=1.0, properties={"source": "investment-brain-research"})
+        add_relation(graph, document_id, source_id, "RETRIEVED_FROM", weight=1.0, properties={"source": "investment-brain-research"})
+        add_relation(graph, document_id, claim_id, "ASSERTS", weight=1.0, properties={"source": "investment-brain-research"})
+        add_relation(graph, claim_id, stock_id, "RESOLVES_TO", weight=1.0, properties={"source": "investment-brain-research"})
+        add_relation(graph, claim_id, assessment_id, "VERIFIED_BY", weight=1.0, properties={"source": "investment-brain-research"})
+
+
+def add_novel_hypothesis_proposal_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    proposals: Iterable[Dict[str, object]],
+) -> None:
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    for proposal in proposals or []:
+        if not isinstance(proposal, dict):
+            continue
+        proposal_key = str(proposal.get("proposalId") or "").strip()
+        symbol = str(proposal.get("symbol") or "").upper().strip()
+        if not proposal_key or not symbol:
+            continue
+        proposal_id = add_entity(graph, "novel-hypothesis-proposal", proposal_key, str(proposal.get("title") or proposal.get("claim") or proposal_key), {
+            "tboxClass": "NovelHypothesisProposal",
+            "claim": proposal.get("claim"),
+            "causalPath": proposal.get("causalPath") or [],
+            "requiredEvidenceTypes": proposal.get("requiredEvidenceTypes") or [],
+            "invalidationConditions": proposal.get("invalidationConditions") or [],
+            "status": proposal.get("status"),
+            "source": proposal.get("source"),
+            "sourceQuestionId": proposal.get("sourceQuestionId"),
+            "createdAt": proposal.get("createdAt"),
+            "governance": "not-deployed-until-rulebox-promotion",
+        })
+        stock_id = entity_id("stock", symbol)
+        add_relation(graph, proposal_id, stock_id, "PROPOSES_HYPOTHESIS_FOR", weight=1.0, properties={"source": "ai-hypothesis-governance"})
+        add_relation(graph, portfolio_node_id, proposal_id, "HAS_EVIDENCE", weight=1.0, properties={"source": "ai-hypothesis-governance"})
+        for evidence_key in proposal.get("supportingEvidenceIds") or []:
+            evidence_id = add_entity(graph, "evidence-reference", str(evidence_key), str(evidence_key), {
+                "tboxClass": "Evidence",
+                "source": "hypothesis-proposal-reference",
+            })
+            add_relation(graph, proposal_id, evidence_id, "USED_AS_EVIDENCE", weight=1.0, properties={"polarity": "support"})

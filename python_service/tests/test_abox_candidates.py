@@ -9,11 +9,12 @@ import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
+from module_migration_fixtures import is_domain_dependency
 from unittest.mock import Mock, patch
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.infrastructure import typedb_ontology as api
 from digital_twin.modules.reasoning.infrastructure.abox_candidates import (
     identity, recovery, row_image, rows, scope_plan, selection, validation,
@@ -332,7 +333,7 @@ for name in sys.modules:
                     if item.level:
                         dependencies[file.stem].add(item.module)
                     elif item.module.startswith("digital_twin"):
-                        self.assertTrue(item.module.startswith(("digital_twin.domain.", "digital_twin.modules.reasoning.infrastructure.")) or item.module == "digital_twin.infrastructure.graph_store_payloads", (file.name, item.module))
+                        self.assertTrue(is_domain_dependency(item.module) or item.module.startswith("digital_twin.modules.reasoning.infrastructure.") or item.module == "digital_twin.infrastructure.graph_store_payloads", (file.name, item.module))
                     self.assertFalse(item.module.startswith("typedb"))
             if file.stem in owners:
                 self.assertEqual(declared[owners[file.stem]], used, file.name)

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 from .record_ports import RecordPort, RecordSnapshotBindings
-from digital_twin.domain.ontology_performance_contract import (
-    ontology_performance_assessment,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_performance_contract import ontology_performance_assessment
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Callable, Dict, List
 import time
 import traceback

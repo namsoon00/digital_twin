@@ -2,7 +2,8 @@ import unittest
 from contextlib import nullcontext
 from unittest.mock import patch
 
-from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
 from digital_twin.infrastructure.mysql_reasoning_ingress import (
     MySQLReasoningIngressRouter,
     ingress_reasoning_event_with_connection,

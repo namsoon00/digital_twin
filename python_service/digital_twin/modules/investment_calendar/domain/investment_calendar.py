@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 DEFAULT_EVENT_TIMEZONE = "Asia/Seoul"

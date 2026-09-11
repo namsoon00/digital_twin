@@ -2,15 +2,17 @@
 
 from typing import Iterable
 
-from digital_twin.domain.events import INVESTMENT_ACTION_PLAN_PROPOSED, INVESTMENT_DECISION_REVIEWED, INVESTMENT_MANDATE_CHANGED, INVESTMENT_PERFORMANCE_ATTRIBUTED, PORTFOLIO_LEDGER_RECORDED, PORTFOLIO_REBALANCE_PROPOSED, PORTFOLIO_REBALANCE_REVIEW_DUE, PORTFOLIO_REBALANCE_RESOLVED, PORTFOLIO_RISK_OBSERVED, TRADE_EXECUTION_RECORDED, investment_lifecycle_event
-from digital_twin.domain.investment_mandate import InvestmentMandate
-from digital_twin.domain.investment_outcomes import DecisionReview, PerformanceAttribution
+from digital_twin.modules.portfolio.domain.event_types import INVESTMENT_ACTION_PLAN_PROPOSED, INVESTMENT_MANDATE_CHANGED, PORTFOLIO_LEDGER_RECORDED, PORTFOLIO_REBALANCE_PROPOSED, PORTFOLIO_REBALANCE_REVIEW_DUE, PORTFOLIO_REBALANCE_RESOLVED, PORTFOLIO_RISK_OBSERVED
+from digital_twin.modules.portfolio.domain.events import investment_lifecycle_event
+from digital_twin.modules.outcomes.contracts import INVESTMENT_DECISION_REVIEWED, INVESTMENT_PERFORMANCE_ATTRIBUTED, TRADE_EXECUTION_RECORDED
+from digital_twin.modules.portfolio.domain.investment_mandate import InvestmentMandate
+from digital_twin.modules.outcomes.contracts import DecisionReview, PerformanceAttribution
 from digital_twin.modules.portfolio.domain.portfolio_ledger import PortfolioLedgerEntry
 from digital_twin.modules.portfolio.domain.portfolio_ledger import INFERRED_SNAPSHOT_ENTRY_TYPES
-from digital_twin.domain.snapshot_portfolio_activity import activity_payload
-from digital_twin.domain.portfolio_rebalancing import RebalanceProposal, RebalanceTransition
+from digital_twin.modules.portfolio.domain.snapshot_portfolio_activity import activity_payload
+from digital_twin.modules.portfolio.domain.portfolio_rebalancing import RebalanceProposal, RebalanceTransition
 from digital_twin.modules.portfolio.contracts import InvestmentDomainRepository
-from digital_twin.domain.trade_execution import ActionPlan, ExecutionEpisode
+from digital_twin.modules.portfolio.domain.trade_execution import ActionPlan, ExecutionEpisode
 
 
 class InvestmentDomainService:

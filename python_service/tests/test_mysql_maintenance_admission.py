@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from digital_twin.domain.mysql_maintenance_admission import mysql_maintenance_admission
+from digital_twin.platform.domain.mysql_maintenance_admission import mysql_maintenance_admission
 from digital_twin.infrastructure.mysql_realtime_workload_guard import MySQLRealtimeWorkloadGuard
 
 

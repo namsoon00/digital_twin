@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.model_registry.contracts import MODEL_REVIEW_PROMPT_VERSION
-from ..domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, DEFAULT_RELATION_RULE_THRESHOLDS, MIN_CADENCE_MINUTES
-from ..domain.parsing import parse_assignments
+from digital_twin.modules.notifications.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, DEFAULT_RELATION_RULE_THRESHOLDS, MIN_CADENCE_MINUTES
+from digital_twin.shared_kernel.parsing import parse_assignments
 from . import operational_store as stores
 from .settings import ROOT_DIR, runtime_settings, settings_path, utc_now
 

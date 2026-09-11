@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.notification_rules import (
+from digital_twin.modules.notifications.domain.notification_rules import (
     attach_previous_profit_loss_context,
     apply_similarity_rule,
     apply_state_cooldown_rule,
@@ -15,21 +15,21 @@ from digital_twin.domain.notification_rules import (
     evaluate_notification_rule,
     notification_state_group_key,
 )
-from digital_twin.domain.notification_rule_evaluator import (
+from digital_twin.modules.notifications.domain.notification_rule_evaluator import (
     similarity_bypass_match,
     typedb_profit_loss_delivery_reason,
 )
-from digital_twin.domain.notification_rule_models import SimilarityBypassCondition
-from digital_twin.domain.data_freshness import (
+from digital_twin.modules.notifications.domain.notification_rule_models import SimilarityBypassCondition
+from digital_twin.modules.market_data.domain.data_freshness import (
     evaluate_notification_data_freshness,
     freshness_from_position,
     sanitize_notification_context_for_freshness,
 )
 from digital_twin.modules.notifications.application.notification_ai_gate_message import notification_cooldown_release_summary, notification_reason_summary, notification_topline_change_summary, prepend_execution_start_badge
-from digital_twin.domain.notification_templates import prepend_message_start_badge
-from digital_twin.domain.notification_ai import opinion_lines_for_type
-from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.message_types import (
+from digital_twin.modules.notifications.domain.notification_templates import prepend_message_start_badge
+from digital_twin.modules.decisions.domain.notification_ai import opinion_lines_for_type
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
+from digital_twin.modules.notifications.domain.message_types import (
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
     NEWS_DIGEST,
@@ -37,9 +37,9 @@ from digital_twin.domain.message_types import (
     WORK_HANDOFF,
     is_operations_delivery_message_type,
 )
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.strategy_alerts import StrategyAlertMixin
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.strategy_alerts import StrategyAlertMixin
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
 from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
 from digital_twin.modules.notifications.application.notification.eligibility import NotificationDispatchEligibilityService

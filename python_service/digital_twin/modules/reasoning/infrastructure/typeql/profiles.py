@@ -2,10 +2,7 @@
 
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.model_signal_interpretation import (
-    is_model_signal_interpretation_rule,
-    model_signal_bridge_source_scope,
-)
+from digital_twin.modules.model_registry.contracts import is_model_signal_interpretation_rule, model_signal_bridge_source_scope
 from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
     TYPEDB_FUNCTION_OPERATORS,
     TYPEDB_FUNCTION_RELATION_FILTERS,

@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.domain.reasoning_shadow import compare_engine_outcomes, independent_reasoning_outcome_packet
-from digital_twin.domain.reasoning_comparison_identity import comparison_input_contract
+from digital_twin.modules.reasoning.domain.reasoning_shadow import compare_engine_outcomes, independent_reasoning_outcome_packet
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import comparison_input_contract
 
 
 def _mapping(value: object) -> Dict[str, object]:

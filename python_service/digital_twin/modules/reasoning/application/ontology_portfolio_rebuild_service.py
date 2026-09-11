@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from typing import Dict, Mapping
 
-from digital_twin.domain.portfolio import account_snapshot_from_monitor_state, monitor_state_has_live_account_data
-from digital_twin.domain.ontology_worlds import PORTFOLIO_WORLD_TYPE, world_from_metadata, world_from_snapshot
+from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state, monitor_state_has_live_account_data
+from digital_twin.modules.reasoning.domain.ontology_worlds import PORTFOLIO_WORLD_TYPE, world_from_metadata, world_from_snapshot
 
 
 SUCCESS_STATUSES = {

@@ -12,7 +12,7 @@ import os
 import socket
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries, event_as_dict, event_has_reasoning_work
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import durable_mailbox_entries, event_as_dict, event_has_reasoning_work
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

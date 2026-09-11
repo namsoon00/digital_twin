@@ -7,8 +7,8 @@ from .legacy_activation_ports import (
     ActivateAboxGenerationBindings,
     AboxProjectionMarkerGraphBindings,
 )
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import (
     typedb_call_for_world,
 )

@@ -3,11 +3,8 @@
 from __future__ import annotations
 from .selection_ports import SelectionPort
 from copy import deepcopy
-from digital_twin.domain.ontology_runtime_operations import (
-    native_rule_adaptive_target_sharding_policy,
-    native_rule_adaptive_target_sharding_profile,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_rule_adaptive_target_sharding_policy, native_rule_adaptive_target_sharding_profile
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.reasoning.domain.projection_facts import rule_id_from_payload
 from typing import Dict, List
 

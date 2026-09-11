@@ -1,7 +1,7 @@
 import unittest
 
-from digital_twin.domain.fact_changes import fact_change_contract
-from digital_twin.domain.ontology_change_impact import (
+from digital_twin.modules.reasoning.domain.fact_changes import fact_change_contract
+from digital_twin.modules.reasoning.domain.ontology_change_impact import (
     CHANGE_IMPACT_VERSION,
     DEPENDENCY_FINGERPRINT_VERSION,
     build_dynamic_inference_preflight,
@@ -17,8 +17,8 @@ from digital_twin.domain.ontology_change_impact import (
     scope_symbol,
     unpack_semantic_dependency_fingerprints,
 )
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
-from digital_twin.domain.ontology_scopes import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import (
     _scope_fragment_payload,
     _scope_fragment_payloads,
     _scope_fragment_payloads_with_semantic_fingerprints,
@@ -27,10 +27,10 @@ from digital_twin.domain.ontology_scopes import (
     apply_scoped_abox_identity,
     relation_link_scope_id,
 )
-from digital_twin.domain.ontology_tbox import tbox_class_def, tbox_relation_def
+from digital_twin.modules.model_registry.domain.ontology_tbox import tbox_class_def, tbox_relation_def
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.world_partitioned_reasoning import (
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import (
     compile_world_partitioned_rules,
 )
 from digital_twin.infrastructure.typedb_ontology import (

@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Dict, List, Mapping
 
-from digital_twin.domain.ontology_projection_payload import deserialize_portfolio_ontology, serialize_portfolio_ontology
-from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
-from digital_twin.domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE, OntologyWorld, world_from_metadata, world_metadata
+from digital_twin.modules.reasoning.domain.ontology_projection_payload import deserialize_portfolio_ontology, serialize_portfolio_ontology
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import material_graph_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE, OntologyWorld, world_from_metadata, world_metadata
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

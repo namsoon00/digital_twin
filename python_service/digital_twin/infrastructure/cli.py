@@ -11,13 +11,13 @@ from typing import Dict, List, Mapping
 
 from digital_twin.modules.accounts.public import AccountApplicationService
 from digital_twin.modules.market_data.public import ExternalDataConfigurationRecoveryService
-from ..application.mysql_minimal_retention_service import MySQLMinimalRetentionService
+from digital_twin.platform.application.mysql_minimal_retention_service import MySQLMinimalRetentionService
 from digital_twin.modules.news_intelligence.public import ResearchEvidenceGovernanceService
-from ..domain.accounts import AccountConfig, split_symbols
-from ..domain.mysql_minimal_retention import mysql_minimal_retention_policy
-from ..domain.monitoring import RealtimeMonitor
-from ..domain.notification_templates import template_variables, text_context
-from ..domain.portfolio import AlertEvent
+from digital_twin.modules.accounts.domain.accounts import AccountConfig, split_symbols
+from digital_twin.platform.domain.mysql_minimal_retention import mysql_minimal_retention_policy
+from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
+from digital_twin.modules.notifications.domain.notification_templates import template_variables, text_context
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
 from digital_twin.modules.news_intelligence.public import RevalidateNewsIntelligenceService
 from .admin_preview import write_admin_preview
 from . import operational_store as stores
@@ -1139,7 +1139,7 @@ def time_series_platform_command(args) -> int:
         build_time_series_projection_runner,
         initialize_time_series_registry,
     )
-    from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
+    from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 
     configured = runtime_settings()
     adapters = build_time_series_adapters(configured)
@@ -1949,7 +1949,7 @@ def maintenance_command(args) -> int:
             configured_interval = min(configured_interval, minimal_policy.interval_seconds)
 
         reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
-        from ..domain.mysql_maintenance_admission import mysql_maintenance_admission
+        from digital_twin.platform.domain.mysql_maintenance_admission import mysql_maintenance_admission
 
         maintenance_state = {
             "deferralStartedAt": 0.0,

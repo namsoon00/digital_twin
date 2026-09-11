@@ -82,14 +82,26 @@ npm run generate:static
 
 ## 앱 구조
 
-- `public/`: Exit Lens 웹 대시보드
+- `public/modules/`: 기능별 상태, 요청, 탐색, 렌더링을 분리한 웹 소스
+- `public/app.js`: 정적 배포용 생성 번들. 직접 수정하지 않음
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
 - `GET /api/symbol-universe`, `POST /api/symbol-universe/refresh`: 코스피·코스닥·나스닥 전체 종목 카탈로그 검색과 원천 목록 갱신
 - `GET /api/bootstrap`, `GET/POST /api/memories`, `GET/POST /api/items`: 운영 DB의 `app_store` 기반 앱 데이터 조회와 저장
 - `GET/PUT /api/settings`: 운영 DB의 `runtime_settings` 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
 - `GET /api/notification-schedules`: 메시지 타입별 실제 마지막 발송, 다음 가능 시각, 최근 대상, 발송 조건 설명 조회
-- `python_service/digital_twin/infrastructure/web_server.py`: 정적 웹 자산 서빙과 로컬 API 라우팅
-- `python_service/digital_twin/application/flow_lens_service.py`: 토스 계좌/보유자산 스냅샷, 관심 종목 파싱, 매도 검토 fallback 생성
+- `python_service/digital_twin/infrastructure/web_server.py`: 웹 서버 시작과 포트 바인딩
+- `python_service/digital_twin/infrastructure/web/`: 인증, HTTP 응답, 업무별 라우팅과 읽기 모델 연결
+- `python_service/digital_twin/modules/`: 12개 업무 모듈의 도메인, 유스케이스, 저장소 구현
+- `python_service/digital_twin/platform/`: 스케줄링, 체크포인트, 저장소 운영 관리
+- `python_service/digital_twin/shared_kernel/`: 업무와 무관한 이벤트 기본 형식, 시간, 파싱
+- `python_service/digital_twin/modules/read_models/application/flow_lens_service.py`: 계좌 스냅샷과 관심 종목 읽기 모델 구성
+
+웹 소스를 수정한 뒤에는 `npm run frontend:build`로 번들과 HTML·서비스 워커의
+콘텐츠 기반 버전을 함께 갱신합니다. `npm test`는 생성물 일치 여부, 모듈 경계,
+요청·탐색 회귀 테스트와 기존 Python 검증을 실행합니다. 실제 브라우저 검증은
+`npm run frontend:test:browser`, 전체 Python 회귀 검증은 `npm run test:full`입니다.
+모듈 경계와 선택적 비동기 기준은 [구조 문서](docs/module-architecture.md),
+격리된 다계정 부하 검증은 [실행 문서](docs/integrated-load-verification.md)를 따릅니다.
 
 토스 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account` 값이 내려가지 않습니다. 토스증권 공개 Open API에는 토스 앱의 관심 종목 목록 조회 endpoint가 확인되지 않아, 관심 종목은 앱 내부 목록으로 관리합니다.
 

@@ -1,6 +1,6 @@
 from typing import Callable, Dict
 
-from digital_twin.domain.investment_analysis import build_investment_analysis
+from digital_twin.modules.read_models.domain.investment_analysis import build_investment_analysis
 
 
 class InvestmentAnalysisService:

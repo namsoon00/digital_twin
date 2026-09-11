@@ -9,13 +9,14 @@ from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.external_signal_quality import attach_external_signal_quality, crypto_signal_freshness, evaluate_external_signal_quality
-from digital_twin.domain.events import MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.domain.ontology_external_abox import add_external_signal_concepts, external_quality_data_state
-from digital_twin.domain.ontology_inference_materializer import observation_metadata
-from digital_twin.domain.ontology_relation_facts import _external_quality_facts
-from digital_twin.domain.portfolio import Position
+from digital_twin.modules.market_data.domain.external_signal_quality import attach_external_signal_quality, crypto_signal_freshness, evaluate_external_signal_quality
+from digital_twin.modules.market_data.domain.event_types import MARKET_DATA_COLLECTED
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_external_abox import add_external_signal_concepts, external_quality_data_state
+from digital_twin.modules.reasoning.domain.ontology_inference_materializer import observation_metadata
+from digital_twin.modules.reasoning.domain.ontology_relation_facts import _external_quality_facts
+from digital_twin.modules.portfolio.domain.portfolio import Position
 from digital_twin.modules.market_data.application.market_data_collection_service import MarketDataCollectionRunner
 from digital_twin.infrastructure.external_signal_utils import ExternalApiGuard, ExternalRateLimited
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider

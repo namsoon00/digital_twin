@@ -1,10 +1,7 @@
 """TypeDB static-seed schema owner; no facade or runtime construction."""
 
 from .schema_ports import SchemaStore
-from digital_twin.domain.ontology_semantics import (
-    SEMANTIC_STORAGE_CONTRACT_VERSION,
-    semantic_typeql_schema,
-)
+from digital_twin.modules.reasoning.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION, semantic_typeql_schema
 from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
     TYPEDB_COMMON_NODE_ATTRIBUTES,
     TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES,

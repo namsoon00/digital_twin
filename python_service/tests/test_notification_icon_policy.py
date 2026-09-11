@@ -4,16 +4,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.message_types import MESSAGE_TYPE_EMOJIS, notification_message_types, public_message_catalog  # noqa: E402
-from digital_twin.domain.notification_icon_policy import (  # noqa: E402
+from digital_twin.modules.notifications.domain.message_types import MESSAGE_TYPE_EMOJIS, notification_message_types, public_message_catalog  # noqa: E402
+from digital_twin.modules.notifications.domain.notification_icon_policy import (  # noqa: E402
     investment_notification_icon,
     notification_message_icon,
     notification_title_with_context_icon,
 )
-from digital_twin.domain.notification_title_rules import notification_title_icon  # noqa: E402
-from digital_twin.domain.notification_title_policy import investment_notification_title  # noqa: E402
-from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification  # noqa: E402
-from digital_twin.domain.portfolio import AlertEvent  # noqa: E402
+from digital_twin.modules.notifications.domain.notification_title_rules import notification_title_icon  # noqa: E402
+from digital_twin.modules.notifications.domain.notification_title_policy import investment_notification_title  # noqa: E402
+from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, alert_context, render_notification  # noqa: E402
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent  # noqa: E402
 
 
 EXPECTED_BASE_ICONS = {

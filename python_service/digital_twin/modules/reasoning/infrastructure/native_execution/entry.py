@@ -1,7 +1,7 @@
 """native_execution: entry through explicit injected capabilities."""
 
-from digital_twin.domain.model_signal_interpretation import is_model_signal_interpretation_rule
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.model_registry.contracts import is_model_signal_interpretation_rule
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.typeql.any_queries import (
     typedb_native_any_group_check_query,

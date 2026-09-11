@@ -3,7 +3,7 @@ import json
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
-from ....domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
 from ...external_signals import ExternalSignalProvider
 
 

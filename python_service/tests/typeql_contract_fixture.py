@@ -4,8 +4,8 @@ from collections import defaultdict
 import hashlib
 import json
 
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules, governed_graph_inference_rules
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules, governed_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule
 
 
 SYMBOLS = ["005930", "TSLA"]

@@ -2,9 +2,9 @@
 
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE, is_current_state_persistence_mode, copy_on_write_generation_id, next_current_state_slot
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE, is_current_state_persistence_mode, copy_on_write_generation_id, next_current_state_slot
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 
 

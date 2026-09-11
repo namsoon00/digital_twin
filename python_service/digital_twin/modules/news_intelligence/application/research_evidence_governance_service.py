@@ -2,10 +2,10 @@ import json
 from collections import Counter
 from typing import Dict, List
 
-from digital_twin.domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, disclosure_evidence_payload
-from digital_twin.domain import news_analysis as news_domain
-from digital_twin.domain.prompt_evidence_admission import attach_prompt_evidence_admission
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, disclosure_evidence_payload
+import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
+from digital_twin.modules.decisions.contracts import attach_prompt_evidence_admission
 from digital_twin.modules.news_intelligence.application.analyze_article import annotate_evidence_eligibility
 from digital_twin.modules.news_intelligence.application.normalize_sources import normalize_evidence_sources
 

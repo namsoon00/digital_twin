@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from threading import Lock
 from typing import Dict
 import time

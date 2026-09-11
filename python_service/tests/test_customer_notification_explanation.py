@@ -2,20 +2,20 @@ import unittest
 
 from digital_twin.modules.notifications.application.notification_ai_gate_message import compact_decision_transition, execution_telegram_message
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
-from digital_twin.domain.customer_evidence_explanation import (
+from digital_twin.modules.read_models.domain.customer_evidence_explanation import (
     build_customer_evidence_explanations,
     customer_data_limitation_text,
     customer_safe_text,
     customer_text_quality_issues,
     enforce_customer_message_quality,
 )
-from digital_twin.domain.customer_investment_document import (
+from digital_twin.modules.read_models.domain.customer_investment_document import (
     customer_follow_up_condition_clause,
     customer_investment_text,
 )
-from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.domain.notification_ai_gate_text import user_friendly_ai_text
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.modules.decisions.domain.notification_ai_gate_text import user_friendly_ai_text
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 
 
 def review_only_context():

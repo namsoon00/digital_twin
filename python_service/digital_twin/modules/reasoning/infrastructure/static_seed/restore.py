@@ -2,9 +2,9 @@
 
 from .artifact import graph_box_entity_counts, ontology_seed_graph_from_artifact
 from .restore_ports import RestoreStore
-from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-from digital_twin.domain.ontology_schema import normalize_tbox_metadata
-from digital_twin.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION
+from digital_twin.modules.model_registry.contracts import rulebox_rules_hash
+from digital_twin.modules.reasoning.domain.ontology_schema import normalize_tbox_metadata
+from digital_twin.modules.reasoning.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_from_payload
 from typing import Dict
 

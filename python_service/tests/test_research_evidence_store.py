@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.investment_research import ResearchEvidence
-from digital_twin.domain.market_data import normalize_position
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence
+from digital_twin.modules.market_data.domain.market_data import normalize_position
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore, merge_derived_evidence_payload
 from digital_twin.modules.news_intelligence.domain.article import article_source_revision

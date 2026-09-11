@@ -17,11 +17,11 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from ..domain import news_analysis as news_domain
-from ..domain.investment_evidence_governance import canonical_evidence_url
-from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
-from ..domain.market_data import number
-from ..domain.portfolio import utc_now_iso
+import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import canonical_evidence_url
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
+from digital_twin.modules.market_data.domain.market_data import number
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from .external_signal_utils import (
     ExternalCircuitOpen,
     ExternalRateLimited,

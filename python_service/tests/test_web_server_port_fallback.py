@@ -6,9 +6,9 @@ from unittest import mock
 
 from digital_twin.infrastructure.web_server import (
     bind_web_server,
-    ontology_audit_sync_rows,
     port_fallback_enabled,
 )
+from digital_twin.infrastructure.web.adapters.ontology_audit import ontology_audit_sync_rows
 from digital_twin.modules.read_models.infrastructure.flow_lens_read_model import FlowLensReadModel
 
 

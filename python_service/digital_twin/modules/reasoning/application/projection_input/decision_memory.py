@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from digital_twin.domain.investment_brain import decision_episode_ontology_context
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.decisions.contracts import decision_episode_ontology_context
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Dict
 from digital_twin.modules.reasoning.application.projection_input.ports import (
     DecisionMemoryInputs,

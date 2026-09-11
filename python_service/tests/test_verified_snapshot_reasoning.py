@@ -9,35 +9,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.market_data.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner, reasoning_request_provenance
-from digital_twin.domain.events import (
-    MAX_REASONING_SOURCE_FACTS_PER_EVENT,
-    DomainEvent,
-    MARKET_DATA_COLLECTED,
-    ontology_reasoning_requested_event,
-    research_evidence_collected_event,
-)
-from digital_twin.domain.crypto_market_signals import (
+from digital_twin.modules.reasoning.domain.event_types import MAX_REASONING_SOURCE_FACTS_PER_EVENT
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_requested_event
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.market_data.domain.event_types import MARKET_DATA_COLLECTED
+from digital_twin.modules.news_intelligence.domain.integration_events import research_evidence_collected_event
+from digital_twin.modules.market_data.domain.crypto_market_signals import (
     CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
     crypto_transition_baseline,
 )
-from digital_twin.domain.investment_alert_coverage import reasoning_delivery_trigger
-from digital_twin.domain.ontology_reasoning_queue import (
+from digital_twin.modules.reasoning.domain.investment_alert_coverage import reasoning_delivery_trigger
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import (
     OBSERVATION_FOLLOWUP_PRIORITY_HINT,
     REALTIME_LATEST_STATE_SLOT,
     durable_mailbox_entries,
 )
-from digital_twin.domain.ontology_inference_materializer import grounded_inference_context
-from digital_twin.domain.ontology_rulebox_contracts import (
+from digital_twin.modules.reasoning.domain.ontology_inference_materializer import grounded_inference_context
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
 )
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.reasoning_source_facts import (
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.reasoning.domain.reasoning_source_facts import (
     ReasoningSourceFact,
     compact_reasoning_source_fact_payload,
 )
-from digital_twin.domain.verified_snapshot_reasoning import (
+from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import (
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     verified_monitor_snapshot_reasoning_event,
 )

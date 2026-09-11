@@ -1,23 +1,23 @@
 import unittest
-from digital_twin.domain.ai_inference_queue import notification_ai_action_eligibility
-from digital_twin.domain.graph_action_authorization import GraphActionAuthorization
+from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_action_eligibility
+from digital_twin.modules.reasoning.domain.graph_action_authorization import GraphActionAuthorization
 
-from digital_twin.domain.decision_evidence_contract import hypothesis_decision_eligibility
-from digital_twin.domain.investment_decision_actionability import (
+from digital_twin.modules.decisions.domain.decision_evidence_contract import hypothesis_decision_eligibility
+from digital_twin.modules.decisions.domain.investment_decision_actionability import (
     investment_decision_actionability,
     is_concrete_observable_condition,
     persisted_decision_authorization,
 )
-from digital_twin.domain.investment_decision_history import (
+from digital_twin.modules.decisions.domain.investment_decision_history import (
     compact_decision_episode_memory,
 )
-from digital_twin.domain.investment_reasoning.synthesis import (
+from digital_twin.modules.decisions.domain.investment_reasoning.synthesis import (
     decision_synthesis_from_relation_context,
 )
-from digital_twin.domain.notification_ai_gate_validation import (
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import (
     validated_response_from_payload,
 )
-from digital_twin.domain.notification_ai_gate_contracts import (
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import (
     NotificationAIValidatedResponse,
 )
 from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message, notification_topline_change_summary, prepend_execution_start_badge

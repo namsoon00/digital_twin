@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Mapping, Tuple
 
-from digital_twin.domain.investment_decision_history import compact_decision_episode_memory
+from digital_twin.modules.decisions.domain.investment_decision_history import compact_decision_episode_memory
 
 
 DECISION_CONTINUITY_PACKET_VERSION = "decision-continuity-packet-v2"

@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.ontology_worlds import portfolio_world_id
+from digital_twin.modules.reasoning.contracts import portfolio_world_id
 
 
 def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int = 1, upper: int = 1000) -> int:

@@ -71,135 +71,43 @@ import time
 import traceback
 
 from digital_twin.modules.outcomes.public import InvestmentOutcomeObservationService
-from ..domain.ontology_contracts import PortfolioOntology
-from ..domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
-from ..domain.decision_performance import evaluate_decision_performance
-from ..domain.crypto_market_signals import crypto_markets_by_symbol
-from ..domain.market_signal_transitions import (
-    MARKET_SIGNAL_TRANSITION_RESULTS_KEY,
-    MARKET_SIGNAL_TRANSITION_STATE_KEY,
-)
-from ..domain.ontology_rulebox_catalog import (
-    default_graph_inference_rules,
-    governed_graph_inference_rules,
-)
-from ..domain.ontology_rulebox_governance import (
-    rulebox_rules_hash as compute_rulebox_rules_hash,
-)
-from ..domain.ontology_rule_ownership import RULE_OWNERSHIP_CONTRACT_VERSION
-from ..domain.rule_claim_contract import (
-    RULE_CLAIM_CONTRACT_VERSION,
-    resolved_rule_claim_contract,
-)
-from ..domain.ontology_change_impact import (
-    build_dynamic_inference_preflight,
-    build_inference_impact_plan,
-    compact_inference_impact_plan,
-    scope_symbol,
-)
-from ..domain.ontology_world_routing import route_world_impact
-from ..domain.ontology_performance_contract import ontology_performance_assessment
-from ..domain.ontology_projection_fingerprint import (
-    active_material_fingerprint,
-    apply_material_graph_identity,
-    material_graph_fingerprint,
-    stable_value,
-)
-from ..domain.reasoning_shadow import (
-    frozen_projection_runtime_context,
-    pack_projection_runtime_contexts,
-    unpack_projection_runtime_contexts,
-)
-from ..domain.ontology_scopes import (
-    SCOPED_ABOX_MANIFEST_VERSION,
-    SCOPED_ABOX_PERSISTENCE_MODE,
-    SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
-    apply_scoped_abox_repair_epochs,
-    apply_scoped_manifest_plan,
-    apply_scoped_abox_identity,
-    merge_target_scoped_abox_manifest,
-    plan_target_scoped_manifest_patch,
-    scoped_manifest_id,
-    target_scope_manifest_fingerprint,
-)
-from ..domain.ontology_worlds import (
-    knowledge_world,
-    market_world,
-    shared_premise_world,
-    world_from_snapshot,
-    world_metadata,
-)
-from ..domain.knowledge_world_projection import build_knowledge_world_graph, knowledge_world_coverage
-from ..domain.market_world_projection import (
-    build_market_world_graph,
-    market_scope_plan_with_observation_times,
-    market_world_coverage,
-    merge_market_world_scope_manifest,
-)
-from ..domain.ontology_projection_audit import (
-    INFERENCE_REUSE_PROOF_VERSION,
-    OntologyProjectionRun,
-    apply_projection_run_identity,
-    build_ontology_projection_run,
-    compact_reasoning_request_context,
-    complete_ontology_projection_run,
-    inference_reuse_scope_plan,
-    inference_reuse_scope_plan_for_targets,
-    inference_reuse_scope_plan_fingerprint,
-    projection_source_snapshot,
-    projection_run_from_payload,
-)
-from ..domain.ontology_projection_input import (
-    compact_external_signals_for_ontology,
-    projection_input_summary,
-)
-from ..domain.ontology_projection_status import TYPEDB_REASONING_WORKER_DEFERRED
-from ..domain.ontology_runtime_operations import (
-    build_projection_runtime_observation,
-    native_rule_adaptive_target_sharding_policy,
-    native_rule_adaptive_target_sharding_profile,
-    native_rule_failure_diagnostic,
-    native_replay_validation,
-)
-from ..domain.ontology_schema import (
-    abox_lifecycle_metadata,
-    apply_abox_lifecycle,
-    tbox_fingerprint,
-)
-from ..domain.ontology_validator import validate_ontology
-from ..domain.portfolio_ontology_builder import build_portfolio_ontology
-from ..domain.portfolio_ontology_outputs import dedupe_entities, dedupe_relations
-from ..domain.portfolio_ontology_statistical_concepts import (
-    add_position_statistical_signal_concepts,
-)
-from ..domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
-from ..domain.ontology_native_rule_planning import (
-    merge_native_rule_planner_topology,
-    native_rule_planner_manifest_fingerprint,
-    native_rule_planner_topology,
-)
-from ..domain.ontology_fact_slots import build_fact_slot_projection_plan
-from ..domain.ontology_rulebox_release_manifest import (
-    DEPRECATED_TYPEDB_RULE_IDS,
-    RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS,
-    RULEBOX_PLATFORM_RELEASE_ADDITION_IDS,
-    RULEBOX_RUNTIME_CONTRACT_RULE_IDS,
-    RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS,
-)
-from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
-from ..domain.portfolio import AccountSnapshot
-from ..domain.investment_brain import decision_episode_ontology_context
-from ..domain.incremental_inference_equivalence import compare_incremental_rule_states
-from ..domain.hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
-from ..domain.world_partitioned_reasoning import (
-    ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION,
-    WORLD_PARTITIONED_REASONING_VERSION,
-    account_overlay_graph,
-    compile_world_partitioned_rules,
-    partitioned_phase_impact_plan,
-    shared_premise_matches,
-    shared_premise_world_graph,
-)
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.outcomes.domain.decision_performance import evaluate_decision_performance
+from digital_twin.modules.market_data.domain.crypto_market_signals import crypto_markets_by_symbol
+from digital_twin.modules.market_data.domain.market_signal_transitions import MARKET_SIGNAL_TRANSITION_RESULTS_KEY, MARKET_SIGNAL_TRANSITION_STATE_KEY
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules, governed_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash as compute_rulebox_rules_hash
+from digital_twin.modules.model_registry.domain.ontology_rule_ownership import RULE_OWNERSHIP_CONTRACT_VERSION
+from digital_twin.modules.model_registry.domain.rule_claim_contract import RULE_CLAIM_CONTRACT_VERSION, resolved_rule_claim_contract
+from digital_twin.modules.reasoning.domain.ontology_change_impact import build_dynamic_inference_preflight, build_inference_impact_plan, compact_inference_impact_plan, scope_symbol
+from digital_twin.modules.reasoning.domain.ontology_world_routing import route_world_impact
+from digital_twin.modules.reasoning.domain.ontology_performance_contract import ontology_performance_assessment
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import active_material_fingerprint, apply_material_graph_identity, material_graph_fingerprint, stable_value
+from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projection_runtime_context, pack_projection_runtime_contexts, unpack_projection_runtime_contexts
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE, SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION, apply_scoped_abox_repair_epochs, apply_scoped_manifest_plan, apply_scoped_abox_identity, merge_target_scoped_abox_manifest, plan_target_scoped_manifest_patch, scoped_manifest_id, target_scope_manifest_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_worlds import knowledge_world, market_world, shared_premise_world, world_from_snapshot, world_metadata
+from digital_twin.modules.reasoning.domain.knowledge_world_projection import build_knowledge_world_graph, knowledge_world_coverage
+from digital_twin.modules.reasoning.domain.market_world_projection import build_market_world_graph, market_scope_plan_with_observation_times, market_world_coverage, merge_market_world_scope_manifest
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import INFERENCE_REUSE_PROOF_VERSION, OntologyProjectionRun, apply_projection_run_identity, build_ontology_projection_run, compact_reasoning_request_context, complete_ontology_projection_run, inference_reuse_scope_plan, inference_reuse_scope_plan_for_targets, inference_reuse_scope_plan_fingerprint, projection_source_snapshot, projection_run_from_payload
+from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology, projection_input_summary
+from digital_twin.modules.reasoning.domain.ontology_projection_status import TYPEDB_REASONING_WORKER_DEFERRED
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import build_projection_runtime_observation, native_rule_adaptive_target_sharding_policy, native_rule_adaptive_target_sharding_profile, native_rule_failure_diagnostic, native_replay_validation
+from digital_twin.modules.reasoning.domain.ontology_schema import abox_lifecycle_metadata, apply_abox_lifecycle, tbox_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_validator import validate_ontology
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.reasoning.domain.portfolio_ontology_outputs import dedupe_entities, dedupe_relations
+from digital_twin.modules.reasoning.domain.portfolio_ontology_statistical_concepts import add_position_statistical_signal_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import merge_native_rule_planner_topology, native_rule_planner_manifest_fingerprint, native_rule_planner_topology
+from digital_twin.modules.reasoning.domain.ontology_fact_slots import build_fact_slot_projection_plan
+from digital_twin.modules.model_registry.domain.ontology_rulebox_release_manifest import DEPRECATED_TYPEDB_RULE_IDS, RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS, RULEBOX_PLATFORM_RELEASE_ADDITION_IDS, RULEBOX_RUNTIME_CONTRACT_RULE_IDS, RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS
+from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot
+from digital_twin.modules.decisions.domain.investment_brain import decision_episode_ontology_context
+from digital_twin.modules.reasoning.domain.incremental_inference_equivalence import compare_incremental_rule_states
+from digital_twin.modules.model_registry.domain.hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION, WORLD_PARTITIONED_REASONING_VERSION, account_overlay_graph, compile_world_partitioned_rules, partitioned_phase_impact_plan, shared_premise_matches, shared_premise_world_graph
 from .graph_store_rulebox import (
     rulebox_rules_from_payload,
     rulebox_rules_to_payload,

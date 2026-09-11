@@ -6,8 +6,8 @@ import hashlib
 import json
 from typing import List, Optional
 
-from digital_twin.domain.investment_reasoning import SubjectDecisionCase
-from digital_twin.domain.events import investment_inference_dispatch_decided_event, investment_inference_episode_completed_event
+from digital_twin.modules.decisions.domain.investment_reasoning import SubjectDecisionCase
+from digital_twin.modules.decisions.domain.events import investment_inference_dispatch_decided_event, investment_inference_episode_completed_event
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads

@@ -10,19 +10,19 @@ from digital_twin.modules.notifications.application.ai_insight_notification_proj
 from digital_twin.modules.decisions.application.notification_ai_gate_audit import context_with_validated_ai_response
 from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionOutcome
 from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
-from digital_twin.domain.ai_inference_queue import (
+from digital_twin.modules.decisions.domain.ai_inference_queue import (
     AIInferenceRequest,
     AIInferenceResult,
     notification_ai_material_fingerprint,
 )
-from digital_twin.domain.investment_reasoning.ai_insight import (
+from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight import (
     AIInsightHandoff,
     decision_reconciliation,
 )
-from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
-from digital_twin.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.modules.decisions.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
+from digital_twin.modules.decisions.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from mysql_fixtures import (
     TestAIInferenceQueueStore,
     TestNotificationJobStore,

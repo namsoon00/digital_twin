@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, Mapping
 
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
-from digital_twin.domain.investment_decision_history import compact_decision_episode_memory
+from digital_twin.modules.decisions.domain.investment_decision_history import compact_decision_episode_memory
 
 
 def _mapping(value: object) -> Dict[str, object]:

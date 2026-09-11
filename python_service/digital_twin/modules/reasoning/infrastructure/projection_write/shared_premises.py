@@ -3,31 +3,14 @@
 from __future__ import annotations
 from .shared_premises_ports import SharedPremisesPort, PrepareSharedPremisesBindings
 from copy import deepcopy
-from digital_twin.domain.ontology_change_impact import (
-    build_dynamic_inference_preflight,
-    build_inference_impact_plan,
-    compact_inference_impact_plan,
-)
-from digital_twin.domain.ontology_performance_contract import (
-    ontology_performance_assessment,
-)
-from digital_twin.domain.ontology_projection_fingerprint import (
-    active_material_fingerprint,
-)
-from digital_twin.domain.ontology_schema import tbox_fingerprint
-from digital_twin.domain.ontology_scopes import target_scope_manifest_fingerprint
-from digital_twin.domain.ontology_worlds import (
-    shared_premise_world,
-    world_from_snapshot,
-    world_metadata,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.world_partitioned_reasoning import (
-    WORLD_PARTITIONED_REASONING_VERSION,
-    partitioned_phase_impact_plan,
-    shared_premise_matches,
-    shared_premise_world_graph,
-)
+from digital_twin.modules.reasoning.domain.ontology_change_impact import build_dynamic_inference_preflight, build_inference_impact_plan, compact_inference_impact_plan
+from digital_twin.modules.reasoning.domain.ontology_performance_contract import ontology_performance_assessment
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import active_material_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_schema import tbox_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_scopes import target_scope_manifest_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_worlds import shared_premise_world, world_from_snapshot, world_metadata
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import WORLD_PARTITIONED_REASONING_VERSION, partitioned_phase_impact_plan, shared_premise_matches, shared_premise_world_graph
 from typing import Callable, Dict, List
 import time
 

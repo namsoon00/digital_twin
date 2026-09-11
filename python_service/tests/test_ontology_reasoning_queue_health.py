@@ -8,12 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.modules.reasoning.application.ontology_reasoning_queue_health_service import OntologyReasoningQueueHealthNotificationEnqueuer, OntologyReasoningQueueHealthService
 from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner  # noqa: E402
 from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner  # noqa: E402
-from digital_twin.domain.events import ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED, ontology_reasoning_queue_health_changed_event  # noqa: E402
-from digital_twin.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type  # noqa: E402
-from digital_twin.domain.ontology_reasoning_queue_health import evaluate_ontology_reasoning_queue_health  # noqa: E402
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_queue_health_changed_event  # noqa: E402
+from digital_twin.modules.notifications.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type  # noqa: E402
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue_health import evaluate_ontology_reasoning_queue_health  # noqa: E402
 from digital_twin.infrastructure.notifications import NotificationResult  # noqa: E402
-from digital_twin.domain.notifications import NotificationJob  # noqa: E402
-from digital_twin.domain.notification_templates import NotificationTemplate, render_notification  # noqa: E402
+from digital_twin.modules.notifications.domain.notifications import NotificationJob  # noqa: E402
+from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification  # noqa: E402
 
 
 UTC = timezone.utc

@@ -1,7 +1,7 @@
 import html
 from typing import Dict, List
 
-from digital_twin.domain.disclosure_analysis import DISCLOSURE_ANALYSIS_PROMPT_VERSION, DisclosureAnalysisResult, split_labeled_text
+from digital_twin.modules.news_intelligence.contracts import DISCLOSURE_ANALYSIS_PROMPT_VERSION, DisclosureAnalysisResult, split_labeled_text
 
 
 def disclosure_analysis_block(result: DisclosureAnalysisResult, rich: bool = False) -> str:

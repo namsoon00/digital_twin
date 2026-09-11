@@ -1,10 +1,10 @@
 import unittest
 from unittest.mock import patch
 
-from digital_twin.domain.disclosure_analysis import build_disclosure_analysis_prompt, local_disclosure_analysis
-from digital_twin.domain.disclosure_taxonomy import classify_disclosure
-from digital_twin.domain.disclosure_quality import assess_disclosure_document, normalize_official_document_text
-from digital_twin.domain.investment_research import disclosure_evidence_payload, research_evidence_from_facts
+from digital_twin.modules.news_intelligence.domain.disclosure_analysis import build_disclosure_analysis_prompt, local_disclosure_analysis
+from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
+from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document, normalize_official_document_text
+from digital_twin.modules.news_intelligence.domain.investment_research import disclosure_evidence_payload, research_evidence_from_facts
 from digital_twin.infrastructure.disclosure_analyzer import CommandDisclosureAnalyzer
 
 

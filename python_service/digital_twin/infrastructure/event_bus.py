@@ -3,7 +3,7 @@ import os
 from collections import defaultdict
 from typing import Callable, DefaultDict, Iterable, List
 
-from ..domain.events import DomainEvent
+from digital_twin.shared_kernel.events import DomainEvent
 from .settings import data_dir
 
 

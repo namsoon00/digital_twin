@@ -2,8 +2,8 @@ import json
 import os
 from typing import Dict
 
-from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from ..domain.news_ai_analysis import build_news_ai_analysis_prompt, local_news_ai_analysis, normalize_ai_analysis
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import build_news_ai_analysis_prompt, local_news_ai_analysis, normalize_ai_analysis
 from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, codex_model_label, run_background_ai_prompt
 from .settings import runtime_settings
 

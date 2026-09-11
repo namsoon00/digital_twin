@@ -1,13 +1,13 @@
 import unittest
 
 from digital_twin.modules.read_models.application.investment_case_query_service import InvestmentCaseQueryService
-from digital_twin.domain.investment_case import (
+from digital_twin.modules.read_models.domain.investment_case import (
     investment_case_id,
     investment_case_snapshot,
     parse_investment_case_id,
 )
-from digital_twin.domain.investment_analysis import investment_decision_key
-from digital_twin.domain.investment_decision_actionability import (
+from digital_twin.modules.read_models.domain.investment_analysis import investment_decision_key
+from digital_twin.modules.decisions.domain.investment_decision_actionability import (
     investment_decision_actionability,
 )
 

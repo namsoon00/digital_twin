@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.domain.investment_reasoning.decision_delta import DecisionDelta
+from digital_twin.modules.decisions.domain.investment_reasoning.decision_delta import DecisionDelta
 from digital_twin.modules.notifications.domain.notification.delivery_policy import evaluate_final_decision_delivery
 
 

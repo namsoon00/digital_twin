@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from digital_twin.domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_contract, investor_flow_coverage, investor_flow_values_reliable
+from digital_twin.modules.market_data.domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_contract, investor_flow_coverage, investor_flow_values_reliable
 
 
 CAPITAL_FLOW_CONTRACT_VERSION = "capital-flow-observation-v1"

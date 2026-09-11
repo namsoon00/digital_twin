@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 from digital_twin.modules.reasoning.application.independent_reasoning_engine import IndependentReasoningInputAssembler, IndependentReasoningJobRunner, ScopedTypeDBInferenceExecutor, V2ReasoningEngine, compact_projection_result, projection_retry_policy, reasoning_job_runtime_eligibility
 from digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis import V2GraphDecisionCandidateBuilder
-from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
-from digital_twin.domain.independent_reasoning import (
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.independent_reasoning import (
     canonical_fact_change_contract,
     independent_reasoning_request,
     merge_reasoning_events,
@@ -16,20 +17,20 @@ from digital_twin.domain.independent_reasoning import (
     reasoning_queue_slot_key,
     shard_reasoning_event,
 )
-from digital_twin.domain.ontology_execution_trace import (
+from digital_twin.modules.reasoning.domain.ontology_execution_trace import (
     reasoning_rule_outcome_records,
 )
-from digital_twin.domain.investment_reasoning import (
+from digital_twin.modules.decisions.domain.investment_reasoning import (
     DecisionSynthesis,
     rule_evaluation_records_from_projection_results,
 )
-from digital_twin.domain.fact_changes import fact_change_contract
-from digital_twin.domain.portfolio import AlertEvent
-from digital_twin.domain.reasoning_engine_versions import (
+from digital_twin.modules.reasoning.domain.fact_changes import fact_change_contract
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
+from digital_twin.modules.reasoning.domain.reasoning_engine_versions import (
     EngineReleaseBundle,
     ReasoningEngineDescriptor,
 )
-from digital_twin.domain.repositories import MonitoringCycleRecordResult
+from digital_twin.modules.portfolio.contracts import MonitoringCycleRecordResult
 from digital_twin.infrastructure.mysql_versioned_runtime import (
     MySQLReasoningEngineJobStore,
     reasoning_failure_recovery_allowed,

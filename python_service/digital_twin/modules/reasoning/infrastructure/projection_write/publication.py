@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 from .publication_ports import PublicationPort
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_current_state import (
-    CURRENT_STATE_ABOX_PERSISTENCE_MODE,
-)
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
 from typing import Dict, List
 
 

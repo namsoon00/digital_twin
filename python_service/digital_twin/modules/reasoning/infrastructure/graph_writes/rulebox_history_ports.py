@@ -1,7 +1,7 @@
 """Capabilities for rulebox history; no runtime construction."""
 
 from __future__ import annotations
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Protocol, Set, Tuple
 

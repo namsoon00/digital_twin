@@ -3,11 +3,8 @@
 from __future__ import annotations
 import inspect
 from .recovery_ports import RecoveryPort
-from digital_twin.domain.ontology_projection_audit import (
-    complete_ontology_projection_run,
-    projection_run_from_payload,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import complete_ontology_projection_run, projection_run_from_payload
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Dict
 
 

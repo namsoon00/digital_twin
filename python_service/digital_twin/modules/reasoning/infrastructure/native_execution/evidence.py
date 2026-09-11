@@ -1,11 +1,7 @@
 """native_execution: evidence through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import (
-    OntologyEntity,
-    OntologyRelation,
-    PortfolioOntology,
-)
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_storage_id,

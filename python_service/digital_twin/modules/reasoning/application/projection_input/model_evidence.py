@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_rulebox_catalog import governed_graph_inference_rules
-from digital_twin.domain.ontology_schema import abox_lifecycle_metadata
-from digital_twin.domain.ontology_schema import apply_abox_lifecycle
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.portfolio_ontology_outputs import dedupe_entities
-from digital_twin.domain.portfolio_ontology_outputs import dedupe_relations
-from digital_twin.domain.portfolio_ontology_statistical_concepts import (
-    add_position_statistical_signal_concepts,
-)
-from digital_twin.domain.reasoning_shadow import frozen_projection_runtime_context
-from digital_twin.domain.reasoning_shadow import pack_projection_runtime_contexts
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.model_registry.contracts import governed_graph_inference_rules
+from digital_twin.modules.reasoning.domain.ontology_schema import abox_lifecycle_metadata
+from digital_twin.modules.reasoning.domain.ontology_schema import apply_abox_lifecycle
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.portfolio_ontology_outputs import dedupe_entities
+from digital_twin.modules.reasoning.domain.portfolio_ontology_outputs import dedupe_relations
+from digital_twin.modules.reasoning.domain.portfolio_ontology_statistical_concepts import add_position_statistical_signal_concepts
+from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projection_runtime_context
+from digital_twin.modules.reasoning.domain.reasoning_shadow import pack_projection_runtime_contexts
 from typing import Mapping
 import time
 from .ports import ModelEvidenceInputs, PreparedGraphInput

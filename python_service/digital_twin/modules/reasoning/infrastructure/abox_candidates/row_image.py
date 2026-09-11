@@ -3,8 +3,8 @@
 from typing import Dict, Iterable, List, Tuple
 
 import copy
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
 from .identity import ontology_storage_id
 from .ports import CandidateRowMapper
 

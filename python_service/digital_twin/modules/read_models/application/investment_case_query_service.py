@@ -3,10 +3,10 @@
 from collections import Counter, defaultdict
 from typing import Dict, Iterable, List, Mapping, Tuple
 
-from digital_twin.domain.investment_case import INVESTMENT_CASE_VERSION, investment_case_history_item, investment_case_id, investment_case_snapshot, parse_investment_case_id
-from digital_twin.domain.investment_analysis import investment_decision_key
-from digital_twin.domain.investment_reasoning_detail import subject_reasoning_lineage
-from digital_twin.domain.investment_flow import FLOW_STAGE_LABELS, FLOW_STATE_LABELS, decision_flow_projection, item_dict, text
+from digital_twin.modules.read_models.domain.investment_case import INVESTMENT_CASE_VERSION, investment_case_history_item, investment_case_id, investment_case_snapshot, parse_investment_case_id
+from digital_twin.modules.read_models.domain.investment_analysis import investment_decision_key
+from digital_twin.modules.read_models.domain.investment_reasoning_detail import subject_reasoning_lineage
+from digital_twin.modules.read_models.domain.investment_flow import FLOW_STAGE_LABELS, FLOW_STATE_LABELS, decision_flow_projection, item_dict, text
 from digital_twin.modules.read_models.application.investment_flow_query_service import InvestmentFlowQueryService
 
 

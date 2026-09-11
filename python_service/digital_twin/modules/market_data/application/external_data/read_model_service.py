@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable
 
-from digital_twin.domain.company_knowledge import merge_company_knowledge_rows
+from digital_twin.modules.news_intelligence.contracts import merge_company_knowledge_rows
 
 
 EXTERNAL_SIGNAL_MAP_FIELDS = {

@@ -7,12 +7,12 @@ from datetime import datetime, timezone
 import time
 from typing import Dict, Iterable, Mapping, Optional
 
-from digital_twin.domain.investment_reasoning import AIJudgmentResult, CASE_AI_COMPLETED, CASE_AI_PENDING, CASE_BLOCKED, CASE_COMPLETED, CASE_CREATED, CASE_DEFERRED, CASE_DECISION_SYNTHESIZED, CASE_EXPIRED, CASE_FAILED, CASE_HYPOTHESES_READY, CASE_INFERENCE_COMPLETED, CASE_INPUT_READY, CASE_PUBLISHED, CASE_SUPPRESSED, CASE_SUPERSEDED, CASE_VALIDATED, FinalDecision, GraphHypothesisManager, InferenceResult, ReasoningCase, DecisionSynthesis, DecisionAbstention, InferenceDispatchDecision, SubjectDecisionCase, publication_for_subject_case, FINAL_DECISION, REVIEW_ONLY, ABSTAIN, OBSERVATION, SUPPRESSED, ARCHIVE, HANDOFF_AI, INVALID, PUBLISH_TYPEDB, rule_evaluation_records_from_projection_results
-from digital_twin.domain.investment_reasoning.subject_case import SUBJECT_ABSTAINED, SUBJECT_AI_COMPLETED, SUBJECT_AI_PENDING, SUBJECT_BLOCKED, SUBJECT_OBSERVATION, SUBJECT_PUBLISHED, SUBJECT_READY, SUBJECT_REVIEW_ONLY, SUBJECT_SUPPRESSED, SUBJECT_VALIDATED
-from digital_twin.domain.investment_alert_coverage import derive_delivery_eligibility
-from digital_twin.domain.investment_decision_actionability import investment_decision_actionability
-from digital_twin.domain.investment_reasoning_detail import subject_reasoning_lineage
-from digital_twin.domain.investment_reasoning.disposition import CONTEXT_OBSERVATION, HYPOTHESIS_QUALIFICATION_PENDING, NO_MATERIAL_PREDICTIVE_RULE_MATCH
+from digital_twin.modules.decisions.contracts import AIJudgmentResult, CASE_AI_COMPLETED, CASE_AI_PENDING, CASE_BLOCKED, CASE_COMPLETED, CASE_CREATED, CASE_DEFERRED, CASE_DECISION_SYNTHESIZED, CASE_EXPIRED, CASE_FAILED, CASE_HYPOTHESES_READY, CASE_INFERENCE_COMPLETED, CASE_INPUT_READY, CASE_PUBLISHED, CASE_SUPPRESSED, CASE_SUPERSEDED, CASE_VALIDATED, FinalDecision, GraphHypothesisManager, InferenceResult, ReasoningCase, DecisionSynthesis, DecisionAbstention, InferenceDispatchDecision, SubjectDecisionCase, publication_for_subject_case, FINAL_DECISION, REVIEW_ONLY, ABSTAIN, OBSERVATION, SUPPRESSED, ARCHIVE, HANDOFF_AI, INVALID, PUBLISH_TYPEDB, rule_evaluation_records_from_projection_results
+from digital_twin.modules.decisions.contracts import SUBJECT_ABSTAINED, SUBJECT_AI_COMPLETED, SUBJECT_AI_PENDING, SUBJECT_BLOCKED, SUBJECT_OBSERVATION, SUBJECT_PUBLISHED, SUBJECT_READY, SUBJECT_REVIEW_ONLY, SUBJECT_SUPPRESSED, SUBJECT_VALIDATED
+from digital_twin.modules.reasoning.domain.investment_alert_coverage import derive_delivery_eligibility
+from digital_twin.modules.decisions.contracts import investment_decision_actionability
+from digital_twin.modules.read_models.contracts import subject_reasoning_lineage
+from digital_twin.modules.decisions.contracts import CONTEXT_OBSERVATION, HYPOTHESIS_QUALIFICATION_PENDING, NO_MATERIAL_PREDICTIVE_RULE_MATCH
 from digital_twin.modules.reasoning.application.investment_reasoning.episode_projection import decision_episode_from_subject_case, decision_episode_outcome_contract_readiness, hypothesis_gap_request_from_subject_case, hypothesis_coverage_gap_request_from_subject_case, shadow_hypothesis_observation_episodes
 
 

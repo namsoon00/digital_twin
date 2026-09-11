@@ -3,9 +3,9 @@ import re
 from html.parser import HTMLParser
 from typing import Dict, List
 
-from ..domain.disclosure_quality import assess_disclosure_document
-from ..domain.market_data import number
-from ..domain.portfolio import Position
+from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
+from digital_twin.modules.market_data.domain.market_data import number
+from digital_twin.modules.portfolio.domain.portfolio import Position
 from .external_signal_utils import symbol_assignments
 
 

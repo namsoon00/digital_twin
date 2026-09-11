@@ -1,7 +1,7 @@
 from copy import deepcopy
 from typing import Dict
 
-from ...domain.portfolio import utc_now_iso
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from digital_twin.modules.market_data.public import setting_enabled
 from ..external_signal_provider_yfinance import YFINANCE_MODULE_PROFILES
 from .adapters.base import source_as_of, source_revision

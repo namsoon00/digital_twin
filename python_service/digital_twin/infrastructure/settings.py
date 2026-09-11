@@ -4,16 +4,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
-from ..domain.accounts import configured
-from ..domain.instrument_profiles import default_instrument_profiles_text
-from ..domain.ontology_relation_reasoning import (
-    DEFAULT_RELATION_THRESHOLDS,
-    default_ai_prompt_policy_text,
-    default_ai_prompt_templates_text,
-    default_ontology_relation_reasoning_text,
-)
-from ..domain.parsing import parse_assignments
-from ..domain.statistical_signals import DEFAULT_PRICE_SIGNAL_RELEASE_ID
+from digital_twin.modules.accounts.domain.accounts import configured
+from digital_twin.modules.instruments.domain.instrument_profiles import default_instrument_profiles_text
+from digital_twin.modules.reasoning.domain.ontology_relation_reasoning import DEFAULT_RELATION_THRESHOLDS, default_ai_prompt_policy_text, default_ai_prompt_templates_text, default_ontology_relation_reasoning_text
+from digital_twin.shared_kernel.parsing import parse_assignments
+from digital_twin.modules.model_registry.domain.statistical_signals import DEFAULT_PRICE_SIGNAL_RELEASE_ID
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]

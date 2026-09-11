@@ -14,7 +14,7 @@ class ReasoningWarmup:
 
 
 def warm_v2_release(projection_recorder, candidate_rulebox) -> ReasoningWarmup:
-    from digital_twin.domain.ontology_compiler import compile_ontology_release
+    from digital_twin.modules.model_registry.domain.ontology_compiler import compile_ontology_release
     from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_from_payload
 
     runtime_rulebox_catalog = projection_recorder.ensure_rulebox_ready()

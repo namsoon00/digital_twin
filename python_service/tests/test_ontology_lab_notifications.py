@@ -5,13 +5,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.model_registry.application.ontology_lab_service import OntologyLabService, ontology_lab_automation_payload, ontology_lab_notification_text
-from digital_twin.domain.message_types import (  # noqa: E402
+from digital_twin.modules.notifications.domain.message_types import (  # noqa: E402
     ONTOLOGY_LAB_EXPERIMENT,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
 )
-from digital_twin.domain.notification_ai import build_notification_ai_opinion  # noqa: E402
-from digital_twin.domain.notification_templates import modeling_lines  # noqa: E402
-from digital_twin.domain.ontology_experiments import OntologyExperiment  # noqa: E402
+from digital_twin.modules.decisions.domain.notification_ai import build_notification_ai_opinion  # noqa: E402
+from digital_twin.modules.notifications.domain.notification_templates import modeling_lines  # noqa: E402
+from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment  # noqa: E402
 
 
 class MemoryExperimentStore:

@@ -1,0 +1,651 @@
+from typing import Dict, List
+
+from digital_twin.modules.model_registry.contracts import investment_archetype_label, investment_archetype_labels, position_intent_label, position_intent_sentence
+
+from digital_twin.modules.market_data.contracts import known_stock, number
+from digital_twin.modules.market_data.contracts import parse_timestamp
+from digital_twin.modules.instruments.contracts import InstrumentProfile, instrument_profile_for_position, is_market_proxy_profile, market_proxy_themes_for_profile, market_signal_profiles
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology, entity_id
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
+from digital_twin.modules.portfolio.contracts import PortfolioSummary, Position
+from digital_twin.modules.portfolio.contracts import position_account_value_in_base
+from digital_twin.modules.reasoning.domain.portfolio_ontology_catalog import FACTOR_BENCHMARKS, SECTOR_FACTORS
+from digital_twin.modules.reasoning.domain.portfolio_ontology_market_concepts import symbol_key
+from digital_twin.modules.reasoning.domain.portfolio_ontology_runtime_concepts import is_holding_position
+
+
+def unique_list(values: List[str]) -> List[str]:
+    seen = set()
+    rows: List[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        rows.append(text)
+    return rows
+
+
+def position_weight(position: Position, portfolio: PortfolioSummary) -> float:
+    base = number(portfolio.total) or number(portfolio.invested)
+    return (position_account_value_in_base(position) / base) * 100 if base else 0.0
+
+
+def factor_labels_for_position(position: Position) -> List[str]:
+    labels = []
+    sector = str(position.sector or "").strip()
+    labels.extend(SECTOR_FACTORS.get(sector, []))
+    currency = str(position.currency or "").upper().strip()
+    market = str(position.market or "").upper().strip()
+    symbol = str(position.symbol or "").upper().strip()
+    if currency and currency != "KRW":
+        labels.append(currency + " 환율")
+    if market in {"US", "USA", "NASDAQ", "NYSE"}:
+        labels.append("미국 주식 베타")
+    if market in {"KR", "KOSPI", "KOSDAQ"} or currency == "KRW":
+        labels.append("한국 시장 베타")
+    if symbol in {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}:
+        labels.append("비트코인 민감도")
+    return unique_list(labels)
+
+
+def profile_settings_from_runtime(runtime_context: Dict[str, object] = None) -> Dict[str, object]:
+    if not isinstance(runtime_context, dict):
+        return {}
+    settings = runtime_context.get("settings")
+    if isinstance(settings, dict):
+        return settings
+    return runtime_context
+
+
+def profile_tbox_classes(profile: InstrumentProfile) -> List[str]:
+    classes = ["InstrumentProfile"]
+    if is_market_proxy_profile(profile):
+        classes.append("MarketProxyInstrument")
+    classes.extend(profile.archetypes or [])
+    return unique_list(classes)
+
+
+def market_proxy_instrument_classes(profile: InstrumentProfile) -> List[str]:
+    classes = ["Instrument", "MarketProxyInstrument"]
+    asset_type = str(known_stock(profile.symbol).get("assetType") or "").upper()
+    if any(item in {"DailyLeveragedProduct"} for item in profile.archetypes or []):
+        classes.append("LeveragedETF")
+    if asset_type == "CRYPTO" or profile.symbol in {"BTC", "ETH"} or "CryptoAssetProfile" in (profile.archetypes or []):
+        classes.append("CryptoAsset")
+    elif asset_type == "ETF":
+        classes.append("ETF")
+        classes.append("MarketProxyETF")
+    elif asset_type == "INDEX":
+        classes.append("Index")
+        classes.append("MarketProxyIndex")
+    else:
+        classes.extend(["Equity", "Stock"])
+    classes.extend(profile.archetypes or [])
+    return unique_list(classes)
+
+
+def market_proxy_quotes_from_runtime(runtime_context: Dict[str, object] = None) -> Dict[str, Dict[str, object]]:
+    if not isinstance(runtime_context, dict):
+        return {}
+    metadata = runtime_context.get("metadata") if isinstance(runtime_context.get("metadata"), dict) else {}
+    quotes = metadata.get("marketProxyQuotes") or metadata.get("marketSignalProxyQuotes") or {}
+    if not isinstance(quotes, dict):
+        return {}
+    return {
+        str(symbol or "").upper(): dict(payload)
+        for symbol, payload in quotes.items()
+        if str(symbol or "").strip() and isinstance(payload, dict)
+    }
+
+
+def market_proxy_observation_id(profile: InstrumentProfile) -> str:
+    return entity_id("market-proxy-observation", profile.symbol)
+
+
+def market_proxy_observation_metadata(quote: Dict[str, object]) -> Dict[str, object]:
+    """Describe an ABox market sensor without pre-judging its direction.
+
+    Price, moving-average and volume values are persisted on the observation
+    itself.  RuleBox native rules decide whether a particular combination is
+    risk, support or only context.
+    """
+    data_state = "sufficient" if number(quote.get("currentPrice")) else "partial"
+    return {
+        "polarity": "context",
+        "evidenceRole": "context",
+        "conflictState": "context-only",
+        "reviewLevel": "observe",
+        "dataState": data_state,
+    }
+
+
+def add_market_proxy_observation_concepts(
+    graph: PortfolioOntology,
+    proxy_id: str,
+    profile: InstrumentProfile,
+    quote: Dict[str, object] = None,
+    source: str = "market-proxy-quote",
+) -> str:
+    if not isinstance(quote, dict) or not quote:
+        return ""
+    observation_metadata = market_proxy_observation_metadata(quote)
+    source_as_of = str(quote.get("sourceAsOf") or quote.get("updatedAt") or "")
+    source_fetched_at = str(quote.get("sourceFetchedAt") or quote.get("updatedAt") or "")
+    observation_id = add_entity(graph, "market-proxy-observation", profile.symbol, profile.label + " 시장 센서 관측", {
+        "tboxClass": "MarketProxyObservation",
+        "tboxClasses": ["Observation", "PriceObservation", "MarketProxyObservation", "MarketProxyInstrument"],
+        "symbol": profile.symbol,
+        "label": profile.label,
+        "currentPrice": number(quote.get("currentPrice")),
+        "changeRate": number(quote.get("changeRate")),
+        "volume": number(quote.get("volume")),
+        "volumeRatio": number(quote.get("volumeRatio")),
+        "tradingValue": number(quote.get("tradingValue")),
+        "ma20Distance": number(quote.get("ma20Distance")),
+        "ma60Distance": number(quote.get("ma60Distance")),
+        "ma20Slope": number(quote.get("ma20Slope")),
+        "ma60Slope": number(quote.get("ma60Slope")),
+        "quoteSource": quote.get("quoteSource") or "",
+        "dataQuality": quote.get("dataQuality") or "",
+        "updatedAt": quote.get("updatedAt") or "",
+        "observationDomain": "quote",
+        "freshnessRequired": True,
+        "freshnessStatus": quote.get("freshnessStatus") or "unknown",
+        "freshnessReason": quote.get("freshnessReason") or "",
+        "freshnessAgeMinutes": quote.get("freshnessAgeMinutes"),
+        "sourceAsOf": source_as_of,
+        "sourceFetchedAt": source_fetched_at,
+        "sourceTimestampPresent": bool(quote.get("sourceTimestampPresent", bool(source_as_of))),
+        "maxAgeMinutes": quote.get("maxAgeMinutes") or 10,
+        "judgementEvidenceUsable": bool(quote.get("judgementEvidenceUsable")),
+        "collectionPurpose": quote.get("collectionPurpose") or "",
+        "collectionTarget": quote.get("collectionTarget") or "",
+        **observation_metadata,
+    })
+    add_relation(graph, proxy_id, observation_id, "HAS_OBSERVATION", weight=0.72, properties={
+        "source": source,
+        **observation_metadata,
+        "aiInfluenceLabel": profile.label + " 시장 센서 관측",
+    })
+    add_relation(graph, proxy_id, observation_id, "HAS_PRICE", weight=0.65, properties={
+        "source": source,
+        **observation_metadata,
+        "aiInfluenceLabel": profile.label + " 가격 맥락",
+    })
+    return observation_id
+
+
+def add_market_proxy_profile_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    profile: InstrumentProfile,
+    source_id: str = "",
+    source: str = "market-proxy-universe",
+    quote: Dict[str, object] = None,
+) -> str:
+    archetype_labels = investment_archetype_labels(profile.archetypes)
+    intent_label = position_intent_label(profile.position_intent)
+    proxy_id = add_entity(graph, "market-proxy-instrument", profile.symbol, profile.label, {
+        "tboxClass": "MarketProxyInstrument",
+        "tboxClasses": market_proxy_instrument_classes(profile),
+        "symbol": profile.symbol,
+        "label": profile.label,
+        "archetypes": list(profile.archetypes),
+        "archetypeLabels": archetype_labels,
+        "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
+        "positionIntentDescription": position_intent_sentence(profile.position_intent),
+        "sensitivities": dict(profile.sensitivities),
+        "source": source,
+    })
+    add_market_proxy_observation_concepts(graph, proxy_id, profile, quote, source)
+    add_relation(graph, portfolio_node_id, proxy_id, "OBSERVES_MARKET_PROXY", weight=0.45, properties={
+        "source": source,
+        "symbol": profile.symbol,
+        "aiInfluenceLabel": profile.label + " 관찰",
+    })
+    if source_id:
+        add_relation(graph, source_id, proxy_id, "HAS_MARKET_PROXY_PROFILE", weight=1.0, properties={
+            "source": source,
+            "symbol": profile.symbol,
+            "aiInfluenceLabel": profile.label + " 시장 프록시",
+        })
+    for theme in market_proxy_themes_for_profile(profile):
+        theme_key = str(theme.get("key") or "").strip()
+        if not theme_key:
+            continue
+        theme_label = str(theme.get("label") or theme_key)
+        theme_id = add_entity(graph, "market-proxy-theme", theme_key, theme_label, {
+            "tboxClass": "MarketProxyTheme",
+            "tboxClasses": ["Factor", "MarketProxyTheme"],
+            "theme": theme_key,
+            "label": theme_label,
+            "source": source,
+            "level": theme.get("level") or "",
+            "themeSource": theme.get("source") or "",
+        })
+        add_relation(graph, proxy_id, theme_id, "PROXIES_THEME", weight=0.75, properties={
+            "source": source,
+            "symbol": profile.symbol,
+            "theme": theme_key,
+            "level": theme.get("level") or "",
+            "aiInfluenceLabel": profile.label + " -> " + theme_label,
+        })
+        add_relation(graph, portfolio_node_id, theme_id, "OBSERVES_MARKET_PROXY", weight=0.25, properties={
+            "source": source,
+            "symbol": profile.symbol,
+            "theme": theme_key,
+            "aiInfluenceLabel": theme_label + " 시장 센서",
+        })
+        if theme.get("source") == "factor-sensitivity":
+            factor_id = add_entity(graph, "factor", theme_label, theme_label, {
+                "tboxClass": "Factor",
+                "tboxClasses": ["Factor", "FactorExposure", "MarketProxyTheme"],
+                "label": theme_label,
+                "factor": theme_key,
+            })
+            add_relation(graph, proxy_id, factor_id, "SENSITIVE_TO", weight=0.7, properties={
+                "source": source,
+                "factor": theme_key,
+                "level": theme.get("level") or "",
+                "aiInfluenceLabel": profile.label + " " + theme_label + " 민감도",
+            })
+    return proxy_id
+
+
+def add_market_proxy_universe_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    runtime_context: Dict[str, object] = None,
+) -> None:
+    profiles = market_signal_profiles(profile_settings_from_runtime(runtime_context))
+    quotes = market_proxy_quotes_from_runtime(runtime_context)
+    for profile in profiles.values():
+        add_market_proxy_profile_concepts(graph, portfolio_node_id, profile, quote=quotes.get(profile.symbol))
+
+
+def stock_relative_performance_evidence_usable(position: Position) -> bool:
+    if not str(position.source_as_of or position.updated_at or "").strip():
+        return False
+    state = " ".join([
+        str(position.market_session or ""),
+        str(position.freshness_status or ""),
+        str(position.source_timestamp_state or ""),
+        str(position.data_quality or ""),
+        str(position.quote_status or ""),
+        str(position.quote_message or ""),
+    ]).strip().lower()
+    blocked_tokens = (
+        "closed",
+        "last-close",
+        "last close",
+        "reference",
+        "stale",
+        "cached",
+        "fallback",
+        "expired",
+        "unavailable",
+        "missing",
+        "휴장",
+        "종가",
+        "지연",
+    )
+    return not any(token in state for token in blocked_tokens)
+
+
+def add_stock_market_proxy_context_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    portfolio_node_id: str,
+    position: Position,
+    profile: InstrumentProfile,
+    runtime_context: Dict[str, object] = None,
+) -> None:
+    quotes = market_proxy_quotes_from_runtime(runtime_context)
+    if not quotes:
+        return
+    stock_factors = {str(factor or "").strip() for factor in (profile.sensitivities or {}).keys() if str(factor or "").strip()}
+    if not stock_factors:
+        return
+    proxy_profiles = market_signal_profiles(profile_settings_from_runtime(runtime_context))
+    for proxy_profile in proxy_profiles.values():
+        proxy_factors = {str(factor or "").strip() for factor in (proxy_profile.sensitivities or {}).keys() if str(factor or "").strip()}
+        overlap = sorted(stock_factors.intersection(proxy_factors))
+        quote = quotes.get(proxy_profile.symbol)
+        if not overlap or not quote:
+            continue
+        proxy_id = add_market_proxy_profile_concepts(
+            graph,
+            portfolio_node_id,
+            proxy_profile,
+            source_id=stock_id,
+            source="market-proxy-context",
+            quote=quote,
+        )
+        observation_id = market_proxy_observation_id(proxy_profile)
+        add_relation(graph, stock_id, proxy_id, "OBSERVES_MARKET_PROXY", weight=0.35, properties={
+            "source": "market-proxy-context",
+            "overlapFactors": overlap,
+            "symbol": proxy_profile.symbol,
+            "aiInfluenceLabel": profile.label + "가 " + proxy_profile.label + "와 같은 팩터를 봅니다.",
+        })
+        add_relation(graph, stock_id, observation_id, "HAS_OBSERVATION", weight=0.32, properties={
+            "source": "market-proxy-context",
+            "overlapFactors": overlap,
+            **market_proxy_observation_metadata(quote),
+            "aiInfluenceLabel": profile.label + " 시장 프록시 관측",
+        })
+        stock_as_of = str(position.source_as_of or position.updated_at or "")
+        proxy_as_of = str(quote.get("sourceAsOf") or quote.get("updatedAt") or "")
+        stock_time = parse_timestamp(stock_as_of)
+        proxy_time = parse_timestamp(proxy_as_of)
+        clock_skew_minutes = (
+            abs((stock_time - proxy_time).total_seconds()) / 60.0
+            if stock_time and proxy_time
+            else None
+        )
+        clocks_aligned = clock_skew_minutes is not None and clock_skew_minutes <= 15
+        stock_change_available = position.change_rate is not None
+        proxy_change_available = quote.get("changeRate") not in (None, "")
+        stock_usable = stock_relative_performance_evidence_usable(position)
+        proxy_usable = bool(quote.get("judgementEvidenceUsable"))
+        comparison_usable = bool(
+            stock_change_available
+            and proxy_change_available
+            and clocks_aligned
+            and stock_usable
+            and proxy_usable
+        )
+        stock_change = number(position.change_rate)
+        proxy_change = number(quote.get("changeRate"))
+        relative_return = stock_change - proxy_change
+        relative_id = add_entity(
+            graph,
+            "relative-performance-observation",
+            str(position.symbol or "").upper() + ":" + proxy_profile.symbol,
+            profile.label + "의 " + proxy_profile.label + " 대비 상대성과",
+            {
+                "tboxClass": "RelativePerformanceObservation",
+                "tboxClasses": ["Observation", "PriceObservation", "RelativePerformanceObservation"],
+                "symbol": str(position.symbol or "").upper(),
+                "proxySymbol": proxy_profile.symbol,
+                "overlapFactors": overlap,
+                "comparisonWindow": "session-change",
+                "stockChangeRate": round(stock_change, 4),
+                "proxyChangeRate": round(proxy_change, 4),
+                "relativeReturnPct": round(relative_return, 4),
+                "sourceAsOf": stock_as_of,
+                "proxySourceAsOf": proxy_as_of,
+                "clockSkewMinutes": round(clock_skew_minutes, 2) if clock_skew_minutes is not None else None,
+                "timestampsAligned": clocks_aligned,
+                "stockEvidenceUsable": stock_usable,
+                "proxyEvidenceUsable": proxy_usable,
+                "judgementEvidenceUsable": comparison_usable,
+                "dataState": "sufficient" if comparison_usable else "partial",
+                "reviewLevel": "observe",
+                "evidenceRole": "context",
+                "polarity": "context",
+                "source": "market-proxy-relative-performance",
+            },
+        )
+        relation_metadata = {
+            "source": "market-proxy-relative-performance",
+            "overlapFactors": overlap,
+            "dataState": "sufficient" if comparison_usable else "partial",
+            "reviewLevel": "observe",
+            "evidenceRole": "context",
+            "polarity": "context",
+        }
+        add_relation(
+            graph,
+            stock_id,
+            relative_id,
+            "HAS_RELATIVE_PERFORMANCE",
+            properties={
+                **relation_metadata,
+                "aiInfluenceLabel": profile.label + " 시장 대비 상대성과",
+            },
+        )
+        add_relation(
+            graph,
+            relative_id,
+            observation_id,
+            "COMPARES_WITH_MARKET_PROXY",
+            properties={
+                **relation_metadata,
+                "aiInfluenceLabel": proxy_profile.label + "와 동일 시각 비교",
+            },
+        )
+
+
+def add_instrument_profile_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    portfolio_node_id: str,
+    position: Position,
+    runtime_context: Dict[str, object] = None,
+) -> None:
+    language_settings = profile_settings_from_runtime(runtime_context)
+    account_context = runtime_context.get("account") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("account"), dict) else {}
+    delivery_level = str(account_context.get("messageDeliveryLevel") or runtime_context.get("messageDeliveryLevel") or "beginner") if isinstance(runtime_context, dict) else "beginner"
+    profile = instrument_profile_for_position(position, language_settings)
+    symbol = symbol_key(position)
+    archetype_labels = investment_archetype_labels(profile.archetypes, language_settings, delivery_level)
+    intent_label = position_intent_label(profile.position_intent, language_settings, delivery_level)
+    intent_description = position_intent_sentence(profile.position_intent, language_settings)
+    profile_id = add_entity(graph, "instrument-profile", symbol, profile.label, {
+        "tboxClass": "InstrumentProfile",
+        "tboxClasses": profile_tbox_classes(profile),
+        "symbol": symbol,
+        "label": profile.label,
+        "archetypes": list(profile.archetypes),
+        "archetypeLabels": archetype_labels,
+        "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
+        "positionIntentDescription": intent_description,
+        "sensitivities": dict(profile.sensitivities),
+        "policies": dict(profile.policies),
+        "allowAddOnStrength": profile.allow_add_on_strength,
+        "trimOnTrendBreak": profile.trim_on_trend_break,
+        "avoidAveragingDown": profile.avoid_averaging_down,
+        "source": profile.source,
+    })
+    add_relation(graph, stock_id, profile_id, "HAS_INSTRUMENT_PROFILE", weight=1.0, properties={
+        "source": "instrument-profile",
+        "aiInfluenceLabel": profile.label,
+        "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
+    })
+    add_relation(graph, portfolio_node_id, profile_id, "HAS_INSTRUMENT_PROFILE", weight=0.5, properties={
+        "source": "instrument-profile",
+        "symbol": symbol,
+    })
+
+    intent_id = add_entity(graph, "position-intent", profile.position_intent, intent_label, {
+        "tboxClass": "PositionIntent",
+        "intent": profile.position_intent,
+        "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
+        "description": intent_description,
+    })
+    add_relation(graph, profile_id, intent_id, "HAS_POSITION_INTENT", weight=1.0, properties={"source": "instrument-profile"})
+
+    for archetype in profile.archetypes:
+        archetype_label = investment_archetype_label(archetype, language_settings, delivery_level)
+        archetype_id = add_entity(graph, "investment-archetype", archetype, archetype_label, {
+            "tboxClass": "InvestmentArchetype",
+            "tboxClasses": ["InvestmentArchetype", archetype],
+            "archetype": archetype,
+            "instrumentArchetype": archetype,
+            "archetypeLabel": archetype_label,
+        })
+        add_relation(graph, profile_id, archetype_id, "HAS_ARCHETYPE", weight=1.0, properties={
+            "source": "instrument-profile",
+            "aiInfluenceLabel": archetype_label,
+        })
+        add_relation(graph, stock_id, archetype_id, "HAS_ARCHETYPE", weight=0.8, properties={
+            "source": "instrument-profile",
+            "aiInfluenceLabel": archetype_label,
+        })
+
+    for factor, level in sorted(profile.sensitivities.items()):
+        factor_key = symbol + ":" + str(factor)
+        label = str(factor) + " 민감도 " + str(level)
+        sensitivity_id = add_entity(graph, "factor-sensitivity", factor_key, label, {
+            "tboxClass": "FactorSensitivity",
+            "tboxClasses": ["FactorSensitivity", "FactorExposure"],
+            "symbol": symbol,
+            "factor": factor,
+            "level": level,
+            "sensitivityLevel": level,
+        })
+        add_relation(graph, profile_id, sensitivity_id, "HAS_FACTOR_SENSITIVITY", weight=1.0, properties={
+            "source": "instrument-profile",
+            "factor": factor,
+            "level": level,
+            "aiInfluenceLabel": label,
+        })
+        add_relation(graph, stock_id, sensitivity_id, "HAS_FACTOR_SENSITIVITY", weight=0.75, properties={
+            "source": "instrument-profile",
+            "factor": factor,
+            "level": level,
+        })
+
+    policy_id = add_entity(graph, "instrument-policy", symbol, profile.label + " 행동 정책", {
+        "tboxClass": "ActionPolicy",
+        "tboxClasses": ["ActionPolicy", "InvestorProfilePolicy"],
+        "symbol": symbol,
+        "allowAddOnStrength": profile.allow_add_on_strength,
+        "trimOnTrendBreak": profile.trim_on_trend_break,
+        "avoidAveragingDown": profile.avoid_averaging_down,
+    })
+    add_relation(graph, profile_id, policy_id, "USES_INSTRUMENT_POLICY", weight=1.0, properties={
+        "source": "instrument-profile",
+        "allowAddOnStrength": profile.allow_add_on_strength,
+        "trimOnTrendBreak": profile.trim_on_trend_break,
+        "avoidAveragingDown": profile.avoid_averaging_down,
+    })
+    if is_market_proxy_profile(profile):
+        add_market_proxy_profile_concepts(graph, portfolio_node_id, profile, source_id=stock_id, source="instrument-profile")
+    add_stock_market_proxy_context_concepts(graph, stock_id, portfolio_node_id, position, profile, runtime_context)
+
+
+def benchmark_for_position(position: Position) -> (str, str):
+    market = str(position.market or "").upper().strip()
+    return FACTOR_BENCHMARKS.get(market, ("benchmark:MARKET", "시장 벤치마크"))
+
+def add_market_exposure_concepts(graph: PortfolioOntology, portfolio_node_id: str, portfolio: PortfolioSummary) -> None:
+    for market in portfolio.markets:
+        key = str(market.get("key") or market.get("market") or market.get("label") or "").strip()
+        if not key:
+            continue
+        label = str(market.get("label") or key)
+        market_id = add_entity(graph, "market", key, label, {"tboxClass": "Market"})
+        exposure_id = add_entity(graph, "market-exposure", graph.portfolio_id + ":" + key, label + " 시장 노출", {
+            "tboxClass": "MarketExposure",
+            "market": key,
+            "invested": number(market.get("invested")),
+            "cash": number(market.get("cash")),
+            "total": number(market.get("total")),
+            "cashRatio": number(market.get("cashRatio")),
+        })
+        add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=1.0, properties={"basis": "portfolio-market-summary"})
+        add_relation(graph, exposure_id, market_id, "AFFECTS", weight=1.0, properties={"polarity": "context", "aiInfluenceLabel": label + " 시장 노출"})
+
+
+def add_portfolio_factor_exposure_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    portfolio: PortfolioSummary,
+    observed_positions: List[Position],
+    runtime_context: Dict[str, object] = None,
+    mandate: Dict[str, object] = None,
+) -> None:
+    add_market_proxy_universe_concepts(graph, portfolio_node_id, runtime_context)
+    total = number(portfolio.total) or number(portfolio.invested)
+    if not total:
+        return
+    currency_exposure: Dict[str, float] = {}
+    raw_position_total = sum(position_account_value_in_base(position) for position in observed_positions if is_holding_position(position))
+    sector_positions: Dict[str, int] = {}
+    mandate = dict(mandate or {})
+    currency_limit = number(mandate.get("fx_exposure_review_pct") or mandate.get("fxExposureReviewPct"))
+    sector_limit = number(mandate.get("max_sector_weight_pct") or mandate.get("maxSectorWeightPct"))
+    policy_version = str(mandate.get("policyVersion") or mandate.get("policy_version") or "")
+    for position in observed_positions:
+        if not is_holding_position(position):
+            continue
+        currency = str(position.currency or "").upper().strip()
+        sector = str(position.sector or "기타").strip() or "기타"
+        if currency:
+            currency_exposure[currency] = currency_exposure.get(currency, 0.0) + position_account_value_in_base(position)
+        sector_positions[sector] = sector_positions.get(sector, 0) + 1
+    for currency, value in sorted(currency_exposure.items()):
+        ratio = (value / raw_position_total) * 100 if raw_position_total else 0.0
+        if currency in {"KRW", ""} or ratio <= 0:
+            continue
+        fx_id = add_entity(graph, "fx-pair", "KRW:" + currency, "KRW/" + currency + " 환율 노출", {
+            "tboxClass": "FXPair",
+            "currency": currency,
+            "exposureValue": round(value, 2),
+            "exposureRatio": round(ratio, 2),
+        })
+        exposure_id = add_entity(graph, "currency-exposure", graph.portfolio_id + ":" + currency, currency + " 통화 노출", {
+            "tboxClass": "CurrencyExposure",
+            "tboxClasses": ["MarketExposure", "CurrencyExposure"],
+            "currency": currency,
+            "exposureRatio": round(ratio, 2),
+            "exposureValue": round(value, 2),
+            "policyLimitRatio": round(currency_limit, 2),
+            "policyDeltaRatio": round(ratio - currency_limit, 2),
+            "policyVersion": policy_version,
+        })
+        add_relation(graph, portfolio_node_id, fx_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "aiInfluenceLabel": currency + " 환율 노출"})
+        add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 통화 노출"})
+        add_relation(graph, fx_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 환율 민감도"})
+    for sector in portfolio.sectors:
+        label = str(sector.get("sector") or "기타")
+        ratio = number(sector.get("ratio"))
+        position_count = sector_positions.get(label, 0)
+        if ratio <= 0 and position_count <= 0:
+            continue
+        exposure_id = add_entity(graph, "sector-exposure", graph.portfolio_id + ":" + label, label + " 섹터 노출", {
+            "tboxClass": "SectorExposure",
+            "tboxClasses": ["MarketExposure", "SectorExposure", "FactorExposure"],
+            "sector": label,
+            "exposureRatio": round(ratio, 2),
+            "positionCount": position_count,
+            "policyLimitRatio": round(sector_limit, 2),
+            "policyDeltaRatio": round(ratio - sector_limit, 2),
+            "policyVersion": policy_version,
+        })
+        add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "sector-exposure", "polarity": "context", "aiInfluenceLabel": label + " 섹터 노출"})
+
+
+
+
+
+
+
+
+
+def add_position_factor_concepts(graph: PortfolioOntology, stock_id: str, portfolio_node_id: str, position: Position, portfolio: PortfolioSummary) -> None:
+    symbol = symbol_key(position)
+    benchmark_id, benchmark_label = benchmark_for_position(position)
+    benchmark_entity_id = add_entity(graph, "benchmark-index", benchmark_id, benchmark_label, {
+        "tboxClass": "BenchmarkIndex",
+        "tboxClasses": ["BenchmarkIndex", "Factor"],
+        "market": position.market,
+    })
+    add_relation(graph, stock_id, benchmark_entity_id, "HAS_BETA_TO", weight=0.6, properties={"source": "factor-map", "polarity": "context", "aiInfluenceLabel": benchmark_label + " 베타"})
+    for label in factor_labels_for_position(position):
+        factor_id = add_entity(graph, "factor", label, label, {
+            "tboxClass": "Factor",
+            "tboxClasses": ["Factor", "FactorExposure"],
+            "label": label,
+        })
+        weight = round(position_weight(position, portfolio) / 100, 4) if is_holding_position(position) else 0.18
+        props = {"source": "factor-map", "polarity": "context", "aiInfluenceLabel": label + " 팩터 노출"}
+        add_relation(graph, stock_id, factor_id, "HAS_FACTOR_EXPOSURE", weight=weight or 0.18, properties=props)
+        add_relation(graph, portfolio_node_id, factor_id, "HAS_FACTOR_EXPOSURE", weight=weight or 0.18, properties=props)

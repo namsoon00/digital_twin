@@ -4,11 +4,11 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.investment_calendar.domain.investment_calendar import clean_text, parse_utc
 from digital_twin.modules.investment_calendar.domain.investment_calendar_candidates import CANDIDATE_FINAL_STATUSES
 from digital_twin.modules.investment_calendar.domain.investment_calendar_extraction import calendar_candidate_sets_from_research_items
-from digital_twin.domain.investment_research import NewsCollectionTarget
-from digital_twin.domain.investment_strategy_guidance import event_type_guidance, target_text
-from digital_twin.domain.market_data import number
-from digital_twin.domain.portfolio import utc_now_iso
-from digital_twin.application.runtime_checkpoint import checkpoint_datetime, checkpoint_iso
+from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
+from digital_twin.modules.decisions.contracts import event_type_guidance, target_text
+from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.portfolio.contracts import utc_now_iso
+from digital_twin.platform.application.runtime_checkpoint import checkpoint_datetime, checkpoint_iso
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

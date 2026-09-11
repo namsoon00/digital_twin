@@ -2,8 +2,8 @@
 
 from typing import Dict, Mapping
 
-from digital_twin.domain.hypothesis_quality_review import quality_review_workspace
-from digital_twin.domain.investment_brain import LearningProposal
+from digital_twin.modules.outcomes.domain.hypothesis_quality_review import quality_review_workspace
+from digital_twin.modules.decisions.contracts import LearningProposal
 
 
 class HypothesisQualityReviewService:

@@ -1,7 +1,7 @@
 """Capabilities for current state; no runtime construction."""
 
 from __future__ import annotations
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Protocol, Set, Tuple
 

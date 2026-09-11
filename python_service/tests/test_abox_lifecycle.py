@@ -1,16 +1,16 @@
 import unittest
 
-from digital_twin.domain.abox_lifecycle import (
+from digital_twin.modules.reasoning.domain.abox_lifecycle import (
     ABoxChangeSet,
     finalize_manifest_patch_plan,
 )
-from digital_twin.domain.ontology_contracts import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
     PortfolioOntology,
 )
-from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
-from digital_twin.domain.ontology_scopes import (
+from digital_twin.modules.reasoning.domain.ontology_scopes import apply_scoped_abox_identity
+from digital_twin.modules.reasoning.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     plan_target_scoped_manifest_patch,

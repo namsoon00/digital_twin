@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import re
 from typing import Iterable, Mapping, Optional
 
-from digital_twin.domain.statistical_signals import ModelSignal, ModelSignalOutcome
+from digital_twin.modules.model_registry.contracts import ModelSignal, ModelSignalOutcome
 
 
 def _timestamp(value: object) -> Optional[datetime]:

@@ -12,13 +12,16 @@ from digital_twin.modules.news_intelligence.application.news_collection_service 
 from digital_twin.modules.market_data.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.modules.news_intelligence.application.news_ai_analysis_service import NewsAiAnalysisService
 from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner, event_order_key, event_review_level
-from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.events import DomainEvent, NEWS_ARTICLE_ANALYZED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, ontology_reasoning_requested_event
-from digital_twin.domain.fact_changes import market_fact_change
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.materiality import evidence_materiality, market_change_materiality
-from digital_twin.domain.news_ai_analysis import local_news_ai_analysis
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.news_intelligence.domain.event_types import NEWS_ARTICLE_ANALYZED, RESEARCH_EVIDENCE_COLLECTED
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_requested_event
+from digital_twin.modules.reasoning.domain.fact_changes import market_fact_change
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality, market_change_materiality
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import local_news_ai_analysis
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.event_bus import EventBus
 from digital_twin.infrastructure.kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from digital_twin.infrastructure.news_sources import NewsSourceGateway

@@ -14,9 +14,9 @@ import hashlib
 import json
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
-from digital_twin.domain.hypothesis_scoping import MARKET_SHARED_SCOPE, condition_scope_profile, inference_scope_assessment
-from digital_twin.domain.ontology_projection_input import compact_external_signals_for_ontology
-from digital_twin.domain.ontology_projection_audit import projection_source_snapshot_fingerprint
+from digital_twin.modules.model_registry.contracts import MARKET_SHARED_SCOPE, condition_scope_profile, inference_scope_assessment
+from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import projection_source_snapshot_fingerprint
 
 
 SHARED_INSTRUMENT_INFERENCE_VERSION = "shared-instrument-inference-v2"

@@ -18,6 +18,19 @@ _EXPORTS = {'ListedSymbol': ('digital_twin.modules.instruments.domain.symbol_uni
 _EXPORTS['SymbolUniverseRepository'] = ('digital_twin.modules.instruments.domain.repositories', 'SymbolUniverseRepository')
 _EXPORTS['SymbolSourceGateway'] = ('digital_twin.modules.instruments.domain.repositories', 'SymbolSourceGateway')
 
+
+_EXPORTS.update({
+    'BTC_SENSITIVE_SYMBOLS': ('digital_twin.modules.instruments.domain.instrument_profiles', 'BTC_SENSITIVE_SYMBOLS'),
+    'InstrumentProfile': ('digital_twin.modules.instruments.domain.instrument_profiles', 'InstrumentProfile'),
+    'SecurityLine': ('digital_twin.modules.instruments.domain.security_lines', 'SecurityLine'),
+    'instrument_profile_for_position': ('digital_twin.modules.instruments.domain.instrument_profiles', 'instrument_profile_for_position'),
+    'is_market_proxy_profile': ('digital_twin.modules.instruments.domain.instrument_profiles', 'is_market_proxy_profile'),
+    'market_proxy_themes_for_profile': ('digital_twin.modules.instruments.domain.instrument_profiles', 'market_proxy_themes_for_profile'),
+    'market_signal_profiles': ('digital_twin.modules.instruments.domain.instrument_profiles', 'market_signal_profiles'),
+    'market_signal_symbols': ('digital_twin.modules.instruments.domain.instrument_profiles', 'market_signal_symbols'),
+    'security_lines_for_symbol': ('digital_twin.modules.instruments.domain.security_lines', 'security_lines_for_symbol'),
+})
+
 __all__ = list(_EXPORTS)
 
 

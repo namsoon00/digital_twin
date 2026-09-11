@@ -111,7 +111,7 @@ class RuntimeCompositionTests(unittest.TestCase):
             "digital_twin.infrastructure.graph_store_rulebox.rulebox_rules_from_payload",
             return_value=["parsed"],
         ) as parse, patch(
-            "digital_twin.domain.ontology_compiler.compile_ontology_release",
+            "digital_twin.modules.model_registry.domain.ontology_compiler.compile_ontology_release",
             return_value={"valid": True},
         ) as compile_release:
             warm_v2_release(recorder, {"rules": ["frozen"]})

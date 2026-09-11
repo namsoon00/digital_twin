@@ -3,17 +3,11 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-from ..domain.disclosure_quality import assess_disclosure_document
-from ..domain.disclosure_taxonomy import classify_disclosure
-from ..domain.market_data import number
-from ..domain.portfolio_calculations import (
-    BROKER_FX_SOURCE_TYPE,
-    DAILY_MARKET_FX_SOURCE_TYPE,
-    FALLBACK_FX_SOURCE_TYPE,
-    LIVE_MARKET_FX_SOURCE_TYPE,
-    broker_fx_rates_from_positions,
-)
-from ..domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
+from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
+from digital_twin.modules.market_data.domain.market_data import number
+from digital_twin.modules.portfolio.domain.portfolio_calculations import BROKER_FX_SOURCE_TYPE, DAILY_MARKET_FX_SOURCE_TYPE, FALLBACK_FX_SOURCE_TYPE, LIVE_MARKET_FX_SOURCE_TYPE, broker_fx_rates_from_positions
+from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import dart_document_text, parse_iso, symbol_assignments, symbol_list
 from digital_twin.modules.investment_calendar.infrastructure.opendart_calendar_source import OPENDART_CORP_CODE_URL, opendart_error_response, parse_opendart_corp_codes
 

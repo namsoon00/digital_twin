@@ -3,9 +3,9 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List
 
-from digital_twin.domain.notification_templates import symbol_display_name, symbol_with_code
-from digital_twin.domain.ontology_decision_state import CHANGE_STATE_LABELS, DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, review_level_for
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.notifications.contracts import symbol_display_name, symbol_with_code
+from digital_twin.modules.reasoning.contracts import CHANGE_STATE_LABELS, DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, review_level_for
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 MODEL_REVIEW_PROMPT_VERSION = "model-review-v2-ontology"

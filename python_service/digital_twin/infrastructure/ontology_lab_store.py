@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
-from ..domain.investment_strategy_proposals import InvestmentStrategyProposal
-from ..domain.ontology_experiments import OntologyExperiment
+from digital_twin.modules.model_registry.domain.investment_strategy_proposals import InvestmentStrategyProposal
+from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment
 from .settings import data_dir
 
 

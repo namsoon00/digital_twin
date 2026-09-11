@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from digital_twin.domain.investment_reasoning import CASE_TERMINAL_STAGES, ReasoningCase
+from digital_twin.modules.decisions.contracts import CASE_TERMINAL_STAGES, ReasoningCase
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

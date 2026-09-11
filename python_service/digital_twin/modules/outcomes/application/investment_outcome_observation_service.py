@@ -1,11 +1,11 @@
 import hashlib
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.investment_brain import canonical_investment_timestamp
-from digital_twin.domain.investment_outcomes import DecisionReview, PerformanceAttribution
-from digital_twin.domain.market_evidence_profiles import market_evidence_profile
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.hypothesis_outcome_facts import premise_observation_facts
+from digital_twin.modules.decisions.contracts import canonical_investment_timestamp
+from digital_twin.modules.outcomes.domain.investment_outcomes import DecisionReview, PerformanceAttribution
+from digital_twin.modules.market_data.contracts import market_evidence_profile
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_facts import premise_observation_facts
 
 
 def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int, upper: int) -> int:

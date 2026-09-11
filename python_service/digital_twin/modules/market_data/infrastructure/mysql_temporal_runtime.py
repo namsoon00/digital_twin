@@ -1,7 +1,7 @@
 import uuid
 from datetime import timedelta
 from typing import Dict, Iterable, List, Mapping, Optional
-from digital_twin.domain.time_series_storage import TemporalFeatureSnapshot, TimeSeriesBackendDescriptor, backend_transition_allowed, canonical_json, clean_status, compacted_legacy_window_reference, is_temporal_window_reference, payload_fingerprint, temporal_window_reference
+from digital_twin.modules.market_data.domain.time_series_storage import TemporalFeatureSnapshot, TimeSeriesBackendDescriptor, backend_transition_allowed, canonical_json, clean_status, compacted_legacy_window_reference, is_temporal_window_reference, payload_fingerprint, temporal_window_reference
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 
 from digital_twin.infrastructure.storage_values import utc_now

@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 from typing import Optional, Union
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Callable, Dict, List
 import time
 
 
 from .stage_results import CompletedProjection, AssembleSourceResult
 from .assemble_source_ports import AssembleSourcePort
-from digital_twin.domain.ontology_worlds import OntologyWorld
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.reasoning.domain.ontology_worlds import OntologyWorld
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
 
 
 def assemble_source(

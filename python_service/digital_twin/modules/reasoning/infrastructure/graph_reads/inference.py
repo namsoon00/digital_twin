@@ -1,13 +1,7 @@
 """graph_reads: inference through explicit injected capabilities."""
 
-from digital_twin.domain.hypothesis_calibration import (
-    hypothesis_calibration_snapshot_from_abox_rows,
-)
-from digital_twin.domain.ontology_contracts import (
-    OntologyEntity,
-    OntologyRelation,
-    PortfolioOntology,
-)
+from digital_twin.modules.outcomes.contracts import hypothesis_calibration_snapshot_from_abox_rows
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.infrastructure.graph_store_inferencebox import inferencebox_snapshot_from_rows
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.backend_constants import (

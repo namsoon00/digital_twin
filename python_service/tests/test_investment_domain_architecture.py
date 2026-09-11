@@ -6,25 +6,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.ontology_domain_tbox import tbox_domain_validation
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_rule_manifest import validate_rule_domain_manifests
-from digital_twin.domain.ontology_schema import add_entity
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_tbox import BOUNDED_CONTEXTS, CLASS_DEFS, RELATION_DEFS
-from digital_twin.domain.investment_outcomes import PerformanceAttribution
-from digital_twin.domain.portfolio import PortfolioSummary, Position
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
+from digital_twin.modules.model_registry.domain.ontology_domain_tbox import tbox_domain_validation
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.model_registry.domain.ontology_rule_manifest import validate_rule_domain_manifests
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_tbox import BOUNDED_CONTEXTS, CLASS_DEFS, RELATION_DEFS
+from digital_twin.modules.outcomes.domain.investment_outcomes import PerformanceAttribution
+from digital_twin.modules.portfolio.domain.portfolio import PortfolioSummary, Position
 from digital_twin.modules.portfolio.domain.portfolio_ledger import BUY, SELL, PortfolioLedger, PortfolioLedgerEntry
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
-from digital_twin.domain.portfolio_rebalancing import (
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.reasoning.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
+from digital_twin.modules.portfolio.domain.portfolio_rebalancing import (
     AllocationBand,
     RebalanceLeg,
     RebalanceProposal,
     allocation_drifts,
 )
-from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, OrderIntent
+from digital_twin.modules.portfolio.domain.trade_execution import ActionEnvelope, ActionPlan, OrderIntent
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
 
 

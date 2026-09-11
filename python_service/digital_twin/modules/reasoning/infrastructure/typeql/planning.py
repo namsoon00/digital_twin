@@ -3,13 +3,10 @@
 import math
 from typing import Dict, Iterable, List, Set
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_execution_units import rule_evaluation_grain
-from digital_twin.domain.ontology_rule_execution_policy import (
-    RULE_EXECUTION_POLICY_VERSION,
-    rule_execution_profile,
-)
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_execution_units import rule_evaluation_grain
+from digital_twin.modules.model_registry.contracts import RULE_EXECUTION_POLICY_VERSION, rule_execution_profile
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.typeql.preflight import (
     typedb_native_rule_any_relation_requirement,

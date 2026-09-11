@@ -3,8 +3,8 @@
 from typing import Dict, Iterable, List, Set
 
 import json
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
-from digital_twin.domain.ontology_scopes import SCOPE_NODE_INVENTORY_VERSION
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPE_NODE_INVENTORY_VERSION
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
 from .identity import ontology_storage_id, ontology_row_content_fingerprint, relation_row_id

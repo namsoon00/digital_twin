@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.domain.events import investment_inference_episode_completed_event
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.decisions.domain.events import investment_inference_episode_completed_event
+from digital_twin.modules.portfolio.contracts import AlertEvent
 
 
 QUEUED_AI_INSIGHT_STATES = frozenset({

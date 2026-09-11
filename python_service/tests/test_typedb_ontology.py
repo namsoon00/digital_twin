@@ -13,24 +13,24 @@ from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call, patch
 
 from digital_twin import service_manager
-from digital_twin.domain.ontology_rulebox_catalog import (
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import (
     default_graph_inference_rules,
     governed_graph_inference_rules,
 )
-from digital_twin.domain.ontology_rulebox_contracts import (
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
     GraphRuleDerivation,
 )
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
-from digital_twin.domain.ontology_current_state import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import (
     CURRENT_STATE_ABOX_PERSISTENCE_MODE,
     LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE,
     copy_on_write_generation_id,
     current_state_slot_id,
 )
-from digital_twin.domain.ontology_fact_slots import build_fact_slot_projection_plan
-from digital_twin.domain.ontology_scopes import (
+from digital_twin.modules.reasoning.domain.ontology_fact_slots import build_fact_slot_projection_plan
+from digital_twin.modules.reasoning.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     apply_scoped_abox_repair_epochs,
@@ -40,14 +40,14 @@ from digital_twin.domain.ontology_scopes import (
     scope_requires_v8_bounded_slot,
     select_target_scoped_manifest_patch,
 )
-from digital_twin.domain.ontology_native_rule_planning import (
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import (
     merge_native_rule_planner_topology,
     native_rule_planner_topology,
 )
-from digital_twin.domain.ontology_schema import default_tbox_metadata
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
-from digital_twin.domain.ontology_worlds import market_world
-from digital_twin.domain.repositories import (
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
+from digital_twin.modules.reasoning.domain.ontology_worlds import market_world
+from digital_twin.modules.reasoning.contracts import (
     ONTOLOGY_GRAPH_REPOSITORY_CONTRACT,
     ontology_graph_repository_contract_errors,
 )
@@ -64,8 +64,8 @@ from digital_twin.infrastructure.graph_store_lifecycle import (
     ontology_release_seed_artifact,
     ontology_seed_graph,
 )
-from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-from digital_twin.domain.investment_ubiquitous_language import investment_language_registry
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
+from digital_twin.modules.model_registry.domain.investment_ubiquitous_language import investment_language_registry
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,

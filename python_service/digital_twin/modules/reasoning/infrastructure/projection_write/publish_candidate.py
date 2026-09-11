@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 from typing import Optional, Union
-from digital_twin.domain.ontology_worlds import world_metadata
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_metadata
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Callable, Dict, List
 import time
 
 
 from .stage_results import CompletedProjection, PublishCandidateResult
 from .publish_candidate_ports import PublishCandidatePort
-from digital_twin.domain.ontology_worlds import OntologyWorld
-from digital_twin.domain.ontology_validator import OntologyValidationReport
-from digital_twin.domain.ontology_projection_audit import OntologyProjectionRun
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_worlds import OntologyWorld
+from digital_twin.modules.reasoning.domain.ontology_validator import OntologyValidationReport
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 def publish_candidate(

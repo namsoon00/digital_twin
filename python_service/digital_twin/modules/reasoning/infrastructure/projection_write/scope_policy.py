@@ -2,21 +2,12 @@
 
 from __future__ import annotations
 from .scope_policy_ports import ScopePolicyPort
-from digital_twin.domain.crypto_market_signals import crypto_markets_by_symbol
-from digital_twin.domain.ontology_change_impact import (
-    build_inference_impact_plan,
-    compact_inference_impact_plan,
-    scope_symbol,
-)
-from digital_twin.domain.ontology_fact_slots import build_fact_slot_projection_plan
-from digital_twin.domain.ontology_scopes import (
-    SCOPED_ABOX_MANIFEST_VERSION,
-    SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
-)
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.world_partitioned_reasoning import (
-    ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION,
-)
+from digital_twin.modules.market_data.contracts import crypto_markets_by_symbol
+from digital_twin.modules.reasoning.domain.ontology_change_impact import build_inference_impact_plan, compact_inference_impact_plan, scope_symbol
+from digital_twin.modules.reasoning.domain.ontology_fact_slots import build_fact_slot_projection_plan
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION
 from typing import Dict, List
 
 

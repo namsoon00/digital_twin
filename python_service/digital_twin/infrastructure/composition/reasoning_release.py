@@ -5,15 +5,7 @@ from __future__ import annotations
 
 def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
     """Resolve model releases required by enabled rules and runtime scorers."""
-    from digital_twin.domain.statistical_signals import (
-        CAPITAL_FLOW_SHADOW_RELEASE_ID,
-        DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
-        DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
-        DEFAULT_EVENT_SIGNAL_RELEASE_ID,
-        DEFAULT_FLOW_SIGNAL_RELEASE_ID,
-        DEFAULT_PRICE_SIGNAL_RELEASE_ID,
-        DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
-    )
+    from digital_twin.modules.model_registry.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID
 
     required = set()
     for rule in (rulebox_snapshot or {}).get("rules") or []:
@@ -71,8 +63,8 @@ def prepare_v2_rulebox_release(repository, settings=None, release_guard=None):
     already-frozen candidate is immutable: startup verifies its persisted
     fingerprints and must never rewrite that graph store in place.
     """
-    from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-    from digital_twin.domain.ontology_schema import default_tbox_metadata
+    from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
+    from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
     from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 
     guard = dict(release_guard or {})

@@ -1,3 +1,4 @@
+import ast
 import json
 import importlib
 import os
@@ -32,35 +33,41 @@ from digital_twin.modules.instruments.application.symbol_universe_service import
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
-from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.data_freshness import evaluate_notification_data_freshness, freshness_from_position
-from digital_twin.domain.external_signal_quality import attach_external_signal_quality
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, build_active_investment_opinion, research_evidence_from_facts
-from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
-from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, PORTFOLIO_HOLDINGS_SNAPSHOT, public_message_catalog
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-from digital_twin.domain.ontology_schema import abox_properties
-from digital_twin.domain.ontology_validator import validate_ontology
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.ontology_relation_reasoning import prompt_template_for_message_type
-from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.domain.strategy import StrategyModel, decisions_for_positions
-from digital_twin.domain.trend_transitions import trend_transition_assessment
-from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, ONTOLOGY_REASONING_COMPLETED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent, alerts_detected_event, monitoring_cycle_completed_event, ontology_reasoning_requested_event, snapshot_collected_event
-from digital_twin.domain.monitoring import RealtimeMonitor
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
+from digital_twin.modules.market_data.domain.data_freshness import evaluate_notification_data_freshness, freshness_from_position
+from digital_twin.modules.market_data.domain.external_signal_quality import attach_external_signal_quality
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, build_active_investment_opinion, research_evidence_from_facts
+from digital_twin.modules.market_data.domain.market_data import normalize_position, technical_indicators_from_candles
+from digital_twin.modules.notifications.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, PORTFOLIO_HOLDINGS_SNAPSHOT, public_message_catalog
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
+from digital_twin.modules.reasoning.domain.ontology_schema import abox_properties
+from digital_twin.modules.reasoning.domain.ontology_validator import validate_ontology
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.reasoning.domain.ontology_relation_reasoning import prompt_template_for_message_type
+from digital_twin.modules.portfolio.domain.portfolio_calculations import portfolio_summary
+from digital_twin.modules.decisions.domain.strategy import StrategyModel, decisions_for_positions
+from digital_twin.modules.market_data.domain.trend_transitions import trend_transition_assessment
+from digital_twin.modules.accounts.domain.event_types import ACCOUNT_SAVED
+from digital_twin.modules.market_data.domain.event_types import MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED
+from digital_twin.modules.market_data.domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
+from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_COMPLETED, ONTOLOGY_REASONING_REQUESTED
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_requested_event
+from digital_twin.modules.news_intelligence.domain.event_types import RESEARCH_EVIDENCE_COLLECTED
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
 from digital_twin.modules.model_registry.domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
-from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
-from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
-from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
-from digital_twin.domain.ontology_insights import build_investment_insight_events
-from digital_twin.domain.notification_ai import build_notification_ai_opinion
+from digital_twin.modules.news_intelligence.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
+from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, alert_context, render_notification
+from digital_twin.modules.notifications.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
+from digital_twin.modules.reasoning.domain.ontology_insights import build_investment_insight_events
+from digital_twin.modules.decisions.domain.notification_ai import build_notification_ai_opinion
 from digital_twin.modules.decisions.application.notification_ai_gate_audit import context_with_validated_ai_response
-from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt, validated_response_from_payload
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.parsing import parse_assignments
-from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt, validated_response_from_payload
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.shared_kernel.parsing import parse_assignments
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpen, guarded_external_call
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
@@ -86,7 +93,16 @@ from digital_twin.infrastructure.mysql_operational_connection import mysql_opera
 from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_KEY_PARTITIONS, mysql_partitioning_mode
 from digital_twin.modules.instruments.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.toss_snapshots import TossAPIError, TossProvider, account_cash_amount, market_proxy_quote_context, normalize_price_items, select_account, toss_json
-from digital_twin.infrastructure.web_server import list_notification_rules_payload, list_templates_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
+from digital_twin.infrastructure.web.adapters.configuration import settings_status_payload
+from digital_twin.infrastructure.web.adapters.notification_configuration import (
+    list_notification_rules_payload,
+    list_templates_payload,
+    notification_schedules_payload,
+    save_notification_rule_payload,
+)
+from digital_twin.infrastructure.web.adapters.notification_inbox import notification_jobs_payload
+from digital_twin.infrastructure.web.adapters.notification_testing import notification_template_test_payload
+from digital_twin.infrastructure.web.events import realtime_status_payload
 from digital_twin.scheduler import MonitorRunner
 from mysql_fixtures import (
     TestAccountRegistry as AccountRegistry,
@@ -539,9 +555,9 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_legacy_python_relation_rule_modules_are_removed(self):
         for module_name in [
-            "digital_twin.domain.ontology_rules",
-            "digital_twin.domain.ontology_relation_rules",
-            "digital_twin.domain.ontology_rule_catalog",
+            "digital_twin.modules.reasoning.domain.ontology_rules",
+            "digital_twin.modules.reasoning.domain.ontology_relation_rules",
+            "digital_twin.modules.reasoning.domain.ontology_rule_catalog",
         ]:
             with self.assertRaises(ModuleNotFoundError):
                 importlib.import_module(module_name)
@@ -7169,9 +7185,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("currentPrice", item)
 
     def test_application_layer_does_not_import_infrastructure(self):
-        application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "application"
+        application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "platform" / "application"
+        application_files = sorted(application_dir.glob("*.py"))
+        self.assertTrue(application_files)
         offenders = []
-        for path in application_dir.glob("*.py"):
+        for path in application_files:
             text = path.read_text(encoding="utf-8")
             if "infrastructure" in text:
                 offenders.append(path.name)
@@ -7179,19 +7197,38 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual([], offenders)
 
     def test_domain_layer_does_not_import_application_or_infrastructure(self):
-        domain_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "domain"
+        package_dir = Path(__file__).resolve().parents[1] / "digital_twin"
+        ownership = json.loads((package_dir.parents[1] / "docs" / "domain-ownership.json").read_text(encoding="utf-8"))
+        domain_files = sorted({
+            package_dir / destination
+            for source, targets in ownership.items()
+            if source.startswith("domain/")
+            for destination in (targets if isinstance(targets, list) else [targets])
+            if destination is not None
+        })
+        self.assertTrue(domain_files)
         offenders = []
-        for path in domain_dir.rglob("*.py"):
-            text = path.read_text(encoding="utf-8")
-            if "application" in text or "infrastructure" in text:
-                offenders.append(str(path.relative_to(domain_dir)))
+        for path in domain_files:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or ""] + [alias.name for alias in node.names]
+                else:
+                    continue
+                if any({"application", "infrastructure"}.intersection(name.split(".")) for name in names):
+                    offenders.append(str(path.relative_to(package_dir)))
+                    break
 
         self.assertEqual([], offenders)
 
     def test_application_layer_does_not_define_runtime_schedulers(self):
-        application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "application"
+        application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "platform" / "application"
+        application_files = sorted(application_dir.rglob("*.py"))
+        self.assertTrue(application_files)
         offenders = []
-        for path in application_dir.rglob("*.py"):
+        for path in application_files:
             text = path.read_text(encoding="utf-8")
             defines_scheduler = "class " in text and "Scheduler" in text
             handles_process_signal = "signal.signal(" in text or "import signal" in text
@@ -7217,14 +7254,14 @@ class PythonServiceTests(unittest.TestCase):
             self.assertTrue(callable(getattr(schedulers, name)))
 
     def test_runtime_relation_reasoning_does_not_export_offline_fallback(self):
-        runtime_reasoning = importlib.import_module("digital_twin.domain.ontology_relation_reasoning")
+        runtime_reasoning = importlib.import_module("digital_twin.modules.reasoning.domain.ontology_relation_reasoning")
 
         self.assertFalse(hasattr(runtime_reasoning, "evaluate_position_relation_rules"))
         with self.assertRaises(ModuleNotFoundError):
-            importlib.import_module("digital_twin.domain.offline.ontology_relation_fallback_evaluator")
+            importlib.import_module("digital_twin.modules.reasoning.domain.offline.ontology_relation_fallback_evaluator")
 
     def test_disclosure_analysis_rendering_stays_out_of_domain(self):
-        domain_file = Path(__file__).resolve().parents[1] / "digital_twin" / "domain" / "disclosure_analysis.py"
+        domain_file = Path(__file__).resolve().parents[1] / "digital_twin" / "modules" / "news_intelligence" / "domain" / "disclosure_analysis.py"
         text = domain_file.read_text(encoding="utf-8")
 
         self.assertNotIn("import html", text)
@@ -13635,7 +13672,7 @@ class PythonServiceTests(unittest.TestCase):
         heartbeat_rule.threshold = 0
         rules.upsert(heartbeat_rule)
 
-        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot):
+        with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot):
             status, payload = notification_template_test_payload({"messageType": "monitorHeartbeat"})
 
         self.assertEqual(202, status)
@@ -13694,7 +13731,7 @@ class PythonServiceTests(unittest.TestCase):
             "notificationAiGateEnabled": "0",
             "dartDisclosureAiAnalysisEnabled": "0",
         })
-        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
+        with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot), \
                 mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account", return_value=FakeNotifier()):
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
@@ -13780,8 +13817,8 @@ class PythonServiceTests(unittest.TestCase):
             "notificationAiGateEnabled": "0",
             "dartDisclosureAiAnalysisEnabled": "0",
         })
-        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
-                mock.patch("digital_twin.infrastructure.web_server.PortfolioOntologyProjectionRecorder", FakeProjectionRecorder), \
+        with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot), \
+                mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.PortfolioOntologyProjectionRecorder", FakeProjectionRecorder), \
                 mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account", return_value=FakeNotifier()):
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
@@ -13838,8 +13875,8 @@ class PythonServiceTests(unittest.TestCase):
                 }
                 return target_snapshot.metadata["ontology"]["projection"]
 
-        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
-                mock.patch("digital_twin.infrastructure.web_server.PortfolioOntologyProjectionRecorder", MissingProjectionRecorder):
+        with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot), \
+                mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.PortfolioOntologyProjectionRecorder", MissingProjectionRecorder):
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
         self.assertEqual(409, status)
@@ -13866,7 +13903,7 @@ class PythonServiceTests(unittest.TestCase):
             [],
         )
 
-        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot):
+        with mock.patch("digital_twin.infrastructure.web.adapters.notification_testing.build_snapshot", return_value=snapshot):
             status, payload = notification_template_test_payload({"messageType": "monitorHeartbeat"})
 
         self.assertEqual(409, status)

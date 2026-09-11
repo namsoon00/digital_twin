@@ -8,7 +8,7 @@ from typing import Callable, Dict, Iterable, List
 from zoneinfo import ZoneInfo
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest
-from ....domain.portfolio import utc_now_iso
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from ...external_signal_utils import api_error_text, default_json_fetcher
 from .base import equity_partitions, observation
 

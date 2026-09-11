@@ -14,11 +14,8 @@ from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
-from ....domain.company_knowledge import (
-    enrich_financial_periods,
-    merge_company_knowledge_rows,
-)
-from ....domain.portfolio import utc_now_iso
+from digital_twin.modules.news_intelligence.domain.company_knowledge import enrich_financial_periods, merge_company_knowledge_rows
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from ...external_signal_utils import default_json_fetcher
 from .base import observation
 from .public_data_portal import (

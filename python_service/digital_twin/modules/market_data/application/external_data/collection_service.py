@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.events import external_fact_changed_event
+from digital_twin.modules.market_data.domain.events import external_fact_changed_event
 from digital_twin.modules.market_data.application.external_data.contracts import DatasetDescriptor, ExternalSubject, setting_enabled
 from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService, FactTransition
 

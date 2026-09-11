@@ -1,16 +1,16 @@
 from dataclasses import dataclass, field
 from typing import Dict
 
-
-ARTICLE_COLLECTED = "news.article_collected"
-ARTICLE_REJECTED = "news.article_rejected"
-ARTICLE_ANALYZED = "news.article_analyzed"
-STORY_CREATED = "news.story_created"
-STORY_UPDATED = "news.story_updated"
-ARTICLE_ALERT_ELIGIBLE = "news.article_alert_eligible"
-ARTICLE_REASONING_ELIGIBLE = "news.article_reasoning_eligible"
-ARTICLE_RETRACTED = "news.article_retracted"
-
+from digital_twin.modules.news_intelligence.domain.event_types import (
+    ARTICLE_ALERT_ELIGIBLE,
+    ARTICLE_ANALYZED,
+    ARTICLE_COLLECTED,
+    ARTICLE_REASONING_ELIGIBLE,
+    ARTICLE_REJECTED,
+    ARTICLE_RETRACTED,
+    STORY_CREATED,
+    STORY_UPDATED,
+)
 
 @dataclass(frozen=True)
 class NewsIntelligenceEvent:

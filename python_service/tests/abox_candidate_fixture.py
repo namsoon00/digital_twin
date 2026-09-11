@@ -5,11 +5,11 @@ from dataclasses import asdict
 import hashlib
 import json
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.domain.ontology_current_state import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import (
     CURRENT_STATE_ABOX_PERSISTENCE_MODE, LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE,
 )
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 
 
 WORLD = "portfolio:fixture:owner"

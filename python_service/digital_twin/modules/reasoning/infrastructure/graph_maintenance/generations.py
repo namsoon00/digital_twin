@@ -1,6 +1,6 @@
 """graph_maintenance: generations through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
 from typing import Dict, Iterable, List

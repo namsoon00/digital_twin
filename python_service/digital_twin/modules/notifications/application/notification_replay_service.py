@@ -2,9 +2,9 @@ from dataclasses import dataclass
 import hashlib
 from typing import Callable, Dict, List, Optional
 
-from digital_twin.domain.notification_delivery_explanation import build_customer_delivery_explanation
-from digital_twin.domain.notifications import NotificationJob, notification_debug_number
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.notifications.domain.notification_delivery_explanation import build_customer_delivery_explanation
+from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 @dataclass(frozen=True)

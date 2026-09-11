@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_facts
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_facts
 from digital_twin.modules.news_intelligence.application.news_ai_analysis_service import int_setting
-from digital_twin.domain.news_analysis import (
+from digital_twin.modules.news_intelligence.domain.news_analysis import (
     article_analysis_facts,
     article_sentence_candidates,
     classify_news_relevance,
@@ -24,7 +24,7 @@ from digital_twin.domain.news_analysis import (
     source_trust_state_for_source,
     stock_impact_analysis,
 )
-from digital_twin.domain.news_ai_analysis import (
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import (
     NewsAiAnalysis,
     apply_news_ai_analysis,
     article_body_quality_needs_refresh,
@@ -35,11 +35,11 @@ from digital_twin.domain.news_ai_analysis import (
     summary_texts_similar,
 )
 from digital_twin.modules.news_intelligence.domain.article import article_enrichment_revision
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.materiality import evidence_materiality
-from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
-from digital_twin.domain.ontology_schema import add_entity
-from digital_twin.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
+from digital_twin.modules.reasoning.domain.ontology_relation_reasoning import research_evidence_facts
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+from digital_twin.modules.reasoning.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
 from digital_twin.infrastructure.news_ai_analyzer import FallbackNewsAiAnalyzer, news_ai_analyzer_from_settings
 
 

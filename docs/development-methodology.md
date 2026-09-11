@@ -14,6 +14,11 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   Keep immediate reads and transactional edits synchronous; use durable events
   and existing jobs for slow, independently retryable follow-up work. Module
   boundaries do not imply asynchronous APIs or separate worker processes.
+- Root `digital_twin/domain` and `digital_twin/application` are removed. Business
+  definitions and integration events belong to their module; cross-owner
+  consumers use explicit contracts. Keep the shared kernel business-independent
+  and operational maintenance in `platform/application`. Do not recreate a
+  global business domain, fallback import alias, or shared service locator.
 - Give every executable RuleBox rule exactly one persisted `RuleClaimContract`.
   Predictive rules own a falsifiable `MarketHypothesisClaim` with an authored
   outcome contract. Policy, execution, data-quality and context rules own
@@ -25,7 +30,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   shadow, observed, limited-active, active or quarantined qualification using
   the versioned policy stored with the claim. Never infer qualification from
   lifecycle persistence, notification counts or a Python-only score.
-- Keep time-series database products behind `domain/time_series_storage.py`.
+- Keep time-series database products behind `modules/market_data/domain/time_series_storage.py`.
   Reasoning code consumes immutable `TemporalFeatureSnapshot` packets and must
   not import MySQL, QuestDB, or a future vendor driver. New backends are first
   registered as shadow targets, replayed from the durable outbox, compared at
@@ -125,7 +130,7 @@ Investment-analysis code must treat the ontology as the shared world model, not 
 Required flow for new investment behavior:
 
 1. Define the concept in the TBox.
-   Add or reuse a class, relation type, bounded context, review level, data state, decision stage, and policy vocabulary before adding runtime behavior. TBox definitions belong in `domain/ontology_tbox.py`, `domain/ontology_relation_contracts.py`, `domain/ontology_relation_catalog.py`, `domain/ontology_relation_decisions.py`, or the closest existing ontology catalog module. Runtime decision conditions and their explicit decision stages belong in the TypeDB-backed rule catalog, not a Python fallback policy. Do not introduce a new investment meaning only as a string in an alert template.
+   Add or reuse a class, relation type, bounded context, review level, data state, decision stage, and policy vocabulary before adding runtime behavior. TBox definitions belong in `modules/model_registry/domain/ontology_tbox.py`, `modules/model_registry/domain/ontology_relation_contracts.py`, `modules/model_registry/domain/ontology_relation_catalog.py`, `modules/model_registry/domain/ontology_relation_decisions.py`, or the closest existing ontology catalog module. Runtime decision conditions and their explicit decision stages belong in the TypeDB-backed rule catalog, not a Python fallback policy. Do not introduce a new investment meaning only as a string in an alert template.
 
 2. Materialize real-world data as ABox facts.
    Every collected or derived investment fact should become an ABox entity or relation with `ontologyBox`, `tboxClass` or `tboxClasses`, `boundedContext` when applicable, provenance, freshness, and missing-data semantics. A quote, disclosure, news item, macro series, FX rate, liquidity observation, investor-flow value, valuation assumption, account exposure, data-source status, or collection schedule should be represented as facts before it is used for judgement.
@@ -134,7 +139,7 @@ Required flow for new investment behavior:
    Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into graph-store assertions through the TypeDB adapter. New feature code must publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on TypeDB or any graph driver.
 
 4. Split predictive evidence from semantic decision assembly.
-   A falsifiable market hypothesis must be registered as a versioned statistical-model contract and evaluated over an immutable point-in-time ABox. The scorer may emit only exact `ModelHypothesisEvidence` with a `hypothesisContractId`; it cannot emit buy, sell, hold, reduce, avoid, or an action envelope. TypeDB 3 direct TypeQL rules join that evidence with account, policy, quality, and execution facts and materialize the final semantic relation and InferenceBox trace. The RuleBox API/editor remains the governed contract surface, while runtime investment judgement must read direct-TypeQL-materialized InferenceBox output through `domain/ontology_inference_context.py`. Do not add a second general Python action evaluator or a fallback that bypasses TypeDB.
+   A falsifiable market hypothesis must be registered as a versioned statistical-model contract and evaluated over an immutable point-in-time ABox. The scorer may emit only exact `ModelHypothesisEvidence` with a `hypothesisContractId`; it cannot emit buy, sell, hold, reduce, avoid, or an action envelope. TypeDB 3 direct TypeQL rules join that evidence with account, policy, quality, and execution facts and materialize the final semantic relation and InferenceBox trace. The RuleBox API/editor remains the governed contract surface, while runtime investment judgement must read direct-TypeQL-materialized InferenceBox output through `modules/reasoning/domain/ontology_inference_context.py`. Do not add a second general Python action evaluator or a fallback that bypasses TypeDB.
 
 5. Keep action thresholds out of model scoring and application services.
    Python may parse data, normalize units, compute raw market metrics, evaluate governed market-hypothesis contracts, detect operational failures, and enforce delivery policies. Statistical scorers must be release-versioned, point-in-time reproducible, and emit exact evidence rather than an action. Python application services must not directly decide that a stock is a buy, sell, loss-cut, profit-take, risk-increase, opportunity, or sector-rotation candidate unless TypeDB has combined the evidence into a graph-store inference or the result is explicitly an operational/system alert.
@@ -212,7 +217,7 @@ Implementation notes:
 - Python code may compute raw observations such as moving averages, P/L, volume ratios, investor-flow deltas, freshness, materiality, and data-quality flags. A registered model scorer may evaluate a governed predictive contract and emit exact evidence, but Python must not independently decide final buy/sell/hold/reduce/avoid judgement for investment alerts.
 - Temporal ABox builders may compute arithmetic path facts such as peak drawdown, trough rebound, recent-versus-prior velocity, crossing counts, and distinct observation counts. Versioned model releases may classify those facts into exact, auditable hypothesis evidence. Evidence polarity never grants action authority; TypeDB owns semantic relation and action-envelope derivation.
 - Portfolio ontology projection must default to factual ABox plus registered model-evidence output. General local Python graph reasoning remains removed; every model-evidence candidate must still pass direct TypeQL evaluation and InferenceBox materialization before it can affect judgement.
-- `domain/ontology_relation_reasoning.py` is a prompt/read-model helper only, and the old graph reasoner modules have been physically removed. Runtime investment judgement must not fall back to Python inference. If a direct TypeQL query fails, investment judgement is blocked and diagnostics must expose the TypeDB failure with `pythonCompatibilityReasonerUsed=false`.
+- `modules/reasoning/domain/ontology_relation_reasoning.py` is a prompt/read-model helper only, and the old graph reasoner modules have been physically removed. Runtime investment judgement must not fall back to Python inference. If a direct TypeQL query fails, investment judgement is blocked and diagnostics must expose the TypeDB failure with `pythonCompatibilityReasonerUsed=false`.
 - InferenceBox writes are generation-scoped. A failed materialization must not delete the last usable generation, and a successful materialization should prune old generations according to retention settings.
 - ABox scope ownership must be graph-shape independent. Shared reference facts and dynamic account facts use deterministic per-item scopes; never infer their owner from whichever neighbours happen to be present in a target-scoped projection. Only semantically selected scopes are relation-rebind roots. Integrity-only endpoint companions may be staged but must not expand the patch into unrelated relations.
 - Legacy names that include `RuleBox` may still appear in API routes, tests, or UI labels as a compatibility management surface for editing rule JSON. New development should document and describe the runtime concept as TypeDB direct TypeQL rules.
@@ -234,53 +239,54 @@ Anti-patterns to avoid:
 
 Domain:
 
-- `python_service/digital_twin/domain/accounts.py`: account entity/value data
+- `python_service/digital_twin/modules/accounts/domain/accounts.py`: account entity/value data
 - `python_service/digital_twin/modules/accounts/domain/account_identity.py`: brokerage account identity, credential references, watchlist universe, and delivery-profile separation
-- `python_service/digital_twin/domain/investment_mandate.py`: versioned investment policy, loss/cash/exposure limits, and allowed actions
+- `python_service/digital_twin/modules/portfolio/domain/investment_mandate.py`: versioned investment policy, loss/cash/exposure limits, and allowed actions
 - `python_service/digital_twin/modules/portfolio/domain/portfolio_ledger.py`: immutable ledger entries, FIFO lots, cash, cost basis, and idempotent position reconstruction
-- `python_service/digital_twin/domain/portfolio_analytics.py`: stored-history portfolio return, volatility, drawdown, correlation, benchmark beta, and policy-delta calculations
-- `python_service/digital_twin/domain/risk_exposure.py`: raw exposure snapshots and policy deltas consumed by TypeDB
-- `python_service/digital_twin/domain/portfolio_rebalancing.py`: allocation bands, drift, and review-only rebalance proposals
-- `python_service/digital_twin/domain/trade_execution.py`: action envelopes, action plans, order intents, fills, and execution episodes
-- `python_service/digital_twin/domain/investment_outcomes.py`: performance attribution and decision review contracts
-- `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
-- `python_service/digital_twin/domain/investment_brain.py`: investment questions, research plans, competing hypotheses, decision episodes, observed outcomes, and governed learning proposals
+- `python_service/digital_twin/modules/portfolio/domain/portfolio_analytics.py`: stored-history portfolio return, volatility, drawdown, correlation, benchmark beta, and policy-delta calculations
+- `python_service/digital_twin/modules/portfolio/domain/risk_exposure.py`: raw exposure snapshots and policy deltas consumed by TypeDB
+- `python_service/digital_twin/modules/portfolio/domain/portfolio_rebalancing.py`: allocation bands, drift, and review-only rebalance proposals
+- `python_service/digital_twin/modules/portfolio/domain/trade_execution.py`: action envelopes, action plans, order intents, fills, and execution episodes
+- `python_service/digital_twin/modules/outcomes/domain/investment_outcomes.py`: performance attribution and decision review contracts
+- `python_service/digital_twin/modules/portfolio/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
+- `python_service/digital_twin/modules/decisions/domain/investment_brain.py`: investment questions, research plans, competing hypotheses, decision episodes, observed outcomes, and governed learning proposals
 - `python_service/digital_twin/modules/decisions/domain/decision_continuity.py`: bounded prior-decision, follow-up, account-action, execution, and outcome memory contract
-- `python_service/digital_twin/domain/investment_evidence_governance.py`: evidence claims, entity resolution, freshness/source quality verification, and research-run audit contracts
-- `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
-- `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
-- `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
-- `python_service/digital_twin/domain/valuation/`: independent valuation bounded context for evidence, model registry, deterministic calculations, quality gates, and ABox projection; it never emits an investment action
-- `python_service/digital_twin/domain/strategy.py`: TypeDB inference-backed strategy compatibility facade, raw market facts, and categorical position decision state
-- `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
-- `python_service/digital_twin/domain/ontology_domain_tbox.py`: canonical account-to-outcome domain modules layered over the compatibility TBox
-- `python_service/digital_twin/domain/ontology_rule_manifest.py`: question, fact-family, policy, world, freshness, cost, and outcome routing metadata for every rule
-- `python_service/digital_twin/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
-- `python_service/digital_twin/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
-- `python_service/digital_twin/domain/ontology_relation_contracts.py`: ontology relation-reasoning data contracts, prompt template contracts, categorical review/data/change states, decision stages, and raw threshold constants
-- `python_service/digital_twin/domain/ontology_relation_catalog.py`: bootstrap ontology relation catalog and decision-stage catalog used to seed ontology/native-rule management views; new runtime logic should not be added here first
-- `python_service/digital_twin/domain/ontology_prompt_registry.py`: default AI prompt registry text, prompt guardrails, and prompt policy defaults
-- `python_service/digital_twin/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by ontology relation evaluation
-- `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; graph-store projection produces ABox facts only and leaves opinions, insights, and inference to TypeDB direct-TypeQL/AI stages
-- `python_service/digital_twin/domain/portfolio_ontology_cognitive_concepts.py`: decision memory, hypotheses, assumptions, unresolved questions, and outcomes projected into the ABox
-- `python_service/digital_twin/domain/portfolio_ontology_catalog.py`: portfolio ontology projection catalogs for metrics, runtime settings, operational pipelines, insight types, factors, and sectors
-- `python_service/digital_twin/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, price-level, and liquidity ABox concept builders
-- `python_service/digital_twin/domain/portfolio_ontology_runtime_concepts.py`: runtime settings, account delivery profile, operational pipeline, strategy world, and decision-item ABox concept builders
-- `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
-- `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage state
-- `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
-- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: prompt/read-model helpers for relation-context formatting; it must not materialize InferenceBox output or run offline investment-rule comparisons
-- `python_service/digital_twin/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should require TypeDB-stored InferenceBox evidence for TypeDB-backed investment judgement
-- `python_service/digital_twin/domain/ontology_decision_state.py`: categorical review, data, evidence, conflict, change, and validation states shared by reasoning, AI, and delivery
-- `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
-- `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
-- `python_service/digital_twin/domain/monitoring.py`: realtime monitoring orchestration rules and cadence filtering
-- `python_service/digital_twin/domain/strategy_alerts.py`: compatibility alert helpers that must not create standalone investment judgement
-- `python_service/digital_twin/domain/external_signal_alerts.py`: external market, crypto, macro, DART, and data-connection alert rules
+- `python_service/digital_twin/modules/news_intelligence/domain/investment_evidence_governance.py`: evidence claims, entity resolution, freshness/source quality verification, and research-run audit contracts
+- `python_service/digital_twin/modules/read_models/domain/analytics.py`: compatibility facade for legacy analytics imports only
+- `python_service/digital_twin/modules/market_data/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
+- `python_service/digital_twin/modules/portfolio/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
+- `python_service/digital_twin/modules/portfolio/domain/valuation/`: independent valuation bounded context for evidence, model registry, deterministic calculations, quality gates, and ABox projection; it never emits an investment action
+- `python_service/digital_twin/modules/decisions/domain/strategy.py`: TypeDB inference-backed strategy compatibility facade, raw market facts, and categorical position decision state
+- `python_service/digital_twin/modules/model_registry/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
+- `python_service/digital_twin/modules/model_registry/domain/ontology_domain_tbox.py`: canonical account-to-outcome domain modules layered over the compatibility TBox
+- `python_service/digital_twin/modules/model_registry/domain/ontology_rule_manifest.py`: question, fact-family, policy, world, freshness, cost, and outcome routing metadata for every rule
+- `python_service/digital_twin/modules/reasoning/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
+- `python_service/digital_twin/modules/reasoning/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
+- `python_service/digital_twin/modules/model_registry/domain/ontology_relation_contracts.py`: ontology relation-reasoning data contracts, prompt template contracts, categorical review/data/change states, decision stages, and raw threshold constants
+- `python_service/digital_twin/modules/model_registry/domain/ontology_relation_catalog.py`: bootstrap ontology relation catalog and decision-stage catalog used to seed ontology/native-rule management views; new runtime logic should not be added here first
+- `python_service/digital_twin/modules/model_registry/domain/ontology_prompt_registry.py`: default AI prompt registry text, prompt guardrails, and prompt policy defaults
+- `python_service/digital_twin/modules/reasoning/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by ontology relation evaluation
+- `python_service/digital_twin/modules/reasoning/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; graph-store projection produces ABox facts only and leaves opinions, insights, and inference to TypeDB direct-TypeQL/AI stages
+- `python_service/digital_twin/modules/reasoning/domain/portfolio_ontology_cognitive_concepts.py`: decision memory, hypotheses, assumptions, unresolved questions, and outcomes projected into the ABox
+- `python_service/digital_twin/modules/reasoning/domain/portfolio_ontology_catalog.py`: portfolio ontology projection catalogs for metrics, runtime settings, operational pipelines, insight types, factors, and sectors
+- `python_service/digital_twin/modules/reasoning/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, price-level, and liquidity ABox concept builders
+- `python_service/digital_twin/modules/reasoning/domain/portfolio_ontology_runtime_concepts.py`: runtime settings, account delivery profile, operational pipeline, strategy world, and decision-item ABox concept builders
+- `python_service/digital_twin/modules/reasoning/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
+- `python_service/digital_twin/modules/market_data/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage state
+- `python_service/digital_twin/modules/reasoning/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
+- `python_service/digital_twin/modules/reasoning/domain/ontology_relation_reasoning.py`: prompt/read-model helpers for relation-context formatting; it must not materialize InferenceBox output or run offline investment-rule comparisons
+- `python_service/digital_twin/modules/reasoning/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should require TypeDB-stored InferenceBox evidence for TypeDB-backed investment judgement
+- `python_service/digital_twin/modules/reasoning/domain/ontology_decision_state.py`: categorical review, data, evidence, conflict, change, and validation states shared by reasoning, AI, and delivery
+- `python_service/digital_twin/modules/notifications/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
+- `python_service/digital_twin/modules/notifications/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
+- `python_service/digital_twin/modules/market_data/domain/monitoring.py`: realtime monitoring orchestration rules and cadence filtering
+- `python_service/digital_twin/modules/notifications/domain/strategy_alerts.py`: compatibility alert helpers that must not create standalone investment judgement
+- `python_service/digital_twin/modules/notifications/domain/external_signal_alerts.py`: external market, crypto, macro, DART, and data-connection alert rules
 - `python_service/digital_twin/modules/model_registry/domain/model_review.py`: model-change explanation, data validation, and improvement hints for alert messages
-- `python_service/digital_twin/domain/events.py`: event names and event payload factories
-- `python_service/digital_twin/domain/repositories.py`: application-facing ports
-- `python_service/digital_twin/domain/parsing.py`: pure parsing helpers shared by domain rules
+- `python_service/digital_twin/shared_kernel/events.py`: generic event envelope and deterministic identity
+- `python_service/digital_twin/modules/<owner>/domain/event_types.py`: owned event names; owner event factories and bounded payload builders live beside them
+- `python_service/digital_twin/modules/<owner>/contracts.py`: explicitly exported application-facing domain ports and data contracts; there is no root repository facade
+- `python_service/digital_twin/shared_kernel/parsing.py`: pure parsing helpers shared by domain rules
 
 Application:
 
@@ -290,9 +296,9 @@ Application:
 - `python_service/digital_twin/modules/market_data/application/monitoring_service.py`: one monitoring cycle use case
 - `python_service/digital_twin/modules/notifications/application/notification/`: version-neutral notification ingress, admission, dispatch eligibility, rendering, channel dispatch, quality policy, lifecycle trace query, and queue workflow
 - `python_service/digital_twin/modules/notifications/application/notification_service.py`: compatibility facade for legacy notification-worker imports only
-- `python_service/digital_twin/application/scheduler.py`: long-running scheduling loop around a runner
+- `python_service/digital_twin/platform/application/scheduler.py`: long-running scheduling loop around a runner
 - `python_service/digital_twin/modules/news_intelligence/application/investment_research_orchestration_service.py`: cache-first bounded hypothesis research, verified-evidence persistence, and re-reasoning request orchestration
-- `python_service/digital_twin/domain/hypothesis_development.py`: novel-hypothesis development lifecycle, lineage, validation gates, decision-impact classification, and deployment state
+- `python_service/digital_twin/modules/model_registry/domain/hypothesis_development.py`: novel-hypothesis development lifecycle, lineage, validation gates, decision-impact classification, and deployment state
 - `python_service/digital_twin/modules/model_registry/application/hypothesis_proposal_service.py`: evidence-bound novel hypothesis proposals that automatically enter the governed development pipeline
 - `python_service/digital_twin/modules/model_registry/application/hypothesis_development_service.py`: automatic causal screening, disabled RuleBox candidate compilation, TypeDB preview, historical and post-proposal validation, and explicit deployment approval orchestration
 
@@ -355,7 +361,10 @@ Compatibility modules:
 
 ## Event-Driven Rules
 
-Shared event contracts live in `domain/events.py`.
+The generic event envelope lives in `shared_kernel/events.py`. Event names,
+typed payload shaping and factories belong to their producing module's domain
+and are exposed through that module's explicit `contracts.py`. Common event
+serialization belongs to the platform, not to the generic envelope.
 
 Current events:
 
@@ -402,9 +411,9 @@ work independently. Shared ontology contracts and runtime composition still
 need coordination; moving an application service does not isolate every shared
 table or adapter it uses.
 
-Put new owner-specific event definitions and ports inside the module and expose
-the required contract explicitly. Existing shared contracts remain in
-`domain/events.py` and `domain/repositories.py` while callers migrate. If one
+Put owner-specific event definitions and ports inside the module and expose
+the required contract explicitly. The old root repository export facade has
+been removed; imports must name the actual owner's contract. If one
 use case must update several stores atomically, use an explicit transaction
 recorder in `infrastructure/`, delegating writes to owner-specific helpers.
 Do not replace an entire account just to change a notification preference or
@@ -420,7 +429,7 @@ and must not load unrelated business workflows merely by being imported.
 Account configuration belongs to `modules/accounts/contracts.py`; delivery
 time/message policies belong to `modules/notifications/contracts.py`, and
 investment strategy profiles belong to `modules/portfolio/contracts.py`.
-`domain/accounts.py` is a compatibility export only. Credential-aware workers
+`modules/accounts/domain/accounts.py` is a compatibility export only. Credential-aware workers
 may request `AccountReader`, but instrument/watchlist operations must use the
 secret-free `WatchlistAccountReader` projection. Keep account commands and
 their domain event in the existing shared transaction.

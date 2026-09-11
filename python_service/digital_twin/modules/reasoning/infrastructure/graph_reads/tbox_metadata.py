@@ -2,7 +2,7 @@
 
 from typing import Dict
 
-from digital_twin.domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata
 
 
 def active_tbox_metadata_unavailable(status: str, reason: str, source: str) -> Dict[str, object]:

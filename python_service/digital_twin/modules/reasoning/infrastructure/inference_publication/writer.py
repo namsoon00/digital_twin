@@ -3,8 +3,8 @@
 from typing import Dict, Iterable, List
 import time
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import material_graph_fingerprint
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from .markers import inference_generation_delete_queries, inference_generation_marker_row
 from .ports import PublicationRuntime, PublicationStore

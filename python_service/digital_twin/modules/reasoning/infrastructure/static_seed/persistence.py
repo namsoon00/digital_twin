@@ -1,8 +1,8 @@
 """TypeDB static-seed persistence owner; no facade or runtime construction."""
 
 from .persistence_ports import PersistenceStore, PersistenceBindings
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_to_payload
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
 from typing import Dict, Iterable, List

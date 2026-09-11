@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin import service_manager
-from digital_twin.domain.typedb_capacity_policy import evaluate_typedb_capacity_policy
+from digital_twin.platform.domain.typedb_capacity_policy import evaluate_typedb_capacity_policy
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
@@ -359,9 +359,9 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("new-rulebox", result["candidateRuleboxFingerprint"])
 
     def test_candidate_seed_contract_accepts_fresh_and_unchanged_verified_paths(self):
-        from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-        from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
-        from digital_twin.domain.ontology_schema import default_tbox_metadata
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash
+        from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
 
         source_rulebox_fingerprint = rulebox_rules_hash([
             rule.to_dict()

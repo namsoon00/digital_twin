@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from typing import Dict, Iterable, List, Tuple
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
 from typing import Mapping
 
 

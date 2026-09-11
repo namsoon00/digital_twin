@@ -5,12 +5,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.read_models.application.instrument_valuation_query_service import InstrumentValuationQueryService
-from digital_twin.domain.company_knowledge import (
+from digital_twin.modules.news_intelligence.domain.company_knowledge import (
     build_company_knowledge,
     company_valuation_context,
 )
-from digital_twin.domain.instrument_valuation import InstrumentValuationQuery
-from digital_twin.domain.portfolio import (
+from digital_twin.modules.portfolio.domain.instrument_valuation import InstrumentValuationQuery
+from digital_twin.modules.portfolio.domain.portfolio import (
     AccountSnapshot,
     PortfolioSummary,
     Position,

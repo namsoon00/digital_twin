@@ -3,8 +3,8 @@ import math
 from datetime import date, timedelta
 from typing import Dict, List
 
-from ..domain.market_data import known_stock
-from ..domain.portfolio import utc_now_iso
+from digital_twin.modules.market_data.domain.market_data import known_stock
+from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 
 
 MOCK_MARKET_UNIVERSE = {

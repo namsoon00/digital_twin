@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Dict
 
-from digital_twin.domain.ontology_projection_fingerprint import stable_value
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import stable_value
 from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
 
 

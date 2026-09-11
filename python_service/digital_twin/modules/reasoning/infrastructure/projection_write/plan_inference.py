@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 from typing import Optional, Union
-from digital_twin.domain.ontology_change_impact import compact_inference_impact_plan
-from digital_twin.domain.ontology_scopes import target_scope_manifest_fingerprint
-from digital_twin.domain.ontology_world_routing import route_world_impact
-from digital_twin.domain.ontology_worlds import shared_premise_world
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.reasoning.domain.ontology_change_impact import compact_inference_impact_plan
+from digital_twin.modules.reasoning.domain.ontology_scopes import target_scope_manifest_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_world_routing import route_world_impact
+from digital_twin.modules.reasoning.domain.ontology_worlds import shared_premise_world
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Callable, Dict, List
 import time
 
 
 from .stage_results import CompletedProjection, PlanInferenceResult
 from .plan_inference_ports import PlanInferencePort
-from digital_twin.domain.ontology_worlds import OntologyWorld
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_worlds import OntologyWorld
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 def plan_inference(

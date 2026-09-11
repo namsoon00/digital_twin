@@ -19,7 +19,7 @@ class FrozenReasoningSnapshotSource:
         }
 
     def __call__(self, account, reasoning_context=None):
-        from digital_twin.domain.portfolio import account_snapshot_from_monitor_state
+        from digital_twin.modules.portfolio.domain.portfolio import account_snapshot_from_monitor_state
 
         del reasoning_context
         account_id = str(getattr(account, "account_id", "") or "")
@@ -137,10 +137,10 @@ class V2InferenceDetailReceiptSink:
 
 def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> ReasoningEngineShadowRunner:
     """Compose the isolated V2 TypeDB + QuestDB candidate worker."""
-    from digital_twin.domain.monitoring import RealtimeMonitor
-    from digital_twin.domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
-    from digital_twin.domain.reasoning_engine_versions import reasoning_release_identity
-    from digital_twin.domain.reasoning_shadow import payload_hash, unpack_projection_runtime_contexts
+    from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
+    from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
+    from digital_twin.modules.reasoning.domain.reasoning_engine_versions import reasoning_release_identity
+    from digital_twin.modules.reasoning.domain.reasoning_shadow import payload_hash, unpack_projection_runtime_contexts
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.reasoning_health import build_ontology_reasoning_queue_probe
     from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings

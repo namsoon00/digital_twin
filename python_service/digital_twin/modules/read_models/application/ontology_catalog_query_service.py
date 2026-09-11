@@ -8,10 +8,10 @@ decision audit records through stable identifiers.
 from collections import Counter
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
-from digital_twin.domain.ontology_rule_manifest import rule_domain_manifest
-from digital_twin.domain.ontology_schema import ontology_tbox
-from digital_twin.domain.ontology_rule_knowledge import knowledge_basis_summary, resolved_rule_knowledge_basis, rule_knowledge_basis_from_rows
-from digital_twin.domain.statistical_signals.registry import model_registry_payload
+from digital_twin.modules.model_registry.contracts import rule_domain_manifest
+from digital_twin.modules.reasoning.contracts import ontology_tbox
+from digital_twin.modules.model_registry.contracts import knowledge_basis_summary, resolved_rule_knowledge_basis, rule_knowledge_basis_from_rows
+from digital_twin.modules.model_registry.contracts import model_registry_payload
 
 
 ONTOLOGY_CATALOG_VERSION = "ontology-catalog-v1"

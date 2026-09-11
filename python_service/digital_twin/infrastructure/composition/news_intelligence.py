@@ -81,7 +81,7 @@ def build_hypothesis_research_planning_service(settings=None) -> HypothesisResea
 
 
 def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCollectionRunner:
-    from digital_twin.application.data_pipeline_health_service import DataPipelineHealthService
+    from digital_twin.platform.application.data_pipeline_health_service import DataPipelineHealthService
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.events import news_event_bus
     from digital_twin.infrastructure.news_ai_analyzer import news_ai_analyzer_from_settings

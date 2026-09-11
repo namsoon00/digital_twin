@@ -2,7 +2,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-from ..domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
 
 
 class ExternalSignalNewsMixin:

@@ -3,22 +3,22 @@ import unittest
 
 from digital_twin.modules.decisions.application.notification_ai_judgement_service import NotificationAIJudgementService
 from digital_twin.modules.decisions.public import NotificationAIValidatedGateEnricher
-from digital_twin.domain.notification_ai_gate_validation import validated_response_from_payload
-from digital_twin.domain.notification_ai_inference_packet import (
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import validated_response_from_payload
+from digital_twin.modules.decisions.domain.notification_ai_inference_packet import (
     build_notification_ai_inference_packet,
 )
-from digital_twin.domain.notification_ai_context_router import (
+from digital_twin.modules.decisions.domain.notification_ai_context_router import (
     fit_notification_ai_decision_core,
 )
-from digital_twin.domain.notification_narrative import (
+from digital_twin.modules.notifications.domain.notification_narrative import (
     apply_narrative_brief_to_response,
     build_investment_narrative_brief,
     narrative_claim_evidence_contract,
     normalize_narrative_claims,
     resolved_narrative_claim_evidence_contract,
 )
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.decisions.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 
 
 def investment_context():

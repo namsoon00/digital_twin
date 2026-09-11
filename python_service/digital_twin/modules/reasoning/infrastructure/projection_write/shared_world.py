@@ -2,33 +2,14 @@
 
 from __future__ import annotations
 from .shared_world_ports import SharedWorldPort
-from digital_twin.domain.knowledge_world_projection import knowledge_world_coverage
-from digital_twin.domain.market_world_projection import (
-    market_scope_plan_with_observation_times,
-    market_world_coverage,
-    merge_market_world_scope_manifest,
-)
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_native_rule_planning import (
-    merge_native_rule_planner_topology,
-    native_rule_planner_manifest_fingerprint,
-    native_rule_planner_topology,
-)
-from digital_twin.domain.ontology_projection_fingerprint import (
-    active_material_fingerprint,
-    apply_material_graph_identity,
-    material_graph_fingerprint,
-)
-from digital_twin.domain.ontology_scopes import (
-    SCOPED_ABOX_MANIFEST_VERSION,
-    apply_scoped_abox_identity,
-    apply_scoped_abox_repair_epochs,
-    apply_scoped_manifest_plan,
-    plan_target_scoped_manifest_patch,
-    scoped_manifest_id,
-)
-from digital_twin.domain.ontology_validator import validate_ontology
-from digital_twin.domain.ontology_worlds import world_metadata
+from digital_twin.modules.reasoning.domain.knowledge_world_projection import knowledge_world_coverage
+from digital_twin.modules.reasoning.domain.market_world_projection import market_scope_plan_with_observation_times, market_world_coverage, merge_market_world_scope_manifest
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import merge_native_rule_planner_topology, native_rule_planner_manifest_fingerprint, native_rule_planner_topology
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import active_material_fingerprint, apply_material_graph_identity, material_graph_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, apply_scoped_abox_identity, apply_scoped_abox_repair_epochs, apply_scoped_manifest_plan, plan_target_scoped_manifest_patch, scoped_manifest_id
+from digital_twin.modules.reasoning.domain.ontology_validator import validate_ontology
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_metadata
 from typing import Dict
 
 

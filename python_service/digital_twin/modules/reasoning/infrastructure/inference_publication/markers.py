@@ -3,7 +3,7 @@
 import json
 from typing import Callable, Dict, Iterable, List
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
 
 

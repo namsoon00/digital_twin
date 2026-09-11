@@ -4,10 +4,10 @@ from datetime import timedelta
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.contracts import CapitalFlowObservation, canonical_observations, merge_capital_flow_rows, observation_from_row
-from digital_twin.domain.market_time_series import MarketTimeSeriesObservation, bucket_start, completed_daily_rows, granularity_preferences, iso_utc, limit_temporal_rows, parse_timestamp, preserved_daily_observed_at, required_session_count, snapshot_safe_granularity_preferences, temporal_observation_payload, temporal_session_count
-from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
-from digital_twin.domain.portfolio_ontology_temporal_concepts import trim_to_recent_sessions, window_rows
-from digital_twin.domain.time_series_storage import TIME_SERIES_CONTRACT_VERSION, TimeSeriesBackendDescriptor, TimeSeriesCapabilities, TimeSeriesWatermark
+from digital_twin.modules.market_data.domain.market_time_series import MarketTimeSeriesObservation, bucket_start, completed_daily_rows, granularity_preferences, iso_utc, limit_temporal_rows, parse_timestamp, preserved_daily_observed_at, required_session_count, snapshot_safe_granularity_preferences, temporal_observation_payload, temporal_session_count
+from digital_twin.modules.portfolio.contracts import AccountSnapshot, utc_now_iso
+from digital_twin.modules.reasoning.contracts import trim_to_recent_sessions, window_rows
+from digital_twin.modules.market_data.domain.time_series_storage import TIME_SERIES_CONTRACT_VERSION, TimeSeriesBackendDescriptor, TimeSeriesCapabilities, TimeSeriesWatermark
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 
 

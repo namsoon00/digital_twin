@@ -1,11 +1,4 @@
-from .domain.portfolio import (
-    AccountSnapshot,
-    AlertEvent,
-    DecisionItem,
-    PortfolioSummary,
-    Position,
-    utc_now_iso,
-)
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, DecisionItem, PortfolioSummary, Position, utc_now_iso
 
 __all__ = [
     "AccountSnapshot",

@@ -2,7 +2,7 @@
 
 from typing import Iterable, List, Protocol
 
-from digital_twin.domain.events import DomainEvent
+from digital_twin.shared_kernel.events import DomainEvent
 from .configuration import AccountConfig
 
 

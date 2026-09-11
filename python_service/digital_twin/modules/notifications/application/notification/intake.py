@@ -2,13 +2,13 @@
 
 from typing import Dict, Mapping
 
-from digital_twin.domain.events import DomainEvent
-from digital_twin.domain.investment_strategy_guidance import merge_strategy_context
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.decisions.contracts import merge_strategy_context
 from digital_twin.modules.notifications.domain.notification.request import NOTIFICATION_REQUEST_CONTRACT_VERSION, NotificationRequest, NotificationSourceTrace
 from digital_twin.modules.notifications.domain.notification.presentation import presentation_metadata
-from digital_twin.domain.notification_templates import alert_context, text_context
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.notifications.domain.notification_templates import alert_context, text_context
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.portfolio.contracts import AlertEvent
 from digital_twin.modules.notifications.application.notification.presentation import content_body
 
 

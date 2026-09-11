@@ -1,10 +1,8 @@
 """graph_reads: rows through explicit injected capabilities."""
 
-from digital_twin.domain.hypothesis_calibration import (
-    hypothesis_calibration_snapshot_from_abox_rows,
-)
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.outcomes.contracts import hypothesis_calibration_snapshot_from_abox_rows
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.infrastructure.graph_store_payloads import (
     condition_relation_filter_values,
     number_or_none,

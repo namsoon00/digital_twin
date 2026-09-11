@@ -1,7 +1,7 @@
 """Capabilities used only by static-seed restore."""
 
 from typing import Dict, Iterable, List, Protocol
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 class RestoreStore(Protocol):

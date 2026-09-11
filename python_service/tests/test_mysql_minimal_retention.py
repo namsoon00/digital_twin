@@ -3,8 +3,8 @@ import time
 import unittest
 from datetime import datetime, timezone
 
-from digital_twin.application.mysql_minimal_retention_service import MySQLMinimalRetentionService
-from digital_twin.domain.mysql_minimal_retention import mysql_minimal_retention_policy
+from digital_twin.platform.application.mysql_minimal_retention_service import MySQLMinimalRetentionService
+from digital_twin.platform.domain.mysql_minimal_retention import mysql_minimal_retention_policy
 from digital_twin.infrastructure.mysql_minimal_retention import MySQLMinimalRetentionRepository
 from digital_twin.infrastructure.mysql_retention import (
     MYSQL_OPERATIONAL_HISTORY_RETENTION_TARGETS,

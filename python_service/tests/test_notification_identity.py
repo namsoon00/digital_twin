@@ -1,7 +1,7 @@
 import unittest
 
 from digital_twin.modules.notifications.application.notification_service import NotificationInstrumentIdentityEnricher
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 
 
 class _Symbol:

@@ -4,13 +4,7 @@ import copy
 from datetime import datetime, timezone
 from typing import Dict
 
-from ..domain.portfolio import (
-    AccountSnapshot,
-    PortfolioSummary,
-    account_snapshot_from_monitor_state,
-    monitor_state_has_live_account_data,
-    utc_now_iso,
-)
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, account_snapshot_from_monitor_state, monitor_state_has_live_account_data, utc_now_iso
 
 
 def _timestamp(value: object):

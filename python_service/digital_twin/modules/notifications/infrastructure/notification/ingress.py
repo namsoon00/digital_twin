@@ -4,12 +4,12 @@ from typing import Dict, Iterable
 
 from digital_twin.modules.notifications.application.notification.intake import NotificationIngressService
 from digital_twin.modules.accounts.contracts import AccountConfig
-from digital_twin.domain.data_freshness import data_freshness_required, freshness_record
-from digital_twin.domain.events import DomainEvent
-from digital_twin.domain.message_types import PORTFOLIO_HOLDINGS_SNAPSHOT
+from digital_twin.modules.market_data.contracts import data_freshness_required, freshness_record
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.notifications.domain.message_types import PORTFOLIO_HOLDINGS_SNAPSHOT
 from digital_twin.modules.notifications.domain.notification.request import NotificationRequest
-from digital_twin.domain.notification_templates import text_context
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.notifications.domain.notification_templates import text_context
+from digital_twin.modules.portfolio.contracts import AlertEvent
 from digital_twin.infrastructure.settings import runtime_settings, utc_now
 from digital_twin.modules.notifications.infrastructure.notification.transport import NotificationResult
 

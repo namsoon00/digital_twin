@@ -1,0 +1,95 @@
+from digital_twin.modules.market_data.contracts import number
+
+
+def money(value: float, currency: str = "KRW") -> str:
+    amount = number(value)
+    code = str(currency or "KRW").upper()
+    if amount <= 0:
+        return "-"
+    if code == "USD":
+        if amount >= 1000:
+            return "$" + format(round(amount), ",")
+        return "$" + format(round(amount, 2), ",").rstrip("0").rstrip(".")
+    if code != "KRW":
+        if amount >= 1000:
+            return format(round(amount), ",") + " " + code
+        return format(round(amount, 2), ",").rstrip("0").rstrip(".") + " " + code
+    if amount >= 100000000:
+        return format(round(amount / 100000000), ",") + "억 원"
+    if amount >= 10000:
+        return format(round(amount / 10000), ",") + "만 원"
+    return format(round(amount), ",") + "원"
+
+
+def price_money(value: float, currency: str = "KRW") -> str:
+    amount = number(value)
+    code = str(currency or "KRW").upper()
+    if amount <= 0:
+        return "-"
+    if code == "KRW":
+        return format(round(amount), ",") + "원"
+    if code == "USD":
+        return "$" + format(round(amount, 2), ",").rstrip("0").rstrip(".")
+    return format(round(amount, 2), ",").rstrip("0").rstrip(".") + " " + code
+
+
+def signed_pct(value: float, suffix: str = "%") -> str:
+    rounded = round(float(value or 0), 1)
+    return ("+" if rounded > 0 else "") + str(rounded) + suffix
+
+
+def pct_delta(current: float, previous: float) -> float:
+    base = float(previous or 0)
+    if not base:
+        return 0.0
+    return ((float(current or 0) / base) - 1) * 100
+
+
+def compact_number(value: float) -> str:
+    amount = number(value)
+    if not amount:
+        return "-"
+    rounded = round(amount, 1)
+    if rounded == round(rounded):
+        return format(round(rounded), ",")
+    return format(rounded, ",")
+
+
+def compact_multiple(value: float, digits: int = 2) -> str:
+    amount = number(value)
+    if amount <= 0:
+        return "-"
+    precision = max(0, int(digits or 0))
+    smallest = 10 ** -precision
+    if amount < smallest:
+        return "<" + format(smallest, "." + str(precision) + "f") + "배"
+    rendered = format(
+        round(amount, precision),
+        "." + str(precision) + "f",
+    ).rstrip("0").rstrip(".")
+    return rendered + "배"
+
+
+def trade_strength_label(value: float) -> str:
+    """Explain the KIS buy/sell execution ratio without implying a price forecast."""
+
+    strength = number(value)
+    if strength <= 0:
+        return ""
+    if strength >= 120:
+        return "매수 체결 강함"
+    if strength >= 105:
+        return "매수 체결 우세"
+    if strength >= 95:
+        return "매수·매도 비슷"
+    if strength >= 80:
+        return "매도 체결 우세"
+    return "매도 체결 강함"
+
+
+def signed_number(value: float) -> str:
+    amount = number(value)
+    if not amount:
+        return "-"
+    prefix = "+" if amount > 0 else ""
+    return prefix + compact_number(amount)

@@ -1,12 +1,8 @@
 from typing import Dict, Iterable, List, Tuple
 
-from ..domain.investment_research import (
-    NewsCollectionTarget,
-    ResearchEvidence,
-    research_evidence_from_external_signals,
-)
-from ..domain import news_analysis as news_domain
-from ..domain.portfolio import Position
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_external_signals
+import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
+from digital_twin.modules.portfolio.domain.portfolio import Position
 from .external_signals import ExternalSignalProvider
 
 

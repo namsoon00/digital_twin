@@ -5,6 +5,7 @@ import copy
 import inspect
 import json
 from pathlib import Path
+from internal_coordinator_parity import patch_manifest_member
 
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -66,7 +67,7 @@ class ExpandStages(ast.NodeTransformer):
             assert {k.arg: ast.unparse(k.value) for k in node.value.keywords} == {
                 name: name for name in spec["inputs"]
             }
-            method = function(
+            method = patch_manifest_member() if name == "patch_manifest" else function(
                 "modules/reasoning/infrastructure/projection_write/" + name + ".py",
                 name,
             )

@@ -133,7 +133,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # protect single-call mutations, verified rule caches and lease cleanup.
         # Projection phases, owner transaction rollback and attempt-fenced
         # completion/receipt recovery add 25 focused boundary tests.
-        self.assertLessEqual(total, 1250)
+        # Integrated domain ownership, HTTP access/payloads, atomic history and
+        # isolated multi-account recovery add 76 focused regressions.
+        self.assertLessEqual(total, 1326)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -3,7 +3,7 @@
 from collections import Counter
 from typing import Dict
 
-from digital_twin.domain.investment_brain import DecisionEpisode
+from digital_twin.modules.decisions.domain.investment_brain import DecisionEpisode
 
 
 class DecisionEpisodeReconciliationService:

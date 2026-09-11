@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from module_migration_fixtures import is_domain_dependency
 
 from digital_twin.modules.reasoning.infrastructure import typeql
 from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules, evidence_index
@@ -80,7 +81,7 @@ for name in sys.modules:
                         dependencies.add(module.rsplit(".", 1)[-1])
                     elif module.startswith("digital_twin"):
                         self.assertTrue(
-                            module.startswith("digital_twin.domain.")
+                            is_domain_dependency(module)
                             or module in {
                                 "digital_twin.modules._exports",
                                 "digital_twin.infrastructure.graph_store_payloads",

@@ -1,10 +1,10 @@
 import urllib.parse
 from typing import Dict, List
 
-from ..domain.company_knowledge import optional_number
-from ..domain.market_data import number
-from ..domain.portfolio import Position, utc_now_iso
-from ..domain.security_lines import related_market_symbols_for_positions
+from digital_twin.modules.news_intelligence.domain.company_knowledge import optional_number
+from digital_twin.modules.market_data.domain.market_data import number
+from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.instruments.domain.security_lines import related_market_symbols_for_positions
 from .external_signal_utils import DISABLED_SETTING_VALUES, percent_text
 
 

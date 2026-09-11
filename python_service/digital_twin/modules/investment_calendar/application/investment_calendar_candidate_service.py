@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 from digital_twin.modules.investment_calendar.domain.investment_calendar import clean_text, has_explicit_event_time, parse_utc
 from digital_twin.modules.investment_calendar.domain.investment_calendar_candidates import bounded_int, CANDIDATE_STATUS_REGISTERED, CANDIDATE_STATUS_EXPIRED, CANDIDATE_STATUS_PENDING, CANDIDATE_STATUS_REJECTED, CANDIDATE_STATUS_SUPERSEDED, InvestmentCalendarReviewCandidate
-from digital_twin.domain.security_lines import security_lines_for_symbol
+from digital_twin.modules.instruments.contracts import security_lines_for_symbol
 from digital_twin.modules.read_models.public import enrich_symbol_display_records
 
 

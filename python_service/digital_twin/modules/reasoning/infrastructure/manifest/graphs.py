@@ -1,10 +1,7 @@
 """manifest: graphs through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.domain.ontology_scopes import (
-    SCOPED_ABOX_MANIFEST_VERSION,
-    SCOPED_ABOX_PERSISTENCE_MODE,
-)
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
 from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
     native_rule_evidence_read_index_from_rows,
     native_rule_manifest_index_required,

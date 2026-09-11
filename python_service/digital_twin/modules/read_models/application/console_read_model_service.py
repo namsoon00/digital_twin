@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional
 
-from digital_twin.domain.operational_health import OPERATIONAL_HEALTH_CONTRACT_VERSION, OperationalHealthSignal, assess_operational_health, reasoning_engine_health_signals
+from digital_twin.platform.domain.operational_health import OPERATIONAL_HEALTH_CONTRACT_VERSION, OperationalHealthSignal, assess_operational_health, reasoning_engine_health_signals
 
 
 CONSOLE_READ_MODEL_VERSION = "console-read-model-v2"

@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional, Protocol, Tuple
 
 from digital_twin.modules.accounts.contracts import WatchlistAccount
-from digital_twin.domain.events import DomainEvent
+from digital_twin.shared_kernel.events import DomainEvent
 
 
 class AccountWatchlistRepository(Protocol):

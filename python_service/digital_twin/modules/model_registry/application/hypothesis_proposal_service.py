@@ -2,8 +2,8 @@ import time
 import uuid
 from typing import Dict, List
 
-from digital_twin.domain.events import hypothesis_proposed_event, hypothesis_reviewed_event
-from digital_twin.domain.investment_brain import NovelHypothesisProposal, stable_id
+from digital_twin.modules.model_registry.domain.events import hypothesis_proposed_event, hypothesis_reviewed_event
+from digital_twin.modules.decisions.contracts import NovelHypothesisProposal, stable_id
 
 
 class HypothesisProposalService:

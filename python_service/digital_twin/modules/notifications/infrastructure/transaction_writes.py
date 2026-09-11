@@ -5,7 +5,7 @@ from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any, Callable, Dict, Iterable
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.infrastructure.settings import utc_now
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.portfolio.contracts import AlertEvent
 from digital_twin.infrastructure.mysql_operational_helpers import _sent_key_hash
 
 

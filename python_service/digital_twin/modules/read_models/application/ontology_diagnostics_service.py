@@ -1,11 +1,12 @@
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.events import MONITORING_ALERTS_DETECTED, MONITORING_SNAPSHOT_COLLECTED, ONTOLOGY_REASONING_COMPLETED
-from digital_twin.domain.notifications import NotificationJob, notification_debug_number
-from digital_twin.domain.ontology_inference_ledger import inference_trace_ledger_payload
-from digital_twin.domain.portfolio import utc_now_iso
-from digital_twin.domain.portfolio_ontology_coverage import CATEGORY_LABELS, CATEGORY_RELATIONS
-from digital_twin.domain.ontology_runtime_operations import scoped_abox_maintenance_health, scoped_abox_maintenance_policy, scoped_abox_maintenance_yield_status
+from digital_twin.modules.market_data.contracts import MONITORING_ALERTS_DETECTED, MONITORING_SNAPSHOT_COLLECTED
+from digital_twin.modules.reasoning.contracts import ONTOLOGY_REASONING_COMPLETED
+from digital_twin.modules.notifications.contracts import NotificationJob, notification_debug_number
+from digital_twin.modules.reasoning.contracts import inference_trace_ledger_payload
+from digital_twin.modules.portfolio.contracts import utc_now_iso
+from digital_twin.modules.reasoning.contracts import CATEGORY_LABELS, CATEGORY_RELATIONS
+from digital_twin.modules.reasoning.contracts import scoped_abox_maintenance_health, scoped_abox_maintenance_policy, scoped_abox_maintenance_yield_status
 
 
 class OntologyDiagnosticsService:

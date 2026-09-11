@@ -11,21 +11,21 @@ from digital_twin.modules.decisions.application.ai_inference_queue_service impor
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
 from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
-from digital_twin.domain.investment_decision_actionability import (
+from digital_twin.modules.decisions.domain.investment_decision_actionability import (
     investment_decision_actionability,
 )
-from digital_twin.domain.decision_follow_up import (
+from digital_twin.modules.outcomes.domain.decision_follow_up import (
     evaluate_follow_up_conditions,
     normalize_follow_up_conditions,
 )
-from digital_twin.domain.notification_ai_decision_brief import (
+from digital_twin.modules.decisions.domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
     build_notification_ai_decision_prompt,
     notification_ai_decision_brief,
     notification_ai_execution_profile,
 )
-from digital_twin.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.decisions.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 
 
 class EpisodeStore:

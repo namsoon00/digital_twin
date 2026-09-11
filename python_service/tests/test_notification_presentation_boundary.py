@@ -10,11 +10,11 @@ from digital_twin.modules.notifications.application.notification.presentation im
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.application.notification.workflow import NotificationHoldingSnapshotEnricher, NotificationQueueRunner
 from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, _trigger_rows
-from digital_twin.domain.customer_investment_document import CustomerInvestmentDocument, CustomerInvestmentSection
+from digital_twin.modules.read_models.domain.customer_investment_document import CustomerInvestmentDocument, CustomerInvestmentSection
 from digital_twin.modules.notifications.domain.notification.presentation import LEGACY_KINDS, NOTIFICATION_KINDS, notification_kind
 from digital_twin.modules.notifications.domain.notification.request import NotificationRequest
-from digital_twin.domain.notification_templates import NotificationTemplate, render_notification, text_context
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification, text_context
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.infrastructure.notification.ingress import enqueue_request
 from digital_twin.infrastructure.mysql_notification_jobs import (
     MySQLNotificationJobStore, notification_list_presentation_column, notification_list_presentation_join,
@@ -106,7 +106,7 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
 
     def test_missing_upstream_decision_does_not_become_hold(self):
         job = NotificationJob.create("가격이 3.8% 올랐습니다.", message_type="investmentInsight")
-        with patch("digital_twin.domain.notification_ai_gate_validation.local_validated_ai_response", side_effect=AssertionError("must not infer")):
+        with patch("digital_twin.modules.decisions.domain.notification_ai_gate_validation.local_validated_ai_response", side_effect=AssertionError("must not infer")):
             message = NotificationRenderingService().render(job)
         self.assertIn("3.8%", message)
         self.assertNotIn("보유", message)
@@ -210,7 +210,7 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         self.assertEqual("price-change", notification_kind("investmentInsight", context).key)
 
     def test_lightweight_web_list_keeps_upstream_notification_kind(self):
-        from digital_twin.infrastructure.web_server import notification_job_list_payload
+        from digital_twin.infrastructure.web.adapters.notification_presentation import notification_job_list_payload
 
         cases = [
             ("ai-interpretation", {
@@ -296,7 +296,7 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
 
     def test_template_does_not_generate_a_canned_ai_opinion(self):
         values = text_context("연결이 복구됐습니다.", "monitorConnection", "main", "계정")
-        with patch("digital_twin.domain.notification_ai.enrich_notification_ai_context", side_effect=AssertionError("template cannot infer")):
+        with patch("digital_twin.modules.decisions.domain.notification_ai.enrich_notification_ai_context", side_effect=AssertionError("template cannot infer")):
             result = render_notification(NotificationTemplate("monitorConnection", "{body}"), values)
         self.assertNotIn("AI 의견", result)
 

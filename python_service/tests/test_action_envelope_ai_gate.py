@@ -5,17 +5,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.notification_ai_gate_validation import (  # noqa: E402
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import (  # noqa: E402
     ai_decision_input_packet,
     build_notification_ai_gate_prompt,
     local_validated_ai_response,
     validated_response_from_payload,
 )
-from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse  # noqa: E402
-from digital_twin.domain.notification_ai_gate_text import user_friendly_ai_text  # noqa: E402
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse  # noqa: E402
+from digital_twin.modules.decisions.domain.notification_ai_gate_text import user_friendly_ai_text  # noqa: E402
 from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message, notification_topline_change_summary, typedb_decision_assessment_rows
 from digital_twin.modules.decisions.public import NotificationAIValidatedGateEnricher
-from digital_twin.domain.notifications import NotificationJob  # noqa: E402
+from digital_twin.modules.notifications.domain.notifications import NotificationJob  # noqa: E402
 
 
 def entry_context():

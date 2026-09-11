@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable
 
-from ..domain.portfolio import AccountSnapshot, AlertEvent
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent
 from .settings import data_dir, read_json, write_private_json
 
 

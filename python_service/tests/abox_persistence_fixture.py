@@ -7,7 +7,7 @@ import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
 
 
 WORLD = "portfolio:abox-test:alpha"

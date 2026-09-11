@@ -2,8 +2,8 @@
 
 from typing import Dict, List
 
-from digital_twin.domain.ontology_decision_state import DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, VALIDATION_STATE_LABELS
-from digital_twin.domain.ontology_decision_quality import build_ontology_decision_quality_snapshot
+from digital_twin.modules.reasoning.contracts import DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, VALIDATION_STATE_LABELS
+from digital_twin.modules.reasoning.contracts import build_ontology_decision_quality_snapshot
 
 
 def _dict_value(value: object) -> Dict[str, object]:

@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.investment_calendar.domain.official_calendar import OfficialCalendarEvent
-from digital_twin.domain.portfolio import utc_now_iso
-from digital_twin.application.runtime_checkpoint import checkpoint_datetime, checkpoint_iso
+from digital_twin.modules.portfolio.contracts import utc_now_iso
+from digital_twin.platform.application.runtime_checkpoint import checkpoint_datetime, checkpoint_iso
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

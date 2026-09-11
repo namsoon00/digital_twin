@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List
 
-from digital_twin.domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.news_intelligence.contracts import RESEARCH_EVIDENCE_COLLECTED
 from digital_twin.modules.investment_calendar.domain.investment_calendar_extraction import calendar_candidate_sets_from_research_items
 
 

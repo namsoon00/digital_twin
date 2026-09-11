@@ -3,9 +3,9 @@ import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
-from digital_twin.domain.ontology_execution_trace import reasoning_execution_trace_payload
-from digital_twin.domain.ontology_projection_audit import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from digital_twin.modules.reasoning.domain.ontology_execution_trace import reasoning_execution_trace_payload
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import (
     apply_projection_run_identity,
     build_ontology_projection_run,
     compact_reasoning_request_context,
@@ -17,14 +17,14 @@ from digital_twin.domain.ontology_projection_audit import (
     projection_run_from_payload,
     projection_source_snapshot,
 )
-from digital_twin.domain.ontology_projection_fingerprint import (
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import (
     apply_material_graph_identity,
     material_graph_fingerprint,
 )
-from digital_twin.domain.ontology_runtime_operations import (
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
 )
-from digital_twin.domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position
 from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
 from digital_twin.infrastructure.ontology_projection import (
     PortfolioOntologyProjectionRecorder,

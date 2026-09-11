@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Protocol
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 
 class BootstrapStore(Protocol):

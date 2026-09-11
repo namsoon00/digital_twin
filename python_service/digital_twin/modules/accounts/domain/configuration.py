@@ -5,11 +5,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from digital_twin.domain.notification_explanation import (
-    DEFAULT_NOTIFICATION_DETAIL_LEVEL,
-    normalize_notification_detail_level,
-    notification_detail_profile,
-)
+from digital_twin.modules.notifications.contracts import DEFAULT_NOTIFICATION_DETAIL_LEVEL, normalize_notification_detail_level, notification_detail_profile
 from digital_twin.modules.notifications.contracts import (
     DEFAULT_QUIET_HOURS_ENABLED,
     DEFAULT_QUIET_HOURS_START,
@@ -74,7 +70,7 @@ class AccountConfig:
         return AccountDomainProfile.from_legacy(self)
 
     def investment_mandate(self, effective_at: str = ""):
-        from digital_twin.domain.investment_mandate import InvestmentMandate
+        from digital_twin.modules.portfolio.contracts import InvestmentMandate
 
         account = self.domain_profile().brokerage_account
         return InvestmentMandate.from_profile(

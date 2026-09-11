@@ -6,11 +6,11 @@ from digital_twin.modules.read_models.application.investment_case_query_service 
 from digital_twin.modules.notifications.application.notification.eligibility import NotificationDispatchEligibilityService
 from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner
 from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_insight
-from digital_twin.domain.investment_insight_assessment import (
+from digital_twin.modules.decisions.domain.investment_insight_assessment import (
     investment_insight_delivery_transition, investment_insight_transition,
 )
-from digital_twin.domain.notification_ai_delivery import final_ai_delivery_decision
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.notification_ai_delivery import final_ai_delivery_decision
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from test_notification_ai_delivery import initial_holding_review_context
 
 

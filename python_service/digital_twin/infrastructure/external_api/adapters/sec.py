@@ -2,7 +2,7 @@ import hashlib
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest, SourceObservation, bounded_int
-from ....domain.disclosure_quality import assess_disclosure_document
+from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
 from ...external_signal_provider_sec import DEFAULT_SEC_COMPANY_CIKS, sec_document_text
 from ...external_signal_utils import symbol_assignments
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of

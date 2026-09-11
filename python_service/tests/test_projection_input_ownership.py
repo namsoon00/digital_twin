@@ -13,12 +13,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from digital_twin.domain.ontology_contracts import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
     PortfolioOntology,
 )
-from digital_twin.domain.ontology_worlds import world_from_snapshot
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_from_snapshot
 from digital_twin.infrastructure import ontology_projection as api
 from digital_twin.modules.reasoning.application.projection_input import (
     assembly,

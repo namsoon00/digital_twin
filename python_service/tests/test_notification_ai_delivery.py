@@ -4,21 +4,21 @@ from datetime import datetime, timezone
 from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
 from digital_twin.modules.notifications.application.notification_ai_gate_message import compact_current_flow_rows
 from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy
-from digital_twin.domain.notification_ai_delivery import (
+from digital_twin.modules.notifications.domain.notification_ai_delivery import (
     final_ai_delivery_decision,
     pre_ai_deferred_delivery_decision,
 )
-from digital_twin.domain.notification_delivery_explanation import (
+from digital_twin.modules.notifications.domain.notification_delivery_explanation import (
     build_customer_delivery_explanation,
 )
-from digital_twin.domain.notification_rules import NotificationRuleDecision
-from digital_twin.domain.notification_rules import (
+from digital_twin.modules.notifications.domain.notification_rules import NotificationRuleDecision
+from digital_twin.modules.notifications.domain.notification_rules import (
     apply_state_cooldown_rule,
     default_notification_rule,
     evaluate_notification_rule,
 )
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.ontology_relation_delivery import relation_delivery_diff
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.ontology_relation_delivery import relation_delivery_diff
 
 
 class SuppressionQueue:

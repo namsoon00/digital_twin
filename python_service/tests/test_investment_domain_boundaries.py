@@ -2,7 +2,7 @@ import ast
 import unittest
 from pathlib import Path
 
-from digital_twin.domain.ontology_domain_tbox import (
+from digital_twin.modules.model_registry.domain.ontology_domain_tbox import (
     DOMAIN_CLASS_DEFS,
     DOMAIN_RELATION_DEFS,
     DOMAIN_RULE_DEFS,
@@ -11,9 +11,11 @@ from digital_twin.domain.ontology_domain_tbox import (
 
 class InvestmentDomainBoundaryTests(unittest.TestCase):
     def test_domain_layer_does_not_import_infrastructure(self):
-        root = Path(__file__).resolve().parents[1] / "digital_twin" / "domain"
+        root = Path(__file__).resolve().parents[1] / "digital_twin"
         violations = []
-        for path in sorted(root.rglob("*.py")):
+        paths = [path for path in root.rglob("*.py") if "domain" in path.relative_to(root).parts]
+        self.assertGreater(len(paths), 250)
+        for path in sorted(paths):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
@@ -25,7 +27,7 @@ class InvestmentDomainBoundaryTests(unittest.TestCase):
                         violations.append(str(path.relative_to(root)))
                 else:
                     continue
-                if any(name.startswith("digital_twin.infrastructure") for name in names):
+                if any("infrastructure" in name.split(".") or "application" in name.split(".") for name in names):
                     violations.append(str(path.relative_to(root)))
         self.assertEqual([], sorted(set(violations)))
 

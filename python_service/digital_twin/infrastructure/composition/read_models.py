@@ -43,7 +43,7 @@ def build_instrument_valuation_query_service(settings=None) -> InstrumentValuati
 
 
 def build_flow_lens_service(settings=None) -> FlowLensService:
-    from digital_twin.domain.market_data import number
+    from digital_twin.modules.market_data.domain.market_data import number
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.instruments import build_symbol_universe_service
     from digital_twin.infrastructure.settings import currency_rates, runtime_settings

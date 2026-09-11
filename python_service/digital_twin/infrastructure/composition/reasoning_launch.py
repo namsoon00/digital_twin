@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict
 
 if TYPE_CHECKING:
-    from digital_twin.domain.reasoning_engine_versions import ReasoningEngineDescriptor
+    from digital_twin.modules.reasoning.domain.reasoning_engine_versions import ReasoningEngineDescriptor
     from digital_twin.modules.reasoning.public import ReasoningEnginePlatformService
 
 

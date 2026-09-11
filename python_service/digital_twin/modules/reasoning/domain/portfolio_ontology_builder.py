@@ -1,0 +1,443 @@
+from typing import Dict, Iterable, List
+
+from digital_twin.modules.market_data.contracts import investor_flow_observation
+from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from digital_twin.modules.reasoning.domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION, build_investment_opinion_prompt, build_reasoning_cards
+from digital_twin.modules.reasoning.domain.ontology_schema import abox_lifecycle_metadata, abox_properties, apply_abox_lifecycle, add_entity, add_relation, tbox_entities, tbox_relations
+from digital_twin.modules.reasoning.domain.ontology_external_abox import add_external_signal_concepts, add_position_macro_context_concepts, add_symbol_external_signal_concepts
+from digital_twin.modules.reasoning.domain.ontology_observation_quality import position_observation_profiles, profile_for_domain
+from digital_twin.modules.reasoning.domain.portfolio_ontology_runtime_concepts import add_account_delivery_profile_concepts, add_account_investment_strategy_concepts, add_decision_item_concepts, add_operational_world_concepts, add_position_strategy_role_concepts, add_runtime_metadata_concepts, add_runtime_setting_concepts, add_strategy_world_concepts, is_holding_position, is_watchlist_position
+from digital_twin.modules.reasoning.domain.portfolio_ontology_market_concepts import add_official_daily_price_concepts, add_data_source_concept, add_market_evidence_profile_concepts, add_metric_concepts, add_price_level_and_liquidity_concepts, pct_distance_safe, symbol_key
+from digital_twin.modules.reasoning.domain.portfolio_ontology_coverage import add_coverage_gap_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_company_concepts import add_company_knowledge_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_reference_concepts import add_official_corporate_action_concepts, add_official_market_index_concepts, add_official_security_reference_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_calendar_concepts import add_investment_calendar_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_exposure_concepts import add_instrument_profile_concepts, add_market_exposure_concepts, add_portfolio_factor_exposure_concepts, add_position_factor_concepts, position_weight
+from digital_twin.modules.reasoning.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_pipeline_quality_concepts import add_position_pipeline_quality_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_lifecycle_concepts import add_portfolio_lifecycle_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_security_line_concepts import add_security_line_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import add_position_temporal_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_statistical_concepts import add_position_statistical_signal_concepts
+from digital_twin.modules.portfolio.contracts import add_position_valuation_concepts
+from digital_twin.modules.portfolio.contracts import PortfolioSummary, Position
+from digital_twin.modules.reasoning.domain.portfolio_ontology_outputs import dedupe_entities, dedupe_evidence, dedupe_relations
+from digital_twin.modules.reasoning.domain.reasoning_source_facts import reasoning_source_fact_lineage_for_symbol
+from digital_twin.modules.reasoning.domain.portfolio_ontology_state import add_fact_change_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_structure import add_instrument_identity_concepts, instrument_tbox_classes, observable_position
+from digital_twin.modules.market_data.contracts import trading_value_snapshot
+
+
+def build_portfolio_ontology(
+    positions: Iterable[Position],
+    portfolio: PortfolioSummary,
+    legacy_by_symbol: Dict[str, Dict[str, object]] = None,
+    external_signals: Dict[str, object] = None,
+    portfolio_id: str = "portfolio",
+    runtime_context: Dict[str, object] = None,
+    include_tbox: bool = True,
+    include_presentation: bool = True,
+    include_derived_decision_items: bool = True,
+    reference_positions: Iterable[Position] = None,
+) -> PortfolioOntology:
+    """Build an ontology graph for a portfolio snapshot.
+
+    The TypeDB runtime projection persists ABox facts only.  It therefore does
+    not need to allocate the static TBox or build user-facing cards/prompts on
+    every market tick.  Read models and diagnostics retain the existing full
+    graph by using the default arguments.
+    """
+    external_signals = external_signals or {}
+    runtime_context = runtime_context or {}
+    lifecycle_metadata = abox_lifecycle_metadata(
+        portfolio_id,
+        runtime_context,
+        runtime_context.get("activeTBox") if isinstance(runtime_context, dict) else None,
+    )
+    observed_by_symbol: Dict[str, Position] = {}
+    for item in positions:
+        if not observable_position(item):
+            continue
+        key = symbol_key(item)
+        previous = observed_by_symbol.get(key)
+        if previous is None or (is_watchlist_position(previous) and is_holding_position(item)):
+            observed_by_symbol[key] = item
+    observed_positions = list(observed_by_symbol.values())
+    reference_by_symbol: Dict[str, Position] = {}
+    reference_source_positions = reference_positions if reference_positions is not None else observed_positions
+    for item in reference_source_positions:
+        if not observable_position(item):
+            continue
+        key = symbol_key(item)
+        previous = reference_by_symbol.get(key)
+        if previous is None or (is_watchlist_position(previous) and is_holding_position(item)):
+            reference_by_symbol[key] = item
+    # A target-scoped projection still owns the target observation even when
+    # a caller supplied an incomplete reference collection.
+    for key, item in observed_by_symbol.items():
+        reference_by_symbol.setdefault(key, item)
+    reference_observed_positions = list(reference_by_symbol.values())
+    graph = PortfolioOntology(portfolio_id=portfolio_id)
+    if include_tbox:
+        graph.entities.extend(tbox_entities())
+        graph.relations.extend(tbox_relations())
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    account_context = runtime_context.get("account") if isinstance(runtime_context, dict) else {}
+    account_context = account_context if isinstance(account_context, dict) else {}
+    account_value = str(account_context.get("accountId") or account_context.get("id") or portfolio_id or "account")
+    account_label = str(account_context.get("accountLabel") or account_context.get("label") or account_value or "투자 계좌")
+    account_id_value = add_entity(graph, "account", account_value, account_label, {
+        "tboxClass": "Account",
+        "provider": account_context.get("provider") or (runtime_context.get("provider") if isinstance(runtime_context, dict) else ""),
+        "mode": account_context.get("mode") or (runtime_context.get("mode") if isinstance(runtime_context, dict) else ""),
+        "status": account_context.get("status") or "",
+    })
+    graph.entities.append(OntologyEntity(portfolio_node_id, "투자 포트폴리오", "portfolio", abox_properties({
+        "total": number(portfolio.total),
+        "invested": number(portfolio.invested),
+        "cash": number(portfolio.cash),
+        "concentration": number(portfolio.concentration),
+        "valuationSnapshotId": str(getattr(portfolio, "valuation_snapshot_id", "") or ""),
+        "valuationBasis": str(getattr(portfolio, "valuation_basis", "") or "legacy-unknown"),
+        "brokerComparableTotal": number(getattr(portfolio, "broker_comparable_total", 0)),
+        "brokerGrossTotal": number(getattr(portfolio, "broker_gross_total", 0)),
+        "brokerNetTotal": number(getattr(portfolio, "broker_net_total", 0)),
+        "markToMarketTotal": number(getattr(portfolio, "mark_to_market_total", 0)),
+        "tboxClass": "Portfolio",
+    })))
+    add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
+    add_account_delivery_profile_concepts(graph, account_id_value, portfolio_node_id, account_context)
+    strategy_context = add_account_investment_strategy_concepts(graph, account_id_value, portfolio_node_id, account_context)
+    strategy_profile = strategy_context.get("profile") if isinstance(strategy_context.get("profile"), dict) else {}
+    strategy_fact_props = {
+        "investmentStrategyProfile": strategy_profile.get("profile"),
+        "investmentStrategyProfileLabel": strategy_profile.get("label"),
+        "strategyLossTolerancePct": number(strategy_profile.get("lossTolerancePct")),
+        "strategyProfitProtectionPct": number(strategy_profile.get("profitProtectionPct")),
+        "strategyMaxPositionWeightPct": number(strategy_profile.get("maxPositionWeightPct")),
+        "strategyMaxSectorWeightPct": number(strategy_profile.get("maxSectorWeightPct")),
+        "strategyFxExposureReviewPct": number(strategy_profile.get("fxExposureReviewPct")),
+        "strategyMinCashWeightPct": number(strategy_profile.get("minCashWeightPct")),
+        "mandateId": strategy_context.get("mandateId"),
+        "policyVersion": (strategy_context.get("mandate") or {}).get("policyVersion") if isinstance(strategy_context.get("mandate"), dict) else "",
+        "strategyAddBuyWatchSignalMin": number(strategy_profile.get("addBuyWatchSignalMin")),
+        "strategyAddBuyReviewSignalMin": number(strategy_profile.get("addBuyReviewSignalMin")),
+        "strategyAllowLossAddBuyReview": bool(strategy_profile.get("allowLossAddBuyReview")),
+    }
+    graph.entities.append(OntologyEntity(entity_id("concept", "ai-investment-review"), "AI 투자 의견", "ai-review", abox_properties({
+        "promptVersion": ONTOLOGY_PROMPT_VERSION,
+        "tboxClass": "AIReview",
+    })))
+    if portfolio.cash:
+        graph.entities.append(OntologyEntity(entity_id("asset", "cash"), "대기 현금", "cash", abox_properties({
+            "value": number(portfolio.cash),
+            "cashRatio": round((number(portfolio.cash) / number(portfolio.total)) * 100, 2) if number(portfolio.total) else 0,
+            "tboxClass": "Cash",
+        })))
+        graph.relations.append(OntologyRelation(
+            portfolio_node_id,
+            entity_id("asset", "cash"),
+            "HOLDS_CASH",
+            weight=1.0,
+            properties=abox_properties(),
+        ))
+    add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
+    add_portfolio_factor_exposure_concepts(
+        graph,
+        portfolio_node_id,
+        portfolio,
+        reference_observed_positions,
+        runtime_context,
+        strategy_context.get("mandate") if isinstance(strategy_context.get("mandate"), dict) else {},
+    )
+    add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
+    add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
+    add_operational_world_concepts(graph, portfolio_node_id, runtime_context, reference_observed_positions)
+    strategy_id = add_strategy_world_concepts(graph, portfolio_node_id, runtime_context)
+    if strategy_context.get("profileId"):
+        add_relation(graph, strategy_id, str(strategy_context.get("profileId")), "USES_INVESTMENT_STRATEGY_PROFILE", weight=1.0, properties={"source": "account-context"})
+    add_external_signal_concepts(graph, portfolio_node_id, external_signals, runtime_context)
+    watchlist_id = ""
+    if any(is_watchlist_position(item) for item in reference_observed_positions):
+        watchlist_id = add_entity(graph, "watchlist", portfolio_id, "관심 종목 목록", {
+            "tboxClass": "Watchlist",
+            "candidateCount": len([item for item in reference_observed_positions if is_watchlist_position(item)]),
+        })
+        add_relation(graph, portfolio_node_id, watchlist_id, "HAS_WATCHLIST", weight=1.0, properties={"source": "watchlist"})
+    sector_weights: Dict[str, float] = {}
+    for sector in portfolio.sectors:
+        label = str(sector.get("sector") or "기타")
+        sector_weights[label] = number(sector.get("ratio"))
+        graph.entities.append(OntologyEntity(entity_id("sector", label), label, "sector", abox_properties({**dict(sector), "tboxClass": "Sector"})))
+        graph.relations.append(OntologyRelation(
+            portfolio_node_id,
+            entity_id("sector", label),
+            "EXPOSED_TO",
+            weight=round(number(sector.get("ratio")) / 100, 4),
+            properties=abox_properties({"basis": "sector-weight", "polarity": "context"}),
+        ))
+    for position in reference_observed_positions:
+        label = str(position.sector or "기타").strip() or "기타"
+        if label in sector_weights:
+            continue
+        sector_weights[label] = 0.0
+        graph.entities.append(OntologyEntity(entity_id("sector", label), label, "sector", abox_properties({
+            "sector": label,
+            "ratio": 0,
+            "tboxClass": "Sector",
+            "source": "observed-position",
+        })))
+    for position in observed_positions:
+        symbol = symbol_key(position)
+        stock_id = entity_id("stock", symbol)
+        source = "watchlist" if is_watchlist_position(position) else "holding"
+        holding = is_holding_position(position)
+        stock_tbox_classes = instrument_tbox_classes(position) + (["WatchlistCandidate"] if source == "watchlist" else [])
+        position_policy_limit = number(strategy_profile.get("maxPositionWeightPct"))
+        position_weight_pct = round(position_weight(position, portfolio), 2)
+        investor_observation = investor_flow_observation(position)
+        investor_root_properties = {
+            key: investor_observation[key]
+            for key in [
+                "foreignNetVolume", "foreignNetAmount", "institutionNetVolume",
+                "institutionNetAmount", "individualNetVolume", "individualNetAmount",
+                "smartMoneyNetVolume", "investorFlowObservedFields",
+                "investorFlowParticipantStatus", "investorFlowSmartMoneyAvailable",
+                "investorFlowComplete", "investorFlowMeasurementType",
+                "investorFlowSourceAsOf", "investorFlowProviderUpdateSlot",
+            ]
+            if key in investor_observation
+        }
+        trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
+        observation_profiles = position_observation_profiles(position, runtime_context)
+        quote_observation = profile_for_domain(observation_profiles, "quote")
+        current_price = number(position.current_price)
+
+        def moving_average_distance(level: object, explicit: object) -> float:
+            average = number(level)
+            if current_price and average:
+                return pct_distance_safe(current_price, average)
+            return number(explicit)
+
+        ma5_distance = moving_average_distance(position.ma5, getattr(position, "ma5_distance", 0.0))
+        ma20_distance = moving_average_distance(position.ma20, position.ma20_distance)
+        ma60_distance = moving_average_distance(position.ma60, position.ma60_distance)
+        source_fact_lineage = reasoning_source_fact_lineage_for_symbol(
+            runtime_context.get("reasoningSourceFacts") or [],
+            symbol,
+        )
+        graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
+            "symbol": symbol,
+            "market": position.market,
+            "currency": position.currency,
+            "sector": position.sector,
+            "source": source,
+            "positionRole": source,
+            "targetPositionRole": source,
+            "currentPrice": current_price,
+            "averagePrice": number(position.average_price),
+            "quantity": number(position.quantity),
+            "sellableQuantity": number(position.sellable_quantity),
+            "marketValue": number(position.market_value),
+            "marketValueKrw": number(position.market_value_krw),
+            "accountValueKrw": number(getattr(position, "account_value_krw", 0) or position.market_value_krw),
+            "accountValueBasis": str(getattr(position, "account_value_basis", "") or "legacy-unknown"),
+            "brokerGrossValue": number(getattr(position, "broker_market_value", 0)),
+            "brokerNetValue": number(getattr(position, "broker_market_value_after_cost", 0)),
+            "brokerGrossValueKrw": number(getattr(position, "broker_market_value_krw", 0)),
+            "brokerNetValueKrw": number(getattr(position, "broker_market_value_after_cost_krw", 0)),
+            "markToMarketValue": number(getattr(position, "mark_to_market_value", 0) or position.market_value),
+            "markToMarketValueKrw": number(getattr(position, "mark_to_market_value_krw", 0) or position.market_value_krw),
+            "valuationSnapshotId": str(getattr(position, "valuation_snapshot_id", "") or ""),
+            "valuationFxSource": str(getattr(position, "valuation_fx_source", "") or ""),
+            "valuationFxState": str(getattr(position, "valuation_fx_state", "") or ""),
+            "valuationFxAsOf": str(getattr(position, "valuation_fx_as_of", "") or ""),
+            "profitLossRate": number(position.profit_loss_rate),
+            "profitLoss": number(position.profit_loss),
+            "positionWeight": position_weight_pct,
+            "positionAccountWeight": position_weight_pct,
+            "policyLimitRatio": position_policy_limit,
+            "policyDeltaRatio": round(position_weight_pct - position_policy_limit, 2),
+            "changeRate": number(position.change_rate),
+            "priceChangeRate": number(position.change_rate),
+            "ma5": number(position.ma5),
+            "ma20": number(position.ma20),
+            "ma60": number(position.ma60),
+            "ma5Distance": ma5_distance,
+            "ma20Distance": ma20_distance,
+            "ma60Distance": ma60_distance,
+            "ma20Slope": number(position.ma20_slope),
+            "ma60Slope": number(position.ma60_slope),
+            "volume": number(position.volume),
+            "volumeRatio": number(position.volume_ratio),
+            "tradeStrength": number(position.trade_strength),
+            "tradingValue": number(trading_snapshot.get("tradingValue")),
+            "reportedTradingValue": number(trading_snapshot.get("reportedTradingValue")),
+            "estimatedTradingValue": number(trading_snapshot.get("estimatedTradingValue")),
+            "tradingValueQuality": trading_snapshot.get("tradingValueQuality"),
+            "tradingValueBasis": trading_snapshot.get("tradingValueBasis"),
+            "tradingValueMismatchPct": trading_snapshot.get("tradingValueMismatchPct"),
+            "tradingValueEstimated": trading_snapshot.get("tradingValueEstimated"),
+            "tradingValueReliable": trading_snapshot.get("tradingValueReliable"),
+            "bidAskImbalance": number(position.bid_ask_imbalance),
+            **investor_root_properties,
+            "updatedAt": position.updated_at,
+            **quote_observation,
+            "tboxClass": "Stock",
+            "tboxClasses": stock_tbox_classes,
+            **source_fact_lineage,
+            **strategy_fact_props,
+        })))
+        position_id = add_entity(graph, "position", portfolio_id + ":" + symbol, (position.name or symbol) + (" 관심 행" if source == "watchlist" else " 보유 행"), {
+            "tboxClass": "Position",
+            "tboxClasses": ["Position"] + (["WatchlistCandidate"] if source == "watchlist" else []),
+            "symbol": symbol,
+            "source": source,
+            "quantity": number(position.quantity),
+            "marketValue": number(position.market_value),
+            "marketValueKrw": number(position.market_value_krw),
+            "accountValueKrw": number(getattr(position, "account_value_krw", 0) or position.market_value_krw),
+            "accountValueBasis": str(getattr(position, "account_value_basis", "") or "legacy-unknown"),
+            "brokerGrossValueKrw": number(getattr(position, "broker_market_value_krw", 0)),
+            "brokerNetValueKrw": number(getattr(position, "broker_market_value_after_cost_krw", 0)),
+            "markToMarketValueKrw": number(getattr(position, "mark_to_market_value_krw", 0) or position.market_value_krw),
+            "valuationSnapshotId": str(getattr(position, "valuation_snapshot_id", "") or ""),
+            "profitLossRate": number(position.profit_loss_rate),
+            "positionWeight": position_weight_pct,
+            "policyLimitRatio": position_policy_limit,
+            "policyDeltaRatio": round(position_weight_pct - position_policy_limit, 2),
+            "updatedAt": position.updated_at,
+            **quote_observation,
+            **strategy_fact_props,
+        })
+        if holding:
+            add_relation(graph, portfolio_node_id, position_id, "HAS_POSITION", weight=round(position_weight(position, portfolio) / 100, 4), properties={"source": source})
+        elif watchlist_id:
+            add_relation(graph, watchlist_id, position_id, "HAS_POSITION", weight=0.15, properties={"source": source})
+        add_relation(graph, position_id, stock_id, "REPRESENTS_STOCK", weight=1.0, properties={"source": source})
+        add_position_strategy_role_concepts(graph, position_id, stock_id, strategy_context, position)
+        for kind, label in [("market", position.market or "unknown"), ("currency", position.currency or "unknown")]:
+            tbox_class = "Market" if kind == "market" else "Currency"
+            graph.entities.append(OntologyEntity(entity_id(kind, label), label, kind, abox_properties({"tboxClass": tbox_class})))
+        graph.relations.append(OntologyRelation(
+            portfolio_node_id,
+            stock_id,
+            "HOLDS" if holding else "WATCHES",
+            weight=round(position_weight(position, portfolio) / 100, 4) if holding else 0.15,
+            properties=abox_properties({"source": source, "basis": "portfolio-position" if holding else "watchlist"}),
+        ))
+        graph.relations.extend([
+            OntologyRelation(stock_id, entity_id("sector", position.sector or "기타"), "BELONGS_TO", weight=1.0, properties=abox_properties({"source": source})),
+            OntologyRelation(stock_id, entity_id("market", position.market or "unknown"), "TRADED_IN", weight=1.0, properties=abox_properties({"source": source})),
+            OntologyRelation(stock_id, entity_id("currency", position.currency or "unknown"), "DENOMINATED_IN", weight=1.0, properties=abox_properties({"source": source})),
+            OntologyRelation(stock_id, entity_id("concept", "ai-investment-review"), "REQUESTS_OPINION_FROM", weight=1.0, properties=abox_properties({"source": source})),
+        ])
+        add_instrument_identity_concepts(graph, stock_id, position, source)
+        add_data_source_concept(graph, stock_id, position, source, observation_profiles)
+        add_metric_concepts(graph, stock_id, position, source, observation_profiles)
+        add_market_evidence_profile_concepts(
+            graph,
+            stock_id,
+            position,
+            source,
+            runtime_context.get("settings") if isinstance(runtime_context.get("settings"), dict) else runtime_context,
+        )
+        add_position_pipeline_quality_concepts(graph, stock_id, position, runtime_context)
+        add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
+        add_official_daily_price_concepts(graph, stock_id, position, external_signals)
+        add_official_security_reference_concepts(graph, stock_id, position, external_signals)
+        add_official_market_index_concepts(graph, stock_id, position, external_signals)
+        add_security_line_concepts(graph, stock_id, position, reference_observed_positions, external_signals, runtime_context)
+        add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
+        add_position_statistical_signal_concepts(graph, stock_id, symbol, runtime_context)
+        add_symbol_external_signal_concepts(
+            graph,
+            stock_id,
+            symbol,
+            external_signals,
+            evaluated_at=str(runtime_context.get("asOf") or ""),
+            event_time_settings=(
+                runtime_context.get("settings")
+                if isinstance(runtime_context.get("settings"), dict)
+                else {}
+            ),
+        )
+        add_investment_calendar_concepts(graph, stock_id, symbol, runtime_context)
+        add_company_knowledge_concepts(graph, stock_id, symbol, external_signals)
+        add_official_corporate_action_concepts(graph, stock_id, position, external_signals)
+        add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
+        add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
+        add_instrument_profile_concepts(graph, stock_id, portfolio_node_id, position, runtime_context)
+        add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)
+        add_fact_change_concepts(graph, stock_id, symbol, position, source, runtime_context)
+        add_research_evidence_concepts(
+            graph,
+            stock_id,
+            "",
+            "",
+            symbol,
+            {},
+            external_signals,
+        )
+    # A current DecisionItem is presentation/decision output from a prior
+    # inference pass.  Read models may include it, but the live TypeDB ABox
+    # must not feed that output back into the next RuleBox evaluation.
+    if include_derived_decision_items:
+        add_decision_item_concepts(graph, runtime_context)
+    runtime_settings = runtime_context.get("settings") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("settings"), dict) else {}
+    try:
+        hypothesis_outcome_minimum_samples = int(float(str(
+            runtime_settings.get("hypothesisOutcomeReviewMinimumSamples")
+            or runtime_settings.get("investmentBrainOutcomeReviewMinimumSamples")
+            or 3
+        )))
+    except (TypeError, ValueError):
+        hypothesis_outcome_minimum_samples = 3
+    lifecycle_projection = (
+        runtime_context.get("hypothesisLifecycleAboxProjection")
+        if isinstance(runtime_context, dict)
+        and isinstance(runtime_context.get("hypothesisLifecycleAboxProjection"), dict)
+        else {}
+    )
+    # Lifecycle state is a downstream audit of an already verified
+    # InferenceBox. Keep it out of the next live ABox unless an operator
+    # explicitly enables the compact diagnostic projection.
+    lifecycle_rows = (
+        runtime_context.get("hypothesisLifecycles")
+        if lifecycle_projection.get("enabled") and isinstance(runtime_context, dict)
+        else []
+    )
+    add_investment_brain_concepts(
+        graph,
+        portfolio_id,
+        runtime_context.get("decisionEpisodes") if isinstance(runtime_context, dict) else [],
+        runtime_context.get("hypothesisProposals") if isinstance(runtime_context, dict) else [],
+        runtime_context.get("decisionPerformance") if isinstance(runtime_context, dict) else {},
+        lifecycle_rows,
+        max(1, min(100, hypothesis_outcome_minimum_samples)),
+        runtime_context.get("decisionOutcomeHistory") if isinstance(runtime_context, dict) else [],
+    )
+    # Lifecycle relations can only target stock and decision entities that
+    # belong to this full or target-scoped ABox generation.
+    add_portfolio_lifecycle_concepts(graph, portfolio_node_id, runtime_context)
+    add_coverage_gap_concepts(graph, observed_positions, portfolio_id)
+    graph.entities = dedupe_entities(graph.entities)
+    graph.relations = dedupe_relations(graph.relations)
+    graph.evidence = dedupe_evidence(graph.evidence)
+    apply_abox_lifecycle(graph, lifecycle_metadata)
+    if include_presentation:
+        graph.reasoning_cards = build_reasoning_cards(graph)
+        graph.prompt = build_investment_opinion_prompt(graph)
+    graph.worldview = {
+        "model": "ontology-abox-facts",
+        "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
+        "description": "Runtime ABox facts are projected for direct TypeQL inference in TypeDB. Python graph reasoning is not available in this path.",
+        "positionCount": len([item for item in reference_observed_positions if is_holding_position(item)]),
+        "watchlistCount": len([item for item in reference_observed_positions if is_watchlist_position(item)]),
+        "aboxLifecycle": dict(lifecycle_metadata),
+        "activeTBox": dict(runtime_context.get("activeTBox") or {}),
+        "presentationDeferred": not include_presentation,
+    }
+    return graph

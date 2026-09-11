@@ -1,13 +1,10 @@
 """native_execution: cycle through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_change_impact import compact_inference_impact_plan
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_runtime_operations import native_rule_timing_profile
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.domain.world_partitioned_reasoning import (
-    WORLD_PARTITIONED_REASONING_VERSION,
-    compile_world_partitioned_rules,
-)
+from digital_twin.modules.reasoning.domain.ontology_change_impact import compact_inference_impact_plan
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_rule_timing_profile
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import WORLD_PARTITIONED_REASONING_VERSION, compile_world_partitioned_rules
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_from_payload
 from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import (

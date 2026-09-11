@@ -1,6 +1,6 @@
 """Additive storage-schema migrations; no investment rule execution."""
 import re
-from digital_twin.domain.ontology_semantics import semantic_storage_type_names, semantic_typeql_schema, typedb_context_type
+from digital_twin.modules.reasoning.domain.ontology_semantics import semantic_storage_type_names, semantic_typeql_schema, typedb_context_type
 from digital_twin.modules.reasoning.infrastructure.typeql.constants import TYPEDB_NUMERIC_ATTRIBUTES, TYPEDB_STRING_ATTRIBUTES, TYPEDB_COMMON_NODE_ATTRIBUTES
 from digital_twin.modules.reasoning.infrastructure.typeql.storage_schema import typedb_rule_schema_capability_contract
 

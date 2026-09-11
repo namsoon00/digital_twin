@@ -1,7 +1,7 @@
 """native_execution: context through explicit injected capabilities."""
 
-from digital_twin.domain.model_signal_interpretation import is_model_signal_interpretation_rule
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.model_registry.contracts import is_model_signal_interpretation_rule
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from digital_twin.modules.reasoning.infrastructure.typeql.condition_queries import (
     typedb_native_condition_check_query,
 )

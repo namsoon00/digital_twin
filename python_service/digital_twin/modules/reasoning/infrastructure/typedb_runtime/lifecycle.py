@@ -1,7 +1,7 @@
 """Prepare a storage schema without publishing or executing investment rules."""
 import hashlib
 import re
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 
 from typing import Dict
 

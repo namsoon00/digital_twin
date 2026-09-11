@@ -5,11 +5,11 @@ import json
 import re
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from digital_twin.domain.events import DomainEvent
-from digital_twin.domain.data_freshness import parse_datetime
-from digital_twin.domain.evidence_delta import EvidenceMutation, clean_lifecycle_state, clean_symbol, evidence_content_signature, evidence_delta, evidence_inference_signature, eligible_evidence_set_revision, inference_eligible
-from digital_twin.domain.investment_research import ResearchEvidence
-from digital_twin.domain import news_analysis as news_domain
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.market_data.contracts import parse_datetime
+from digital_twin.modules.news_intelligence.domain.evidence_delta import EvidenceMutation, clean_lifecycle_state, clean_symbol, evidence_content_signature, evidence_delta, evidence_inference_signature, eligible_evidence_set_revision, inference_eligible
+from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence
+import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
 from digital_twin.modules.news_intelligence.contracts import apply_enrichment_snapshot, article_enrichment_revision, article_source_revision, authoritative_enrichment, authoritative_event_takeaway, clear_resolved_analysis_conflict, enrichment_payload_snapshot
 from digital_twin.modules.news_intelligence.contracts import annotate_news_eligibility
 from digital_twin.modules.news_intelligence.contracts import event_episode_identity, news_event_fingerprint

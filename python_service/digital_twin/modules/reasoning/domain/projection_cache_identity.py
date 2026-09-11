@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from digital_twin.domain.ontology_projection_audit import projection_source_snapshot
-from digital_twin.domain.ontology_projection_fingerprint import stable_value
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.reasoning_shadow import frozen_projection_runtime_context
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import projection_source_snapshot
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import stable_value
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projection_runtime_context
 from typing import Dict
 from typing import Iterable
 from typing import List

@@ -1,7 +1,7 @@
 import json
 from typing import Dict, List
 
-from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION
 from .graph_store_payloads import list_of_strings, number_or_none
 
 

@@ -3,11 +3,9 @@
 from .artifact import ontology_seed_graph
 from .bootstrap_ports import BootstrapStore, BootstrapBindings
 from .identity import rulebox_runtime_metadata, rulebox_structural_fingerprint
-from digital_twin.domain.investment_ubiquitous_language import (
-    investment_language_registry,
-)
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION
+from digital_twin.modules.model_registry.contracts import investment_language_registry
+from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+from digital_twin.modules.model_registry.contracts import GRAPH_REASONER_VERSION
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.infrastructure.graph_store_rulebox import (
     rulebox_rules_from_payload,

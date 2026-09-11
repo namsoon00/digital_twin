@@ -7,12 +7,12 @@ from collections import OrderedDict
 from copy import deepcopy
 from typing import Dict, List
 
-from digital_twin.domain.ai_inference_queue import notification_ai_subject
-from digital_twin.domain.investment_brain import canonical_investment_timestamp
-from digital_twin.domain.market_data import number
-from digital_twin.domain.market_time_series import market_session_date
-from digital_twin.domain.message_types import INVESTMENT_INSIGHT
-from digital_twin.domain.portfolio_ontology_temporal_concepts import dedupe_temporal_rows, parse_temporal_windows, temporal_window_values, trim_to_recent_sessions, window_rows
+from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_subject
+from digital_twin.modules.decisions.domain.investment_brain import canonical_investment_timestamp
+from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.market_data.contracts import market_session_date
+from digital_twin.modules.notifications.contracts import INVESTMENT_INSIGHT
+from digital_twin.modules.reasoning.contracts import dedupe_temporal_rows, parse_temporal_windows, temporal_window_values, trim_to_recent_sessions, window_rows
 
 
 AI_INTERNAL_DATA_VERSION = "notification-ai-internal-data-v1"

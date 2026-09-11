@@ -11,6 +11,7 @@ import sys
 import threading
 from types import SimpleNamespace
 import unittest
+from module_migration_fixtures import is_domain_dependency
 from unittest.mock import MagicMock, Mock, patch
 import urllib.error
 
@@ -439,7 +440,7 @@ for name in sys.modules:
                     if node.level:
                         self.assertIn(node.module, {"ports", "constants"})
                     elif node.module.startswith("digital_twin"):
-                        self.assertTrue(node.module.startswith(("digital_twin.domain.", "digital_twin.modules.reasoning.infrastructure.typeql.")), (path.name, node.module))
+                        self.assertTrue(is_domain_dependency(node.module) or node.module.startswith("digital_twin.modules.reasoning.infrastructure.typeql."), (path.name, node.module))
                     elif node.module.startswith("typedb"):
                         self.assertIn(path.stem, {"connection", "transactions"})
             if path.stem in capabilities:

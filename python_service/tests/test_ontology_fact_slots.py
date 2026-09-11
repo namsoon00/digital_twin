@@ -1,24 +1,24 @@
 import unittest
 from copy import deepcopy
 
-from digital_twin.domain.ontology_fact_slots import (
+from digital_twin.modules.reasoning.domain.ontology_fact_slots import (
     build_fact_slot_projection_plan,
     select_fact_slot_scope_ids,
 )
-from digital_twin.domain.abox_lifecycle.contracts import (
+from digital_twin.modules.reasoning.domain.abox_lifecycle.contracts import (
     RELATION_ENDPOINT_BINDING_VERSION,
     SCOPE_NODE_INVENTORY_VERSION,
 )
-from digital_twin.domain.ontology_contracts import (
+from digital_twin.modules.reasoning.domain.ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
     PortfolioOntology,
     entity_id,
 )
-from digital_twin.domain.portfolio_ontology_lifecycle_concepts import (
+from digital_twin.modules.reasoning.domain.portfolio_ontology_lifecycle_concepts import (
     add_portfolio_lifecycle_concepts,
 )
-from digital_twin.domain.ontology_scopes import (
+from digital_twin.modules.reasoning.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     apply_scoped_abox_identity,

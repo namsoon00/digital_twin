@@ -1,7 +1,7 @@
 import unittest
 
-from digital_twin.domain.investment_model import investment_model_projection
-from digital_twin.domain.investment_product_readiness import (
+from digital_twin.modules.model_registry.domain.investment_model import investment_model_projection
+from digital_twin.modules.read_models.domain.investment_product_readiness import (
     investment_product_readiness,
 )
 

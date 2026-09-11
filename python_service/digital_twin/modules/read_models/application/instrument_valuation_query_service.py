@@ -5,10 +5,10 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, Mapping, Optional
 
-from digital_twin.domain.company_knowledge import company_prompt_context, company_valuation_context, latest_source_as_of
-from digital_twin.domain.instrument_valuation import InstrumentValuationQuery
-from digital_twin.domain.portfolio import account_snapshot_from_monitor_state, utc_now_iso
-from digital_twin.domain.valuation import ValuationModelRequest, ValuationModelService
+from digital_twin.modules.news_intelligence.contracts import company_prompt_context, company_valuation_context, latest_source_as_of
+from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
+from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state, utc_now_iso
+from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService
 
 
 READ_MODEL_VERSION = "instrument-valuation-read-model-v1"

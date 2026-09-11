@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.domain.operational_health import (
+from digital_twin.platform.domain.operational_health import (
     OperationalHealthSignal,
     assess_operational_health,
     reasoning_engine_health_signals,

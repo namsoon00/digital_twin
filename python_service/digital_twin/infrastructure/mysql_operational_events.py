@@ -3,32 +3,19 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
-from ..domain.accounts import AccountConfig, split_symbols
-from ..domain.data_freshness import evaluate_notification_data_freshness
-from ..domain.events import (
-    DomainEvent,
-    alerts_detected_event,
-    domain_event_storage_payload,
-    monitoring_cycle_completed_event,
-    snapshot_collected_event,
-)
-from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
-from ..domain.investment_research import ResearchEvidence
+from digital_twin.modules.accounts.domain.accounts import AccountConfig, split_symbols
+from digital_twin.modules.market_data.domain.data_freshness import evaluate_notification_data_freshness
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.market_data.domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
+from digital_twin.platform.domain.events import domain_event_storage_payload
+from digital_twin.modules.reasoning.domain.fact_changes import fact_signature, research_evidence_fact_payload
+from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence
 from digital_twin.modules.model_registry.contracts import ModelReviewJob
-from ..domain.notification_rules import (
-    DEFAULT_NOTIFICATION_RULES,
-    NotificationRuleConfig,
-    apply_market_hours_rule,
-    apply_similarity_rule,
-    apply_state_cooldown_rule,
-    default_notification_rule,
-    evaluate_notification_rule,
-    notification_fingerprint,
-)
-from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, alert_context, render_notification
-from ..domain.notifications import NotificationJob, notification_debug_number
-from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
-from ..domain.portfolio import AccountSnapshot, AlertEvent
+from digital_twin.modules.notifications.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
+from digital_twin.modules.notifications.domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, alert_context, render_notification
+from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
+from digital_twin.modules.reasoning.domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent
 from digital_twin.modules.portfolio.contracts import MonitoringCycleRecordResult
 from digital_twin.modules.instruments.contracts import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from digital_twin.modules.model_registry.infrastructure.model_review_queue import model_review_payloads_from_event

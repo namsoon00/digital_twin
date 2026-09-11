@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from digital_twin.modules.reasoning.application.investment_reasoning.orchestrator import InvestmentReasoningOrchestrator
-from digital_twin.domain.investment_reasoning.subject_case import (
+from digital_twin.modules.decisions.domain.investment_reasoning.subject_case import (
     ABSTAIN,
     OBSERVATION,
     REVIEW_ONLY,
@@ -11,7 +11,7 @@ from digital_twin.domain.investment_reasoning.subject_case import (
     SUBJECT_READY,
     SUBJECT_REVIEW_ONLY,
 )
-from digital_twin.domain.investment_reasoning import CASE_DECISION_SYNTHESIZED
+from digital_twin.modules.decisions.domain.investment_reasoning import CASE_DECISION_SYNTHESIZED
 
 
 class Repository:

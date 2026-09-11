@@ -14,28 +14,29 @@ from digital_twin.modules.outcomes.application.investment_outcome_observation_se
 from digital_twin.modules.portfolio.application.investment_domain_service import InvestmentDomainService
 from digital_twin.modules.decisions.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
 from digital_twin.modules.portfolio.application.portfolio_lifecycle_service import DecisionActionPlanningService, PortfolioAccountingService, TradeExecutionService
-from digital_twin.domain.investment_brain import ObservedOutcome
-from digital_twin.domain.investment_mandate import InvestmentMandate
-from digital_twin.domain.events import DomainEvent, ontology_reasoning_requested_event
-from digital_twin.domain.investment_outcomes import decision_quality_summary
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
-from digital_twin.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
-from digital_twin.domain.portfolio_analytics import (
+from digital_twin.modules.decisions.domain.investment_brain import ObservedOutcome
+from digital_twin.modules.portfolio.domain.investment_mandate import InvestmentMandate
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.reasoning.domain.events import ontology_reasoning_requested_event
+from digital_twin.modules.outcomes.domain.investment_outcomes import decision_quality_summary
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.modules.portfolio.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
+from digital_twin.modules.portfolio.domain.portfolio_analytics import (
     portfolio_risk_event_materiality,
     portfolio_risk_snapshot,
     with_policy_limits,
 )
 from digital_twin.modules.portfolio.domain.portfolio_ledger import INFERRED_CORPORATE_ACTION, INFERRED_POSITION_DECREASE, INFERRED_POSITION_EXIT, INFERRED_POSITION_INCREASE, SNAPSHOT_CASH_ADJUSTMENT, PortfolioLedger, PortfolioLedgerEntry, execution_ledger_entries
-from digital_twin.domain.portfolio_rebalancing import (
+from digital_twin.modules.portfolio.domain.portfolio_rebalancing import (
     RebalanceState,
     rebalance_transition,
 )
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
-from digital_twin.domain.ontology_validator import validate_ontology
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, ExecutionEpisode, OrderIntent, TradeFill
+from digital_twin.modules.reasoning.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import durable_mailbox_entries
+from digital_twin.modules.reasoning.domain.ontology_validator import validate_ontology
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.portfolio.domain.trade_execution import ActionEnvelope, ActionPlan, ExecutionEpisode, OrderIntent, TradeFill
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
 from digital_twin.infrastructure.event_bus import EventBus
 from digital_twin.infrastructure.mysql_investment_domain import MySQLInvestmentDomainStore
@@ -202,7 +203,7 @@ class MemoryInvestmentRepository:
         if not current:
             return False
         self.current_rebalance_state = current.to_dict()
-        from digital_twin.domain.portfolio_rebalancing import rebalance_transition as evaluate_transition
+        from digital_twin.modules.portfolio.domain.portfolio_rebalancing import rebalance_transition as evaluate_transition
 
         previous = RebalanceState.from_dict(self.rebalance_state) if self.rebalance_state else None
         verified = evaluate_transition(previous, current)

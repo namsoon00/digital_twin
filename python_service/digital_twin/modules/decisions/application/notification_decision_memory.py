@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
-from digital_twin.domain.ai_inference_queue import notification_ai_subject
+from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_subject
 from digital_twin.modules.decisions.domain.decision_continuity import compact_decision_continuity_packet
-from digital_twin.domain.investment_decision_history import compact_decision_episode_memory
-from digital_twin.domain.investment_insight_assessment import compact_previous_investment_insight_episode
+from digital_twin.modules.decisions.domain.investment_decision_history import compact_decision_episode_memory
+from digital_twin.modules.decisions.domain.investment_insight_assessment import compact_previous_investment_insight_episode
 
 
 def _mapping(value: object) -> Dict[str, object]:

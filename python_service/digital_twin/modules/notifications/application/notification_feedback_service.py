@@ -6,7 +6,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Dict, Mapping
 
-from digital_twin.domain.investment_brain import LearningProposal
+from digital_twin.modules.decisions.contracts import LearningProposal
 
 
 FEEDBACK_CHANGE_TYPES = {

@@ -1,6 +1,6 @@
 from typing import List
 
-from digital_twin.domain.investment_strategy_proposals import InvestmentStrategyProposal, without_retired_strategy_score_fields
+from digital_twin.modules.model_registry.domain.investment_strategy_proposals import InvestmentStrategyProposal, without_retired_strategy_score_fields
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

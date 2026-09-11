@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
     ontology_storage_id,

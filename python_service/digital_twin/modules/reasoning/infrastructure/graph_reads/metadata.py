@@ -1,15 +1,8 @@
 """graph_reads: metadata through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_schema import default_tbox_metadata
-from digital_twin.domain.ontology_scopes import (
-    SCOPED_ABOX_MANIFEST_VERSION,
-    SCOPED_ABOX_PERSISTENCE_MODE,
-)
-from digital_twin.domain.ontology_semantics import (
-    SEMANTIC_STORAGE_CONTRACT_VERSION,
-    semantic_class_types,
-    semantic_relation_types,
-)
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION, semantic_class_types, semantic_relation_types
 from .tbox_metadata import active_tbox_metadata_from_rows, active_tbox_metadata_unavailable
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import (

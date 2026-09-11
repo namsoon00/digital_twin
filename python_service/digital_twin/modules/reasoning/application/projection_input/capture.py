@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from digital_twin.domain.ontology_projection_input import (
-    compact_external_signals_for_ontology,
-)
-from digital_twin.domain.ontology_projection_input import projection_input_summary
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.reasoning_shadow import frozen_projection_runtime_context
-from digital_twin.domain.reasoning_shadow import pack_projection_runtime_contexts
+from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology
+from digital_twin.modules.reasoning.domain.ontology_projection_input import projection_input_summary
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projection_runtime_context
+from digital_twin.modules.reasoning.domain.reasoning_shadow import pack_projection_runtime_contexts
 import time
 from .ports import CaptureInputs, PreparedGraphInput
 

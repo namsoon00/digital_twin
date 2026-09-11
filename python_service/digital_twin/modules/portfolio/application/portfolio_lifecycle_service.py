@@ -7,18 +7,18 @@ import hashlib
 import math
 from typing import Dict, Iterable, List, Optional, Protocol
 
-from digital_twin.domain.investment_mandate import InvestmentMandate
-from digital_twin.domain.investment_decision_actionability import persisted_decision_authorization
-from digital_twin.domain.events import ontology_reasoning_requested_event
-from digital_twin.domain.portfolio_activity_episode import DecisionActionObservation, PortfolioActivityEpisode, PortfolioSnapshotCheckpoint, PortfolioStateSnapshot, checkpoint_acceptance
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.portfolio.domain.investment_mandate import InvestmentMandate
+from digital_twin.modules.decisions.contracts import persisted_decision_authorization
+from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
+from digital_twin.modules.portfolio.domain.portfolio_activity_episode import DecisionActionObservation, PortfolioActivityEpisode, PortfolioSnapshotCheckpoint, PortfolioStateSnapshot, checkpoint_acceptance
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot
 from digital_twin.modules.portfolio.domain.portfolio_ledger import OPENING_CASH, OPENING_POSITION, PortfolioLedger, PortfolioLedgerEntry, PortfolioReconciliation, ReconciliationDifference, decimal_value
-from digital_twin.domain.snapshot_portfolio_activity import activity_payload, infer_snapshot_ledger_entries, trusted_account_snapshot
-from digital_twin.domain.portfolio_rebalancing import AllocationBand, RebalanceLeg, RebalanceProposal, RebalanceScenario, RebalanceState, allocation_drifts, rebalance_transition
-from digital_twin.domain.portfolio_analytics import PortfolioRiskSnapshot, portfolio_risk_snapshot, with_policy_limits
-from digital_twin.domain.portfolio_decision_cycle import PortfolioActionCandidate, PortfolioDecisionCycle
-from digital_twin.domain.risk_exposure import ExposureMetric, ExposureSnapshot
-from digital_twin.domain.trade_execution import EXECUTABLE_ACTIONS, ActionEnvelope, ActionPlan, ActionPlanSlice, ActionPlanReview, ExecutionEpisode, OrderIntent, TradeFill, stable_execution_id
+from digital_twin.modules.portfolio.domain.snapshot_portfolio_activity import activity_payload, infer_snapshot_ledger_entries, trusted_account_snapshot
+from digital_twin.modules.portfolio.domain.portfolio_rebalancing import AllocationBand, RebalanceLeg, RebalanceProposal, RebalanceScenario, RebalanceState, allocation_drifts, rebalance_transition
+from digital_twin.modules.portfolio.domain.portfolio_analytics import PortfolioRiskSnapshot, portfolio_risk_snapshot, with_policy_limits
+from digital_twin.modules.portfolio.domain.portfolio_decision_cycle import PortfolioActionCandidate, PortfolioDecisionCycle
+from digital_twin.modules.portfolio.domain.risk_exposure import ExposureMetric, ExposureSnapshot
+from digital_twin.modules.portfolio.domain.trade_execution import EXECUTABLE_ACTIONS, ActionEnvelope, ActionPlan, ActionPlanSlice, ActionPlanReview, ExecutionEpisode, OrderIntent, TradeFill, stable_execution_id
 from digital_twin.modules.portfolio.application.portfolio_activity_notification_service import portfolio_activity_notification_job
 
 

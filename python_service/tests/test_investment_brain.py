@@ -1,14 +1,14 @@
 from copy import deepcopy
 import unittest
 import copy
-from digital_twin.domain.hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
+from digital_twin.modules.outcomes.domain.hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
 
 from digital_twin.modules.model_registry.application.hypothesis_proposal_service import HypothesisProposalQueueRunner, HypothesisProposalService
 from digital_twin.modules.decisions.application.investment_brain_service import InvestmentBrainService
 from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from digital_twin.modules.news_intelligence.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
 from digital_twin.modules.notifications.application.notification_service import NotificationHypothesisResearchEnricher
-from digital_twin.domain.investment_brain import (
+from digital_twin.modules.decisions.domain.investment_brain import (
     DecisionEpisode,
     InvestmentQuestion,
     canonical_investment_timestamp,
@@ -16,30 +16,30 @@ from digital_twin.domain.investment_brain import (
     hypothesis_comparison_audit,
     hypothesis_set_from_relation_context,
 )
-from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
-from digital_twin.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
-from digital_twin.domain.hypothesis_calibration import (
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import ResearchRun, governed_evidence
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
+from digital_twin.modules.outcomes.domain.hypothesis_calibration import (
     attach_abox_hypothesis_calibrations,
     hypothesis_calibration_snapshot_from_abox_rows,
 )
-from digital_twin.domain.decision_performance import (
+from digital_twin.modules.outcomes.domain.decision_performance import (
     contradiction_learning_candidates,
     evaluate_decision_performance,
 )
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.domain.notification_ai_gate_validation import (
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import (
     build_notification_ai_gate_prompt,
     validated_response_from_payload,
 )
-from digital_twin.domain.ontology_contracts import PortfolioOntology, entity_id
-from digital_twin.domain.ontology_tbox import CLASS_DEFS, RELATION_DEFS
-from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
-from digital_twin.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
-from digital_twin.domain.ontology_schema import add_entity
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, utc_now_iso
-from digital_twin.domain.market_data import normalize_position
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology, entity_id
+from digital_twin.modules.model_registry.domain.ontology_tbox import CLASS_DEFS, RELATION_DEFS
+from digital_twin.modules.reasoning.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
+from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, utc_now_iso
+from digital_twin.modules.market_data.domain.market_data import normalize_position
 from digital_twin.infrastructure.mysql_investment_decision_episodes import (
     due_outcome_horizon_minutes,
     due_outcome_horizon_minutes_all,

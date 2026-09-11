@@ -6,22 +6,12 @@ from .reuse_ports import (
     ExecutionNamespaceBindings,
     CompactSharedInferenceReuseBindings,
 )
-from digital_twin.domain.ontology_performance_contract import (
-    ontology_performance_assessment,
-)
-from digital_twin.domain.ontology_projection_audit import (
-    INFERENCE_REUSE_PROOF_VERSION,
-    OntologyProjectionRun,
-    inference_reuse_scope_plan,
-    inference_reuse_scope_plan_fingerprint,
-)
-from digital_twin.domain.ontology_runtime_operations import native_replay_validation
-from digital_twin.domain.ontology_scopes import target_scope_manifest_fingerprint
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.world_partitioned_reasoning import (
-    WORLD_PARTITIONED_REASONING_VERSION,
-    shared_premise_matches,
-)
+from digital_twin.modules.reasoning.domain.ontology_performance_contract import ontology_performance_assessment
+from digital_twin.modules.reasoning.domain.ontology_projection_audit import INFERENCE_REUSE_PROOF_VERSION, OntologyProjectionRun, inference_reuse_scope_plan, inference_reuse_scope_plan_fingerprint
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_replay_validation
+from digital_twin.modules.reasoning.domain.ontology_scopes import target_scope_manifest_fingerprint
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import WORLD_PARTITIONED_REASONING_VERSION, shared_premise_matches
 from digital_twin.infrastructure.runtime_identity import runtime_identity
 from typing import Dict, List
 import hashlib

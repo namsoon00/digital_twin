@@ -3,10 +3,20 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.notification_feedback import normalize_notification_feedback
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.notification_feedback import normalize_notification_feedback
 from digital_twin.modules.notifications.application.notification_feedback_service import NotificationFeedbackService
-from digital_twin.infrastructure import web_server
+from digital_twin.infrastructure.web import cache as web_cache
+from digital_twin.infrastructure.web.adapters import (
+    brain,
+    console,
+    notification_inbox,
+    notification_presentation,
+    notification_storage,
+    ontology_catalog,
+    platforms,
+    workspace,
+)
 
 
 class _NotificationListStore:
@@ -39,7 +49,7 @@ class WebReadPathPerformanceTests(unittest.TestCase):
                     "lastError": "dependency timeout",
                 }
 
-        payload = web_server.cached_api_payload(Cache(), "key", lambda: {})
+        payload = web_cache.cached_api_payload(Cache(), "key", lambda: {})
 
         self.assertEqual("stale", payload["dataFreshness"]["status"])
         self.assertEqual("fresh", payload["dataFreshness"]["sourceStatus"])
@@ -75,9 +85,9 @@ class WebReadPathPerformanceTests(unittest.TestCase):
             "_skipOperationalSchemaBootstrap": "1",
         }
 
-        with patch.object(web_server, "operational_read_settings", return_value=settings) as read_settings:
-            with patch.object(web_server, "notification_queue_store", return_value=store):
-                payload = web_server.notification_jobs_payload({"limit": ["20"]})
+        with patch.object(notification_inbox, "operational_read_settings", return_value=settings) as read_settings:
+            with patch.object(notification_inbox, "notification_queue_store", return_value=store):
+                payload = notification_inbox.notification_jobs_payload({"limit": ["20"]})
 
         self.assertEqual(1, read_settings.call_count)
         self.assertEqual(0, store.receipt_queries)
@@ -169,8 +179,8 @@ class WebReadPathPerformanceTests(unittest.TestCase):
             created_at=(now - timedelta(hours=3)).isoformat(),
             updated_at=(now - timedelta(hours=2)).isoformat(),
         )
-        recent_payload = web_server.notification_job_list_payload(recent, 2, settings)
-        historical_payload = web_server.notification_job_list_payload(historical, 2, settings)
+        recent_payload = notification_presentation.notification_job_list_payload(recent, 2, settings)
+        historical_payload = notification_presentation.notification_job_list_payload(historical, 2, settings)
         self.assertTrue(recent_payload["priorityQueueEligible"])
         self.assertEqual("recent-failure", recent_payload["priorityQueueState"])
         self.assertFalse(historical_payload["priorityQueueEligible"])
@@ -180,8 +190,8 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         marker = object()
         settings = {"notificationProcessingStaleMinutes": "2"}
 
-        with patch.object(web_server.stores, "notification_job_store", return_value=marker) as job_store:
-            self.assertIs(marker, web_server.notification_queue_store(settings))
+        with patch.object(notification_storage.stores, "notification_job_store", return_value=marker) as job_store:
+            self.assertIs(marker, notification_storage.notification_queue_store(settings))
 
         configured = job_store.call_args.args[0]
         self.assertEqual("1", configured["_skipNotificationRuleDefaultsSeed"])
@@ -232,11 +242,11 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         )
 
         with patch.object(
-            web_server.stores,
+            notification_presentation.stores,
             "investment_domain_store",
             return_value=lifecycle_store,
         ):
-            payload = web_server.notification_job_public_payload(
+            payload = notification_presentation.notification_job_public_payload(
                 job,
                 detail=True,
                 stale_minutes=2,
@@ -249,14 +259,14 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         self.assertEqual("🧭 투자 판단 · NVDA", payload["title"])
         self.assertEqual("ai-judgement", payload["customerInvestmentDocument"]["role"])
 
-        summary_payload = web_server.notification_job_public_payload(
+        summary_payload = notification_presentation.notification_job_public_payload(
             job,
             detail=False,
             stale_minutes=2,
             settings={"_skipOperationalSchemaBootstrap": "1"},
             include_customer_document=True,
         )
-        list_payload = web_server.notification_job_public_payload(
+        list_payload = notification_presentation.notification_job_public_payload(
             job,
             detail=False,
             stale_minutes=2,
@@ -269,9 +279,9 @@ class WebReadPathPerformanceTests(unittest.TestCase):
     def test_bootstrap_app_store_uses_read_only_operational_settings(self):
         marker = object()
         settings = {"_skipOperationalSchemaBootstrap": "1"}
-        with patch.object(web_server, "operational_read_settings", return_value=settings):
-            with patch.object(web_server.stores, "app_store", return_value=marker) as app_store:
-                self.assertIs(marker, web_server.app_store())
+        with patch.object(workspace, "operational_read_settings", return_value=settings):
+            with patch.object(workspace.stores, "app_store", return_value=marker) as app_store:
+                self.assertIs(marker, workspace.app_store())
         app_store.assert_called_once_with(settings)
 
     def test_heavy_console_reads_use_non_blocking_stale_read_models(self):
@@ -282,20 +292,20 @@ class WebReadPathPerformanceTests(unittest.TestCase):
             calls.append((cache, key, loader, kwargs))
             return marker
 
-        with patch.object(web_server, "cached_api_payload", side_effect=capture):
-            self.assertIs(marker, web_server.console_portfolio_api_payload({"accountId": ["default"]}, "positions"))
-            self.assertIs(marker, web_server.console_market_instruments_api_payload({}))
-            self.assertIs(marker, web_server.console_market_evidence_api_payload({"limit": ["8"]}))
-            self.assertIs(marker, web_server.investment_brain_hypothesis_workspace_api_payload({"view": ["summary"]}))
+        with patch.object(console, "cached_api_payload", side_effect=capture), patch.object(brain, "cached_api_payload", side_effect=capture):
+            self.assertIs(marker, console.console_portfolio_api_payload({"accountId": ["default"]}, "positions"))
+            self.assertIs(marker, console.console_market_instruments_api_payload({}))
+            self.assertIs(marker, console.console_market_evidence_api_payload({"limit": ["8"]}))
+            self.assertIs(marker, brain.investment_brain_hypothesis_workspace_api_payload({"view": ["summary"]}))
 
         self.assertEqual(4, len(calls))
         self.assertTrue(all(call[3].get("blocking_first_load") is False for call in calls))
         self.assertEqual(
             {
-                web_server.PORTFOLIO_CONSOLE_READ_MODEL,
-                web_server.MARKET_INSTRUMENTS_READ_MODEL,
-                web_server.MARKET_EVIDENCE_READ_MODEL,
-                web_server.HYPOTHESIS_WORKSPACE_READ_MODEL,
+                console.PORTFOLIO_CONSOLE_READ_MODEL,
+                console.MARKET_INSTRUMENTS_READ_MODEL,
+                console.MARKET_EVIDENCE_READ_MODEL,
+                brain.HYPOTHESIS_WORKSPACE_READ_MODEL,
             },
             {call[0] for call in calls},
         )
@@ -303,10 +313,10 @@ class WebReadPathPerformanceTests(unittest.TestCase):
 
     def test_ontology_catalog_builds_storage_service_only_inside_cache_loader(self):
         marker = {"status": "warming"}
-        with patch.object(web_server, "cached_api_payload", return_value=marker) as cached:
-            with patch.object(web_server, "ontology_repository_from_settings", side_effect=AssertionError("must stay lazy")):
-                self.assertIs(marker, web_server.ontology_catalog_api_payload("summary", {}))
-        self.assertIs(web_server.ONTOLOGY_CATALOG_SUMMARY_READ_MODEL, cached.call_args.args[0])
+        with patch.object(ontology_catalog, "cached_api_payload", return_value=marker) as cached:
+            with patch.object(ontology_catalog, "ontology_repository_from_settings", side_effect=AssertionError("must stay lazy")):
+                self.assertIs(marker, ontology_catalog.ontology_catalog_api_payload("summary", {}))
+        self.assertIs(ontology_catalog.ONTOLOGY_CATALOG_SUMMARY_READ_MODEL, cached.call_args.args[0])
         self.assertFalse(cached.call_args.kwargs["blocking_first_load"])
 
     def test_reasoning_completion_uses_production_delivery_deployment(self):
@@ -328,11 +338,11 @@ class WebReadPathPerformanceTests(unittest.TestCase):
                 cls.calls.append((deployment_id, limit))
                 return {"deploymentId": deployment_id, "receiptCount": 2}
 
-        with patch.object(web_server, "operational_read_settings", return_value=settings):
-            with patch.object(web_server, "build_ontology_reasoning_queue_probe", return_value=lambda: {}):
-                with patch.object(web_server.stores, "reasoning_engine_registry_store", return_value=Registry()):
-                    with patch.object(web_server.stores, "reasoning_engine_job_store", return_value=Jobs()):
-                        payload = web_server.ontology_reasoning_status_payload()
+        with patch.object(platforms, "operational_read_settings", return_value=settings):
+            with patch.object(platforms, "build_ontology_reasoning_queue_probe", return_value=lambda: {}):
+                with patch.object(platforms.stores, "reasoning_engine_registry_store", return_value=Registry()):
+                    with patch.object(platforms.stores, "reasoning_engine_job_store", return_value=Jobs()):
+                        payload = platforms.ontology_reasoning_status_payload()
 
         self.assertEqual(
             {"deploymentId": "v2-delivery", "receiptCount": 2},

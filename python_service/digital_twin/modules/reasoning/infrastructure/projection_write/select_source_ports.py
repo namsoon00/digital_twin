@@ -1,7 +1,7 @@
 """Capabilities for record; no runtime construction."""
 
 from __future__ import annotations
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Callable, Dict, List, Protocol
 
 

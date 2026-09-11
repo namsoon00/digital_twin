@@ -3,8 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,

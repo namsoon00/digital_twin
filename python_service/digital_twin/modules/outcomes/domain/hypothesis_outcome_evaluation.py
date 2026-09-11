@@ -3,7 +3,7 @@
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 import math
 
-from digital_twin.domain.hypothesis_outcome_contract import HypothesisOutcomeContract, text
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import HypothesisOutcomeContract, text
 
 
 HYPOTHESIS_OUTCOME_EVALUATION_VERSION = "hypothesis-outcome-criterion-evaluation-v1"

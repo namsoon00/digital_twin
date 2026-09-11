@@ -8,17 +8,17 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message
-from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.external_api_sources import external_api_source_metadata
-from digital_twin.domain.investment_research import research_evidence_from_external_signals
-from digital_twin.domain.investor_flow_psychology import investor_flow_psychology
-from digital_twin.domain.market_data import normalize_position
-from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
-from digital_twin.domain.ontology_observation_quality import position_observation_profiles
-from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position
-from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.domain.monitoring import RealtimeMonitor
+from digital_twin.modules.accounts.domain.accounts import AccountConfig
+from digital_twin.modules.market_data.domain.external_api_sources import external_api_source_metadata
+from digital_twin.modules.news_intelligence.domain.investment_research import research_evidence_from_external_signals
+from digital_twin.modules.market_data.domain.investor_flow_psychology import investor_flow_psychology
+from digital_twin.modules.market_data.domain.market_data import normalize_position
+from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, alert_context, render_notification
+from digital_twin.modules.reasoning.domain.ontology_observation_quality import position_observation_profiles
+from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, Position
+from digital_twin.modules.portfolio.domain.portfolio_calculations import portfolio_summary
+from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.external_signal_provider_yfinance import (
     normalized_yfinance_earnings_estimates,

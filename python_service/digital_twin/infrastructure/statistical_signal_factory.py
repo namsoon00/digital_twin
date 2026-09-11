@@ -3,15 +3,7 @@
 from typing import Dict
 
 from digital_twin.modules.reasoning.public import StatisticalSignalPipelineService
-from ..domain.statistical_signals import (
-    CAPITAL_FLOW_SHADOW_RELEASE_ID,
-    DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
-    DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
-    DEFAULT_EVENT_SIGNAL_RELEASE_ID,
-    DEFAULT_FLOW_SIGNAL_RELEASE_ID,
-    DEFAULT_PRICE_SIGNAL_RELEASE_ID,
-    DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
-)
+from digital_twin.modules.model_registry.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID
 from digital_twin.modules.model_registry.infrastructure.mysql_statistical_signals import MySQLStatisticalModelSignalStore
 from digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime import MySQLTemporalFeatureSnapshotStore
 from .settings import runtime_settings

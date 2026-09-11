@@ -6,7 +6,7 @@ from .rulebox_commands_ports import (
     SaveRuleboxBindings,
     EnsureRuleboxVersionBaselineBindings,
 )
-from digital_twin.domain.ontology_rulebox_governance import rulebox_version_payload
+from digital_twin.modules.model_registry.contracts import rulebox_version_payload
 from digital_twin.infrastructure.graph_store_rulebox import (
     rulebox_rules_from_payload,
     rulebox_rules_to_payload,

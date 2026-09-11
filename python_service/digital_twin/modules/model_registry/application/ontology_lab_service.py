@@ -3,16 +3,16 @@ import json
 from dataclasses import fields
 from typing import Callable, Dict, Iterable, List
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
-from digital_twin.domain.message_types import ONTOLOGY_LAB_EXPERIMENT
-from digital_twin.domain.ontology_experiments import OntologyExperiment, clean_symbols, compact_rulebox_snapshot, experiment_id_for, normalize_candidate_rules, rule_payloads_from_snapshot, run_experiment_on_graph, summarize_experiment_result
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
-from digital_twin.domain.ontology_worlds import PORTFOLIO_WORLD_TYPE, portfolio_world, world_type_from_id
-from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position, utc_now_iso
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.ontology_schema import default_tbox_metadata, tbox_entities, tbox_relations
-from digital_twin.domain.ontology_tbox import TBOX_CLASSES, TBOX_RELATION_TYPES
+from digital_twin.modules.reasoning.contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from digital_twin.modules.notifications.contracts import ONTOLOGY_LAB_EXPERIMENT
+from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment, clean_symbols, compact_rulebox_snapshot, experiment_id_for, normalize_candidate_rules, rule_payloads_from_snapshot, run_experiment_on_graph, summarize_experiment_result
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.modules.reasoning.contracts import PORTFOLIO_WORLD_TYPE, portfolio_world, world_type_from_id
+from digital_twin.modules.notifications.contracts import NotificationJob
+from digital_twin.modules.portfolio.contracts import AccountSnapshot, DecisionItem, PortfolioSummary, Position, utc_now_iso
+from digital_twin.modules.reasoning.contracts import build_portfolio_ontology
+from digital_twin.modules.reasoning.contracts import default_tbox_metadata, tbox_entities, tbox_relations
+from digital_twin.modules.model_registry.domain.ontology_tbox import TBOX_CLASSES, TBOX_RELATION_TYPES
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}

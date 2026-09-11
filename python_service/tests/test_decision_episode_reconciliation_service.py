@@ -1,7 +1,7 @@
 import unittest
 
 from digital_twin.modules.decisions.application.decision_episode_reconciliation_service import DecisionEpisodeReconciliationService
-from digital_twin.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.notifications import NotificationJob
 
 
 def episode_payload(episode_id="decision-episode:recover-1"):

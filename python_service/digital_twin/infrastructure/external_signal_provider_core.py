@@ -4,22 +4,13 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
-from ..domain.company_knowledge import (
-    COMPANY_KNOWLEDGE_CACHE_VERSION,
-    company_knowledge_by_symbol,
-    merge_company_knowledge_rows,
-)
-from ..domain.crypto_market_signals import (
-    combine_crypto_market_snapshots,
-    crypto_market_positions,
-    crypto_market_snapshot,
-    merge_crypto_market_snapshot,
-)
-from ..domain.external_signal_quality import attach_external_signal_quality
-from ..domain.investment_evidence_governance import claim_policy, governed_evidence
-from ..domain.investment_research import NewsCollectionTarget, research_evidence_from_external_signals
-from ..domain.market_data import number
-from ..domain.portfolio import Position, utc_now_iso
+from digital_twin.modules.news_intelligence.domain.company_knowledge import COMPANY_KNOWLEDGE_CACHE_VERSION, company_knowledge_by_symbol, merge_company_knowledge_rows
+from digital_twin.modules.market_data.domain.crypto_market_signals import combine_crypto_market_snapshots, crypto_market_positions, crypto_market_snapshot, merge_crypto_market_snapshot
+from digital_twin.modules.market_data.domain.external_signal_quality import attach_external_signal_quality
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import claim_policy, governed_evidence
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, research_evidence_from_external_signals
+from digital_twin.modules.market_data.domain.market_data import number
+from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import (
     DISABLED_SETTING_VALUES,
     ExternalApiGuard,

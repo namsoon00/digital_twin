@@ -1,10 +1,10 @@
 """Repository capabilities owned by news intelligence."""
 
 from typing import Callable, Dict, Iterable, List, Protocol, Tuple
-from digital_twin.domain.events import DomainEvent
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.investment_brain import NovelHypothesisProposal
-from digital_twin.domain.investment_evidence_governance import ResearchRun
+from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.modules.decisions.contracts import NovelHypothesisProposal
+from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import ResearchRun
 
 
 class InvestmentResearchRepository(Protocol):

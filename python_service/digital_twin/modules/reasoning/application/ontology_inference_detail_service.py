@@ -13,7 +13,7 @@ import time
 import uuid
 from typing import Dict, List, Mapping, Tuple
 
-from digital_twin.domain.ontology_runtime_operations import active_reasoning_lease_count, background_queue_backlog, bounded_background_work_fairness
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import active_reasoning_lease_count, background_queue_backlog, bounded_background_work_fairness
 
 
 SUCCESS_STATUSES = {"ok", "empty"}

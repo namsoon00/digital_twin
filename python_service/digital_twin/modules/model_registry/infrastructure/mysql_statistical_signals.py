@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from digital_twin.domain.statistical_signals import ModelSignalSnapshot
+from digital_twin.modules.model_registry.domain.statistical_signals import ModelSignalSnapshot
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 
 

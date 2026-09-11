@@ -6,9 +6,9 @@ import time
 import uuid
 from typing import Dict
 
-from digital_twin.domain.ontology_projection_payload import deserialize_portfolio_ontology
-from digital_twin.domain.ontology_runtime_operations import active_reasoning_lease_count, background_queue_backlog, bounded_background_work_fairness
-from digital_twin.domain.ontology_worlds import world_from_metadata
+from digital_twin.modules.reasoning.domain.ontology_projection_payload import deserialize_portfolio_ontology
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import active_reasoning_lease_count, background_queue_backlog, bounded_background_work_fairness
+from digital_twin.modules.reasoning.domain.ontology_worlds import world_from_metadata
 
 
 SUCCESS_STATUSES = {

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from digital_twin.domain.portfolio import AccountSnapshot
-from digital_twin.domain.portfolio_ontology_temporal_concepts import (
-    parse_temporal_windows,
-)
+from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.modules.reasoning.domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from typing import Dict
 from digital_twin.modules.reasoning.application.projection_input.ports import (
     TemporalInputs,

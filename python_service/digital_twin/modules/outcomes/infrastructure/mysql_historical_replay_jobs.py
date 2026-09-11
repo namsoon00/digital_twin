@@ -2,7 +2,7 @@
 
 from typing import Dict, List
 
-from digital_twin.domain.historical_replay import HistoricalReplayJob
+from digital_twin.modules.outcomes.domain.historical_replay import HistoricalReplayJob
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps

@@ -65,83 +65,30 @@ from contextlib import contextmanager
 from functools import wraps
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from ..domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION
-from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
-from ..domain.ontology_current_state import (
-    CURRENT_STATE_ABOX_PERSISTENCE_MODE,
-    copy_on_write_generation_id,
-    is_current_state_persistence_mode,
-    next_current_state_slot,
-)
-from ..domain.model_signal_interpretation import (
-    MODEL_SIGNAL_BRIDGE_VERSION,
-    is_model_signal_interpretation_rule,
-    model_signal_bridge_conditions,
-    model_signal_bridge_definition_key,
-    model_signal_bridge_rule_payload,
-    model_signal_conditions,
-    model_signal_interpretation_contract_id,
-)
-from ..domain.ontology_semantics import (
-    SEMANTIC_STORAGE_CONTRACT_VERSION,
-    entity_semantic_type,
-    primary_tbox_class,
-    relation_semantic_type,
-    semantic_class_types,
-    semantic_relation_types,
-    semantic_storage_type_names,
-    semantic_typeql_schema,
-    typedb_context_type,
-)
-from ..domain.ontology_tbox import tbox_class_def
-from ..domain.investment_ubiquitous_language import investment_language_registry
-from ..domain.ontology_inference_materializer import (
-    evidence_relation_index,
-    materialize_rule_inference,
-    ontology_property_value_matches,
-)
-from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
-from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
-from ..domain.ontology_rule_execution_policy import (
-    RULE_EXECUTION_POLICY_VERSION,
-    rule_execution_profile,
-)
-from ..domain.ontology_execution_units import (
-    rules_allow_subject_fanout,
-)
-from ..domain.ontology_rulebox_governance import (
-    normalize_rule_change_candidate,
-    rulebox_governance_candidates,
-    rulebox_rules_hash,
-    rulebox_version_payload,
-)
-from ..domain.ontology_change_impact import compact_inference_impact_plan, scope_family, scope_symbol
-from ..domain.ontology_rule_manifest import rule_dependency_reverse_index
-from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
-from ..domain.ontology_projection_fingerprint import (
-    material_graph_fingerprint,
-    stable_value,
-)
-from ..domain.ontology_runtime_operations import native_rule_timing_profile
-from ..domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata
-from ..domain.ontology_subject_fanout import evaluate_subject_fanout_comparison
-from ..domain.world_partitioned_reasoning import (
-    WORLD_PARTITIONED_REASONING_VERSION,
-    compile_world_partitioned_rules,
-)
-from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
-from ..domain.ontology_scopes import (
-    SCOPED_ABOX_MANIFEST_VERSION,
-    SCOPED_ABOX_PERSISTENCE_MODE,
-    SCOPE_NODE_INVENTORY_VERSION,
-    support_relation_key,
-)
-from ..domain.ontology_worlds import (
-    KNOWLEDGE_WORLD_TYPE,
-    MARKET_WORLD_TYPE,
-    SHARED_PREMISE_WORLD_TYPE,
-    world_type_from_id,
-)
+from digital_twin.modules.reasoning.domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE, copy_on_write_generation_id, is_current_state_persistence_mode, next_current_state_slot
+from digital_twin.modules.model_registry.domain.model_signal_interpretation import MODEL_SIGNAL_BRIDGE_VERSION, is_model_signal_interpretation_rule, model_signal_bridge_conditions, model_signal_bridge_definition_key, model_signal_bridge_rule_payload, model_signal_conditions, model_signal_interpretation_contract_id
+from digital_twin.modules.reasoning.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION, entity_semantic_type, primary_tbox_class, relation_semantic_type, semantic_class_types, semantic_relation_types, semantic_storage_type_names, semantic_typeql_schema, typedb_context_type
+from digital_twin.modules.model_registry.domain.ontology_tbox import tbox_class_def
+from digital_twin.modules.model_registry.domain.investment_ubiquitous_language import investment_language_registry
+from digital_twin.modules.reasoning.domain.ontology_inference_materializer import evidence_relation_index, materialize_rule_inference, ontology_property_value_matches
+from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from digital_twin.modules.model_registry.domain.ontology_rule_execution_policy import RULE_EXECUTION_POLICY_VERSION, rule_execution_profile
+from digital_twin.modules.reasoning.domain.ontology_execution_units import rules_allow_subject_fanout
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import normalize_rule_change_candidate, rulebox_governance_candidates, rulebox_rules_hash, rulebox_version_payload
+from digital_twin.modules.reasoning.domain.ontology_change_impact import compact_inference_impact_plan, scope_family, scope_symbol
+from digital_twin.modules.model_registry.domain.ontology_rule_manifest import rule_dependency_reverse_index
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
+from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import material_graph_fingerprint, stable_value
+from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_rule_timing_profile
+from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata
+from digital_twin.modules.reasoning.domain.ontology_subject_fanout import evaluate_subject_fanout_comparison
+from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import WORLD_PARTITIONED_REASONING_VERSION, compile_world_partitioned_rules
+from digital_twin.modules.outcomes.domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE, SCOPE_NODE_INVENTORY_VERSION, support_relation_key
+from digital_twin.modules.reasoning.domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE, SHARED_PREMISE_WORLD_TYPE, world_type_from_id
 from .graph_store_inferencebox import (
     inferencebox_entity_payload,
     inferencebox_relation_payload,

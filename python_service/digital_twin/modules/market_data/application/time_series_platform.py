@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.domain.time_series_storage import TEMPORAL_FEATURE_SET_VERSION, TemporalFeatureSnapshot, TimeSeriesWatermark, compare_feature_snapshots, payload_fingerprint
+from digital_twin.modules.market_data.domain.time_series_storage import TEMPORAL_FEATURE_SET_VERSION, TemporalFeatureSnapshot, TimeSeriesWatermark, compare_feature_snapshots, payload_fingerprint
 
 
 def utc_now_iso() -> str:

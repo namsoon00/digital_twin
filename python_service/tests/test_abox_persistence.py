@@ -6,9 +6,10 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from module_migration_fixtures import is_domain_dependency
 from unittest.mock import patch
 
-from digital_twin.domain.ontology_contracts import OntologyEntity
+from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity
 from digital_twin.infrastructure import typedb_ontology as api
 from digital_twin.modules.reasoning.infrastructure.abox_persistence import controls, ports, world_calls
 from abox_persistence_fixture import (
@@ -105,7 +106,7 @@ for name in sys.modules:
                 if module.startswith(PACKAGE + "."):
                     dependencies[path.stem].add(module.rsplit(".", 1)[1])
                 if module.startswith("digital_twin"):
-                    self.assertTrue(module.startswith((PACKAGE + ".", "digital_twin.domain.",
+                    self.assertTrue(is_domain_dependency(module) or module.startswith((PACKAGE + ".",
                                                      "digital_twin.modules.reasoning.infrastructure.typeql."))
                                     or module == "digital_twin.infrastructure.graph_store_payloads", (path.name, module))
         self.assertEqual(declared_capabilities(tree, "ABoxRowStore"), used["writer"])

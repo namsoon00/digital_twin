@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.domain.point_in_time_replay import DecisionReplayEnvelope, STRICT_REPLAY_MODE, observations_as_of
+from digital_twin.modules.outcomes.domain.point_in_time_replay import DecisionReplayEnvelope, STRICT_REPLAY_MODE, observations_as_of
 
 
 TRANSITIONED_FOLLOW_UP_STATES = {"satisfied", "invalidated", "expired"}

@@ -5,8 +5,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from digital_twin import service_manager
-from digital_twin.domain.market_observations import market_observation_delivery_admission
-from digital_twin.domain.portfolio import AlertEvent
+from digital_twin.modules.market_data.domain.market_observations import market_observation_delivery_admission
+from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMonitoringCycleRecorder
 
 

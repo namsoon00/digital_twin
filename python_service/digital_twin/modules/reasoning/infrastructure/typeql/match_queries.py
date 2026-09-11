@@ -2,7 +2,7 @@
 
 from typing import Dict, Iterable, List, Tuple
 
-from digital_twin.domain.ontology_contracts import entity_id
+from digital_twin.modules.reasoning.domain.ontology_contracts import entity_id
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.typeql.condition_queries import (
     typedb_condition_pattern,

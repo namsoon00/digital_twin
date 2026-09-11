@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from digital_twin.domain.ontology_subject_fanout import (
+from digital_twin.modules.reasoning.domain.ontology_subject_fanout import (
     evaluate_subject_fanout_comparison,
     native_match_signatures,
 )

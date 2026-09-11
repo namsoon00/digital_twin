@@ -1,7 +1,7 @@
 """Account-scoped watchlist changes and their secret-free event contract."""
 
 from digital_twin.modules.accounts.contracts import split_symbols
-from digital_twin.domain.events import DomainEvent
+from digital_twin.shared_kernel.events import DomainEvent
 
 
 ACCOUNT_WATCHLIST_CHANGED = "account.watchlist_changed"

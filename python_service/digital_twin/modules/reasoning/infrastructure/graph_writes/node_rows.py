@@ -6,8 +6,8 @@ from .node_rows_ports import (
     BeliefNodeRowsBindings,
     SupportRelationRowsBindings,
 )
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_scopes import support_relation_key
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_scopes import support_relation_key
 from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
     symbol_from_subject,
 )

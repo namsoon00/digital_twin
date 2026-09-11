@@ -3,15 +3,15 @@ from dataclasses import asdict
 from typing import Callable, Dict, List
 
 from digital_twin.modules.accounts.contracts import AccountConfig, split_symbols
-from digital_twin.domain.market_data import investor_net_volume, known_stock, normalize_position, number, sector_from_symbol
-from digital_twin.domain.investment_analysis import build_investment_analysis
-from digital_twin.domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_observation, investor_flow_observed_fields
-from digital_twin.domain.ontology_decision_state import REVIEW_LEVEL_RANK
-from digital_twin.domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio import PortfolioSummary, Position, utc_now_iso
-from digital_twin.domain.portfolio_calculations import normalized_fx_rates, value_in_base
-from digital_twin.domain.strategy import StrategyModel, inference_required_relation_context
+from digital_twin.modules.market_data.contracts import investor_net_volume, known_stock, normalize_position, number, sector_from_symbol
+from digital_twin.modules.read_models.domain.investment_analysis import build_investment_analysis
+from digital_twin.modules.market_data.contracts import INVESTOR_PARTY_FIELDS, investor_flow_observation, investor_flow_observed_fields
+from digital_twin.modules.reasoning.contracts import REVIEW_LEVEL_RANK
+from digital_twin.modules.reasoning.contracts import ONTOLOGY_PROMPT_VERSION
+from digital_twin.modules.reasoning.contracts import build_portfolio_ontology
+from digital_twin.modules.portfolio.contracts import PortfolioSummary, Position, utc_now_iso
+from digital_twin.modules.portfolio.contracts import normalized_fx_rates, value_in_base
+from digital_twin.modules.decisions.contracts import StrategyModel, inference_required_relation_context
 
 
 MARKET_DATA_ACCOUNT_ID = "__market_data__"

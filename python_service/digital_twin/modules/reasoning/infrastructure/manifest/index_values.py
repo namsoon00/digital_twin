@@ -1,9 +1,9 @@
 """Pure Manifest topology and exact evidence-index planning."""
 
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
-from digital_twin.domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE
+from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
+from digital_twin.modules.model_registry.contracts import GraphInferenceRule
+from digital_twin.modules.reasoning.domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE
 from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
     ontology_storage_id,
     relation_row_id,

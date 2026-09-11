@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, Mapping, Set
 
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
 class NotificationStage(str, Enum):

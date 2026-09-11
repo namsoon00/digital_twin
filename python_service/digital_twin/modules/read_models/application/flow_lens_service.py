@@ -2,7 +2,7 @@ from collections import Counter
 from dataclasses import asdict
 from typing import Callable, Dict, List
 
-from digital_twin.domain.accounts import AccountConfig, split_symbols
+from digital_twin.modules.accounts.contracts import AccountConfig, split_symbols
 from digital_twin.domain.market_data import investor_net_volume, known_stock, normalize_position, number, sector_from_symbol
 from digital_twin.domain.investment_analysis import build_investment_analysis
 from digital_twin.domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_observation, investor_flow_observed_fields

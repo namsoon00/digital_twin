@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
-from digital_twin.domain.accounts import AccountConfig, split_symbols
+from digital_twin.modules.accounts.contracts import AccountConfig, split_symbols
 from digital_twin.domain.data_freshness import evaluate_notification_data_freshness
 from digital_twin.domain.events import DomainEvent, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from digital_twin.domain.fact_changes import fact_signature, research_evidence_fact_payload

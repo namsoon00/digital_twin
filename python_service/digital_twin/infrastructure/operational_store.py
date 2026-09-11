@@ -39,10 +39,11 @@ def account_reader(settings: Dict[str, str] = None):
 
 
 def account_watchlist_repository(settings: Dict[str, str] = None):
+    from digital_twin.modules.accounts.infrastructure.mysql_watchlist_account_reader import MySQLWatchlistAccountReader
     from digital_twin.modules.instruments.infrastructure.mysql_account_watchlist import MySQLAccountWatchlistRepository
 
     configured = configured_settings(settings)
-    return MySQLAccountWatchlistRepository(configured, account_reader(configured))
+    return MySQLAccountWatchlistRepository(configured, MySQLWatchlistAccountReader(configured))
 
 
 def app_store(settings: Dict[str, str] = None):

@@ -1,6 +1,6 @@
 from typing import Callable, Dict, List
 
-from digital_twin.domain.accounts import AccountConfig, split_symbols
+from digital_twin.modules.accounts.contracts import WatchlistAccount, split_symbols
 from digital_twin.modules.instruments.application.ports import AccountWatchlistRepository
 
 
@@ -17,7 +17,7 @@ class AccountWatchlistService:
         self.event_publisher = event_publisher
         self.refresh_requester = refresh_requester
 
-    def account(self, account_id: str) -> AccountConfig:
+    def account(self, account_id: str) -> WatchlistAccount:
         normalized_id = str(account_id or "").strip()
         if not normalized_id:
             raise ValueError("계정 ID가 필요합니다.")
@@ -73,7 +73,7 @@ class AccountWatchlistService:
                 result.append(symbol)
         return result
 
-    def stored_items(self, account: AccountConfig) -> List[Dict[str, object]]:
+    def stored_items(self, account: WatchlistAccount) -> List[Dict[str, object]]:
         if hasattr(self.repository, "watchlist_items"):
             items = self.repository.watchlist_items(account.account_id)
             if items:
@@ -89,7 +89,7 @@ class AccountWatchlistService:
 
     def payload(
         self,
-        account: AccountConfig,
+        account: WatchlistAccount,
         *,
         changed: bool,
         action: str,

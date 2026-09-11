@@ -258,7 +258,9 @@ function checkWorkflowConsoleContract() {
   const serviceWorker = fs.readFileSync(path.join(rootDir, "public", "service-worker.js"), "utf8");
   const webRuntime = fs.readFileSync(path.join(rootDir, "public", "web-runtime.js"), "utf8");
   const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
-  const accountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "domain", "accounts.py"), "utf8");
+  const accountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "accounts", "domain", "configuration.py"), "utf8");
+  const watchlistAccountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "accounts", "domain", "watchlist_account.py"), "utf8");
+  const watchlistAccountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "accounts", "infrastructure", "mysql_watchlist_account_reader.py"), "utf8");
   const accountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "accounts", "infrastructure", "mysql_account_reader.py"), "utf8");
   const watchlistStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "instruments", "infrastructure", "account_watchlist.py"), "utf8");
   const calendarStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "investment_calendar", "infrastructure", "mysql_investment_calendar_candidates.py"), "utf8");
@@ -931,6 +933,8 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(
     accountDomain.indexOf('"updatedAt": self.updated_at') >= 0 &&
+      watchlistAccountDomain.indexOf('"updatedAt": self.updated_at') >= 0 &&
+      watchlistAccountStore.indexOf("ORDER BY updated_at DESC, id") >= 0 &&
       accountStore.indexOf("ORDER BY a.updated_at DESC") >= 0 &&
       calendarStore.indexOf("ORDER BY updated_at DESC, candidate_id DESC") >= 0 &&
       notificationStore.indexOf("ORDER BY updated_at DESC, job_id DESC") >= 0 &&

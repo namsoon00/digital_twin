@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.domain.events import alerts_detected_event, investment_follow_up_transitioned_event, monitoring_cycle_completed_event, ontology_reasoning_requested_event, snapshot_collected_event
 from digital_twin.domain.ontology_projection_input import compact_monitor_state_for_ontology, frozen_monitor_state_for_reasoning
 from digital_twin.domain.ontology_projection_status import VERIFIED_MONITOR_SNAPSHOT_QUEUED

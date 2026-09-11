@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from digital_twin.domain.accounts import AccountConfig, split_symbols
+from digital_twin.modules.accounts.contracts import AccountConfig, split_symbols
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_core_stores import MySQLRuntimeSettingsStore
 

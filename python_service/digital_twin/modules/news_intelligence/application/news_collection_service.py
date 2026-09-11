@@ -4,7 +4,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Tuple
 
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.domain.data_freshness import age_minutes, parse_datetime, utc_iso
 from digital_twin.domain.events import DomainEvent, news_article_analyzed_event, ontology_reasoning_requested_event, research_evidence_collected_event, research_evidence_lifecycle_events
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, stable_evidence_token

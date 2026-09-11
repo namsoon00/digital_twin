@@ -8,7 +8,7 @@ import urllib.request
 from html import unescape
 from typing import Dict, Iterable
 
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.infrastructure.external_signal_utils import guarded_external_call, root_api_error
 from digital_twin.infrastructure.settings import runtime_settings
 

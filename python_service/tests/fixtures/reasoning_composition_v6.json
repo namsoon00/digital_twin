@@ -1,0 +1,40 @@
+{
+  "source": "49f2783bb",
+  "phases": [
+    {
+      "file": "reasoning_launch.py",
+      "function": "prepare_v2_launch",
+      "importCount": 1,
+      "returnBundle": true,
+      "bodyHash": "f750101514efb010f75ec2f00a129307b198b93bdc7d4ba5c3377ec216211a0f"
+    },
+    {
+      "file": "reasoning_binding.py",
+      "function": "bind_v2_release",
+      "importCount": 7,
+      "returnBundle": true,
+      "bodyHash": "7483329becb0547444a8f68811a5b2c790f73d5ad7fd7bcd03d2e5d180818463"
+    },
+    {
+      "file": "reasoning_warmup.py",
+      "function": "warm_v2_release",
+      "importCount": 2,
+      "returnBundle": true,
+      "bodyHash": "40e4767afe705c6b9ca8944cf66df68b905c0e13d50fc73394a85c04a8da6bd4"
+    },
+    {
+      "file": "reasoning_release_health.py",
+      "function": "record_v2_release_health",
+      "importCount": 1,
+      "returnBundle": false,
+      "bodyHash": "8b515d2533d9e7aaf3490c89c4a230026ac84bce289d6a38ae34deb343bbdfb5"
+    },
+    {
+      "file": "reasoning_delivery.py",
+      "function": "wire_v2_decision_services",
+      "importCount": 7,
+      "returnBundle": true,
+      "bodyHash": "d3a0f0d8b58905f716df5f2e3ef26507e6206460270ce341f3e7834b8525143b"
+    }
+  ]
+}

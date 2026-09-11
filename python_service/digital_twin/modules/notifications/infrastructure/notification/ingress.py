@@ -3,7 +3,7 @@
 from typing import Dict, Iterable
 
 from digital_twin.modules.notifications.application.notification.intake import NotificationIngressService
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.domain.data_freshness import data_freshness_required, freshness_record
 from digital_twin.domain.events import DomainEvent
 from digital_twin.domain.message_types import PORTFOLIO_HOLDINGS_SNAPSHOT

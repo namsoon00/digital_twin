@@ -159,6 +159,15 @@ class BackendOwnershipTests(unittest.TestCase):
             tree = ast.parse((INFRA / entry['path']).read_text())
             method = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
             self.assertEqual(entry['bodyHash'], body_hash(method), name)
+        from digital_twin.infrastructure import typedb_ontology as facade
+        from digital_twin.modules.reasoning.infrastructure import backend_constants
+        names = {name for name in vars(backend_constants) if name.isupper()}
+        tree = ast.parse((ROOT / 'digital_twin/infrastructure/typedb_ontology.py').read_text())
+        redeclared = {target.id for node in tree.body if isinstance(node, ast.Assign)
+                      for target in node.targets if isinstance(target, ast.Name)}
+        self.assertTrue(names.isdisjoint(redeclared))
+        for name in names:
+            self.assertEqual(getattr(backend_constants, name), getattr(facade, name), name)
 
     def test_native_retry_respects_deadline_and_never_retries_invalid_queries(self):
         from types import SimpleNamespace

@@ -407,11 +407,12 @@ fallback accounts must first be explicitly saved through account settings.
 The patch contract prevents unrelated-field overwrites. It does not provide
 compare-and-swap protection for two users intentionally editing the same field.
 
-The account dependencies now expose three distinct capabilities:
+The account dependencies now expose four distinct capabilities:
 
 | Capability | Implementation | Used by |
 | --- | --- | --- |
 | Account reads | `modules/accounts/infrastructure/mysql_account_reader.py` | Collection, reasoning, portfolio observation, notification and web read paths |
+| Watchlist account identity | `modules/accounts/infrastructure/mysql_watchlist_account_reader.py` | Instrument lists; selects identity, symbols and timestamps without joining credential tables |
 | Watchlist edits | `modules/instruments/infrastructure/mysql_account_watchlist.py` | The watchlist use case; account reads are injected |
 | Account commands | `infrastructure/account_transactions.py` | Explicit account create, patch, remove and full import/save operations |
 
@@ -424,29 +425,85 @@ an event-write or owner-write failure rolls everything back. Deletion preserves
 historical investment records as before.
 
 This is a logical capability boundary, not a security sandbox. The database
-schema/credentials are still shared, and `AccountConfig` still carries several
-owners' read data. The legacy full registry is available for explicit command
-callers; new read paths must request `account_reader` instead.
+schema/credentials are still shared. `AccountConfig` remains a credential-aware
+runtime configuration owned by `modules/accounts/domain/configuration.py`; it
+must not be serialized into events. Its account read/atomic command ports live
+in the same module. `domain/accounts.py` and the old account repository import
+are compatibility exports, not duplicate implementations.
+
+Quiet hours and message-level policies belong to `notifications` contracts;
+investment strategy profiles belong to `portfolio` contracts. Values, defaults
+and saved field names have not changed. Watchlist operations receive the much
+smaller `WatchlistAccount` contract and return its identity-only account payload.
+The full account settings endpoint remains authoritative for credentials and
+preferences. Provider/notification workers still explicitly use the
+credential-aware reader; this is not a complete secret-vault migration.
+
+## Backend Execution Ownership
+
+The reasoning infrastructure now has these additional private boundaries:
+
+| Package | Responsibility |
+| --- | --- |
+| `manifest/` | Control graphs, exact evidence indexes, count plans, repair and staged save sequencing |
+| `projection_lock/` | World leases, writer coordination, owner recovery and per-repository thread-local lease state |
+| `graph_reads/` | Bounded reads, row decoding, metadata, inventories, inference snapshots and query metrics |
+| `graph_maintenance/` | Retained-generation cleanup, orphan candidates and bounded deferred maintenance |
+| `native_execution/` | Rule entry execution, target fanout, deadline recovery, evidence reads, validation and run sequencing |
+
+These packages use explicit operation-specific Protocols and runtime callbacks.
+They do not import the root TypeDB repository, runtime settings or business
+application services. The facade preserves call signatures, coordinator guards,
+driver ownership and activation order. Query-metric and lease state are owned
+by their packages, with facade properties preserving lock/object identity.
+Protocols document capabilities; they are not a runtime security sandbox.
+
+The extraction preserves 153 method bodies and ten Manifest index helpers
+against frozen pre-migration AST contracts, plus execution fingerprints for 22
+save/lease scenarios. One intentional correction is recorded separately:
+orphan cleanup previously referenced an undefined, unused `timing` variable
+before opening its cleanup work. Removing that assignment permits the existing
+bounded cleanup policy to run. Tests cover its generation limit and driver
+release on failure; active/retained references are still excluded by inventory.
+
+Native retry remains bounded by the original deadline. Invalid queries are not
+made retryable, incomplete target-shard results are not treated as complete,
+and partially persisted candidates do not replace the active generation.
+No new background worker, broker, database format or investment rule was added.
+
+## V2 Composition Phases
+
+`composition/reasoning.py` now wires five explicit phases:
+
+1. `reasoning_launch`: resolve the deployment and copy its runtime settings.
+2. `reasoning_binding`: validate immutable release identity and seed artifacts.
+3. `reasoning_warmup`: compile and warm the frozen rule catalog.
+4. `reasoning_release_health`: record readiness without changing a frozen release.
+5. `reasoning_delivery`: connect subject cases, AI handoff and delivery admission.
+
+Typed result bundles connect the phases. Importing a phase does not initialize
+the runtime. Platform initialization, store construction and phase execution
+remain ordered synchronously; subsequent reasoning/AI/delivery jobs retain
+their existing durable event and lease contracts. Frozen phase-body tests
+protect the original release guards and wiring decisions.
 
 ## Remaining Shared Boundaries
 
 This is application-layer modularization with selected ownership fixes, not a
 claim that the entire persistence/domain migration is complete:
 
-- The broad `AccountConfig` DTO and several repository ports remain in the
-  shared domain package. Other large ontology and decision contracts also
-  remain there.
-- Runtime builders are physically separated and loaded lazily, but some
-  reasoning builders still assemble large collaborator graphs. Those graphs
-  are not fully described by module import checks alone.
-- `typedb_ontology.py` still has roughly 22,700 lines after query, inference
-  publication, ABox write/control, connection/schema and candidate/recovery
-  extraction. Its state
-  identities remain at the composition boundary. `ontology_projection.py`
-  remains a large shared adapter. The scoped save coordinator, Manifest/index
-  construction, database readback queries, projection leases, maintenance and
-  native execution orchestration still need ownership separation. The atomic control
-  limit fix is explicit above; investment semantics are unchanged.
+- Account configuration has an owner, but still composes multiple policy
+  contracts for provider/notification workers. Other large ontology, decision
+  and portfolio repository contracts remain in the shared domain package.
+- Runtime builders are lazy and V2 has tested phases, but some phases still
+  assemble large collaborator graphs. Import checks alone cannot prove all
+  runtime interactions safe.
+- `typedb_ontology.py` is now roughly 9,200 lines, down from 22,738 at the start
+  of this batch. Schema/seed administration, primitive writes, legacy helpers,
+  facade methods and some driver/cache identities remain there.
+  `ontology_projection.py` remains large. The extracted save and native-cycle
+  algorithms are deliberately intact; ownership separation does not mean
+  every algorithm is already small or that overall code volume decreased.
 - The MySQL schema and operational store facade remain shared. Owner helpers
   restrict the changed write paths, but do not enforce table ownership for
   every legacy writer.
@@ -456,12 +513,10 @@ claim that the entire persistence/domain migration is complete:
 - There is no new generic per-consumer acknowledgement/outbox framework.
   Existing job-specific recovery remains authoritative.
 
-Next work should move remaining store ports and table writes one owner at a
-time, then simplify large builder dependency graphs. Following TypeQL,
-InferenceBox publication, scoped ABox write/control, connection/schema and
-candidate/recovery extraction, separate the remaining save/Manifest
-orchestration and state ownership only with immutable replay and failure-path
-tests.
+Further changes should move remaining store ports and table writes one owner
+at a time, and simplify the larger save/native algorithms only with immutable
+replay and failure-path tests. Schema/seed administration and projection input
+assembly are separate remaining ownership areas, not part of this batch.
 Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
 asynchronous APIs by default.
@@ -476,7 +531,10 @@ asynchronous APIs by default.
   lists, account isolation, narrow runtime wiring and create/delete/event-write
   rollback across owner helpers.
 - `test_runtime_composition.py`: explicit builder coverage, lightweight import
-  isolation, bounded valuation construction and read-only account capabilities.
+  isolation, bounded valuation construction, V2 frozen phase bodies, launch
+  isolation, immutable catalog warmup and read-only account capabilities.
+- `test_account_contracts.py`: one policy owner, serialization stability,
+  credential-free watchlist query projection and empty/default list behavior.
 - `test_typeql_compiler.py`: original query/plan byte fingerprints, driver-free
   import isolation, explicit ownership, acyclic leaf dependencies and scoped
   unexecutable/fallback plans. Existing TypeDB/replay regressions still cover
@@ -494,7 +552,13 @@ asynchronous APIs by default.
 - `test_abox_candidates.py`: original candidate/recovery fingerprints, exact
   row-image closure, deferred facts and relation rebinding, identity readback,
   bounded world-scoped recovery, idempotence and retained coordinator guards.
+- `test_backend_ownership.py`: original save/native execution contracts, cold
+  imports, narrow ports, lease/metric state isolation, orphan cleanup bounds,
+  deadline exhaustion and rejection of incomplete native timeout recovery.
 - The web smoke test checks changed-field payloads and existing pages.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not
   the owner's production account data.
+- Unit failure injection is not a native-server crash test. Deliberately killing
+  TypeDB mid-commit and exhaustive mobile/network outage testing were not part
+  of this backend ownership batch.

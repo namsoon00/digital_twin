@@ -23,6 +23,11 @@ _EXPORTS = {'INFERRED_CORPORATE_ACTION': ('digital_twin.modules.portfolio.domain
  'execution_ledger_entries': ('digital_twin.modules.portfolio.domain.portfolio_ledger',
                               'execution_ledger_entries')}
 
+_EXPORTS['DEFAULT_INVESTMENT_STRATEGY_PROFILE'] = ('digital_twin.modules.portfolio.domain.strategy_profile', 'DEFAULT_INVESTMENT_STRATEGY_PROFILE')
+_EXPORTS['INVESTMENT_STRATEGY_PROFILES'] = ('digital_twin.modules.portfolio.domain.strategy_profile', 'INVESTMENT_STRATEGY_PROFILES')
+_EXPORTS['normalize_investment_strategy_profile'] = ('digital_twin.modules.portfolio.domain.strategy_profile', 'normalize_investment_strategy_profile')
+_EXPORTS['investment_strategy_profile'] = ('digital_twin.modules.portfolio.domain.strategy_profile', 'investment_strategy_profile')
+
 __all__ = list(_EXPORTS)
 
 

@@ -1,6 +1,6 @@
 """Instrument-owned writes; callers provide the transaction boundary."""
 
-from digital_twin.domain.accounts import split_symbols
+from digital_twin.modules.accounts.contracts import split_symbols
 from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
 from digital_twin.modules.instruments.domain.watchlist import (
     changed_watchlist,

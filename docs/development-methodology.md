@@ -417,6 +417,28 @@ for instrument edits, and the command coordinator for explicit account writes.
 Runtime builders may wire private adapters, but must remain explicitly exported
 and must not load unrelated business workflows merely by being imported.
 
+Account configuration belongs to `modules/accounts/contracts.py`; delivery
+time/message policies belong to `modules/notifications/contracts.py`, and
+investment strategy profiles belong to `modules/portfolio/contracts.py`.
+`domain/accounts.py` is a compatibility export only. Credential-aware workers
+may request `AccountReader`, but instrument/watchlist operations must use the
+secret-free `WatchlistAccountReader` projection. Keep account commands and
+their domain event in the existing shared transaction.
+
+For reasoning persistence, keep Manifest/save planning, projection leases,
+bounded graph reads, maintenance and native execution in their private
+`modules/reasoning/infrastructure` packages. Pass explicit ports and callbacks;
+do not import the repository facade or composition root back into these
+packages. Preserve per-repository driver/lock/cache identities and coordinator
+decorators. A cleanup or native-retry change requires failure-path and active
+generation preservation tests, not just query snapshots.
+
+V2 composition separates launch settings, immutable release binding, warmup,
+release health and decision/delivery wiring. Keep this preparation synchronous
+and preserve its phase order. Do not change frozen release identities or
+promote shadow delivery while reorganizing its code. Do not reset existing
+quiet-hours values or change account serialization during a DTO ownership move.
+
 ## Testing Expectations
 
 - Add unit tests around application services when a use case changes.

@@ -11,6 +11,7 @@ from mysql_fixtures import TestAccountRegistry, reset_mysql_test_database, test_
 from digital_twin.infrastructure import operational_store
 from digital_twin.infrastructure.service_factory import build_account_watchlist_service
 from digital_twin.modules.accounts.infrastructure.mysql_account_reader import MySQLAccountReader
+from digital_twin.modules.accounts.infrastructure.mysql_watchlist_account_reader import MySQLWatchlistAccountReader
 from digital_twin.modules.instruments.infrastructure.mysql_account_watchlist import MySQLAccountWatchlistRepository
 
 
@@ -93,13 +94,19 @@ class ModuleAccountMutationTests(unittest.TestCase):
             refresh_requester=lambda *args: refreshes.append(args) or {"status": "queued"},
         )
         self.assertIsInstance(service.repository, MySQLAccountWatchlistRepository)
-        self.assertIs(type(service.repository.account_reader), MySQLAccountReader)
+        self.assertIs(type(service.repository.account_reader), MySQLWatchlistAccountReader)
         self.assertFalse(hasattr(service.repository, "upsert"))
         self.assertFalse(hasattr(service.repository.account_reader, "patch_with_event"))
         self.assertEqual("queued", service.add(account.account_id, "MSFT")["refresh"]["status"])
         self.assertEqual([account.account_id, "MSFT", "added"], list(refreshes[0]))
         self.assertEqual(["AAPL", "MSFT"], self.stored(account.account_id).watchlist_symbols)
         self.assertEqual(1, len(bus.published))
+
+        visible_account = service.account(account.account_id)
+        for private_field in ("client_id", "client_secret", "telegram_bot_token", "telegram_chat_id", "notify_link_url"):
+            self.assertFalse(hasattr(visible_account, private_field), private_field)
+        self.assertEqual(account.label, visible_account.label)
+        self.assertEqual("test-only-secret", self.stored(account.account_id).client_secret)
 
     def test_module_account_delete_failure_preserves_every_owner_and_its_event(self):
         account = self.account("module-delete-rollback")

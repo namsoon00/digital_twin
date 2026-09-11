@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.domain.events import DomainEvent, NEWS_ARTICLE_ANALYZED, RESEARCH_EVIDENCE_COLLECTED
 from digital_twin.domain.data_freshness import freshness_record
 from digital_twin.domain.market_data import number

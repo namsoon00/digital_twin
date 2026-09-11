@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple, runtime_checkable
 
 from .accounts import AccountConfig
+from digital_twin.modules.accounts.contracts import AccountRepository
 from .events import DomainEvent
 from .investment_research import NewsCollectionTarget, ResearchEvidence
 from .investment_brain import DecisionEpisode, LearningProposal, NovelHypothesisProposal, ObservedOutcome
@@ -22,23 +23,6 @@ from .portfolio_rebalancing import RebalanceProposal
 from .risk_exposure import ExposureSnapshot
 from .trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
 from digital_twin.modules.instruments.contracts import ListedSymbol
-
-
-class AccountRepository(Protocol):
-    def load(self) -> List[AccountConfig]:
-        ...
-
-    def load_all(self) -> List[AccountConfig]:
-        ...
-
-    def load_saved(self) -> List[AccountConfig]:
-        ...
-
-    def upsert(self, account: AccountConfig) -> None:
-        ...
-
-    def remove(self, account_id: str) -> bool:
-        ...
 
 
 class InvestmentDomainRepository(Protocol):

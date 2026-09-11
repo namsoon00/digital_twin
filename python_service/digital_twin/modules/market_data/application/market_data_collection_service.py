@@ -1,7 +1,7 @@
 import time
 from typing import Callable, Dict, Iterable, List, Tuple
 
-from digital_twin.domain.accounts import AccountConfig
+from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.domain.data_freshness import age_minutes
 from digital_twin.domain.events import market_data_collected_event
 from digital_twin.domain.fact_changes import market_fact_change

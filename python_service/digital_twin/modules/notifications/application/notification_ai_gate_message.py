@@ -7,7 +7,8 @@ try:
 except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
     ZoneInfo = None
 
-from digital_twin.domain.accounts import investment_strategy_profile, message_delivery_profile
+from digital_twin.modules.portfolio.contracts import investment_strategy_profile
+from digital_twin.modules.notifications.contracts import message_delivery_profile
 from digital_twin.domain.alert_formatting import compact_multiple, compact_number, price_money, signed_pct, trade_strength_label
 from digital_twin.domain.company_knowledge import active_company_valuation_rule_ids
 from digital_twin.domain.customer_evidence_explanation import customer_evidence_rows, enforce_customer_message_quality, is_non_final_publication, non_final_publication_summary, publication_outcome_kind

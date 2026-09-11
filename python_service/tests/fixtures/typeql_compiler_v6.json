@@ -1,0 +1,17 @@
+{
+  "sourceRevision": "45f284c52",
+  "engineVersion": "typedb-direct-typeql-rule-engine-v6",
+  "groups": {
+    "any-group": {"count": 58, "bytes": 139371, "sha256": "8c1a5c3e9e4c5b35a8fb6e1faf6eada4f60afa7b13380940c5ad3fc6e2c6be79"},
+    "bridge": {"count": 10, "bytes": 38589, "sha256": "bbd1d21c8d66b30dd382c8b55cd8af0fa6f615b03252d982cfd20d6cd86bde61"},
+    "catalog": {"count": 1, "bytes": 2534194, "sha256": "2e07b33214ca87e4d4a73836c0547edfa5cf6d184d18c80791d3e468d1b51bdb"},
+    "condition": {"count": 281, "bytes": 541636, "sha256": "16e5ba644e11a4b6b0a64e46594eb11fc78402cc32c7bb9c2c47e7f3fd0ed8cb"},
+    "governed": {"count": 29, "bytes": 300199, "sha256": "2b6b12e5fc61a1762896b675e281086ec180c07ffd779a2402843188113f5446"},
+    "indexed": {"count": 244, "bytes": 642372, "sha256": "ae7cdd80ede44f274796389c1caee1f197e7808cc606d99a9b54f5c393bd7e0f"},
+    "literals": {"count": 30, "bytes": 1033, "sha256": "6767b7f1c7d34d9bf06cf6b684f7d7c2528d7ed79aaebc4bf6e899e0566b3f31"},
+    "match": {"count": 366, "bytes": 1333848, "sha256": "c1cdb9507ea5cdf367b07e9295e0428c8aea2df7eb01d53e64d7cf9d1c9d87a4"},
+    "planning": {"count": 2, "bytes": 42342, "sha256": "9358bec8547578ae40718c770be57462104bd50fe50863a45daa162d5f8b9e31"},
+    "profiles": {"count": 1, "bytes": 291817, "sha256": "8f15e92b1d4a9453826c0221633bd4c35522c3e61abe8ed56282c514787d5d8d"},
+    "schema": {"count": 1, "bytes": 22845, "sha256": "f90a6307192101bbb278e4c2eb9ebb28afc049de704d033b40079a86173af980"}
+  }
+}

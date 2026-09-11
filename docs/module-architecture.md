@@ -95,6 +95,45 @@ are injected through ports. There is no implicit fallback export or runtime
 service locator. Add each new builder to the explicit export catalog and its
 isolation tests.
 
+## TypeQL Query Boundary
+
+`modules/reasoning/infrastructure/typeql/` owns direct TypeQL query generation
+and execution planning. These are internal reasoning adapters, not additional
+business modules or workers. The graph repository imports them explicitly;
+they cannot import the repository, runtime composition, settings or application
+services in return.
+
+| Files | Responsibility |
+| --- | --- |
+| `constants`, `storage_schema` | Native engine identity, promoted attributes and physical schema capabilities |
+| `literals`, `rule_shape`, `scope_clauses` | Value encoding, authored rule metadata, world and active-generation constraints |
+| `condition_queries`, `match_queries`, `any_queries` | Individual predicates, complete queries and independent evidence groups |
+| `indexed_queries`, `model_signal_queries` | Verified evidence-index bindings and governed model-signal batch queries |
+| `preflight`, `planning`, `profiles` | Impossible-candidate rejection, bounded work plans and query capability reports |
+
+The leaf dependency graph is acyclic. Shared domain contracts and the pure
+`graph_store_payloads` conversions are allowed dependencies. Resolving every
+compiler export must not load a TypeDB/MySQL driver or an application workflow.
+`__init__.py` lists exports explicitly; it is not a fallback service locator.
+Existing graph-adapter imports resolve to the same owned implementations.
+
+These functions return query strings, plans and diagnostics, not an investment
+verdict. Preflight rejection does not prove a matched rule. An unavailable
+index remains explicit and may select the existing scoped **TypeDB** query;
+it must never fall back to Python investment evaluation. Actual transactions,
+leases, retry policy, candidate activation and InferenceBox publication remain
+in the graph repository and existing runtime.
+
+The extraction moved 85 definitions without changing their AST or the
+remaining adapter's runtime AST. A golden contract captured from revision
+`45f284c52` checks 1,023 deterministic query/plan/catalog cases, including
+field/target-kind indexes, independent evidence groups and world ownership.
+Inputs are synthetic and contain no account credentials or production records.
+The native engine remains `typedb-direct-typeql-rule-engine-v6` because this is
+a byte-equivalent relocation. Future semantic changes require the normal
+versioned engine/replay review; do not simply regenerate the golden file to
+silence a failure.
+
 ## Synchronous and Asynchronous Boundaries
 
 Use a synchronous public interface when the caller needs an immediate result
@@ -188,8 +227,10 @@ claim that the entire persistence/domain migration is complete:
 - Runtime builders are physically separated and loaded lazily, but some
   reasoning builders still assemble large collaborator graphs. Those graphs
   are not fully described by module import checks alone.
-- `typedb_ontology.py` and `ontology_projection.py` remain large shared adapters.
-  Their query, generation and transaction semantics were not changed here.
+- `typedb_ontology.py` still has roughly 27,000 lines after the TypeQL extraction,
+  and `ontology_projection.py` remains a large shared adapter. Driver execution,
+  generation publication and scoped Manifest persistence are not yet separated
+  by ownership. Their transaction and investment semantics are unchanged.
 - The MySQL schema and operational store facade remain shared. Owner helpers
   restrict the changed write paths, but do not enforce table ownership for
   every legacy writer.
@@ -200,9 +241,10 @@ claim that the entire persistence/domain migration is complete:
   Existing job-specific recovery remains authoritative.
 
 Next work should move remaining store ports and table writes one owner at a
-time, then simplify large builder dependency graphs. Separate TypeDB query planning, generation
-publication and storage adapters only with immutable replay and failure-path
-tests. Convert a synchronous follow-up to a durable consumer only when measured
+time, then simplify large builder dependency graphs. Following the TypeQL query
+extraction, separate TypeDB generation publication and storage adapters only
+with immutable replay and failure-path tests. Convert a synchronous follow-up
+to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
 asynchronous APIs by default.
 
@@ -217,6 +259,10 @@ asynchronous APIs by default.
   rollback across owner helpers.
 - `test_runtime_composition.py`: explicit builder coverage, lightweight import
   isolation, bounded valuation construction and read-only account capabilities.
+- `test_typeql_compiler.py`: original query/plan byte fingerprints, driver-free
+  import isolation, explicit ownership, acyclic leaf dependencies and scoped
+  unexecutable/fallback plans. Existing TypeDB/replay regressions still cover
+  repository execution and failed-generation behavior.
 - The web smoke test checks changed-field payloads and existing pages.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not

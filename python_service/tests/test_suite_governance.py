@@ -112,7 +112,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and transactional event failure add eight boundary regressions.
         # Lazy runtime composition and narrow account storage additionally
         # protect startup isolation and cross-owner create/delete rollback.
-        self.assertLessEqual(total, 1096)
+        # TypeQL compiler byte parity, import isolation, acyclic ownership and
+        # scoped failure plans guard the reasoning adapter extraction.
+        self.assertLessEqual(total, 1100)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

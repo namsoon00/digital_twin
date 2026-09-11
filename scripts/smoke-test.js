@@ -2488,6 +2488,19 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-workbench") >= 0 && notificationHtml.indexOf("notification-list-pane") >= 0 && notificationHtml.indexOf("notification-detail-pane") >= 0, "최근 알림 판단이 전체 리스트와 상세 보기 워크벤치로 분리되지 않았습니다.");
     assertOk(notificationHtml.indexOf("전체 리스트") >= 0 && notificationHtml.indexOf("상세 보기") >= 0, "최근 알림 판단에 전체 리스트/상세 보기 제목이 없습니다.");
     assertOk(code.indexOf("filteredNotificationJobs") >= 0 && code.indexOf("notificationJobSearch") >= 0 && code.indexOf("data-notification-job-filter") >= 0, "최근 알림 판단 검색/필터 상태 경로가 없습니다.");
+    var notificationLoadSource = code.match(/function loadNotificationJobs\(\) \{[\s\S]*?\n  \}/);
+    var notificationListUrl = "";
+    vm.runInNewContext(notificationLoadSource[0] + "\nloadNotificationJobs();", {
+      state: { notificationJobTypeFilter: "ai-interpretation", notificationJobsPageSize: 20 },
+      URLSearchParams: URLSearchParams,
+      mobileInfiniteScrollEnabled: function () { return false; },
+      isStaticPreviewHost: function () { return false; },
+      notificationRecipientId: function () { return "test-recipient"; },
+      applyNotificationJobs: function () {},
+      requestJson: function (url) { notificationListUrl = url; return Promise.resolve({ jobs: [] }); }
+    });
+    assertOk(notificationListUrl.indexOf("/api/notification-jobs?") === 0, "알림 목록 조회가 실행되지 않았습니다.");
+    assertOk(new URL(notificationListUrl, "http://127.0.0.1").searchParams.has("messageType") === false, "표시 종류를 기존 발송 정책 키로 조회하면 알림이 사라집니다.");
     assertOk(styles.indexOf(".notification-search-panel") >= 0 && styles.indexOf(".notification-workbench") >= 0, "최근 알림 판단 검색/워크벤치 스타일이 없습니다.");
     assertOk(code.indexOf("renderNotificationDecisionEmptyConsole") >= 0 && styles.indexOf(".notification-empty-console") >= 0, "최근 알림 판단 빈 상태가 후보/판단/설정 흐름으로 구조화되지 않았습니다.");
     assertOk(

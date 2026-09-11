@@ -70,6 +70,9 @@ rule-level statistics, rather than being silently relabeled as per-kind counts.
 The lightweight web list projects only classification fields from the stored
 context, including legacy metadata paths. It does not fetch full graph traces or
 reconstruct an investment decision merely to display a type label and preview.
+The kind selector filters the currently loaded page and is labeled accordingly.
+It must not send a kind such as `ai-interpretation` as the legacy `messageType`
+query parameter; doing so would hide valid history after the next refresh.
 
 Legacy `investmentInsight` is resolved from its publication mode and saved action.
 Reference-only or NO_ACTION results cannot be labeled as investment decisions.

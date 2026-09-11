@@ -17,7 +17,7 @@ from digital_twin.domain.notification_templates import NotificationTemplate, ren
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.infrastructure.notification.ingress import enqueue_request
 from digital_twin.infrastructure.mysql_notification_jobs import (
-    MySQLNotificationJobStore, notification_list_presentation_column,
+    MySQLNotificationJobStore, notification_list_presentation_column, notification_list_presentation_join,
 )
 
 
@@ -244,9 +244,12 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
                 self.assertIn("종목 이름", payload["title"])
                 self.assertIn("기존 본문은 유지합니다.", payload["textPreview"])
         columns = notification_list_presentation_column()
-        self.assertIn("$.context.metadata.notificationDecisionMode", columns)
-        self.assertNotIn("'$.context'", columns)
-        self.assertNotIn("'$.context.ontologyRelationContext'", columns)
+        projection = notification_list_presentation_join()
+        self.assertEqual(1, projection.count("JSON_TABLE("))
+        self.assertNotIn("JSON_EXTRACT(", columns)
+        self.assertIn("$.context.metadata.notificationDecisionMode", projection)
+        self.assertNotIn("'$.context'", projection)
+        self.assertNotIn("'$.context.ontologyRelationContext'", projection)
 
     def test_watchlist_zero_return_is_not_shown(self):
         context = {"ontologyRelationContext": {"facts": {"quantity": 0, "isHolding": False, "isWatchlist": True, "profitLossRate": 0, "currentPrice": 100}}}

@@ -69,14 +69,22 @@ NOTIFICATION_LIST_PRESENTATION_PATHS = (
 def notification_list_presentation_column() -> str:
     # Project classification leaves only, never the graph or AI response body.
     fields = []
-    for path in NOTIFICATION_LIST_PRESENTATION_PATHS:
-        paths = ("$.context." + path, "$.context.metadata." + path)
+    for index, path in enumerate(NOTIFICATION_LIST_PRESENTATION_PATHS):
         values = [
-            "NULLIF(JSON_EXTRACT(notification_jobs.payload_json, '" + value + "'), 'null')"
-            for value in paths
+            "NULLIF(presentation_read." + prefix + str(index) + ", 'null')"
+            for prefix in ("direct_", "metadata_")
         ]
         fields.extend(["'" + path + "'", "COALESCE(" + ", ".join(values) + ")"])
     return "JSON_OBJECT(" + ", ".join(fields) + ") AS presentation_json"
+
+
+def notification_list_presentation_join() -> str:
+    # JSON_TABLE parses a large legacy payload once instead of once per leaf.
+    fields = []
+    for index, path in enumerate(NOTIFICATION_LIST_PRESENTATION_PATHS):
+        for prefix, parent in (("direct_", "$.context."), ("metadata_", "$.context.metadata.")):
+            fields.append(prefix + str(index) + " JSON PATH '" + parent + path + "' NULL ON EMPTY NULL ON ERROR")
+    return " JOIN JSON_TABLE(notification_jobs.payload_json, '$' COLUMNS (" + ", ".join(fields) + ")) AS presentation_read ON TRUE"
 
 
 class MySQLNotificationJobStore(MySQLOperationalConnection):
@@ -492,7 +500,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params,
             ).fetchone()
             rows = connection.execute(
-                "SELECT " + columns + " FROM notification_jobs" + join + page_where
+                "SELECT " + columns + " FROM notification_jobs" + join + notification_list_presentation_join() + page_where
                 + " ORDER BY notification_jobs.updated_at DESC, notification_jobs.job_id DESC LIMIT %s OFFSET %s",
                 page_params + [page_size, 0 if cursor_updated_at else page_offset],
             ).fetchall()

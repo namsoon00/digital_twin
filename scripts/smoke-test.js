@@ -259,7 +259,8 @@ function checkWorkflowConsoleContract() {
   const webRuntime = fs.readFileSync(path.join(rootDir, "public", "web-runtime.js"), "utf8");
   const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
   const accountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "domain", "accounts.py"), "utf8");
-  const accountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_operational_core_stores.py"), "utf8");
+  const accountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "accounts", "infrastructure", "mysql_account_reader.py"), "utf8");
+  const watchlistStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "instruments", "infrastructure", "account_watchlist.py"), "utf8");
   const calendarStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "investment_calendar", "infrastructure", "mysql_investment_calendar_candidates.py"), "utf8");
   const calendarSymbolProjection = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "modules", "read_models", "application", "symbol_display_projection.py"), "utf8");
   const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_notification_jobs.py"), "utf8");
@@ -662,7 +663,8 @@ function checkWorkflowConsoleContract() {
   assertOk(
     webServer.indexOf('/api/service-accounts/([^/]+)/watchlist') >= 0 &&
       webServer.indexOf("request_watchlist_refresh") >= 0 &&
-      accountStore.indexOf("account_watchlist_symbols") >= 0,
+      webServer.indexOf("build_account_watchlist_service") >= 0 &&
+      watchlistStore.indexOf("account_watchlist_symbols") >= 0,
     "계정별 관심종목 전용 API, 고유 저장소 또는 후속 수집 요청이 없습니다."
   );
   assertOk(

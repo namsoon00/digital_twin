@@ -110,7 +110,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # contracts; none may silently manufacture an investment decision.
         # Twelve-module imports, synchronous CRUD, scoped concurrent writes,
         # and transactional event failure add eight boundary regressions.
-        self.assertLessEqual(total, 1088)
+        # Lazy runtime composition and narrow account storage additionally
+        # protect startup isolation and cross-owner create/delete rollback.
+        self.assertLessEqual(total, 1096)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

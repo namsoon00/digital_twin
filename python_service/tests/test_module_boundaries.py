@@ -53,9 +53,12 @@ class ModuleBoundaryTests(unittest.TestCase):
                     name = node.module or ""
                     if node.level:
                         name = importlib.util.resolve_name("." * node.level + name, package)
-                    names = [name]
+                    names = [name] + [name + "." + alias.name for alias in node.names]
                 for name in names:
                     parts = name.split(".")
+                    if parts[:2] == ["digital_twin", "infrastructure"] and len(parts) >= 3:
+                        if parts[2] in {"composition", "service_factory", "account_transactions"}:
+                            violations.append((str(relative), node.lineno, name))
                     if parts[:2] == ["digital_twin", "modules"] and len(parts) >= 4:
                         if parts[2] != owner and parts[3] not in {"public", "contracts"}:
                             violations.append((str(relative), node.lineno, name))

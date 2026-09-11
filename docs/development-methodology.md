@@ -299,9 +299,12 @@ Application:
 Infrastructure:
 
 - `python_service/digital_twin/infrastructure/settings.py`: env fallback and operational runtime settings facade
-- `python_service/digital_twin/infrastructure/operational_store.py`: runtime factory for the MySQL operational stores
+- `python_service/digital_twin/infrastructure/operational_store.py`: lazy runtime factories for MySQL operational stores and separate account-reader/watchlist-command capabilities
 - `python_service/digital_twin/infrastructure/operational_common.py`: shared row conversion and notification helper functions used by operational store adapters
-- `python_service/digital_twin/infrastructure/mysql_operational.py`: MySQL account, runtime, event, monitoring, notification, model-review, symbol, quote, evidence, and quality-sample stores
+- `python_service/digital_twin/infrastructure/mysql_operational.py`: explicit lazy exports of MySQL adapters, without loading every store on import
+- `python_service/digital_twin/modules/accounts/infrastructure/mysql_account_reader.py`: read-only account queries; no mutation capability
+- `python_service/digital_twin/modules/instruments/infrastructure/mysql_account_watchlist.py`: watchlist-only mutations with an injected account reader
+- `python_service/digital_twin/infrastructure/account_transactions.py`: cross-owner account create/patch/delete coordinator; owner helpers and the domain event commit in one MySQL transaction
 - `python_service/digital_twin/infrastructure/mysql_investment_domain.py`: versioned mandate, append-only ledger, rebalance, action-plan, execution, fill, review, and lifecycle-trace persistence
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
@@ -318,7 +321,8 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
 - `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB direct TypeQL rules into TypeDB InferenceBox, not from a non-TypeDB runtime fallback. InferenceBox writes must be generation-scoped so a failed materialization does not erase the last usable graph-backed judgement.
-- `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
+- `python_service/digital_twin/infrastructure/service_factory.py`: explicit lazy export catalog for runtime builders
+- `python_service/digital_twin/infrastructure/composition/`: owner/lifecycle-specific runtime composition of use cases and adapters, imported at builder invocation
 
 Versioned reasoning engines must own separate durable queue, graph-database,
 release, and delivery-authorization boundaries. Promotion must switch the
@@ -400,6 +404,13 @@ use case must update several stores atomically, use an explicit transaction
 recorder in `infrastructure/`, delegating writes to owner-specific helpers.
 Do not replace an entire account just to change a notification preference or
 watchlist. Do not add cross-module private imports or circular public imports.
+
+Business modules must not import the root service factory, composition package
+or cross-owner account transaction coordinator. Inject the required capability:
+read-only account data for collection/query workers, the watchlist-only store
+for instrument edits, and the command coordinator for explicit account writes.
+Runtime builders may wire private adapters, but must remain explicitly exported
+and must not load unrelated business workflows merely by being imported.
 
 ## Testing Expectations
 

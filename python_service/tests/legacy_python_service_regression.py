@@ -13695,7 +13695,7 @@ class PythonServiceTests(unittest.TestCase):
             "dartDisclosureAiAnalysisEnabled": "0",
         })
         with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
-                mock.patch("digital_twin.infrastructure.service_factory.notifier_for_account", return_value=FakeNotifier()):
+                mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account", return_value=FakeNotifier()):
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
         self.assertEqual(200, status, payload)
@@ -13782,7 +13782,7 @@ class PythonServiceTests(unittest.TestCase):
         })
         with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
                 mock.patch("digital_twin.infrastructure.web_server.PortfolioOntologyProjectionRecorder", FakeProjectionRecorder), \
-                mock.patch("digital_twin.infrastructure.service_factory.notifier_for_account", return_value=FakeNotifier()):
+                mock.patch("digital_twin.modules.notifications.infrastructure.notification.transport.notifier_for_account", return_value=FakeNotifier()):
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
         self.assertEqual(200, status)

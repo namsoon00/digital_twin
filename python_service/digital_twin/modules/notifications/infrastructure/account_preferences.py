@@ -16,6 +16,10 @@ CHANNEL_FIELDS = {
 }
 
 
+def remove_preferences(connection, account_id):
+    connection.execute("DELETE FROM telegram_configs WHERE account_id = %s", (account_id,))
+
+
 def write_preferences(connection, account, fields, stamp):
     selected = [PREFERENCE_FIELDS[key] for key in PREFERENCE_FIELDS if key in fields]
     if selected:

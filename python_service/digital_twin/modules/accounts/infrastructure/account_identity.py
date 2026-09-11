@@ -7,6 +7,22 @@ BROKER_FIELDS = {
 }
 
 
+def ensure_identity(connection, account, stamp):
+    connection.execute(
+        "INSERT INTO service_accounts "
+        "(id, label, provider, enabled, watchlist_symbols, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, '', %s, %s) "
+        "ON DUPLICATE KEY UPDATE label = VALUES(label), provider = VALUES(provider), "
+        "enabled = VALUES(enabled), updated_at = VALUES(updated_at)",
+        (account.account_id, account.label, account.provider, account.enabled, stamp, stamp),
+    )
+
+
+def remove_identity(connection, account_id):
+    connection.execute("DELETE FROM toss_credentials WHERE account_id = %s", (account_id,))
+    return connection.execute("DELETE FROM service_accounts WHERE id = %s", (account_id,))
+
+
 def write_identity(connection, account, fields, stamp):
     columns = [column for key, column in IDENTITY_FIELDS.items() if key in fields]
     if columns:

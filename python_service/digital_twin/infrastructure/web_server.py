@@ -118,6 +118,8 @@ from ..infrastructure.stale_read_model import StaleReadModelCache
 from ..infrastructure import operational_store as stores
 from ..infrastructure.operational_error_reporting import operational_error_reporter, report_runtime_error
 from ..infrastructure.service_factory import (
+    build_account_service,
+    build_account_watchlist_service,
     build_investment_calendar_candidate_service,
     build_investment_calendar_discovery_service,
     build_investment_calendar_research_service,
@@ -4279,7 +4281,7 @@ def replay_notification_payload(payload: Dict[str, object]) -> Dict[str, object]
     identifier = configured(body.get("identifier") or body.get("notificationNumber") or body.get("jobId"))
     result = NotificationReplayService(
         queue=notification_queue_store(),
-        account_repository=stores.account_registry(),
+        account_repository=stores.account_reader(),
         runner_factory=build_notification_queue_runner,
         lookup_limit=int(body.get("lookupLimit") or 200),
     ).replay(
@@ -4905,7 +4907,7 @@ def notification_schedules_payload(include_internal: bool = False) -> Dict[str, 
     rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
     cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
     store = stores.monitor_store()
-    accounts = {account.account_id: account for account in stores.account_registry().load()}
+    accounts = {account.account_id: account for account in stores.account_reader().load()}
     now_at = datetime.now(timezone.utc)
     if include_internal:
         message_types = list(dict.fromkeys(list(DEFAULT_CADENCE.keys()) + list(DEFAULT_NOTIFICATION_TEMPLATES.keys())))
@@ -5064,7 +5066,7 @@ def alert_event_public_payload(event) -> Dict[str, object]:
 
 def selected_notification_test_account(payload: Dict[str, object]):
     requested = configured(payload.get("accountId") or payload.get("account_id"))
-    accounts = stores.account_registry().load()
+    accounts = stores.account_reader().load()
     if requested:
         for account in accounts:
             if account.account_id == requested:
@@ -5296,8 +5298,7 @@ def notification_template_test_payload(payload: Dict[str, object]):
 
 
 def account_service() -> AccountApplicationService:
-    registry = stores.account_registry()
-    return AccountApplicationService(registry, registry.settings, event_publisher=RealtimeEventBridge())
+    return build_account_service(event_publisher=RealtimeEventBridge())
 
 
 def watchlist_refresh_status() -> Dict[str, object]:
@@ -5326,7 +5327,7 @@ def run_watchlist_refresh_pipeline() -> None:
         try:
             settings = runtime_settings()
             build_market_data_collection_runner(settings=settings).run_once(force=True)
-            registry = stores.account_registry(settings)
+            registry = stores.account_reader(settings)
             accounts = [account for account in registry.load() if not account_ids or account.account_id in account_ids]
             if accounts:
                 build_monitor_runner(accounts, settings=settings).run_once(
@@ -5365,9 +5366,7 @@ def request_watchlist_refresh(account_id: str, symbol: str, _action: str) -> Dic
 
 
 def account_watchlist_service() -> AccountWatchlistService:
-    registry = stores.account_registry()
-    return AccountWatchlistService(
-        registry,
+    return build_account_watchlist_service(
         event_publisher=RealtimeEventBridge(),
         refresh_requester=request_watchlist_refresh,
     )

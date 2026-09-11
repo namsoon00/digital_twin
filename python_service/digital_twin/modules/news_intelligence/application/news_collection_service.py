@@ -14,7 +14,8 @@ from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.news_collection_quality import annotate_news_collection_admission, assess_news_collection_admission, news_collection_admission_summary
 from digital_twin.domain.news_ai_analysis import news_ai_analysis_is_current
 from digital_twin.domain.prompt_evidence_admission import assess_prompt_evidence, attach_prompt_evidence_admission
-from digital_twin.domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
+from digital_twin.domain.repositories import MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
+from digital_twin.modules.accounts.public import AccountReader
 from digital_twin.modules.instruments.contracts import ListedSymbol, normalize_market
 from digital_twin.modules.news_intelligence.application.analyze_article import annotate_evidence_eligibility
 from digital_twin.modules.news_intelligence.application.normalize_sources import normalize_evidence_sources
@@ -122,7 +123,7 @@ def evidence_is_feed_only_rss(item: ResearchEvidence) -> bool:
 class NewsCollectionRunner:
     def __init__(
         self,
-        account_repository: AccountRepository,
+        account_repository: AccountReader,
         monitor_store: MonitorSnapshotReader,
         symbol_store: SymbolUniverseRepository,
         evidence_store: ResearchEvidenceRepository,

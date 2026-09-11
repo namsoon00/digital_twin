@@ -9,6 +9,22 @@ from digital_twin.modules.instruments.domain.watchlist import (
 )
 
 
+def read_watchlist(connection, account_id):
+    rows = connection.execute(
+        "SELECT symbol, created_at, updated_at FROM account_watchlist_symbols "
+        "WHERE account_id = %s ORDER BY updated_at DESC, symbol ASC",
+        (account_id,),
+    ).fetchall()
+    return [
+        {"symbol": row["symbol"], "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
+        for row in rows
+    ]
+
+
+def remove_watchlist(connection, account_id):
+    connection.execute("DELETE FROM account_watchlist_symbols WHERE account_id = %s", (account_id,))
+
+
 def write_watchlist(connection, account_id, symbols, stamp):
     normalized = normalized_symbols(symbols)
     connection.execute(

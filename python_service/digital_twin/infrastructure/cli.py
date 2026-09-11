@@ -20,7 +20,6 @@ from ..domain.notification_templates import template_variables, text_context
 from ..domain.portfolio import AlertEvent
 from digital_twin.modules.news_intelligence.public import RevalidateNewsIntelligenceService
 from .admin_preview import write_admin_preview
-from .event_bus import default_event_bus
 from . import operational_store as stores
 from .graph_writer_guard import LocalGraphWriterGuard
 from .mysql_operational_connection import (
@@ -49,6 +48,7 @@ from .operational_storage_guard import (
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
+    build_account_service,
     build_ai_inference_queue_runner,
     build_decision_episode_reconciliation_service,
     build_investment_calendar_candidate_service,
@@ -265,8 +265,7 @@ def notification_targets(accounts: List[AccountConfig]) -> List[AccountConfig]:
 
 
 def accounts_command(args) -> int:
-    registry = stores.account_registry()
-    service = AccountApplicationService(registry, registry.settings, event_publisher=default_event_bus())
+    service = build_account_service()
     if args.accounts_action == "list":
         accounts = service.list_masked()
         if args.json:
@@ -300,7 +299,7 @@ def accounts_command(args) -> int:
 
 def monitor_command(args) -> int:
     settings = runtime_settings()
-    registry = stores.account_registry(settings)
+    registry = stores.account_reader(settings)
     accounts = registry.load()
     if args.monitor_action == "status":
         store = stores.monitor_store(settings)
@@ -2261,7 +2260,7 @@ def investment_calendar_command(args) -> int:
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
-    registry = stores.account_registry()
+    registry = stores.account_reader()
     accounts = notification_targets(registry.load())
     message = build_handoff_message(args.summary, args.commit, args.validation, args.push, args.details)
     if args.dry_run:

@@ -49,7 +49,11 @@ digital_twin/
       infrastructure/       # Owned adapters, when already separated
   domain/                   # Remaining shared contracts and ontology kernel
   application/              # Runtime coordination only
-  infrastructure/           # Composition and remaining shared adapters
+  infrastructure/
+    composition/            # Responsibility-specific runtime builders
+    service_factory.py      # Explicit, lazy builder exports
+    account_transactions.py # Explicit cross-owner account transaction
+                            # Remaining shared adapters also live here
 ```
 
 - A business module imports another module only through `public` or `contracts`.
@@ -67,6 +71,29 @@ digital_twin/
   health and storage maintenance. New business features belong to their owner.
 - Shared runtime composition can wire implementations. That exception is not
   permission for business modules to bypass each other's contracts.
+
+## Runtime Composition
+
+`infrastructure/service_factory.py` is now an explicit lazy export catalog, not
+a container that imports every business implementation. Builders live in
+`infrastructure/composition/` by owner: accounts, instruments, portfolio,
+market data, news, calendar, model registry, reasoning, decisions, outcomes,
+notifications and read models. Reasoning release, projection, monitoring,
+health and shadow wiring have separate files because their runtime lifecycles
+differ. Events, operations and small runtime settings helpers are shared
+composition concerns, not additional business modules or workers.
+
+Each builder imports its implementations when invoked. The operational-store
+factory and MySQL export catalog use the same lazy boundary. Resolving a
+builder must not load the entire application graph or a database driver. A
+builder can still construct its actual required collaborators; laziness does
+not make a slow use case asynchronous.
+
+Web handlers and CLI commands use these builders. Business modules cannot
+import `service_factory`, `composition` or `account_transactions`; dependencies
+are injected through ports. There is no implicit fallback export or runtime
+service locator. Add each new builder to the explicit export catalog and its
+isolation tests.
 
 ## Synchronous and Asynchronous Boundaries
 
@@ -129,6 +156,27 @@ fallback accounts must first be explicitly saved through account settings.
 The patch contract prevents unrelated-field overwrites. It does not provide
 compare-and-swap protection for two users intentionally editing the same field.
 
+The account dependencies now expose three distinct capabilities:
+
+| Capability | Implementation | Used by |
+| --- | --- | --- |
+| Account reads | `modules/accounts/infrastructure/mysql_account_reader.py` | Collection, reasoning, portfolio observation, notification and web read paths |
+| Watchlist edits | `modules/instruments/infrastructure/mysql_account_watchlist.py` | The watchlist use case; account reads are injected |
+| Account commands | `infrastructure/account_transactions.py` | Explicit account create, patch, remove and full import/save operations |
+
+The account reader has no account mutation or watchlist mutation methods. The
+watchlist repository cannot replace credentials or notification preferences.
+The command coordinator delegates identity, notification preferences, watchlist
+and mandate writes to owner-specific helpers using the same MySQL connection.
+Creation and deletion also keep the state change and event in one transaction;
+an event-write or owner-write failure rolls everything back. Deletion preserves
+historical investment records as before.
+
+This is a logical capability boundary, not a security sandbox. The database
+schema/credentials are still shared, and `AccountConfig` still carries several
+owners' read data. The legacy full registry is available for explicit command
+callers; new read paths must request `account_reader` instead.
+
 ## Remaining Shared Boundaries
 
 This is application-layer modularization with selected ownership fixes, not a
@@ -137,20 +185,22 @@ claim that the entire persistence/domain migration is complete:
 - The broad `AccountConfig` DTO and several repository ports remain in the
   shared domain package. Other large ontology and decision contracts also
   remain there.
-- `service_factory.py` still assembles most runtime dependencies. Injected
-  cross-module collaborators are not all discoverable from Python imports.
+- Runtime builders are physically separated and loaded lazily, but some
+  reasoning builders still assemble large collaborator graphs. Those graphs
+  are not fully described by module import checks alone.
 - `typedb_ontology.py` and `ontology_projection.py` remain large shared adapters.
   Their query, generation and transaction semantics were not changed here.
 - The MySQL schema and operational store facade remain shared. Owner helpers
   restrict the changed write paths, but do not enforce table ownership for
   every legacy writer.
 - `public/app.js` and the Python web router were not split into frontend/BFF
-  modules. Only account payload construction changed in this pass.
+  modules. Account payload handling and dependency wiring changed; navigation
+  and rendering did not.
 - There is no new generic per-consumer acknowledgement/outbox framework.
   Existing job-specific recovery remains authoritative.
 
-Next work should isolate composition by module, then move store ports and table
-writes one owner at a time. Separate TypeDB query planning, generation
+Next work should move remaining store ports and table writes one owner at a
+time, then simplify large builder dependency graphs. Separate TypeDB query planning, generation
 publication and storage adapters only with immutable replay and failure-path
 tests. Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
@@ -163,7 +213,10 @@ asynchronous APIs by default.
   synchronous account APIs and record-before-dispatch behavior.
 - `test_module_account_mutations.py`: real isolated MySQL transactions,
   credential/watchlist preservation, concurrent additions, idempotence, empty
-  lists, account isolation and event-write rollback.
+  lists, account isolation, narrow runtime wiring and create/delete/event-write
+  rollback across owner helpers.
+- `test_runtime_composition.py`: explicit builder coverage, lightweight import
+  isolation, bounded valuation construction and read-only account capabilities.
 - The web smoke test checks changed-field payloads and existing pages.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not

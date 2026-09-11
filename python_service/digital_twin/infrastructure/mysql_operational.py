@@ -1,72 +1,136 @@
-from .mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy, MySQLOperationalConnection
-from .mysql_operational_helpers import (
-    _is_duplicate_key_error,
-    _json_loads,
-    _sent_key_hash,
-    research_evidence_change_payload,
-)
-from .mysql_operational_events import insert_domain_event_with_connection
-from .mysql_notification_jobs import MySQLNotificationJobStore
-from .mysql_ai_inference_queue import MySQLAIInferenceQueueStore
-from .mysql_historical_replay_jobs import MySQLHistoricalReplayJobStore
-from .mysql_investment_reasoning_cases import MySQLInvestmentReasoningCaseStore
-from .mysql_subject_decision_cases import MySQLSubjectDecisionCaseStore
-from .mysql_operational_core_stores import (
-    MySQLAccountRegistry,
-    MySQLAppStore,
-    MySQLCompanyKnowledgeCache,
-    MySQLCryptoMarketSignalCache,
-    MySQLDataPipelineHealthStore,
-    MySQLExternalSignalCache,
-    MySQLExternalEvidenceProjectionStateStore,
-    MySQLNewsDigestReconciliationStateStore,
-    MySQLOperationalStorageCapacityStateStore,
-    MySQLOntologyInferenceDetailStateStore,
-    MySQLOntologyMaintenanceStateStore,
-    MySQLOntologyReasoningCursorStore,
-    MySQLOntologyWorldProjectionStateStore,
-    MySQLRuntimeSettingsStore,
-)
-from .mysql_notification_config import MySQLNotificationRuleStore, MySQLNotificationTemplateStore
-from .mysql_monitoring_stores import (
-    MySQLEventLog,
-    MySQLMarketObservationReasoningAnchorStore,
-    MySQLMonitoringCycleRecorder,
-    MySQLMonitorStore,
-    MySQLOntologyReasoningMonitorStore,
-)
-from .mysql_market_stores import (
-    MySQLMarketQuoteCache,
-    MySQLModelReviewJobStore,
-    MySQLOntologyQualitySampleStore,
-    MySQLResearchEvidenceStore,
-    MySQLSymbolUniverseStore,
-)
-from .mysql_market_time_series import MySQLMarketTimeSeriesStore
-from .mysql_statistical_signals import MySQLStatisticalModelSignalStore
-from digital_twin.modules.investment_calendar.infrastructure.mysql_investment_calendar import MySQLInvestmentCalendarStore
-from .mysql_reasoning_source_facts import MySQLReasoningSourceFactStore
-from digital_twin.modules.investment_calendar.infrastructure.mysql_investment_calendar_candidates import MySQLInvestmentCalendarCandidateStore
-from .mysql_investment_strategy_proposals import MySQLInvestmentStrategyProposalStore
-from .mysql_investment_decision_episodes import MySQLInvestmentDecisionEpisodeStore
-from .mysql_hypothesis_lifecycle import MySQLHypothesisLifecycleStore
-from .mysql_hypothesis_development import MySQLHypothesisDevelopmentStore, MySQLOntologyExperimentStore
-from .mysql_investment_research import MySQLInvestmentResearchStore
-from .mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
-from .mysql_ontology_graph_assembly_cache import MySQLOntologyGraphAssemblyCacheStore
-from .mysql_ontology_world_projection_outbox import MySQLOntologyWorldProjectionOutboxStore
-from .mysql_ontology_inference_detail_outbox import MySQLOntologyInferenceDetailOutboxStore
-from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
-from .mysql_investment_domain import MySQLInvestmentDomainStore
-from .mysql_versioned_runtime import (
-    MySQLReasoningEngineComparisonStore,
-    MySQLReasoningEngineJobStore,
-    MySQLReasoningEngineRegistryStore,
-    MySQLReasoningShadowJobStore,
-    MySQLTemporalFeatureSnapshotStore,
-    MySQLTimeSeriesBackendRegistryStore,
-    MySQLTimeSeriesProjectionOutboxStore,
-)
-from digital_twin.modules.reasoning.infrastructure.mysql_shared_instrument_inference import MySQLSharedInstrumentInferenceStore
-from .mysql_runtime_checkpoints import MySQLRuntimeCheckpointStore
-from .external_api.mysql_stores import MySQLExternalDataStore
+"""Explicit lazy store exports; selecting one adapter does not load every store."""
+
+from digital_twin.modules._exports import resolve_export
+
+
+_EXPORTS = {'MYSQL_SCHEMA': ('digital_twin.infrastructure.mysql_operational_connection', 'MYSQL_SCHEMA'),
+ 'MySQLConnectionProxy': ('digital_twin.infrastructure.mysql_operational_connection',
+                          'MySQLConnectionProxy'),
+ 'MySQLOperationalConnection': ('digital_twin.infrastructure.mysql_operational_connection',
+                                'MySQLOperationalConnection'),
+ '_is_duplicate_key_error': ('digital_twin.infrastructure.mysql_operational_helpers',
+                             '_is_duplicate_key_error'),
+ '_json_loads': ('digital_twin.infrastructure.mysql_operational_helpers', '_json_loads'),
+ '_sent_key_hash': ('digital_twin.infrastructure.mysql_operational_helpers', '_sent_key_hash'),
+ 'research_evidence_change_payload': ('digital_twin.infrastructure.mysql_operational_helpers',
+                                      'research_evidence_change_payload'),
+ 'insert_domain_event_with_connection': ('digital_twin.infrastructure.mysql_operational_events',
+                                         'insert_domain_event_with_connection'),
+ 'MySQLNotificationJobStore': ('digital_twin.infrastructure.mysql_notification_jobs',
+                               'MySQLNotificationJobStore'),
+ 'MySQLAIInferenceQueueStore': ('digital_twin.infrastructure.mysql_ai_inference_queue',
+                                'MySQLAIInferenceQueueStore'),
+ 'MySQLHistoricalReplayJobStore': ('digital_twin.infrastructure.mysql_historical_replay_jobs',
+                                   'MySQLHistoricalReplayJobStore'),
+ 'MySQLInvestmentReasoningCaseStore': ('digital_twin.infrastructure.mysql_investment_reasoning_cases',
+                                       'MySQLInvestmentReasoningCaseStore'),
+ 'MySQLSubjectDecisionCaseStore': ('digital_twin.infrastructure.mysql_subject_decision_cases',
+                                   'MySQLSubjectDecisionCaseStore'),
+ 'MySQLAccountRegistry': ('digital_twin.infrastructure.account_transactions',
+                          'MySQLAccountRegistry'),
+ 'MySQLAppStore': ('digital_twin.infrastructure.mysql_operational_core_stores', 'MySQLAppStore'),
+ 'MySQLCompanyKnowledgeCache': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                'MySQLCompanyKnowledgeCache'),
+ 'MySQLCryptoMarketSignalCache': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                  'MySQLCryptoMarketSignalCache'),
+ 'MySQLDataPipelineHealthStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                  'MySQLDataPipelineHealthStore'),
+ 'MySQLExternalSignalCache': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                              'MySQLExternalSignalCache'),
+ 'MySQLExternalEvidenceProjectionStateStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                               'MySQLExternalEvidenceProjectionStateStore'),
+ 'MySQLNewsDigestReconciliationStateStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                             'MySQLNewsDigestReconciliationStateStore'),
+ 'MySQLOperationalStorageCapacityStateStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                               'MySQLOperationalStorageCapacityStateStore'),
+ 'MySQLOntologyInferenceDetailStateStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                            'MySQLOntologyInferenceDetailStateStore'),
+ 'MySQLOntologyMaintenanceStateStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                        'MySQLOntologyMaintenanceStateStore'),
+ 'MySQLOntologyReasoningCursorStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                       'MySQLOntologyReasoningCursorStore'),
+ 'MySQLOntologyWorldProjectionStateStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                                            'MySQLOntologyWorldProjectionStateStore'),
+ 'MySQLRuntimeSettingsStore': ('digital_twin.infrastructure.mysql_operational_core_stores',
+                               'MySQLRuntimeSettingsStore'),
+ 'MySQLNotificationRuleStore': ('digital_twin.infrastructure.mysql_notification_config',
+                                'MySQLNotificationRuleStore'),
+ 'MySQLNotificationTemplateStore': ('digital_twin.infrastructure.mysql_notification_config',
+                                    'MySQLNotificationTemplateStore'),
+ 'MySQLEventLog': ('digital_twin.infrastructure.mysql_monitoring_stores', 'MySQLEventLog'),
+ 'MySQLMarketObservationReasoningAnchorStore': ('digital_twin.infrastructure.mysql_monitoring_stores',
+                                                'MySQLMarketObservationReasoningAnchorStore'),
+ 'MySQLMonitoringCycleRecorder': ('digital_twin.infrastructure.mysql_monitoring_stores',
+                                  'MySQLMonitoringCycleRecorder'),
+ 'MySQLMonitorStore': ('digital_twin.infrastructure.mysql_monitoring_stores', 'MySQLMonitorStore'),
+ 'MySQLOntologyReasoningMonitorStore': ('digital_twin.infrastructure.mysql_monitoring_stores',
+                                        'MySQLOntologyReasoningMonitorStore'),
+ 'MySQLMarketQuoteCache': ('digital_twin.infrastructure.mysql_market_quotes', 'MySQLMarketQuoteCache'),
+ 'MySQLModelReviewJobStore': ('digital_twin.modules.model_registry.infrastructure.mysql_model_review_jobs',
+                              'MySQLModelReviewJobStore'),
+ 'MySQLOntologyQualitySampleStore': ('digital_twin.infrastructure.mysql_ontology_quality',
+                                     'MySQLOntologyQualitySampleStore'),
+ 'MySQLResearchEvidenceStore': ('digital_twin.infrastructure.mysql_research_evidence',
+                                'MySQLResearchEvidenceStore'),
+ 'MySQLSymbolUniverseStore': ('digital_twin.modules.instruments.infrastructure.mysql_symbol_universe',
+                              'MySQLSymbolUniverseStore'),
+ 'MySQLMarketTimeSeriesStore': ('digital_twin.infrastructure.mysql_market_time_series',
+                                'MySQLMarketTimeSeriesStore'),
+ 'MySQLStatisticalModelSignalStore': ('digital_twin.infrastructure.mysql_statistical_signals',
+                                      'MySQLStatisticalModelSignalStore'),
+ 'MySQLInvestmentCalendarStore': ('digital_twin.modules.investment_calendar.infrastructure.mysql_investment_calendar',
+                                  'MySQLInvestmentCalendarStore'),
+ 'MySQLReasoningSourceFactStore': ('digital_twin.infrastructure.mysql_reasoning_source_facts',
+                                   'MySQLReasoningSourceFactStore'),
+ 'MySQLInvestmentCalendarCandidateStore': ('digital_twin.modules.investment_calendar.infrastructure.mysql_investment_calendar_candidates',
+                                           'MySQLInvestmentCalendarCandidateStore'),
+ 'MySQLInvestmentStrategyProposalStore': ('digital_twin.infrastructure.mysql_investment_strategy_proposals',
+                                          'MySQLInvestmentStrategyProposalStore'),
+ 'MySQLInvestmentDecisionEpisodeStore': ('digital_twin.infrastructure.mysql_investment_decision_episodes',
+                                         'MySQLInvestmentDecisionEpisodeStore'),
+ 'MySQLHypothesisLifecycleStore': ('digital_twin.infrastructure.mysql_hypothesis_lifecycle',
+                                   'MySQLHypothesisLifecycleStore'),
+ 'MySQLHypothesisDevelopmentStore': ('digital_twin.infrastructure.mysql_hypothesis_development',
+                                     'MySQLHypothesisDevelopmentStore'),
+ 'MySQLOntologyExperimentStore': ('digital_twin.infrastructure.mysql_hypothesis_development',
+                                  'MySQLOntologyExperimentStore'),
+ 'MySQLInvestmentResearchStore': ('digital_twin.infrastructure.mysql_investment_research',
+                                  'MySQLInvestmentResearchStore'),
+ 'MySQLOntologyProjectionRunStore': ('digital_twin.infrastructure.mysql_ontology_projection_runs',
+                                     'MySQLOntologyProjectionRunStore'),
+ 'MySQLOntologyGraphAssemblyCacheStore': ('digital_twin.infrastructure.mysql_ontology_graph_assembly_cache',
+                                          'MySQLOntologyGraphAssemblyCacheStore'),
+ 'MySQLOntologyWorldProjectionOutboxStore': ('digital_twin.infrastructure.mysql_ontology_world_projection_outbox',
+                                             'MySQLOntologyWorldProjectionOutboxStore'),
+ 'MySQLOntologyInferenceDetailOutboxStore': ('digital_twin.infrastructure.mysql_ontology_inference_detail_outbox',
+                                             'MySQLOntologyInferenceDetailOutboxStore'),
+ 'MySQLOntologyReasoningMailboxStore': ('digital_twin.infrastructure.mysql_reasoning_mailbox',
+                                        'MySQLOntologyReasoningMailboxStore'),
+ 'MySQLInvestmentDomainStore': ('digital_twin.infrastructure.mysql_investment_domain',
+                                'MySQLInvestmentDomainStore'),
+ 'MySQLReasoningEngineComparisonStore': ('digital_twin.infrastructure.mysql_versioned_runtime',
+                                         'MySQLReasoningEngineComparisonStore'),
+ 'MySQLReasoningEngineJobStore': ('digital_twin.infrastructure.mysql_versioned_runtime',
+                                  'MySQLReasoningEngineJobStore'),
+ 'MySQLReasoningEngineRegistryStore': ('digital_twin.infrastructure.mysql_versioned_runtime',
+                                       'MySQLReasoningEngineRegistryStore'),
+ 'MySQLReasoningShadowJobStore': ('digital_twin.infrastructure.mysql_versioned_runtime',
+                                  'MySQLReasoningShadowJobStore'),
+ 'MySQLTemporalFeatureSnapshotStore': ('digital_twin.infrastructure.mysql_versioned_runtime',
+                                       'MySQLTemporalFeatureSnapshotStore'),
+ 'MySQLTimeSeriesBackendRegistryStore': ('digital_twin.infrastructure.mysql_versioned_runtime',
+                                         'MySQLTimeSeriesBackendRegistryStore'),
+ 'MySQLTimeSeriesProjectionOutboxStore': ('digital_twin.infrastructure.mysql_versioned_runtime',
+                                          'MySQLTimeSeriesProjectionOutboxStore'),
+ 'MySQLSharedInstrumentInferenceStore': ('digital_twin.modules.reasoning.infrastructure.mysql_shared_instrument_inference',
+                                         'MySQLSharedInstrumentInferenceStore'),
+ 'MySQLRuntimeCheckpointStore': ('digital_twin.infrastructure.mysql_runtime_checkpoints',
+                                 'MySQLRuntimeCheckpointStore'),
+ 'MySQLExternalDataStore': ('digital_twin.infrastructure.external_api.mysql_stores',
+                            'MySQLExternalDataStore')}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    return resolve_export(__name__, _EXPORTS, name)

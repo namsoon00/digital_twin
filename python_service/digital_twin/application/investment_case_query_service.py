@@ -702,6 +702,19 @@ class InvestmentCaseQueryService:
                         else text(ai_insight.get("reason"))
                     ),
                 },
+                *([{
+                    "id": "notification",
+                    "label": "알림 전달",
+                    "state": (
+                        "pass" if item_dict(ai_insight.get("notificationDelivery")).get("status")
+                        in {"delivered", "not-requested"}
+                        else "warning" if item_dict(ai_insight.get("notificationDelivery")).get("status")
+                        in {"failed", "suppressed", "unconfirmed", "unavailable"}
+                        else "pending"
+                    ),
+                    "stateLabel": text(ai_insight.get("notificationDeliveryLabel")),
+                    "reason": text(ai_insight.get("deliveryReason")) or "실제 전송 기록 기준입니다.",
+                }] if ai_insight.get("episodeId") else []),
                 {"id": "decision", "label": "현재 의견", "state": readiness, "stateLabel": "확정" if has_final else "후보", "reason": headline},
                 {"id": "data", "label": "판단 자료", "state": "warning" if missing_data else "pass", "stateLabel": "일부 확인" if missing_data else "사용 가능", "reason": text(missing_data[0] if missing_data else "현재 가설 평가에 사용한 자료가 기록되어 있습니다.")},
             ],

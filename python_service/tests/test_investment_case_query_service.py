@@ -314,6 +314,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
                 "promptVersion": "investment-ai-judge-v17",
                 "validationState": "conditional",
                 "createdAt": "2026-08-20T03:01:00Z",
+                "notificationDelivery": {"status": "not-requested", "delivered": False},
                 "insight": {
                     "action": "BUY",
                     "actionLabel": "매수 검토",
@@ -365,6 +366,9 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         item = result["items"][0]
         insight = item["subjectDecisionCase"]["aiInsight"]
         ai_dimension = next(row for row in item["statusDimensions"] if row["id"] == "ai")
+        delivery_dimension = next(row for row in item["statusDimensions"] if row["id"] == "notification")
+        self.assertEqual("웹 기록만", delivery_dimension["stateLabel"])
+        self.assertEqual("알림 전달", delivery_dimension["label"])
         dispatch_dimension = next(
             row for row in item["statusDimensions"] if row["id"] == "dispatch"
         )

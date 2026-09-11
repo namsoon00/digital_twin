@@ -3,20 +3,25 @@
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
 from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
-from digital_twin.domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE
-from digital_twin.domain.ontology_worlds import MARKET_WORLD_TYPE
-from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import ontology_storage_id
-from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import relation_row_id
-from digital_twin.modules.reasoning.infrastructure.backend_constants import NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION
-from digital_twin.modules.reasoning.infrastructure.backend_constants import NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION
+from digital_twin.domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE
+from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
+    ontology_storage_id,
+    relation_row_id,
+)
+from digital_twin.modules.reasoning.infrastructure.backend_constants import (
+    NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION,
+    NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
+)
 from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
-from digital_twin.modules.reasoning.infrastructure.typeql.constants import NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import normalized_condition_role
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import symbol_from_subject
-from typing import Dict
-from typing import Iterable
-from typing import List
+from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
+    NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
+    clean_symbols_from_payload,
+    normalized_condition_role,
+    symbol_from_subject,
+)
+from typing import Dict, Iterable, List
 import hashlib
 import json
 
@@ -38,6 +43,7 @@ def native_rule_manifest_index_required(worldview: Dict[str, object] = None) -> 
     if world_id.startswith("market:") or world_id.startswith("knowledge:"):
         return False
     return True
+
 
 def typedb_native_rule_planner_topology_for_execution(
     active_abox_metadata: Dict[str, object] = None,
@@ -62,7 +68,10 @@ def typedb_native_rule_planner_topology_for_execution(
         return {
             "status": "fallback",
             "source": "typedb-active-abox-read",
-            "reason": str(stored_full.get("reason") or "Active ABox manifest has no verified planner topology."),
+            "reason": str(
+                stored_full.get("reason")
+                or "Active ABox manifest has no verified planner topology."
+            ),
             "topology": {},
             "relationTypesBySymbol": {},
             "sourceIdsBySymbol": {},
@@ -97,19 +106,26 @@ def typedb_native_rule_planner_topology_for_execution(
         active.get("nativeRulePlannerTopology"),
         target_symbols=target_symbols,
     )
-    supplied = normalize_native_rule_planner_topology(
-        supplied_topology,
-    ) if supplied_topology else {}
+    supplied = (
+        normalize_native_rule_planner_topology(
+            supplied_topology,
+        )
+        if supplied_topology
+        else {}
+    )
     supplied_status = str(supplied.get("status") or "")
-    supplied_matches = (
-        supplied_status == "ok"
-        and str(supplied.get("fingerprint") or "") == str(stored_full.get("fingerprint") or "")
+    supplied_matches = supplied_status == "ok" and str(supplied.get("fingerprint") or "") == str(
+        stored_full.get("fingerprint") or ""
     )
     execution_topology = {
         key: stored_full.get(key)
         for key in [
-            "version", "complete", "source", "fingerprint",
-            "sourceIdsBySymbol", "relationTypesBySymbol",
+            "version",
+            "complete",
+            "source",
+            "fingerprint",
+            "sourceIdsBySymbol",
+            "relationTypesBySymbol",
         ]
     }
     if bool(stored_full.get("subjectPropertyIndexAvailable")):
@@ -145,6 +161,7 @@ def typedb_native_rule_planner_topology_for_execution(
         "symbols": list(stored.get("symbols") or []),
     }
 
+
 def native_rule_evidence_read_index_from_rows(
     node_rows: Iterable[Dict[str, object]],
     relation_rows: Iterable[Dict[str, object]],
@@ -175,10 +192,9 @@ def native_rule_evidence_read_index_from_rows(
         if kind not in {"stock", "crypto-asset", "portfolio"}:
             continue
         source_id = str(row.get("id") or "").strip()
-        symbol = str(
-            row.get("symbol")
-            or (source_id if kind == "portfolio" else "")
-        ).upper().strip()
+        symbol = (
+            str(row.get("symbol") or (source_id if kind == "portfolio" else "")).upper().strip()
+        )
         if not source_id or not symbol:
             continue
         subjects_by_id[source_id] = symbol
@@ -186,20 +202,16 @@ def native_rule_evidence_read_index_from_rows(
         source_ids_by_symbol.setdefault(symbol, []).append(source_id)
 
     relation_storage_ids_by_symbol: Dict[str, set] = {
-        symbol: set()
-        for symbol in source_ids_by_symbol
+        symbol: set() for symbol in source_ids_by_symbol
     }
     relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, set]] = {
-        symbol: {}
-        for symbol in source_ids_by_symbol
+        symbol: {} for symbol in source_ids_by_symbol
     }
     relation_storage_ids_by_symbol_type_field: Dict[str, Dict[str, Dict[str, set]]] = {
-        symbol: {}
-        for symbol in source_ids_by_symbol
+        symbol: {} for symbol in source_ids_by_symbol
     }
     relation_storage_ids_by_symbol_type_target_kind: Dict[str, Dict[str, Dict[str, set]]] = {
-        symbol: {}
-        for symbol in source_ids_by_symbol
+        symbol: {} for symbol in source_ids_by_symbol
     }
     for row in relation_rows or []:
         if str(row.get("ontologyBox") or "ABox") != "ABox":
@@ -231,15 +243,13 @@ def native_rule_evidence_read_index_from_rows(
                     or ""
                 ).strip()
                 evidence_target_kind = str(
-                    evidence_node.get("kind")
-                    or evidence_properties.get("kind")
-                    or ""
+                    evidence_node.get("kind") or evidence_properties.get("kind") or ""
                 ).strip()
                 relation_storage_ids_by_symbol[symbol].add(relation_storage_id)
                 if relation_type:
-                    relation_storage_ids_by_symbol_and_type[symbol].setdefault(relation_type, set()).add(
-                        relation_storage_id
-                    )
+                    relation_storage_ids_by_symbol_and_type[symbol].setdefault(
+                        relation_type, set()
+                    ).add(relation_storage_id)
                     if evidence_field:
                         relation_storage_ids_by_symbol_type_field[symbol].setdefault(
                             relation_type, {}
@@ -277,8 +287,7 @@ def native_rule_evidence_read_index_from_rows(
         "relationStorageIdsBySymbolAndTypeAndField": {
             symbol: {
                 relation_type: {
-                    field: sorted(storage_ids)
-                    for field, storage_ids in sorted(fields.items())
+                    field: sorted(storage_ids) for field, storage_ids in sorted(fields.items())
                 }
                 for relation_type, fields in sorted(
                     relation_storage_ids_by_symbol_type_field.get(symbol, {}).items()
@@ -302,56 +311,66 @@ def native_rule_evidence_read_index_from_rows(
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return {
         **payload,
-        "fingerprint": "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
+        "fingerprint": "native-rule-evidence-index:"
+        + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
     }
+
 
 def native_rule_evidence_read_index_from_components(
     source_ids_by_symbol: Dict[str, Iterable[str]],
     source_storage_ids_by_source_id: Dict[str, object],
     relation_storage_ids_by_symbol: Dict[str, Iterable[str]],
     relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, Iterable[str]]] = None,
-    relation_storage_ids_by_symbol_type_field: Dict[str, Dict[str, Dict[str, Iterable[str]]]] = None,
-    relation_storage_ids_by_symbol_type_target_kind: Dict[str, Dict[str, Dict[str, Iterable[str]]]] = None,
+    relation_storage_ids_by_symbol_type_field: Dict[
+        str, Dict[str, Dict[str, Iterable[str]]]
+    ] = None,
+    relation_storage_ids_by_symbol_type_target_kind: Dict[
+        str, Dict[str, Dict[str, Iterable[str]]]
+    ] = None,
 ) -> Dict[str, object]:
     """Build the canonical persisted evidence index from verified components."""
     sources = {
-        str(symbol or "").upper().strip(): sorted({
-            str(source_id or "").strip()
-            for source_id in source_ids or []
-            if str(source_id or "").strip()
-        })
+        str(symbol or "")
+        .upper()
+        .strip(): sorted(
+            {
+                str(source_id or "").strip()
+                for source_id in source_ids or []
+                if str(source_id or "").strip()
+            }
+        )
         for symbol, source_ids in dict(source_ids_by_symbol or {}).items()
         if str(symbol or "").strip()
     }
-    sources = {
-        symbol: source_ids
-        for symbol, source_ids in sorted(sources.items())
-        if source_ids
-    }
+    sources = {symbol: source_ids for symbol, source_ids in sorted(sources.items()) if source_ids}
     storage_ids = {
         source_id: str(source_storage_ids_by_source_id.get(source_id) or "").strip()
-        for source_id in sorted({
-            source_id
-            for source_ids in sources.values()
-            for source_id in source_ids
-        })
+        for source_id in sorted(
+            {source_id for source_ids in sources.values() for source_id in source_ids}
+        )
         if str(source_storage_ids_by_source_id.get(source_id) or "").strip()
     }
     relation_ids = {
-        symbol: sorted({
-            str(storage_id or "").strip()
-            for storage_id in list((relation_storage_ids_by_symbol or {}).get(symbol) or [])
-            if str(storage_id or "").strip()
-        })
+        symbol: sorted(
+            {
+                str(storage_id or "").strip()
+                for storage_id in list((relation_storage_ids_by_symbol or {}).get(symbol) or [])
+                if str(storage_id or "").strip()
+            }
+        )
         for symbol in sources
     }
     typed_relation_ids = {
         symbol: {
-            str(relation_type or "").upper().strip(): sorted({
-                str(storage_id or "").strip()
-                for storage_id in storage_ids or []
-                if str(storage_id or "").strip()
-            })
+            str(relation_type or "")
+            .upper()
+            .strip(): sorted(
+                {
+                    str(storage_id or "").strip()
+                    for storage_id in storage_ids or []
+                    if str(storage_id or "").strip()
+                }
+            )
             for relation_type, storage_ids in sorted(
                 dict((relation_storage_ids_by_symbol_and_type or {}).get(symbol) or {}).items()
             )
@@ -359,15 +378,20 @@ def native_rule_evidence_read_index_from_components(
         }
         for symbol in sources
     }
+
     def normalized_selector_index(values: Dict[str, object]) -> Dict[str, object]:
         return {
             symbol: {
-                str(relation_type or "").upper().strip(): {
-                    str(selector or "").strip(): sorted({
-                        str(storage_id or "").strip()
-                        for storage_id in storage_ids or []
-                        if str(storage_id or "").strip()
-                    })
+                str(relation_type or "")
+                .upper()
+                .strip(): {
+                    str(selector or "").strip(): sorted(
+                        {
+                            str(storage_id or "").strip()
+                            for storage_id in storage_ids or []
+                            if str(storage_id or "").strip()
+                        }
+                    )
                     for selector, storage_ids in sorted(dict(selectors or {}).items())
                     if str(selector or "").strip()
                 }
@@ -379,9 +403,7 @@ def native_rule_evidence_read_index_from_components(
             for symbol in sources
         }
 
-    field_relation_ids = normalized_selector_index(
-        relation_storage_ids_by_symbol_type_field or {}
-    )
+    field_relation_ids = normalized_selector_index(relation_storage_ids_by_symbol_type_field or {})
     target_kind_relation_ids = normalized_selector_index(
         relation_storage_ids_by_symbol_type_target_kind or {}
     )
@@ -399,8 +421,10 @@ def native_rule_evidence_read_index_from_components(
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return {
         **payload,
-        "fingerprint": "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
+        "fingerprint": "native-rule-evidence-index:"
+        + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
     }
+
 
 def merge_native_rule_evidence_read_index(
     active_index: Dict[str, object],
@@ -422,11 +446,20 @@ def merge_native_rule_evidence_read_index(
     incoming_topology_normalized = normalize_native_rule_planner_topology(incoming_topology)
     merged_topology_normalized = normalize_native_rule_planner_topology(merged_topology)
     if str(active_topology_normalized.get("status") or "") != "ok":
-        return {"status": "active-topology-unavailable", "reason": str(active_topology_normalized.get("reason") or "")}
+        return {
+            "status": "active-topology-unavailable",
+            "reason": str(active_topology_normalized.get("reason") or ""),
+        }
     if str(incoming_topology_normalized.get("status") or "") != "ok":
-        return {"status": "incoming-topology-invalid", "reason": str(incoming_topology_normalized.get("reason") or "")}
+        return {
+            "status": "incoming-topology-invalid",
+            "reason": str(incoming_topology_normalized.get("reason") or ""),
+        }
     if str(merged_topology_normalized.get("status") or "") != "ok":
-        return {"status": "merged-topology-invalid", "reason": str(merged_topology_normalized.get("reason") or "")}
+        return {
+            "status": "merged-topology-invalid",
+            "reason": str(merged_topology_normalized.get("reason") or ""),
+        }
     active = normalize_native_rule_evidence_read_index(active_index, active_topology_normalized)
     incoming = normalize_native_rule_evidence_read_index(
         incoming_index,
@@ -450,18 +483,18 @@ def merge_native_rule_evidence_read_index(
     active_sources = dict(active.get("sourceIdsBySymbol") or {})
     incoming_sources = dict(incoming.get("sourceIdsBySymbol") or {})
     incoming_symbols = set(incoming_sources)
-    missing_requested_symbols = sorted({
-        symbol
-        for symbol in requested
-        if symbol in dict(merged_topology_normalized.get("sourceIdsBySymbol") or {})
-        and symbol not in incoming_symbols
-    })
+    missing_requested_symbols = sorted(
+        {
+            symbol
+            for symbol in requested
+            if symbol in dict(merged_topology_normalized.get("sourceIdsBySymbol") or {})
+            and symbol not in incoming_symbols
+        }
+    )
     if incoming_index_is_candidate_subset and missing_requested_symbols:
         return {
             "status": "incoming-target-source-missing",
-            "reason": (
-                "Candidate persistence rows do not contain every requested target source."
-            ),
+            "reason": ("Candidate persistence rows do not contain every requested target source."),
             "missingSymbols": missing_requested_symbols,
         }
     # A stock-targeted portfolio projection carries both the changed stock
@@ -494,8 +527,16 @@ def merge_native_rule_evidence_read_index(
     target_kind_relation_ids_by_symbol: Dict[str, Dict[str, Dict[str, Iterable[str]]]] = {}
     for symbol, expected_ids in expected_sources.items():
         selected = incoming if symbol in replacements else active
-        actual_ids = sorted({str(item or "").strip() for item in selected.get("sourceIdsBySymbol", {}).get(symbol, []) or [] if str(item or "").strip()})
-        expected_ids = sorted({str(item or "").strip() for item in expected_ids or [] if str(item or "").strip()})
+        actual_ids = sorted(
+            {
+                str(item or "").strip()
+                for item in selected.get("sourceIdsBySymbol", {}).get(symbol, []) or []
+                if str(item or "").strip()
+            }
+        )
+        expected_ids = sorted(
+            {str(item or "").strip() for item in expected_ids or [] if str(item or "").strip()}
+        )
         if actual_ids != expected_ids:
             return {
                 "status": "source-coverage-mismatch",
@@ -549,6 +590,7 @@ def merge_native_rule_evidence_read_index(
         "mergedSymbolCount": len(source_ids_by_symbol),
     }
 
+
 def normalize_native_rule_evidence_read_index(
     value: Dict[str, object] = None,
     planner_topology: Dict[str, object] = None,
@@ -569,12 +611,31 @@ def normalize_native_rule_evidence_read_index(
         NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
         NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION,
     }:
-        return {"status": "invalid", "reason": "Native rule evidence read index version is unsupported."}
-    if raw.get("complete") is not True or str(raw.get("source") or "") != "projection-persistence-rows":
-        return {"status": "invalid", "reason": "Native rule evidence read index is not a complete projection persistence index."}
-    raw_sources = raw.get("sourceIdsBySymbol") if isinstance(raw.get("sourceIdsBySymbol"), dict) else {}
-    raw_storage_ids = raw.get("sourceStorageIdsBySourceId") if isinstance(raw.get("sourceStorageIdsBySourceId"), dict) else {}
-    raw_relation_ids = raw.get("relationStorageIdsBySymbol") if isinstance(raw.get("relationStorageIdsBySymbol"), dict) else {}
+        return {
+            "status": "invalid",
+            "reason": "Native rule evidence read index version is unsupported.",
+        }
+    if (
+        raw.get("complete") is not True
+        or str(raw.get("source") or "") != "projection-persistence-rows"
+    ):
+        return {
+            "status": "invalid",
+            "reason": "Native rule evidence read index is not a complete projection persistence index.",
+        }
+    raw_sources = (
+        raw.get("sourceIdsBySymbol") if isinstance(raw.get("sourceIdsBySymbol"), dict) else {}
+    )
+    raw_storage_ids = (
+        raw.get("sourceStorageIdsBySourceId")
+        if isinstance(raw.get("sourceStorageIdsBySourceId"), dict)
+        else {}
+    )
+    raw_relation_ids = (
+        raw.get("relationStorageIdsBySymbol")
+        if isinstance(raw.get("relationStorageIdsBySymbol"), dict)
+        else {}
+    )
     raw_relation_ids_by_type = (
         raw.get("relationStorageIdsBySymbolAndType")
         if isinstance(raw.get("relationStorageIdsBySymbolAndType"), dict)
@@ -605,17 +666,20 @@ def normalize_native_rule_evidence_read_index(
         for raw_relation_type, raw_selectors in dict(raw_values.get(symbol) or {}).items():
             relation_type = str(raw_relation_type or "").upper().strip()
             selectors = {
-                str(selector or "").strip(): sorted({
-                    str(storage_id or "").strip()
-                    for storage_id in storage_ids or []
-                    if str(storage_id or "").strip()
-                })
+                str(selector or "").strip(): sorted(
+                    {
+                        str(storage_id or "").strip()
+                        for storage_id in storage_ids or []
+                        if str(storage_id or "").strip()
+                    }
+                )
                 for selector, storage_ids in dict(raw_selectors or {}).items()
                 if str(selector or "").strip()
             }
             if relation_type and selectors:
                 result[relation_type] = selectors
         return result
+
     for raw_symbol, raw_ids in raw_sources.items():
         symbol = str(raw_symbol or "").upper().strip()
         ids = sorted({str(item or "").strip() for item in raw_ids or [] if str(item or "").strip()})
@@ -624,22 +688,31 @@ def normalize_native_rule_evidence_read_index(
     for source_id in sorted({item for values in source_ids_by_symbol.values() for item in values}):
         storage_id = str(raw_storage_ids.get(source_id) or "").strip()
         if not storage_id:
-            return {"status": "invalid", "reason": "Native rule evidence read index is missing a stock storage identity."}
+            return {
+                "status": "invalid",
+                "reason": "Native rule evidence read index is missing a stock storage identity.",
+            }
         source_storage_ids_by_source_id[source_id] = storage_id
     for symbol in source_ids_by_symbol:
-        relation_storage_ids_by_symbol[symbol] = sorted({
-            str(item or "").strip()
-            for item in raw_relation_ids.get(symbol, []) or []
-            if str(item or "").strip()
-        })
-        typed_relation_ids: Dict[str, List[str]] = {}
-        for raw_relation_type, raw_storage_ids in dict(raw_relation_ids_by_type.get(symbol) or {}).items():
-            relation_type = str(raw_relation_type or "").upper().strip()
-            storage_ids = sorted({
+        relation_storage_ids_by_symbol[symbol] = sorted(
+            {
                 str(item or "").strip()
-                for item in raw_storage_ids or []
+                for item in raw_relation_ids.get(symbol, []) or []
                 if str(item or "").strip()
-            })
+            }
+        )
+        typed_relation_ids: Dict[str, List[str]] = {}
+        for raw_relation_type, raw_storage_ids in dict(
+            raw_relation_ids_by_type.get(symbol) or {}
+        ).items():
+            relation_type = str(raw_relation_type or "").upper().strip()
+            storage_ids = sorted(
+                {
+                    str(item or "").strip()
+                    for item in raw_storage_ids or []
+                    if str(item or "").strip()
+                }
+            )
             if relation_type and storage_ids:
                 typed_relation_ids[relation_type] = storage_ids
         relation_storage_ids_by_symbol_and_type[symbol] = typed_relation_ids
@@ -656,8 +729,7 @@ def normalize_native_rule_evidence_read_index(
         "complete": True,
         "source": "projection-persistence-rows",
         "sourceIdsBySymbol": {
-            symbol: source_ids_by_symbol[symbol]
-            for symbol in sorted(source_ids_by_symbol)
+            symbol: source_ids_by_symbol[symbol] for symbol in sorted(source_ids_by_symbol)
         },
         "sourceStorageIdsBySourceId": {
             source_id: source_storage_ids_by_source_id[source_id]
@@ -686,20 +758,28 @@ def normalize_native_rule_evidence_read_index(
             for symbol in sorted(source_ids_by_symbol)
         }
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    fingerprint = "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+    fingerprint = (
+        "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+    )
     if str(raw.get("fingerprint") or "") != fingerprint:
-        return {"status": "invalid", "reason": "Native rule evidence read index fingerprint does not match its contents."}
+        return {
+            "status": "invalid",
+            "reason": "Native rule evidence read index fingerprint does not match its contents.",
+        }
     topology = normalize_native_rule_planner_topology(planner_topology)
     if str(topology.get("status") or "") != "ok":
-        return {"status": "invalid", "reason": "Native rule evidence read index has no verified planner topology."}
+        return {
+            "status": "invalid",
+            "reason": "Native rule evidence read index has no verified planner topology.",
+        }
     expected_sources = {
-        symbol: sorted({str(item or "").strip() for item in values or [] if str(item or "").strip()})
+        symbol: sorted(
+            {str(item or "").strip() for item in values or [] if str(item or "").strip()}
+        )
         for symbol, values in dict(topology.get("sourceIdsBySymbol") or {}).items()
     }
     if allow_topology_subset:
-        unexpected_symbols = sorted(
-            set(payload["sourceIdsBySymbol"]) - set(expected_sources)
-        )
+        unexpected_symbols = sorted(set(payload["sourceIdsBySymbol"]) - set(expected_sources))
         if unexpected_symbols:
             return {
                 "status": "invalid",
@@ -707,8 +787,7 @@ def normalize_native_rule_evidence_read_index(
                 "unexpectedSymbols": unexpected_symbols,
             }
         expected_sources = {
-            symbol: expected_sources[symbol]
-            for symbol in payload["sourceIdsBySymbol"]
+            symbol: expected_sources[symbol] for symbol in payload["sourceIdsBySymbol"]
         }
     if expected_sources != payload["sourceIdsBySymbol"]:
         return {
@@ -716,11 +795,13 @@ def normalize_native_rule_evidence_read_index(
             "reason": "Native rule evidence read index stock subjects do not match the active planner topology.",
             "expectedSymbols": sorted(expected_sources),
             "actualSymbols": sorted(payload["sourceIdsBySymbol"]),
-            "mismatchedSymbols": sorted({
-                symbol
-                for symbol in set(expected_sources).union(payload["sourceIdsBySymbol"])
-                if expected_sources.get(symbol) != payload["sourceIdsBySymbol"].get(symbol)
-            }),
+            "mismatchedSymbols": sorted(
+                {
+                    symbol
+                    for symbol in set(expected_sources).union(payload["sourceIdsBySymbol"])
+                    if expected_sources.get(symbol) != payload["sourceIdsBySymbol"].get(symbol)
+                }
+            ),
         }
     requested_symbols = clean_symbols_from_payload(target_symbols or [])
     # Portfolio work items still carry their affected stock symbols so the
@@ -729,12 +810,14 @@ def normalize_native_rule_evidence_read_index(
     # execution view if it retained only those stock symbols. Keep aggregate
     # portfolio keys alongside every requested symbol; this is an identity
     # projection only and does not decide whether a portfolio rule matches.
-    portfolio_symbols = sorted({
-        symbol
-        for symbol, source_ids in source_ids_by_symbol.items()
-        if symbol.startswith("PORTFOLIO:")
-        or any(str(source_id or "").startswith("portfolio:") for source_id in source_ids or [])
-    })
+    portfolio_symbols = sorted(
+        {
+            symbol
+            for symbol, source_ids in source_ids_by_symbol.items()
+            if symbol.startswith("PORTFOLIO:")
+            or any(str(source_id or "").startswith("portfolio:") for source_id in source_ids or [])
+        }
+    )
     selected_symbols = (
         sorted(set(requested_symbols).union(portfolio_symbols))
         if requested_symbols
@@ -758,22 +841,36 @@ def normalize_native_rule_evidence_read_index(
             symbol: list(relation_storage_ids_by_symbol.get(symbol, []))
             for symbol in selected_symbols
         },
-        "relationStorageIdsBySymbolAndType": {
-            symbol: dict(relation_storage_ids_by_symbol_and_type.get(symbol, {}))
-            for symbol in selected_symbols
-        } if index_version in {
-            NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
-            NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
-        } else {},
-        "relationStorageIdsBySymbolAndTypeAndField": {
-            symbol: dict(relation_storage_ids_by_symbol_type_field.get(symbol, {}))
-            for symbol in selected_symbols
-        } if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION else {},
-        "relationStorageIdsBySymbolAndTypeAndTargetKind": {
-            symbol: dict(relation_storage_ids_by_symbol_type_target_kind.get(symbol, {}))
-            for symbol in selected_symbols
-        } if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION else {},
+        "relationStorageIdsBySymbolAndType": (
+            {
+                symbol: dict(relation_storage_ids_by_symbol_and_type.get(symbol, {}))
+                for symbol in selected_symbols
+            }
+            if index_version
+            in {
+                NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+                NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
+            }
+            else {}
+        ),
+        "relationStorageIdsBySymbolAndTypeAndField": (
+            {
+                symbol: dict(relation_storage_ids_by_symbol_type_field.get(symbol, {}))
+                for symbol in selected_symbols
+            }
+            if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION
+            else {}
+        ),
+        "relationStorageIdsBySymbolAndTypeAndTargetKind": (
+            {
+                symbol: dict(relation_storage_ids_by_symbol_type_target_kind.get(symbol, {}))
+                for symbol in selected_symbols
+            }
+            if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION
+            else {}
+        ),
     }
+
 
 def typedb_native_rule_evidence_read_index_for_execution(
     active_abox_metadata: Dict[str, object] = None,
@@ -783,11 +880,15 @@ def typedb_native_rule_evidence_read_index_for_execution(
     active = dict(active_abox_metadata or {})
     topology = normalize_native_rule_planner_topology(active.get("nativeRulePlannerTopology"))
     requested_symbols = clean_symbols_from_payload(target_symbols or [])
-    missing_requested_symbols = [
-        symbol
-        for symbol in requested_symbols
-        if not list((topology.get("sourceIdsBySymbol") or {}).get(symbol) or [])
-    ] if str(topology.get("status") or "") == "ok" else []
+    missing_requested_symbols = (
+        [
+            symbol
+            for symbol in requested_symbols
+            if not list((topology.get("sourceIdsBySymbol") or {}).get(symbol) or [])
+        ]
+        if str(topology.get("status") or "") == "ok"
+        else []
+    )
     if missing_requested_symbols:
         return {
             "status": "fallback",
@@ -805,7 +906,10 @@ def typedb_native_rule_evidence_read_index_for_execution(
         return {
             "status": "fallback",
             "source": "typedb-active-abox-manifest",
-            "reason": str(normalized.get("reason") or "Active ABox Manifest has no verified evidence read index."),
+            "reason": str(
+                normalized.get("reason")
+                or "Active ABox Manifest has no verified evidence read index."
+            ),
             "index": {},
         }
     return {
@@ -815,6 +919,7 @@ def typedb_native_rule_evidence_read_index_for_execution(
         "fingerprint": str(normalized.get("fingerprint") or ""),
         "index": normalized,
     }
+
 
 def typedb_native_rule_evidence_read_allows_active_membership_recovery(
     evidence_read_index: Dict[str, object] = None,
@@ -827,13 +932,11 @@ def typedb_native_rule_evidence_read_allows_active_membership_recovery(
     explanation graph. Other invalid indexes remain fail-closed.
     """
     value = dict(evidence_read_index or {}) if isinstance(evidence_read_index, dict) else {}
-    return (
-        str(value.get("status") or "") == "verified"
-        or (
-            str(value.get("status") or "") == "fallback"
-            and str(value.get("source") or "") == "typedb-active-abox-membership-recovery"
-        )
+    return str(value.get("status") or "") == "verified" or (
+        str(value.get("status") or "") == "fallback"
+        and str(value.get("source") or "") == "typedb-active-abox-membership-recovery"
     )
+
 
 def native_rule_matched_evidence_storage_plan(
     native_match_result: Dict[str, object],
@@ -850,16 +953,26 @@ def native_rule_matched_evidence_storage_plan(
     rereading every relation of the same broad type for the stock.
     """
     evidence = dict(evidence_read_index or {}) if isinstance(evidence_read_index, dict) else {}
-    index = dict(evidence.get("index") or {}) if str(evidence.get("status") or "") == "verified" else {}
+    index = (
+        dict(evidence.get("index") or {}) if str(evidence.get("status") or "") == "verified" else {}
+    )
     matches = [
         dict(item)
         for item in (native_match_result or {}).get("matches") or []
         if isinstance(item, dict) and str(item.get("sourceId") or "").strip()
     ]
     rules_by_id = {
-        str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "").strip(): rule
+        str(
+            getattr(rule, "rule_id", "")
+            or (rule.get("rule_id") if isinstance(rule, dict) else "")
+            or ""
+        ).strip(): rule
         for rule in rules or []
-        if str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "").strip()
+        if str(
+            getattr(rule, "rule_id", "")
+            or (rule.get("rule_id") if isinstance(rule, dict) else "")
+            or ""
+        ).strip()
     }
     source_symbols_by_source_id = {
         str(source_id or "").strip(): str(symbol or "").upper().strip()
@@ -869,9 +982,7 @@ def native_rule_matched_evidence_storage_plan(
     }
     by_type = dict(index.get("relationStorageIdsBySymbolAndType") or {})
     by_field = dict(index.get("relationStorageIdsBySymbolAndTypeAndField") or {})
-    by_target_kind = dict(
-        index.get("relationStorageIdsBySymbolAndTypeAndTargetKind") or {}
-    )
+    by_target_kind = dict(index.get("relationStorageIdsBySymbolAndTypeAndTargetKind") or {})
 
     def equality_values(filters: Dict[str, object], key: str) -> List[str]:
         expected = dict(filters or {}).get(key)
@@ -896,9 +1007,11 @@ def native_rule_matched_evidence_storage_plan(
     for match in matches:
         source_id = str(match.get("sourceId") or "").strip()
         symbol = source_symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
-        requested_rule_ids = all_rule_ids if include_all_rule_relation_types else [
-            str(match.get("ruleId") or "").strip()
-        ]
+        requested_rule_ids = (
+            all_rule_ids
+            if include_all_rule_relation_types
+            else [str(match.get("ruleId") or "").strip()]
+        )
         for rule_id in requested_rule_ids:
             rule = rules_by_id.get(rule_id)
             if not rule:
@@ -912,19 +1025,21 @@ def native_rule_matched_evidence_storage_plan(
                 condition = (
                     raw_condition.to_dict()
                     if hasattr(raw_condition, "to_dict")
-                    else dict(vars(raw_condition))
-                    if hasattr(raw_condition, "__dict__")
-                    else dict(raw_condition or {})
+                    else (
+                        dict(vars(raw_condition))
+                        if hasattr(raw_condition, "__dict__")
+                        else dict(raw_condition or {})
+                    )
                 )
                 if str(condition.get("kind") or "") != "relation":
                     continue
                 if normalized_condition_role(condition) == "not":
                     continue
-                relation_type = str(
-                    condition.get("relation_type")
-                    or condition.get("relationType")
-                    or ""
-                ).upper().strip()
+                relation_type = (
+                    str(condition.get("relation_type") or condition.get("relationType") or "")
+                    .upper()
+                    .strip()
+                )
                 if not relation_type:
                     continue
                 relation_condition_count += 1
@@ -948,17 +1063,20 @@ def native_rule_matched_evidence_storage_plan(
                     or condition.get("relationPropertyFilters")
                     or {}
                 )
-                field_values = sorted(set(
-                    equality_values(target_filters, "field")
-                    + equality_values(relation_filters, "field")
-                ))
+                field_values = sorted(
+                    set(
+                        equality_values(target_filters, "field")
+                        + equality_values(relation_filters, "field")
+                    )
+                )
                 if field_values:
                     field_ids = {
                         str(storage_id or "").strip()
                         for field in field_values
                         for storage_id in dict(
                             dict(by_field.get(symbol) or {}).get(relation_type) or {}
-                        ).get(field, []) or []
+                        ).get(field, [])
+                        or []
                         if str(storage_id or "").strip()
                     }
                     if field_ids:
@@ -967,16 +1085,15 @@ def native_rule_matched_evidence_storage_plan(
                     else:
                         selector_missing = True
                 target_kind = str(
-                    condition.get("target_kind")
-                    or condition.get("targetKind")
-                    or ""
+                    condition.get("target_kind") or condition.get("targetKind") or ""
                 ).strip()
                 if target_kind:
                     kind_ids = {
                         str(storage_id or "").strip()
                         for storage_id in dict(
                             dict(by_target_kind.get(symbol) or {}).get(relation_type) or {}
-                        ).get(target_kind, []) or []
+                        ).get(target_kind, [])
+                        or []
                         if str(storage_id or "").strip()
                     }
                     if kind_ids:
@@ -992,7 +1109,15 @@ def native_rule_matched_evidence_storage_plan(
                     if not selector_used:
                         condition_ids = set(base_ids)
                     fallback_condition_count += 1
-                    fallback_conditions.append(rule_id + ":" + str(condition.get("condition_id") or condition.get("conditionId") or relation_type))
+                    fallback_conditions.append(
+                        rule_id
+                        + ":"
+                        + str(
+                            condition.get("condition_id")
+                            or condition.get("conditionId")
+                            or relation_type
+                        )
+                    )
                 elif selector_used:
                     exact_condition_count += 1
                 else:
@@ -1007,10 +1132,14 @@ def native_rule_matched_evidence_storage_plan(
         "relationTypes": sorted(selected_relation_types),
         "candidateRelationStorageCount": candidate_count,
         "selectedEvidenceStorageCount": selected_count,
-        "evidenceNarrowingPct": round(
-            max(0.0, (1.0 - (selected_count / candidate_count)) * 100.0),
-            1,
-        ) if candidate_count else 0.0,
+        "evidenceNarrowingPct": (
+            round(
+                max(0.0, (1.0 - (selected_count / candidate_count)) * 100.0),
+                1,
+            )
+            if candidate_count
+            else 0.0
+        ),
         "relationConditionCount": relation_condition_count,
         "exactSelectorConditionCount": exact_condition_count,
         "fallbackConditionCount": fallback_condition_count,
@@ -1018,11 +1147,14 @@ def native_rule_matched_evidence_storage_plan(
         "relationReadScope": (
             "matched-rule-exact-evidence"
             if exact_condition_count and not fallback_condition_count
-            else "matched-rule-exact-evidence-with-type-fallback"
-            if exact_condition_count
-            else "matched-rule-types"
+            else (
+                "matched-rule-exact-evidence-with-type-fallback"
+                if exact_condition_count
+                else "matched-rule-types"
+            )
         ),
     }
+
 
 def typedb_projection_preflight_graph_for_execution(
     projection_graph: object,
@@ -1052,9 +1184,7 @@ def typedb_projection_preflight_graph_for_execution(
     supplied_manifest_id = str(projection_manifest_id or "").strip()
     graph_worldview = dict(getattr(projection_graph, "worldview", {}) or {})
     graph_manifest_id = str(
-        graph_worldview.get("worldviewManifestId")
-        or graph_worldview.get("aboxSnapshotId")
-        or ""
+        graph_worldview.get("worldviewManifestId") or graph_worldview.get("aboxSnapshotId") or ""
     ).strip()
     if (
         not active_manifest_id
@@ -1070,13 +1200,18 @@ def typedb_projection_preflight_graph_for_execution(
     requested_world_id = str(world_id or "").strip()
     active_world_id = str(active.get("worldId") or requested_world_id or "").strip()
     graph_world_id = str(graph_worldview.get("worldId") or "").strip()
-    if requested_world_id and (graph_world_id != requested_world_id or active_world_id != requested_world_id):
+    if requested_world_id and (
+        graph_world_id != requested_world_id or active_world_id != requested_world_id
+    ):
         return {
             "status": "incomplete",
             "mode": "projection-verified-in-memory",
             "reason": "Projection graph world does not match the active TypeDB inference world.",
         }
-    if str(graph_worldview.get("runtimeProjectionMode") or "") != "abox-facts-only-typedb-native-rules":
+    if (
+        str(graph_worldview.get("runtimeProjectionMode") or "")
+        != "abox-facts-only-typedb-native-rules"
+    ):
         return {
             "status": "incomplete",
             "mode": "projection-verified-in-memory",
@@ -1101,7 +1236,8 @@ def typedb_projection_preflight_graph_for_execution(
     expected_source_ids = {
         str(source_id or "").strip()
         for symbol in clean_symbols
-        for source_id in dict(expected_topology.get("sourceIdsBySymbol") or {}).get(symbol, []) or []
+        for source_id in dict(expected_topology.get("sourceIdsBySymbol") or {}).get(symbol, [])
+        or []
         if str(source_id or "").strip()
     }
     graph_source_ids = {

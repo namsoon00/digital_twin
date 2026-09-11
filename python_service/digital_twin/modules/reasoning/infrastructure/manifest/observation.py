@@ -1,15 +1,20 @@
 """manifest: observation through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import OntologyEntity
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
 from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
-from typing import Dict
-from typing import List
+from typing import Dict, List
 from .observation_ports import ManifestObservationStore
 
 
-def refresh_market_world_observation_metadata(_store: ManifestObservationStore, manifest_id: str, scope_plan: List[Dict[str, object]], market_scope_observed_at: Dict[str, object], world_id: str='', adopted_write_lease: Dict[str, object]=None) -> Dict[str, object]:
+def refresh_market_world_observation_metadata(
+    _store: ManifestObservationStore,
+    manifest_id: str,
+    scope_plan: List[Dict[str, object]],
+    market_scope_observed_at: Dict[str, object],
+    world_id: str = "",
+    adopted_write_lease: Dict[str, object] = None,
+) -> Dict[str, object]:
     """Refresh MarketWorld source clocks without changing ABox facts.
 
     A collection heartbeat can prove that an unchanged quote or news feed
@@ -123,13 +128,15 @@ def refresh_market_world_observation_metadata(_store: ManifestObservationStore, 
         )
         marker = next(
             (
-                item for item in markers
+                item
+                for item in markers
                 if str(
                     item.get("worldviewManifestId")
                     or item.get("aboxSnapshotId")
                     or item.get("snapshotId")
                     or ""
-                ).strip() == clean_manifest_id
+                ).strip()
+                == clean_manifest_id
             ),
             {},
         )
@@ -189,64 +196,75 @@ def refresh_market_world_observation_metadata(_store: ManifestObservationStore, 
         ]:
             if key in marker and key not in properties:
                 properties[key] = marker.get(key)
-        properties.update({
-            "ontologyBox": "ABox",
-            "worldId": requested_world_id or str(properties.get("worldId") or ""),
-            "worldType": str(active.get("worldType") or properties.get("worldType") or ""),
-            "tenantId": str(active.get("tenantId") or properties.get("tenantId") or ""),
-            "accountId": str(active.get("accountId") or properties.get("accountId") or ""),
-            "tboxClass": "WorldviewManifest",
-            "snapshotId": clean_manifest_id,
-            "aboxSnapshotId": clean_manifest_id,
-            "worldviewManifestId": clean_manifest_id,
-            "scopePlan": list(scope_plan),
-            "scopeGenerationIds": expected_generations,
-            "scopeFingerprints": {
-                str(item.get("scopeId") or "").strip(): str(item.get("fingerprint") or "")
-                for item in scope_plan or []
-                if isinstance(item, dict) and str(item.get("scopeId") or "").strip()
-            },
-            "scopeFamilyCounts": dict(active.get("scopeFamilyCounts") or properties.get("scopeFamilyCounts") or {}),
-            "materialFingerprint": str(active.get("materialFingerprint") or properties.get("materialFingerprint") or ""),
-            "marketScopeObservedAt": {
-                str(scope_id): str(stamp)
-                for scope_id, stamp in dict(market_scope_observed_at or {}).items()
-                if str(scope_id or "").strip() and str(stamp or "").strip()
-            },
-            "marketScopeObservedAtVersion": "source-item-v1",
-            "marketWorldProjectionMode": str(
-                properties.get("marketWorldProjectionMode") or "incremental-scoped-manifest-patch"
-            ),
-            "sharedWorldProjection": str(properties.get("sharedWorldProjection") or "market"),
-            "sharedWorldProjectionContractVersion": str(
-                properties.get("sharedWorldProjectionContractVersion") or ""
-            ),
-            "sharedWorldFullRebuild": bool(properties.get("sharedWorldFullRebuild")),
-            "accountOverlayProjectionContractVersion": str(
-                properties.get("accountOverlayProjectionContractVersion") or ""
-            ),
-            "worldPartitionedReasoningVersion": str(
-                properties.get("worldPartitionedReasoningVersion") or ""
-            ),
-            "marketContextMode": str(properties.get("marketContextMode") or ""),
-            "marketReadMirrorRemoved": bool(properties.get("marketReadMirrorRemoved")),
-            "sharedPremiseWorldId": str(properties.get("sharedPremiseWorldId") or ""),
-            "sharedPremiseInferenceGenerationId": str(
-                properties.get("sharedPremiseInferenceGenerationId") or ""
-            ),
-            "sharedPremiseSourceAboxSnapshotId": str(
-                properties.get("sharedPremiseSourceAboxSnapshotId") or ""
-            ),
-            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
-        })
+        properties.update(
+            {
+                "ontologyBox": "ABox",
+                "worldId": requested_world_id or str(properties.get("worldId") or ""),
+                "worldType": str(active.get("worldType") or properties.get("worldType") or ""),
+                "tenantId": str(active.get("tenantId") or properties.get("tenantId") or ""),
+                "accountId": str(active.get("accountId") or properties.get("accountId") or ""),
+                "tboxClass": "WorldviewManifest",
+                "snapshotId": clean_manifest_id,
+                "aboxSnapshotId": clean_manifest_id,
+                "worldviewManifestId": clean_manifest_id,
+                "scopePlan": list(scope_plan),
+                "scopeGenerationIds": expected_generations,
+                "scopeFingerprints": {
+                    str(item.get("scopeId") or "").strip(): str(item.get("fingerprint") or "")
+                    for item in scope_plan or []
+                    if isinstance(item, dict) and str(item.get("scopeId") or "").strip()
+                },
+                "scopeFamilyCounts": dict(
+                    active.get("scopeFamilyCounts") or properties.get("scopeFamilyCounts") or {}
+                ),
+                "materialFingerprint": str(
+                    active.get("materialFingerprint") or properties.get("materialFingerprint") or ""
+                ),
+                "marketScopeObservedAt": {
+                    str(scope_id): str(stamp)
+                    for scope_id, stamp in dict(market_scope_observed_at or {}).items()
+                    if str(scope_id or "").strip() and str(stamp or "").strip()
+                },
+                "marketScopeObservedAtVersion": "source-item-v1",
+                "marketWorldProjectionMode": str(
+                    properties.get("marketWorldProjectionMode")
+                    or "incremental-scoped-manifest-patch"
+                ),
+                "sharedWorldProjection": str(properties.get("sharedWorldProjection") or "market"),
+                "sharedWorldProjectionContractVersion": str(
+                    properties.get("sharedWorldProjectionContractVersion") or ""
+                ),
+                "sharedWorldFullRebuild": bool(properties.get("sharedWorldFullRebuild")),
+                "accountOverlayProjectionContractVersion": str(
+                    properties.get("accountOverlayProjectionContractVersion") or ""
+                ),
+                "worldPartitionedReasoningVersion": str(
+                    properties.get("worldPartitionedReasoningVersion") or ""
+                ),
+                "marketContextMode": str(properties.get("marketContextMode") or ""),
+                "marketReadMirrorRemoved": bool(properties.get("marketReadMirrorRemoved")),
+                "sharedPremiseWorldId": str(properties.get("sharedPremiseWorldId") or ""),
+                "sharedPremiseInferenceGenerationId": str(
+                    properties.get("sharedPremiseInferenceGenerationId") or ""
+                ),
+                "sharedPremiseSourceAboxSnapshotId": str(
+                    properties.get("sharedPremiseSourceAboxSnapshotId") or ""
+                ),
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            }
+        )
         marker_graph = PortfolioOntology(
             str(properties.get("accountId") or "typedb-scoped-manifest"),
-            entities=[OntologyEntity(
-                entity_id=str(marker.get("id") or "worldview-manifest-marker:" + clean_manifest_id),
-                label=str(marker.get("label") or "Worldview Manifest " + clean_manifest_id),
-                kind="worldview-manifest-marker",
-                properties=properties,
-            )],
+            entities=[
+                OntologyEntity(
+                    entity_id=str(
+                        marker.get("id") or "worldview-manifest-marker:" + clean_manifest_id
+                    ),
+                    label=str(marker.get("label") or "Worldview Manifest " + clean_manifest_id),
+                    kind="worldview-manifest-marker",
+                    properties=properties,
+                )
+            ],
         )
         replacement = _store.replace_scoped_manifest_marker_graph(marker_graph)
         if not replacement.get("saved"):
@@ -266,9 +284,12 @@ def refresh_market_world_observation_metadata(_store: ManifestObservationStore, 
             or verified_manifest_id != clean_manifest_id
             or {
                 str(scope_id or "").strip(): str(generation_id or "").strip()
-                for scope_id, generation_id in dict(verified.get("scopeGenerationIds") or {}).items()
+                for scope_id, generation_id in dict(
+                    verified.get("scopeGenerationIds") or {}
+                ).items()
                 if str(scope_id or "").strip() and str(generation_id or "").strip()
-            } != expected_generations
+            }
+            != expected_generations
         ):
             return {
                 "configured": True,

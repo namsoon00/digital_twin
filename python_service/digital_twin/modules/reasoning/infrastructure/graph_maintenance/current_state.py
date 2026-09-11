@@ -1,22 +1,31 @@
 """graph_maintenance: current_state through explicit injected capabilities."""
 
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_value_match
-from typing import Dict
-from typing import Iterable
-from typing import List
-from typing import Tuple
+from typing import Dict, Iterable, List, Tuple
 import time
-from .current_state_ports import GraphMaintenanceCurrentStateStore, GraphMaintenanceCurrentStateRuntime
+from .current_state_ports import (
+    GraphMaintenanceCurrentStateStore,
+    GraphMaintenanceCurrentStateRuntime,
+)
 
 
-def delete_current_state_slot_rows(_store: GraphMaintenanceCurrentStateStore, driver, imported, physical_generation_ids: Iterable[str], *, _bindings: GraphMaintenanceCurrentStateRuntime) -> Dict[str, object]:
+def delete_current_state_slot_rows(
+    _store: GraphMaintenanceCurrentStateStore,
+    driver,
+    imported,
+    physical_generation_ids: Iterable[str],
+    *,
+    _bindings: GraphMaintenanceCurrentStateRuntime
+) -> Dict[str, object]:
     """Replace inactive physical slots with bounded grouped deletes."""
 
-    generation_ids = sorted({
-        str(value or "").strip()
-        for value in physical_generation_ids or []
-        if str(value or "").startswith("abox-current:")
-    })
+    generation_ids = sorted(
+        {
+            str(value or "").strip()
+            for value in physical_generation_ids or []
+            if str(value or "").startswith("abox-current:")
+        }
+    )
     if not generation_ids:
         return {
             "status": "skipped",
@@ -28,13 +37,16 @@ def delete_current_state_slot_rows(_store: GraphMaintenanceCurrentStateStore, dr
     transaction_count = 0
     started = time.monotonic()
     for offset in range(0, len(generation_ids), batch_size):
-        batch = generation_ids[offset: offset + batch_size]
+        batch = generation_ids[offset : offset + batch_size]
         for type_label, variable in [
             ("ontology-assertion", "$r"),
             ("ontology-node", "$n"),
         ]:
             query = (
-                "match " + variable + " isa " + type_label
+                "match "
+                + variable
+                + " isa "
+                + type_label
                 + ', has ontology-box "ABox", has ontology-snapshot-id $slot; '
                 + typedb_value_match(
                     variable,
@@ -43,7 +55,9 @@ def delete_current_state_slot_rows(_store: GraphMaintenanceCurrentStateStore, dr
                     "==",
                     "slotFilter",
                 )
-                + " delete " + variable + ";"
+                + " delete "
+                + variable
+                + ";"
             )
 
             def delete_batch():
@@ -69,7 +83,15 @@ def delete_current_state_slot_rows(_store: GraphMaintenanceCurrentStateStore, dr
     }
 
 
-def delete_current_state_storage_ids(_store: GraphMaintenanceCurrentStateStore, driver, imported, node_storage_ids: Iterable[str], relation_storage_ids: Iterable[str], *, _bindings: GraphMaintenanceCurrentStateRuntime) -> Dict[str, object]:
+def delete_current_state_storage_ids(
+    _store: GraphMaintenanceCurrentStateStore,
+    driver,
+    imported,
+    node_storage_ids: Iterable[str],
+    relation_storage_ids: Iterable[str],
+    *,
+    _bindings: GraphMaintenanceCurrentStateRuntime
+) -> Dict[str, object]:
     """Delete stale slot rows by exact unique identity before reinsertion."""
 
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
@@ -81,15 +103,16 @@ def delete_current_state_storage_ids(_store: GraphMaintenanceCurrentStateStore, 
         ("ontology-assertion", "$r", relation_storage_ids),
         ("ontology-node", "$n", node_storage_ids),
     ]:
-        ids = sorted({
-            str(value or "").strip()
-            for value in raw_ids or []
-            if str(value or "").strip()
-        })
+        ids = sorted(
+            {str(value or "").strip() for value in raw_ids or [] if str(value or "").strip()}
+        )
         for offset in range(0, len(ids), 64):
-            batch = ids[offset: offset + 64]
+            batch = ids[offset : offset + 64]
             query = (
-                "match " + variable + " isa " + type_label
+                "match "
+                + variable
+                + " isa "
+                + type_label
                 + ", has ontology-storage-id $storageId; "
                 + typedb_value_match(
                     variable,
@@ -98,7 +121,9 @@ def delete_current_state_storage_ids(_store: GraphMaintenanceCurrentStateStore, 
                     "==",
                     "storageIdFilter",
                 )
-                + " delete " + variable + ";"
+                + " delete "
+                + variable
+                + ";"
             )
             delete_queries.append((query, len(batch)))
 
@@ -110,7 +135,7 @@ def delete_current_state_storage_ids(_store: GraphMaintenanceCurrentStateStore, 
         _bindings.runtime_settings()
     )
     for offset in range(0, len(delete_queries), transaction_query_count):
-        query_batch = delete_queries[offset: offset + transaction_query_count]
+        query_batch = delete_queries[offset : offset + transaction_query_count]
 
         def delete_batch():
             with _bindings.typedb_operation_timeout(
@@ -128,9 +153,7 @@ def delete_current_state_storage_ids(_store: GraphMaintenanceCurrentStateStore, 
 
         _store.with_typedb_retries(delete_batch)
         transaction_count += 1
-        deleted_identity_count += sum(
-            identity_count for _query, identity_count in query_batch
-        )
+        deleted_identity_count += sum(identity_count for _query, identity_count in query_batch)
     return {
         "status": "ok",
         "deletedIdentityCount": deleted_identity_count,

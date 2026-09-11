@@ -4,11 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 
-
 class GraphReadsMetricsStore(Protocol):
     _query_metrics: Any
 
     _query_metrics_lock: Any
 
-    def query_metrics_enabled(self) -> bool:
-        ...
+    def query_metrics_enabled(self) -> bool: ...

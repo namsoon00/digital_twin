@@ -2,13 +2,20 @@
 
 from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
-from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import typedb_call_for_world
+from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import (
+    typedb_call_for_world,
+)
 from typing import Dict
 import time
 from .runner_ports import GraphMaintenanceRunnerStore, GraphMaintenanceRunnerRuntime
 
 
-def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[str, object]=None, *, _bindings: GraphMaintenanceRunnerRuntime) -> Dict[str, object]:
+def run_deferred_maintenance(
+    _store: GraphMaintenanceRunnerStore,
+    payload: Dict[str, object] = None,
+    *,
+    _bindings: GraphMaintenanceRunnerRuntime
+) -> Dict[str, object]:
     """Prune inactive graph generations after a verified cycle or while idle.
 
     This is operational retention, never an investment-rule step. It uses
@@ -80,9 +87,7 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
         else options.get("keep_inactive_manifests")
     )
     maintenance_keep_inactive = (
-        None
-        if requested_keep_inactive is None
-        else max(0, min(5, int(requested_keep_inactive)))
+        None if requested_keep_inactive is None else max(0, min(5, int(requested_keep_inactive)))
     )
     requested_orphan_limit = number_or_none(
         options.get("maxOrphanGenerations")
@@ -93,9 +98,7 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
     # migration/repair can safely drain more invisible generations while
     # holding the same per-world writer lease.
     maintenance_orphan_limit = (
-        0
-        if requested_orphan_limit is None
-        else max(1, min(256, int(requested_orphan_limit)))
+        0 if requested_orphan_limit is None else max(1, min(256, int(requested_orphan_limit)))
     )
     started_at = time.perf_counter()
 
@@ -105,12 +108,14 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
     # no-world invocation remains a legacy migration fallback only.
     if not requested_world_id:
         worlds = [
-            item for item in _store.list_ontology_worlds()
+            item
+            for item in _store.list_ontology_worlds()
             if isinstance(item, dict) and str(item.get("worldId") or "").strip()
         ]
         if requested_world_types:
             worlds = [
-                item for item in worlds
+                item
+                for item in worlds
                 if (
                     str(item.get("worldType") or "").strip().lower() in requested_world_types
                     or str(item.get("worldId") or "").split(":", 1)[0].strip().lower()
@@ -121,20 +126,28 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
             results = []
             for world in worlds:
                 world_id = str(world.get("worldId") or "").strip()
-                result = _store.run_deferred_maintenance({
-                    **options,
-                    "worldId": world_id,
-                })
-                results.append({
-                    "worldId": world_id,
-                    "worldType": str(world.get("worldType") or ""),
-                    "status": str(result.get("status") or ""),
-                    "result": result,
-                })
+                result = _store.run_deferred_maintenance(
+                    {
+                        **options,
+                        "worldId": world_id,
+                    }
+                )
+                results.append(
+                    {
+                        "worldId": world_id,
+                        "worldType": str(world.get("worldType") or ""),
+                        "status": str(result.get("status") or ""),
+                        "result": result,
+                    }
+                )
             statuses = {str(item.get("status") or "") for item in results}
             return {
                 "configured": True,
-                "status": "partial" if statuses.intersection({"error", "partial", "deferred-write-lease"}) else "ok",
+                "status": (
+                    "partial"
+                    if statuses.intersection({"error", "partial", "deferred-write-lease"})
+                    else "ok"
+                ),
                 "graphStore": "typedb",
                 "maintenanceMode": "per-active-world",
                 "worldTypes": sorted(requested_world_types),
@@ -216,7 +229,8 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
         if (
             not abox_slice_incomplete
             and not requested_world_id
-            and str(active_abox.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+            and str(active_abox.get("scopedAboxManifestVersion") or "")
+            == SCOPED_ABOX_MANIFEST_VERSION
         ):
             pending = _store.pending_abox_activation(requested_world_id)
             active_scope_ids = {
@@ -234,9 +248,16 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
                         and clean_snapshot_id.startswith(("abox-material:", "abox-snapshot:"))
                     ):
                         legacy_candidates.append(clean_snapshot_id)
-            legacy_slices = [_store.discard_abox_generation(snapshot_id) for snapshot_id in legacy_candidates[:2]]
+            legacy_slices = [
+                _store.discard_abox_generation(snapshot_id) for snapshot_id in legacy_candidates[:2]
+            ]
             legacy_result = {
-                "status": "ok" if not legacy_slices or all(str(item.get("status") or "") == "ok" for item in legacy_slices) else "partial",
+                "status": (
+                    "ok"
+                    if not legacy_slices
+                    or all(str(item.get("status") or "") == "ok" for item in legacy_slices)
+                    else "partial"
+                ),
                 "candidateGenerationIds": legacy_candidates,
                 "deletedGenerationIds": [
                     str(item.get("aboxSnapshotId") or "")
@@ -262,12 +283,20 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
                 published_only=True,
                 world_id=requested_world_id,
             )
-            active_generation_id = str((records[0] if records else {}).get("generationId") or "").strip()
+            active_generation_id = str(
+                (records[0] if records else {}).get("generationId") or ""
+            ).strip()
             if active_generation_id:
                 inference_result = typedb_call_for_world(
                     pruner,
                     active_generation_id,
-                    keep_count=max(1, int(number_or_none(options.get("inferenceKeepCount")) or getattr(_store, "inference_generation_keep_count", 1))),
+                    keep_count=max(
+                        1,
+                        int(
+                            number_or_none(options.get("inferenceKeepCount"))
+                            or getattr(_store, "inference_generation_keep_count", 1)
+                        ),
+                    ),
                     world_id=requested_world_id,
                 )
         statuses = {
@@ -276,7 +305,9 @@ def run_deferred_maintenance(_store: GraphMaintenanceRunnerStore, payload: Dict[
             str(legacy_result.get("status") or ""),
             str(inference_result.get("status") or ""),
         }
-        maintenance_partial = bool(statuses.intersection({"error", "partial", "deferred-write-lease"}))
+        maintenance_partial = bool(
+            statuses.intersection({"error", "partial", "deferred-write-lease"})
+        )
         return {
             "configured": True,
             "status": "partial" if maintenance_partial else "ok",

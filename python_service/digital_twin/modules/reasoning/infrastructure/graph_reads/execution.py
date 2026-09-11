@@ -1,24 +1,31 @@
 """graph_reads: execution through explicit injected capabilities."""
 
-from typing import Dict
-from typing import Iterable
-from typing import List
+from typing import Dict, Iterable, List
 import time
 from .execution_ports import GraphReadsExecutionStore, GraphReadsExecutionRuntime
 
 
-def read_rows(_store: GraphReadsExecutionStore, query: str, columns: Iterable[str], label: str='typedb.read', timeout_seconds: float=None) -> List[Dict[str, object]]:
+def read_rows(
+    _store: GraphReadsExecutionStore,
+    query: str,
+    columns: Iterable[str],
+    label: str = "typedb.read",
+    timeout_seconds: float = None,
+) -> List[Dict[str, object]]:
     if not _store.address:
         return []
     imported = _store.driver_imports()
     if imported[0] is None:
-        raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
+        raise RuntimeError(
+            "typedb-driver Python package is not installed: " + str(imported[1])[:160]
+        )
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
     request_timeout = (
         _store.query_timeout_seconds()
         if timeout_seconds is None
         else max(0.5, float(timeout_seconds))
     )
+
     def operation():
         driver = _store.open_driver(imported, request_timeout_seconds=request_timeout)
         try:
@@ -37,10 +44,20 @@ def read_rows(_store: GraphReadsExecutionStore, query: str, columns: Iterable[st
                 )
         finally:
             _store.close_driver(driver)
+
     return _store.with_typedb_retries(operation)
 
 
-def read_rows_in_transaction(_store: GraphReadsExecutionStore, tx, query: str, columns: Iterable[str], label: str='typedb.read', timeout_seconds: float=None, *, _bindings: GraphReadsExecutionRuntime) -> List[Dict[str, object]]:
+def read_rows_in_transaction(
+    _store: GraphReadsExecutionStore,
+    tx,
+    query: str,
+    columns: Iterable[str],
+    label: str = "typedb.read",
+    timeout_seconds: float = None,
+    *,
+    _bindings: GraphReadsExecutionRuntime
+) -> List[Dict[str, object]]:
     started_at = time.perf_counter()
     rows: List[Dict[str, object]] = []
     status = "ok"

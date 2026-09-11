@@ -1167,6 +1167,261 @@
       "runtimeFields": [],
       "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
       "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.verify_typedb_native_any_conditions": {
+      "path": "native_execution/entry.py",
+      "bodyHash": "8b8126cd84286df2bbeb3d1d1511080aae3dc1de2f98393953b8aec1c318d384",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='driver'), arg(arg='transaction_type'), arg(arg='rule', annotation=Name(id='GraphInferenceRule', ctx=Load())), arg(arg='source_id', annotation=Name(id='str', ctx=Load())), arg(arg='timeout_seconds', annotation=Name(id='float', ctx=Load())), arg(arg='scoped_manifest_only', annotation=Name(id='bool', ctx=Load())), arg(arg='tx'), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=''), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.execute_typedb_native_rule_entry": {
+      "path": "native_execution/entry.py",
+      "bodyHash": "c7399afd96c3a2d43ae0a98d6e30c7b1b47054cfdc673f0f12eaac2682586871",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='planned', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='clean_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='scoped_manifest_only', annotation=Name(id='bool', ctx=Load())), arg(arg='imported'), arg(arg='transaction_type'), arg(arg='deadline', annotation=Name(id='float', ctx=Load())), arg(arg='execution_mode', annotation=Name(id='str', ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='shared_read_driver')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.execute_typedb_model_signal_bridge_batches": {
+      "path": "native_execution/bridge.py",
+      "bodyHash": "676d6d7d13faec654bbbef5bd1fc1bf7629bc4557e277288036d2b35fb11020a",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='batches', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='imported'), arg(arg='transaction_type'), arg(arg='deadline', annotation=Name(id='float', ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kw_defaults=[None, None, None, None, Constant(value=None)], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.native_rule_entry_has_timeout_failure": {
+      "path": "native_execution/retry.py",
+      "bodyHash": "65e25bafbb62c114bec6a0bf8e73ee68d61773135347f603d895b4153b52a1c2",
+      "instance": false,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.native_rule_entry_has_interrupted_transaction_failure": {
+      "path": "native_execution/retry.py",
+      "bodyHash": "a3496e8cb154066da255ec6eb61acfe8589c26339523ba0874ced491d7669515",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.recover_timed_out_native_rule_entry": {
+      "path": "native_execution/retry.py",
+      "bodyHash": "adfb651529bd8bd87956c442f2de1714f32beeef876464405360ef876a60fbc9",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='primary_result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='planned', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='clean_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='scoped_manifest_only', annotation=Name(id='bool', ctx=Load())), arg(arg='imported'), arg(arg='transaction_type'), arg(arg='deadline', annotation=Name(id='float', ctx=Load())), arg(arg='execution_mode', annotation=Name(id='str', ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.merge_subject_fanout_matches": {
+      "path": "native_execution/fanout.py",
+      "bodyHash": "75ff13feb81e7cfba842a745ccb915b602ea4dde879141b935b657a1574cae28",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='results', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.match_typedb_native_rules_by_subject": {
+      "path": "native_execution/fanout.py",
+      "bodyHash": "1849453a2ed908d1d54b06298578534ab55dde575a06162c7118a7db9cbd94f1",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rules', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='GraphInferenceRule', ctx=Load()), ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='planner_topology', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='preflight_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='preflight_incoming_relations_complete', annotation=Name(id='bool', ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kw_defaults=[None, Constant(value=None), Constant(value=None), Constant(value=False), Constant(value=None)], defaults=[])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.match_typedb_native_rules": {
+      "path": "native_execution/matching.py",
+      "bodyHash": "98a69fbfd0a0dafa5a82556dc879c8fbebd2ae9d514183fc1a45d0d66e29935d",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code",
+        "typedb_native_rule_execution_incomplete_diagnostic"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rules', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='GraphInferenceRule', ctx=Load()), ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='planner_topology', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='preflight_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='preflight_incoming_relations_complete', annotation=Name(id='bool', ctx=Load())), arg(arg='native_rule_parallelism', annotation=Name(id='int', ctx=Load())), arg(arg='native_rule_target_parallelism', annotation=Name(id='int', ctx=Load())), arg(arg='adaptive_target_sharding_profile', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='stable_abox_write_lease_held', annotation=Name(id='bool', ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=''), Constant(value=None), Constant(value=None), Constant(value=False), Constant(value=1), Constant(value=1), Constant(value=None), Constant(value=False), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.abox_generation_identity": {
+      "path": "native_execution/profile.py",
+      "bodyHash": "8c83b63fafd2cc123b75827add15b4d6d7316eb0ff6271c7206d16fc92341e2b",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.compact_native_rule_profile_rows": {
+      "path": "native_execution/profile.py",
+      "bodyHash": "b12cca0e8c7ce1f58362848b765a8e6416ba8e2f3796f39aabddaf5f6eadf5ee",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.profile_native_rule_reads": {
+      "path": "native_execution/profile.py",
+      "bodyHash": "bf21b770d394c57ed7921b290a679da5cec9c3165cbda01a678fedc3398e36a2",
+      "instance": true,
+      "runtimeFields": [
+        "materialize_typedb_native_matches",
+        "typedb_inferencebox_graph"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.merge_native_match_rows": {
+      "path": "native_execution/context.py",
+      "bodyHash": "6be2d21d6840effd5a6fdba90cefb5249e776f1276519062b917962f384d53f9",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_native_matched_conditions"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rule', annotation=Name(id='GraphInferenceRule', ctx=Load())), arg(arg='query_plan', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='match_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='matches', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.typedb_rule_condition_context": {
+      "path": "native_execution/context.py",
+      "bodyHash": "2c2e1fe76e66fa165e822a107b860b44fb11a7ae0ab7035d034c0793d43764d5",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_static_rule_condition_context"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='rule', annotation=Name(id='GraphInferenceRule', ctx=Load())), arg(arg='source_id', annotation=Name(id='str', ctx=Load())), arg(arg='query_plan', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='row', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.run_rulebox_for_staged_abox": {
+      "path": "native_execution/staged.py",
+      "bodyHash": "361a00b3e21ddb75d3bfe0bc3db5f8451a12bbeff52e2e4a2438743759d08ea2",
+      "instance": true,
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository",
+        "typedb_projection_coordinator_summary"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.run_rulebox": {
+      "path": "native_execution/runner.py",
+      "bodyHash": "800e5464233d9aafceab497114a3c87709ccb8f803b537a1557dc1bdb32af85c",
+      "instance": true,
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "coordinated_typedb_projection_write('native-rule-run', typedb_projection_world_from_payload)"
+      ]
+    },
+    "TypeDBOntologyGraphRepository._run_rulebox_unlocked": {
+      "path": "native_execution/cycle.py",
+      "bodyHash": "88b8d6d3d811cc81703f82555fd184e8c5fc61ee2f06cfb1f438e26eed432b5c",
+      "instance": true,
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository",
+        "inference_generation_id",
+        "materialize_typedb_native_matches",
+        "rulebox_runtime_metadata",
+        "typedb_abox_inference_generation_id",
+        "typedb_error_code",
+        "typedb_inferencebox_graph",
+        "typedb_native_profile_metadata",
+        "utc_now"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.validate_rulebox_materialization": {
+      "path": "native_execution/validation.py",
+      "bodyHash": "7b4fd394e021d7314caa1d3cc16c70d070c21b374394eaccf236a0f89a4ba7b4",
+      "instance": true,
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository",
+        "materialization_preview_diff_payload",
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='payload', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.projection_graph_for_native_matches": {
+      "path": "native_execution/evidence.py",
+      "bodyHash": "a33420a6d166866fd20825455dc6d7ab2906b9a1280fc1924395ce756b175655",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='projection_graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='native_match_result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='rules', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='GraphInferenceRule', ctx=Load()), ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.load_graph_for_native_matches": {
+      "path": "native_execution/evidence.py",
+      "bodyHash": "33c9bf5ad1696035bf62fcb7db003a7569abac21281274ce924862a6f6a5c29a",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='native_match_result', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='rules', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='GraphInferenceRule', ctx=Load()), ctx=Load())), arg(arg='include_all_rule_relation_types', annotation=Name(id='bool', ctx=Load())), arg(arg='include_incoming_relations', annotation=Name(id='bool', ctx=Load())), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=False), Constant(value=True), Constant(value=None), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.inferencebox_snapshot_from_graph": {
+      "path": "graph_reads/inference.py",
+      "bodyHash": "fa7b466818dd35a3a3f6532f277925e0d1eadd3f53b0b3e2dbad429755408423",
+      "instance": true,
+      "runtimeFields": [
+        "apply_inference_target_coverage",
+        "inference_rulebox_metadata",
+        "matched_condition_ids"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=80)])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.inferencebox_snapshot": {
+      "path": "graph_reads/inference.py",
+      "bodyHash": "7f3b3c207eeeb8f3430e07775016fba84c7236c54d7855e3ab19b20fdaca8544",
+      "instance": true,
+      "runtimeFields": [
+        "NullTypeDBOntologyGraphRepository",
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='limit', annotation=Name(id='int', ctx=Load())), arg(arg='reset_metrics', annotation=Name(id='bool', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='inference_generation_id', annotation=Name(id='str', ctx=Load())), arg(arg='source_abox_snapshot_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=80), Constant(value=True), Constant(value=''), Constant(value=''), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.inferencebox_snapshot_from_typedb": {
+      "path": "graph_reads/inference.py",
+      "bodyHash": "6ae5c8fa02800cce3f926de7e4bb682dd5300fdb62220b6baed947b3e39aa4c1",
+      "instance": true,
+      "runtimeFields": [
+        "apply_inference_target_coverage",
+        "inference_generation_records",
+        "inference_rulebox_metadata",
+        "matched_condition_ids",
+        "row_inference_generation_id",
+        "select_inference_generation_record"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='clean_symbols', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='safe_limit', annotation=Name(id='int', ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='inference_generation_id', annotation=Name(id='str', ctx=Load())), arg(arg='source_abox_snapshot_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=''), Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.load_graph_from_typedb": {
+      "path": "graph_reads/inference.py",
+      "bodyHash": "cf7489a071857c4d2f844428dac001d7c07bc364ce819c5b421e7e03af24ce2c",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value='')])",
+      "decorators": []
     }
   },
   "helpers": {

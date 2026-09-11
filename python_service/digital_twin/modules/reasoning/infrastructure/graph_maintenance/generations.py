@@ -3,52 +3,104 @@
 from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
-from typing import Dict
-from typing import Iterable
-from typing import List
+from typing import Dict, Iterable, List
 import time
 from .generations_ports import GraphMaintenanceGenerationsStore, GraphMaintenanceGenerationsRuntime
 
 
-def box_snapshot_instance_exists(_store: GraphMaintenanceGenerationsStore, driver, imported, box: str, snapshot_id: str, type_label: str) -> bool:
+def box_snapshot_instance_exists(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    box: str,
+    snapshot_id: str,
+    type_label: str,
+) -> bool:
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
     query = (
-        "match $item isa " + str(type_label)
-        + ", has ontology-box " + typedb_string(box)
-        + ", has ontology-snapshot-id " + typedb_string(snapshot_id)
+        "match $item isa "
+        + str(type_label)
+        + ", has ontology-box "
+        + typedb_string(box)
+        + ", has ontology-snapshot-id "
+        + typedb_string(snapshot_id)
         + "; limit 1;"
     )
     with driver.transaction(_store.database, TransactionType.READ) as tx:
-        return bool(_store.read_rows_in_transaction(tx, query, [], label="typedb.abox-candidate-exists"))
+        return bool(
+            _store.read_rows_in_transaction(tx, query, [], label="typedb.abox-candidate-exists")
+        )
 
 
-def box_manifest_instance_exists(_store: GraphMaintenanceGenerationsStore, driver, imported, box: str, manifest_id: str, type_label: str, world_id: str='') -> bool:
+def box_manifest_instance_exists(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    box: str,
+    manifest_id: str,
+    type_label: str,
+    world_id: str = "",
+) -> bool:
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
     clean_world_id = str(world_id or "").strip()
     query = (
-        "match $item isa " + str(type_label)
-        + ", has ontology-box " + typedb_string(box)
-        + ", has ontology-manifest-id " + typedb_string(manifest_id)
+        "match $item isa "
+        + str(type_label)
+        + ", has ontology-box "
+        + typedb_string(box)
+        + ", has ontology-manifest-id "
+        + typedb_string(manifest_id)
         + (", has ontology-world-id " + typedb_string(clean_world_id) if clean_world_id else "")
         + "; limit 1;"
     )
     with driver.transaction(_store.database, TransactionType.READ) as tx:
-        return bool(_store.read_rows_in_transaction(tx, query, [], label="typedb.abox-manifest-candidate-exists"))
+        return bool(
+            _store.read_rows_in_transaction(
+                tx, query, [], label="typedb.abox-manifest-candidate-exists"
+            )
+        )
 
 
-def box_manifest_delete_batch_query(_store: GraphMaintenanceGenerationsStore, box: str, manifest_id: str, type_label: str, batch_size: int, world_id: str='') -> str:
+def box_manifest_delete_batch_query(
+    _store: GraphMaintenanceGenerationsStore,
+    box: str,
+    manifest_id: str,
+    type_label: str,
+    batch_size: int,
+    world_id: str = "",
+) -> str:
     variable = "$r" if str(type_label) == "ontology-assertion" else "$n"
     clean_world_id = str(world_id or "").strip()
     return (
-        "match " + variable + " isa " + str(type_label)
-        + ", has ontology-box " + typedb_string(box)
-        + ", has ontology-manifest-id " + typedb_string(manifest_id)
+        "match "
+        + variable
+        + " isa "
+        + str(type_label)
+        + ", has ontology-box "
+        + typedb_string(box)
+        + ", has ontology-manifest-id "
+        + typedb_string(manifest_id)
         + (", has ontology-world-id " + typedb_string(clean_world_id) if clean_world_id else "")
-        + "; limit " + str(max(1, int(batch_size or 1))) + "; delete " + variable + ";"
+        + "; limit "
+        + str(max(1, int(batch_size or 1)))
+        + "; delete "
+        + variable
+        + ";"
     )
 
 
-def delete_box_manifest_rows_in_batches(_store: GraphMaintenanceGenerationsStore, driver, imported, box: str, manifest_id: str, batch_size: int=None, max_batches: int=None, world_id: str='', *, _bindings: GraphMaintenanceGenerationsRuntime) -> Dict[str, object]:
+def delete_box_manifest_rows_in_batches(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    box: str,
+    manifest_id: str,
+    batch_size: int = None,
+    max_batches: int = None,
+    world_id: str = "",
+    *,
+    _bindings: GraphMaintenanceGenerationsRuntime
+) -> Dict[str, object]:
     """Clear a retry candidate by its exact Manifest provenance.
 
     Scoped generations can be shared by retained Manifests, so a realtime
@@ -62,7 +114,9 @@ def delete_box_manifest_rows_in_batches(_store: GraphMaintenanceGenerationsStore
     if not clean_box or not clean_manifest_id:
         return {"status": "skipped", "deletedBatchCount": 0}
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-    configured_batch_size = _store.abox_delete_batch_size() if batch_size is None else int(batch_size or 0)
+    configured_batch_size = (
+        _store.abox_delete_batch_size() if batch_size is None else int(batch_size or 0)
+    )
     safe_batch_size = max(1, min(5000, configured_batch_size))
     safe_max_batches = None if max_batches is None else max(0, int(max_batches or 0))
     deleted_batches = 0
@@ -88,7 +142,10 @@ def delete_box_manifest_rows_in_batches(_store: GraphMaintenanceGenerationsStore
             )
 
             def delete_batch():
-                with _bindings.typedb_operation_timeout(_store.write_operation_timeout_seconds(), "TypeDB ABox manifest candidate delete batch"):
+                with _bindings.typedb_operation_timeout(
+                    _store.write_operation_timeout_seconds(),
+                    "TypeDB ABox manifest candidate delete batch",
+                ):
                     with driver.transaction(
                         _store.database,
                         TransactionType.WRITE,
@@ -103,14 +160,17 @@ def delete_box_manifest_rows_in_batches(_store: GraphMaintenanceGenerationsStore
             break
     if safe_max_batches is not None and deleted_batches >= safe_max_batches:
         for type_label in ["ontology-assertion", "ontology-node"]:
-            if _store.box_manifest_instance_exists(
-                driver,
-                imported,
-                clean_box,
-                clean_manifest_id,
-                type_label,
-                world_id=clean_world_id,
-            ) and type_label not in remaining_types:
+            if (
+                _store.box_manifest_instance_exists(
+                    driver,
+                    imported,
+                    clean_box,
+                    clean_manifest_id,
+                    type_label,
+                    world_id=clean_world_id,
+                )
+                and type_label not in remaining_types
+            ):
                 remaining_types.append(type_label)
     return {
         "status": "partial" if remaining_types else "ok",
@@ -124,17 +184,39 @@ def delete_box_manifest_rows_in_batches(_store: GraphMaintenanceGenerationsStore
     }
 
 
-def box_snapshot_delete_batch_query(_store: GraphMaintenanceGenerationsStore, box: str, snapshot_id: str, type_label: str, batch_size: int) -> str:
+def box_snapshot_delete_batch_query(
+    _store: GraphMaintenanceGenerationsStore,
+    box: str,
+    snapshot_id: str,
+    type_label: str,
+    batch_size: int,
+) -> str:
     variable = "$r" if str(type_label) == "ontology-assertion" else "$n"
     return (
-        "match " + variable + " isa " + str(type_label)
-        + ", has ontology-box " + typedb_string(box)
-        + ", has ontology-snapshot-id " + typedb_string(snapshot_id)
-        + "; limit " + str(max(1, int(batch_size or 1))) + "; delete " + variable + ";"
+        "match "
+        + variable
+        + " isa "
+        + str(type_label)
+        + ", has ontology-box "
+        + typedb_string(box)
+        + ", has ontology-snapshot-id "
+        + typedb_string(snapshot_id)
+        + "; limit "
+        + str(max(1, int(batch_size or 1)))
+        + "; delete "
+        + variable
+        + ";"
     )
 
 
-def box_snapshot_external_relation_references(_store: GraphMaintenanceGenerationsStore, driver, imported, box: str, snapshot_id: str, limit: int=5) -> List[Dict[str, object]]:
+def box_snapshot_external_relation_references(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    box: str,
+    snapshot_id: str,
+    limit: int = 5,
+) -> List[Dict[str, object]]:
     """Return relations in other generations that still use these nodes.
 
     TypeDB role players are physical entities. Deleting a retired node
@@ -179,7 +261,18 @@ def box_snapshot_external_relation_references(_store: GraphMaintenanceGeneration
         )
 
 
-def delete_box_snapshot_rows_in_batches(_store: GraphMaintenanceGenerationsStore, driver, imported, box: str, snapshot_id: str, batch_size: int=None, max_batches: int=None, deadline_monotonic: float=None, *, _bindings: GraphMaintenanceGenerationsRuntime) -> Dict[str, object]:
+def delete_box_snapshot_rows_in_batches(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    box: str,
+    snapshot_id: str,
+    batch_size: int = None,
+    max_batches: int = None,
+    deadline_monotonic: float = None,
+    *,
+    _bindings: GraphMaintenanceGenerationsRuntime
+) -> Dict[str, object]:
     """Delete one inactive ABox generation in short TypeDB writes.
 
     ``max_batches`` turns the operation into a bounded maintenance slice.
@@ -191,7 +284,9 @@ def delete_box_snapshot_rows_in_batches(_store: GraphMaintenanceGenerationsStore
     if not clean_box or not clean_snapshot_id:
         return {"status": "skipped", "deletedBatchCount": 0}
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-    configured_batch_size = _store.abox_delete_batch_size() if batch_size is None else int(batch_size or 0)
+    configured_batch_size = (
+        _store.abox_delete_batch_size() if batch_size is None else int(batch_size or 0)
+    )
     safe_batch_size = max(1, min(5000, configured_batch_size))
     safe_max_batches = None if max_batches is None else max(0, int(max_batches or 0))
     started_at = time.monotonic()
@@ -248,7 +343,9 @@ def delete_box_snapshot_rows_in_batches(_store: GraphMaintenanceGenerationsStore
             )
 
             def delete_batch():
-                with _bindings.typedb_operation_timeout(_store.write_operation_timeout_seconds(), "TypeDB ABox candidate delete batch"):
+                with _bindings.typedb_operation_timeout(
+                    _store.write_operation_timeout_seconds(), "TypeDB ABox candidate delete batch"
+                ):
                     with driver.transaction(
                         _store.database,
                         TransactionType.WRITE,
@@ -267,13 +364,16 @@ def delete_box_snapshot_rows_in_batches(_store: GraphMaintenanceGenerationsStore
         and deleted_batches >= safe_max_batches
     ):
         for type_label in ["ontology-assertion", "ontology-node"]:
-            if _store.box_snapshot_instance_exists(
-                driver,
-                imported,
-                clean_box,
-                clean_snapshot_id,
-                type_label,
-            ) and type_label not in remaining_types:
+            if (
+                _store.box_snapshot_instance_exists(
+                    driver,
+                    imported,
+                    clean_box,
+                    clean_snapshot_id,
+                    type_label,
+                )
+                and type_label not in remaining_types
+            ):
                 remaining_types.append(type_label)
     return {
         "status": "partial" if remaining_types else "ok",
@@ -289,7 +389,12 @@ def delete_box_snapshot_rows_in_batches(_store: GraphMaintenanceGenerationsStore
     }
 
 
-def discard_abox_generation(_store: GraphMaintenanceGenerationsStore, snapshot_id: str, *, _bindings: GraphMaintenanceGenerationsRuntime) -> Dict[str, object]:
+def discard_abox_generation(
+    _store: GraphMaintenanceGenerationsStore,
+    snapshot_id: str,
+    *,
+    _bindings: GraphMaintenanceGenerationsRuntime
+) -> Dict[str, object]:
     """Delete one failed, inactive candidate generation immediately."""
     clean_snapshot_id = str(snapshot_id or "").strip()
     if not clean_snapshot_id:
@@ -321,6 +426,7 @@ def discard_abox_generation(_store: GraphMaintenanceGenerationsStore, snapshot_i
             "reason": str(imported[1])[:180],
         }
     try:
+
         def operation():
             driver = _store.open_driver(imported)
             try:
@@ -340,7 +446,9 @@ def discard_abox_generation(_store: GraphMaintenanceGenerationsStore, snapshot_i
             "graphStore": "typedb",
             **dict(result or {}),
         }
-    except Exception as error:  # noqa: BLE001 - cleanup state remains visible to the circuit breaker.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - cleanup state remains visible to the circuit breaker.
         return {
             "configured": True,
             "status": "error",
@@ -351,7 +459,14 @@ def discard_abox_generation(_store: GraphMaintenanceGenerationsStore, snapshot_i
         }
 
 
-def delete_box_rows_in_batches(_store: GraphMaintenanceGenerationsStore, driver, imported, boxes: Iterable[str], *, _bindings: GraphMaintenanceGenerationsRuntime) -> Dict[str, object]:
+def delete_box_rows_in_batches(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    boxes: Iterable[str],
+    *,
+    _bindings: GraphMaintenanceGenerationsRuntime
+) -> Dict[str, object]:
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
     batch_size = _store.abox_delete_batch_size()
     deleted_batches = 0
@@ -361,7 +476,9 @@ def delete_box_rows_in_batches(_store: GraphMaintenanceGenerationsStore, driver,
                 query = _store.box_delete_batch_query(box, type_label, batch_size)
 
                 def delete_batch():
-                    with _bindings.typedb_operation_timeout(_store.write_operation_timeout_seconds(), "TypeDB ABox delete batch"):
+                    with _bindings.typedb_operation_timeout(
+                        _store.write_operation_timeout_seconds(), "TypeDB ABox delete batch"
+                    ):
                         with driver.transaction(
                             _store.database,
                             TransactionType.WRITE,
@@ -374,13 +491,22 @@ def delete_box_rows_in_batches(_store: GraphMaintenanceGenerationsStore, driver,
                 deleted_batches += 1
     return {
         "status": "ok",
-        "boxes": sorted({str(item or "").strip() for item in boxes or [] if str(item or "").strip()}),
+        "boxes": sorted(
+            {str(item or "").strip() for item in boxes or [] if str(item or "").strip()}
+        ),
         "batchSize": batch_size,
         "deletedBatchCount": deleted_batches,
     }
 
 
-def delete_world_abox_control_rows(_store: GraphMaintenanceGenerationsStore, driver, imported, world_id: str='', *, _bindings: GraphMaintenanceGenerationsRuntime) -> Dict[str, object]:
+def delete_world_abox_control_rows(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    world_id: str = "",
+    *,
+    _bindings: GraphMaintenanceGenerationsRuntime
+) -> Dict[str, object]:
     """Replace only one world's pointer and activation journal.
 
     Historical code replaced every ``ABoxControl`` record during one
@@ -391,12 +517,18 @@ def delete_world_abox_control_rows(_store: GraphMaintenanceGenerationsStore, dri
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
     query = (
         'match $n isa ontology-node, has ontology-box "ABoxControl"'
-        + (", has ontology-world-id " + typedb_string(world_id) if str(world_id or "").strip() else "")
+        + (
+            ", has ontology-world-id " + typedb_string(world_id)
+            if str(world_id or "").strip()
+            else ""
+        )
         + "; delete $n;"
     )
 
     def operation():
-        with _bindings.typedb_operation_timeout(_store.write_operation_timeout_seconds(), "TypeDB world ABox control swap"):
+        with _bindings.typedb_operation_timeout(
+            _store.write_operation_timeout_seconds(), "TypeDB world ABox control swap"
+        ):
             with driver.transaction(
                 _store.database,
                 TransactionType.WRITE,
@@ -409,7 +541,9 @@ def delete_world_abox_control_rows(_store: GraphMaintenanceGenerationsStore, dri
     return {"status": "ok", "worldId": str(world_id or "")}
 
 
-def cleanup_inactive_abox_candidates(_store: GraphMaintenanceGenerationsStore, driver, imported, active_snapshot_id: str='') -> Dict[str, object]:
+def cleanup_inactive_abox_candidates(
+    _store: GraphMaintenanceGenerationsStore, driver, imported, active_snapshot_id: str = ""
+) -> Dict[str, object]:
     """Remove incomplete candidate generations without touching the active ABox.
 
     Candidate writes are committed in bounded batches. If a process exits
@@ -448,7 +582,13 @@ def cleanup_inactive_abox_candidates(_store: GraphMaintenanceGenerationsStore, d
     }
 
 
-def drain_inactive_abox_generations_incrementally(_store: GraphMaintenanceGenerationsStore, driver, imported, active_snapshot_id: str='', excluded_snapshot_ids: Iterable[str]=None) -> Dict[str, object]:
+def drain_inactive_abox_generations_incrementally(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    active_snapshot_id: str = "",
+    excluded_snapshot_ids: Iterable[str] = None,
+) -> Dict[str, object]:
     """Reclaim a bounded slice of inactive ABox generations.
 
     Native inference and notification delivery must not wait for a full
@@ -457,9 +597,7 @@ def drain_inactive_abox_generations_incrementally(_store: GraphMaintenanceGenera
     """
     active = str(active_snapshot_id or "").strip()
     excluded = {
-        str(item or "").strip()
-        for item in excluded_snapshot_ids or []
-        if str(item or "").strip()
+        str(item or "").strip() for item in excluded_snapshot_ids or [] if str(item or "").strip()
     }
     if not active:
         return {
@@ -497,12 +635,13 @@ def drain_inactive_abox_generations_incrementally(_store: GraphMaintenanceGenera
         if snapshot_id and snapshot_id in candidates:
             previous = marker_by_snapshot.get(snapshot_id)
             if previous is None or (
-                str(marker.get("updatedAt") or ""), str(marker.get("id") or "")
-            ) > (
-                str(previous.get("updatedAt") or ""), str(previous.get("id") or "")
-            ):
+                str(marker.get("updatedAt") or ""),
+                str(marker.get("id") or ""),
+            ) > (str(previous.get("updatedAt") or ""), str(previous.get("id") or "")):
                 marker_by_snapshot[snapshot_id] = marker
-    incomplete = sorted(snapshot_id for snapshot_id in candidates if snapshot_id not in marker_by_snapshot)
+    incomplete = sorted(
+        snapshot_id for snapshot_id in candidates if snapshot_id not in marker_by_snapshot
+    )
     completed_newest_first = sorted(
         marker_by_snapshot,
         key=lambda snapshot_id: (
@@ -557,7 +696,14 @@ def drain_inactive_abox_generations_incrementally(_store: GraphMaintenanceGenera
     }
 
 
-def prune_inactive_abox_generations(_store: GraphMaintenanceGenerationsStore, driver, imported, active_snapshot_id: str='', keep_inactive_count: int=None, max_generations: int=None) -> Dict[str, object]:
+def prune_inactive_abox_generations(
+    _store: GraphMaintenanceGenerationsStore,
+    driver,
+    imported,
+    active_snapshot_id: str = "",
+    keep_inactive_count: int = None,
+    max_generations: int = None,
+) -> Dict[str, object]:
     """Bound retention to completed ABox generations after activation.
 
     This intentionally operates on completion markers, not every physical
@@ -578,8 +724,11 @@ def prune_inactive_abox_generations(_store: GraphMaintenanceGenerationsStore, dr
         return _store.prune_inactive_scoped_abox_manifests_in_driver(
             driver,
             imported,
-            active_manifest_id=active or str(
-                active_metadata.get("worldviewManifestId") or active_metadata.get("aboxSnapshotId") or ""
+            active_manifest_id=active
+            or str(
+                active_metadata.get("worldviewManifestId")
+                or active_metadata.get("aboxSnapshotId")
+                or ""
             ),
             keep_inactive_count=keep_inactive_count,
             max_manifests=max_generations,
@@ -601,10 +750,9 @@ def prune_inactive_abox_generations(_store: GraphMaintenanceGenerationsStore, dr
         if not snapshot_id or snapshot_id == active:
             continue
         previous = marker_by_snapshot.get(snapshot_id)
-        if previous is None or (
-            str(marker.get("updatedAt") or ""), str(marker.get("id") or "")
-        ) > (
-            str(previous.get("updatedAt") or ""), str(previous.get("id") or "")
+        if previous is None or (str(marker.get("updatedAt") or ""), str(marker.get("id") or "")) > (
+            str(previous.get("updatedAt") or ""),
+            str(previous.get("id") or ""),
         ):
             marker_by_snapshot[snapshot_id] = marker
     ordered_inactive = sorted(
@@ -640,14 +788,19 @@ def prune_inactive_abox_generations(_store: GraphMaintenanceGenerationsStore, dr
     }
 
 
-def clear_boxes_in_batches(_store: GraphMaintenanceGenerationsStore, boxes: Iterable[str]) -> Dict[str, object]:
-    clean_boxes = sorted({str(item or "").strip() for item in boxes or [] if str(item or "").strip()})
+def clear_boxes_in_batches(
+    _store: GraphMaintenanceGenerationsStore, boxes: Iterable[str]
+) -> Dict[str, object]:
+    clean_boxes = sorted(
+        {str(item or "").strip() for item in boxes or [] if str(item or "").strip()}
+    )
     if not clean_boxes:
         return {"status": "skipped", "boxes": [], "deletedBatchCount": 0}
     imported = _store.driver_imports()
     if imported[0] is None:
         return {"status": "driver-missing", "boxes": clean_boxes, "reason": str(imported[1])[:180]}
     try:
+
         def operation():
             driver = _store.open_driver(imported)
             try:
@@ -656,6 +809,9 @@ def clear_boxes_in_batches(_store: GraphMaintenanceGenerationsStore, boxes: Iter
                 return _store.delete_box_rows_in_batches(driver, imported, clean_boxes)
             finally:
                 _store.close_driver(driver)
+
         return _store.with_typedb_retries(operation)
-    except Exception as error:  # noqa: BLE001 - preserve the original write failure while reporting cleanup state.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - preserve the original write failure while reporting cleanup state.
         return {"status": "error", "boxes": clean_boxes, "reason": str(error)[:180]}

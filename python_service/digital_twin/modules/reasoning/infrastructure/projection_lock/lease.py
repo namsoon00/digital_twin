@@ -1,17 +1,16 @@
 """projection_lock: lease through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import OntologyEntity
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
-from digital_twin.modules.reasoning.infrastructure.backend_constants import SCOPED_ABOX_WRITE_LEASE_BOX
-from digital_twin.modules.reasoning.infrastructure.backend_constants import SCOPED_ABOX_WRITE_LEASE_ID
-from digital_twin.modules.reasoning.infrastructure.backend_constants import SCOPED_ABOX_WRITE_LEASE_VERSION
-from digital_twin.modules.reasoning.infrastructure.backend_constants import TYPEDB_PROJECTION_COORDINATOR_WORLD_ID
+from digital_twin.modules.reasoning.infrastructure.backend_constants import (
+    SCOPED_ABOX_WRITE_LEASE_BOX,
+    SCOPED_ABOX_WRITE_LEASE_ID,
+    SCOPED_ABOX_WRITE_LEASE_VERSION,
+    TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+)
 from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
-from typing import Dict
-from typing import List
-from typing import Tuple
+from typing import Dict, List, Tuple
 import hashlib
 import os
 import socket
@@ -20,16 +19,26 @@ import uuid
 from .lease_ports import ProjectionLockLeaseStore, ProjectionLockLeaseRuntime
 
 
-def scoped_abox_write_lease_rows(_store: ProjectionLockLeaseStore, world_id: str='') -> List[Dict[str, object]]:
+def scoped_abox_write_lease_rows(
+    _store: ProjectionLockLeaseStore, world_id: str = ""
+) -> List[Dict[str, object]]:
     """Read the durable lease without treating it as an ontology fact."""
     query = (
         "match $n isa ontology-node, "
-        "has ontology-id " + typedb_string(
+        "has ontology-id "
+        + typedb_string(
             SCOPED_ABOX_WRITE_LEASE_ID
-            + (":world:" + hashlib.sha256(str(world_id).encode("utf-8")).hexdigest()[:16] if str(world_id or "").strip() else "")
-        ) + ", "
+            + (
+                ":world:" + hashlib.sha256(str(world_id).encode("utf-8")).hexdigest()[:16]
+                if str(world_id or "").strip()
+                else ""
+            )
+        )
+        + ", "
         "has ontology-box " + typedb_string(SCOPED_ABOX_WRITE_LEASE_BOX) + ", "
-        "has ontology-storage-id " + typedb_string(_store.scoped_abox_write_lease_storage_id(world_id)) + ", "
+        "has ontology-storage-id "
+        + typedb_string(_store.scoped_abox_write_lease_storage_id(world_id))
+        + ", "
         "has ontology-updated-at $updatedAt, has ontology-json $json;"
     )
     return _store.read_rows(
@@ -81,7 +90,9 @@ def scoped_abox_write_lease_world_ids(_store: ProjectionLockLeaseStore) -> List[
     return sorted(worlds)
 
 
-def scoped_abox_write_lease_status(_store: ProjectionLockLeaseStore, world_id: str='') -> Dict[str, object]:
+def scoped_abox_write_lease_status(
+    _store: ProjectionLockLeaseStore, world_id: str = ""
+) -> Dict[str, object]:
     rows = list(_store.scoped_abox_write_lease_rows(world_id) or [])
     if not rows:
         return {
@@ -114,12 +125,16 @@ def scoped_abox_write_lease_status(_store: ProjectionLockLeaseStore, world_id: s
     }
 
 
-def scoped_abox_write_lease_graph(_store: ProjectionLockLeaseStore, owner: str, manifest_id: str='', lease_seconds: int=0, world_id: str='') -> Tuple[PortfolioOntology, Dict[str, object]]:
+def scoped_abox_write_lease_graph(
+    _store: ProjectionLockLeaseStore,
+    owner: str,
+    manifest_id: str = "",
+    lease_seconds: int = 0,
+    world_id: str = "",
+) -> Tuple[PortfolioOntology, Dict[str, object]]:
     acquired_at = time.time()
     lease_settings = (
-        {"typedbScopedABoxLeaseSeconds": lease_seconds}
-        if int(lease_seconds or 0) > 0
-        else None
+        {"typedbScopedABoxLeaseSeconds": lease_seconds} if int(lease_seconds or 0) > 0 else None
     )
     expires_at = acquired_at + _store.scoped_abox_write_lease_seconds(lease_settings)
     properties = {
@@ -140,13 +155,19 @@ def scoped_abox_write_lease_graph(_store: ProjectionLockLeaseStore, owner: str, 
     }
     graph = PortfolioOntology(
         "typedb-scoped-abox-lease",
-        entities=[OntologyEntity(
-            entity_id=SCOPED_ABOX_WRITE_LEASE_ID
-            + (":world:" + hashlib.sha256(str(world_id).encode("utf-8")).hexdigest()[:16] if str(world_id or "").strip() else ""),
-            label="Scoped ABox write lease",
-            kind="scoped-abox-write-lease",
-            properties=properties,
-        )],
+        entities=[
+            OntologyEntity(
+                entity_id=SCOPED_ABOX_WRITE_LEASE_ID
+                + (
+                    ":world:" + hashlib.sha256(str(world_id).encode("utf-8")).hexdigest()[:16]
+                    if str(world_id or "").strip()
+                    else ""
+                ),
+                label="Scoped ABox write lease",
+                kind="scoped-abox-write-lease",
+                properties=properties,
+            )
+        ],
     )
     row = _store.node_rows(graph)[0]
     return graph, {
@@ -160,25 +181,36 @@ def scoped_abox_write_lease_graph(_store: ProjectionLockLeaseStore, owner: str, 
     }
 
 
-def delete_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, driver, imported, lease: Dict[str, object], *, _bindings: ProjectionLockLeaseRuntime) -> Dict[str, object]:
+def delete_scoped_abox_write_lease(
+    _store: ProjectionLockLeaseStore,
+    driver,
+    imported,
+    lease: Dict[str, object],
+    *,
+    _bindings: ProjectionLockLeaseRuntime
+) -> Dict[str, object]:
     """Delete only the exact owner record, never a successor's lease."""
     owner = str((lease or {}).get("owner") or "")
     properties_json = str((lease or {}).get("propertiesJson") or "")
     if not owner or not properties_json:
         return {"status": "skipped", "reason": "Lease ownership payload is incomplete."}
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-    storage_id = str((lease or {}).get("storageId") or _store.scoped_abox_write_lease_storage_id(
-        str((lease or {}).get("worldId") or "")
-    ))
+    storage_id = str(
+        (lease or {}).get("storageId")
+        or _store.scoped_abox_write_lease_storage_id(str((lease or {}).get("worldId") or ""))
+    )
     query = (
         "match $n isa ontology-node, has ontology-storage-id "
         + typedb_string(storage_id)
-        + ", has ontology-json " + typedb_string(properties_json)
+        + ", has ontology-json "
+        + typedb_string(properties_json)
         + "; delete $n;"
     )
 
     def operation():
-        with _bindings.typedb_operation_timeout(_store.write_operation_timeout_seconds(), "TypeDB scoped ABox lease release"):
+        with _bindings.typedb_operation_timeout(
+            _store.write_operation_timeout_seconds(), "TypeDB scoped ABox lease release"
+        ):
             with driver.transaction(
                 _store.database,
                 TransactionType.WRITE,
@@ -191,7 +223,12 @@ def delete_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, driver, imp
     return {"status": "released", "leaseOwner": owner}
 
 
-def acquire_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, manifest_id: str='', world_id: str='', lease_seconds: int=0) -> Dict[str, object]:
+def acquire_scoped_abox_write_lease(
+    _store: ProjectionLockLeaseStore,
+    manifest_id: str = "",
+    world_id: str = "",
+    lease_seconds: int = 0,
+) -> Dict[str, object]:
     """Serialize multi-transaction scoped writes across local workers.
 
     A TypeDB write transaction protects only one batch. Without this lease,
@@ -221,10 +258,11 @@ def acquire_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, manifest_i
                 "acquired": False,
                 "status": "held",
                 "leaseOwner": str(existing.get("leaseOwner") or ""),
-                "leaseExpiresAtEpoch": float(number_or_none(existing.get("leaseExpiresAtEpoch")) or 0),
+                "leaseExpiresAtEpoch": float(
+                    number_or_none(existing.get("leaseExpiresAtEpoch")) or 0
+                ),
                 "recovery": {
-                    key: value for key, value in recovery.items()
-                    if key != "propertiesJson"
+                    key: value for key, value in recovery.items() if key != "propertiesJson"
                 },
             }
     if str(existing.get("status") or "") == "held":
@@ -254,12 +292,16 @@ def acquire_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, manifest_i
             _store.ensure_database(driver)
             _store.ensure_schema(driver, imported)
             if str(existing.get("status") or "") == "expired":
-                _store.delete_scoped_abox_write_lease(driver, imported, {
-                    "owner": str(existing.get("leaseOwner") or "expired"),
-                    "propertiesJson": str(existing.get("propertiesJson") or ""),
-                    "worldId": str(world_id or ""),
-                    "storageId": _store.scoped_abox_write_lease_storage_id(world_id),
-                })
+                _store.delete_scoped_abox_write_lease(
+                    driver,
+                    imported,
+                    {
+                        "owner": str(existing.get("leaseOwner") or "expired"),
+                        "propertiesJson": str(existing.get("propertiesJson") or ""),
+                        "worldId": str(world_id or ""),
+                        "storageId": _store.scoped_abox_write_lease_storage_id(world_id),
+                    },
+                )
             try:
                 _store.write_graph(driver, imported, graph, delete_boxes=[])
             except Exception:
@@ -269,7 +311,9 @@ def acquire_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, manifest_i
                         "acquired": False,
                         "status": "held",
                         "leaseOwner": str(current.get("leaseOwner") or ""),
-                        "leaseExpiresAtEpoch": float(number_or_none(current.get("leaseExpiresAtEpoch")) or 0),
+                        "leaseExpiresAtEpoch": float(
+                            number_or_none(current.get("leaseExpiresAtEpoch")) or 0
+                        ),
                     }
                 raise
         finally:
@@ -280,7 +324,9 @@ def acquire_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, manifest_i
                 "acquired": False,
                 "status": "held",
                 "leaseOwner": str(current.get("leaseOwner") or ""),
-                "leaseExpiresAtEpoch": float(number_or_none(current.get("leaseExpiresAtEpoch")) or 0),
+                "leaseExpiresAtEpoch": float(
+                    number_or_none(current.get("leaseExpiresAtEpoch")) or 0
+                ),
             }
         return {
             "acquired": True,
@@ -296,7 +342,9 @@ def acquire_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, manifest_i
     return _store.with_typedb_retries(operation)
 
 
-def release_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, lease: Dict[str, object]) -> Dict[str, object]:
+def release_scoped_abox_write_lease(
+    _store: ProjectionLockLeaseStore, lease: Dict[str, object]
+) -> Dict[str, object]:
     if not (lease or {}).get("acquired"):
         return {"status": "not-owner"}
     imported = _store.driver_imports()
@@ -307,10 +355,16 @@ def release_scoped_abox_write_lease(_store: ProjectionLockLeaseStore, lease: Dic
         driver = _store.open_driver(imported)
         try:
             _store.ensure_database(driver)
-            return _store.delete_scoped_abox_write_lease(driver, imported, {
-                **dict(lease or {}),
-                "owner": str((lease or {}).get("owner") or (lease or {}).get("leaseOwner") or ""),
-            })
+            return _store.delete_scoped_abox_write_lease(
+                driver,
+                imported,
+                {
+                    **dict(lease or {}),
+                    "owner": str(
+                        (lease or {}).get("owner") or (lease or {}).get("leaseOwner") or ""
+                    ),
+                },
+            )
         finally:
             _store.close_driver(driver)
 

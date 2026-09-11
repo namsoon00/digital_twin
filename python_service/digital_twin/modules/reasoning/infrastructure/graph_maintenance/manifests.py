@@ -4,13 +4,21 @@ from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_scopes import SCOPED_ABOX_PERSISTENCE_MODE
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
-from typing import Dict
-from typing import Iterable
+from typing import Dict, Iterable
 import time
 from .manifests_ports import GraphMaintenanceManifestsStore, GraphMaintenanceManifestsRuntime
 
 
-def discard_scoped_abox_manifest_in_driver(_store: GraphMaintenanceManifestsStore, driver, imported, manifest_id: str, protected_generation_ids: Iterable[str]=None, world_id: str='', max_delete_batches: int=None, delete_batch_size: int=None) -> Dict[str, object]:
+def discard_scoped_abox_manifest_in_driver(
+    _store: GraphMaintenanceManifestsStore,
+    driver,
+    imported,
+    manifest_id: str,
+    protected_generation_ids: Iterable[str] = None,
+    world_id: str = "",
+    max_delete_batches: int = None,
+    delete_batch_size: int = None,
+) -> Dict[str, object]:
     """Delete a non-active Manifest and only generations no other Manifest needs.
 
     A bounded deletion may leave the Manifest marker in place. That is
@@ -50,9 +58,7 @@ def discard_scoped_abox_manifest_in_driver(_store: GraphMaintenanceManifestsStor
     retained_generations = []
     scope_cleanup_rows = []
     remaining_batch_budget = (
-        None
-        if max_delete_batches is None
-        else max(0, min(1000, int(max_delete_batches or 0)))
+        None if max_delete_batches is None else max(0, min(1000, int(max_delete_batches or 0)))
     )
     bounded_delete_batch_size = (
         _store.deferred_maintenance_abox_delete_batch_size()
@@ -76,11 +82,13 @@ def discard_scoped_abox_manifest_in_driver(_store: GraphMaintenanceManifestsStor
             remaining_batch_budget = max(0, remaining_batch_budget - deleted)
         return cleanup
 
-    for generation_id in sorted({
-        str(item or "").strip()
-        for item in dict(metadata.get("scopeGenerationIds") or {}).values()
-        if str(item or "").strip()
-    }):
+    for generation_id in sorted(
+        {
+            str(item or "").strip()
+            for item in dict(metadata.get("scopeGenerationIds") or {}).values()
+            if str(item or "").strip()
+        }
+    ):
         if generation_id in protected:
             retained_generations.append(generation_id)
             continue
@@ -107,7 +115,11 @@ def discard_scoped_abox_manifest_in_driver(_store: GraphMaintenanceManifestsStor
         scope_cleanup_rows.append(cleanup)
         if str(cleanup.get("status") or "") != "ok":
             return {
-                "status": "partial" if str(cleanup.get("status") or "") == "partial" else str(cleanup.get("status") or "error"),
+                "status": (
+                    "partial"
+                    if str(cleanup.get("status") or "") == "partial"
+                    else str(cleanup.get("status") or "error")
+                ),
                 "aboxSnapshotId": clean_manifest_id,
                 "worldviewManifestId": clean_manifest_id,
                 "removedScopeGenerationIds": removed_generations,
@@ -137,7 +149,11 @@ def discard_scoped_abox_manifest_in_driver(_store: GraphMaintenanceManifestsStor
     marker_cleanup = delete_snapshot(clean_manifest_id)
     if str(marker_cleanup.get("status") or "") != "ok":
         return {
-            "status": "partial" if str(marker_cleanup.get("status") or "") == "partial" else str(marker_cleanup.get("status") or "error"),
+            "status": (
+                "partial"
+                if str(marker_cleanup.get("status") or "") == "partial"
+                else str(marker_cleanup.get("status") or "error")
+            ),
             "aboxSnapshotId": clean_manifest_id,
             "worldviewManifestId": clean_manifest_id,
             "removedScopeGenerationIds": removed_generations,
@@ -165,12 +181,19 @@ def discard_scoped_abox_manifest_in_driver(_store: GraphMaintenanceManifestsStor
     }
 
 
-def discard_scoped_abox_manifest(_store: GraphMaintenanceManifestsStore, manifest_id: str, world_id: str='', *, _bindings: GraphMaintenanceManifestsRuntime) -> Dict[str, object]:
+def discard_scoped_abox_manifest(
+    _store: GraphMaintenanceManifestsStore,
+    manifest_id: str,
+    world_id: str = "",
+    *,
+    _bindings: GraphMaintenanceManifestsRuntime
+) -> Dict[str, object]:
     clean_manifest_id = str(manifest_id or "").strip()
     imported = _store.driver_imports()
     if imported[0] is None:
         return _store.driver_missing_result(imported[1], PortfolioOntology("typedb-scoped-cleanup"))
     try:
+
         def operation():
             driver = _store.open_driver(imported)
             try:
@@ -197,13 +220,21 @@ def discard_scoped_abox_manifest(_store: GraphMaintenanceManifestsStore, manifes
         }
 
 
-def delete_worldview_manifest_markers_batch(_store: GraphMaintenanceManifestsStore, driver, imported, manifest_ids: Iterable[str], world_id: str='', *, _bindings: GraphMaintenanceManifestsRuntime) -> Dict[str, object]:
+def delete_worldview_manifest_markers_batch(
+    _store: GraphMaintenanceManifestsStore,
+    driver,
+    imported,
+    manifest_ids: Iterable[str],
+    world_id: str = "",
+    *,
+    _bindings: GraphMaintenanceManifestsRuntime
+) -> Dict[str, object]:
     """Delete already-safe immutable Manifest markers in one short write."""
-    clean_ids = list(dict.fromkeys(
-        str(value or "").strip()
-        for value in manifest_ids or []
-        if str(value or "").strip()
-    ))[:20]
+    clean_ids = list(
+        dict.fromkeys(
+            str(value or "").strip() for value in manifest_ids or [] if str(value or "").strip()
+        )
+    )[:20]
     if not clean_ids:
         return {"status": "skipped", "deletedBatchCount": 0, "removedManifestIds": []}
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
@@ -211,7 +242,11 @@ def delete_worldview_manifest_markers_batch(_store: GraphMaintenanceManifestsSto
         "match $n isa ontology-node, "
         'has ontology-kind "worldview-manifest-marker", '
         'has ontology-box "ABox"'
-        + (", has ontology-world-id " + typedb_string(world_id) if str(world_id or "").strip() else "")
+        + (
+            ", has ontology-world-id " + typedb_string(world_id)
+            if str(world_id or "").strip()
+            else ""
+        )
         + "; "
     )
     marker_patterns = [
@@ -246,7 +281,18 @@ def delete_worldview_manifest_markers_batch(_store: GraphMaintenanceManifestsSto
     }
 
 
-def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManifestsStore, driver, imported, active_manifest_id: str='', keep_inactive_count: int=None, max_manifests: int=None, max_delete_batches: int=None, delete_batch_size: int=None, world_id: str='', max_duration_seconds: int=None) -> Dict[str, object]:
+def prune_inactive_scoped_abox_manifests_in_driver(
+    _store: GraphMaintenanceManifestsStore,
+    driver,
+    imported,
+    active_manifest_id: str = "",
+    keep_inactive_count: int = None,
+    max_manifests: int = None,
+    max_delete_batches: int = None,
+    delete_batch_size: int = None,
+    world_id: str = "",
+    max_duration_seconds: int = None,
+) -> Dict[str, object]:
     """Prune immutable Manifests without deleting generations still referenced.
 
     A scope generation is a shared immutable object: an unchanged macro or
@@ -256,13 +302,9 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
     """
     started_at = time.monotonic()
     duration_limit = (
-        None
-        if max_duration_seconds is None
-        else max(5, min(300, int(max_duration_seconds or 0)))
+        None if max_duration_seconds is None else max(5, min(300, int(max_duration_seconds or 0)))
     )
-    deadline_monotonic = (
-        None if duration_limit is None else started_at + duration_limit
-    )
+    deadline_monotonic = None if duration_limit is None else started_at + duration_limit
     active = _store.active_abox_metadata(world_id)
     active_id = str(
         active_manifest_id
@@ -314,10 +356,9 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
         if not manifest_id or manifest_id == active_id:
             continue
         previous = manifest_identities.get(manifest_id)
-        if previous is None or (
-            str(marker.get("updatedAt") or ""), str(marker.get("id") or "")
-        ) > (
-            str(previous.get("updatedAt") or ""), str(previous.get("id") or "")
+        if previous is None or (str(marker.get("updatedAt") or ""), str(marker.get("id") or "")) > (
+            str(previous.get("updatedAt") or ""),
+            str(previous.get("id") or ""),
         ):
             manifest_identities[manifest_id] = {
                 **dict(marker),
@@ -343,23 +384,16 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
 
     retained = [
         metadata
-        for metadata in (
-            load_selected_metadata(identity)
-            for identity in retained_identities
-        )
+        for metadata in (load_selected_metadata(identity) for identity in retained_identities)
         if metadata
     ]
     removable = [
         metadata
-        for metadata in (
-            load_selected_metadata(identity)
-            for identity in removable_identities
-        )
+        for metadata in (load_selected_metadata(identity) for identity in removable_identities)
         if metadata
     ]
-    selected_metadata_missing = (
-        len(retained) != len(retained_identities)
-        or len(removable) != len(removable_identities)
+    selected_metadata_missing = len(retained) != len(retained_identities) or len(removable) != len(
+        removable_identities
     )
     protected_generation_ids = {
         str(item or "").strip()
@@ -415,8 +449,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
         if not {
             str(item or "").strip()
             for item in dict(metadata.get("scopeGenerationIds") or {}).values()
-            if str(item or "").strip()
-            and str(item or "").strip() not in protected_generation_ids
+            if str(item or "").strip() and str(item or "").strip() not in protected_generation_ids
         }
     )
     marker_batch_reserve = min(
@@ -424,17 +457,12 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
         max(1, max_batch_count // 4) if max_batch_count >= 2 else 0,
     )
     for generation_id in retired_generation_ids:
-        if (
-            remaining_batch_budget <= marker_batch_reserve
-            or (
-                deadline_monotonic is not None
-                and time.monotonic() >= deadline_monotonic
-            )
+        if remaining_batch_budget <= marker_batch_reserve or (
+            deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
         ):
             cleanup_partial = True
             time_budget_exhausted = bool(
-                deadline_monotonic is not None
-                and time.monotonic() >= deadline_monotonic
+                deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
             )
             resume_generation_id = generation_id
             break
@@ -475,7 +503,9 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
     removed_generation_set = set(removed_generation_ids)
     safe_marker_ids = []
     for metadata in removable:
-        manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
+        manifest_id = str(
+            metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or ""
+        ).strip()
         if not manifest_id:
             continue
         required_generations = {
@@ -488,8 +518,10 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
             resume_manifest_id = resume_manifest_id or manifest_id
             continue
         safe_marker_ids.append(manifest_id)
-    if safe_marker_ids and remaining_batch_budget > 0 and not (
-        deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+    if (
+        safe_marker_ids
+        and remaining_batch_budget > 0
+        and not (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic)
     ):
         # A marker is one small node, so delete the independently verified
         # marker set in one transaction. Physical generations continue to
@@ -561,7 +593,17 @@ def prune_inactive_scoped_abox_manifests_in_driver(_store: GraphMaintenanceManif
     }
 
 
-def prune_inactive_scoped_abox_manifests(_store: GraphMaintenanceManifestsStore, world_id: str='', keep_inactive_count: int=None, max_manifests: int=None, max_delete_batches: int=None, delete_batch_size: int=None, max_duration_seconds: int=None, *, _bindings: GraphMaintenanceManifestsRuntime) -> Dict[str, object]:
+def prune_inactive_scoped_abox_manifests(
+    _store: GraphMaintenanceManifestsStore,
+    world_id: str = "",
+    keep_inactive_count: int = None,
+    max_manifests: int = None,
+    max_delete_batches: int = None,
+    delete_batch_size: int = None,
+    max_duration_seconds: int = None,
+    *,
+    _bindings: GraphMaintenanceManifestsRuntime
+) -> Dict[str, object]:
     """Run one bounded, reference-aware scoped ABox maintenance pass."""
     imported = _store.driver_imports()
     if imported[0] is None:
@@ -572,6 +614,7 @@ def prune_inactive_scoped_abox_manifests(_store: GraphMaintenanceManifestsStore,
             "reason": str(imported[1])[:180],
         }
     try:
+
         def operation():
             driver = _store.open_driver(imported)
             try:
@@ -596,7 +639,9 @@ def prune_inactive_scoped_abox_manifests(_store: GraphMaintenanceManifestsStore,
 
         result = _store.with_typedb_retries(operation)
         return {"configured": True, "graphStore": "typedb", **dict(result or {})}
-    except Exception as error:  # noqa: BLE001 - valid inference remains usable if maintenance is delayed.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - valid inference remains usable if maintenance is delayed.
         return {
             "configured": True,
             "status": "error",

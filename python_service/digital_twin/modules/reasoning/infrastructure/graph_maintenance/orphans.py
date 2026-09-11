@@ -5,8 +5,15 @@ from typing import Dict
 from .orphans_ports import GraphMaintenanceOrphansStore, GraphMaintenanceOrphansRuntime
 
 
-def scoped_abox_orphan_cleanup_max_generations(_store: GraphMaintenanceOrphansStore, settings: Dict[str, object]=None, *, _bindings: GraphMaintenanceOrphansRuntime) -> int:
-    raw = (settings or _bindings.runtime_settings()).get("typedbScopedABoxOrphanCleanupMaxGenerations")
+def scoped_abox_orphan_cleanup_max_generations(
+    _store: GraphMaintenanceOrphansStore,
+    settings: Dict[str, object] = None,
+    *,
+    _bindings: GraphMaintenanceOrphansRuntime
+) -> int:
+    raw = (settings or _bindings.runtime_settings()).get(
+        "typedbScopedABoxOrphanCleanupMaxGenerations"
+    )
     parsed = number_or_none(raw)
     if parsed is None:
         parsed = 4
@@ -16,7 +23,13 @@ def scoped_abox_orphan_cleanup_max_generations(_store: GraphMaintenanceOrphansSt
     return max(1, min(20, int(parsed)))
 
 
-def cleanup_orphan_scoped_abox_candidates(_store: GraphMaintenanceOrphansStore, driver, imported, max_generation_count: int=0, world_id: str='') -> Dict[str, object]:
+def cleanup_orphan_scoped_abox_candidates(
+    _store: GraphMaintenanceOrphansStore,
+    driver,
+    imported,
+    max_generation_count: int = 0,
+    world_id: str = "",
+) -> Dict[str, object]:
     """Reclaim incomplete scoped candidates while the scoped write lease is held."""
     inventory = _store.scoped_abox_orphan_candidate_inventory(world_id)
     deleted_batches = 0
@@ -41,29 +54,41 @@ def cleanup_orphan_scoped_abox_candidates(_store: GraphMaintenanceOrphansStore, 
             if str(result.get("status") or "") in {"ok", "skipped"}:
                 removed_generation_ids.append(str(generation_id))
             else:
-                failures.append({
+                failures.append(
+                    {
+                        "generationId": str(generation_id),
+                        "status": str(result.get("status") or "error"),
+                        "reason": str(result.get("reason") or ""),
+                    }
+                )
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 - keep the candidate invisible and report cleanup state.
+            failures.append(
+                {
                     "generationId": str(generation_id),
-                    "status": str(result.get("status") or "error"),
-                    "reason": str(result.get("reason") or ""),
-                })
-        except Exception as error:  # noqa: BLE001 - keep the candidate invisible and report cleanup state.
-            failures.append({
-                "generationId": str(generation_id),
-                "status": "error",
-                "reason": str(error)[:180],
-            })
+                    "status": "error",
+                    "reason": str(error)[:180],
+                }
+            )
     return {
         "status": "ok" if not failures and len(selected) == len(candidates) else "partial",
         "candidateManifestIds": list(inventory.get("candidateManifestIds") or []),
         "removedGenerationIds": removed_generation_ids,
         "deletedBatchCount": deleted_batches,
         "failures": failures,
-        "remainingGenerationIds": candidates[len(selected):],
+        "remainingGenerationIds": candidates[len(selected) :],
         "maxGenerationCount": maximum,
     }
 
 
-def prune_orphan_scoped_abox_candidates(_store: GraphMaintenanceOrphansStore, world_id: str='', max_generation_count: int=0, *, _bindings: GraphMaintenanceOrphansRuntime) -> Dict[str, object]:
+def prune_orphan_scoped_abox_candidates(
+    _store: GraphMaintenanceOrphansStore,
+    world_id: str = "",
+    max_generation_count: int = 0,
+    *,
+    _bindings: GraphMaintenanceOrphansRuntime
+) -> Dict[str, object]:
     """Run orphan candidate reclamation as deferred maintenance only."""
     imported = _store.driver_imports()
     if imported[0] is None:
@@ -74,6 +99,7 @@ def prune_orphan_scoped_abox_candidates(_store: GraphMaintenanceOrphansStore, wo
             "reason": str(imported[1])[:180],
         }
     try:
+
         def operation():
             driver = _store.open_driver(imported)
             try:
@@ -89,7 +115,12 @@ def prune_orphan_scoped_abox_candidates(_store: GraphMaintenanceOrphansStore, wo
                 _store.close_driver(driver)
 
         result = _store.with_typedb_retries(operation)
-        return {"configured": True, "graphStore": "typedb", "worldId": str(world_id or ""), **dict(result or {})}
+        return {
+            "configured": True,
+            "graphStore": "typedb",
+            "worldId": str(world_id or ""),
+            **dict(result or {}),
+        }
     except Exception as error:  # noqa: BLE001 - leave invisible candidates for the next idle pass.
         return {
             "configured": True,

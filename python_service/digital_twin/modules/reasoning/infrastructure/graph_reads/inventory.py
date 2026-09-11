@@ -1,28 +1,33 @@
 """graph_reads: inventory through explicit injected capabilities."""
 
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import as_completed
-from digital_twin.domain.ontology_change_impact import scope_family
-from digital_twin.domain.ontology_change_impact import scope_symbol
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_PERSISTENCE_MODE
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from digital_twin.domain.ontology_change_impact import scope_family, scope_symbol
+from digital_twin.domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_PERSISTENCE_MODE,
+)
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
-from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import typedb_call_for_world
+from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import (
+    typedb_call_for_world,
+)
 from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
-from digital_twin.modules.reasoning.infrastructure.typeql.constants import NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE
-from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
-from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_value_match
-from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import typedb_active_abox_member_clause
-from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import typedb_active_worldview_manifest_clause
-from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import typedb_scoped_manifest_member_clause
-from typing import Dict
-from typing import Iterable
-from typing import List
-from typing import Tuple
+from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
+    NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.literals import (
+    typedb_string,
+    typedb_value_match,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import (
+    typedb_active_abox_member_clause,
+    typedb_active_worldview_manifest_clause,
+    typedb_scoped_manifest_member_clause,
+)
+from typing import Dict, Iterable, List, Tuple
 from .inventory_ports import GraphReadsInventoryStore, GraphReadsInventoryRuntime
 
 
-def active_abox_uses_scoped_manifest(_store: GraphReadsInventoryStore, world_id: str='') -> bool:
+def active_abox_uses_scoped_manifest(_store: GraphReadsInventoryStore, world_id: str = "") -> bool:
     """Whether live ABox reads must resolve through scope pointers.
 
     This deliberately reads the durable manifest marker instead of
@@ -39,7 +44,9 @@ def active_abox_uses_scoped_manifest(_store: GraphReadsInventoryStore, world_id:
     )
 
 
-def active_abox_members_clause(_store: GraphReadsInventoryStore, members: Iterable[Tuple[str, str]], world_id: str='') -> str:
+def active_abox_members_clause(
+    _store: GraphReadsInventoryStore, members: Iterable[Tuple[str, str]], world_id: str = ""
+) -> str:
     """Build one active-world constraint for a TypeQL query.
 
     Runtime reads must not repeat the scoped-or-legacy activation branch
@@ -49,27 +56,32 @@ def active_abox_members_clause(_store: GraphReadsInventoryStore, members: Iterab
     migration has completed.
     """
     normalized = [
-        (str(variable or "$item"), str(prefix or "item"))
-        for variable, prefix in members or []
+        (str(variable or "$item"), str(prefix or "item")) for variable, prefix in members or []
     ]
     if not normalized:
         return ""
     if _store.active_abox_uses_scoped_manifest(world_id):
         manifest_id = "$activeManifestId"
-        return " ".join([
-            typedb_active_worldview_manifest_clause("$activeManifestPointer", manifest_id, world_id),
-            *[
-                typedb_scoped_manifest_member_clause(variable, prefix, manifest_id, world_id)
-                for variable, prefix in normalized
-            ],
-        ])
+        return " ".join(
+            [
+                typedb_active_worldview_manifest_clause(
+                    "$activeManifestPointer", manifest_id, world_id
+                ),
+                *[
+                    typedb_scoped_manifest_member_clause(variable, prefix, manifest_id, world_id)
+                    for variable, prefix in normalized
+                ],
+            ]
+        )
     return " ".join(
         typedb_active_abox_member_clause(variable, prefix, world_id)
         for variable, prefix in normalized
     )
 
 
-def scoped_abox_manifest_inventory(_store: GraphReadsInventoryStore, world_id: str='') -> Dict[str, object]:
+def scoped_abox_manifest_inventory(
+    _store: GraphReadsInventoryStore, world_id: str = ""
+) -> Dict[str, object]:
     """Read the retired Manifest count without scanning physical ABox rows.
 
     The maintenance scheduler needs to select the most backlogged world
@@ -145,7 +157,13 @@ def scoped_abox_manifest_inventory(_store: GraphReadsInventoryStore, world_id: s
         }
 
 
-def scoped_abox_integrity_audit(_store: GraphReadsInventoryStore, world_id: str='', cursor: int=0, limit: int=20, scope_ids: Iterable[str]=None) -> Dict[str, object]:
+def scoped_abox_integrity_audit(
+    _store: GraphReadsInventoryStore,
+    world_id: str = "",
+    cursor: int = 0,
+    limit: int = 20,
+    scope_ids: Iterable[str] = None,
+) -> Dict[str, object]:
     """Verify a bounded slice of the active Manifest without rewriting it.
 
     A recurring whole-world projection used to hide physical drift by
@@ -189,22 +207,21 @@ def scoped_abox_integrity_audit(_store: GraphReadsInventoryStore, world_id: str=
         }
     ordered = sorted(scope_plan, key=lambda item: str(item.get("scopeId") or ""))
     bounded_limit = max(1, min(200, int(limit or 20)))
-    requested_scope_ids = list(dict.fromkeys(
-        str(item or "").strip()
-        for item in scope_ids or []
-        if str(item or "").strip()
-    ))[:bounded_limit]
+    requested_scope_ids = list(
+        dict.fromkeys(
+            str(item or "").strip() for item in scope_ids or [] if str(item or "").strip()
+        )
+    )[:bounded_limit]
     targeted_verification = bool(requested_scope_ids)
     if targeted_verification:
         requested_scope_id_set = set(requested_scope_ids)
         selected = [
-            item for item in ordered
-            if str(item.get("scopeId") or "") in requested_scope_id_set
+            item for item in ordered if str(item.get("scopeId") or "") in requested_scope_id_set
         ]
         start = max(0, int(cursor or 0)) % len(ordered)
     else:
         start = max(0, int(cursor or 0)) % len(ordered)
-        selected = ordered[start:start + bounded_limit]
+        selected = ordered[start : start + bounded_limit]
     counts = _store.scoped_abox_scope_row_counts_batch(
         selected,
         world_id=str(world_id or ""),
@@ -216,33 +233,29 @@ def scoped_abox_integrity_audit(_store: GraphReadsInventoryStore, world_id: str=
         # OntologyEvidence is stored as an ``ontology-node`` beside
         # regular entities. The Manifest exposes the logical counts
         # separately, while this physical reduction returns their sum.
-        expected_entities = (
-            int(number_or_none(item.get("entityCount")) or 0)
-            + int(number_or_none(item.get("evidenceCount")) or 0)
+        expected_entities = int(number_or_none(item.get("entityCount")) or 0) + int(
+            number_or_none(item.get("evidenceCount")) or 0
         )
         expected_relations = int(number_or_none(item.get("relationCount")) or 0)
         actual_entities = int(actual.get("entityCount") or 0)
         actual_relations = int(actual.get("relationCount") or 0)
-        if (
-            expected_entities == actual_entities
-            and expected_relations == actual_relations
-        ):
+        if expected_entities == actual_entities and expected_relations == actual_relations:
             continue
-        mismatches.append({
-            "scopeId": scope_id,
-            "generationId": str(item.get("generationId") or ""),
-            "symbol": scope_symbol(scope_id),
-            "scopeFamily": str(item.get("scopeFamily") or scope_family(scope_id)),
-            "expectedEntityCount": expected_entities,
-            "actualEntityCount": actual_entities,
-            "expectedRelationCount": expected_relations,
-            "actualRelationCount": actual_relations,
-        })
+        mismatches.append(
+            {
+                "scopeId": scope_id,
+                "generationId": str(item.get("generationId") or ""),
+                "symbol": scope_symbol(scope_id),
+                "scopeFamily": str(item.get("scopeFamily") or scope_family(scope_id)),
+                "expectedEntityCount": expected_entities,
+                "actualEntityCount": actual_entities,
+                "expectedRelationCount": expected_relations,
+                "actualRelationCount": actual_relations,
+            }
+        )
     reached_cycle_end = start + len(selected) >= len(ordered)
     next_cursor = (
-        start
-        if targeted_verification
-        else 0 if reached_cycle_end else start + len(selected)
+        start if targeted_verification else 0 if reached_cycle_end else start + len(selected)
     )
     checked_scope_ids = (
         requested_scope_ids
@@ -273,7 +286,9 @@ def scoped_abox_integrity_audit(_store: GraphReadsInventoryStore, world_id: str=
     }
 
 
-def scoped_abox_storage_diagnostics(_store: GraphReadsInventoryStore, world_id: str='') -> Dict[str, object]:
+def scoped_abox_storage_diagnostics(
+    _store: GraphReadsInventoryStore, world_id: str = ""
+) -> Dict[str, object]:
     """Describe active logical scopes separately from physical ABox rows.
 
     Operators previously saw one large ABox count and could not tell
@@ -301,33 +316,51 @@ def scoped_abox_storage_diagnostics(_store: GraphReadsInventoryStore, world_id: 
             "reason": "Active ABox has not yet been migrated to a scoped Worldview Manifest.",
         }
     scope_plan = list(active.get("scopePlan") or [])
-    logical_entities = sum(int(number_or_none(item.get("entityCount")) or 0) for item in scope_plan if isinstance(item, dict))
-    logical_relations = sum(int(number_or_none(item.get("relationCount")) or 0) for item in scope_plan if isinstance(item, dict))
+    logical_entities = sum(
+        int(number_or_none(item.get("entityCount")) or 0)
+        for item in scope_plan
+        if isinstance(item, dict)
+    )
+    logical_relations = sum(
+        int(number_or_none(item.get("relationCount")) or 0)
+        for item in scope_plan
+        if isinstance(item, dict)
+    )
     scope_type_counts: Dict[str, int] = {}
     scope_family_counts: Dict[str, int] = {}
     for item in scope_plan:
         if not isinstance(item, dict):
             continue
-        scope_type = str(item.get("scopeType") or str(item.get("scopeId") or "").split(":", 1)[0] or "reference")
+        scope_type = str(
+            item.get("scopeType") or str(item.get("scopeId") or "").split(":", 1)[0] or "reference"
+        )
         scope_type_counts[scope_type] = scope_type_counts.get(scope_type, 0) + 1
         scope_family = str(item.get("scopeFamily") or "").strip()
         if not scope_family:
             parts = [part for part in str(item.get("scopeId") or "").split(":") if part]
-            scope_family = parts[2] if len(parts) >= 3 and parts[0] == "symbol" else (parts[0] if parts else "reference")
+            scope_family = (
+                parts[2]
+                if len(parts) >= 3 and parts[0] == "symbol"
+                else (parts[0] if parts else "reference")
+            )
         scope_family_counts[scope_family] = scope_family_counts.get(scope_family, 0) + 1
     result = {
         "configured": bool(getattr(_store, "address", "")),
         "status": str(active.get("status") or "ok"),
         "graphStore": "typedb",
         "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
-        "worldviewManifestId": str(active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""),
+        "worldviewManifestId": str(
+            active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""
+        ),
         "activeScopeCount": len(scope_plan),
         "scopeTypeCounts": dict(sorted(scope_type_counts.items())),
         "scopeTopologyVersion": str(active.get("scopeTopologyVersion") or ""),
         "scopeFamilyCounts": dict(sorted(scope_family_counts.items())),
         "logicalActiveEntityCount": logical_entities,
         "logicalActiveRelationCount": logical_relations,
-        "scopeIds": [str(item.get("scopeId") or "") for item in scope_plan if isinstance(item, dict)][:120],
+        "scopeIds": [
+            str(item.get("scopeId") or "") for item in scope_plan if isinstance(item, dict)
+        ][:120],
         "keepInactiveManifestCount": _store.abox_inactive_generation_keep_count(),
         "maxInactiveManifestsPrunedPerRun": _store.abox_inactive_generation_max_prune_per_save(),
         # Internal hand-off for the diagnostics service. Its public
@@ -339,7 +372,12 @@ def scoped_abox_storage_diagnostics(_store: GraphReadsInventoryStore, world_id: 
     try:
         markers = list(_store.worldview_manifest_marker_rows(world_id))
         manifest_ids = {
-            str(item.get("worldviewManifestId") or item.get("aboxSnapshotId") or item.get("snapshotId") or "")
+            str(
+                item.get("worldviewManifestId")
+                or item.get("aboxSnapshotId")
+                or item.get("snapshotId")
+                or ""
+            )
             for item in markers
         }
         manifest_ids.discard("")
@@ -348,25 +386,34 @@ def scoped_abox_storage_diagnostics(_store: GraphReadsInventoryStore, world_id: 
             for generation_id in dict(marker.get("scopeGenerationIds") or {}).values():
                 clean_generation_id = str(generation_id or "")
                 if clean_generation_id:
-                    generation_references[clean_generation_id] = generation_references.get(clean_generation_id, 0) + 1
-        result.update({
-            "storedManifestCount": len(manifest_ids),
-            "inactiveManifestCount": max(0, len(manifest_ids) - 1),
-            "storedScopeGenerationCount": len(generation_references),
-            "sharedHistoricalScopeGenerationCount": len([
-                generation_id for generation_id, count in generation_references.items()
-                if count > 1
-            ]),
-        })
+                    generation_references[clean_generation_id] = (
+                        generation_references.get(clean_generation_id, 0) + 1
+                    )
+        result.update(
+            {
+                "storedManifestCount": len(manifest_ids),
+                "inactiveManifestCount": max(0, len(manifest_ids) - 1),
+                "storedScopeGenerationCount": len(generation_references),
+                "sharedHistoricalScopeGenerationCount": len(
+                    [
+                        generation_id
+                        for generation_id, count in generation_references.items()
+                        if count > 1
+                    ]
+                ),
+            }
+        )
     except Exception as error:  # noqa: BLE001 - physical counts are diagnostic only.
         result["manifestInventoryStatus"] = "error"
         result["manifestInventoryReason"] = str(error)[:180]
     try:
         physical = typedb_call_for_world(_store.box_row_counts, "ABox", world_id=world_id)
-        result.update({
-            "physicalAboxEntityCount": int(physical.get("entityCount") or 0),
-            "physicalAboxRelationCount": int(physical.get("relationCount") or 0),
-        })
+        result.update(
+            {
+                "physicalAboxEntityCount": int(physical.get("entityCount") or 0),
+                "physicalAboxRelationCount": int(physical.get("relationCount") or 0),
+            }
+        )
     except Exception as error:  # noqa: BLE001 - preserve logical lifecycle status.
         result["physicalCountStatus"] = "error"
         result["physicalCountReason"] = str(error)[:180]
@@ -380,23 +427,28 @@ def scoped_abox_storage_diagnostics(_store: GraphReadsInventoryStore, world_id: 
     return result
 
 
-def current_state_slot_inventory(_store: GraphReadsInventoryStore, driver, imported, physical_generation_ids: Iterable[str]) -> Dict[str, Dict[str, Dict[str, object]]]:
+def current_state_slot_inventory(
+    _store: GraphReadsInventoryStore, driver, imported, physical_generation_ids: Iterable[str]
+) -> Dict[str, Dict[str, Dict[str, object]]]:
     """Read bounded physical slot identities and their semantic hashes."""
 
-    generation_ids = sorted({
-        str(value or "").strip()
-        for value in physical_generation_ids or []
-        if str(value or "").startswith("abox-current:")
-    })
+    generation_ids = sorted(
+        {
+            str(value or "").strip()
+            for value in physical_generation_ids or []
+            if str(value or "").startswith("abox-current:")
+        }
+    )
     result = {"nodes": {}, "relations": {}}
     if not generation_ids:
         return result
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
     batch_size = _store.current_state_inventory_batch_size()
+
     def read_type_inventory(type_label: str, key: str):
         type_inventory: Dict[str, Dict[str, object]] = {}
         for offset in range(0, len(generation_ids), batch_size):
-            batch = generation_ids[offset: offset + batch_size]
+            batch = generation_ids[offset : offset + batch_size]
             slot_filter = typedb_value_match(
                 "$item",
                 "ontology-snapshot-id",
@@ -405,7 +457,8 @@ def current_state_slot_inventory(_store: GraphReadsInventoryStore, driver, impor
                 "slotFilter",
             )
             base_query = (
-                "match $item isa " + type_label
+                "match $item isa "
+                + type_label
                 + ', has ontology-box "ABox", '
                 + "has ontology-storage-id $storageId, "
                 + "has ontology-scope-id $scopeId, "
@@ -439,9 +492,7 @@ def current_state_slot_inventory(_store: GraphReadsInventoryStore, driver, impor
                     label="typedb.current-state-slot-content",
                 )
             fingerprints = {
-                str(item.get("storageId") or ""): str(
-                    item.get("contentFingerprint") or ""
-                )
+                str(item.get("storageId") or ""): str(item.get("contentFingerprint") or "")
                 for item in fingerprint_rows or []
                 if str(item.get("storageId") or "")
             }
@@ -452,9 +503,7 @@ def current_state_slot_inventory(_store: GraphReadsInventoryStore, driver, impor
                 type_inventory[storage_id] = {
                     "storageId": storage_id,
                     "scopeId": str(item.get("scopeId") or ""),
-                    "physicalGenerationId": str(
-                        item.get("snapshotId") or ""
-                    ),
+                    "physicalGenerationId": str(item.get("snapshotId") or ""),
                     "contentFingerprint": fingerprints.get(storage_id, ""),
                 }
         return key, type_inventory
@@ -478,7 +527,13 @@ def current_state_slot_inventory(_store: GraphReadsInventoryStore, driver, impor
     return result
 
 
-def current_state_storage_inventory(_store: GraphReadsInventoryStore, driver, imported, node_storage_ids: Iterable[str]=None, relation_storage_ids: Iterable[str]=None) -> Dict[str, Dict[str, Dict[str, object]]]:
+def current_state_storage_inventory(
+    _store: GraphReadsInventoryStore,
+    driver,
+    imported,
+    node_storage_ids: Iterable[str] = None,
+    relation_storage_ids: Iterable[str] = None,
+) -> Dict[str, Dict[str, Dict[str, object]]]:
     """Verify newly written current-state rows by exact storage identity.
 
     Newly inserted rows always own a semantic content fingerprint. Legacy
@@ -489,28 +544,34 @@ def current_state_storage_inventory(_store: GraphReadsInventoryStore, driver, im
 
     result = {"nodes": {}, "relations": {}}
     storage_ids_by_key = {
-        "nodes": sorted({
-            str(value or "").strip()
-            for value in node_storage_ids or []
-            if str(value or "").strip()
-        }),
-        "relations": sorted({
-            str(value or "").strip()
-            for value in relation_storage_ids or []
-            if str(value or "").strip()
-        }),
+        "nodes": sorted(
+            {
+                str(value or "").strip()
+                for value in node_storage_ids or []
+                if str(value or "").strip()
+            }
+        ),
+        "relations": sorted(
+            {
+                str(value or "").strip()
+                for value in relation_storage_ids or []
+                if str(value or "").strip()
+            }
+        ),
     }
     if not any(storage_ids_by_key.values()):
         return result
     _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
     batch_size = _store.current_state_inventory_batch_size()
+
     def read_type_inventory(type_label: str, key: str):
         type_inventory: Dict[str, Dict[str, object]] = {}
         storage_ids = storage_ids_by_key[key]
         for offset in range(0, len(storage_ids), batch_size):
-            batch = storage_ids[offset: offset + batch_size]
+            batch = storage_ids[offset : offset + batch_size]
             query = (
-                "match $item isa " + type_label
+                "match $item isa "
+                + type_label
                 + ', has ontology-box "ABox", '
                 + "has ontology-storage-id $storageId, "
                 + "has ontology-scope-id $scopeId, "
@@ -548,9 +609,7 @@ def current_state_storage_inventory(_store: GraphReadsInventoryStore, driver, im
                     "storageId": storage_id,
                     "scopeId": str(item.get("scopeId") or ""),
                     "physicalGenerationId": str(item.get("snapshotId") or ""),
-                    "contentFingerprint": str(
-                        item.get("contentFingerprint") or ""
-                    ),
+                    "contentFingerprint": str(item.get("contentFingerprint") or ""),
                 }
         return key, type_inventory
 
@@ -569,7 +628,14 @@ def current_state_storage_inventory(_store: GraphReadsInventoryStore, driver, im
     return result
 
 
-def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metadata: Dict[str, object], scope_ids: Iterable[str], world_id: str='', *, _bindings: GraphReadsInventoryRuntime) -> Dict[str, object]:
+def read_active_scoped_abox_rows(
+    _store: GraphReadsInventoryStore,
+    active_metadata: Dict[str, object],
+    scope_ids: Iterable[str],
+    world_id: str = "",
+    *,
+    _bindings: GraphReadsInventoryRuntime
+) -> Dict[str, object]:
     """Read exact active rows for a bounded set of scope generations.
 
     A target-scoped source graph may already contain facts produced by a
@@ -582,9 +648,7 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
     active = dict(active_metadata or {})
     generations = {
         str(scope_id or "").strip(): str(generation_id or "").strip()
-        for scope_id, generation_id in dict(
-            active.get("scopeGenerationIds") or {}
-        ).items()
+        for scope_id, generation_id in dict(active.get("scopeGenerationIds") or {}).items()
         if str(scope_id or "").strip() and str(generation_id or "").strip()
     }
     active_plan = {
@@ -592,11 +656,13 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
         for item in active.get("scopePlan") or []
         if str((item or {}).get("scopeId") or "").strip()
     }
-    requested = sorted({
-        str(scope_id or "").strip()
-        for scope_id in scope_ids or []
-        if str(scope_id or "").strip() in generations
-    })
+    requested = sorted(
+        {
+            str(scope_id or "").strip()
+            for scope_id in scope_ids or []
+            if str(scope_id or "").strip() in generations
+        }
+    )
     if not requested:
         return {
             "status": "ok",
@@ -607,14 +673,10 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
             "countsByScope": {},
         }
 
-    expected_generation_by_scope = {
-        scope_id: generations[scope_id]
-        for scope_id in requested
-    }
+    expected_generation_by_scope = {scope_id: generations[scope_id] for scope_id in requested}
     requested_generations = sorted(set(expected_generation_by_scope.values()))
     generation_scope = {
-        generation_id: scope_id
-        for scope_id, generation_id in expected_generation_by_scope.items()
+        generation_id: scope_id for scope_id, generation_id in expected_generation_by_scope.items()
     }
     node_rows: List[Dict[str, object]] = []
     relation_rows: List[Dict[str, object]] = []
@@ -627,7 +689,7 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
     )
 
     for offset in range(0, len(requested_generations), batch_size):
-        batch = requested_generations[offset: offset + batch_size]
+        batch = requested_generations[offset : offset + batch_size]
         generation_filter = typedb_value_match(
             "$n",
             "ontology-snapshot-id",
@@ -641,19 +703,22 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
             "has ontology-storage-id $storageId, "
             "has ontology-label $label, "
             "has ontology-kind $kind, "
-            'has ontology-box "ABox", '
-            + world_clause
-            + "has ontology-scope-id $scopeId, "
+            'has ontology-box "ABox", ' + world_clause + "has ontology-scope-id $scopeId, "
             "has ontology-snapshot-id $generationId, "
             "has ontology-updated-at $updatedAt, "
-            "has ontology-json $json; "
-            + generation_filter
+            "has ontology-json $json; " + generation_filter
         )
         raw_nodes = _store.read_rows(
             node_query,
             [
-                "id", "storageId", "label", "kind", "scopeId",
-                "generationId", "updatedAt", "json",
+                "id",
+                "storageId",
+                "label",
+                "kind",
+                "scopeId",
+                "generationId",
+                "updatedAt",
+                "json",
             ],
             label="typedb.scoped-abox.active-node-rows",
         )
@@ -675,24 +740,24 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
                 }
             properties = json_object(raw.get("json"))
             mapped = _store.entity_row_from_typeql(raw, "ABox")
-            mapped.update({
-                "storageId": str(raw.get("storageId") or ""),
-                "scopeId": scope_id,
-                "scopeType": str(
-                    properties.get("aboxScopeType")
-                    or (active_plan.get(scope_id) or {}).get("scopeType")
-                    or ""
-                ),
-                "snapshotId": generation_id,
-                "aboxSnapshotId": generation_id,
-                "scopeGenerationId": generation_id,
-                "manifestId": str(
-                    properties.get("worldviewManifestId")
-                    or properties.get("manifestId")
-                    or ""
-                ),
-                "worldId": str(properties.get("worldId") or world_id or ""),
-            })
+            mapped.update(
+                {
+                    "storageId": str(raw.get("storageId") or ""),
+                    "scopeId": scope_id,
+                    "scopeType": str(
+                        properties.get("aboxScopeType")
+                        or (active_plan.get(scope_id) or {}).get("scopeType")
+                        or ""
+                    ),
+                    "snapshotId": generation_id,
+                    "aboxSnapshotId": generation_id,
+                    "scopeGenerationId": generation_id,
+                    "manifestId": str(
+                        properties.get("worldviewManifestId") or properties.get("manifestId") or ""
+                    ),
+                    "worldId": str(properties.get("worldId") or world_id or ""),
+                }
+            )
             node_rows.append(mapped)
 
         relation_generation_filter = typedb_value_match(
@@ -719,24 +784,38 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
             "$r isa ontology-assertion, links (source: $source, target: $target), "
             "has ontology-id $id, has ontology-storage-id $storageId, "
             "has ontology-relation-type $type, "
-            'has ontology-box "ABox", '
-            + world_clause
-            + "has ontology-scope-id $scopeId, "
+            'has ontology-box "ABox", ' + world_clause + "has ontology-scope-id $scopeId, "
             "has ontology-snapshot-id $generationId, "
             "has ontology-updated-at $updatedAt, has ontology-json $json, "
-            "has ontology-weight $weight; "
-            + relation_generation_filter
+            "has ontology-weight $weight; " + relation_generation_filter
         )
         raw_relations = _store.read_rows(
             relation_query,
             [
-                "id", "storageId", "sourceId", "sourceStorageId",
-                "sourceLabel", "sourceKind", "sourceScopeId",
-                "sourceGenerationId", "sourceUpdatedAt", "sourceJson",
-                "targetId", "targetStorageId", "targetLabel", "targetKind",
-                "targetScopeId", "targetGenerationId", "targetUpdatedAt",
-                "targetJson", "type", "scopeId", "generationId",
-                "updatedAt", "json", "weight",
+                "id",
+                "storageId",
+                "sourceId",
+                "sourceStorageId",
+                "sourceLabel",
+                "sourceKind",
+                "sourceScopeId",
+                "sourceGenerationId",
+                "sourceUpdatedAt",
+                "sourceJson",
+                "targetId",
+                "targetStorageId",
+                "targetLabel",
+                "targetKind",
+                "targetScopeId",
+                "targetGenerationId",
+                "targetUpdatedAt",
+                "targetJson",
+                "type",
+                "scopeId",
+                "generationId",
+                "updatedAt",
+                "json",
+                "weight",
             ],
             label="typedb.scoped-abox.active-relation-rows",
         )
@@ -758,43 +837,45 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
                 }
             properties = json_object(raw.get("json"))
             mapped = _store.relation_row_from_typeql(raw, "ABox")
-            mapped.update({
-                "storageId": str(raw.get("storageId") or ""),
-                "sourceStorageId": str(raw.get("sourceStorageId") or ""),
-                "targetStorageId": str(raw.get("targetStorageId") or ""),
-                "scopeId": scope_id,
-                "scopeType": str(
-                    properties.get("aboxScopeType")
-                    or (active_plan.get(scope_id) or {}).get("scopeType")
-                    or ""
-                ),
-                "snapshotId": generation_id,
-                "aboxSnapshotId": generation_id,
-                "scopeGenerationId": generation_id,
-                "manifestId": str(
-                    properties.get("worldviewManifestId")
-                    or properties.get("manifestId")
-                    or ""
-                ),
-                "worldId": str(properties.get("worldId") or world_id or ""),
-            })
+            mapped.update(
+                {
+                    "storageId": str(raw.get("storageId") or ""),
+                    "sourceStorageId": str(raw.get("sourceStorageId") or ""),
+                    "targetStorageId": str(raw.get("targetStorageId") or ""),
+                    "scopeId": scope_id,
+                    "scopeType": str(
+                        properties.get("aboxScopeType")
+                        or (active_plan.get(scope_id) or {}).get("scopeType")
+                        or ""
+                    ),
+                    "snapshotId": generation_id,
+                    "aboxSnapshotId": generation_id,
+                    "scopeGenerationId": generation_id,
+                    "manifestId": str(
+                        properties.get("worldviewManifestId") or properties.get("manifestId") or ""
+                    ),
+                    "worldId": str(properties.get("worldId") or world_id or ""),
+                }
+            )
             for prefix in ("source", "target"):
                 endpoint = _bindings.endpoint_node_row(raw, prefix, "ABox")
                 endpoint_properties = json_object(raw.get(prefix + "Json"))
-                endpoint.update({
-                    "storageId": str(raw.get(prefix + "StorageId") or ""),
-                    "scopeId": str(raw.get(prefix + "ScopeId") or ""),
-                    "scopeType": str(endpoint_properties.get("aboxScopeType") or ""),
-                    "snapshotId": str(raw.get(prefix + "GenerationId") or ""),
-                    "aboxSnapshotId": str(raw.get(prefix + "GenerationId") or ""),
-                    "scopeGenerationId": str(raw.get(prefix + "GenerationId") or ""),
-                    "manifestId": str(
-                        endpoint_properties.get("worldviewManifestId")
-                        or endpoint_properties.get("manifestId")
-                        or ""
-                    ),
-                    "worldId": str(endpoint_properties.get("worldId") or world_id or ""),
-                })
+                endpoint.update(
+                    {
+                        "storageId": str(raw.get(prefix + "StorageId") or ""),
+                        "scopeId": str(raw.get(prefix + "ScopeId") or ""),
+                        "scopeType": str(endpoint_properties.get("aboxScopeType") or ""),
+                        "snapshotId": str(raw.get(prefix + "GenerationId") or ""),
+                        "aboxSnapshotId": str(raw.get(prefix + "GenerationId") or ""),
+                        "scopeGenerationId": str(raw.get(prefix + "GenerationId") or ""),
+                        "manifestId": str(
+                            endpoint_properties.get("worldviewManifestId")
+                            or endpoint_properties.get("manifestId")
+                            or ""
+                        ),
+                        "worldId": str(endpoint_properties.get("worldId") or world_id or ""),
+                    }
+                )
                 endpoint_storage_id = str(endpoint.get("storageId") or "").strip()
                 if endpoint_storage_id:
                     endpoint_rows_by_storage_id[endpoint_storage_id] = endpoint
@@ -808,23 +889,24 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
         # OntologyEvidence is persisted as an ontology-node. The scoped
         # Manifest keeps logical entities and evidence separate, while a
         # physical TypeDB read returns both as node rows.
-        expected_entity_count = (
-            int(number_or_none(plan.get("entityCount")) or 0)
-            + int(number_or_none(plan.get("evidenceCount")) or 0)
+        expected_entity_count = int(number_or_none(plan.get("entityCount")) or 0) + int(
+            number_or_none(plan.get("evidenceCount")) or 0
         )
         expected_relation_count = int(number_or_none(plan.get("relationCount")) or 0)
         if (
             int(actual.get("entityCount") or 0) != expected_entity_count
             or int(actual.get("relationCount") or 0) != expected_relation_count
         ):
-            failed_scopes.append({
-                "scopeId": scope_id,
-                "generationId": expected_generation_by_scope.get(scope_id, ""),
-                "expectedEntityCount": expected_entity_count,
-                "actualEntityCount": int(actual.get("entityCount") or 0),
-                "expectedRelationCount": expected_relation_count,
-                "actualRelationCount": int(actual.get("relationCount") or 0),
-            })
+            failed_scopes.append(
+                {
+                    "scopeId": scope_id,
+                    "generationId": expected_generation_by_scope.get(scope_id, ""),
+                    "expectedEntityCount": expected_entity_count,
+                    "actualEntityCount": int(actual.get("entityCount") or 0),
+                    "expectedRelationCount": expected_relation_count,
+                    "actualRelationCount": int(actual.get("relationCount") or 0),
+                }
+            )
     return {
         "status": "ok" if not failed_scopes else "active-scope-row-count-mismatch",
         "reason": (
@@ -841,7 +923,9 @@ def read_active_scoped_abox_rows(_store: GraphReadsInventoryStore, active_metada
     }
 
 
-def scoped_abox_manifest_generation_references(_store: GraphReadsInventoryStore, world_id: str='') -> Dict[str, object]:
+def scoped_abox_manifest_generation_references(
+    _store: GraphReadsInventoryStore, world_id: str = ""
+) -> Dict[str, object]:
     """Return generations protected by a durable Worldview Manifest."""
     manifests = set()
     generations = set()
@@ -879,7 +963,9 @@ def scoped_abox_manifest_generation_references(_store: GraphReadsInventoryStore,
     }
 
 
-def scoped_abox_orphan_candidate_inventory(_store: GraphReadsInventoryStore, world_id: str='') -> Dict[str, object]:
+def scoped_abox_orphan_candidate_inventory(
+    _store: GraphReadsInventoryStore, world_id: str = ""
+) -> Dict[str, object]:
     """Find staged scoped rows not owned by any complete Manifest.
 
     Interrupted writes cannot have a manifest marker because the marker is
@@ -894,9 +980,14 @@ def scoped_abox_orphan_candidate_inventory(_store: GraphReadsInventoryStore, wor
     candidate_generations = set()
     for type_label in ["ontology-node", "ontology-assertion"]:
         rows = _store.read_rows(
-            "match $item isa " + type_label
+            "match $item isa "
+            + type_label
             + ', has ontology-box "ABox", has ontology-manifest-id $manifestId, '
-            + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+            + (
+                "has ontology-world-id " + typedb_string(world_id) + ", "
+                if str(world_id or "").strip()
+                else ""
+            )
             + "has ontology-snapshot-id $snapshotId;",
             ["manifestId", "snapshotId"],
             label="typedb.scoped-abox-orphan-inventory",
@@ -904,13 +995,12 @@ def scoped_abox_orphan_candidate_inventory(_store: GraphReadsInventoryStore, wor
         for row in rows:
             manifest_id = str(row.get("manifestId") or "").strip()
             generation_id = str(row.get("snapshotId") or "").strip()
-            if (
-                not manifest_id.startswith("abox-manifest:")
-                or not generation_id.startswith((
+            if not manifest_id.startswith("abox-manifest:") or not generation_id.startswith(
+                (
                     "abox-scope:",
                     "abox-current:",
                     "abox-current-cow:",
-                ))
+                )
             ):
                 continue
             if manifest_id in protected_manifests or generation_id in protected_generations:
@@ -925,7 +1015,9 @@ def scoped_abox_orphan_candidate_inventory(_store: GraphReadsInventoryStore, wor
     }
 
 
-def scoped_abox_scope_row_counts(_store: GraphReadsInventoryStore, scope_id: str, generation_id: str) -> Dict[str, int]:
+def scoped_abox_scope_row_counts(
+    _store: GraphReadsInventoryStore, scope_id: str, generation_id: str
+) -> Dict[str, int]:
     clean_scope = str(scope_id or "").strip()
     clean_generation = str(generation_id or "").strip()
     if not clean_scope or not clean_generation:
@@ -933,10 +1025,13 @@ def scoped_abox_scope_row_counts(_store: GraphReadsInventoryStore, scope_id: str
 
     def count(type_label: str) -> int:
         query = (
-            "match $item isa " + type_label
+            "match $item isa "
+            + type_label
             + ', has ontology-box "ABox"'
-            + ", has ontology-scope-id " + typedb_string(clean_scope)
-            + ", has ontology-snapshot-id " + typedb_string(clean_generation)
+            + ", has ontology-scope-id "
+            + typedb_string(clean_scope)
+            + ", has ontology-snapshot-id "
+            + typedb_string(clean_generation)
             + "; reduce $count = count;"
         )
         rows = _store.read_rows(query, ["count"], label="typedb.scoped-abox-count")
@@ -948,7 +1043,12 @@ def scoped_abox_scope_row_counts(_store: GraphReadsInventoryStore, scope_id: str
     }
 
 
-def scoped_abox_scope_row_counts_batch(_store: GraphReadsInventoryStore, scope_rows: Iterable[Dict[str, object]], manifest_id: str='', world_id: str='') -> Dict[str, Dict[str, int]]:
+def scoped_abox_scope_row_counts_batch(
+    _store: GraphReadsInventoryStore,
+    scope_rows: Iterable[Dict[str, object]],
+    manifest_id: str = "",
+    world_id: str = "",
+) -> Dict[str, Dict[str, int]]:
     """Read persisted counts for every staged scope with two TypeQL reductions.
 
     The initial migration from a broad legacy scope layout can change well
@@ -984,34 +1084,43 @@ def scoped_abox_scope_row_counts_batch(_store: GraphReadsInventoryStore, scope_r
     # unexpected pair in Python. Legacy callers without both identities
     # retain the explicit pair filter.
     manifest_partitioned = bool(clean_manifest_id and clean_world_id)
-    pair_patterns = [] if manifest_partitioned else [
-        "$item has ontology-scope-id " + typedb_string(scope_id)
-        + ", has ontology-snapshot-id " + typedb_string(generation_id) + ";"
-        for scope_id, generation_id in sorted(expected_pairs)
-    ]
+    pair_patterns = (
+        []
+        if manifest_partitioned
+        else [
+            "$item has ontology-scope-id "
+            + typedb_string(scope_id)
+            + ", has ontology-snapshot-id "
+            + typedb_string(generation_id)
+            + ";"
+            for scope_id, generation_id in sorted(expected_pairs)
+        ]
+    )
     pair_filter = (
         ""
         if manifest_partitioned
-        else pair_patterns[0]
-        if len(pair_patterns) == 1
-        else " or ".join("{ " + pattern + " }" for pattern in pair_patterns) + ";"
+        else (
+            pair_patterns[0]
+            if len(pair_patterns) == 1
+            else " or ".join("{ " + pattern + " }" for pattern in pair_patterns) + ";"
+        )
     )
 
     def collect(type_label: str, count_key: str) -> None:
         query = (
-            "match $item isa " + type_label
+            "match $item isa "
+            + type_label
             + ', has ontology-box "ABox"'
             + (
                 ", has ontology-manifest-id " + typedb_string(clean_manifest_id)
-                if clean_manifest_id else ""
+                if clean_manifest_id
+                else ""
             )
-            + (
-                ", has ontology-world-id " + typedb_string(clean_world_id)
-                if clean_world_id else ""
-            )
+            + (", has ontology-world-id " + typedb_string(clean_world_id) if clean_world_id else "")
             + ", has ontology-scope-id $scopeId"
             + ", has ontology-snapshot-id $generationId"
-            + "; " + pair_filter
+            + "; "
+            + pair_filter
             + " reduce $count = count groupby $scopeId, $generationId;"
         )
         rows = _store.read_rows(
@@ -1026,7 +1135,9 @@ def scoped_abox_scope_row_counts_batch(_store: GraphReadsInventoryStore, scope_r
                 if manifest_partitioned:
                     raise RuntimeError(
                         "Scoped ABox Manifest verification found an unexpected scope generation: "
-                        + scope_id + " / " + generation_id
+                        + scope_id
+                        + " / "
+                        + generation_id
                     )
                 continue
             counts.setdefault(scope_id, {"entityCount": 0, "relationCount": 0})[count_key] = int(
@@ -1038,25 +1149,28 @@ def scoped_abox_scope_row_counts_batch(_store: GraphReadsInventoryStore, scope_r
     return counts
 
 
-def scoped_abox_storage_rows_by_id(_store: GraphReadsInventoryStore, node_storage_ids: Iterable[str], relation_storage_ids: Iterable[str]) -> Dict[str, Dict[str, Dict[str, object]]]:
+def scoped_abox_storage_rows_by_id(
+    _store: GraphReadsInventoryStore,
+    node_storage_ids: Iterable[str],
+    relation_storage_ids: Iterable[str],
+) -> Dict[str, Dict[str, Dict[str, object]]]:
     """Read immutable scoped rows by physical storage ID.
 
     This deliberately avoids Manifest provenance in the query. A reused
     scope generation retains the Manifest that first staged it, while the
     active Manifest proves present membership through its scope plan.
     """
+
     def storage_ids(values: Iterable[str]) -> List[str]:
-        return sorted({
-            str(value or "").strip()
-            for value in values or []
-            if str(value or "").strip()
-        })
+        return sorted(
+            {str(value or "").strip() for value in values or [] if str(value or "").strip()}
+        )
 
     def collect(type_label: str, values: Iterable[str], label: str) -> Dict[str, Dict[str, object]]:
         rows_by_storage_id: Dict[str, Dict[str, object]] = {}
         ids = storage_ids(values)
         for offset in range(0, len(ids), NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE):
-            batch = ids[offset: offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE]
+            batch = ids[offset : offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE]
             query = (
                 "match $item isa " + type_label + ", "
                 "has ontology-storage-id $storageId, "
@@ -1090,7 +1204,9 @@ def scoped_abox_storage_rows_by_id(_store: GraphReadsInventoryStore, node_storag
     }
 
 
-def scoped_manifest_metadata(_store: GraphReadsInventoryStore, manifest_id: str, world_id: str='') -> Dict[str, object]:
+def scoped_manifest_metadata(
+    _store: GraphReadsInventoryStore, manifest_id: str, world_id: str = ""
+) -> Dict[str, object]:
     """Load one verified scoped Manifest without consulting the live pointer."""
     clean_manifest_id = str(manifest_id or "").strip()
     if not clean_manifest_id:
@@ -1117,7 +1233,8 @@ def scoped_manifest_metadata(_store: GraphReadsInventoryStore, manifest_id: str,
             or item.get("aboxSnapshotId")
             or item.get("snapshotId")
             or ""
-        ).strip() == clean_manifest_id
+        ).strip()
+        == clean_manifest_id
     ]
     if not candidates:
         return {}

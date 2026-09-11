@@ -3,24 +3,31 @@
 from digital_twin.domain.ontology_change_impact import scope_symbol
 from digital_twin.domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
 from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import native_rule_evidence_read_index_from_components
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import normalize_native_rule_evidence_read_index
-from digital_twin.modules.reasoning.infrastructure.typeql.constants import NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE
-from digital_twin.modules.reasoning.infrastructure.typeql.constants import NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS
+from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
+    native_rule_evidence_read_index_from_components,
+    normalize_native_rule_evidence_read_index,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.constants import (
+    NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE,
+    NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS,
+)
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_value_match
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
-from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import typedb_world_id_constraint
-from typing import Dict
-from typing import Iterable
-from typing import List
-from typing import Tuple
+from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
+    clean_symbols_from_payload,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import (
+    typedb_world_id_constraint,
+)
+from typing import Dict, Iterable, List, Tuple
 import copy
 import math
 import time
 from .read_index_ports import ManifestReadIndexStore, ManifestReadIndexRuntime
 
 
-def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestReadIndexStore, active_metadata: Dict[str, object], world_id: str='') -> Dict[str, object]:
+def rebuild_active_manifest_native_rule_evidence_read_index(
+    _store: ManifestReadIndexStore, active_metadata: Dict[str, object], world_id: str = ""
+) -> Dict[str, object]:
     """Reconstruct one active Manifest's exact physical evidence index.
 
     This is a rolling-recovery path, not an inference path. It reads only
@@ -34,14 +41,11 @@ def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestRead
     manifest_id = str(
         active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""
     ).strip()
-    topology = normalize_native_rule_planner_topology(
-        active.get("nativeRulePlannerTopology")
-    )
+    topology = normalize_native_rule_planner_topology(active.get("nativeRulePlannerTopology"))
     if (
         str(active.get("status") or "") != "ok"
         or not manifest_id
-        or str(active.get("scopedAboxManifestVersion") or "")
-        != SCOPED_ABOX_MANIFEST_VERSION
+        or str(active.get("scopedAboxManifestVersion") or "") != SCOPED_ABOX_MANIFEST_VERSION
         or str(topology.get("status") or "") != "ok"
     ):
         return {
@@ -56,19 +60,21 @@ def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestRead
         }
 
     source_ids_by_symbol = {
-        str(symbol or "").upper().strip(): sorted({
-            str(source_id or "").strip()
-            for source_id in source_ids or []
-            if str(source_id or "").strip()
-        })
+        str(symbol or "")
+        .upper()
+        .strip(): sorted(
+            {
+                str(source_id or "").strip()
+                for source_id in source_ids or []
+                if str(source_id or "").strip()
+            }
+        )
         for symbol, source_ids in dict(topology.get("sourceIdsBySymbol") or {}).items()
         if str(symbol or "").strip()
     }
-    expected_source_ids = sorted({
-        source_id
-        for source_ids in source_ids_by_symbol.values()
-        for source_id in source_ids
-    })
+    expected_source_ids = sorted(
+        {source_id for source_ids in source_ids_by_symbol.values() for source_id in source_ids}
+    )
     if not expected_source_ids:
         return {
             "status": "invalid-active-manifest",
@@ -95,17 +101,12 @@ def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestRead
         _store.write_operation_timeout_seconds(),
         _store.native_rule_execution_budget_seconds(),
     )
-    source_storage_ids: Dict[str, set] = {
-        source_id: set()
-        for source_id in expected_source_ids
-    }
+    source_storage_ids: Dict[str, set] = {source_id: set() for source_id in expected_source_ids}
     relation_storage_ids_by_symbol: Dict[str, set] = {
-        symbol: set()
-        for symbol in source_ids_by_symbol
+        symbol: set() for symbol in source_ids_by_symbol
     }
     relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, set]] = {
-        symbol: {}
-        for symbol in source_ids_by_symbol
+        symbol: {} for symbol in source_ids_by_symbol
     }
     symbols_by_source_id: Dict[str, set] = {}
     for symbol, source_ids in source_ids_by_symbol.items():
@@ -116,18 +117,14 @@ def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestRead
     generation_ids_by_symbol: Dict[str, set] = {}
     for symbol, source_ids in source_ids_by_symbol.items():
         portfolio_source = symbol.startswith("PORTFOLIO:") or any(
-            str(source_id or "").startswith("portfolio:")
-            for source_id in source_ids
+            str(source_id or "").startswith("portfolio:") for source_id in source_ids
         )
         relevant = {
             str(item.get("generationId") or "").strip()
             for item in scope_plan
             if isinstance(item, dict)
             and str(item.get("generationId") or "").strip()
-            and (
-                portfolio_source
-                or scope_symbol(item.get("scopeId")) == symbol
-            )
+            and (portfolio_source or scope_symbol(item.get("scopeId")) == symbol)
         }
         # A legacy scoped Manifest can omit symbol ownership on a link
         # scope. Falling back to all active generations is slower but
@@ -140,7 +137,7 @@ def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestRead
         generation_ids = sorted(generation_ids_by_symbol.get(symbol) or set())
         for offset in range(0, len(generation_ids), NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE):
             generation_batch = generation_ids[
-                offset: offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE
+                offset : offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE
             ]
             source_query = (
                 "match "
@@ -226,7 +223,9 @@ def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestRead
                     if not storage_id or snapshot_id not in active_generation_ids:
                         continue
                     for source_symbol in symbols_by_source_id.get(source_id, set()):
-                        relation_storage_ids_by_symbol.setdefault(source_symbol, set()).add(storage_id)
+                        relation_storage_ids_by_symbol.setdefault(source_symbol, set()).add(
+                            storage_id
+                        )
                         if relation_type:
                             relation_storage_ids_by_symbol_and_type.setdefault(
                                 source_symbol,
@@ -321,17 +320,26 @@ def rebuild_active_manifest_native_rule_evidence_read_index(_store: ManifestRead
         "index": index,
         "fingerprint": str(verified.get("fingerprint") or ""),
         "sourceCount": len(expected_source_ids),
-        "relationCount": len({
-            storage_id
-            for storage_ids in relation_storage_ids_by_symbol.values()
-            for storage_id in storage_ids
-        }),
+        "relationCount": len(
+            {
+                storage_id
+                for storage_ids in relation_storage_ids_by_symbol.values()
+                for storage_id in storage_ids
+            }
+        ),
         "readQueryCount": read_query_count,
         "durationMs": int((time.perf_counter() - started_at) * 1000),
     }
 
 
-def hydrate_native_rule_evidence_field_index(_store: ManifestReadIndexStore, evidence_read_index: Dict[str, object]=None, target_symbols: Iterable[str]=None, relation_types: Iterable[str]=None, *, _bindings: ManifestReadIndexRuntime) -> Dict[str, object]:
+def hydrate_native_rule_evidence_field_index(
+    _store: ManifestReadIndexStore,
+    evidence_read_index: Dict[str, object] = None,
+    target_symbols: Iterable[str] = None,
+    relation_types: Iterable[str] = None,
+    *,
+    _bindings: ManifestReadIndexRuntime
+) -> Dict[str, object]:
     """Add a bounded relation-field lookup to a verified Manifest index.
 
     The persisted index already proves which immutable assertion rows are
@@ -375,7 +383,9 @@ def hydrate_native_rule_evidence_field_index(_store: ManifestReadIndexStore, evi
     relation_ids_by_symbol_and_type = dict(index.get("relationStorageIdsBySymbolAndType") or {})
     storage_membership: Dict[str, List[Tuple[str, str]]] = {}
     for symbol in symbols:
-        for relation_type, storage_ids in dict(relation_ids_by_symbol_and_type.get(symbol) or {}).items():
+        for relation_type, storage_ids in dict(
+            relation_ids_by_symbol_and_type.get(symbol) or {}
+        ).items():
             clean_relation_type = str(relation_type or "").upper().strip()
             if not clean_relation_type or (
                 requested_relation_types and clean_relation_type not in requested_relation_types
@@ -384,7 +394,9 @@ def hydrate_native_rule_evidence_field_index(_store: ManifestReadIndexStore, evi
             for storage_id in storage_ids or []:
                 clean_storage_id = str(storage_id or "").strip()
                 if clean_storage_id:
-                    storage_membership.setdefault(clean_storage_id, []).append((symbol, clean_relation_type))
+                    storage_membership.setdefault(clean_storage_id, []).append(
+                        (symbol, clean_relation_type)
+                    )
     storage_ids = sorted(storage_membership)
     if not storage_ids:
         evidence["index"] = index
@@ -397,9 +409,7 @@ def hydrate_native_rule_evidence_field_index(_store: ManifestReadIndexStore, evi
     rows: List[Dict[str, object]] = []
     read_query_count = 0
     for offset in range(0, len(storage_ids), NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS):
-        storage_id_chunk = storage_ids[
-            offset:offset + NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS
-        ]
+        storage_id_chunk = storage_ids[offset : offset + NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS]
         query = (
             "match $relation isa ontology-assertion, has ontology-storage-id $storageId, "
             "has ontology-field $field; "
@@ -412,14 +422,18 @@ def hydrate_native_rule_evidence_field_index(_store: ManifestReadIndexStore, evi
             )
         )
         try:
-            rows.extend(_store.read_rows(
-                query,
-                ["storageId", "field"],
-                label="typedb.native-rule-evidence-field-index",
-                timeout_seconds=min(5.0, _store.native_rule_query_timeout_seconds()),
-            ))
+            rows.extend(
+                _store.read_rows(
+                    query,
+                    ["storageId", "field"],
+                    label="typedb.native-rule-evidence-field-index",
+                    timeout_seconds=min(5.0, _store.native_rule_query_timeout_seconds()),
+                )
+            )
             read_query_count += 1
-        except Exception as error:  # noqa: BLE001 - relation-type index remains safe but less selective.
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 - relation-type index remains safe but less selective.
             evidence["index"] = index
             return {
                 "status": "error",
@@ -427,9 +441,9 @@ def hydrate_native_rule_evidence_field_index(_store: ManifestReadIndexStore, evi
                 "readQueryCount": read_query_count + 1,
                 "readTransactionCount": read_query_count + 1,
                 "storageIdentityCount": len(storage_ids),
-                "chunkCount": int(math.ceil(
-                    len(storage_ids) / NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS
-                )),
+                "chunkCount": int(
+                    math.ceil(len(storage_ids) / NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS)
+                ),
                 "relationTypes": sorted(requested_relation_types),
                 "reasonCode": _bindings.typedb_error_code(error),
                 "reason": str(error)[:180],
@@ -441,12 +455,13 @@ def hydrate_native_rule_evidence_field_index(_store: ManifestReadIndexStore, evi
         if not storage_id or not field:
             continue
         for symbol, relation_type in storage_membership.get(storage_id, []):
-            field_index.setdefault(symbol, {}).setdefault(relation_type, {}).setdefault(field, []).append(storage_id)
+            field_index.setdefault(symbol, {}).setdefault(relation_type, {}).setdefault(
+                field, []
+            ).append(storage_id)
     index["relationStorageIdsBySymbolAndTypeAndField"] = {
         symbol: {
             relation_type: {
-                field: sorted(set(storage_ids))
-                for field, storage_ids in fields.items()
+                field: sorted(set(storage_ids)) for field, storage_ids in fields.items()
             }
             for relation_type, fields in relation_types.items()
         }

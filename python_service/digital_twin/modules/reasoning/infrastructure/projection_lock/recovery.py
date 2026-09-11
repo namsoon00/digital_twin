@@ -8,7 +8,11 @@ import socket
 from .recovery_ports import ProjectionLockRecoveryStore
 
 
-def recover_dead_local_scoped_abox_write_lease(_store: ProjectionLockRecoveryStore, world_id: str='', recover_untracked_current_process: bool=False) -> Dict[str, object]:
+def recover_dead_local_scoped_abox_write_lease(
+    _store: ProjectionLockRecoveryStore,
+    world_id: str = "",
+    recover_untracked_current_process: bool = False,
+) -> Dict[str, object]:
     """Release a held lease only when its local owner process is gone.
 
     This covers a project worker restart without requiring a TypeDB server
@@ -115,14 +119,16 @@ def recover_dead_local_scoped_abox_write_lease(_store: ProjectionLockRecoverySto
             "reason": "Dead local lease has no exact ownership payload.",
         }
     try:
-        release = _store.release_scoped_abox_write_lease({
-            "acquired": True,
-            "owner": owner,
-            "leaseOwner": owner,
-            "propertiesJson": properties_json,
-            "worldId": str(world_id or ""),
-            "storageId": _store.scoped_abox_write_lease_storage_id(world_id),
-        })
+        release = _store.release_scoped_abox_write_lease(
+            {
+                "acquired": True,
+                "owner": owner,
+                "leaseOwner": owner,
+                "propertiesJson": properties_json,
+                "worldId": str(world_id or ""),
+                "storageId": _store.scoped_abox_write_lease_storage_id(world_id),
+            }
+        )
     except Exception as error:  # noqa: BLE001 - normal expiry remains the final fallback.
         return {
             "configured": True,
@@ -144,7 +150,9 @@ def recover_dead_local_scoped_abox_write_lease(_store: ProjectionLockRecoverySto
     }
 
 
-def recover_all_dead_local_scoped_abox_write_leases(_store: ProjectionLockRecoveryStore) -> Dict[str, object]:
+def recover_all_dead_local_scoped_abox_write_leases(
+    _store: ProjectionLockRecoveryStore,
+) -> Dict[str, object]:
     """Recover every proven-dead local writer, including account worlds."""
     if not str(getattr(_store, "address", "") or "").strip():
         return {
@@ -156,7 +164,9 @@ def recover_all_dead_local_scoped_abox_write_leases(_store: ProjectionLockRecove
         }
     try:
         world_ids = _store.scoped_abox_write_lease_world_ids()
-    except Exception as error:  # noqa: BLE001 - startup must not fail only because the inventory is unavailable.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - startup must not fail only because the inventory is unavailable.
         return {
             "configured": True,
             "status": "unavailable",
@@ -169,7 +179,11 @@ def recover_all_dead_local_scoped_abox_write_leases(_store: ProjectionLockRecove
     world_ids = list(dict.fromkeys(["", *world_ids]))
     worlds = [_store.recover_dead_local_scoped_abox_write_lease(item) for item in world_ids]
     statuses = [str(item.get("status") or "") for item in worlds]
-    cleared_worlds = [str(item.get("worldId") or "") for item in worlds if str(item.get("status") or "") == "cleared"]
+    cleared_worlds = [
+        str(item.get("worldId") or "")
+        for item in worlds
+        if str(item.get("status") or "") == "cleared"
+    ]
     errors = [item for item in worlds if str(item.get("status") or "") in {"error", "unavailable"}]
     if errors and cleared_worlds:
         status = "partial"
@@ -191,7 +205,9 @@ def recover_all_dead_local_scoped_abox_write_leases(_store: ProjectionLockRecove
     }
 
 
-def recover_scoped_abox_write_lease_after_server_start_for_world(_store: ProjectionLockRecoveryStore, world_id: str='') -> Dict[str, object]:
+def recover_scoped_abox_write_lease_after_server_start_for_world(
+    _store: ProjectionLockRecoveryStore, world_id: str = ""
+) -> Dict[str, object]:
     """Clear a lease after TypeDB itself has restarted.
 
     A scoped ABox writer holds a durable lease across bounded TypeDB write
@@ -255,12 +271,16 @@ def recover_scoped_abox_write_lease_after_server_start_for_world(_store: Project
             # large graph, while it adds no safety: a missing schema would
             # have made the keyed lease probe unavailable.  New databases
             # never reach this write path.
-            return _store.delete_scoped_abox_write_lease(driver, imported, {
-                "owner": owner,
-                "propertiesJson": properties_json,
-                "worldId": str(world_id or ""),
-                "storageId": _store.scoped_abox_write_lease_storage_id(world_id),
-            })
+            return _store.delete_scoped_abox_write_lease(
+                driver,
+                imported,
+                {
+                    "owner": owner,
+                    "propertiesJson": properties_json,
+                    "worldId": str(world_id or ""),
+                    "storageId": _store.scoped_abox_write_lease_storage_id(world_id),
+                },
+            )
         finally:
             _store.close_driver(driver)
 
@@ -277,16 +297,24 @@ def recover_scoped_abox_write_lease_after_server_start_for_world(_store: Project
         }
     return {
         "configured": True,
-        "status": "cleared" if str((deleted or {}).get("status") or "") == "released" else str((deleted or {}).get("status") or "error"),
+        "status": (
+            "cleared"
+            if str((deleted or {}).get("status") or "") == "released"
+            else str((deleted or {}).get("status") or "error")
+        ),
         "graphStore": "typedb",
         "worldId": str(world_id or ""),
         "previousLeaseOwner": owner,
-        "previousLeaseExpiresAtEpoch": float(number_or_none(existing.get("leaseExpiresAtEpoch")) or 0),
+        "previousLeaseExpiresAtEpoch": float(
+            number_or_none(existing.get("leaseExpiresAtEpoch")) or 0
+        ),
         "release": dict(deleted or {}),
     }
 
 
-def recover_all_scoped_abox_write_leases_after_server_start(_store: ProjectionLockRecoveryStore) -> Dict[str, object]:
+def recover_all_scoped_abox_write_leases_after_server_start(
+    _store: ProjectionLockRecoveryStore,
+) -> Dict[str, object]:
     """Clear every validated lease after a fresh TypeDB server startup."""
     if not str(getattr(_store, "address", "") or "").strip():
         return {
@@ -298,7 +326,9 @@ def recover_all_scoped_abox_write_leases_after_server_start(_store: ProjectionLo
         }
     try:
         world_ids = _store.scoped_abox_write_lease_world_ids()
-    except Exception as error:  # noqa: BLE001 - seed must surface the unavailable inventory without hiding it.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - seed must surface the unavailable inventory without hiding it.
         return {
             "configured": True,
             "status": "unavailable",
@@ -307,10 +337,21 @@ def recover_all_scoped_abox_write_leases_after_server_start(_store: ProjectionLo
             "worlds": [],
         }
     world_ids = list(dict.fromkeys(["", *world_ids]))
-    worlds = [_store.recover_scoped_abox_write_lease_after_server_start_for_world(item) for item in world_ids]
+    worlds = [
+        _store.recover_scoped_abox_write_lease_after_server_start_for_world(item)
+        for item in world_ids
+    ]
     statuses = [str(item.get("status") or "") for item in worlds]
-    cleared_worlds = [str(item.get("worldId") or "") for item in worlds if str(item.get("status") or "") == "cleared"]
-    errors = [item for item in worlds if str(item.get("status") or "") in {"error", "unavailable", "driver-missing", "invalid"}]
+    cleared_worlds = [
+        str(item.get("worldId") or "")
+        for item in worlds
+        if str(item.get("status") or "") == "cleared"
+    ]
+    errors = [
+        item
+        for item in worlds
+        if str(item.get("status") or "") in {"error", "unavailable", "driver-missing", "invalid"}
+    ]
     if errors and cleared_worlds:
         status = "partial"
     elif errors:
@@ -333,12 +374,16 @@ def recover_all_scoped_abox_write_leases_after_server_start(_store: ProjectionLo
     }
 
 
-def recover_scoped_abox_write_lease_after_server_start(_store: ProjectionLockRecoveryStore) -> Dict[str, object]:
+def recover_scoped_abox_write_lease_after_server_start(
+    _store: ProjectionLockRecoveryStore,
+) -> Dict[str, object]:
     """Clear all leases after TypeDB itself has restarted."""
     return _store.recover_all_scoped_abox_write_leases_after_server_start()
 
 
-def recover_scoped_abox_write_lease_after_managed_shutdown(_store: ProjectionLockRecoveryStore) -> Dict[str, object]:
+def recover_scoped_abox_write_lease_after_managed_shutdown(
+    _store: ProjectionLockRecoveryStore,
+) -> Dict[str, object]:
     """Recover only a proven-dead local writer after worker restart.
 
     A project manager restart does not prove that an independently started

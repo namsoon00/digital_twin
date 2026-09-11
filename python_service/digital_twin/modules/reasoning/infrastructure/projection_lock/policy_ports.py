@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 
-
 class ProjectionLockPolicyStore(Protocol):
     pass
 

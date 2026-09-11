@@ -1,12 +1,16 @@
 """projection_lock: coordinator through explicit injected capabilities."""
 
-from digital_twin.modules.reasoning.infrastructure.backend_constants import TYPEDB_PROJECTION_COORDINATOR_VERSION
-from digital_twin.modules.reasoning.infrastructure.backend_constants import TYPEDB_PROJECTION_COORDINATOR_WORLD_ID
+from digital_twin.modules.reasoning.infrastructure.backend_constants import (
+    TYPEDB_PROJECTION_COORDINATOR_VERSION,
+    TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+)
 from typing import Dict
 from .coordinator_ports import ProjectionLockCoordinatorStore
 
 
-def projection_coordinator_lease_status(_store: ProjectionLockCoordinatorStore) -> Dict[str, object]:
+def projection_coordinator_lease_status(
+    _store: ProjectionLockCoordinatorStore,
+) -> Dict[str, object]:
     """Expose the database-wide projection owner without exposing ABox facts."""
     result = _store.scoped_abox_write_lease_status(TYPEDB_PROJECTION_COORDINATOR_WORLD_ID)
     return {
@@ -17,7 +21,9 @@ def projection_coordinator_lease_status(_store: ProjectionLockCoordinatorStore) 
     }
 
 
-def recover_dead_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore) -> Dict[str, object]:
+def recover_dead_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore,
+) -> Dict[str, object]:
     """Recover a dead or proven-orphaned local projection coordinator."""
     with _store._projection_coordinator_registry_lock:
         return _store.recover_dead_local_scoped_abox_write_lease(
@@ -31,14 +37,18 @@ def projection_coordinator_write_enforced(_store: ProjectionLockCoordinatorStore
     return bool(getattr(_store, "_projection_coordinator_write_enforced", False))
 
 
-def active_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore) -> Dict[str, object]:
+def active_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore,
+) -> Dict[str, object]:
     leases = list(getattr(_store._projection_coordinator_local, "leases", []) or [])
     if not leases:
         return {}
     return dict(leases[-1] or {})
 
 
-def projection_coordinator_token_is_active(_store: ProjectionLockCoordinatorStore, token: str) -> bool:
+def projection_coordinator_token_is_active(
+    _store: ProjectionLockCoordinatorStore, token: str
+) -> bool:
     clean_token = str(token or "").strip()
     if not clean_token:
         return False
@@ -46,7 +56,9 @@ def projection_coordinator_token_is_active(_store: ProjectionLockCoordinatorStor
         return clean_token in _store._active_projection_coordinator_tokens
 
 
-def track_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, lease: Dict[str, object]) -> None:
+def track_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore, lease: Dict[str, object]
+) -> None:
     if not bool((lease or {}).get("acquired")):
         return
     with _store._projection_coordinator_registry_lock:
@@ -58,7 +70,9 @@ def track_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, l
             _store._active_projection_coordinator_tokens.add(token)
 
 
-def forget_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, lease: Dict[str, object]) -> None:
+def forget_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore, lease: Dict[str, object]
+) -> None:
     with _store._projection_coordinator_registry_lock:
         leases = list(getattr(_store._projection_coordinator_local, "leases", []) or [])
         target_token = str((lease or {}).get("leaseToken") or "")
@@ -88,7 +102,9 @@ def forget_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, 
                 return
 
 
-def projection_coordinator_write_scope(_store: ProjectionLockCoordinatorStore, owner: str, world_id: str=''):
+def projection_coordinator_write_scope(
+    _store: ProjectionLockCoordinatorStore, owner: str, world_id: str = ""
+):
     """Reuse an explicit outer scope or release the lease acquired here.
 
     Public top-level acquisition deliberately does not adopt a thread-local
@@ -111,12 +127,19 @@ def projection_coordinator_write_scope(_store: ProjectionLockCoordinatorStore, o
         _store._projection_coordinator_local.explicit_scope_depth = depth
 
 
-def acquire_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, owner: str, world_id: str='') -> Dict[str, object]:
+def acquire_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore, owner: str, world_id: str = ""
+) -> Dict[str, object]:
     with _store._projection_coordinator_registry_lock:
         return _store._acquire_projection_coordinator_lease(owner, world_id=world_id)
 
 
-def _acquire_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, owner: str, world_id: str='', allow_adopt: bool=False) -> Dict[str, object]:
+def _acquire_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore,
+    owner: str,
+    world_id: str = "",
+    allow_adopt: bool = False,
+) -> Dict[str, object]:
     """Serialize physical TypeDB writes across portfolio and shared worlds.
 
     Per-world ABox leases protect semantic generation ownership. This
@@ -165,7 +188,9 @@ def _acquire_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore
             world_id=TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
             lease_seconds=_store.typedb_projection_coordinator_lease_seconds(),
         )
-    except Exception as error:  # noqa: BLE001 - callers keep the prior active generation on a failed claim.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - callers keep the prior active generation on a failed claim.
         return {
             "acquired": False,
             "status": "error",
@@ -176,25 +201,33 @@ def _acquire_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore
             "reason": str(error)[:180],
         }
     response = dict(lease or {})
-    response.update({
-        "coordinator": "typedb-projection",
-        "coordinatorVersion": TYPEDB_PROJECTION_COORDINATOR_VERSION,
-        "coordinatorWorldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
-        "requestedWorldId": str(world_id or ""),
-    })
+    response.update(
+        {
+            "coordinator": "typedb-projection",
+            "coordinatorVersion": TYPEDB_PROJECTION_COORDINATOR_VERSION,
+            "coordinatorWorldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+            "requestedWorldId": str(world_id or ""),
+        }
+    )
     if not response.get("acquired"):
-        response["recommendedRetryAfterSeconds"] = _store.typedb_projection_coordinator_retry_seconds()
+        response["recommendedRetryAfterSeconds"] = (
+            _store.typedb_projection_coordinator_retry_seconds()
+        )
     else:
         _store.track_projection_coordinator_lease(response)
     return response
 
 
-def release_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, lease: Dict[str, object]) -> Dict[str, object]:
+def release_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore, lease: Dict[str, object]
+) -> Dict[str, object]:
     with _store._projection_coordinator_registry_lock:
         return _store._release_projection_coordinator_lease(lease)
 
 
-def _release_projection_coordinator_lease(_store: ProjectionLockCoordinatorStore, lease: Dict[str, object]) -> Dict[str, object]:
+def _release_projection_coordinator_lease(
+    _store: ProjectionLockCoordinatorStore, lease: Dict[str, object]
+) -> Dict[str, object]:
     if bool((lease or {}).get("adopted")):
         return {"status": "adopted-by-caller"}
     if str((lease or {}).get("status") or "") == "disabled":

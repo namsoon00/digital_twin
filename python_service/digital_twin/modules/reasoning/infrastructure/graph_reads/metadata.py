@@ -1,27 +1,39 @@
 """graph_reads: metadata through explicit injected capabilities."""
 
 from digital_twin.domain.ontology_schema import default_tbox_metadata
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_PERSISTENCE_MODE
-from digital_twin.domain.ontology_semantics import SEMANTIC_STORAGE_CONTRACT_VERSION
-from digital_twin.domain.ontology_semantics import semantic_class_types
-from digital_twin.domain.ontology_semantics import semantic_relation_types
-from .tbox_metadata import active_tbox_metadata_from_rows
-from .tbox_metadata import active_tbox_metadata_unavailable
+from digital_twin.domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_PERSISTENCE_MODE,
+)
+from digital_twin.domain.ontology_semantics import (
+    SEMANTIC_STORAGE_CONTRACT_VERSION,
+    semantic_class_types,
+    semantic_relation_types,
+)
+from .tbox_metadata import active_tbox_metadata_from_rows, active_tbox_metadata_unavailable
 from digital_twin.infrastructure.graph_store_payloads import number_or_none
-from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import typedb_call_for_world
-from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
-from digital_twin.modules.reasoning.infrastructure.inference_publication.values import typedb_bool
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import native_rule_manifest_index_required
+from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import (
+    typedb_call_for_world,
+)
+from digital_twin.modules.reasoning.infrastructure.inference_publication.values import (
+    json_object,
+    typedb_bool,
+)
+from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
+    native_rule_manifest_index_required,
+)
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
-from typing import Dict
-from typing import List
+from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
+    clean_symbols_from_payload,
+)
+from typing import Dict, List
 import hashlib
 from .metadata_ports import GraphReadsMetadataStore, GraphReadsMetadataRuntime
 
 
-def active_tbox_metadata(_store: GraphReadsMetadataStore, *, _bindings: GraphReadsMetadataRuntime) -> Dict[str, object]:
+def active_tbox_metadata(
+    _store: GraphReadsMetadataStore, *, _bindings: GraphReadsMetadataRuntime
+) -> Dict[str, object]:
     if not _store.address:
         return _bindings.NullTypeDBOntologyGraphRepository().active_tbox_metadata()
     # A static-seed manifest is a keyed, content-addressed record written
@@ -40,37 +52,50 @@ def active_tbox_metadata(_store: GraphReadsMetadataStore, *, _bindings: GraphRea
         expected_schema = _store.base_schema_contract_metadata()
         stored_schema_version = str(manifest_metadata.get("schemaContractVersion") or "")
         stored_schema_fingerprint = str(manifest_metadata.get("schemaContractFingerprint") or "")
-        schema_current = (
-            stored_schema_version == str(expected_schema.get("schemaContractVersion") or "")
-            and stored_schema_fingerprint == str(expected_schema.get("schemaContractFingerprint") or "")
+        schema_current = stored_schema_version == str(
+            expected_schema.get("schemaContractVersion") or ""
+        ) and stored_schema_fingerprint == str(
+            expected_schema.get("schemaContractFingerprint") or ""
         )
         metadata = active_tbox_metadata_from_rows(
             {
-                "entities": [{
-                    "entityCount": int(tbox_counts.get("entityCount") or fallback.get("entityCount") or 1),
-                    "version": tbox_version,
-                    "fingerprint": tbox_fingerprint,
-                    "updatedAt": str(manifest_metadata.get("updatedAt") or ""),
-                }],
-                "relations": [{
-                    "relationCount": int(tbox_counts.get("relationCount") or fallback.get("relationCount") or 0),
-                }],
+                "entities": [
+                    {
+                        "entityCount": int(
+                            tbox_counts.get("entityCount") or fallback.get("entityCount") or 1
+                        ),
+                        "version": tbox_version,
+                        "fingerprint": tbox_fingerprint,
+                        "updatedAt": str(manifest_metadata.get("updatedAt") or ""),
+                    }
+                ],
+                "relations": [
+                    {
+                        "relationCount": int(
+                            tbox_counts.get("relationCount") or fallback.get("relationCount") or 0
+                        ),
+                    }
+                ],
             },
             "typedb-static-seed-manifest",
         )
-        metadata.update({
-            "graphStore": "typedb",
-            "source": "typedb-static-seed-manifest",
-            "storeSource": "typedb-static-seed-manifest",
-            "semanticStorage": {
-                "contractVersion": SEMANTIC_STORAGE_CONTRACT_VERSION,
-                "physicalStorage": "typedb-logical-tbox-subtypes",
-                "physicalClassTypeCount": len(semantic_class_types()),
-                "physicalRelationTypeCount": len(semantic_relation_types()),
-                "schemaContractStatus": "current" if schema_current else "stale",
-                "schemaContractFingerprint": str(expected_schema.get("schemaContractFingerprint") or ""),
-            },
-        })
+        metadata.update(
+            {
+                "graphStore": "typedb",
+                "source": "typedb-static-seed-manifest",
+                "storeSource": "typedb-static-seed-manifest",
+                "semanticStorage": {
+                    "contractVersion": SEMANTIC_STORAGE_CONTRACT_VERSION,
+                    "physicalStorage": "typedb-logical-tbox-subtypes",
+                    "physicalClassTypeCount": len(semantic_class_types()),
+                    "physicalRelationTypeCount": len(semantic_relation_types()),
+                    "schemaContractStatus": "current" if schema_current else "stale",
+                    "schemaContractFingerprint": str(
+                        expected_schema.get("schemaContractFingerprint") or ""
+                    ),
+                },
+            }
+        )
         return metadata
     try:
         entity_rows = _store.read_entity_rows(["TBox"])
@@ -84,45 +109,59 @@ def active_tbox_metadata(_store: GraphReadsMetadataStore, *, _bindings: GraphRea
     updated_at = ""
     for row in entity_rows:
         props = json_object(row.get("propertiesJson"))
-        version = version or str(row.get("version") or props.get("version") or props.get("tboxVersion") or "")
-        fingerprint = fingerprint or str(row.get("fingerprint") or props.get("fingerprint") or props.get("tboxFingerprint") or "")
+        version = version or str(
+            row.get("version") or props.get("version") or props.get("tboxVersion") or ""
+        )
+        fingerprint = fingerprint or str(
+            row.get("fingerprint") or props.get("fingerprint") or props.get("tboxFingerprint") or ""
+        )
         updated_at = max(updated_at, str(row.get("updatedAt") or props.get("updatedAt") or ""))
     metadata = active_tbox_metadata_from_rows(
         {
-            "entities": [{
-                "entityCount": len(entity_rows),
-                "version": version,
-                "fingerprint": fingerprint,
-                "updatedAt": updated_at,
-            }],
+            "entities": [
+                {
+                    "entityCount": len(entity_rows),
+                    "version": version,
+                    "fingerprint": fingerprint,
+                    "updatedAt": updated_at,
+                }
+            ],
             "relations": [{"relationCount": len(relation_rows)}],
         },
         "typedb-typeql",
     )
     try:
         schema_contract = _store.base_schema_contract_state()
-    except Exception as error:  # noqa: BLE001 - TBox metadata remains useful when the seed marker is temporarily unavailable.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - TBox metadata remains useful when the seed marker is temporarily unavailable.
         schema_contract = {
             "status": "unavailable",
             "reason": str(error)[:180],
         }
-    metadata.update({
-        "graphStore": "typedb",
-        "source": "typedb-typeql",
-        "storeSource": "typedb-typeql",
-        "semanticStorage": {
-            "contractVersion": SEMANTIC_STORAGE_CONTRACT_VERSION,
-            "physicalStorage": "typedb-logical-tbox-subtypes",
-            "physicalClassTypeCount": len(semantic_class_types()),
-            "physicalRelationTypeCount": len(semantic_relation_types()),
-            "schemaContractStatus": str(schema_contract.get("status") or "unavailable"),
-            "schemaContractFingerprint": str(schema_contract.get("schemaContractFingerprint") or ""),
-        },
-    })
+    metadata.update(
+        {
+            "graphStore": "typedb",
+            "source": "typedb-typeql",
+            "storeSource": "typedb-typeql",
+            "semanticStorage": {
+                "contractVersion": SEMANTIC_STORAGE_CONTRACT_VERSION,
+                "physicalStorage": "typedb-logical-tbox-subtypes",
+                "physicalClassTypeCount": len(semantic_class_types()),
+                "physicalRelationTypeCount": len(semantic_relation_types()),
+                "schemaContractStatus": str(schema_contract.get("status") or "unavailable"),
+                "schemaContractFingerprint": str(
+                    schema_contract.get("schemaContractFingerprint") or ""
+                ),
+            },
+        }
+    )
     return metadata
 
 
-def box_snapshot_row_counts(_store: GraphReadsMetadataStore, box: str, snapshot_id: str, world_id: str='') -> Dict[str, int]:
+def box_snapshot_row_counts(
+    _store: GraphReadsMetadataStore, box: str, snapshot_id: str, world_id: str = ""
+) -> Dict[str, int]:
     clean_box = str(box or "").strip()
     clean_snapshot_id = str(snapshot_id or "").strip()
     if not clean_box or not clean_snapshot_id:
@@ -130,10 +169,17 @@ def box_snapshot_row_counts(_store: GraphReadsMetadataStore, box: str, snapshot_
 
     def count(type_label: str) -> int:
         query = (
-            "match $item isa " + type_label
-            + ", has ontology-box " + typedb_string(clean_box)
-            + ", has ontology-snapshot-id " + typedb_string(clean_snapshot_id)
-            + (", has ontology-world-id " + typedb_string(world_id) if str(world_id or "").strip() else "")
+            "match $item isa "
+            + type_label
+            + ", has ontology-box "
+            + typedb_string(clean_box)
+            + ", has ontology-snapshot-id "
+            + typedb_string(clean_snapshot_id)
+            + (
+                ", has ontology-world-id " + typedb_string(world_id)
+                if str(world_id or "").strip()
+                else ""
+            )
             + "; reduce $count = count;"
         )
         rows = _store.read_rows(query, ["count"], label="typedb.box-snapshot-count")
@@ -145,7 +191,7 @@ def box_snapshot_row_counts(_store: GraphReadsMetadataStore, box: str, snapshot_
     }
 
 
-def box_row_counts(_store: GraphReadsMetadataStore, box: str, world_id: str='') -> Dict[str, int]:
+def box_row_counts(_store: GraphReadsMetadataStore, box: str, world_id: str = "") -> Dict[str, int]:
     """Count one ontology box without loading its full JSON payloads."""
     clean_box = str(box or "").strip()
     if not clean_box:
@@ -153,9 +199,15 @@ def box_row_counts(_store: GraphReadsMetadataStore, box: str, world_id: str='') 
 
     def count(type_label: str) -> int:
         query = (
-            "match $item isa " + type_label
-            + ", has ontology-box " + typedb_string(clean_box)
-            + (", has ontology-world-id " + typedb_string(world_id) if str(world_id or "").strip() else "")
+            "match $item isa "
+            + type_label
+            + ", has ontology-box "
+            + typedb_string(clean_box)
+            + (
+                ", has ontology-world-id " + typedb_string(world_id)
+                if str(world_id or "").strip()
+                else ""
+            )
             + "; reduce $count = count;"
         )
         rows = _store.read_rows(query, ["count"], label="typedb.box-count")
@@ -167,7 +219,14 @@ def box_row_counts(_store: GraphReadsMetadataStore, box: str, world_id: str='') 
     }
 
 
-def abox_projection_marker_rows(_store: GraphReadsMetadataStore, world_id: str='', snapshot_id: str='', limit: int=0, *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def abox_projection_marker_rows(
+    _store: GraphReadsMetadataStore,
+    world_id: str = "",
+    snapshot_id: str = "",
+    limit: int = 0,
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     snapshot_clause = (
         "has ontology-snapshot-id " + typedb_string(snapshot_id) + ", "
         if str(snapshot_id or "").strip()
@@ -177,32 +236,46 @@ def abox_projection_marker_rows(_store: GraphReadsMetadataStore, world_id: str='
         "match $n isa ontology-node, "
         "has ontology-id $id, "
         "has ontology-label $label, "
-        "has ontology-kind \"abox-projection-marker\", "
-        "has ontology-box \"ABox\", "
-        + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+        'has ontology-kind "abox-projection-marker", '
+        'has ontology-box "ABox", '
+        + (
+            "has ontology-world-id " + typedb_string(world_id) + ", "
+            if str(world_id or "").strip()
+            else ""
+        )
         + snapshot_clause
         + "has ontology-updated-at $updatedAt, "
-        "has ontology-json $json;"
-        + _bindings.typeql_limit_clause(limit)
+        "has ontology-json $json;" + _bindings.typeql_limit_clause(limit)
     )
     return _store.entity_rows_from_typeql(
-        _store.read_rows(query, ["id", "label", "kind", "updatedAt", "json"], label="typedb.abox-marker"),
+        _store.read_rows(
+            query, ["id", "label", "kind", "updatedAt", "json"], label="typedb.abox-marker"
+        ),
         "ABox",
     )
 
 
-def active_worldview_manifest_pointer_rows(_store: GraphReadsMetadataStore, world_id: str='', limit: int=0, *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def active_worldview_manifest_pointer_rows(
+    _store: GraphReadsMetadataStore,
+    world_id: str = "",
+    limit: int = 0,
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     query = (
         "match $n isa ontology-node, "
         "has ontology-id $id, "
         "has ontology-label $label, "
-        "has ontology-kind \"worldview-manifest-active-pointer\", "
-        "has ontology-box \"ABoxControl\", "
-        + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+        'has ontology-kind "worldview-manifest-active-pointer", '
+        'has ontology-box "ABoxControl", '
+        + (
+            "has ontology-world-id " + typedb_string(world_id) + ", "
+            if str(world_id or "").strip()
+            else ""
+        )
         + "has ontology-snapshot-id $snapshotId, "
         "has ontology-updated-at $updatedAt, "
-        "has ontology-json $json;"
-        + _bindings.typeql_limit_clause(limit)
+        "has ontology-json $json;" + _bindings.typeql_limit_clause(limit)
     )
     return _store.entity_rows_from_typeql(
         _store.read_rows(
@@ -214,7 +287,13 @@ def active_worldview_manifest_pointer_rows(_store: GraphReadsMetadataStore, worl
     )
 
 
-def active_worldview_manifest_pointer_identity_rows(_store: GraphReadsMetadataStore, world_id: str='', limit: int=0, *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def active_worldview_manifest_pointer_identity_rows(
+    _store: GraphReadsMetadataStore,
+    world_id: str = "",
+    limit: int = 0,
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     """Read just enough active-pointer state to validate a cached Manifest.
 
     The active pointer used to duplicate the full scoped Manifest payload.
@@ -227,16 +306,15 @@ def active_worldview_manifest_pointer_identity_rows(_store: GraphReadsMetadataSt
     query = (
         "match $n isa ontology-node, "
         "has ontology-id $id, "
-        "has ontology-kind \"worldview-manifest-active-pointer\", "
-        "has ontology-box \"ABoxControl\", "
+        'has ontology-kind "worldview-manifest-active-pointer", '
+        'has ontology-box "ABoxControl", '
         + (
             "has ontology-world-id " + typedb_string(clean_world_id) + ", "
             if clean_world_id
             else ""
         )
         + "has ontology-snapshot-id $snapshotId, "
-        "has ontology-updated-at $updatedAt;"
-        + _bindings.typeql_limit_clause(limit)
+        "has ontology-updated-at $updatedAt;" + _bindings.typeql_limit_clause(limit)
     )
     rows = _store.read_rows(
         query,
@@ -256,18 +334,14 @@ def active_worldview_manifest_pointer_identity_rows(_store: GraphReadsMetadataSt
     ]
 
 
-def worldview_manifest_marker_count(_store: GraphReadsMetadataStore, world_id: str='') -> int:
+def worldview_manifest_marker_count(_store: GraphReadsMetadataStore, world_id: str = "") -> int:
     """Count Manifest markers without materializing their large JSON bodies."""
     clean_world_id = str(world_id or "").strip()
     query = (
         "match $n isa ontology-node, "
-        "has ontology-kind \"worldview-manifest-marker\", "
-        "has ontology-box \"ABox\""
-        + (
-            ", has ontology-world-id " + typedb_string(clean_world_id)
-            if clean_world_id
-            else ""
-        )
+        'has ontology-kind "worldview-manifest-marker", '
+        'has ontology-box "ABox"'
+        + (", has ontology-world-id " + typedb_string(clean_world_id) if clean_world_id else "")
         + "; reduce $count = count;"
     )
     rows = _store.read_rows(
@@ -278,7 +352,14 @@ def worldview_manifest_marker_count(_store: GraphReadsMetadataStore, world_id: s
     return max(0, int(number_or_none((rows[0] if rows else {}).get("count")) or 0))
 
 
-def worldview_manifest_marker_rows(_store: GraphReadsMetadataStore, world_id: str='', manifest_id: str='', limit: int=0, *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def worldview_manifest_marker_rows(
+    _store: GraphReadsMetadataStore,
+    world_id: str = "",
+    manifest_id: str = "",
+    limit: int = 0,
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     manifest_clause = (
         "has ontology-snapshot-id " + typedb_string(manifest_id) + ", "
         if str(manifest_id or "").strip()
@@ -288,14 +369,17 @@ def worldview_manifest_marker_rows(_store: GraphReadsMetadataStore, world_id: st
         "match $n isa ontology-node, "
         "has ontology-id $id, "
         "has ontology-label $label, "
-        "has ontology-kind \"worldview-manifest-marker\", "
-        "has ontology-box \"ABox\", "
-        + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+        'has ontology-kind "worldview-manifest-marker", '
+        'has ontology-box "ABox", '
+        + (
+            "has ontology-world-id " + typedb_string(world_id) + ", "
+            if str(world_id or "").strip()
+            else ""
+        )
         + manifest_clause
         + "has ontology-snapshot-id $snapshotId, "
         "has ontology-updated-at $updatedAt, "
-        "has ontology-json $json;"
-        + _bindings.typeql_limit_clause(limit)
+        "has ontology-json $json;" + _bindings.typeql_limit_clause(limit)
     )
     return _store.entity_rows_from_typeql(
         _store.read_rows(
@@ -307,7 +391,14 @@ def worldview_manifest_marker_rows(_store: GraphReadsMetadataStore, world_id: st
     )
 
 
-def worldview_manifest_marker_identity_rows(_store: GraphReadsMetadataStore, world_id: str='', manifest_id: str='', limit: int=0, *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def worldview_manifest_marker_identity_rows(
+    _store: GraphReadsMetadataStore,
+    world_id: str = "",
+    manifest_id: str = "",
+    limit: int = 0,
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     """Read a Manifest revision without loading its large JSON payload."""
     clean_world_id = str(world_id or "").strip()
     clean_manifest_id = str(manifest_id or "").strip()
@@ -319,8 +410,8 @@ def worldview_manifest_marker_identity_rows(_store: GraphReadsMetadataStore, wor
     query = (
         "match $n isa ontology-node, "
         "has ontology-id $id, "
-        "has ontology-kind \"worldview-manifest-marker\", "
-        "has ontology-box \"ABox\", "
+        'has ontology-kind "worldview-manifest-marker", '
+        'has ontology-box "ABox", '
         + (
             "has ontology-world-id " + typedb_string(clean_world_id) + ", "
             if clean_world_id
@@ -328,8 +419,7 @@ def worldview_manifest_marker_identity_rows(_store: GraphReadsMetadataStore, wor
         )
         + manifest_clause
         + "has ontology-snapshot-id $snapshotId, "
-        "has ontology-updated-at $updatedAt;"
-        + _bindings.typeql_limit_clause(limit)
+        "has ontology-updated-at $updatedAt;" + _bindings.typeql_limit_clause(limit)
     )
     rows = _store.read_rows(
         query,
@@ -358,8 +448,16 @@ def scoped_abox_metadata_from_manifest_marker(marker: Dict[str, object]) -> Dict
         or ""
     ).strip()
     scope_plan = payload.get("scopePlan") if isinstance(payload.get("scopePlan"), list) else []
-    generations = payload.get("scopeGenerationIds") if isinstance(payload.get("scopeGenerationIds"), dict) else {}
-    fingerprints = payload.get("scopeFingerprints") if isinstance(payload.get("scopeFingerprints"), dict) else {}
+    generations = (
+        payload.get("scopeGenerationIds")
+        if isinstance(payload.get("scopeGenerationIds"), dict)
+        else {}
+    )
+    fingerprints = (
+        payload.get("scopeFingerprints")
+        if isinstance(payload.get("scopeFingerprints"), dict)
+        else {}
+    )
     if not manifest_id or not scope_plan or not generations:
         return {}
     return {
@@ -376,7 +474,9 @@ def scoped_abox_metadata_from_manifest_marker(marker: Dict[str, object]) -> Dict
         "projectionRunId": str(payload.get("projectionRunId") or ""),
         "asOf": str(payload.get("asOf") or ""),
         "lastFullScopeReconcileAt": str(payload.get("lastFullScopeReconcileAt") or ""),
-        "scopedAboxManifestVersion": str(payload.get("scopedAboxManifestVersion") or SCOPED_ABOX_MANIFEST_VERSION),
+        "scopedAboxManifestVersion": str(
+            payload.get("scopedAboxManifestVersion") or SCOPED_ABOX_MANIFEST_VERSION
+        ),
         "persistenceMode": str(
             payload.get("persistenceMode")
             or payload.get("physicalStateMode")
@@ -389,9 +489,7 @@ def scoped_abox_metadata_from_manifest_marker(marker: Dict[str, object]) -> Dict
         ),
         "scopePlan": list(scope_plan),
         "scopeGenerationIds": dict(generations),
-        "logicalScopeGenerationIds": dict(
-            payload.get("logicalScopeGenerationIds") or {}
-        ),
+        "logicalScopeGenerationIds": dict(payload.get("logicalScopeGenerationIds") or {}),
         "scopeFingerprints": dict(fingerprints),
         "scopeTopologyVersion": str(payload.get("scopeTopologyVersion") or ""),
         "scopeFamilyCounts": dict(payload.get("scopeFamilyCounts") or {}),
@@ -413,7 +511,9 @@ def scoped_abox_metadata_from_manifest_marker(marker: Dict[str, object]) -> Dict
         "marketScopeObservedAtVersion": str(payload.get("marketScopeObservedAtVersion") or ""),
         "marketWorldProjectionMode": str(payload.get("marketWorldProjectionMode") or ""),
         "sharedWorldProjection": str(payload.get("sharedWorldProjection") or ""),
-        "sharedWorldProjectionContractVersion": str(payload.get("sharedWorldProjectionContractVersion") or ""),
+        "sharedWorldProjectionContractVersion": str(
+            payload.get("sharedWorldProjectionContractVersion") or ""
+        ),
         "sharedWorldFullRebuild": bool(payload.get("sharedWorldFullRebuild")),
         "accountOverlayProjectionContractVersion": str(
             payload.get("accountOverlayProjectionContractVersion") or ""
@@ -433,18 +533,27 @@ def scoped_abox_metadata_from_manifest_marker(marker: Dict[str, object]) -> Dict
     }
 
 
-def active_abox_pointer_rows(_store: GraphReadsMetadataStore, world_id: str='', limit: int=0, *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def active_abox_pointer_rows(
+    _store: GraphReadsMetadataStore,
+    world_id: str = "",
+    limit: int = 0,
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     query = (
         "match $n isa ontology-node, "
         "has ontology-id $id, "
         "has ontology-label $label, "
-        "has ontology-kind \"abox-active-pointer\", "
-        "has ontology-box \"ABoxControl\", "
-        + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+        'has ontology-kind "abox-active-pointer", '
+        'has ontology-box "ABoxControl", '
+        + (
+            "has ontology-world-id " + typedb_string(world_id) + ", "
+            if str(world_id or "").strip()
+            else ""
+        )
         + "has ontology-snapshot-id $snapshotId, "
         "has ontology-updated-at $updatedAt, "
-        "has ontology-json $json;"
-        + _bindings.typeql_limit_clause(limit)
+        "has ontology-json $json;" + _bindings.typeql_limit_clause(limit)
     )
     return _store.entity_rows_from_typeql(
         _store.read_rows(
@@ -456,7 +565,9 @@ def active_abox_pointer_rows(_store: GraphReadsMetadataStore, world_id: str='', 
     )
 
 
-def abox_metadata_from_marker(_store: GraphReadsMetadataStore, marker: Dict[str, object]) -> Dict[str, object]:
+def abox_metadata_from_marker(
+    _store: GraphReadsMetadataStore, marker: Dict[str, object]
+) -> Dict[str, object]:
     snapshot_id = str(marker.get("aboxSnapshotId") or marker.get("snapshotId") or "").strip()
     expected_entities = number_or_none(marker.get("expectedAboxEntityCount"))
     expected_relations = number_or_none(marker.get("expectedAboxRelationCount"))
@@ -502,7 +613,7 @@ def abox_metadata_from_marker(_store: GraphReadsMetadataStore, marker: Dict[str,
     }
 
 
-def active_abox_metadata(_store: GraphReadsMetadataStore, world_id: str='') -> Dict[str, object]:
+def active_abox_metadata(_store: GraphReadsMetadataStore, world_id: str = "") -> Dict[str, object]:
     try:
         manifests = sorted(
             _store.active_worldview_manifest_pointer_identity_rows(world_id, limit=1),
@@ -539,7 +650,8 @@ def active_abox_metadata(_store: GraphReadsMetadataStore, world_id: str='') -> D
                     or item.get("aboxSnapshotId")
                     or item.get("snapshotId")
                     or ""
-                ).strip() == manifest_id
+                ).strip()
+                == manifest_id
             ),
             marker_identities[0] if marker_identities else {},
         )
@@ -575,13 +687,15 @@ def active_abox_metadata(_store: GraphReadsMetadataStore, world_id: str='') -> D
             markers = []
         marker = next(
             (
-                item for item in markers
+                item
+                for item in markers
                 if str(
                     item.get("worldviewManifestId")
                     or item.get("aboxSnapshotId")
                     or item.get("snapshotId")
                     or ""
-                ).strip() == manifest_id
+                ).strip()
+                == manifest_id
             ),
             markers[0] if markers else {},
         )
@@ -595,7 +709,8 @@ def active_abox_metadata(_store: GraphReadsMetadataStore, world_id: str='') -> D
                     # worlds. Discard superseded revisions for this world
                     # rather than retaining every historical Manifest.
                     for stale_key in [
-                        key for key in _store._active_scoped_abox_metadata_cache
+                        key
+                        for key in _store._active_scoped_abox_metadata_cache
                         if key[0] == cache_world_id and key != cache_key
                     ]:
                         _store._active_scoped_abox_metadata_cache.pop(stale_key, None)
@@ -624,8 +739,10 @@ def active_abox_metadata(_store: GraphReadsMetadataStore, world_id: str='') -> D
             markers = []
         marker = next(
             (
-                item for item in markers
-                if str(item.get("aboxSnapshotId") or item.get("snapshotId") or "").strip() == snapshot_id
+                item
+                for item in markers
+                if str(item.get("aboxSnapshotId") or item.get("snapshotId") or "").strip()
+                == snapshot_id
             ),
             markers[0] if markers else None,
         )
@@ -668,19 +785,28 @@ def active_abox_metadata(_store: GraphReadsMetadataStore, world_id: str='') -> D
     }
 
 
-def active_inference_generation_marker_rows(_store: GraphReadsMetadataStore, world_id: str='', limit: int=1, *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def active_inference_generation_marker_rows(
+    _store: GraphReadsMetadataStore,
+    world_id: str = "",
+    limit: int = 1,
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     """Read the active InferenceBox marker without scanning its facts."""
     query = (
         "match $n isa ontology-node, "
         "has ontology-id $id, "
         "has ontology-label $label, "
-        "has ontology-kind \"inference-generation\", "
-        "has ontology-box \"InferenceBox\", "
-        + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+        'has ontology-kind "inference-generation", '
+        'has ontology-box "InferenceBox", '
+        + (
+            "has ontology-world-id " + typedb_string(world_id) + ", "
+            if str(world_id or "").strip()
+            else ""
+        )
         + "has ontology-snapshot-id $snapshotId, "
         "has ontology-updated-at $updatedAt, "
-        "has ontology-json $json;"
-        + _bindings.typeql_limit_clause(limit)
+        "has ontology-json $json;" + _bindings.typeql_limit_clause(limit)
     )
     return _store.entity_rows_from_typeql(
         _store.read_rows(
@@ -692,7 +818,9 @@ def active_inference_generation_marker_rows(_store: GraphReadsMetadataStore, wor
     )
 
 
-def inferencebox_recovery_metadata(_store: GraphReadsMetadataStore, world_id: str='', *, _bindings: GraphReadsMetadataRuntime) -> Dict[str, object]:
+def inferencebox_recovery_metadata(
+    _store: GraphReadsMetadataStore, world_id: str = "", *, _bindings: GraphReadsMetadataRuntime
+) -> Dict[str, object]:
     """Read only active InferenceBox generation provenance for recovery.
 
     This intentionally does not expand entities, relations, traces, or
@@ -706,7 +834,9 @@ def inferencebox_recovery_metadata(_store: GraphReadsMetadataStore, world_id: st
             key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
             reverse=True,
         )
-    except Exception as error:  # noqa: BLE001 - recovery diagnostics must not scan a full InferenceBox.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - recovery diagnostics must not scan a full InferenceBox.
         return {
             "configured": True,
             "status": "error",
@@ -725,7 +855,9 @@ def inferencebox_recovery_metadata(_store: GraphReadsMetadataStore, world_id: st
         }
     marker = markers[0]
     metadata = _bindings.inference_rulebox_metadata([marker], [])
-    target_symbols = clean_symbols_from_payload(metadata.get("targetSymbols") or marker.get("targetSymbols") or [])
+    target_symbols = clean_symbols_from_payload(
+        metadata.get("targetSymbols") or marker.get("targetSymbols") or []
+    )
     full_completed = typedb_bool(metadata.get("nativeInferenceEvaluationComplete"))
     core_completed = typedb_bool(metadata.get("coreNativeInferenceEvaluationComplete"))
     decision_eligible = _bindings.native_inference_decision_eligible(metadata)
@@ -740,7 +872,9 @@ def inferencebox_recovery_metadata(_store: GraphReadsMetadataStore, world_id: st
             or marker.get("aboxSnapshotId")
             or ""
         ).strip(),
-        "sourceAboxSnapshotId": str(metadata.get("sourceAboxSnapshotId") or marker.get("sourceAboxSnapshotId") or "").strip(),
+        "sourceAboxSnapshotId": str(
+            metadata.get("sourceAboxSnapshotId") or marker.get("sourceAboxSnapshotId") or ""
+        ).strip(),
         "targetSymbols": target_symbols,
         # A support-only rule may fail after every core action rule has
         # completed.  That generation remains decision-safe, but it must
@@ -756,9 +890,7 @@ def inferencebox_recovery_metadata(_store: GraphReadsMetadataStore, world_id: st
         "supportingRuleFailures": list(metadata.get("supportingRuleFailures") or [])[:20],
         "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
         "reasoningMode": str(metadata.get("reasoningMode") or ""),
-        "nativeRuleSelectionApplied": typedb_bool(
-            metadata.get("nativeRuleSelectionApplied")
-        ),
+        "nativeRuleSelectionApplied": typedb_bool(metadata.get("nativeRuleSelectionApplied")),
         "nativeRuleSelectionCandidateCount": int(
             number_or_none(metadata.get("nativeRuleSelectionCandidateCount")) or 0
         ),
@@ -786,24 +918,30 @@ def inferencebox_recovery_metadata(_store: GraphReadsMetadataStore, world_id: st
         "typedbNativeRuleMatchedRuleIds": list(
             metadata.get("typedbNativeRuleMatchedRuleIds") or []
         )[:160],
-        "typedbNativeRuleTimingProfile": dict(
-            metadata.get("typedbNativeRuleTimingProfile") or {}
-        ) if isinstance(metadata.get("typedbNativeRuleTimingProfile"), dict) else {},
-        "typedbNativeStageTimings": dict(
-            metadata.get("typedbNativeStageTimings") or {}
-        ) if isinstance(metadata.get("typedbNativeStageTimings"), dict) else {},
-        "matchedGraphSource": str(metadata.get("matchedGraphSource") or ""),
-        "matchedGraphReuseStatus": str(
-            metadata.get("matchedGraphReuseStatus") or ""
+        "typedbNativeRuleTimingProfile": (
+            dict(metadata.get("typedbNativeRuleTimingProfile") or {})
+            if isinstance(metadata.get("typedbNativeRuleTimingProfile"), dict)
+            else {}
         ),
-        "matchedGraphReuseReason": str(
-            metadata.get("matchedGraphReuseReason") or ""
-        )[:220],
+        "typedbNativeStageTimings": (
+            dict(metadata.get("typedbNativeStageTimings") or {})
+            if isinstance(metadata.get("typedbNativeStageTimings"), dict)
+            else {}
+        ),
+        "matchedGraphSource": str(metadata.get("matchedGraphSource") or ""),
+        "matchedGraphReuseStatus": str(metadata.get("matchedGraphReuseStatus") or ""),
+        "matchedGraphReuseReason": str(metadata.get("matchedGraphReuseReason") or "")[:220],
         "querySource": "typedb-active-inference-generation-marker",
     }
 
 
-def inferencebox_commit_proof(_store: GraphReadsMetadataStore, inference_generation_id: str, source_abox_snapshot_id: str, target_symbols: List[str]=None, world_id: str='') -> Dict[str, object]:
+def inferencebox_commit_proof(
+    _store: GraphReadsMetadataStore,
+    inference_generation_id: str,
+    source_abox_snapshot_id: str,
+    target_symbols: List[str] = None,
+    world_id: str = "",
+) -> Dict[str, object]:
     """Verify publication using only active markers and pointers.
 
     ``run_rulebox`` already has the materialized InferenceBox graph in
@@ -905,28 +1043,36 @@ def list_ontology_worlds(_store: GraphReadsMetadataStore) -> List[Dict[str, obje
         pointers = _store.active_worldview_manifest_pointer_rows()
     except Exception:
         return []
-    world_ids = sorted({
-        str(row.get("worldId") or "").strip()
-        for row in pointers
-        if str(row.get("worldId") or "").strip()
-    })
+    world_ids = sorted(
+        {
+            str(row.get("worldId") or "").strip()
+            for row in pointers
+            if str(row.get("worldId") or "").strip()
+        }
+    )
     worlds: List[Dict[str, object]] = []
     for world_id in world_ids:
         metadata = _store.active_abox_metadata(world_id)
-        worlds.append({
-            "worldId": world_id,
-            "worldType": str(metadata.get("worldType") or ""),
-            "tenantId": str(metadata.get("tenantId") or ""),
-            "accountId": str(metadata.get("accountId") or ""),
-            "marketId": str(metadata.get("marketId") or ""),
-            "status": str(metadata.get("status") or ""),
-            "worldviewManifestId": str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or ""),
-            "activeScopeCount": int(number_or_none(metadata.get("activeScopeCount")) or 0),
-        })
+        worlds.append(
+            {
+                "worldId": world_id,
+                "worldType": str(metadata.get("worldType") or ""),
+                "tenantId": str(metadata.get("tenantId") or ""),
+                "accountId": str(metadata.get("accountId") or ""),
+                "marketId": str(metadata.get("marketId") or ""),
+                "status": str(metadata.get("status") or ""),
+                "worldviewManifestId": str(
+                    metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or ""
+                ),
+                "activeScopeCount": int(number_or_none(metadata.get("activeScopeCount")) or 0),
+            }
+        )
     return worlds
 
 
-def abox_pending_activation_rows(_store: GraphReadsMetadataStore, world_id: str='') -> List[Dict[str, object]]:
+def abox_pending_activation_rows(
+    _store: GraphReadsMetadataStore, world_id: str = ""
+) -> List[Dict[str, object]]:
     """Return durable ABox activation hand-offs awaiting native inference.
 
     The active pointer is intentionally switched only after a candidate
@@ -948,19 +1094,30 @@ def abox_pending_activation_rows(_store: GraphReadsMetadataStore, world_id: str=
         control_id = ""
         id_clause = "has ontology-id $id, "
     query = (
-        "match $n isa ontology-node, "
-        + id_clause
-        + "has ontology-label $label, "
-        "has ontology-kind \"abox-activation-pending\", "
-        "has ontology-box \"ABoxControl\", "
-        + ("has ontology-world-id " + typedb_string(clean_world_id) + ", " if clean_world_id else "")
+        "match $n isa ontology-node, " + id_clause + "has ontology-label $label, "
+        'has ontology-kind "abox-activation-pending", '
+        'has ontology-box "ABoxControl", '
+        + (
+            "has ontology-world-id " + typedb_string(clean_world_id) + ", "
+            if clean_world_id
+            else ""
+        )
         + "has ontology-snapshot-id $snapshotId, "
         "has ontology-updated-at $updatedAt, "
         "has ontology-json $json;"
     )
-    columns = ["label", "kind", "snapshotId", "updatedAt", "json"] if control_id else [
-        "id", "label", "kind", "snapshotId", "updatedAt", "json",
-    ]
+    columns = (
+        ["label", "kind", "snapshotId", "updatedAt", "json"]
+        if control_id
+        else [
+            "id",
+            "label",
+            "kind",
+            "snapshotId",
+            "updatedAt",
+            "json",
+        ]
+    )
     rows = _store.read_rows(
         query,
         columns,
@@ -976,7 +1133,9 @@ def abox_pending_activation_rows(_store: GraphReadsMetadataStore, world_id: str=
     return _store.entity_rows_from_typeql(rows, "ABoxControl")
 
 
-def pending_abox_activation(_store: GraphReadsMetadataStore, world_id: str='') -> Dict[str, object]:
+def pending_abox_activation(
+    _store: GraphReadsMetadataStore, world_id: str = ""
+) -> Dict[str, object]:
     rows = sorted(
         _store.abox_pending_activation_rows(world_id),
         key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
@@ -990,7 +1149,10 @@ def pending_abox_activation(_store: GraphReadsMetadataStore, world_id: str='') -
         }
     row = rows[0]
     candidate_snapshot_id = str(
-        row.get("candidateAboxSnapshotId") or row.get("aboxSnapshotId") or row.get("snapshotId") or ""
+        row.get("candidateAboxSnapshotId")
+        or row.get("aboxSnapshotId")
+        or row.get("snapshotId")
+        or ""
     ).strip()
     return {
         "configured": True,
@@ -1001,7 +1163,9 @@ def pending_abox_activation(_store: GraphReadsMetadataStore, world_id: str='') -
         "materialFingerprint": str(row.get("materialFingerprint") or "").strip(),
         "projectionRunId": str(row.get("projectionRunId") or "").strip(),
         "asOf": str(row.get("asOf") or ""),
-        "targetSymbols": clean_symbols_from_payload(row.get("targetSymbols") or row.get("inferenceTargetSymbols") or []),
+        "targetSymbols": clean_symbols_from_payload(
+            row.get("targetSymbols") or row.get("inferenceTargetSymbols") or []
+        ),
         "activationStatus": str(row.get("activationStatus") or "pending-native-inference"),
         "candidateWorldviewManifestId": str(row.get("candidateWorldviewManifestId") or "").strip(),
         "worldId": str(row.get("worldId") or world_id or ""),
@@ -1013,7 +1177,13 @@ def pending_abox_activation(_store: GraphReadsMetadataStore, world_id: str='') -
     }
 
 
-def read_inference_generation_records(_store: GraphReadsMetadataStore, published_only: bool=True, world_id: str='', *, _bindings: GraphReadsMetadataRuntime) -> List[Dict[str, object]]:
+def read_inference_generation_records(
+    _store: GraphReadsMetadataStore,
+    published_only: bool = True,
+    world_id: str = "",
+    *,
+    _bindings: GraphReadsMetadataRuntime
+) -> List[Dict[str, object]]:
     world_clause = (
         "has ontology-world-id " + typedb_string(world_id) + ", "
         if str(world_id or "").strip()
@@ -1087,7 +1257,14 @@ def read_inference_generation_records(_store: GraphReadsMetadataStore, published
         if published_only:
             return []
         return [
-            {**record, "publicationStatus": "candidate" if str(record.get("generationId") or "") in candidate_ids else "staging"}
+            {
+                **record,
+                "publicationStatus": (
+                    "candidate"
+                    if str(record.get("generationId") or "") in candidate_ids
+                    else "staging"
+                ),
+            }
             for record in records
         ]
     published = {
@@ -1100,11 +1277,17 @@ def read_inference_generation_records(_store: GraphReadsMetadataStore, published
         return [
             {
                 **record,
-                "latestAt": published.get(str(record.get("generationId") or ""), record.get("latestAt")),
+                "latestAt": published.get(
+                    str(record.get("generationId") or ""), record.get("latestAt")
+                ),
                 "publicationStatus": (
                     "active"
                     if str(record.get("generationId") or "") in published
-                    else ("candidate" if str(record.get("generationId") or "") in candidate_ids else "staging")
+                    else (
+                        "candidate"
+                        if str(record.get("generationId") or "") in candidate_ids
+                        else "staging"
+                    )
                 ),
             }
             for record in records
@@ -1114,9 +1297,11 @@ def read_inference_generation_records(_store: GraphReadsMetadataStore, published
         generation_id = str(record.get("generationId") or "")
         if generation_id not in published:
             continue
-        result.append({
-            **record,
-            "latestAt": published[generation_id] or record.get("latestAt"),
-            "publicationStatus": "active",
-        })
+        result.append(
+            {
+                **record,
+                "latestAt": published[generation_id] or record.get("latestAt"),
+                "publicationStatus": "active",
+            }
+        )
     return sorted(result, key=lambda item: str(item.get("latestAt") or ""), reverse=True)

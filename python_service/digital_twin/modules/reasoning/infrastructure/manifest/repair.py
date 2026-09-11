@@ -1,17 +1,25 @@
 """manifest: repair through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import OntologyEntity
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
 from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import ontology_storage_id
+from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
+    ontology_storage_id,
+)
 from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import normalize_native_rule_evidence_read_index
+from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
+    normalize_native_rule_evidence_read_index,
+)
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string
 from typing import Dict
 from .repair_ports import ManifestRepairStore, ManifestRepairRuntime
 
 
-def replace_scoped_manifest_marker_graph(_store: ManifestRepairStore, marker_graph: PortfolioOntology, *, _bindings: ManifestRepairRuntime) -> Dict[str, object]:
+def replace_scoped_manifest_marker_graph(
+    _store: ManifestRepairStore,
+    marker_graph: PortfolioOntology,
+    *,
+    _bindings: ManifestRepairRuntime
+) -> Dict[str, object]:
     """Replace one immutable Manifest marker without touching ABox facts.
 
     A marker can gain a new operational read index during a rolling
@@ -69,7 +77,9 @@ def replace_scoped_manifest_marker_graph(_store: ManifestRepairStore, marker_gra
         try:
             _store.ensure_database(driver)
             _store.ensure_schema(driver, imported)
-            with _bindings.typedb_operation_timeout(_store.write_operation_timeout_seconds(), "TypeDB scoped Manifest marker upgrade"):
+            with _bindings.typedb_operation_timeout(
+                _store.write_operation_timeout_seconds(), "TypeDB scoped Manifest marker upgrade"
+            ):
                 with driver.transaction(
                     _store.database,
                     TransactionType.WRITE,
@@ -83,7 +93,9 @@ def replace_scoped_manifest_marker_graph(_store: ManifestRepairStore, marker_gra
 
     try:
         _store.with_typedb_retries(operation)
-    except Exception as error:  # noqa: BLE001 - keep the prior active ABox and retry on the next projection.
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - keep the prior active ABox and retry on the next projection.
         return {
             "configured": True,
             "saved": False,
@@ -102,7 +114,15 @@ def replace_scoped_manifest_marker_graph(_store: ManifestRepairStore, marker_gra
     }
 
 
-def repair_active_manifest_native_rule_evidence_index(_store: ManifestRepairStore, active_metadata: Dict[str, object]=None, world_id: str='', expected_manifest_id: str='', stable_write_lease_held: bool=False, *, _bindings: ManifestRepairRuntime) -> Dict[str, object]:
+def repair_active_manifest_native_rule_evidence_index(
+    _store: ManifestRepairStore,
+    active_metadata: Dict[str, object] = None,
+    world_id: str = "",
+    expected_manifest_id: str = "",
+    stable_write_lease_held: bool = False,
+    *,
+    _bindings: ManifestRepairRuntime
+) -> Dict[str, object]:
     """Repair only the control-plane index of an unchanged active ABox.
 
     Callers that already own the scoped ABox write lease can adopt it.
@@ -163,9 +183,8 @@ def repair_active_manifest_native_rule_evidence_index(_store: ManifestRepairStor
         current_manifest_id = str(
             current.get("worldviewManifestId") or current.get("aboxSnapshotId") or ""
         ).strip()
-        if (
-            str(current.get("status") or "") != "ok"
-            or (expected_id and current_manifest_id != expected_id)
+        if str(current.get("status") or "") != "ok" or (
+            expected_id and current_manifest_id != expected_id
         ):
             return {
                 "configured": True,
@@ -201,7 +220,9 @@ def repair_active_manifest_native_rule_evidence_index(_store: ManifestRepairStor
                 "status": str(rebuilt.get("status") or "repair-read-failed"),
                 "graphStore": "typedb",
                 "manifestId": current_manifest_id,
-                "reason": str(rebuilt.get("reason") or "Active evidence rows could not be indexed.")[:220],
+                "reason": str(
+                    rebuilt.get("reason") or "Active evidence rows could not be indexed."
+                )[:220],
                 "rebuild": rebuilt,
             }
         markers = _store.worldview_manifest_marker_rows(
@@ -211,13 +232,15 @@ def repair_active_manifest_native_rule_evidence_index(_store: ManifestRepairStor
         )
         marker = next(
             (
-                item for item in markers
+                item
+                for item in markers
                 if str(
                     item.get("worldviewManifestId")
                     or item.get("aboxSnapshotId")
                     or item.get("snapshotId")
                     or ""
-                ).strip() == current_manifest_id
+                ).strip()
+                == current_manifest_id
             ),
             {},
         )
@@ -231,59 +254,57 @@ def repair_active_manifest_native_rule_evidence_index(_store: ManifestRepairStor
                 "reason": "The active Manifest marker is unavailable for evidence-index repair.",
             }
         properties = json_object(marker.get("propertiesJson"))
-        properties.update({
-            "ontologyBox": "ABox",
-            "worldId": clean_world_id or str(current.get("worldId") or ""),
-            "worldType": str(current.get("worldType") or properties.get("worldType") or ""),
-            "tenantId": str(current.get("tenantId") or properties.get("tenantId") or ""),
-            "accountId": str(current.get("accountId") or properties.get("accountId") or ""),
-            "tboxClass": "WorldviewManifest",
-            "snapshotId": current_manifest_id,
-            "aboxSnapshotId": current_manifest_id,
-            "worldviewManifestId": current_manifest_id,
-            "aboxScopeId": str(
-                properties.get("aboxScopeId") or "manifest:" + current_manifest_id
-            ),
-            "aboxScopeType": "manifest",
-            "scopeGenerationId": str(
-                properties.get("scopeGenerationId") or current_manifest_id
-            ),
-            "scopePlan": list(current.get("scopePlan") or properties.get("scopePlan") or []),
-            "scopeGenerationIds": dict(
-                current.get("scopeGenerationIds")
-                or properties.get("scopeGenerationIds")
-                or {}
-            ),
-            "nativeRulePlannerTopology": dict(
-                current.get("nativeRulePlannerTopology")
-                or properties.get("nativeRulePlannerTopology")
-                or {}
-            ),
-            "nativeRuleEvidenceReadIndex": dict(rebuilt.get("index") or {}),
-            "nativeRuleEvidenceReadIndexMerge": {
-                "status": "recovered-active-membership",
-                "sourceCount": int(rebuilt.get("sourceCount") or 0),
-                "relationCount": int(rebuilt.get("relationCount") or 0),
-                "readQueryCount": int(rebuilt.get("readQueryCount") or 0),
-                "durationMs": int(rebuilt.get("durationMs") or 0),
-            },
-            "projectionStatus": "complete",
-            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
-        })
+        properties.update(
+            {
+                "ontologyBox": "ABox",
+                "worldId": clean_world_id or str(current.get("worldId") or ""),
+                "worldType": str(current.get("worldType") or properties.get("worldType") or ""),
+                "tenantId": str(current.get("tenantId") or properties.get("tenantId") or ""),
+                "accountId": str(current.get("accountId") or properties.get("accountId") or ""),
+                "tboxClass": "WorldviewManifest",
+                "snapshotId": current_manifest_id,
+                "aboxSnapshotId": current_manifest_id,
+                "worldviewManifestId": current_manifest_id,
+                "aboxScopeId": str(
+                    properties.get("aboxScopeId") or "manifest:" + current_manifest_id
+                ),
+                "aboxScopeType": "manifest",
+                "scopeGenerationId": str(
+                    properties.get("scopeGenerationId") or current_manifest_id
+                ),
+                "scopePlan": list(current.get("scopePlan") or properties.get("scopePlan") or []),
+                "scopeGenerationIds": dict(
+                    current.get("scopeGenerationIds") or properties.get("scopeGenerationIds") or {}
+                ),
+                "nativeRulePlannerTopology": dict(
+                    current.get("nativeRulePlannerTopology")
+                    or properties.get("nativeRulePlannerTopology")
+                    or {}
+                ),
+                "nativeRuleEvidenceReadIndex": dict(rebuilt.get("index") or {}),
+                "nativeRuleEvidenceReadIndexMerge": {
+                    "status": "recovered-active-membership",
+                    "sourceCount": int(rebuilt.get("sourceCount") or 0),
+                    "relationCount": int(rebuilt.get("relationCount") or 0),
+                    "readQueryCount": int(rebuilt.get("readQueryCount") or 0),
+                    "durationMs": int(rebuilt.get("durationMs") or 0),
+                },
+                "projectionStatus": "complete",
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            }
+        )
         marker_graph = PortfolioOntology(
             str(properties.get("accountId") or "typedb-scoped-manifest"),
-            entities=[OntologyEntity(
-                entity_id=str(
-                    marker.get("id")
-                    or "worldview-manifest-marker:" + current_manifest_id
-                ),
-                label=str(
-                    marker.get("label")
-                    or "Worldview Manifest " + current_manifest_id
-                ),
-                kind="worldview-manifest-marker",
-                properties=properties,
-            )],
+            entities=[
+                OntologyEntity(
+                    entity_id=str(
+                        marker.get("id") or "worldview-manifest-marker:" + current_manifest_id
+                    ),
+                    label=str(marker.get("label") or "Worldview Manifest " + current_manifest_id),
+                    kind="worldview-manifest-marker",
+                    properties=properties,
+                )
+            ],
         )
         replacement = _store.replace_scoped_manifest_marker_graph(marker_graph)
         if not replacement.get("saved"):
@@ -298,9 +319,7 @@ def repair_active_manifest_native_rule_evidence_index(_store: ManifestRepairStor
             }
         with _store._active_scoped_abox_metadata_cache_lock:
             for cache_key in [
-                key
-                for key in _store._active_scoped_abox_metadata_cache
-                if key[0] == clean_world_id
+                key for key in _store._active_scoped_abox_metadata_cache if key[0] == clean_world_id
             ]:
                 _store._active_scoped_abox_metadata_cache.pop(cache_key, None)
         verified_active = dict(_store.active_abox_metadata(clean_world_id) or {})
@@ -348,7 +367,12 @@ def repair_active_manifest_native_rule_evidence_index(_store: ManifestRepairStor
                 pass
 
 
-def ensure_scoped_manifest_evidence_read_index(_store: ManifestRepairStore, graph: PortfolioOntology, active_metadata: Dict[str, object]=None, world_id: str='') -> Dict[str, object]:
+def ensure_scoped_manifest_evidence_read_index(
+    _store: ManifestRepairStore,
+    graph: PortfolioOntology,
+    active_metadata: Dict[str, object] = None,
+    world_id: str = "",
+) -> Dict[str, object]:
     """Backfill a verified evidence-read index for one unchanged Manifest.
 
     The ABox generation and its TypeDB native rule semantics stay exactly
@@ -380,7 +404,9 @@ def ensure_scoped_manifest_evidence_read_index(_store: ManifestRepairStore, grap
     if not active:
         try:
             active = dict(_store.active_abox_metadata(requested_world_id) or {})
-        except Exception as error:  # noqa: BLE001 - do not write against an uncertain active pointer.
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 - do not write against an uncertain active pointer.
             return {
                 "configured": True,
                 "saved": False,

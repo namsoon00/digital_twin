@@ -3,42 +3,52 @@
 from digital_twin.domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_PERSISTENCE_MODE
-from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import ontology_row_content_fingerprint
-from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import ontology_storage_id
-from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import relation_row_id
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import native_rule_manifest_index_required
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import normalize_native_rule_evidence_read_index
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
-from typing import Dict
-from typing import Iterable
+from digital_twin.domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_PERSISTENCE_MODE,
+)
+from digital_twin.modules.reasoning.infrastructure.abox_candidates.identity import (
+    ontology_row_content_fingerprint,
+    ontology_storage_id,
+    relation_row_id,
+)
+from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
+    native_rule_manifest_index_required,
+    normalize_native_rule_evidence_read_index,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
+    clean_symbols_from_payload,
+)
+from typing import Dict, Iterable
 import time
 from .save_ports import ManifestSaveStore, ManifestSaveRuntime
 
 
-def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, boxes: Iterable[str]=None, adopted_write_lease: Dict[str, object]=None, *, _bindings: ManifestSaveRuntime) -> Dict[str, object]:
+def save_scoped_abox_graph(
+    _store: ManifestSaveStore,
+    graph: PortfolioOntology,
+    boxes: Iterable[str] = None,
+    adopted_write_lease: Dict[str, object] = None,
+    *,
+    _bindings: ManifestSaveRuntime
+) -> Dict[str, object]:
     """Stage changed scopes before native inference activates a Manifest."""
     logical_scope_plan = _store.scoped_abox_plan(graph)
     scope_plan = list(logical_scope_plan)
     worldview = dict(getattr(graph, "worldview", {}) or {})
     current_state_mode = _store.is_current_state_scoped_abox_graph(graph)
     current_state_persistence_mode = str(
-        worldview.get("persistenceMode")
-        or worldview.get("physicalStateMode")
-        or ""
+        worldview.get("persistenceMode") or worldview.get("physicalStateMode") or ""
     ).strip()
     copy_on_write_mode = bool(
-        current_state_mode
-        and current_state_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+        current_state_mode and current_state_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
     )
     target_patch = dict(worldview.get("targetScopedManifestPatch") or {})
     if str(target_patch.get("mode") or "") == "incremental-target-scoped-manifest-patch":
         patch_contract = dict(target_patch.get("manifestPatchContract") or {})
         patch_validation = dict(patch_contract.get("validation") or {})
         if (
-            str(patch_contract.get("version") or "")
-            != MANIFEST_PATCH_BOUNDARY_VERSION
+            str(patch_contract.get("version") or "") != MANIFEST_PATCH_BOUNDARY_VERSION
             or not bool(patch_validation.get("valid"))
             or str(patch_validation.get("status") or "") != "valid"
         ):
@@ -51,11 +61,15 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                 "reason": "Incremental ABox persistence requires a validated Manifest patch contract.",
                 "manifestPatchContract": patch_contract,
             }
-    topology_migration = dict(
-        (worldview.get("targetScopedManifestPatch") or {}).get("scopeTopologyMigration") or {}
-    ) if isinstance(worldview.get("targetScopedManifestPatch"), dict) else {}
+    topology_migration = (
+        dict((worldview.get("targetScopedManifestPatch") or {}).get("scopeTopologyMigration") or {})
+        if isinstance(worldview.get("targetScopedManifestPatch"), dict)
+        else {}
+    )
     world_id = str(worldview.get("worldId") or "").strip()
-    manifest_id = str(worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or "").strip()
+    manifest_id = str(
+        worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or ""
+    ).strip()
     inference_target_symbols = clean_symbols_from_payload(
         worldview.get("inferenceTargetSymbols") or worldview.get("targetSymbols") or []
     )
@@ -73,9 +87,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
     # macro/reference generation while each is staging a successor.
     adopted_write_lease = dict(adopted_write_lease or {})
     adopted_owner = str(
-        adopted_write_lease.get("leaseOwner")
-        or adopted_write_lease.get("owner")
-        or ""
+        adopted_write_lease.get("leaseOwner") or adopted_write_lease.get("owner") or ""
     ).strip()
     lease_is_adopted = bool(adopted_owner)
     if lease_is_adopted:
@@ -134,13 +146,13 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
             }
         try:
             return _store.release_scoped_abox_write_lease(write_lease)
-        except Exception as error:  # noqa: BLE001 - expiry protects the next retry if release fails.
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 - expiry protects the next retry if release fails.
             return {"status": "error", "reason": str(error)[:180]}
 
     try:
-        fresh_world_bootstrap = _store.fresh_candidate_world_bootstrap_required(
-            world_id
-        )
+        fresh_world_bootstrap = _store.fresh_candidate_world_bootstrap_required(world_id)
         pending_before = (
             {
                 "status": "skipped-fresh-candidate",
@@ -169,7 +181,9 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
         return {
             "configured": True,
             "saved": False,
-            "status": "staged-scoped-manifest" if same_manifest else "deferred-pending-scoped-manifest",
+            "status": (
+                "staged-scoped-manifest" if same_manifest else "deferred-pending-scoped-manifest"
+            ),
             "graphStore": "typedb",
             "aboxSnapshotId": pending_manifest_id or manifest_id,
             "worldviewManifestId": pending_manifest_id or manifest_id,
@@ -184,17 +198,13 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
         }
 
     try:
-        active_before = (
-            {}
-            if fresh_world_bootstrap
-            else _store.active_abox_metadata(world_id)
-        )
+        active_before = {} if fresh_world_bootstrap else _store.active_abox_metadata(world_id)
     except Exception:
         active_before = {}
-    scoped_active = str(active_before.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
-    migration_mode = str(
-        worldview.get("currentStateMigrationMode") or ""
-    ).strip().lower()
+    scoped_active = (
+        str(active_before.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+    )
+    migration_mode = str(worldview.get("currentStateMigrationMode") or "").strip().lower()
     active_manifest_index_repair: Dict[str, object] = {}
     if scoped_active and native_rule_manifest_index_required(active_before):
         active_index = normalize_native_rule_evidence_read_index(
@@ -245,9 +255,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
         migration_mode=migration_mode,
         current_state_persistence_mode=current_state_persistence_mode,
         relation_rebind_root_scope_ids=(
-            dict(worldview.get("targetScopedManifestPatch") or {}).get(
-                "relationRebindRootScopeIds"
-            )
+            dict(worldview.get("targetScopedManifestPatch") or {}).get("relationRebindRootScopeIds")
             if isinstance(worldview.get("targetScopedManifestPatch"), dict)
             else None
         ),
@@ -265,12 +273,12 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
             changed_scope_ids,
             world_id,
             persistence_mode=current_state_persistence_mode,
-            transition_id=str(
-                worldview.get("projectionRunId") or manifest_id
-            ),
+            transition_id=str(worldview.get("projectionRunId") or manifest_id),
         )
         persistence_graph = _store.current_state_physical_graph(graph, scope_plan)
-    previous_manifest_id = str(active_before.get("worldviewManifestId") or active_before.get("aboxSnapshotId") or "").strip()
+    previous_manifest_id = str(
+        active_before.get("worldviewManifestId") or active_before.get("aboxSnapshotId") or ""
+    ).strip()
     if scoped_active and previous_manifest_id == manifest_id and not changed_scope_ids:
         release_write_lease()
         return {
@@ -282,9 +290,9 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
             "worldviewManifestId": manifest_id,
             "changedScopeIds": [],
             "scopePlan": scope_plan,
-                "activeAbox": active_before,
-                "currentStateMigrationMode": migration_mode,
-            }
+            "activeAbox": active_before,
+            "currentStateMigrationMode": migration_mode,
+        }
     if scoped_active and previous_manifest_id == manifest_id:
         release = release_write_lease()
         return {
@@ -312,9 +320,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
         changed_scope_ids,
         scope_plan,
     )
-    candidate_deferred_scope_ids = deferred_scope_ids.union(
-        native_index_reuse_scope_ids
-    )
+    candidate_deferred_scope_ids = deferred_scope_ids.union(native_index_reuse_scope_ids)
     active_reuse_plan = _store.scoped_abox_active_reuse_scope_ids(
         scope_plan,
         active_generations,
@@ -342,7 +348,9 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                 active_reuse_scope_ids,
                 world_id=world_id,
             )
-        except Exception as error:  # noqa: BLE001 - preserve the active Manifest on an uncertain semantic rebind.
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 - preserve the active Manifest on an uncertain semantic rebind.
             release = release_write_lease()
             return {
                 "configured": True,
@@ -353,7 +361,8 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                 "worldviewManifestId": manifest_id,
                 "worldId": world_id,
                 "preservedActiveGeneration": True,
-                "reason": "Active scoped rows required for an exact relation rebind could not be read: " + str(error)[:180],
+                "reason": "Active scoped rows required for an exact relation rebind could not be read: "
+                + str(error)[:180],
                 "activeReuseScopeIds": active_reuse_scope_ids,
                 "writeLeaseRelease": release,
             }
@@ -368,7 +377,9 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                 "worldviewManifestId": manifest_id,
                 "worldId": world_id,
                 "preservedActiveGeneration": True,
-                "reason": str(active_scope_rows.get("reason") or "Active scoped rows are incomplete.")[:220],
+                "reason": str(
+                    active_scope_rows.get("reason") or "Active scoped rows are incomplete."
+                )[:220],
                 "activeReuseScopeIds": active_reuse_scope_ids,
                 "failedScopes": list(active_scope_rows.get("failedScopes") or []),
                 "writeLeaseRelease": release,
@@ -380,9 +391,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
 
     exact_candidate_rows: Dict[str, object] = {}
     if current_state_mode:
-        current_node_rows, current_relation_rows = _store.graph_persistence_rows(
-            persistence_graph
-        )
+        current_node_rows, current_relation_rows = _store.graph_persistence_rows(persistence_graph)
         exact_candidate_rows = _store.scoped_abox_candidate_persistence_rows(
             current_node_rows,
             current_relation_rows,
@@ -398,12 +407,22 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
             candidate_failure = {
                 key: exact_candidate_rows.get(key)
                 for key in [
-                    "status", "reason", "scopeId", "relationType",
-                    "source", "target", "endpointRole", "endpointId",
-                    "endpointStorageId", "knownEndpointScopeIds",
-                    "knownEndpointGenerationIds", "candidateManifestId",
-                    "expectedGenerationId", "actualGenerationId",
-                    "expectedRelationCount", "currentRelationCount",
+                    "status",
+                    "reason",
+                    "scopeId",
+                    "relationType",
+                    "source",
+                    "target",
+                    "endpointRole",
+                    "endpointId",
+                    "endpointStorageId",
+                    "knownEndpointScopeIds",
+                    "knownEndpointGenerationIds",
+                    "candidateManifestId",
+                    "expectedGenerationId",
+                    "actualGenerationId",
+                    "expectedRelationCount",
+                    "currentRelationCount",
                     "failedScopes",
                 ]
                 if key in exact_candidate_rows
@@ -412,15 +431,17 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                 "configured": True,
                 "saved": False,
                 "status": str(
-                    exact_candidate_rows.get("status")
-                    or "candidate-semantic-reconciliation-failed"
+                    exact_candidate_rows.get("status") or "candidate-semantic-reconciliation-failed"
                 ),
                 "graphStore": "typedb",
                 "aboxSnapshotId": manifest_id,
                 "worldviewManifestId": manifest_id,
                 "worldId": world_id,
                 "preservedActiveGeneration": True,
-                "reason": str(exact_candidate_rows.get("reason") or "Candidate semantic rows could not be reconciled.")[:220],
+                "reason": str(
+                    exact_candidate_rows.get("reason")
+                    or "Candidate semantic rows could not be reconciled."
+                )[:220],
                 "failedScopes": list(exact_candidate_rows.get("failedScopes") or []),
                 "rebindOnlyRelationScopeIds": rebind_only_relation_scope_ids,
                 "candidateSemanticReconciliationFailure": candidate_failure,
@@ -432,9 +453,13 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
         persistence_graph,
         active_before,
         persistence_rows=(
-            exact_candidate_rows.get("candidateNodeRows") or [],
-            exact_candidate_rows.get("candidateRelationRows") or [],
-        ) if current_state_mode else None,
+            (
+                exact_candidate_rows.get("candidateNodeRows") or [],
+                exact_candidate_rows.get("candidateRelationRows") or [],
+            )
+            if current_state_mode
+            else None
+        ),
     )
     if str(native_manifest_index.get("status") or "") not in {
         "local-complete",
@@ -492,10 +517,14 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
         "candidateSemanticReconciliation": {
             key: exact_candidate_rows.get(key)
             for key in [
-                "status", "semanticChangedScopeIds", "physicalChangedScopeIds",
-                "rebindOnlyRelationScopeIds", "deferredScopeIds",
+                "status",
+                "semanticChangedScopeIds",
+                "physicalChangedScopeIds",
+                "rebindOnlyRelationScopeIds",
+                "deferredScopeIds",
                 "currentFallbackRelationScopeIds",
-                "reusedActiveNodeCount", "reusedActiveRelationCount",
+                "reusedActiveNodeCount",
+                "reusedActiveRelationCount",
                 "reboundRelationCount",
             ]
             if key in exact_candidate_rows
@@ -512,6 +541,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
     }
     operation_attempt_count = 0
     try:
+
         def operation():
             nonlocal operation_attempt_count
             operation_attempt_count += 1
@@ -577,9 +607,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                             "transactionCount": 0,
                             "durationMs": 0,
                         }
-                        timing["currentStateWriteStrategy"] = (
-                            "copy-on-write-fresh-generation-v4"
-                        )
+                        timing["currentStateWriteStrategy"] = "copy-on-write-fresh-generation-v4"
                     else:
                         inventory_started = time.monotonic()
                         before_inventory = _store.current_state_slot_inventory(
@@ -602,9 +630,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                             delta_plan.get("nodeStorageIdsToDelete") or [],
                             delta_plan.get("relationStorageIdsToDelete") or [],
                         )
-                        timing["currentStateWriteStrategy"] = (
-                            "legacy-dual-slot-delta-v1"
-                        )
+                        timing["currentStateWriteStrategy"] = "legacy-dual-slot-delta-v1"
                     write_plan = _store.write_persistence_rows(
                         driver,
                         imported,
@@ -621,30 +647,34 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                         delta_plan.get("reusedNodeRows") or [],
                         delta_plan.get("reusedRelationRows") or [],
                     )
-                    write_plan.update({
-                        "requestedNodeCount": len(delta_plan.get("nodeRows") or []),
-                        "requestedRelationCount": len(delta_plan.get("relationRows") or []),
-                        "insertedNodeCount": len(delta_plan.get("nodeRowsToInsert") or []),
-                        "insertedRelationCount": len(delta_plan.get("relationRowsToInsert") or []),
-                        "reusedNodeCount": len(delta_plan.get("reusedNodeRows") or []),
-                        "reusedRelationCount": len(delta_plan.get("reusedRelationRows") or []),
-                        "expectedCountsByScope": expected_counts,
-                        "reusedCountsByScope": reused_counts,
-                        "physicalStateMode": current_state_persistence_mode,
-                        "deltaDelete": delta_delete,
-                        "changedNodeScopeIds": list(
-                            delta_plan.get("changedNodeScopeIds") or []
-                        ),
-                        "requestedRelationBreakdown": _store.scoped_abox_relation_breakdown(
-                            delta_plan.get("relationRows") or []
-                        ),
-                        "insertedRelationBreakdown": _store.scoped_abox_relation_breakdown(
-                            delta_plan.get("relationRowsToInsert") or []
-                        ),
-                        "reusedRelationBreakdown": _store.scoped_abox_relation_breakdown(
-                            delta_plan.get("reusedRelationRows") or []
-                        ),
-                    })
+                    write_plan.update(
+                        {
+                            "requestedNodeCount": len(delta_plan.get("nodeRows") or []),
+                            "requestedRelationCount": len(delta_plan.get("relationRows") or []),
+                            "insertedNodeCount": len(delta_plan.get("nodeRowsToInsert") or []),
+                            "insertedRelationCount": len(
+                                delta_plan.get("relationRowsToInsert") or []
+                            ),
+                            "reusedNodeCount": len(delta_plan.get("reusedNodeRows") or []),
+                            "reusedRelationCount": len(delta_plan.get("reusedRelationRows") or []),
+                            "expectedCountsByScope": expected_counts,
+                            "reusedCountsByScope": reused_counts,
+                            "physicalStateMode": current_state_persistence_mode,
+                            "deltaDelete": delta_delete,
+                            "changedNodeScopeIds": list(
+                                delta_plan.get("changedNodeScopeIds") or []
+                            ),
+                            "requestedRelationBreakdown": _store.scoped_abox_relation_breakdown(
+                                delta_plan.get("relationRows") or []
+                            ),
+                            "insertedRelationBreakdown": _store.scoped_abox_relation_breakdown(
+                                delta_plan.get("relationRowsToInsert") or []
+                            ),
+                            "reusedRelationBreakdown": _store.scoped_abox_relation_breakdown(
+                                delta_plan.get("reusedRelationRows") or []
+                            ),
+                        }
+                    )
                     timing["currentStateDeltaPlan"] = {
                         "requestedNodeCount": write_plan["requestedNodeCount"],
                         "requestedRelationCount": write_plan["requestedRelationCount"],
@@ -652,9 +682,7 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                         "insertedRelationCount": write_plan["insertedRelationCount"],
                         "reusedNodeCount": write_plan["reusedNodeCount"],
                         "reusedRelationCount": write_plan["reusedRelationCount"],
-                        "deletedIdentityCount": int(
-                            delta_delete.get("deletedIdentityCount") or 0
-                        ),
+                        "deletedIdentityCount": int(delta_delete.get("deletedIdentityCount") or 0),
                     }
                 else:
                     write_plan = _store.write_persistence_rows(
@@ -675,24 +703,17 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                 # read. Two grouped counts verify newly inserted rows by
                 # exact manifest/scope/generation instead.
                 changed_scope_rows = [
-                    scope_rows.get(scope_id) or {}
-                    for scope_id in changed_scope_ids
+                    scope_rows.get(scope_id) or {} for scope_id in changed_scope_ids
                 ]
                 expected_counts_by_scope = dict(write_plan.get("expectedCountsByScope") or {})
                 reused_counts_by_scope = dict(write_plan.get("reusedCountsByScope") or {})
                 if current_state_mode and not copy_on_write_mode:
-                    node_storage_ids_to_delete = set(
-                        delta_plan.get("nodeStorageIdsToDelete") or []
-                    )
+                    node_storage_ids_to_delete = set(delta_plan.get("nodeStorageIdsToDelete") or [])
                     relation_storage_ids_to_delete = set(
                         delta_plan.get("relationStorageIdsToDelete") or []
                     )
-                    inserted_node_rows = list(
-                        delta_plan.get("nodeRowsToInsert") or []
-                    )
-                    inserted_relation_rows = list(
-                        delta_plan.get("relationRowsToInsert") or []
-                    )
+                    inserted_node_rows = list(delta_plan.get("nodeRowsToInsert") or [])
+                    inserted_relation_rows = list(delta_plan.get("relationRowsToInsert") or [])
                     inserted_node_storage_ids = [
                         ontology_storage_id(row, row.get("id"), "node")
                         for row in inserted_node_rows
@@ -732,12 +753,8 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                             if storage_id not in relation_storage_ids_to_delete
                         },
                     }
-                    post_inventory["nodes"].update(
-                        inserted_inventory.get("nodes") or {}
-                    )
-                    post_inventory["relations"].update(
-                        inserted_inventory.get("relations") or {}
-                    )
+                    post_inventory["nodes"].update(inserted_inventory.get("nodes") or {})
+                    post_inventory["relations"].update(inserted_inventory.get("relations") or {})
                     actual_counts_by_scope: Dict[str, Dict[str, int]] = {}
                     for key, count_key in [
                         ("nodes", "entityCount"),
@@ -758,17 +775,19 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                         )
                         for row in desired_node_rows
                     }
-                    desired_fingerprints.update({
-                        ontology_storage_id(
-                            row,
-                            relation_row_id(row),
-                            "relation",
-                        ): str(
-                            row.get("contentFingerprint")
-                            or ontology_row_content_fingerprint(row, "relation")
-                        )
-                        for row in desired_relation_rows
-                    })
+                    desired_fingerprints.update(
+                        {
+                            ontology_storage_id(
+                                row,
+                                relation_row_id(row),
+                                "relation",
+                            ): str(
+                                row.get("contentFingerprint")
+                                or ontology_row_content_fingerprint(row, "relation")
+                            )
+                            for row in desired_relation_rows
+                        }
+                    )
                     actual_fingerprints = {
                         storage_id: str(item.get("contentFingerprint") or "")
                         for key in ["nodes", "relations"]
@@ -794,9 +813,12 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                             "Current-state ABox delta verification failed for "
                             + str(len(missing_or_stale))
                             + " physical facts"
-                            + " missing=" + str(len(missing_storage_ids))
-                            + " stale=" + str(len(stale_storage_ids))
-                            + " sample=" + ",".join(missing_or_stale[:5])
+                            + " missing="
+                            + str(len(missing_storage_ids))
+                            + " stale="
+                            + str(len(stale_storage_ids))
+                            + " sample="
+                            + ",".join(missing_or_stale[:5])
                             + "."
                         )
                 else:
@@ -814,14 +836,14 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                     "mode": (
                         "current-state-delta-exact-write-verification"
                         if current_state_mode and not copy_on_write_mode
-                        else "copy-on-write-manifest-scope-count"
-                        if copy_on_write_mode
-                        else "manifest-scope-count"
+                        else (
+                            "copy-on-write-manifest-scope-count"
+                            if copy_on_write_mode
+                            else "manifest-scope-count"
+                        )
                     ),
                     "manifestScopedReadCount": (
-                        0
-                        if current_state_mode and not copy_on_write_mode
-                        else 2
+                        0 if current_state_mode and not copy_on_write_mode else 2
                     ),
                     "reusedStorageIdentityCount": (
                         int(write_plan.get("reusedNodeCount") or 0)
@@ -837,10 +859,9 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                         "entityCount": 0,
                         "relationCount": 0,
                     }
-                    valid = (
-                        actual.get("entityCount") == int(expected.get("entityCount") or 0)
-                        and actual.get("relationCount") == int(expected.get("relationCount") or 0)
-                    )
+                    valid = actual.get("entityCount") == int(
+                        expected.get("entityCount") or 0
+                    ) and actual.get("relationCount") == int(expected.get("relationCount") or 0)
                     verification[scope_id] = {
                         "status": "ok" if valid else "incomplete",
                         "generationId": generation_id,
@@ -849,10 +870,18 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
                         "actualEntityCount": int(actual.get("entityCount") or 0),
                         "actualRelationCount": int(actual.get("relationCount") or 0),
                     }
-                timing["changedScopeVerificationMs"] = round((time.monotonic() - verification_started) * 1000, 1)
-                failed = [scope_id for scope_id, item in verification.items() if str(item.get("status") or "") != "ok"]
+                timing["changedScopeVerificationMs"] = round(
+                    (time.monotonic() - verification_started) * 1000, 1
+                )
+                failed = [
+                    scope_id
+                    for scope_id, item in verification.items()
+                    if str(item.get("status") or "") != "ok"
+                ]
                 if failed:
-                    raise RuntimeError("Scoped ABox candidate verification failed for " + ", ".join(failed))
+                    raise RuntimeError(
+                        "Scoped ABox candidate verification failed for " + ", ".join(failed)
+                    )
                 marker_graph = _store.scoped_manifest_marker_graph(
                     persistence_graph,
                     scope_plan,
@@ -906,7 +935,8 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
         if (
             str(pending_after.get("status") or "") != "pending"
             or str(pending_after.get("candidateAboxSnapshotId") or "") != manifest_id
-            or clean_symbols_from_payload(pending_after.get("targetSymbols") or []) != inference_target_symbols
+            or clean_symbols_from_payload(pending_after.get("targetSymbols") or [])
+            != inference_target_symbols
         ):
             raise RuntimeError(
                 "Scoped ABox activation journal verification failed after candidate staging."
@@ -945,15 +975,21 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
             ),
             "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
             "scopeTopologyMigration": topology_migration,
-            "boundedScopeCount": len([
-                item for item in scope_plan
-                if ":bucket:" in str(item.get("scopeId") or "")
-                or ":window:" in str(item.get("scopeId") or "")
-            ]),
-            "changedBoundedScopeCount": len([
-                scope_id for scope_id in changed_scope_ids
-                if ":bucket:" in scope_id or ":window:" in scope_id
-            ]),
+            "boundedScopeCount": len(
+                [
+                    item
+                    for item in scope_plan
+                    if ":bucket:" in str(item.get("scopeId") or "")
+                    or ":window:" in str(item.get("scopeId") or "")
+                ]
+            ),
+            "changedBoundedScopeCount": len(
+                [
+                    scope_id
+                    for scope_id in changed_scope_ids
+                    if ":bucket:" in scope_id or ":window:" in scope_id
+                ]
+            ),
             "pendingAboxActivation": pending_after,
             "changedScopeEntityCount": len(node_rows),
             "changedScopeRelationCount": len(relation_rows),
@@ -1024,7 +1060,8 @@ def save_scoped_abox_graph(_store: ManifestSaveStore, graph: PortfolioOntology, 
             ),
             "reasonCode": reason_code,
             "reason": str(error)[:220],
-            "retryable": reason_code in {
+            "retryable": reason_code
+            in {
                 "typedbConnectionError",
                 "typedbTimeout",
             },

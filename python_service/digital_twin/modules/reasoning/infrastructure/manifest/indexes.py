@@ -1,18 +1,25 @@
 """manifest: indexes through explicit injected capabilities."""
 
 from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import merge_native_rule_evidence_read_index
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import native_rule_evidence_read_index_from_rows
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import native_rule_manifest_index_required
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import normalize_native_rule_evidence_read_index
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
-from typing import Dict
-from typing import Iterable
-from typing import Tuple
+from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
+    merge_native_rule_evidence_read_index,
+    native_rule_evidence_read_index_from_rows,
+    native_rule_manifest_index_required,
+    normalize_native_rule_evidence_read_index,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
+    clean_symbols_from_payload,
+)
+from typing import Dict, Iterable, Tuple
 from .indexes_ports import ManifestIndexesStore
 
 
-def prepare_scoped_manifest_native_rule_indexes(_store: ManifestIndexesStore, graph: PortfolioOntology, active_metadata: Dict[str, object]=None, persistence_rows: Tuple[Iterable[Dict[str, object]], Iterable[Dict[str, object]]]=None) -> Dict[str, object]:
+def prepare_scoped_manifest_native_rule_indexes(
+    _store: ManifestIndexesStore,
+    graph: PortfolioOntology,
+    active_metadata: Dict[str, object] = None,
+    persistence_rows: Tuple[Iterable[Dict[str, object]], Iterable[Dict[str, object]]] = None,
+) -> Dict[str, object]:
     """Bind a staged target graph to the complete candidate Manifest index.
 
     This is control-plane persistence only. It never evaluates RuleBox
@@ -37,16 +44,11 @@ def prepare_scoped_manifest_native_rule_indexes(_store: ManifestIndexesStore, gr
         return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
     graph.worldview["nativeRuleEvidenceReadIndexRequired"] = True
     topology = dict(worldview.get("nativeRulePlannerTopology") or {})
-    incoming_topology = dict(
-        worldview.get("nativeRulePlannerTopologyIncoming")
-        or topology
-    )
+    incoming_topology = dict(worldview.get("nativeRulePlannerTopologyIncoming") or topology)
     patch = dict(worldview.get("targetScopedManifestPatch") or {})
     target_symbols = clean_symbols_from_payload(patch.get("targetSymbols") or [])
     replacement_symbols = clean_symbols_from_payload(
-        patch.get("replacementSymbols")
-        if "replacementSymbols" in patch
-        else target_symbols
+        patch.get("replacementSymbols") if "replacementSymbols" in patch else target_symbols
     )
     if persistence_rows is None:
         node_rows, relation_rows = _store.graph_persistence_rows(graph)
@@ -71,16 +73,13 @@ def prepare_scoped_manifest_native_rule_indexes(_store: ManifestIndexesStore, gr
                 "status": "local-complete",
                 "mode": "exact-candidate-rows",
                 "replacedSymbols": replacement_symbols if target_scoped else [],
-                "mergedSymbolCount": len(
-                    incoming_index.get("sourceIdsBySymbol") or {}
-                ),
+                "mergedSymbolCount": len(incoming_index.get("sourceIdsBySymbol") or {}),
             }
             return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
         if target_scoped:
             if "replacementSymbols" in patch and not replacement_symbols:
                 active_index = dict(
-                    (active_metadata or {}).get("nativeRuleEvidenceReadIndex")
-                    or {}
+                    (active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}
                 )
                 active_reuse = normalize_native_rule_evidence_read_index(
                     active_index,
@@ -92,13 +91,9 @@ def prepare_scoped_manifest_native_rule_indexes(_store: ManifestIndexesStore, gr
                         "status": "merged",
                         "mode": "semantic-noop-active-reuse",
                         "replacedSymbols": [],
-                        "mergedSymbolCount": len(
-                            active_index.get("sourceIdsBySymbol") or {}
-                        ),
+                        "mergedSymbolCount": len(active_index.get("sourceIdsBySymbol") or {}),
                     }
-                    return dict(
-                        graph.worldview["nativeRuleEvidenceReadIndexMerge"]
-                    )
+                    return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
             merged_candidate = merge_native_rule_evidence_read_index(
                 dict((active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}),
                 dict((active_metadata or {}).get("nativeRulePlannerTopology") or {}),
@@ -115,28 +110,19 @@ def prepare_scoped_manifest_native_rule_indexes(_store: ManifestIndexesStore, gr
                 graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
                     "status": "merged",
                     "mode": "exact-candidate-subset",
-                    "replacedSymbols": list(
-                        merged_candidate.get("replacedSymbols") or []
-                    ),
-                    "mergedSymbolCount": int(
-                        merged_candidate.get("mergedSymbolCount") or 0
-                    ),
+                    "replacedSymbols": list(merged_candidate.get("replacedSymbols") or []),
+                    "mergedSymbolCount": int(merged_candidate.get("mergedSymbolCount") or 0),
                 }
                 return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
             graph.worldview.pop("nativeRuleEvidenceReadIndex", None)
             graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
                 "status": str(
-                    merged_candidate.get("status")
-                    or "candidate-subset-index-merge-failed"
+                    merged_candidate.get("status") or "candidate-subset-index-merge-failed"
                 ),
                 "mode": "exact-candidate-subset",
                 "reason": str(merged_candidate.get("reason") or "")[:220],
-                "replacedSymbols": list(
-                    merged_candidate.get("replacedSymbols") or []
-                ),
-                "missingSymbols": list(
-                    merged_candidate.get("missingSymbols") or []
-                ),
+                "replacedSymbols": list(merged_candidate.get("replacedSymbols") or []),
+                "missingSymbols": list(merged_candidate.get("missingSymbols") or []),
                 "mergedSymbolCount": 0,
             }
             return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
@@ -168,9 +154,7 @@ def prepare_scoped_manifest_native_rule_indexes(_store: ManifestIndexesStore, gr
         }
 
     if "replacementSymbols" in patch and not replacement_symbols:
-        active_index = dict(
-            (active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}
-        )
+        active_index = dict((active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {})
         active_reuse = normalize_native_rule_evidence_read_index(
             active_index,
             planner_topology=topology,
@@ -181,9 +165,7 @@ def prepare_scoped_manifest_native_rule_indexes(_store: ManifestIndexesStore, gr
                 "status": "merged",
                 "mode": "semantic-noop-active-reuse",
                 "replacedSymbols": [],
-                "mergedSymbolCount": len(
-                    active_index.get("sourceIdsBySymbol") or {}
-                ),
+                "mergedSymbolCount": len(active_index.get("sourceIdsBySymbol") or {}),
             }
             return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
 

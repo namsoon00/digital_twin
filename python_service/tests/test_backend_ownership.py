@@ -160,6 +160,53 @@ class BackendOwnershipTests(unittest.TestCase):
             method = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
             self.assertEqual(entry['bodyHash'], body_hash(method), name)
 
+    def test_native_retry_respects_deadline_and_never_retries_invalid_queries(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from digital_twin.modules.reasoning.infrastructure.native_execution import retry
+        execute = Mock(side_effect=AssertionError('No retry may start'))
+        store = SimpleNamespace(
+            native_rule_entry_has_timeout_failure=lambda result: False,
+            native_rule_entry_has_interrupted_transaction_failure=lambda result: True,
+            execute_typedb_native_rule_entry=execute,
+        )
+        failed = {'status': 'partial', 'failure': {'status': 'query-error'}}
+        with patch.object(retry.time, 'monotonic', return_value=10):
+            result = retry.recover_timed_out_native_rule_entry(
+                store, failed, {}, ['AAA'], 'market:fixture', True, (), None, 10.4, 'native')
+        self.assertEqual(failed, result)
+        store.native_rule_entry_has_interrupted_transaction_failure = lambda result: False
+        result = retry.recover_timed_out_native_rule_entry(
+            store, failed, {}, ['AAA'], 'market:fixture', True, (), None, 999, 'native')
+        self.assertEqual(failed, result)
+        execute.assert_not_called()
+
+    def test_native_timeout_shards_do_not_publish_incomplete_rows(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from digital_twin.modules.reasoning.infrastructure.native_execution import retry
+        execute = Mock(side_effect=[
+            {'status': 'ok', 'rows': [{'symbol': 'AAA'}], 'readTransactionCount': 1},
+            {'status': 'partial', 'failure': {'status': 'query-timeout'}, 'readTransactionCount': 1},
+        ])
+        store = SimpleNamespace(
+            native_rule_entry_has_timeout_failure=lambda result: True,
+            native_rule_entry_has_interrupted_transaction_failure=lambda result: False,
+            execute_typedb_native_rule_entry=execute,
+        )
+        failed = {'status': 'partial', 'failure': {'status': 'query-timeout'}, 'readTransactionCount': 1}
+        with patch.object(retry.time, 'monotonic', return_value=10), patch.object(
+            retry, 'typedb_native_rule_target_work_plan', return_value={'workItems': [{'candidateSymbols': ['AAA']}, {'candidateSymbols': ['BBB']}]}
+        ):
+            result = retry.recover_timed_out_native_rule_entry(
+                store, failed, {'candidateSymbols': ['AAA', 'BBB']}, ['AAA', 'BBB'],
+                'market:fixture', True, (), None, 999, 'native')
+        self.assertEqual('partial', result['status'])
+        self.assertNotIn('rows', result)
+        self.assertEqual(3, result['readTransactionCount'])
+        self.assertEqual(1, result['failure']['timeoutFallbackFailedShardIndex'])
+        self.assertEqual(2, execute.call_count)
+
     def test_facade_keeps_signatures_and_coordinator_decorators(self):
         tree = ast.parse((ROOT / 'digital_twin/infrastructure/typedb_ontology.py').read_text())
         methods = {c.name + '.' + n.name: n for c in tree.body if isinstance(c, ast.ClassDef)

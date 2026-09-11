@@ -3,19 +3,23 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from digital_twin.domain.ontology_contracts import PortfolioOntology
-from typing import Dict
-from typing import Iterable
-from typing import List
-from typing import Tuple
-
+from typing import Dict, Iterable, List, Tuple
 
 
 class ManifestGraphsStore(Protocol):
-    def graph_persistence_rows(self, graph: PortfolioOntology) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
-        ...
+    def graph_persistence_rows(
+        self, graph: PortfolioOntology
+    ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]: ...
 
-    def scoped_manifest_pointer_graph(self, graph: PortfolioOntology, scope_plan: List[Dict[str, object]], previous_metadata: Dict[str, object]=None, pending_activation: bool=True, inference_target_symbols: Iterable[str]=None, scope_ids: Iterable[str]=None) -> PortfolioOntology:
-        ...
+    def scoped_manifest_pointer_graph(
+        self,
+        graph: PortfolioOntology,
+        scope_plan: List[Dict[str, object]],
+        previous_metadata: Dict[str, object] = None,
+        pending_activation: bool = True,
+        inference_target_symbols: Iterable[str] = None,
+        scope_ids: Iterable[str] = None,
+    ) -> PortfolioOntology: ...
 
 
 @dataclass(frozen=True)

@@ -1,23 +1,35 @@
 """manifest: graphs through explicit injected capabilities."""
 
-from digital_twin.domain.ontology_contracts import OntologyEntity
-from digital_twin.domain.ontology_contracts import PortfolioOntology
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
-from digital_twin.domain.ontology_scopes import SCOPED_ABOX_PERSISTENCE_MODE
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import native_rule_evidence_read_index_from_rows
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import native_rule_manifest_index_required
-from digital_twin.modules.reasoning.infrastructure.manifest.index_values import normalize_native_rule_evidence_read_index
-from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
-from typing import Dict
-from typing import Iterable
-from typing import List
+from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_PERSISTENCE_MODE,
+)
+from digital_twin.modules.reasoning.infrastructure.manifest.index_values import (
+    native_rule_evidence_read_index_from_rows,
+    native_rule_manifest_index_required,
+    normalize_native_rule_evidence_read_index,
+)
+from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
+    clean_symbols_from_payload,
+)
+from typing import Dict, Iterable, List
 import hashlib
 from .graphs_ports import ManifestGraphsStore, ManifestGraphsRuntime
 
 
-def scoped_manifest_marker_graph(_store: ManifestGraphsStore, graph: PortfolioOntology, scope_plan: List[Dict[str, object]], changed_scope_ids: Iterable[str], *, _bindings: ManifestGraphsRuntime) -> PortfolioOntology:
+def scoped_manifest_marker_graph(
+    _store: ManifestGraphsStore,
+    graph: PortfolioOntology,
+    scope_plan: List[Dict[str, object]],
+    changed_scope_ids: Iterable[str],
+    *,
+    _bindings: ManifestGraphsRuntime
+) -> PortfolioOntology:
     worldview = dict(getattr(graph, "worldview", {}) or {})
-    manifest_id = str(worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or "").strip()
+    manifest_id = str(
+        worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or ""
+    ).strip()
     if not manifest_id:
         return PortfolioOntology(str(graph.portfolio_id or "typedb-scoped-manifest"))
     world_context = {
@@ -70,21 +82,25 @@ def scoped_manifest_marker_graph(_store: ManifestGraphsStore, graph: PortfolioOn
             "scopeGenerationId": manifest_id,
             "materialFingerprint": str(worldview.get("materialFingerprint") or ""),
             "projectionRunId": str(worldview.get("projectionRunId") or ""),
-            "asOf": str(worldview.get("asOf") or worldview.get("generatedAt") or _bindings.utc_now()),
+            "asOf": str(
+                worldview.get("asOf") or worldview.get("generatedAt") or _bindings.utc_now()
+            ),
             "lastFullScopeReconcileAt": str(worldview.get("lastFullScopeReconcileAt") or ""),
             "scopePlan": list(scope_plan),
             "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
-            "logicalScopeGenerationIds": dict(
-                worldview.get("logicalScopeGenerationIds") or {}
-            ),
+            "logicalScopeGenerationIds": dict(worldview.get("logicalScopeGenerationIds") or {}),
             "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
             "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
             "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
             "marketScopeObservedAt": dict(worldview.get("marketScopeObservedAt") or {}),
-            "marketScopeObservedAtVersion": str(worldview.get("marketScopeObservedAtVersion") or ""),
+            "marketScopeObservedAtVersion": str(
+                worldview.get("marketScopeObservedAtVersion") or ""
+            ),
             "marketWorldProjectionMode": str(worldview.get("marketWorldProjectionMode") or ""),
             "sharedWorldProjection": str(worldview.get("sharedWorldProjection") or ""),
-            "sharedWorldProjectionContractVersion": str(worldview.get("sharedWorldProjectionContractVersion") or ""),
+            "sharedWorldProjectionContractVersion": str(
+                worldview.get("sharedWorldProjectionContractVersion") or ""
+            ),
             "sharedWorldFullRebuild": bool(worldview.get("sharedWorldFullRebuild")),
             "accountOverlayProjectionContractVersion": str(
                 worldview.get("accountOverlayProjectionContractVersion") or ""
@@ -120,7 +136,9 @@ def scoped_manifest_marker_graph(_store: ManifestGraphsStore, graph: PortfolioOn
                 worldview.get("nativeRuleEvidenceReadIndexMerge") or {}
             ),
             "factSlotProjection": dict(worldview.get("factSlotProjection") or {}),
-            "changedScopeIds": sorted({str(item or "") for item in changed_scope_ids if str(item or "")}),
+            "changedScopeIds": sorted(
+                {str(item or "") for item in changed_scope_ids if str(item or "")}
+            ),
             "projectionStatus": "complete",
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
             "persistenceMode": str(
@@ -136,21 +154,39 @@ def scoped_manifest_marker_graph(_store: ManifestGraphsStore, graph: PortfolioOn
     return PortfolioOntology(str(graph.portfolio_id or "typedb-scoped-manifest"), entities=[marker])
 
 
-def scoped_manifest_pointer_graph(_store: ManifestGraphsStore, graph: PortfolioOntology, scope_plan: List[Dict[str, object]], previous_metadata: Dict[str, object]=None, pending_activation: bool=True, inference_target_symbols: Iterable[str]=None, scope_ids: Iterable[str]=None, *, _bindings: ManifestGraphsRuntime) -> PortfolioOntology:
+def scoped_manifest_pointer_graph(
+    _store: ManifestGraphsStore,
+    graph: PortfolioOntology,
+    scope_plan: List[Dict[str, object]],
+    previous_metadata: Dict[str, object] = None,
+    pending_activation: bool = True,
+    inference_target_symbols: Iterable[str] = None,
+    scope_ids: Iterable[str] = None,
+    *,
+    _bindings: ManifestGraphsRuntime
+) -> PortfolioOntology:
     worldview = dict(getattr(graph, "worldview", {}) or {})
-    manifest_id = str(worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or "").strip()
+    manifest_id = str(
+        worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or ""
+    ).strip()
     if not manifest_id:
         return PortfolioOntology(str(graph.portfolio_id or "typedb-scoped-control"))
     previous = dict(previous_metadata or {})
-    previous_manifest_id = str(previous.get("worldviewManifestId") or previous.get("aboxSnapshotId") or "").strip()
+    previous_manifest_id = str(
+        previous.get("worldviewManifestId") or previous.get("aboxSnapshotId") or ""
+    ).strip()
     world_context = {
         "worldId": str(worldview.get("worldId") or previous.get("worldId") or ""),
         "worldType": str(worldview.get("worldType") or previous.get("worldType") or ""),
         "tenantId": str(worldview.get("tenantId") or previous.get("tenantId") or ""),
-        "accountId": str(worldview.get("accountId") or previous.get("accountId") or graph.portfolio_id or ""),
+        "accountId": str(
+            worldview.get("accountId") or previous.get("accountId") or graph.portfolio_id or ""
+        ),
     }
     world_id = str(world_context.get("worldId") or "")
-    world_suffix = (":world:" + hashlib.sha256(world_id.encode("utf-8")).hexdigest()[:16]) if world_id else ""
+    world_suffix = (
+        (":world:" + hashlib.sha256(world_id.encode("utf-8")).hexdigest()[:16]) if world_id else ""
+    )
     # A Manifest marker intentionally excludes execution targets because
     # they do not affect its material identity. The activation journal is
     # the durable hand-off for those targets, so a pointer rebuild must
@@ -176,21 +212,21 @@ def scoped_manifest_pointer_graph(_store: ManifestGraphsStore, graph: PortfolioO
         "asOf": str(worldview.get("asOf") or worldview.get("generatedAt") or _bindings.utc_now()),
         "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
     }
-    entities = [OntologyEntity(
-        entity_id="worldview-manifest-active-pointer" + world_suffix,
-        label="Active Worldview Manifest",
-        kind="worldview-manifest-active-pointer",
-        properties={
-            **control_identity_common,
-            "tboxClass": "WorldviewManifestActivePointer",
-            "snapshotId": manifest_id,
-            "aboxSnapshotId": manifest_id,
-        },
-    )]
+    entities = [
+        OntologyEntity(
+            entity_id="worldview-manifest-active-pointer" + world_suffix,
+            label="Active Worldview Manifest",
+            kind="worldview-manifest-active-pointer",
+            properties={
+                **control_identity_common,
+                "tboxClass": "WorldviewManifestActivePointer",
+                "snapshotId": manifest_id,
+                "aboxSnapshotId": manifest_id,
+            },
+        )
+    ]
     selected_scope_ids = {
-        str(value or "").strip()
-        for value in scope_ids or []
-        if str(value or "").strip()
+        str(value or "").strip() for value in scope_ids or [] if str(value or "").strip()
     }
     include_all_scope_pointers = scope_ids is None
     for item in scope_plan:
@@ -203,45 +239,55 @@ def scoped_manifest_pointer_graph(_store: ManifestGraphsStore, graph: PortfolioO
         ):
             continue
         digest = hashlib.sha256((world_id + "|" + scope_id).encode("utf-8")).hexdigest()[:16]
-        entities.append(OntologyEntity(
-            entity_id="abox-scope-active-pointer:" + digest,
-            label="Active ABox scope " + scope_id,
-            kind="abox-scope-active-pointer",
-            properties={
-                "ontologyBox": "ABoxControl",
-                **world_context,
-                "tboxClass": "ABoxScopeActivePointer",
-                "snapshotId": generation_id,
-                "aboxSnapshotId": generation_id,
-                "worldviewManifestId": manifest_id,
-                "aboxScopeId": scope_id,
-                "aboxScopeType": str(item.get("scopeType") or scope_id.split(":", 1)[0]),
-                "scopeGenerationId": generation_id,
-                "scopeFingerprint": str(item.get("fingerprint") or ""),
-            },
-        ))
+        entities.append(
+            OntologyEntity(
+                entity_id="abox-scope-active-pointer:" + digest,
+                label="Active ABox scope " + scope_id,
+                kind="abox-scope-active-pointer",
+                properties={
+                    "ontologyBox": "ABoxControl",
+                    **world_context,
+                    "tboxClass": "ABoxScopeActivePointer",
+                    "snapshotId": generation_id,
+                    "aboxSnapshotId": generation_id,
+                    "worldviewManifestId": manifest_id,
+                    "aboxScopeId": scope_id,
+                    "aboxScopeType": str(item.get("scopeType") or scope_id.split(":", 1)[0]),
+                    "scopeGenerationId": generation_id,
+                    "scopeFingerprint": str(item.get("fingerprint") or ""),
+                },
+            )
+        )
     if pending_activation and previous_manifest_id != manifest_id:
-        entities.append(OntologyEntity(
-            entity_id="abox-activation-pending" + world_suffix,
-            label="Worldview Manifest activation pending native inference",
-            kind="abox-activation-pending",
-            properties={
-                **control_identity_common,
-                "tboxClass": "ABoxActivationPending",
-                "snapshotId": manifest_id,
-                "aboxSnapshotId": manifest_id,
-                "candidateAboxSnapshotId": manifest_id,
-                "candidateWorldviewManifestId": manifest_id,
-                "previousAboxSnapshotId": previous_manifest_id,
-                "previousWorldviewManifestId": previous_manifest_id,
-                "targetSymbols": target_symbols,
-                "activationStatus": "pending-native-inference",
-            },
-        ))
+        entities.append(
+            OntologyEntity(
+                entity_id="abox-activation-pending" + world_suffix,
+                label="Worldview Manifest activation pending native inference",
+                kind="abox-activation-pending",
+                properties={
+                    **control_identity_common,
+                    "tboxClass": "ABoxActivationPending",
+                    "snapshotId": manifest_id,
+                    "aboxSnapshotId": manifest_id,
+                    "candidateAboxSnapshotId": manifest_id,
+                    "candidateWorldviewManifestId": manifest_id,
+                    "previousAboxSnapshotId": previous_manifest_id,
+                    "previousWorldviewManifestId": previous_manifest_id,
+                    "targetSymbols": target_symbols,
+                    "activationStatus": "pending-native-inference",
+                },
+            )
+        )
     return PortfolioOntology(str(graph.portfolio_id or "typedb-scoped-control"), entities=entities)
 
 
-def scoped_manifest_pending_graph(_store: ManifestGraphsStore, graph: PortfolioOntology, scope_plan: List[Dict[str, object]], previous_metadata: Dict[str, object]=None, inference_target_symbols: Iterable[str]=None) -> PortfolioOntology:
+def scoped_manifest_pending_graph(
+    _store: ManifestGraphsStore,
+    graph: PortfolioOntology,
+    scope_plan: List[Dict[str, object]],
+    previous_metadata: Dict[str, object] = None,
+    inference_target_symbols: Iterable[str] = None,
+) -> PortfolioOntology:
     """Persist a verified candidate journal without moving the live world.
 
     Candidate scope generations and their complete Manifest marker can be
@@ -258,9 +304,7 @@ def scoped_manifest_pending_graph(_store: ManifestGraphsStore, graph: PortfolioO
         inference_target_symbols=inference_target_symbols,
     )
     pending_entities = [
-        entity
-        for entity in control.entities
-        if str(entity.kind or "") == "abox-activation-pending"
+        entity for entity in control.entities if str(entity.kind or "") == "abox-activation-pending"
     ]
     for entity in pending_entities:
         entity.properties["activationStatus"] = "staged-native-inference"
@@ -270,7 +314,16 @@ def scoped_manifest_pending_graph(_store: ManifestGraphsStore, graph: PortfolioO
     )
 
 
-def scoped_manifest_control_graph(_store: ManifestGraphsStore, metadata: Dict[str, object], previous_metadata: Dict[str, object]=None, pending_activation: bool=False, inference_target_symbols: Iterable[str]=None, scope_ids: Iterable[str]=None, *, _bindings: ManifestGraphsRuntime) -> PortfolioOntology:
+def scoped_manifest_control_graph(
+    _store: ManifestGraphsStore,
+    metadata: Dict[str, object],
+    previous_metadata: Dict[str, object] = None,
+    pending_activation: bool = False,
+    inference_target_symbols: Iterable[str] = None,
+    scope_ids: Iterable[str] = None,
+    *,
+    _bindings: ManifestGraphsRuntime
+) -> PortfolioOntology:
     """Build the active Manifest pointer and an optional scope-pointer delta.
 
     The main Manifest pointer is always replaced. ``scope_ids`` lets an
@@ -278,7 +331,9 @@ def scoped_manifest_control_graph(_store: ManifestGraphsStore, metadata: Dict[st
     verified active Manifest; all other scope pointers remain valid.
     """
     payload = dict(metadata or {})
-    manifest_id = str(payload.get("worldviewManifestId") or payload.get("aboxSnapshotId") or "").strip()
+    manifest_id = str(
+        payload.get("worldviewManifestId") or payload.get("aboxSnapshotId") or ""
+    ).strip()
     if not manifest_id:
         return PortfolioOntology("typedb-scoped-control")
     worldview = {
@@ -309,7 +364,9 @@ def scoped_manifest_control_graph(_store: ManifestGraphsStore, metadata: Dict[st
     )
 
 
-def scoped_manifest_control_delta(metadata: Dict[str, object], previous_metadata: Dict[str, object]=None) -> Dict[str, object]:
+def scoped_manifest_control_delta(
+    metadata: Dict[str, object], previous_metadata: Dict[str, object] = None
+) -> Dict[str, object]:
     """Return the pointer rows an activation must replace.
 
     A Worldview Manifest changes whenever any scope generation changes,
@@ -326,17 +383,19 @@ def scoped_manifest_control_delta(metadata: Dict[str, object], previous_metadata
     }
     previous_generations = {
         str(scope_id or "").strip(): str(generation_id or "").strip()
-        for scope_id, generation_id in dict(previous_payload.get("scopeGenerationIds") or {}).items()
+        for scope_id, generation_id in dict(
+            previous_payload.get("scopeGenerationIds") or {}
+        ).items()
         if str(scope_id or "").strip() and str(generation_id or "").strip()
     }
     previous_scoped = (
         str(previous_payload.get("status") or "") == "ok"
-        and str(previous_payload.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+        and str(previous_payload.get("scopedAboxManifestVersion") or "")
+        == SCOPED_ABOX_MANIFEST_VERSION
         and bool(previous_generations)
     )
-    same_topology = (
-        str(previous_payload.get("scopeTopologyVersion") or "")
-        == str(next_payload.get("scopeTopologyVersion") or "")
+    same_topology = str(previous_payload.get("scopeTopologyVersion") or "") == str(
+        next_payload.get("scopeTopologyVersion") or ""
     )
     replace_all = not previous_scoped or not same_topology
     changed_scope_ids = sorted(
@@ -348,22 +407,16 @@ def scoped_manifest_control_delta(metadata: Dict[str, object], previous_metadata
             if previous_generations.get(scope_id) != generation_id
         }
     )
-    removed_scope_ids = sorted(
-        set(previous_generations) - set(next_generations)
-    )
+    removed_scope_ids = sorted(set(previous_generations) - set(next_generations))
     return {
         "mode": (
-            "full-scoped-control-rebuild"
-            if replace_all
-            else "incremental-scoped-control-patch"
+            "full-scoped-control-rebuild" if replace_all else "incremental-scoped-control-patch"
         ),
         "replaceAllScopePointers": replace_all,
         "changedScopeIds": changed_scope_ids,
         "removedScopeIds": removed_scope_ids,
         "replacedScopeIds": sorted(set(changed_scope_ids) | set(removed_scope_ids)),
-        "reusedScopeIds": sorted(
-            set(next_generations) - set(changed_scope_ids)
-        ),
+        "reusedScopeIds": sorted(set(next_generations) - set(changed_scope_ids)),
         "previousScopeCount": len(previous_generations),
         "nextScopeCount": len(next_generations),
     }

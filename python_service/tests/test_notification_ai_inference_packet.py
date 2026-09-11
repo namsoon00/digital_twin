@@ -104,6 +104,9 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             "20일 평균을 4.76% 밑도는 가격입니다.",
             "가격 변화율은 -0.43%입니다.",
             "가격은 0.43% 하락했습니다.",
+            "가격은 0.43% 내리고 있습니다.",
+            "가격은 0.43% 내렸습니다.",
+            "가격은 0.43% 떨어졌습니다.",
             "거래량은 평균의 0.85배입니다.",
         ]:
             with self.subTest(text=text):
@@ -112,6 +115,8 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             "20일 평균보다 4.76% 높습니다.",
             "가격은 -0.43% 상승했습니다.",
             "가격은 0.44% 하락했습니다.",
+            "가격은 0.43% 올랐습니다.",
+            "가격은 0.43% 오른 상태입니다.",
             "60일 평균보다 4.76% 낮습니다.",
             "새 진입 가격은 20원입니다.",
             "평균 대비 4.76%입니다.",
@@ -126,6 +131,13 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         }]
         self.assertEqual([], ungrounded_narrative_numbers(
             "20일선보다 2.761% 높지만 일간 1.136% 하락했습니다.", rows,
+        ))
+        self.assertEqual([], ungrounded_narrative_numbers(
+            "20일선보다 2.761% 높지만 일간 1.136% 내렸습니다.", rows,
+        ))
+        self.assertEqual([], ungrounded_narrative_numbers(
+            "가격은 2.76% 올랐습니다.",
+            [{"evidenceId": "fact:priceChangeRate", "value": 2.761}],
         ))
         for text in ("목표는 999원입니다.", "목표는 2026원입니다.", "2.7609% 높습니다."):
             with self.subTest(text=text):

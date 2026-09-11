@@ -7,8 +7,8 @@ from typing import Mapping
 
 NUMBER = re.compile(r"(?<![0-9A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?")
 PERIOD = re.compile(r"^\s*(개월|시간|분기|일|년|분)(?![A-Za-z])")
-NEGATIVE = re.compile(r"낮|밑[돌도]|하락|감소|하회|순매도|손실|줄어|내려")
-POSITIVE = re.compile(r"높|웃[돌도]|상승|증가|상회|순매수|늘어|올라")
+NEGATIVE = re.compile(r"낮|밑[돌도]|하락|감소|하회|순매도|손실|줄[어었]|내[려렸리린릴림]|떨어|약세")
+POSITIVE = re.compile(r"높|웃[돌도]|상승|증가|상회|순매수|늘[어었]|올[라랐]|오[르른를름]|강세")
 SKIP_FIELDS = {
     "id", "evidenceId", "source", "sourceAsOf", "asOf", "generatedAt",
     "observedAt", "updatedAt", "createdAt", "referenceDate", "url",
@@ -103,9 +103,10 @@ def ungrounded_narrative_numbers(text, evidence_rows):
     opposite directions and invented precision still fail validation.
     """
 
+    text = str(text or "")
     numbers, periods = _evidence_quantities(evidence_rows)
     missing = []
-    for match in NUMBER.finditer(str(text or "")):
+    for match in NUMBER.finditer(text):
         raw = match.group().replace(",", "")
         number = _decimal(raw)
         period = PERIOD.match(text[match.end():])

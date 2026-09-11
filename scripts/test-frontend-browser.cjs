@@ -101,6 +101,28 @@ async function caseInteractions(page, label) {
   results.push({test: label + " case tabs / delayed close", before, after});
 }
 
+async function hypothesisScheduling(page, label) {
+  await routeTo(page, "modeling", "investment-model-management", "fixture-model");
+  await page.locator('[data-investment-model-management-tab="validation"]').click();
+  await page.waitForSelector('[data-hypothesis-development-select="fixture-development"]');
+  await page.locator('[data-hypothesis-development-select="fixture-development"]').click();
+  const retry = page.locator('.hypothesis-development-retry');
+  await retry.scrollIntoViewIfNeeded();
+  assert.match(await retry.textContent(), /개발·명세 수정 필요/);
+  assert.match(await retry.textContent(), /기능 보완.*모델 계약 등록/s);
+  assert.match(await retry.textContent(), /예약 없음/);
+  assert.equal(await page.locator('[data-hypothesis-development-approve="fixture-development"]').isDisabled(), true);
+  const bounds = await retry.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
+  assert(bounds.content <= bounds.width + 1, label + ' hypothesis retry overflows');
+  await retry.screenshot({path: path.join(screenshots, label + '-hypothesis-retry.png')});
+  await page.locator('[data-hypothesis-development-select="fixture-observation"]').click();
+  await page.waitForFunction(() => document.querySelector('.hypothesis-development-retry')?.textContent.includes('관측 기간 대기'));
+  assert.match(await page.locator('.hypothesis-development-retry').textContent(), /관측 기간 대기/);
+  await page.locator('button[data-work-detail-close]').first().click();
+  await page.waitForSelector('[data-work-detail-dialog]', {state: 'detached'});
+  results.push({test: label + ' hypothesis blockers and approval gate', ...bounds});
+}
+
 async function instrumentChart(page, label) {
   await routeTo(page, "feed");
   await page.addScriptTag({url: "/vendor/lightweight-charts.standalone.production.js?v=5.2.1"});
@@ -189,6 +211,7 @@ async function run() {
       await page.waitForSelector('.workspace-main[data-scroll-key="feed"]');
       await instrumentChart(page, mode);
       await caseInteractions(page, mode + "-desktop");
+      await hypothesisScheduling(page, mode + "-desktop");
       if (mode === "modules") {
         const result = await page.evaluate(async () => {
           const { openWorkDetailLayer, closeWorkDetailLayer } = await import("/modules/navigation/detail.mjs");
@@ -274,6 +297,7 @@ async function run() {
     await page.evaluate(() => { window.scrollTo(0, 0); document.querySelector(".workspace-main").scrollTop = 0; });
     await page.screenshot({ path: path.join(screenshots, mode + "-mobile-inbox-top.png") });
     await caseInteractions(page, mode + "-mobile");
+    await hypothesisScheduling(page, mode + "-mobile");
     assert.deepEqual(errors, [], "Mobile append and stale response");
     await context.close();
     console.log(mode + " mobile: measured append/tab/case scroll, retained row identity, append deduplication and delayed close passed");

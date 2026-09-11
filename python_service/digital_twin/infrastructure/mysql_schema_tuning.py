@@ -289,6 +289,10 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`updated_at`, `subject_key`",
         ),
     ),
+    "hypothesis_development_cases": (
+        MySQLIndexDefinition("hypothesis_development_cases", "idx_hypothesis_development_ready",
+                             "`status`, `next_check_at`, `case_id`"),
+    ),
     "ai_inference_requests": (
         MySQLIndexDefinition(
             "ai_inference_requests",
@@ -618,6 +622,10 @@ MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS: Sequence[MySQLUniqueIndexRetirementD
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "hypothesis_development_cases": (
+        MySQLColumnDefinition("hypothesis_development_cases", "next_check_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("hypothesis_development_cases", "last_checked_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
+    ),
     "ai_inference_requests": (
         MySQLColumnDefinition(
             "ai_inference_requests",

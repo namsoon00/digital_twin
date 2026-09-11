@@ -15,6 +15,11 @@ from digital_twin.modules.decisions.domain.notification_ai_decision_brief import
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
 from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight import AIInsightEpisode, AIInsightHandoff
 from digital_twin.modules.read_models.application.investment_case_query_service import InvestmentCaseQueryService
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import RULE_DESIGN_VERSION, blocker_state, compilation_blockers, rule_design_context
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, normalize_rule_change_candidate
+from digital_twin.modules.model_registry.application.ontology_lab_service import OntologyLabService
+from digital_twin.modules.model_registry.application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
+from digital_twin.infrastructure.rule_change_candidate_ai import FallbackRuleChangeCandidateAdvisor
 
 
 class CaseStore:
@@ -59,7 +64,10 @@ class HypothesisClosedLoopTests(unittest.TestCase):
     def development(self, cases=None):
         store = CaseStore(cases or [hypothesis()])
         candidate = SimpleNamespace(propose_hypothesis=Mock(return_value={
-            "candidates": [{"requiresData": ["분기 매출", "수요 지표"]}]
+            "candidates": [{"requiresData": ["분기 매출", "수요 지표"], "blockers": [
+                {"kind": "missing-observation", "requirement": "분기 매출", "dependencyKey": "quarterlyRevenue"},
+                {"kind": "missing-observation", "requirement": "수요 지표", "dependencyKey": "demand"},
+            ]}]
         }))
         service = HypothesisDevelopmentService(store, None, None, candidate, None)
         service.history_for = lambda case: []
@@ -111,6 +119,115 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         service, _, candidate = self.development([hypothesis("closed:" + str(i), "retired") for i in range(20)] + [hypothesis()])
         self.assertEqual(1, service.process_pending(limit=1)["processedCount"])
         candidate.propose_hypothesis.assert_called_once()
+
+    def test_compilation_receives_complete_scoped_rule_syntax_not_just_counts(self):
+        rule = {"rule_id": "graph.fixture", "source_kind": "stock", "conditions": [
+            {"kind": "relation", "relation_type": "HAS_MODEL_SIGNAL", "target_property_filters": {"field": "fixture"}}
+        ], "derivations": [{"decision_stage": "review", "evidence_role": "context", "decision_effect": "defer"}]}
+        context = {"symbols": ["MSTR"], "worldId": "portfolio:main", "ruleBox": {"status": "ok", "rules": [rule]},
+                   "hypothesisProposal": {"supportingEvidenceIds": ["trace:graph.fixture"]}}
+        design = rule_design_context(context)
+        self.assertEqual(rule["conditions"], design["examples"][0]["conditions"])
+        self.assertEqual(rule["derivations"], design["examples"][0]["derivations"])
+        self.assertIn("target_property_filters", design["conditionFields"])
+        self.assertIn("candidate_action", design["derivationFields"])
+        self.assertEqual("portfolio:main", design["scope"]["worldId"])
+        prompt = build_rule_change_candidate_prompt(context)
+        self.assertIn('"field": "fixture"', prompt)
+        self.assertIn(RULE_DESIGN_VERSION, prompt)
+        self.assertEqual([], rule_design_context(context, max_bytes=1)["examples"])
+        repository = SimpleNamespace(rulebox_snapshot=Mock(return_value=context["ruleBox"]),
+                                     inferencebox_snapshot=Mock(side_effect=TimeoutError("unneeded live detail")))
+        advisor = SimpleNamespace(propose=Mock(return_value=[]))
+        service = RuleChangeCandidateProposalService(repository, advisor)
+        service.propose_hypothesis(hypothesis().to_dict())
+        repository.inferencebox_snapshot.assert_not_called()
+        supplied = advisor.propose.call_args.args[0]
+        self.assertEqual("deferred-validation", supplied["inferenceBox"]["status"])
+        self.assertEqual("authoring-only", supplied["inferenceBox"]["decisionEligibility"])
+        self.assertTrue(supplied["worldId"])
+
+    def test_compilation_blockers_park_unsupported_and_keep_true_observation_wait_retryable(self):
+        for kind in ("schema-mismatch", "unsupported-capability", "unclassified", "missing-observation", "observation-window"):
+            with self.subTest(kind=kind):
+                service, store, candidate = self.development()
+                raw = {"blockers": [{"kind": kind, "requirement": "requirement", "dependencyKey": "key"}]}
+                normalized = normalize_rule_change_candidate(raw)
+                self.assertEqual(kind, normalized["blockers"][0]["kind"])
+                candidate.propose_hypothesis.return_value = {"candidates": [normalized]}
+                service.process_pending()
+                saved = store.get("case:1")
+                self.assertEqual(blocker_state(compilation_blockers([raw]))[0], saved.status)
+                if saved.status == "needs-revision":
+                    self.assertEqual("", saved.retry["nextCheckAt"])
+                    self.assertEqual(0, service.process_pending()["processedCount"])
+        legacy = compilation_blockers([{"requiresData": ["unknown legacy requirement"]}])
+        self.assertEqual("unclassified", legacy[0]["kind"])
+        structured = compilation_blockers([{"requiresData": ["short display label"], "blockers": [
+            {"kind": "missing-observation", "requirement": "Detailed observation requirement", "dependencyKey": "revenue"}
+        ]}])
+        self.assertEqual(1, len(structured))
+        self.assertEqual(("needs-data", "waiting-data"), blocker_state(structured))
+        case = hypothesis()
+        case.supporting_evidence_ids = []
+        case.retry = {"blockers": [{"kind": "schema-mismatch", "requirement": "old blocker"}]}
+        service, store, candidate = self.development([case])
+        service.process("case:1")
+        self.assertEqual("missing-observation", store.get("case:1").retry["blockers"][0]["kind"])
+        self.assertEqual("waiting-data", store.get("case:1").retry["state"])
+        candidate.propose_hypothesis.assert_not_called()
+
+    def test_price_only_changes_do_not_recompile_missing_schema_or_observation(self):
+        service, store, _ = self.development()
+        case = store.get("case:1")
+        a = [{"positions": [{"symbol": "MSTR", "currentPrice": 100}]}]
+        b = [{"positions": [{"symbol": "MSTR", "currentPrice": 120}]}]
+        self.assertEqual(service.validation_input_fingerprint(case, a), service.validation_input_fingerprint(case, b))
+        case.candidate_rule = {"rule_id": "fixture"}
+        self.assertNotEqual(service.validation_input_fingerprint(case, a), service.validation_input_fingerprint(case, b))
+
+    def test_deferred_rows_do_not_consume_hypothesis_batch_execution_slots(self):
+        cases = [hypothesis("waiting:" + str(i)) for i in range(70)] + [hypothesis("ready")]
+        service, store, advisor = self.development(cases)
+        for case in cases[:-1]:
+            case.retry = {"attemptCount": 1, "lastAttemptAt": datetime.now(timezone.utc).isoformat(),
+                          "designVersion": RULE_DESIGN_VERSION}
+            store.save(case)
+        result = service.process_pending(limit=1)
+        self.assertEqual(1, result["processedCount"])
+        self.assertEqual(1, store.get("ready").retry["attemptCount"])
+        advisor.propose_hypothesis.assert_called_once()
+        self.assertTrue(store.get("waiting:0").retry["nextCheckAt"])
+
+    def test_busy_hypothesis_does_not_consume_the_next_ready_case_slot(self):
+        service, store, advisor = self.development([hypothesis("busy"), hypothesis("ready")])
+        @contextmanager
+        def lock(case_id):
+            yield case_id != "busy"
+        store.processing_lock = lock
+        result = service.process_pending(limit=1)
+        self.assertEqual(1, result["processedCount"])
+        advisor.propose_hypothesis.assert_called_once()
+
+    def test_hypothesis_ai_outage_is_not_swallowed_as_no_candidates(self):
+        primary = SimpleNamespace(propose=Mock(side_effect=TimeoutError("offline")))
+        advisor = FallbackRuleChangeCandidateAdvisor(primary)
+        with self.assertRaises(TimeoutError):
+            advisor.propose({"hypothesisProposal": {"claim": "fixture"}})
+        self.assertEqual([], advisor.propose({}))
+
+    def test_continuous_realtime_backlog_reserves_one_aged_development_turn(self):
+        service = object.__new__(OntologyLabService)
+        service.settings = {}
+        service.enabled = lambda: True
+        service.reasoning_queue_deferral = lambda: {"status": "deferred-reasoning-queue", "runCount": 0}
+        development = SimpleNamespace(ready_wait_minutes=Mock(return_value=31), process_pending=Mock(return_value={"processedCount": 1}))
+        service.hypothesis_development_service = development
+        result = service.run_once()
+        self.assertEqual("development-reserved-slot", result["status"])
+        development.process_pending.assert_called_once_with(limit=1)
+        development.ready_wait_minutes.return_value = 2
+        self.assertEqual("deferred-reasoning-queue", service.run_once()["status"])
 
     def test_outcome_repair_preserves_original_price_time_and_contract(self):
         previous = previous_outcome()

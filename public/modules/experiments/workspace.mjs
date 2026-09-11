@@ -221,7 +221,9 @@ function renderHypothesisDevelopmentCaseDetail(item) {
   var busy = Boolean(hypothesesState.hypothesisDevelopmentAction);
   var retry = item.retry || {};
   var requirements = Array.isArray(retry.requirements) ? retry.requirements : [];
-  var retryLabels = { processing: "검증 진행 중", "waiting-data": "자료 갱신 대기", "dependency-error": "연결 복구 대기", completed: "이번 검증 완료" };
+  var retryLabels = { processing: "검증 진행 중", "waiting-data": "자료 갱신 대기", "waiting-observation": "관측 기간 대기", "development-required": "개발·명세 수정 필요", "dependency-error": "연결 복구 대기", completed: "이번 검증 완료" };
+  var blockerLabels = { "missing-observation": "자료 수집", "stale-observation": "자료 갱신", "observation-window": "관측 대기", "schema-mismatch": "명세 수정", "unsupported-capability": "기능 보완", "dependency-error": "연결 복구", unclassified: "원인 확인" };
+  var blockers = Array.isArray(retry.blockers) ? retry.blockers : [];
   return [
     '<section class="hypothesis-development-detail">',
     '<div class="hypothesis-development-detail-head">',
@@ -242,7 +244,8 @@ function renderHypothesisDevelopmentCaseDetail(item) {
     '<div><dt>실행 횟수</dt><dd>' + escapeHtml(Number(retry.attemptCount || 0)) + '회</dd></div>' +
     '<div><dt>마지막 시도</dt><dd>' + escapeHtml(retry.lastAttemptAt ? formatClock(retry.lastAttemptAt) : "기록 없음") + '</dd></div>' +
     '<div><dt>다음 정기 확인</dt><dd>' + escapeHtml(retry.nextCheckAt ? formatClock(retry.nextCheckAt) : "예약 없음") + '</dd></div></dl>' +
-    (requirements.length ? '<ul>' + requirements.slice(0, 8).map(function (text) { return '<li>' + escapeHtml(text) + '</li>'; }).join("") + '</ul>' : '') + '</section>',
+    (blockers.length ? '<ul>' + blockers.slice(0, 8).map(function (blocker) { return '<li><strong>' + escapeHtml(blockerLabels[blocker.kind] || "원인 확인") + '</strong> · ' + escapeHtml(blocker.requirement || "") + '</li>'; }).join("") + '</ul>' :
+      (requirements.length ? '<ul>' + requirements.slice(0, 8).map(function (text) { return '<li>' + escapeHtml(text) + '</li>'; }).join("") + '</ul>' : '')) + '</section>',
     item.blockedReason ? '<p class="form-error">' + escapeHtml(item.blockedReason) + '</p>' : '',
     '<div class="ontology-experiment-actions">',
     '<button class="text-button" type="button" data-hypothesis-development-process="' + escapeHtml(item.caseId || "") + '"' + (busy || ["deployed", "observing", "retired"].indexOf(String(item.status || "")) >= 0 ? ' disabled' : '') + '>검증 다시 실행</button>',
@@ -252,7 +255,7 @@ function renderHypothesisDevelopmentCaseDetail(item) {
   ].join("");
 }
 
-function renderHypothesisDevelopmentPanel() {
+export function renderHypothesisDevelopmentPanel() {
   var payload = hypothesisDevelopmentPayload();
   var cases = hypothesisDevelopmentCases();
   var active = syncActiveHypothesisDevelopmentCaseId();

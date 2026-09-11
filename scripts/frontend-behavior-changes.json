@@ -1,5 +1,9 @@
 [
   {
+    "reason": "Expose already-loaded hypothesis development cases in model management's validation tab; browser tests cover classified blockers, pending observations and approval controls.",
+    "functions": ["renderInvestmentModelManagementWorkspace"]
+  },
+  {
     "reason": "Show captured prior-decision validation without recomputing judgments, and durable retry state for data-blocked hypothesis development.",
     "functions": ["renderHypothesisDevelopmentCaseDetail", "renderInvestmentCaseSummary"]
   },

@@ -40,7 +40,11 @@ class RuleChangeCandidateProposalService:
             return {"status": "disabled", "reason": "Rule candidate advisor is not configured.", "candidateCount": 0, "savedCount": 0}
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
         world_id = portfolio_world_id(account_id, tenant_id) if str(account_id or "").strip() else ""
-        context = self.build_context(clean_symbols, trigger, requests, alerts, world_id=world_id)
+        context = self.build_context(clean_symbols, trigger, requests, alerts, world_id=world_id,
+                                     read_inference=not bool(hypothesis_proposal))
+        for box in ("ruleBox", "inferenceBox"):
+            if str((context.get(box) or {}).get("status") or "") in {"error", "unavailable", "disabled"}:
+                raise RuntimeError(box + " unavailable: " + str((context.get(box) or {}).get("reason") or ""))
         if isinstance(hypothesis_proposal, dict) and hypothesis_proposal:
             context["hypothesisProposal"] = dict(hypothesis_proposal)
         candidates = self.advisor.propose(context)
@@ -100,18 +104,29 @@ class RuleChangeCandidateProposalService:
         requests: Iterable[object] = None,
         alerts: Iterable[object] = None,
         world_id: str = "",
+        read_inference: bool = True,
     ) -> Dict[str, object]:
         rulebox = self.ontology_repository.rulebox_snapshot() if hasattr(self.ontology_repository, "rulebox_snapshot") else {}
-        inferencebox = {}
-        if hasattr(self.ontology_repository, "inferencebox_snapshot"):
+        # Authoring uses the stored proposal and rule syntax. Only a runnable
+        # candidate needs the live TypeDB validation performed by development.
+        inferencebox = {} if read_inference else {
+            "status": "deferred-validation", "relations": [],
+            "reason": "후보 명세 생성 단계입니다. 원본 제안의 근거 ID는 출처 참조이며 현재 사실 확인은 후보 생성 후 TypeDB 검증에서 수행합니다.",
+            "decisionEligibility": "authoring-only",
+        }
+        if read_inference and hasattr(self.ontology_repository, "inferencebox_snapshot"):
             try:
                 inferencebox = self.ontology_repository.inferencebox_snapshot(symbols, limit=80, world_id=world_id)
             except TypeError as error:
                 if "unexpected keyword" not in str(error) and "world_id" not in str(error):
                     raise
+                if world_id:
+                    raise RuntimeError("Scoped InferenceBox reads are required for hypothesis compilation") from error
                 inferencebox = self.ontology_repository.inferencebox_snapshot(symbols, limit=80)
         request_items = [self.event_payload(event) for event in (requests or [])]
-        recent_events = request_items or self.recent_events()
+        recent_events = request_items or (self.recent_events() if read_inference else [])
+        if symbols:
+            recent_events = [item for item in recent_events if set(item.get("symbols") or []) & set(symbols)]
         return {
             "trigger": trigger,
             "symbols": symbols,

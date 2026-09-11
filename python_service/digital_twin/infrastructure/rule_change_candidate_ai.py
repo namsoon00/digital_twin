@@ -71,6 +71,9 @@ class FallbackRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
         try:
             return self.primary.propose(context)
         except Exception as error:  # noqa: BLE001 - ontology reasoning worker must keep running after AI failures.
+            if context.get("hypothesisProposal"):
+                # Preserve outages for the durable retry owner, not an empty candidate.
+                raise
             candidates = self.fallback.propose(context)
             for candidate in candidates:
                 warnings = list(candidate.get("validationWarnings") or [])

@@ -3,6 +3,7 @@
 import json
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from stabilization_database import (
@@ -27,9 +28,41 @@ from digital_twin.modules.portfolio.application.investment_domain_service import
 )
 from digital_twin.modules.outcomes.infrastructure.transaction_writes import upsert_decision_outcome_target
 from digital_twin.infrastructure.transactions.decision_history_parts.target_queries import PendingTargetRead, pending_outcome_targets
+from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase
+from digital_twin.modules.model_registry.infrastructure.mysql_hypothesis_development import MySQLHypothesisDevelopmentStore
 
 
 class TransactionStabilizationTests(StabilizationDatabaseCase):
+    def test_ready_hypothesis_selection_survives_restart_and_skips_future_backlog(self):
+        store = MySQLHypothesisDevelopmentStore(self.settings)
+        prefix = "schedule:" + uuid.uuid4().hex
+        now = datetime.now(timezone.utc)
+        future = (now + timedelta(hours=3)).isoformat()
+        due = (now - timedelta(hours=1)).isoformat()
+        for index in range(60):
+            case = HypothesisDevelopmentCase(case_id=prefix + str(index), fingerprint=prefix + str(index),
+                                             account_id="fixture", symbol="MSTR", title="Fixture", claim="Fixture only", status="needs-data",
+                                             retry={"nextCheckAt": future, "lastCheckedAt": now.isoformat()})
+            store.save(case)
+        ready = HypothesisDevelopmentCase(case_id=prefix + "ready", fingerprint=prefix + "ready",
+                                          account_id="fixture", symbol="MSTR", title="Fixture", claim="Fixture only", status="needs-data",
+                                          retry={"nextCheckAt": due, "lastCheckedAt": now.isoformat()})
+        store.save(ready)
+        restarted = MySQLHypothesisDevelopmentStore(self.settings)
+        self.assertEqual([ready.case_id], [case.case_id for case in restarted.pending(limit=1)])
+        self.assertEqual(due.replace("+00:00", "Z"), restarted.oldest_ready_at())
+        row = self.sql("SELECT next_check_at, last_checked_at FROM hypothesis_development_cases WHERE case_id = %s", (ready.case_id,))
+        self.assertEqual(due.replace("+00:00", "Z"), row["next_check_at"])
+        self.assertEqual(now.isoformat().replace("+00:00", "Z"), row["last_checked_at"])
+        with store.processing_lock(ready.case_id) as first:
+            with restarted.processing_lock(ready.case_id) as second:
+                self.assertTrue(first)
+                self.assertFalse(second)
+        ready.status = "needs-revision"
+        store.save(ready)
+        self.assertEqual([], restarted.pending(limit=1))
+        self.assertEqual("", restarted.oldest_ready_at())
+
     def outcome_target(self, episode, target_at="2099-01-01T01:00:00Z"):
         target_id = "target:" + episode.episode_id
         payload = {"requestId": target_id, "episodeId": episode.episode_id, "symbol": episode.symbol,

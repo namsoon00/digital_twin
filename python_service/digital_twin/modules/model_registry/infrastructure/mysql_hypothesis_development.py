@@ -1,6 +1,7 @@
 import hashlib
 from contextlib import contextmanager
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Dict, List
 
 from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase
@@ -29,9 +30,9 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
             rows = connection.execute(
                 "SELECT payload_json FROM hypothesis_development_cases "
                 "WHERE status IN ('proposed', 'screening', 'compiled', 'validating', 'needs-data') "
-                "ORDER BY COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.retry.lastAttemptAt')), '') ASC, "
-                "created_at ASC, case_id LIMIT %s",
-                (max(1, min(500, int(limit))),),
+                "AND next_check_at <= %s "
+                "ORDER BY next_check_at ASC, created_at ASC, case_id LIMIT %s",
+                (utc_now_iso(), max(1, min(500, int(limit)))),
             ).fetchall()
         return [HypothesisDevelopmentCase.from_dict(_json_loads(row.get("payload_json"), {})) for row in rows or []]
 
@@ -77,23 +78,26 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
         rule_id = str(case.candidate_rule.get("rule_id") or case.candidate_rule.get("ruleId") or "")
         event_seed = "|".join([case.case_id, event_type, case.status, case.stage, stamp])
         event_id = "hypothesis-case-event:" + hashlib.sha256(event_seed.encode("utf-8")).hexdigest()[:24]
+        next_check = self.normalized_schedule_time(case.retry.get("nextCheckAt") or case.created_at or stamp)
+        last_checked = self.normalized_schedule_time(case.retry.get("lastCheckedAt") or case.retry.get("lastAttemptAt"))
         with self.transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO hypothesis_development_cases (
                     case_id, fingerprint, account_id, symbol, status, stage, title,
                     latest_proposal_id, candidate_rule_id, experiment_id,
-                    payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    payload_json, created_at, updated_at, next_check_at, last_checked_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE status = VALUES(status), stage = VALUES(stage),
                     title = VALUES(title), latest_proposal_id = VALUES(latest_proposal_id),
                     candidate_rule_id = VALUES(candidate_rule_id), experiment_id = VALUES(experiment_id),
-                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at),
+                    next_check_at = VALUES(next_check_at), last_checked_at = VALUES(last_checked_at)
                 """,
                 (
                     case.case_id, case.fingerprint, case.account_id, case.symbol,
                     case.status, case.stage, case.title, latest_proposal, rule_id,
-                    case.experiment_id, json_dumps(payload), case.created_at or stamp, stamp,
+                    case.experiment_id, json_dumps(payload), case.created_at or stamp, stamp, next_check, last_checked,
                 ),
             )
             connection.execute(
@@ -111,6 +115,25 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
                 ),
             )
         return case
+
+    @staticmethod
+    def normalized_schedule_time(value) -> str:
+        if not value:
+            return ""
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def oldest_ready_at(self) -> str:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT MIN(COALESCE(NULLIF(next_check_at, ''), created_at)) AS ready_at "
+                "FROM hypothesis_development_cases WHERE status IN "
+                "('proposed', 'screening', 'compiled', 'validating', 'needs-data') AND next_check_at <= %s",
+                (utc_now_iso(),),
+            ).fetchone() or {}
+        return str(row.get("ready_at") or "")
 
     def events(self, case_id: str = "", limit: int = 200) -> List[Dict[str, object]]:
         params: List[object] = []

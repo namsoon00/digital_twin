@@ -2976,10 +2976,13 @@ MYSQL_SCHEMA = [
         candidate_rule_id VARCHAR(191) NOT NULL DEFAULT '',
         experiment_id VARCHAR(191) NOT NULL DEFAULT '',
         payload_json LONGTEXT NOT NULL,
+        next_check_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_checked_at VARCHAR(40) NOT NULL DEFAULT '',
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         UNIQUE KEY uq_hypothesis_development_fingerprint (fingerprint),
         KEY idx_hypothesis_development_status_time (status, updated_at, case_id),
+        KEY idx_hypothesis_development_ready (status, next_check_at, case_id),
         KEY idx_hypothesis_development_symbol_status (symbol, status, updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,

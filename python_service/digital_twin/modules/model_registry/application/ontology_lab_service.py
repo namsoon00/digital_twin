@@ -784,6 +784,19 @@ class OntologyLabService:
             return {"status": "disabled", "processedCount": 0, "runCount": 0, "skippedCount": 0, "experiments": []}
         queue_deferral = self.reasoning_queue_deferral()
         if queue_deferral:
+            development = self.hypothesis_development_service
+            wait_reader = getattr(development, "ready_wait_minutes", None)
+            maximum_yield = max(15, int(self.settings.get("hypothesisDevelopmentMaximumQueueYieldMinutes") or 30))
+            if callable(wait_reader) and wait_reader() >= maximum_yield:
+                # Reserve one aged development turn, never the whole lab batch.
+                result = development.process_pending(limit=1)
+                return {
+                    **queue_deferral,
+                    "status": "development-reserved-slot",
+                    "processedCount": int(result.get("processedCount") or 0),
+                    "hypothesisDevelopment": result,
+                    "reason": "실시간 추론을 우선하되 오래 기다린 가설 한 건에 검증 기회를 배정했습니다.",
+                }
             return queue_deferral
         development_result = (
             self.hypothesis_development_service.process_pending(limit=max(1, int(limit or self.batch_size())))

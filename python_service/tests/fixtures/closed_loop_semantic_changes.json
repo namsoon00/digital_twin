@@ -1,5 +1,17 @@
 {
   "domain": {
+    "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
+      "hash": "21e7790a682e6818637d963029cc914206c69281e94581ac96f33dddff9d7c1d",
+      "reason": "Require typed blockers and scoped authoring examples without relaxing model governance; test_hypothesis_closed_loop."
+    },
+    "modules/model_registry/domain/ontology_rulebox_governance.py::compact_candidate_context": {
+      "hash": "bad9e83f89dbb9f74fdab3c03619fe7ee36226894e3a283d71be23d4a10c6f6c",
+      "reason": "Preserve bounded rule syntax, original generation references and explicit authoring-only status; test_hypothesis_closed_loop."
+    },
+    "modules/model_registry/domain/ontology_rulebox_governance.py::normalize_rule_change_candidate": {
+      "hash": "3f84c29f1de6d96ff808a7528c102919ca6321ed32100deb8f040b633a1a02fd",
+      "reason": "Separate observation gaps from unsupported capabilities and unknown legacy requirements; test_hypothesis_closed_loop."
+    },
     "modules/model_registry/domain/hypothesis_development.py::HypothesisDevelopmentCase": {
       "hash": "80c2f300e983ca4f5924bdfda6112fb3a2762afdd84a35cd115a8144518dbb4e",
       "reason": "Persist retry ownership and timestamps; test_hypothesis_closed_loop."
@@ -43,8 +55,8 @@
   },
   "storage": {
     "modules/model_registry/infrastructure/mysql_hypothesis_development.py::MySQLHypothesisDevelopmentStore": {
-      "hash": "5e9dd0e7e10ca6b7474a164116033995c335705c29dd1c5e62b13f7adcda3da6",
-      "reason": "Persist retry audit and serialize same-case processing; test_hypothesis_closed_loop."
+      "hash": "c4391e508bece457b995be24a15a37221e78c23ac7140edfca18add612c41bf1",
+      "reason": "Persist indexed UTC due times with audit and nonblocking same-case locks; test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
       "hash": "b4fbd2a4c024a14cf6b5895802b5ac689290e1b275a1a38487f433a804e5295e",

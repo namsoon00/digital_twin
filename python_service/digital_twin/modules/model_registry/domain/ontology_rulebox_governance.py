@@ -7,6 +7,7 @@ from digital_twin.modules.reasoning.contracts import DECISION_EFFECTS
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, HOLDING_TARGET_ROLE, WATCHLIST_ALLOWED_ACTIONS, WATCHLIST_TARGET_ROLE, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 from digital_twin.modules.model_registry.domain.ontology_rule_knowledge import knowledge_basis_violations
 from digital_twin.modules.model_registry.domain.rule_claim_contract import rule_claim_contract_violations
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import compilation_blockers, rule_design_context
 
 
 RULEBOX_EVIDENCE_ROLES = frozenset({"risk", "support", "counter", "context", "blocking"})
@@ -354,6 +355,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
                 "expectedEffect": "how this changes AI opinions or alert quality",
                 "risk": "false positive or data risk",
                 "requiresData": ["existing ABox relation or missing data"],
+                "blockers": [{"kind": "missing-observation", "requirement": "specific missing fact", "dependencyKey": "exact observation or capability key"}],
                 "priority": 0,
                 "proposedRule": {
                     "rule_id": "graph.example.context.v1",
@@ -377,6 +379,10 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- 매수/매도 지시를 만들지 말고 관계 후보만 제안한다.",
         "- proposedRule.enabled는 반드시 false다.",
         "- ABox에 없는 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
+        "- 부족 항목마다 blockers에 원인을 구분한다. 실제 관측 부재는 missing-observation, 미래 관측 대기는 observation-window, 규칙 명세 불일치는 schema-mismatch, 미구현 모델/공급자는 unsupported-capability다.",
+        "- ruleDesign의 필드 명세와 실제 조건/파생 예시를 사용한다. 명세에 있는 필드를 알 수 없다는 이유로 데이터 수집을 요구하지 않는다.",
+        "- evidence ID 보존은 가설의 출처 계보로 처리하며 PRESERVES_RULE_LINEAGE 관측이 있어야 규칙을 작성할 수 있다고 요구하지 않는다.",
+        "- 새 예측 모델 등록이 필요하면 unsupported-capability로 명시한다. 기존 모델을 다른 인과 가설의 증거로 바꾸지 않는다.",
         "- relation_type, condition field, target filters는 제공된 RuleBox/InferenceBox/TBox에서 확인 가능한 형태를 우선 사용한다.",
         "- hypothesisProposal이 있으면 그 주장 하나만 실행 가능한 후보 규칙으로 변환하고 다른 가설을 추가하지 않는다.",
         "- hypothesisProposal의 evidence ID는 출처 계보이며 조건 field나 relation_type으로 직접 사용하지 않는다.",
@@ -420,6 +426,8 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
         },
         "inferenceBox": {
             "status": inferencebox.get("status"),
+            "reason": inferencebox.get("reason"),
+            "decisionEligibility": inferencebox.get("decisionEligibility"),
             "relationCount": inferencebox.get("relationCount"),
             "relations": [
                 {
@@ -440,6 +448,7 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
         "hypothesisProposal": {
             "caseId": proposal.get("caseId"),
             "proposalIds": list(proposal.get("sourceProposalIds") or proposal.get("proposalIds") or [])[:20],
+            "inferenceGenerationIds": list(proposal.get("inferenceGenerationIds") or [])[:20],
             "symbol": proposal.get("symbol"),
             "claim": proposal.get("claim"),
             "causalPath": list(proposal.get("causalPath") or [])[:12],
@@ -448,6 +457,7 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
             "requiredEvidenceTypes": list(proposal.get("requiredEvidenceTypes") or [])[:12],
             "invalidationConditions": list(proposal.get("invalidationConditions") or [])[:12],
         } if proposal else {},
+        "ruleDesign": rule_design_context(context),
         "existingCandidates": [
             {"id": item.get("id"), "status": item.get("status"), "title": item.get("title")}
             for item in list(rulebox.get("changeCandidates") or [])[:20]
@@ -532,6 +542,7 @@ def normalize_rule_change_candidate(
         "risk": str(candidate.get("risk") or ""),
         "action": str(candidate.get("action") or ("append-disabled-rule" if normalized_rule else "data-required")),
         "requiresData": [str(item) for item in (candidate.get("requiresData") or []) if str(item or "").strip()],
+        "blockers": compilation_blockers([candidate]),
         "proposedRule": normalized_rule,
         "validationWarnings": dedupe_strings(warnings),
     }

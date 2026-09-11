@@ -142,7 +142,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # JSON_TABLE collation without constructing application stores.
         # Durable hypothesis retry, frozen outcome repair, baseline retention,
         # and shared AI/web memory add 13 unit and isolated SQL boundaries.
-        self.assertLessEqual(total, 1388)
+        # Scoped authoring, classified blockers, ready-queue fairness and a
+        # persisted SQL schedule add eight anti-stagnation boundaries.
+        self.assertLessEqual(total, 1396)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

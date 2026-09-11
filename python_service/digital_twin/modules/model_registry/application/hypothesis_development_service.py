@@ -10,6 +10,7 @@ from digital_twin.modules.model_registry.domain.hypothesis_development import Hy
 from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment, normalize_candidate_rules, rulebox_metrics
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_semantic_violations
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import RULE_DESIGN_VERSION, blocker_state, compilation_blockers
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import utc_now_iso
 
@@ -64,7 +65,17 @@ class HypothesisDevelopmentService:
                 return {"status": "not-found", "caseId": case_id}
             if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES | {"approval-required", "deployed", "observing"}:
                 return {"status": case.status, "case": case.to_dict()}
+            if not force and case.status in {"needs-revision", "blocked"}:
+                return {"status": "development-required", "caseId": case_id}
             if not force and not self.validation_retry_due(case):
+                attempted = self.parse_timestamp(case.retry.get("lastAttemptAt") or case.validation_attempted_at)
+                now = datetime.now(timezone.utc)
+                minimum = max(1, int(self.settings.get("hypothesisDevelopmentChangedRetryMinutes") or 15))
+                ready = attempted + timedelta(minutes=minimum)
+                if ready <= now:
+                    ready = attempted + timedelta(minutes=self.retry_minutes())
+                case.retry.update({"nextCheckAt": ready.isoformat(), "lastCheckedAt": now.isoformat()})
+                self.persist(case, "retry-deferred")
                 return {"status": "deferred-unchanged", "caseId": case_id}
             attempted = datetime.now(timezone.utc)
             case.retry = {
@@ -74,6 +85,8 @@ class HypothesisDevelopmentService:
                 "lastInputFingerprint": self.validation_input_fingerprint(case),
                 "nextCheckAt": (attempted + timedelta(minutes=self.retry_minutes())).isoformat(),
                 "state": "processing",
+                "designVersion": RULE_DESIGN_VERSION,
+                "lastCheckedAt": attempted.isoformat(),
                 "owner": "hypothesis-development",
             }
             self.persist(case, "retry-started")
@@ -81,12 +94,25 @@ class HypothesisDevelopmentService:
                 result = self._process_case(case_id)
             except Exception as error:
                 case = self.case_store.get(case_id) or case
-                case.transition("needs-data", case.stage, str(error)[:500])
-                case.retry["state"] = "dependency-error"
+                invalid = isinstance(error, (ValueError, TypeError))
+                case.transition("needs-revision" if invalid else "needs-data", case.stage, str(error)[:500])
+                case.retry["state"] = "development-required" if invalid else "dependency-error"
+                case.retry["blockers"] = [{"kind": "schema-mismatch" if invalid else "dependency-error",
+                                           "requirement": case.blocked_reason,
+                                           "owner": "development" if invalid else "runtime",
+                                           "dependencyKey": "rule-candidate-runtime"}]
+                case.retry["requirements"] = [case.blocked_reason]
+                if invalid:
+                    case.retry["nextCheckAt"] = ""
                 self.persist(case, "retry-failed", case.blocked_reason)
                 return {"status": "error", "caseId": case_id, "reason": case.blocked_reason}
             case = self.case_store.get(case_id) or case
-            case.retry["state"] = "waiting-data" if case.status == "needs-data" else "completed"
+            if case.status == "needs-data":
+                case.retry["state"] = blocker_state(case.retry.get("blockers") or [
+                    {"kind": "missing-observation"}
+                ])[1]
+            else:
+                case.retry["state"] = "development-required" if case.status in {"needs-revision", "blocked"} else "completed"
             if case.status != "needs-data":
                 case.retry["nextCheckAt"] = ""
             self.persist(case, "retry-finished", case.blocked_reason)
@@ -132,19 +158,28 @@ class HypothesisDevelopmentService:
         screen_status = str(screening.get("status") or "needs-revision")
         if screen_status != "passed":
             case.transition(screen_status, "screening", ", ".join(screening.get("issues") or screening.get("needsData") or []))
+            case.retry["blockers"] = compilation_blockers([{"blockers": [
+                {"kind": "missing-observation" if screen_status == "needs-data" else "schema-mismatch",
+                 "requirement": case.blocked_reason, "dependencyKey": "hypothesis-screening"}
+            ]}])
+            case.retry["requirements"] = [item["requirement"] for item in case.retry["blockers"]]
             self.persist(case, "screening-stopped", case.blocked_reason)
             return {"status": case.status, "case": case.to_dict()}
         candidate_result = self.compile_candidate(case)
         candidates = [dict(item) for item in candidate_result.get("candidates") or [] if isinstance(item, dict)]
         candidate = next((item for item in candidates if isinstance(item.get("proposedRule"), dict)), None)
         if not candidate:
-            needs_data = sorted({str(value) for item in candidates for value in (item.get("requiresData") or []) if str(value)})
+            blockers = compilation_blockers(candidates)
+            needs_data = sorted({item["requirement"] for item in blockers})
             case.retry["requirements"] = needs_data[:40]
-            status = "needs-data" if needs_data else "needs-revision"
+            case.retry["blockers"] = blockers
+            status, case.retry["state"] = blocker_state(blockers)
             reason = ", ".join(needs_data) or str(candidate_result.get("reason") or "AI가 실행 가능한 후보 규칙을 만들지 못했습니다.")
             case.transition(status, "compilation", reason)
             self.persist(case, "compilation-stopped", reason)
             return {"status": case.status, "case": case.to_dict(), "candidateResult": self.compact_candidate_result(candidate_result)}
+        case.retry["blockers"] = []
+        case.retry["requirements"] = []
         prepared_rule = self.governed_candidate_rule(case, candidate.get("proposedRule") or {})
         candidate["proposedRule"] = prepared_rule
         case.candidate_id = str(candidate.get("id") or "")
@@ -190,20 +225,23 @@ class HypothesisDevelopmentService:
             for item in scanned
             if item.status in statuses
         ]
-        candidates.sort(key=lambda item: (str(item.retry.get("lastAttemptAt") or item.validation_attempted_at), item.created_at, item.case_id))
-        rows = []
+        candidates.sort(key=lambda item: (
+            self.parse_timestamp(item.retry.get("nextCheckAt") or item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            item.case_id,
+        ))
         deferred = []
-        for item in candidates:
-            if not self.validation_retry_due(item):
-                deferred.append(item.case_id)
-                continue
-            rows.append(item)
         results = []
-        for item in rows[: max(1, int(limit or 5))]:
+        for item in candidates:
             try:
-                results.append(self.process(item.case_id, force=False))
+                result = self.process(item.case_id, force=False)
+                if result.get("status") in {"deferred-unchanged", "already-processing", "development-required"}:
+                    deferred.append(item.case_id)
+                    continue
+                results.append(result)
             except Exception as error:  # noqa: BLE001 - one unavailable dependency must not stop the batch.
                 results.append({"status": "error", "caseId": item.case_id, "reason": str(error)[:500]})
+            if len(results) >= max(1, int(limit or 5)):
+                break
         return {
             "status": "processed" if results else "idle",
             "processedCount": len(results),
@@ -212,6 +250,11 @@ class HypothesisDevelopmentService:
             "results": results,
             "scannedCount": len(scanned),
         }
+
+    def ready_wait_minutes(self) -> float:
+        reader = getattr(self.case_store, "oldest_ready_at", None)
+        ready = self.parse_timestamp(reader()) if callable(reader) else None
+        return max(0.0, (datetime.now(timezone.utc) - ready).total_seconds() / 60) if ready else 0.0
 
     def reconcile_proposal_backlog(self, limit: int = 5) -> Dict[str, object]:
         """Create missing development cases for proposals persisted before automation."""
@@ -390,7 +433,7 @@ class HypothesisDevelopmentService:
         case.update_gates([
             validation_gate("typedb-preview", "TypeDB 후보 실행", type_status, str(preview.get("reason") or preview_status), True, self.compact_preview(preview)),
             validation_gate("current-replay", "현재 ABox 재생", replay_status, "후보 규칙 일치 " + str(matched_count) + "건", True, {"matchedCount": matched_count}),
-            validation_gate("historical-coverage", "과거 자료 범위", history_status, str(len(history)) + "개 독립 스냅샷 중 최소 " + str(minimum_history) + "개 필요", True, {"snapshotCount": len(history), "minimumSnapshotCount": minimum_history}),
+            validation_gate("historical-coverage", "과거 자료 범위", history_status, str(len(history)) + "개 스냅샷 중 최소 " + str(minimum_history) + "개 필요", True, {"snapshotCount": len(history), "minimumSnapshotCount": minimum_history}),
             validation_gate("holdout-observation", "제안 후 관측", holdout_status, "가설 제안 뒤 생성된 " + str(len(holdout)) + "개 스냅샷 중 최소 " + str(minimum_holdout) + "개 필요", True, {"snapshotCount": len(holdout), "minimumSnapshotCount": minimum_holdout, "after": case.created_at}),
             validation_gate("policy-safety", "정책 안전", policy_status, "후보 행동은 HOLD, 판단 효과는 defer/constrain으로 제한되며 운영 배포에는 승인이 필요합니다.", True, {"operationalDeploymentRequiresApproval": True, "candidateActions": [item.get("candidate_action") for item in derivations], "decisionEffects": [item.get("decision_effect") for item in derivations]}),
         ])
@@ -407,6 +450,19 @@ class HypothesisDevelopmentService:
             case.transition("needs-data", "validation", ", ".join(summary.get("pendingGateIds") or []))
             event_name = HYPOTHESIS_DEVELOPMENT_TRANSITIONED
             event_type = "validation-needs-data"
+        if case.status == "needs-data":
+            blockers = []
+            for item in case.validation_gates:
+                if item.get("id") not in (summary.get("pendingGateIds") or []):
+                    continue
+                kind = "observation-window"
+                if item.get("id") in {"typedb-preview", "current-replay"}:
+                    kind = "dependency-error" if preview_status in {"error", "typedb-error", "unavailable", "provisioning"} else "missing-observation"
+                blockers.append({"kind": kind,
+                                 "requirement": str(item.get("detail") or item.get("label") or ""),
+                                 "dependencyKey": str(item.get("id") or "")})
+            case.retry["blockers"] = compilation_blockers([{"blockers": blockers}])
+            case.retry["requirements"] = [item["requirement"] for item in case.retry["blockers"]]
         self.complete_experiment(experiment, case, preview, history, holdout)
         self.persist(case, event_type, case.blocked_reason, event_name=event_name)
         return {
@@ -559,7 +615,7 @@ class HypothesisDevelopmentService:
         """Retry a needs-data experiment only after new input or a slow health retry."""
 
         attempted = self.parse_timestamp(case.retry.get("lastAttemptAt") or case.validation_attempted_at)
-        if attempted is None:
+        if attempted is None or case.retry.get("designVersion") != RULE_DESIGN_VERSION:
             return True
         elapsed = (datetime.now(timezone.utc) - attempted).total_seconds()
         # Price ticks must not turn a missing-data hypothesis into an AI loop.
@@ -605,7 +661,8 @@ class HypothesisDevelopmentService:
             "requiredEvidenceTypes": sorted(case.required_evidence_types),
             "candidateRule": case.candidate_rule,
             "historyCoverageCount": len(rows),
-            "latestSymbolState": latest_state,
+            "latestSymbolState": latest_state if case.candidate_rule else {},
+            "designVersion": RULE_DESIGN_VERSION,
         }
         encoded = json.dumps(
             payload,

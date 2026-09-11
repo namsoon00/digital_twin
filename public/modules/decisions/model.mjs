@@ -3,6 +3,7 @@ import { renderConsoleEmpty } from "../shared/console.mjs";
 import { formatClock } from "../shared/format.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { decisionsState } from "../state/decisions.mjs";
+import { renderHypothesisDevelopmentPanel } from "../experiments/workspace.mjs";
 
 function investmentModelOverviewWorkDetailPayload() {
   return editorWorkDetailPayload(
@@ -64,7 +65,7 @@ function renderInvestmentModelManagementWorkspace() {
   var payload = investmentModelPayload();
   var active = String(decisionsState.investmentModelManagementTab || "release");
   var body = active === "inventory" ? renderInvestmentModelInventoryManagement(payload)
-    : active === "validation" ? renderInvestmentProductReadiness(payload.productReadiness || {})
+    : active === "validation" ? renderInvestmentProductReadiness(payload.productReadiness || {}) + renderHypothesisDevelopmentPanel()
     : active === "changes" ? renderInvestmentModelChangeDraft(payload)
     : active === "audit" ? renderInvestmentModelAudit(payload)
     : renderInvestmentModelOverview(true);

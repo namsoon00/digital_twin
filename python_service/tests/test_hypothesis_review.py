@@ -1,9 +1,9 @@
 import unittest
 from copy import deepcopy
 
-from digital_twin.application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
-from digital_twin.application.hypothesis_review_service import HypothesisReviewService
-from digital_twin.application.notification_ai_gate_message import execution_telegram_message
+from digital_twin.modules.model_registry.application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
+from digital_twin.modules.outcomes.application.hypothesis_review_service import HypothesisReviewService
+from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.hypothesis_review import (
     lifecycle_review_item,
     outcome_assessment_for_lifecycle,

@@ -1,10 +1,7 @@
 import unittest
 
-from digital_twin.application.notification_ai_gate_message import (
-    compact_decision_transition,
-    execution_telegram_message,
-)
-from digital_twin.application.notification.rendering import NotificationRenderingService
+from digital_twin.modules.notifications.application.notification_ai_gate_message import compact_decision_transition, execution_telegram_message
+from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.domain.customer_evidence_explanation import (
     build_customer_evidence_explanations,
     customer_data_limitation_text,

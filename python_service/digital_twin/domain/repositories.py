@@ -8,7 +8,7 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from .investment_brain import DecisionEpisode, LearningProposal, NovelHypothesisProposal, ObservedOutcome
 from .hypothesis_lifecycle import HypothesisLifecycleRecord, HypothesisLifecycleTransition
 from .investment_evidence_governance import ResearchRun
-from .investment_calendar import InvestmentCalendarEvent
+from digital_twin.modules.investment_calendar.contracts import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
 from .ontology_projection_audit import OntologyProjectionRun
 from .portfolio import AccountSnapshot, AlertEvent, Position
@@ -16,12 +16,12 @@ from .investment_mandate import InvestmentMandate
 from .investment_outcomes import DecisionReview, PerformanceAttribution
 from .portfolio_decision_cycle import PortfolioDecisionCycle
 from .portfolio_analytics import PortfolioRiskSnapshot
-from .portfolio_ledger import PortfolioLedgerEntry, PortfolioReconciliation
+from digital_twin.modules.portfolio.contracts import PortfolioLedgerEntry, PortfolioReconciliation
 from .portfolio_activity_episode import PortfolioSnapshotCheckpoint
 from .portfolio_rebalancing import RebalanceProposal
 from .risk_exposure import ExposureSnapshot
 from .trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
-from .symbol_universe import ListedSymbol
+from digital_twin.modules.instruments.contracts import ListedSymbol
 
 
 class AccountRepository(Protocol):

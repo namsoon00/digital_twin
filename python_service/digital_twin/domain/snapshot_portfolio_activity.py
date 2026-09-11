@@ -6,16 +6,7 @@ import hashlib
 import json
 from typing import Dict, Iterable, List, Tuple
 
-from .portfolio_ledger import (
-    INFERRED_CORPORATE_ACTION,
-    INFERRED_POSITION_DECREASE,
-    INFERRED_POSITION_EXIT,
-    INFERRED_POSITION_INCREASE,
-    SNAPSHOT_CASH_ADJUSTMENT,
-    PortfolioLedgerEntry,
-    PortfolioLedgerState,
-    decimal_value,
-)
+from digital_twin.modules.portfolio.contracts import INFERRED_CORPORATE_ACTION, INFERRED_POSITION_DECREASE, INFERRED_POSITION_EXIT, INFERRED_POSITION_INCREASE, SNAPSHOT_CASH_ADJUSTMENT, PortfolioLedgerEntry, PortfolioLedgerState, decimal_value
 
 
 SNAPSHOT_ACTIVITY_VERSION = "snapshot-portfolio-activity-v2-native-cash-components"

@@ -10,7 +10,7 @@ from .investment_brain import stable_id, utc_now_iso
 from .investment_research import NewsCollectionTarget, ResearchEvidence, target_aliases
 from .prompt_evidence_admission import attach_prompt_evidence_admission
 from . import news_analysis as news_domain
-from ..news_intelligence.domain.provenance import resolve_source_provenance
+from digital_twin.modules.news_intelligence.contracts import resolve_source_provenance
 
 
 PRIMARY_SOURCE_MARKERS = (

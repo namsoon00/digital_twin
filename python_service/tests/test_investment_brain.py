@@ -3,14 +3,11 @@ import unittest
 import copy
 from digital_twin.domain.hypothesis_calibration_identity import claim_validation_fingerprint, claim_revision_identity
 
-from digital_twin.application.hypothesis_proposal_service import (
-    HypothesisProposalQueueRunner,
-    HypothesisProposalService,
-)
-from digital_twin.application.investment_brain_service import InvestmentBrainService
-from digital_twin.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
-from digital_twin.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
-from digital_twin.application.notification_service import NotificationHypothesisResearchEnricher
+from digital_twin.modules.model_registry.application.hypothesis_proposal_service import HypothesisProposalQueueRunner, HypothesisProposalService
+from digital_twin.modules.decisions.application.investment_brain_service import InvestmentBrainService
+from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
+from digital_twin.modules.news_intelligence.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
+from digital_twin.modules.notifications.application.notification_service import NotificationHypothesisResearchEnricher
 from digital_twin.domain.investment_brain import (
     DecisionEpisode,
     InvestmentQuestion,

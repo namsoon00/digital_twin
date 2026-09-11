@@ -10,7 +10,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
-from digital_twin.news_intelligence.application.normalize_sources import normalize_evidence_sources
+from digital_twin.modules.news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 
 TARGET = NewsCollectionTarget("005930", "Samsung Electronics", "KOSPI", "KRW", "semiconductor")

@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.application.investment_case_query_service import InvestmentCaseQueryService
+from digital_twin.modules.read_models.application.investment_case_query_service import InvestmentCaseQueryService
 from digital_twin.domain.investment_case import (
     investment_case_id,
     investment_case_snapshot,

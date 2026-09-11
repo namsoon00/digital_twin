@@ -2,10 +2,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from digital_twin.application.investment_case_query_service import InvestmentCaseQueryService
-from digital_twin.application.notification.eligibility import NotificationDispatchEligibilityService
-from digital_twin.application.notification.workflow import NotificationQueueRunner
-from digital_twin.application.notification_decision_memory import context_with_previous_investment_insight
+from digital_twin.modules.read_models.application.investment_case_query_service import InvestmentCaseQueryService
+from digital_twin.modules.notifications.application.notification.eligibility import NotificationDispatchEligibilityService
+from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner
+from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_insight
 from digital_twin.domain.investment_insight_assessment import (
     investment_insight_delivery_transition, investment_insight_transition,
 )

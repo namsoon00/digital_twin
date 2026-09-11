@@ -13,12 +13,8 @@ from digital_twin.domain.notification_ai_gate_validation import (  # noqa: E402
 )
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse  # noqa: E402
 from digital_twin.domain.notification_ai_gate_text import user_friendly_ai_text  # noqa: E402
-from digital_twin.application.notification_ai_gate_message import (  # noqa: E402
-    execution_telegram_message,
-    notification_topline_change_summary,
-    typedb_decision_assessment_rows,
-)
-from digital_twin.application.notification_service import NotificationAIValidatedGateEnricher  # noqa: E402
+from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message, notification_topline_change_summary, typedb_decision_assessment_rows
+from digital_twin.modules.decisions.public import NotificationAIValidatedGateEnricher
 from digital_twin.domain.notifications import NotificationJob  # noqa: E402
 
 

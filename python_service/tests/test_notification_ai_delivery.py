@@ -1,9 +1,9 @@
 import unittest
 from datetime import datetime, timezone
 
-from digital_twin.application.notification_service import NotificationQueueRunner
-from digital_twin.application.notification_ai_gate_message import compact_current_flow_rows
-from digital_twin.application.notification.admission import NotificationAdmissionPolicy
+from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
+from digital_twin.modules.notifications.application.notification_ai_gate_message import compact_current_flow_rows
+from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy
 from digital_twin.domain.notification_ai_delivery import (
     final_ai_delivery_decision,
     pre_ai_deferred_delivery_decision,

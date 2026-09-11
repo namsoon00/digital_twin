@@ -1,0 +1,1263 @@
+from dataclasses import fields
+from typing import Dict, List, Optional, Tuple
+
+from digital_twin.domain.investment_brain import InvestmentQuestion, decision_episode_from_context, hypothesis_set_from_relation_context, hypothesis_templates_from_rulebox_snapshot, rule_claim_coverage_from_rulebox_snapshot
+from digital_twin.domain.investment_research import NewsCollectionTarget
+from digital_twin.domain.investment_evidence_governance import ReasoningGeneration, ResearchRun, complete_reasoning_handoff
+from digital_twin.domain.hypothesis_calibration import attach_abox_hypothesis_calibrations
+from digital_twin.domain.message_types import INVESTMENT_INSIGHT
+from digital_twin.domain.notification_ai_decision_brief import AI_DECISION_CONTRACT_VERSION, AI_DECISION_PROMPT_VERSION
+from digital_twin.domain.ontology_inference_context import relation_context_from_inferencebox
+from digital_twin.domain.ontology_worlds import portfolio_world_id
+from digital_twin.domain.portfolio import PortfolioSummary, Position
+from digital_twin.modules.decisions.application.notification_ai_judgement_service import NotificationAIContractError, NotificationAIJudgementService
+
+
+class InvestmentBrainService:
+    def __init__(
+        self,
+        monitor_store,
+        ontology_repository,
+        reviewer,
+        decision_episode_store,
+        research_orchestrator=None,
+        reasoning_refresher=None,
+        hypothesis_proposal_service=None,
+        research_store=None,
+        settings: Dict[str, object] = None,
+        hypothesis_lifecycle_store=None,
+        hypothesis_review_service=None,
+        hypothesis_lifecycle_policy_service=None,
+        hypothesis_quality_review_service=None,
+        hypothesis_policy_governance_service=None,
+        hypothesis_outcome_replay_service=None,
+    ):
+        self.monitor_store = monitor_store
+        self.ontology_repository = ontology_repository
+        self.reviewer = reviewer
+        self.decision_episode_store = decision_episode_store
+        self.research_orchestrator = research_orchestrator
+        self.reasoning_refresher = reasoning_refresher
+        self.hypothesis_proposal_service = hypothesis_proposal_service
+        self.research_store = research_store
+        self.settings = dict(settings or {})
+        self.hypothesis_lifecycle_store = hypothesis_lifecycle_store
+        self.hypothesis_review_service = hypothesis_review_service
+        self.hypothesis_lifecycle_policy_service = hypothesis_lifecycle_policy_service
+        self.hypothesis_quality_review_service = hypothesis_quality_review_service
+        self.hypothesis_policy_governance_service = hypothesis_policy_governance_service
+        self.hypothesis_outcome_replay_service = hypothesis_outcome_replay_service
+        self.ai_judgement_service = NotificationAIJudgementService(
+            reviewer,
+            self.settings,
+            max_prompt_bytes=int(self.settings.get("notificationAiQueueMaxPromptBytes") or 24 * 1024),
+            repair_reasoning_effort=str(
+                self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
+            ),
+            repair_timeout_seconds=int(
+                self.settings.get("notificationAiComparisonRepairTimeoutSeconds") or 0
+            ),
+            enforce_contract_for_typed_response=False,
+        )
+
+    def ask(self, message: str, account_id: str = "", symbol: str = "") -> Dict[str, object]:
+        message = " ".join(str(message or "").split())
+        if not message:
+            raise ValueError("투자 질문을 입력하세요.")
+        state, position, source = self.resolve_subject(message, account_id, symbol)
+        if not state or not position:
+            return {
+                "status": "blocked",
+                "engine": "ontology-investment-brain",
+                "reply": "최신 계좌 스냅샷에서 질문 대상을 찾지 못했습니다. 회사명 또는 종목을 질문에 포함해 주세요.",
+                "missing": ["account-snapshot", "investment-subject"],
+            }
+        resolved_account_id = str(state.get("accountId") or account_id or "")
+        question = InvestmentQuestion.create(
+            message,
+            subject_symbol=position.symbol,
+            subject_name=position.name,
+            account_id=resolved_account_id,
+        )
+        relation_context = self.load_relation_context(state, position, source)
+        if not relation_context:
+            return {
+                "status": "blocked",
+                "engine": "ontology-investment-brain",
+                "question": question.to_dict(),
+                "reply": "TypeDB InferenceBox에서 이 종목과 연결된 추론 관계를 찾지 못해 투자 답변을 만들지 않았습니다.",
+                "missing": ["typedb-inference-relations"],
+            }
+        brain = self.brain_with_reasoning_generation(
+            hypothesis_set_from_relation_context(relation_context, question),
+            relation_context,
+        )
+        research_run = self.run_research(question, position, brain, resolved_account_id)
+        refresh_result = {}
+        if research_run and self.research_requires_reasoning_refresh(research_run):
+            refresh_result = self.refresh_reasoning(resolved_account_id, position.symbol)
+            refreshed_handoff = self.completed_reasoning_handoff(research_run, refresh_result)
+            refreshed = bool(refreshed_handoff and refreshed_handoff.applied())
+            if str(refresh_result.get("status") or "") != "queued" and self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
+                research_run = self.mark_research_reasoning_refreshed(
+                    research_run,
+                    refreshed,
+                    refreshed_handoff,
+                )
+            if refreshed:
+                refreshed_position = refresh_result.get("position") if isinstance(refresh_result.get("position"), dict) else {}
+                if refreshed_position:
+                    position = position_from_payload(refreshed_position, position.symbol, source)
+                refreshed_state = refresh_result.get("state") if isinstance(refresh_result.get("state"), dict) else {}
+                if refreshed_state:
+                    state = {**state, **refreshed_state}
+                refreshed_context = self.load_relation_context(state, position, source)
+                if refreshed_context:
+                    relation_context = refreshed_context
+                    brain = self.brain_with_reasoning_generation(
+                        hypothesis_set_from_relation_context(relation_context, question),
+                        relation_context,
+                    )
+        research_payload = research_run.to_dict() if research_run and hasattr(research_run, "to_dict") else {}
+        if research_run and self.research_requires_reasoning_refresh(research_run) and not bool(research_payload.get("reasoningRefreshed")):
+            return {
+                "status": "blocked",
+                "engine": "ontology-investment-brain",
+                "reply": "새 검증 근거는 저장됐지만 TypeDB 재추론이 완료되지 않아 투자 의견을 만들지 않았습니다. 마지막 정상 추론 세대는 유지됩니다.",
+                "question": question.to_dict(),
+                "hypothesisSet": brain.get("hypothesisSet") or {},
+                "researchPlan": brain.get("researchPlan") or {},
+                "researchRun": research_payload,
+                "reasoningRefresh": refresh_result,
+                "missing": ["typedb-reasoning-refresh"],
+            }
+        relation_context.update({
+            "investmentBrain": brain,
+            "hypothesisTemplates": brain.get("hypothesisTemplates") or [],
+            "hypothesisSet": brain.get("hypothesisSet") or {},
+            "researchPlan": brain.get("researchPlan") or {},
+            "selfQuestions": brain.get("selfQuestions") or [],
+            "epistemicState": brain.get("epistemicState") or {},
+            "researchCycle": {
+                **research_payload,
+                "reasoningRefresh": refresh_result,
+            } if research_payload else {},
+        })
+        self.attach_hypothesis_decision_brief(
+            relation_context,
+            resolved_account_id,
+            position.symbol,
+            relation_context.get("researchCycle") if isinstance(relation_context.get("researchCycle"), dict) else {},
+        )
+        context = {
+            "messageType": INVESTMENT_INSIGHT,
+            "accountId": resolved_account_id,
+            "accountLabel": state.get("accountLabel") or "",
+            "displayTarget": position.name or position.symbol,
+            "title": position.name or position.symbol,
+            "referenceDate": relation_context.get("inferenceGenerationAt") or state.get("generatedAt") or "",
+            "rawLines": ["사용자 투자 질문: " + message],
+            "criteria": ["TypeDB 동적 인과 가설 비교", "반대 근거와 데이터 공백 조사", "검증 근거 반영 후 공통 AI 심판"],
+            "ontologyRelationContext": relation_context,
+            "investmentBrainQuestion": question.to_dict(),
+            "notificationAiReplayManifest": {
+                "promptVersion": AI_DECISION_PROMPT_VERSION,
+                "modelVersion": str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
+                "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
+                "reasoningEffort": "max",
+            },
+        }
+        outcome = self.ai_judgement_service.judge(context)
+        if not outcome.publishable:
+            raise NotificationAIContractError(
+                outcome.final_contract_error
+                or outcome.final_publication_error
+                or outcome.repair_error
+            )
+        response = outcome.response
+        context["_notificationAiInferencePacket"] = outcome.packet.to_audit_dict()
+        response_payload = response.to_dict()
+        episode = decision_episode_from_context(context, response_payload, job_id=question.question_id)
+        if episode and self.decision_episode_store:
+            facts = dict(relation_context.get("facts") or {})
+            facts["inferenceGenerationId"] = relation_context.get("inferenceGenerationId") or ""
+            self.decision_episode_store.record_observation(
+                resolved_account_id,
+                position.symbol,
+                facts,
+                str(relation_context.get("inferenceGenerationAt") or ""),
+            )
+            self.decision_episode_store.save(episode)
+        proposal_result = self.propose_novel_hypotheses(
+            resolved_account_id,
+            position.symbol,
+            question,
+            brain,
+            research_payload,
+            relation_context,
+        )
+        return {
+            "status": "answered",
+            "engine": "ontology-investment-brain",
+            "reply": answer_text(response_payload),
+            "question": question.to_dict(),
+            "answer": response_payload,
+            "hypothesisSet": brain.get("hypothesisSet") or {},
+            "hypothesisTemplates": brain.get("hypothesisTemplates") or [],
+            "researchPlan": brain.get("researchPlan") or {},
+            "researchRun": research_payload,
+            "reasoningRefresh": refresh_result,
+            "novelHypothesisProposal": proposal_result,
+            "decisionEpisodeId": episode.episode_id if episode else "",
+            "inferenceGenerationId": relation_context.get("inferenceGenerationId") or "",
+            "graphStore": relation_context.get("graphStore") or "",
+            "hypothesisDecisionBrief": relation_context.get("hypothesisDecisionBrief") or {},
+        }
+
+    def run_research(
+        self,
+        question: InvestmentQuestion,
+        position: Position,
+        brain: Dict[str, object],
+        account_id: str,
+    ):
+        if not self.research_orchestrator or not hasattr(self.research_orchestrator, "run"):
+            return None
+        target = NewsCollectionTarget(
+            symbol=position.symbol,
+            name=position.name,
+            market=position.market,
+            currency=position.currency,
+            sector=getattr(position, "sector", ""),
+        )
+        try:
+            return self.research_orchestrator.run(question, target, brain, account_id=account_id)
+        except Exception as error:  # noqa: BLE001 - existing TypeDB context can still answer with a visible research gap.
+            failed = ResearchRun(
+                run_id="research-run:error:" + question.question_id,
+                question_id=question.question_id,
+                account_id=account_id,
+                symbol=position.symbol,
+                status="error",
+                task_ids=[],
+                source_types=[],
+                provider_statuses=[{"provider": "research-orchestrator", "status": "error", "reason": str(error)[:180]}],
+            )
+            if self.research_store and hasattr(self.research_store, "save_run"):
+                return self.research_store.save_run(failed)
+            return failed
+
+    def research_requires_reasoning_refresh(self, run) -> bool:
+        return int(getattr(run, "changed_evidence_count", 0) or 0) > 0
+
+    def brain_with_reasoning_generation(
+        self,
+        brain: Dict[str, object],
+        relation_context: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Give research a stable reference to the exact active TypeDB world."""
+        enriched = dict(brain or {})
+        context = dict(relation_context or {})
+        typedb = context.get("typedbInference") if isinstance(context.get("typedbInference"), dict) else {}
+        enriched["reasoningGeneration"] = {
+            "inferenceGenerationId": str(
+                context.get("inferenceGenerationId")
+                or typedb.get("inferenceGenerationId")
+                or ""
+            ),
+            "sourceAboxSnapshotId": str(
+                context.get("sourceAboxSnapshotId")
+                or typedb.get("sourceAboxSnapshotId")
+                or ""
+            ),
+            "worldId": str(context.get("worldId") or typedb.get("worldId") or ""),
+            "generationAligned": bool(
+                context.get("generationAligned")
+                if "generationAligned" in context
+                else typedb.get("generationAligned")
+            ),
+            "observedAt": str(
+                context.get("inferenceGenerationAt")
+                or typedb.get("inferenceGenerationAt")
+                or ""
+            ),
+        }
+        subject = context.get("subject") if isinstance(context.get("subject"), dict) else {}
+        facts = context.get("facts") if isinstance(context.get("facts"), dict) else {}
+        calibration_snapshot = context.get("hypothesisCalibration") if isinstance(context.get("hypothesisCalibration"), dict) else {}
+        if not calibration_snapshot and isinstance(typedb.get("hypothesisCalibration"), dict):
+            calibration_snapshot = typedb.get("hypothesisCalibration")
+        enriched = attach_abox_hypothesis_calibrations(
+            enriched,
+            calibration_snapshot,
+            subject_symbol=str(subject.get("symbol") or facts.get("symbol") or ""),
+            inference_generation_id=str(enriched["reasoningGeneration"].get("inferenceGenerationId") or ""),
+            inference_generation_at=str(enriched["reasoningGeneration"].get("observedAt") or ""),
+            source_abox_snapshot_id=str(enriched["reasoningGeneration"].get("sourceAboxSnapshotId") or ""),
+            generation_aligned=bool(enriched["reasoningGeneration"].get("generationAligned")),
+        )
+        return enriched
+
+    def completed_reasoning_handoff(self, run, refresh_result: Dict[str, object]):
+        handoff = getattr(run, "reasoning_handoff", None)
+        if not handoff or not getattr(handoff, "request_id", ""):
+            return handoff
+        result = dict(refresh_result or {})
+        payload = result.get("reasoningGeneration")
+        if not isinstance(payload, dict):
+            payload = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else result
+        return complete_reasoning_handoff(
+            handoff,
+            ReasoningGeneration.from_dict(payload),
+            str(result.get("reason") or ""),
+        )
+
+    def mark_research_reasoning_refreshed(self, run, refreshed: bool, handoff):
+        marker = getattr(self.research_orchestrator, "mark_reasoning_refreshed", None)
+        if not callable(marker):
+            return run
+        try:
+            return marker(run, refreshed, handoff)
+        except TypeError:
+            # Compatibility adapters cannot persist the generation audit, but
+            # current production orchestration always receives the handoff.
+            return marker(run, refreshed)
+
+    def enrich_notification_context(
+        self,
+        context: Dict[str, object],
+        account_id: str = "",
+        event_id: str = "",
+    ) -> Dict[str, object]:
+        enriched = dict(context or {})
+        relation_context = enriched.get("ontologyRelationContext")
+        if not isinstance(relation_context, dict) or not relation_context:
+            return enriched
+        subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+        symbol = str(subject.get("symbol") or enriched.get("rawSymbol") or enriched.get("symbol") or "").upper().strip()
+        if not symbol:
+            return enriched
+        state, position, source = self.resolve_subject(symbol, account_id, symbol)
+        if not state or not position:
+            state, position, source = subject_from_notification_graph_context(
+                relation_context,
+                enriched,
+                account_id,
+            )
+        if not state or not position:
+            enriched["researchCycle"] = {
+                "status": "subject-not-found",
+                "symbol": symbol,
+                "reason": "최신 계좌 스냅샷과 검증 가능한 TypeDB 알림 컨텍스트에서 대상을 찾지 못했습니다.",
+            }
+            return enriched
+        resolved_account_id = str(state.get("accountId") or account_id or "")
+        reference_at = str(
+            relation_context.get("inferenceGenerationAt")
+            or enriched.get("referenceDate")
+            or state.get("generatedAt")
+            or ""
+        )
+        question = InvestmentQuestion.create(
+            str(enriched.get("investmentBrainQuestionText") or position.name + "의 현재 알림 판단을 반증 가능한 가설로 다시 검증한다."),
+            subject_symbol=position.symbol,
+            subject_name=position.name,
+            account_id=resolved_account_id,
+            asked_at=reference_at,
+            source="notification",
+        )
+        brain = self.brain_with_reasoning_generation(
+            hypothesis_set_from_relation_context(relation_context, question),
+            relation_context,
+        )
+        research_run = self.run_research(question, position, brain, resolved_account_id)
+        refresh_result: Dict[str, object] = {}
+        if research_run and self.research_requires_reasoning_refresh(research_run):
+            refresh_result = self.refresh_reasoning(resolved_account_id, position.symbol)
+            refreshed_handoff = self.completed_reasoning_handoff(research_run, refresh_result)
+            refreshed = bool(refreshed_handoff and refreshed_handoff.applied())
+            if str(refresh_result.get("status") or "") != "queued" and self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
+                research_run = self.mark_research_reasoning_refreshed(
+                    research_run,
+                    refreshed,
+                    refreshed_handoff,
+                )
+            if refreshed:
+                refreshed_position = refresh_result.get("position") if isinstance(refresh_result.get("position"), dict) else {}
+                refreshed_state = refresh_result.get("state") if isinstance(refresh_result.get("state"), dict) else {}
+                if refreshed_position:
+                    position = position_from_payload(refreshed_position, position.symbol, source)
+                if refreshed_state:
+                    state = {**state, **refreshed_state}
+                refreshed_context = self.load_relation_context(state, position, source)
+                if refreshed_context:
+                    relation_context = refreshed_context
+                    brain = self.brain_with_reasoning_generation(
+                        hypothesis_set_from_relation_context(relation_context, question),
+                        relation_context,
+                    )
+        research_payload = research_run.to_dict() if research_run and hasattr(research_run, "to_dict") else {}
+        research_cycle = {
+            **research_payload,
+            "notificationEventId": str(event_id or ""),
+            "reasoningRefresh": refresh_result,
+            "subjectResolutionSource": source,
+        } if research_payload else {
+            "status": "unavailable",
+            "notificationEventId": str(event_id or ""),
+            "subjectResolutionSource": source,
+            "reason": "가설 조사 오케스트레이터가 구성되지 않아 기존 TypeDB 추론 세대를 사용합니다.",
+        }
+        if int(research_cycle.get("changedEvidenceCount") or 0) > 0 and not bool(research_cycle.get("reasoningRefreshed")):
+            research_cycle["unappliedVerifiedClaims"] = list(research_cycle.get("verifiedClaims") or [])
+            research_cycle["verifiedClaims"] = []
+            research_cycle["investmentJudgmentEligible"] = False
+            research_cycle["reason"] = "새 검증 근거의 TypeDB 재추론이 실패해 마지막 정상 InferenceBox만 판단에 사용합니다."
+        else:
+            research_cycle["investmentJudgmentEligible"] = True
+        relation_context.update({
+            "investmentBrain": brain,
+            "hypothesisTemplates": brain.get("hypothesisTemplates") or [],
+            "hypothesisSet": brain.get("hypothesisSet") or {},
+            "researchPlan": brain.get("researchPlan") or {},
+            "selfQuestions": brain.get("selfQuestions") or [],
+            "epistemicState": brain.get("epistemicState") or {},
+            "researchCycle": research_cycle,
+        })
+        self.attach_hypothesis_decision_brief(
+            relation_context,
+            resolved_account_id,
+            position.symbol,
+            research_cycle,
+        )
+        enriched["ontologyRelationContext"] = relation_context
+        enriched["investmentBrainQuestion"] = question.to_dict()
+        enriched["researchCycle"] = research_cycle
+        return enriched
+
+    def enqueue_notification_research_context(
+        self,
+        context: Dict[str, object],
+        account_id: str = "",
+        event_id: str = "",
+    ) -> Dict[str, object]:
+        enriched = dict(context or {})
+        relation_context = enriched.get("ontologyRelationContext")
+        if not isinstance(relation_context, dict) or not relation_context:
+            return enriched
+        subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+        symbol = str(subject.get("symbol") or enriched.get("rawSymbol") or enriched.get("symbol") or "").upper().strip()
+        if not symbol:
+            return enriched
+        state, position, source = self.resolve_subject(symbol, account_id, symbol)
+        if not state or not position:
+            state, position, source = subject_from_notification_graph_context(relation_context, enriched, account_id)
+        if not state or not position:
+            enriched["researchCycle"] = {
+                "status": "subject-not-found",
+                "executionMode": "asynchronous",
+                "symbol": symbol,
+            }
+            return enriched
+        resolved_account_id = str(state.get("accountId") or account_id or "")
+        reference_at = str(relation_context.get("inferenceGenerationAt") or enriched.get("referenceDate") or state.get("generatedAt") or "")
+        question = InvestmentQuestion.create(
+            str(enriched.get("investmentBrainQuestionText") or position.name + "의 현재 알림 판단을 반증 가능한 가설로 다시 검증한다."),
+            subject_symbol=position.symbol,
+            subject_name=position.name,
+            account_id=resolved_account_id,
+            asked_at=reference_at,
+            source="notification",
+        )
+        brain = self.brain_with_reasoning_generation(
+            hypothesis_set_from_relation_context(relation_context, question),
+            relation_context,
+        )
+        research_run = None
+        if self.research_orchestrator and hasattr(self.research_orchestrator, "enqueue"):
+            research_run = self.research_orchestrator.enqueue(
+                question,
+                NewsCollectionTarget(
+                    symbol=position.symbol,
+                    name=position.name,
+                    market=position.market,
+                    currency=position.currency,
+                    sector=getattr(position, "sector", ""),
+                ),
+                brain,
+                account_id=resolved_account_id,
+                notification_event_id=event_id,
+            )
+        research_cycle = research_run.to_dict() if research_run and hasattr(research_run, "to_dict") else {
+            "status": "unavailable",
+            "reason": "비동기 ResearchRun 저장소를 사용할 수 없습니다.",
+        }
+        research_cycle.update({
+            "executionMode": "asynchronous",
+            "notificationEventId": str(event_id or ""),
+            "subjectResolutionSource": source,
+            "usesActiveInferenceGeneration": True,
+            "investmentJudgmentEligible": True,
+        })
+        relation_context.update({
+            "investmentBrain": brain,
+            "hypothesisTemplates": brain.get("hypothesisTemplates") or [],
+            "hypothesisSet": brain.get("hypothesisSet") or {},
+            "researchPlan": brain.get("researchPlan") or {},
+            "selfQuestions": brain.get("selfQuestions") or [],
+            "epistemicState": brain.get("epistemicState") or {},
+            "researchCycle": research_cycle,
+        })
+        self.attach_hypothesis_decision_brief(
+            relation_context,
+            resolved_account_id,
+            position.symbol,
+            research_cycle,
+        )
+        enriched["ontologyRelationContext"] = relation_context
+        enriched["investmentBrainQuestion"] = question.to_dict()
+        enriched["researchCycle"] = research_cycle
+        return enriched
+
+    def refresh_reasoning(self, account_id: str, symbol: str) -> Dict[str, object]:
+        if not self.reasoning_refresher:
+            return {"status": "queued", "refreshed": False, "reason": "전용 온톨로지 추론 워커가 TypeDB 활성 세대를 갱신합니다."}
+        try:
+            result = self.reasoning_refresher(account_id, symbol)
+        except Exception as error:  # noqa: BLE001 - caller keeps the previous usable inference generation.
+            return {"status": "error", "refreshed": False, "reason": str(error)[:180]}
+        if isinstance(result, dict):
+            return result
+        return {"status": "completed" if result else "error", "refreshed": bool(result)}
+
+    def attach_hypothesis_decision_brief(
+        self,
+        relation_context: Dict[str, object],
+        account_id: str = "",
+        symbol: str = "",
+        research_cycle: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Attach audit context for AI explanation, never an action selector."""
+
+        if not self.hypothesis_review_service:
+            return {}
+        try:
+            brief = self.hypothesis_review_service.brief(
+                relation_context,
+                account_id=account_id,
+                symbol=symbol,
+                research_cycle=research_cycle,
+            )
+        except Exception as error:  # noqa: BLE001 - review history must not block a live TypeDB judgement.
+            brief = {
+                "status": "unavailable",
+                "source": "typedb-hypothesis-lifecycle+decision-episode-outcome",
+                "decisionEligibility": "context-only-not-action-selector",
+                "automaticDeployment": False,
+                "reason": str(error)[:180],
+                "items": [],
+            }
+        if self.hypothesis_quality_review_service:
+            try:
+                brief["qualityReview"] = self.hypothesis_quality_review_service.assess(brief)
+            except Exception as error:  # noqa: BLE001 - review-only quality context must stay non-blocking.
+                brief["qualityReview"] = {
+                    "status": "unavailable",
+                    "decisionEligibility": "quality-review-only",
+                    "automaticDeployment": False,
+                    "reason": str(error)[:180],
+                    "items": [],
+                }
+        relation_context["hypothesisDecisionBrief"] = brief
+        prompt_context = relation_context.get("promptContext") if isinstance(relation_context.get("promptContext"), dict) else {}
+        if prompt_context:
+            prompt_context["hypothesisDecisionBrief"] = brief
+            relation_context["promptContext"] = prompt_context
+        brain = relation_context.get("investmentBrain") if isinstance(relation_context.get("investmentBrain"), dict) else {}
+        if brain:
+            brain["hypothesisDecisionBrief"] = brief
+            relation_context["investmentBrain"] = brain
+        return brief
+
+    def propose_novel_hypotheses(
+        self,
+        account_id: str,
+        symbol: str,
+        question: InvestmentQuestion,
+        brain: Dict[str, object],
+        research_run: Dict[str, object],
+        relation_context: Dict[str, object],
+    ) -> Dict[str, object]:
+        if not self.hypothesis_proposal_service or not self.should_propose_novel_hypothesis(brain, research_run):
+            return {"status": "not-required", "proposalCount": 0, "proposals": []}
+        return self.hypothesis_proposal_service.propose(
+            account_id,
+            symbol,
+            question.to_dict(),
+            brain.get("hypothesisSet") or {},
+            research_run,
+            relation_context,
+        )
+
+    def should_propose_novel_hypothesis(self, brain: Dict[str, object], research_run: Dict[str, object] = None) -> bool:
+        hypotheses = ((brain.get("hypothesisSet") or {}).get("hypotheses") if isinstance(brain.get("hypothesisSet"), dict) else []) or []
+        approved_graph = [
+            item for item in hypotheses
+            if isinstance(item, dict)
+            and str(item.get("approvalStatus") or "") == "approved-active"
+            and item.get("supportingRuleIds")
+        ]
+        epistemic = brain.get("epistemicState") if isinstance(brain.get("epistemicState"), dict) else {}
+        verified_claims = (research_run or {}).get("verifiedClaims") if isinstance(research_run, dict) else []
+        return len(approved_graph) < 2 or (
+            str(epistemic.get("status") or "") == "contested"
+            and bool(verified_claims)
+        )
+
+    def episodes(self, account_id: str = "", symbol: str = "", limit: int = 50, view: str = "detail") -> Dict[str, object]:
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "head"}
+        if self.decision_episode_store and summary_view and hasattr(self.decision_episode_store, "list_summaries"):
+            rows = self.decision_episode_store.list_summaries(account_id, symbol, limit)
+        else:
+            episodes = self.decision_episode_store.list(account_id, symbol, limit) if self.decision_episode_store else []
+            rows = [item.to_dict() for item in episodes]
+            if summary_view:
+                rows = [{
+                    key: row.get(key)
+                    for key in [
+                        "episodeId", "accountId", "symbol", "subjectName", "questionId",
+                        "selectedHypothesisId", "action", "reviewLevel", "dataState", "validationState",
+                        "inferenceGenerationId", "status", "decidedAt", "source",
+                    ]
+                    if key in row
+                } | {"detailRequired": True} for row in rows]
+        return {
+            "engine": "ontology-investment-brain",
+            "count": len(rows),
+            "view": "summary" if summary_view else "detail",
+            "episodes": rows,
+        }
+
+    def episode_detail(self, episode_id: str) -> Dict[str, object]:
+        episode = self.decision_episode_store.get(episode_id) if self.decision_episode_store else None
+        return {
+            "engine": "ontology-investment-brain",
+            "status": "ok" if episode else "not-found",
+            "episode": episode.to_dict() if episode else {},
+        }
+
+    def performance(self, account_id: str = "", symbol: str = "", limit: int = 500) -> Dict[str, object]:
+        if not self.decision_episode_store or not hasattr(self.decision_episode_store, "performance"):
+            return {"status": "unavailable", "engine": "ontology-investment-brain"}
+        result = self.decision_episode_store.performance(account_id, symbol, limit)
+        return {
+            "engine": "ontology-investment-brain",
+            "source": "DecisionEpisode+ObservedOutcome",
+            "accountId": account_id,
+            "symbol": str(symbol or "").upper(),
+            **dict(result or {}),
+        }
+
+    def learning_proposals(self, status: str = "", limit: int = 50) -> Dict[str, object]:
+        rows = self.decision_episode_store.list_learning_proposals(status, limit) if self.decision_episode_store else []
+        return {
+            "engine": "ontology-investment-brain",
+            "governance": "human-review-required-no-automatic-rulebox-deployment",
+            "count": len(rows),
+            "proposals": rows,
+        }
+
+    def review_learning_proposal(self, proposal_id: str, status: str, note: str = "") -> Dict[str, object]:
+        proposal = self.decision_episode_store.review_learning_proposal(proposal_id, status, note)
+        return {
+            "engine": "ontology-investment-brain",
+            "governance": "reviewed-not-deployed",
+            "proposal": proposal,
+        }
+
+    def hypothesis_templates(self) -> Dict[str, object]:
+        snapshot = self.ontology_repository.rulebox_snapshot() if self.ontology_repository and hasattr(self.ontology_repository, "rulebox_snapshot") else {}
+        performance = (
+            self.decision_episode_store.performance(limit=500)
+            if self.decision_episode_store and hasattr(self.decision_episode_store, "performance")
+            else {}
+        )
+        rows = hypothesis_templates_from_rulebox_snapshot(snapshot, performance)
+        coverage = rule_claim_coverage_from_rulebox_snapshot(snapshot)
+        return {
+            "engine": "ontology-investment-brain",
+            "source": "typedb-active-rulebox",
+            "count": len(rows),
+            "ruleClaimCoverage": coverage,
+            "automaticQualification": {
+                "enabled": True,
+                "source": "DecisionEpisode+ObservedOutcome",
+                "performanceStatus": str((performance or {}).get("status") or "unavailable"),
+                "stateCounts": {
+                    state: sum(1 for item in rows if str((item.get("qualification") or {}).get("status") or "") == state)
+                    for state in sorted({
+                        str((item.get("qualification") or {}).get("status") or "unknown")
+                        for item in rows
+                    })
+                },
+            },
+            "templates": rows,
+        }
+
+    def hypothesis_lifecycles(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+        event_limit: int = 100,
+        view: str = "detail",
+    ) -> Dict[str, object]:
+        """Read lifecycle audit records; this does not run or alter inference."""
+
+        if not self.hypothesis_lifecycle_store:
+            return {
+                "status": "unavailable",
+                "engine": "ontology-investment-brain",
+                "records": [],
+                "events": [],
+            }
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "head"}
+        summary_reader = getattr(self.hypothesis_lifecycle_store, "list_current_summary", None)
+        if summary_view and callable(summary_reader):
+            records = summary_reader(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=limit,
+            )
+        else:
+            records = self.hypothesis_lifecycle_store.list_current(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=limit,
+            ) if hasattr(self.hypothesis_lifecycle_store, "list_current") else []
+        events = [] if summary_view else (
+            self.hypothesis_lifecycle_store.list_events(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=event_limit,
+            ) if hasattr(self.hypothesis_lifecycle_store, "list_events") else []
+        )
+        record_payloads = [
+            item.to_dict() if hasattr(item, "to_dict") else dict(item)
+            for item in records
+            if hasattr(item, "to_dict") or isinstance(item, dict)
+        ]
+        return {
+            "status": "ok",
+            "engine": "ontology-investment-brain",
+            "source": "typedb-hypothesis-lifecycle-audit",
+            "accountId": account_id,
+            "symbol": str(symbol or "").upper(),
+            "marketId": market_id,
+            "scope": scope,
+            "view": "summary" if summary_view else "detail",
+            "count": len(records),
+            "eventCount": len(events),
+            "records": record_payloads,
+            "events": [item.to_dict() for item in events if hasattr(item, "to_dict")],
+        }
+
+    def hypothesis_workspace(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+        event_limit: int = 100,
+        view: str = "detail",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_review_service:
+            return {
+                "status": "unavailable",
+                "engine": "ontology-investment-brain",
+                "items": [],
+                "events": [],
+                "reason": "가설 검토 읽기 모델이 구성되지 않았습니다.",
+            }
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "inbox"}
+        if summary_view:
+            workspace = {
+                "engine": "ontology-investment-brain",
+                **self.hypothesis_review_service.workspace_summary(
+                    account_id=account_id,
+                    symbol=symbol,
+                    market_id=market_id,
+                    scope=scope,
+                    limit=limit,
+                ),
+            }
+            workspace["qualityReview"] = {
+                "status": "on-demand",
+                "decisionEligibility": "quality-review-only",
+                "automaticDeployment": False,
+                "items": [],
+                "reason": "가설 품질 검토는 선택한 상세 리포트에서 계산합니다.",
+            }
+            return workspace
+        workspace = {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_review_service.workspace(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=limit,
+                event_limit=event_limit,
+            ),
+        }
+        if self.hypothesis_quality_review_service:
+            try:
+                workspace["qualityReview"] = self.hypothesis_quality_review_service.assess(workspace)
+            except Exception as error:  # noqa: BLE001 - the read model remains usable when review storage is unavailable.
+                workspace["qualityReview"] = {
+                    "status": "unavailable",
+                    "decisionEligibility": "quality-review-only",
+                    "automaticDeployment": False,
+                    "reason": str(error)[:180],
+                    "items": [],
+                }
+        return workspace
+
+    def hypothesis_workspace_detail(self, lifecycle_key: str) -> Dict[str, object]:
+        if not self.hypothesis_review_service:
+            return {
+                "status": "unavailable",
+                "engine": "ontology-investment-brain",
+                "items": [],
+                "events": [],
+                "reason": "가설 검토 읽기 모델이 구성되지 않았습니다.",
+            }
+        workspace = {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_review_service.workspace_for_lifecycle_key(lifecycle_key),
+        }
+        if self.hypothesis_quality_review_service and workspace.get("items"):
+            try:
+                workspace["qualityReview"] = self.hypothesis_quality_review_service.assess(workspace)
+            except Exception as error:  # noqa: BLE001 - the report remains usable without quality aggregation.
+                workspace["qualityReview"] = {
+                    "status": "unavailable",
+                    "decisionEligibility": "quality-review-only",
+                    "automaticDeployment": False,
+                    "reason": str(error)[:180],
+                    "items": [],
+                }
+        return workspace
+
+    def update_hypothesis_lifecycle_policy(
+        self,
+        rule_id: str,
+        policy: Dict[str, object],
+        change_reason: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_lifecycle_policy_service:
+            raise RuntimeError("가설 수명주기 정책 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_lifecycle_policy_service.update(rule_id, policy, change_reason),
+        }
+
+    def preview_hypothesis_lifecycle_policy(
+        self,
+        rule_id: str,
+        policy: Dict[str, object],
+        change_reason: str = "",
+        symbols=None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.preview(
+                rule_id,
+                policy,
+                change_reason,
+                symbols=symbols,
+                world_id=world_id,
+            ),
+        }
+
+    def approve_hypothesis_lifecycle_policy(
+        self,
+        rule_id: str,
+        policy: Dict[str, object],
+        change_reason: str = "",
+        author: str = "web-main",
+        symbols=None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.approve(
+                rule_id,
+                policy,
+                change_reason,
+                author=author,
+                symbols=symbols,
+                world_id=world_id,
+            ),
+        }
+
+    def hypothesis_policy_versions(self, limit: int = 40) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            return {
+                "engine": "ontology-investment-brain",
+                "status": "unavailable",
+                "versions": [],
+                "reason": "가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.",
+            }
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.versions(limit),
+        }
+
+    def record_hypothesis_policy_baseline(self, author: str = "web-main") -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.record_baseline(author=author),
+        }
+
+    def restore_hypothesis_policy_version(
+        self,
+        version_id: str,
+        change_reason: str = "",
+        author: str = "web-main",
+        symbols=None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.restore(
+                version_id,
+                change_reason,
+                author=author,
+                symbols=symbols,
+                world_id=world_id,
+            ),
+        }
+
+    def review_hypothesis_quality(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        reviewed_by: str = "web-main",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_quality_review_service:
+            raise RuntimeError("가설 품질 검토 서비스가 구성되지 않았습니다.")
+        workspace = self.hypothesis_workspace(
+            account_id=account_id,
+            symbol=symbol,
+            market_id=market_id,
+            scope=scope,
+            limit=300,
+            event_limit=100,
+        )
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_quality_review_service.propose(workspace, reviewed_by=reviewed_by),
+        }
+
+    def replay_hypothesis_outcomes(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        limit: int = 500,
+    ) -> Dict[str, object]:
+        if not self.hypothesis_outcome_replay_service:
+            return {
+                "engine": "ontology-investment-brain",
+                "status": "unavailable",
+                "reason": "가설 사후 결과 재생 서비스가 구성되지 않았습니다.",
+                "mutated": False,
+            }
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_outcome_replay_service.run(account_id=account_id, symbol=symbol, limit=limit),
+        }
+
+    def research_runs(self, account_id: str = "", symbol: str = "", limit: int = 50, view: str = "detail") -> Dict[str, object]:
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "head"}
+        if self.research_store and summary_view and hasattr(self.research_store, "list_run_summaries"):
+            rows = self.research_store.list_run_summaries(account_id, symbol, limit)
+        else:
+            rows = self.research_store.list_runs(account_id, symbol, limit) if self.research_store else []
+            if summary_view:
+                rows = [{
+                    key: row.get(key)
+                    for key in [
+                        "runId", "questionId", "accountId", "symbol", "status", "sourceTypes",
+                        "roundCount", "changedEvidenceCount", "reasoningRefreshed", "startedAt", "completedAt",
+                    ]
+                    if key in row
+                } | {
+                    "verifiedClaimCount": len(row.get("verifiedClaims") or []),
+                    "rejectedClaimCount": len(row.get("rejectedClaims") or []),
+                    "detailRequired": True,
+                } for row in rows]
+        return {"count": len(rows), "view": "summary" if summary_view else "detail", "runs": rows}
+
+    def research_run_detail(self, run_id: str) -> Dict[str, object]:
+        row = self.research_store.get_run(run_id) if self.research_store and hasattr(self.research_store, "get_run") else {}
+        return {"status": "ok" if row else "not-found", "run": row or {}}
+
+    def hypothesis_proposals(self, status: str = "", symbol: str = "", limit: int = 50) -> Dict[str, object]:
+        if not self.hypothesis_proposal_service:
+            return {"count": 0, "proposals": [], "status": "disabled"}
+        return self.hypothesis_proposal_service.list(status, symbol, limit)
+
+    def review_hypothesis_proposal(self, proposal_id: str, status: str, note: str = "") -> Dict[str, object]:
+        if not self.hypothesis_proposal_service:
+            raise RuntimeError("가설 제안 서비스가 구성되지 않았습니다.")
+        return self.hypothesis_proposal_service.review(proposal_id, status, note)
+
+    def resolve_subject(self, message: str, account_id: str = "", symbol: str = "") -> Tuple[Dict[str, object], Optional[Position], str]:
+        states = self.monitor_store.load_previous() if hasattr(self.monitor_store, "load_previous") else dict(getattr(self.monitor_store, "previous", {}) or {})
+        requested_symbol = str(symbol or "").upper().strip()
+        candidates = []
+        for state_account_id, state in (states or {}).items():
+            if not isinstance(state, dict) or (account_id and str(state_account_id) != str(account_id)):
+                continue
+            for source_key, source in [("positions", "holding"), ("watchlist", "watchlist")]:
+                rows = state.get(source_key) if isinstance(state.get(source_key), dict) else {}
+                for item_symbol, payload in rows.items():
+                    if not isinstance(payload, dict):
+                        continue
+                    item = position_from_payload(payload, item_symbol, source)
+                    match_kind = subject_match_kind(message, requested_symbol, item)
+                    if match_kind != "none":
+                        candidates.append((match_kind, state, item, source))
+        if not candidates:
+            return {}, None, ""
+        _, state, item, source = max(candidates, key=lambda row: subject_match_priority(row[0]))
+        return state, item, source
+
+    def load_relation_context(self, state: Dict[str, object], position: Position, source: str) -> Dict[str, object]:
+        decision_rows = state.get("decisions") if isinstance(state.get("decisions"), dict) else {}
+        stored_decision = decision_rows.get(position.symbol) if isinstance(decision_rows.get(position.symbol), dict) else {}
+        stored_context = stored_decision.get("relation_rule_context") or stored_decision.get("relationRuleContext")
+        world_id = self.portfolio_world_id_for_state(state)
+        account_context = (state.get("metadata") or {}).get("accountContext") if isinstance(state.get("metadata"), dict) else {}
+        account_id = str(state.get("accountId") or (account_context or {}).get("accountId") or "").strip()
+        inferencebox = {}
+        if self.ontology_repository and hasattr(self.ontology_repository, "inferencebox_snapshot"):
+            try:
+                inferencebox = self.ontology_repository.inferencebox_snapshot(
+                    symbols=[position.symbol],
+                    limit=bounded_int_setting(self.settings, "investmentBrainInferenceBoxLimit", 500, 120, 500),
+                    world_id=world_id,
+                )
+            except TypeError as error:
+                # Narrow compatibility for older in-memory test adapters. The
+                # production TypeDB adapter always receives the account world.
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                try:
+                    inferencebox = self.ontology_repository.inferencebox_snapshot(
+                        symbols=[position.symbol],
+                        limit=bounded_int_setting(self.settings, "investmentBrainInferenceBoxLimit", 500, 120, 500),
+                    )
+                except Exception:
+                    inferencebox = {}
+            except Exception:  # noqa: BLE001 - stored graph context is the read fallback.
+                inferencebox = {}
+        if isinstance(inferencebox, dict) and (inferencebox.get("relations") or inferencebox.get("traces")):
+            context = relation_context_from_inferencebox(
+                position,
+                portfolio_from_payload(state.get("portfolio") or {}),
+                inferencebox,
+                external_signals=state.get("externalSignals") if isinstance(state.get("externalSignals"), dict) else {},
+                settings=self.settings,
+                source=source,
+                prompt_id="investmentBrainQuestion",
+                account_id=account_id,
+                portfolio_world_id=world_id,
+                account_context=account_context,
+            )
+            context.setdefault("worldId", world_id)
+            context.setdefault("accountId", account_id)
+            context.setdefault("portfolioWorldId", world_id)
+            return context
+        context = dict(stored_context or {}) if isinstance(stored_context, dict) else {}
+        if context:
+            context.setdefault("worldId", world_id)
+            context.setdefault("accountId", account_id)
+            context.setdefault("portfolioWorldId", world_id)
+        return context
+
+    def portfolio_world_id_for_state(self, state: Dict[str, object]) -> str:
+        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
+        account_id = str(state.get("accountId") or account_context.get("accountId") or "").strip()
+        if not account_id:
+            return ""
+        tenant_id = str(
+            metadata.get("tenantId")
+            or account_context.get("tenantId")
+            or self.settings.get("ontologyTenantId")
+            or self.settings.get("tenantId")
+            or ""
+        ).strip()
+        return portfolio_world_id(account_id, tenant_id)
+
+
+def position_from_payload(payload: Dict[str, object], symbol: str, source: str) -> Position:
+    allowed = {item.name for item in fields(Position)}
+    values = {key: value for key, value in payload.items() if key in allowed}
+    values["symbol"] = str(values.get("symbol") or symbol).upper()
+    values["name"] = str(values.get("name") or values["symbol"])
+    values["source"] = source
+    return Position(**values)
+
+
+def portfolio_from_payload(payload: Dict[str, object]) -> PortfolioSummary:
+    payload = payload if isinstance(payload, dict) else {}
+    return PortfolioSummary(
+        total=float(payload.get("total") or 0),
+        invested=float(payload.get("invested") or 0),
+        cash=float(payload.get("cash") or 0),
+        markets=list(payload.get("markets") or []),
+        sectors=list(payload.get("sectors") or []),
+        concentration=float(payload.get("concentration") or 0),
+    )
+
+
+def subject_from_notification_graph_context(
+    relation_context: Dict[str, object],
+    notification_context: Dict[str, object],
+    account_id: str = "",
+) -> Tuple[Dict[str, object], Optional[Position], str]:
+    graph_inference = relation_context.get("graphStoreInference") if isinstance(relation_context.get("graphStoreInference"), dict) else {}
+    graph_backed = bool(
+        relation_context.get("graphStoreUsed")
+        or graph_inference.get("relations")
+        or graph_inference.get("traces")
+    )
+    if not graph_backed:
+        return {}, None, ""
+    subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    symbol = str(subject.get("symbol") or facts.get("symbol") or notification_context.get("rawSymbol") or "").upper().strip()
+    if not symbol:
+        return {}, None, ""
+    market = str(subject.get("market") or facts.get("market") or "").upper().strip()
+    currency = str(subject.get("currency") or facts.get("currency") or ("KRW" if market == "KR" or symbol.isdigit() else ""))
+    values = {
+        "symbol": symbol,
+        "name": str(subject.get("name") or facts.get("name") or notification_context.get("displayTarget") or symbol),
+        "market": market,
+        "currency": currency,
+        "quantity": facts.get("quantity") or 0,
+        "sellable_quantity": facts.get("sellableQuantity") or 0,
+        "average_price": facts.get("averagePrice") or 0,
+        "current_price": facts.get("currentPrice") or 0,
+        "change_rate": facts.get("changeRate"),
+        "market_value": facts.get("marketValue") or 0,
+        "market_value_krw": facts.get("marketValueKrw") or facts.get("marketValueKRW") or 0,
+        "account_value_krw": facts.get("accountValueKrw") or facts.get("marketValueKrw") or 0,
+        "account_value_basis": facts.get("accountValueBasis") or "legacy-unknown",
+        "broker_market_value_krw": facts.get("brokerGrossValueKrw") or 0,
+        "broker_market_value_after_cost_krw": facts.get("brokerNetValueKrw") or 0,
+        "mark_to_market_value_krw": facts.get("markToMarketValueKrw") or 0,
+        "valuation_snapshot_id": facts.get("valuationSnapshotId") or "",
+        "profit_loss": facts.get("profitLoss") or 0,
+        "profit_loss_krw": facts.get("profitLossKrw") or facts.get("profitLossKRW") or 0,
+        "profit_loss_rate": facts.get("profitLossRate") or 0,
+        "volume": facts.get("volume") or 0,
+        "volume_ratio": facts.get("volumeRatio") or 0,
+        "trade_strength": facts.get("tradeStrength") or 0,
+        "ma5": facts.get("ma5") or 0,
+        "ma20": facts.get("ma20") or 0,
+        "ma60": facts.get("ma60") or 0,
+        "ma20_distance": facts.get("ma20Distance") or 0,
+        "ma60_distance": facts.get("ma60Distance") or 0,
+        "sector": str(subject.get("sector") or facts.get("sector") or "기타"),
+        "source": str(facts.get("source") or ("holding" if facts.get("isHolding") else "watchlist")),
+        "updated_at": str(facts.get("observedAt") or relation_context.get("inferenceGenerationAt") or ""),
+        "data_quality": "graph-context",
+    }
+    try:
+        position = Position(**values)
+    except (TypeError, ValueError):
+        return {}, None, ""
+    resolved_account_id = str(notification_context.get("accountId") or account_id or facts.get("accountId") or "")
+    portfolio_payload = {
+        "total": facts.get("portfolioTotal") or facts.get("accountTotal") or notification_context.get("portfolioTotal") or 0,
+        "invested": facts.get("portfolioInvested") or 0,
+        "cash": facts.get("portfolioCash") or 0,
+        "markets": [],
+        "sectors": [],
+        "concentration": facts.get("portfolioConcentration") or 0,
+        "valuation_snapshot_id": facts.get("valuationSnapshotId") or "",
+        "valuation_basis": facts.get("valuationBasis") or "legacy-unknown",
+        "broker_gross_total": facts.get("brokerGrossTotal") or 0,
+        "broker_net_total": facts.get("brokerNetTotal") or 0,
+        "mark_to_market_total": facts.get("markToMarketTotal") or 0,
+    }
+    state = {
+        "accountId": resolved_account_id,
+        "accountLabel": str(notification_context.get("accountLabel") or ""),
+        "generatedAt": str(relation_context.get("inferenceGenerationAt") or facts.get("observedAt") or ""),
+        "portfolio": portfolio_payload,
+        "positions": {symbol: position.to_dict()} if position.source == "holding" else {},
+        "watchlist": {symbol: position.to_dict()} if position.source != "holding" else {},
+        "decisions": {},
+        "externalSignals": {},
+    }
+    return state, position, "notification-graph-context"
+
+
+def subject_match_kind(message: str, requested_symbol: str, position: Position) -> str:
+    if requested_symbol and requested_symbol == position.symbol.upper():
+        return "exact"
+    compact = str(message or "").lower().replace(" ", "")
+    symbol = position.symbol.lower().replace(" ", "")
+    name = position.name.lower().replace(" ", "")
+    if symbol and symbol in compact:
+        return "symbol"
+    if name and name in compact:
+        return "name"
+    return "none"
+
+
+def subject_match_priority(match_kind: str) -> int:
+    return ("none", "name", "symbol", "exact").index(str(match_kind or "none"))
+
+
+def answer_text(payload: Dict[str, object]) -> str:
+    action_label = str(payload.get("actionLabel") or payload.get("action") or "")
+    summary = str(payload.get("summary") or "")
+    opinion = str(payload.get("opinion") or "")
+    epistemic = str(payload.get("epistemicSummary") or "")
+    rows = [item for item in [action_label + (": " if action_label and summary else "") + summary, opinion, epistemic] if item]
+    return "\n\n".join(rows)
+
+
+def bounded_int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int, upper: int) -> int:
+    try:
+        value = int(float(str((settings or {}).get(key) or fallback)))
+    except (TypeError, ValueError):
+        value = fallback
+    return max(lower, min(upper, value))

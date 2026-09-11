@@ -15,11 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.infrastructure.disclosure_analyzer import disclosure_analyzer_from_settings  # noqa: E402
 from digital_twin.infrastructure.hypothesis_proposal_ai import hypothesis_proposal_advisor_from_settings  # noqa: E402
 from digital_twin.infrastructure.hypothesis_research_planner_ai import hypothesis_research_planning_advisor_from_settings  # noqa: E402
-from digital_twin.infrastructure.model_reviewer import (  # noqa: E402
-    _CODEX_PREFLIGHT_CACHE,
-    healthy_codex_executable,
-    reviewer_from_settings,
-)
+from digital_twin.modules.model_registry.infrastructure.model_reviewer import _CODEX_PREFLIGHT_CACHE, healthy_codex_executable, reviewer_from_settings
 from digital_twin.infrastructure.news_ai_analyzer import news_ai_analyzer_from_settings  # noqa: E402
 from digital_twin.infrastructure.local_ai_process_guard import (  # noqa: E402
     LocalAICapacityUnavailable,
@@ -83,7 +79,7 @@ class AiModelPolicyTests(unittest.TestCase):
 
     def test_all_application_ai_factories_ignore_custom_commands_and_use_the_fixed_codex_policy(self):
         fixed_command = ["codex", "--model", "gpt-5.6-sol", "exec", "-"]
-        with patch("digital_twin.infrastructure.model_reviewer.background_codex_process_arguments", return_value=fixed_command) as model_command, \
+        with patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.background_codex_process_arguments", return_value=fixed_command) as model_command, \
              patch("digital_twin.infrastructure.notification_ai_reviewer.codex_process_arguments", return_value=["codex", "exec", "-"]) as notification_command, \
              patch("digital_twin.infrastructure.news_ai_analyzer.background_codex_process_arguments", return_value=fixed_command) as news_command, \
              patch("digital_twin.infrastructure.disclosure_analyzer.background_codex_process_arguments", return_value=fixed_command) as disclosure_command, \
@@ -118,10 +114,10 @@ class AiModelPolicyTests(unittest.TestCase):
 
         _CODEX_PREFLIGHT_CACHE.clear()
         fake_stat = type("Stat", (), {"st_mtime_ns": 1, "st_size": 2})()
-        with patch("digital_twin.infrastructure.model_reviewer.shutil.which", return_value="/tmp/codex"), \
-             patch("digital_twin.infrastructure.model_reviewer.os.stat", return_value=fake_stat), \
+        with patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.shutil.which", return_value="/tmp/codex"), \
+             patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.os.stat", return_value=fake_stat), \
              patch(
-                 "digital_twin.infrastructure.model_reviewer.subprocess.run",
+                 "digital_twin.modules.model_registry.infrastructure.model_reviewer.subprocess.run",
                  side_effect=subprocess.TimeoutExpired(["codex", "--version"], 5),
              ):
             self.assertEqual("", healthy_codex_executable())

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.notification_feedback import normalize_notification_feedback
-from digital_twin.application.notification_feedback_service import NotificationFeedbackService
+from digital_twin.modules.notifications.application.notification_feedback_service import NotificationFeedbackService
 from digital_twin.infrastructure import web_server
 
 

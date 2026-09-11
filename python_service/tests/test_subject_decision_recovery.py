@@ -1,9 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from digital_twin.application.investment_reasoning.orchestrator import (
-    InvestmentReasoningOrchestrator,
-)
+from digital_twin.modules.reasoning.application.investment_reasoning.orchestrator import InvestmentReasoningOrchestrator
 from digital_twin.domain.investment_reasoning.subject_case import (
     ABSTAIN,
     OBSERVATION,

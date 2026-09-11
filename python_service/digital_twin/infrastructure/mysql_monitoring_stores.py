@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
-from ..application.notification.intake import NotificationIngressService
+from digital_twin.modules.notifications.public import NotificationIngressService
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.data_freshness import evaluate_notification_data_freshness
 from ..domain.crypto_market_signals import (
@@ -33,7 +33,7 @@ from ..domain.market_observations import (
     market_observation_reasoning_symbols,
 )
 from ..domain.market_signal_transitions import prepare_market_signal_transition_metadata
-from ..domain.model_review import ModelReviewJob
+from digital_twin.modules.model_registry.contracts import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
@@ -61,9 +61,9 @@ from ..domain.portfolio import (
 )
 from ..domain.reasoning_source_snapshot import build_reasoning_source_snapshot
 from ..domain.repositories import MonitoringCycleRecordResult
-from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
+from digital_twin.modules.instruments.contracts import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from ..domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
-from .model_review_queue import model_review_payloads_from_event
+from digital_twin.modules.model_registry.infrastructure.model_review_queue import model_review_payloads_from_event
 from .mysql_monitoring import MySQLDependencyError, MySQLMonitorAccountJobStore, ensure_mysql_database_exists, mysql_settings
 from .operational_common import (
     MAX_NOTIFICATION_DELIVERY_ATTEMPTS,

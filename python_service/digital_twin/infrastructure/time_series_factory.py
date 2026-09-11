@@ -2,13 +2,7 @@
 
 from typing import Dict
 
-from ..application.time_series_platform import (
-    TemporalFeatureSnapshotService,
-    TimeSeriesBackendPlatformService,
-    TimeSeriesProjectionRunner,
-    VersionedMarketTimeSeriesStore,
-    truthy,
-)
+from digital_twin.modules.market_data.public import TemporalFeatureSnapshotService, TimeSeriesBackendPlatformService, TimeSeriesProjectionRunner, VersionedMarketTimeSeriesStore, truthy
 from ..domain.time_series_storage import TimeSeriesBackendDescriptor
 from .mysql_market_time_series import MySQLMarketTimeSeriesStore
 from .mysql_versioned_runtime import (

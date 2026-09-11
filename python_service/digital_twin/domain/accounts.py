@@ -287,7 +287,7 @@ class AccountConfig:
 
     def domain_profile(self):
         """Expose separated account concepts without breaking legacy callers."""
-        from .account_identity import AccountDomainProfile
+        from digital_twin.modules.accounts.contracts import AccountDomainProfile
 
         return AccountDomainProfile.from_legacy(self)
 

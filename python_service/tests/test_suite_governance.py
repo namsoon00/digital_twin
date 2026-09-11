@@ -108,7 +108,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Flexible notification requests, authoritative kind labels, optional
         # template recovery, account isolation and queue delivery are separate
         # contracts; none may silently manufacture an investment decision.
-        self.assertLessEqual(total, 1080)
+        # Twelve-module imports, synchronous CRUD, scoped concurrent writes,
+        # and transactional event failure add eight boundary regressions.
+        self.assertLessEqual(total, 1088)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -7,11 +7,7 @@ from ..domain.disclosure_analysis import (
     local_disclosure_analysis,
     normalize_disclosure_analysis_output,
 )
-from .model_reviewer import (
-    background_codex_process_arguments,
-    codex_model_label,
-    run_background_ai_prompt,
-)
+from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, codex_model_label, run_background_ai_prompt
 from .settings import runtime_settings
 
 

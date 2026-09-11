@@ -5,10 +5,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.application.independent_reasoning_comparison_service import (
-    IndependentReasoningComparisonService,
-)
-from digital_twin.application.reasoning_engine_platform import ReasoningEnginePlatformService
+from digital_twin.modules.reasoning.application.independent_reasoning_comparison_service import IndependentReasoningComparisonService
+from digital_twin.modules.reasoning.application.reasoning_engine_platform import ReasoningEnginePlatformService
 from digital_twin.domain.reasoning_engine_versions import (
     EngineControlState,
     EngineReleaseBundle,

@@ -20,14 +20,8 @@ from digital_twin.domain.notification_ai_gate_validation import (
 from digital_twin.domain.notification_ai_gate_contracts import (
     NotificationAIValidatedResponse,
 )
-from digital_twin.application.notification_ai_gate_message import (
-    execution_telegram_message,
-    notification_topline_change_summary,
-    prepend_execution_start_badge,
-)
-from digital_twin.application.portfolio_lifecycle_service import (
-    DecisionActionPlanningService,
-)
+from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message, notification_topline_change_summary, prepend_execution_start_badge
+from digital_twin.modules.portfolio.application.portfolio_lifecycle_service import DecisionActionPlanningService
 
 
 def hypothesis(qualification_status="active"):

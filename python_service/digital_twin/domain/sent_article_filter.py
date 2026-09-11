@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Set, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .news_analysis import normalized_article_title
-from ..news_intelligence.domain.story import news_event_fingerprint, story_identity
+from digital_twin.modules.news_intelligence.contracts import news_event_fingerprint, story_identity
 
 
 TRACKING_QUERY_KEYS = {

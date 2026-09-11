@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.application.notification_service import NotificationInstrumentIdentityEnricher
+from digital_twin.modules.notifications.application.notification_service import NotificationInstrumentIdentityEnricher
 from digital_twin.domain.notifications import NotificationJob
 
 

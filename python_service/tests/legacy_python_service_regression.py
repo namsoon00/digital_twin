@@ -17,17 +17,18 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.admin_preview import admin_preview_config, write_admin_preview
-from digital_twin.application.account_service import AccountApplicationService
-from digital_twin.application.flow_lens_service import FlowLensService, ontology_box
-from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
-from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
-from digital_twin.application.model_review_service import ModelReviewRunner
-from digital_twin.application.news_ai_analysis_service import NewsAiAnalysisService
-from digital_twin.application.news_collection_service import NewsCollectionRunner
-from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
-from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
-from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIValidatedGateEnricher, NotificationAIOpinionEnricher, NotificationHoldingSnapshotEnricher, NotificationQueueRunner
-from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
+from digital_twin.modules.accounts.application.account_service import AccountApplicationService
+from digital_twin.modules.read_models.application.flow_lens_service import FlowLensService, ontology_box
+from digital_twin.modules.market_data.application.kis_realtime_service import KISRealtimeWebSocketRunner
+from digital_twin.modules.market_data.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
+from digital_twin.modules.model_registry.application.model_review_service import ModelReviewRunner
+from digital_twin.modules.news_intelligence.application.news_ai_analysis_service import NewsAiAnalysisService
+from digital_twin.modules.news_intelligence.application.news_collection_service import NewsCollectionRunner
+from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner
+from digital_twin.modules.market_data.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
+from digital_twin.modules.notifications.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIOpinionEnricher, NotificationHoldingSnapshotEnricher, NotificationQueueRunner
+from digital_twin.modules.decisions.public import NotificationAIValidatedGateEnricher
+from digital_twin.modules.instruments.application.symbol_universe_service import SymbolUniverseService, seed_symbol
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
@@ -49,13 +50,13 @@ from digital_twin.domain.strategy import StrategyModel, decisions_for_positions
 from digital_twin.domain.trend_transitions import trend_transition_assessment
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, ONTOLOGY_REASONING_COMPLETED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent, alerts_detected_event, monitoring_cycle_completed_event, ontology_reasoning_requested_event, snapshot_collected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
+from digital_twin.modules.model_registry.domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.ontology_insights import build_investment_insight_events
 from digital_twin.domain.notification_ai import build_notification_ai_opinion
-from digital_twin.application.notification_ai_gate_audit import context_with_validated_ai_response
+from digital_twin.modules.decisions.application.notification_ai_gate_audit import context_with_validated_ai_response
 from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt, validated_response_from_payload
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
@@ -66,7 +67,7 @@ from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, KISMarketSignalProvider
 from digital_twin.infrastructure.kis_realtime_ws import CCNL_COLUMNS, KIS_REALTIME_API_GUARD_STATE, KIS_TR_CCN_PRICE, KIS_TR_ORDERBOOK, ORDERBOOK_COLUMNS, KISRealtimeWebSocketClient
-from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
+from digital_twin.modules.model_registry.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.graph_store_payloads import safe_relation_type
 from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository, NullTypeDBOntologyGraphRepository
@@ -83,7 +84,7 @@ from digital_twin.infrastructure.mysql_retention import (
 )
 from digital_twin.infrastructure.mysql_operational_connection import mysql_operation_timeout_seconds
 from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_KEY_PARTITIONS, mysql_partitioning_mode
-from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
+from digital_twin.modules.instruments.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.toss_snapshots import TossAPIError, TossProvider, account_cash_amount, market_proxy_quote_context, normalize_price_items, select_account, toss_json
 from digital_twin.infrastructure.web_server import list_notification_rules_payload, list_templates_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
 from digital_twin.scheduler import MonitorRunner
@@ -13450,7 +13451,7 @@ class PythonServiceTests(unittest.TestCase):
 
         notifier = TelegramNotifier("token", "chat")
         with mock.patch(
-            "digital_twin.infrastructure.notification.transport.urllib.request.urlopen",
+            "digital_twin.modules.notifications.infrastructure.notification.transport.urllib.request.urlopen",
             side_effect=fake_urlopen,
         ):
             result = notifier.send("<b>[관찰] 이동평균 변화</b>\n<code>AAPL</code>")

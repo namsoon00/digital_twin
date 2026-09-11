@@ -3614,7 +3614,7 @@ def validate_typedb_candidate_release_contract(
         # this branch breaks the startup cycle without weakening unregistered
         # mutation protection.
         if candidate_governs_database:
-            from .application.reasoning_engine_platform import ReasoningEnginePlatformService
+            from digital_twin.modules.reasoning.public import ReasoningEnginePlatformService
             from .infrastructure.runtime_identity import runtime_identity
 
             release_settings = dict(configured)

@@ -1,7 +1,7 @@
 import unittest
 
-from digital_twin.application.statistical_signals import StatisticalSignalPipelineService
-from digital_twin.application.statistical_signals import observe_model_signal_outcome
+from digital_twin.modules.reasoning.application.statistical_signals import StatisticalSignalPipelineService
+from digital_twin.modules.reasoning.application.statistical_signals import observe_model_signal_outcome
 from digital_twin.domain.hypothesis_scoping import condition_scope_profile
 from digital_twin.domain.ontology_contracts import (
     OntologyEntity,

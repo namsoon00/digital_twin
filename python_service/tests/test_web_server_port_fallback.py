@@ -9,7 +9,7 @@ from digital_twin.infrastructure.web_server import (
     ontology_audit_sync_rows,
     port_fallback_enabled,
 )
-from digital_twin.infrastructure.flow_lens_read_model import FlowLensReadModel
+from digital_twin.modules.read_models.infrastructure.flow_lens_read_model import FlowLensReadModel
 
 
 class WebServerPortFallbackTests(unittest.TestCase):

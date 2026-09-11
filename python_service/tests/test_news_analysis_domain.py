@@ -7,7 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_facts
-from digital_twin.application.news_ai_analysis_service import int_setting
+from digital_twin.modules.news_intelligence.application.news_ai_analysis_service import int_setting
 from digital_twin.domain.news_analysis import (
     article_analysis_facts,
     article_sentence_candidates,
@@ -34,7 +34,7 @@ from digital_twin.domain.news_ai_analysis import (
     summary_quality_payload,
     summary_texts_similar,
 )
-from digital_twin.news_intelligence.domain.article import article_enrichment_revision
+from digital_twin.modules.news_intelligence.domain.article import article_enrichment_revision
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts

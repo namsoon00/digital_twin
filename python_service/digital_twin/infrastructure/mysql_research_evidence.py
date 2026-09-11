@@ -19,17 +19,9 @@ from ..domain.evidence_delta import (
 )
 from ..domain.investment_research import ResearchEvidence
 from ..domain import news_analysis as news_domain
-from ..news_intelligence.domain.article import (
-    apply_enrichment_snapshot,
-    article_enrichment_revision,
-    article_source_revision,
-    authoritative_enrichment,
-    authoritative_event_takeaway,
-    clear_resolved_analysis_conflict,
-    enrichment_payload_snapshot,
-)
-from ..news_intelligence.domain.eligibility import annotate_news_eligibility
-from ..news_intelligence.domain.story import event_episode_identity, news_event_fingerprint
+from digital_twin.modules.news_intelligence.contracts import apply_enrichment_snapshot, article_enrichment_revision, article_source_revision, authoritative_enrichment, authoritative_event_takeaway, clear_resolved_analysis_conflict, enrichment_payload_snapshot
+from digital_twin.modules.news_intelligence.contracts import annotate_news_eligibility
+from digital_twin.modules.news_intelligence.contracts import event_episode_identity, news_event_fingerprint
 from .operational_common import (
     json_dumps,
     research_evidence_from_row,

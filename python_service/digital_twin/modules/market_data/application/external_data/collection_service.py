@@ -1,0 +1,405 @@
+import hashlib
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Iterable, List
+
+from digital_twin.domain.events import external_fact_changed_event
+from digital_twin.modules.market_data.application.external_data.contracts import DatasetDescriptor, ExternalSubject, setting_enabled
+from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService, FactTransition
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso(value: datetime) -> str:
+    current = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def integer_setting(
+    settings: Dict[str, object],
+    key: str,
+    fallback: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(float(str(settings.get(key) or fallback)))
+    except (TypeError, ValueError):
+        value = fallback
+    return max(minimum, min(maximum, value))
+
+
+def next_due_at(descriptor: DatasetDescriptor, settings: Dict[str, object], partition_key: str) -> str:
+    cadence = descriptor.resolved_cadence_seconds(settings)
+    digest = hashlib.sha256((descriptor.dataset_id + ":" + partition_key).encode("utf-8")).digest()
+    jitter_ratio = (int.from_bytes(digest[:2], "big") / 65535.0 - 0.5) * 0.1
+    return iso(utc_now() + timedelta(seconds=max(10, int(cadence * (1.0 + jitter_ratio)))))
+
+
+class ExternalDataCollectionService:
+    def __init__(
+        self,
+        settings: Dict[str, object],
+        registry,
+        store,
+        transition_service=None,
+        legacy_importer=None,
+        evidence_reconciler=None,
+        worker_id: str = "external-data-1",
+        now_provider=None,
+    ):
+        self.settings = dict(settings or {})
+        self.registry = registry
+        self.store = store
+        self.transition_service = transition_service or ExternalFactTransitionService()
+        self.legacy_importer = legacy_importer
+        self.evidence_reconciler = evidence_reconciler
+        self.worker_id = str(worker_id or "external-data-1")
+        self.now_provider = now_provider or utc_now
+        self._last_partition_sync_at = None
+        self._last_cleanup_at = None
+
+    def enabled(self) -> bool:
+        return setting_enabled(self.settings, "externalDataPlatformEnabled", True)
+
+    def interval_seconds(self) -> int:
+        return integer_setting(self.settings, "externalDataWorkerIntervalSeconds", 15, 5, 3600)
+
+    def sync_interval_seconds(self) -> int:
+        return integer_setting(self.settings, "externalDataSubjectRefreshSeconds", 300, 30, 86400)
+
+    def batch_size(self) -> int:
+        return integer_setting(self.settings, "externalDataWorkerBatchSize", 6, 1, 100)
+
+    def concurrency(self) -> int:
+        return integer_setting(self.settings, "externalDataWorkerConcurrency", 3, 1, 12)
+
+    def lease_seconds(self) -> int:
+        return integer_setting(self.settings, "externalDataLeaseSeconds", 180, 30, 3600)
+
+    def inline_rate_limit_wait_seconds(self) -> int:
+        return integer_setting(self.settings, "externalDataRateLimitInlineWaitSeconds", 2, 0, 10)
+
+    def should_sync_partitions(self, force: bool = False) -> bool:
+        if force or not self._last_partition_sync_at:
+            return True
+        return (self.now_provider() - self._last_partition_sync_at).total_seconds() >= self.sync_interval_seconds()
+
+    def sync_partitions(self, subjects: Iterable[ExternalSubject] = None, force: bool = False) -> Dict[str, object]:
+        if not self.should_sync_partitions(force=force) and subjects is None:
+            return {"status": "fresh", "synced": False, "partitionCount": 0}
+        subject_rows = list(subjects) if subjects is not None else self.store.list_subjects()
+        partitions = self.registry.desired_partitions(subject_rows, self.settings)
+        adapters = self.registry.adapters()
+        descriptor_by_dataset = {adapter.descriptor.dataset_id: adapter.descriptor for adapter in adapters}
+        plans = [(descriptor_by_dataset[item.dataset_id], item) for item in partitions]
+        saved = self.store.sync_partitions(
+            plans,
+            self.registry.static_dataset_ids(self.settings),
+            now=self.now_provider(),
+        )
+        self._last_partition_sync_at = self.now_provider()
+        return {
+            "status": "ok",
+            "synced": True,
+            "subjectCount": len(subject_rows),
+            "partitionCount": len(partitions),
+            "savedCount": saved,
+        }
+
+    def request_subjects(self, subjects: Iterable[ExternalSubject]) -> Dict[str, object]:
+        """Register work without calling a vendor from the requesting path."""
+        return self.sync_partitions(subjects=list(subjects or []), force=True)
+
+    def run_once(self, force: bool = False) -> Dict[str, object]:
+        if not self.enabled() and not force:
+            return {"status": "disabled", "processedCount": 0}
+        migration = self.legacy_importer.import_if_empty() if self.legacy_importer else {"status": "not-configured"}
+        projection_before = self.reconcile_official_evidence()
+        cleanup = self.cleanup_history_if_due(force=force)
+        sync = self.sync_partitions(force=force)
+        if force and hasattr(self.store, "make_due"):
+            self.store.make_due()
+        jobs = self.store.claim_due(
+            self.worker_id,
+            self.batch_size(),
+            self.lease_seconds(),
+            now=self.now_provider(),
+        )
+        if not jobs:
+            return {
+                "status": "idle",
+                "processedCount": 0,
+                "partitionSync": sync,
+                "legacyMigration": migration,
+                "historyCleanup": cleanup,
+                "officialEvidenceProjection": projection_before,
+                "summary": self.store.summary(),
+            }
+        provider_groups: Dict[str, List[object]] = {}
+        for job in jobs:
+            provider_groups.setdefault(str(job.provider_id or job.dataset_id), []).append(job)
+        groups = list(provider_groups.values())
+        if self.concurrency() <= 1 or len(groups) == 1:
+            results = [result for group in groups for result in self._process_provider_jobs(group)]
+        else:
+            results: List[Dict[str, object]] = []
+            with ThreadPoolExecutor(max_workers=min(self.concurrency(), len(groups))) as executor:
+                futures = {executor.submit(self._process_provider_jobs, group): group for group in groups}
+                for future in as_completed(futures):
+                    try:
+                        results.extend(future.result())
+                    except Exception as error:  # noqa: BLE001 - one collection partition cannot stop the batch.
+                        for job in futures[future]:
+                            results.append({
+                                "datasetId": job.dataset_id,
+                                "partitionKey": job.partition_key,
+                                "status": "error",
+                                "error": str(error)[:500],
+                            })
+        failures = [item for item in results if item.get("status") == "error"]
+        deferred = [item for item in results if item.get("status") == "deferred"]
+        no_data = [item for item in results if item.get("status") == "no-data"]
+        projection_after = self.reconcile_official_evidence()
+        return {
+            "status": "partial" if failures else "ok",
+            "processedCount": len(results),
+            "successCount": len(results) - len(failures) - len(deferred),
+            "failureCount": len(failures),
+            "deferredCount": len(deferred),
+            "noDataCount": len(no_data),
+            "results": results,
+            "partitionSync": sync,
+            "legacyMigration": migration,
+            "historyCleanup": cleanup,
+            "officialEvidenceProjection": {
+                "before": projection_before,
+                "after": projection_after,
+            },
+            "summary": self.store.summary(),
+        }
+
+    def reconcile_official_evidence(self) -> Dict[str, object]:
+        if not self.evidence_reconciler:
+            return {"status": "not-configured", "processedCount": 0, "projectedCount": 0}
+        try:
+            return dict(self.evidence_reconciler.run_once() or {})
+        except Exception as error:  # noqa: BLE001 - durable cursor keeps the failed event replayable.
+            recorder = getattr(self.evidence_reconciler, "record_failure", None)
+            if callable(recorder):
+                recorder(error)
+            return {
+                "status": "error",
+                "processedCount": 0,
+                "projectedCount": 0,
+                "reason": str(error)[:500],
+            }
+
+    def cleanup_history_if_due(self, force: bool = False) -> Dict[str, object]:
+        if not callable(getattr(self.store, "cleanup_history", None)):
+            return {"status": "not-supported"}
+        interval = integer_setting(self.settings, "externalDataRetentionCheckIntervalSeconds", 21600, 300, 86400)
+        current = self.now_provider()
+        if not force and self._last_cleanup_at and (current - self._last_cleanup_at).total_seconds() < interval:
+            return {"status": "fresh"}
+        self._last_cleanup_at = current
+        return self.store.cleanup_history(
+            run_retention_days=integer_setting(self.settings, "externalDataRunRetentionDays", 30, 1, 365),
+            revision_retention_days=integer_setting(self.settings, "externalDataRevisionRetentionDays", 365, 30, 3650),
+            batch_size=integer_setting(self.settings, "externalDataRetentionBatchSize", 1000, 10, 10000),
+            now=current,
+        )
+
+    def _process_provider_jobs(self, jobs) -> List[Dict[str, object]]:
+        """Keep each vendor serial while independent vendors run concurrently."""
+        return [self._process_job(job) for job in jobs]
+
+    def _process_job(self, job) -> Dict[str, object]:
+        adapter = self.registry.adapter(job.dataset_id)
+        descriptor = adapter.descriptor
+        started = self.now_provider()
+        started_at = iso(started)
+        reservation = self.store.reserve_provider_call(descriptor, now=started)
+        if reservation.get("reason") == "rate-limited" and self.inline_rate_limit_wait_seconds() > 0:
+            try:
+                retry_at = datetime.fromisoformat(str(reservation.get("nextAllowedAt") or "").replace("Z", "+00:00"))
+                delay = max(0.0, (retry_at - utc_now()).total_seconds())
+            except (TypeError, ValueError):
+                delay = self.inline_rate_limit_wait_seconds() + 1
+            if delay <= self.inline_rate_limit_wait_seconds():
+                time.sleep(delay + 0.05)
+                reservation = self.store.reserve_provider_call(descriptor, now=utc_now())
+        if not reservation.get("allowed"):
+            next_allowed = str(reservation.get("nextAllowedAt") or next_due_at(descriptor, self.settings, job.partition_key))
+            reason = str(reservation.get("reason") or "provider-deferred")
+            self.store.defer_job(job, next_allowed, reason)
+            self.store.record_run(
+                job,
+                "deferred",
+                started_at,
+                iso(self.now_provider()),
+                0,
+                error_message=reason,
+            )
+            return {
+                "datasetId": job.dataset_id,
+                "partitionKey": job.partition_key,
+                "status": "deferred",
+                "reason": reason,
+                "nextDueAt": next_allowed,
+            }
+        try:
+            observation = adapter.fetch(job, self.settings)
+            quality = observation.quality if isinstance(observation.quality, dict) else {}
+            if (
+                descriptor.completion_mode == "once"
+                and not observation.empty_result
+                and quality.get("dataUsable") is False
+            ):
+                quality_state = str(
+                    quality.get("documentState")
+                    or quality.get("availability")
+                    or "unusable-payload"
+                ).strip()
+                raise RuntimeError(
+                    descriptor.dataset_id
+                    + " returned an unusable one-time payload: "
+                    + quality_state
+                )
+            previous = self.store.current_fact(observation.dataset_id, observation.subject_key)
+            no_data = bool(observation.empty_result)
+            transition = (
+                FactTransition(False, False, "no-data", [], "provider returned a valid empty result")
+                if no_data
+                else self.transition_service.assess(
+                    observation.dataset_id,
+                    previous,
+                    observation.payload,
+                    observation.source_revision,
+                )
+            )
+            event = None
+            if transition.material:
+                event = external_fact_changed_event(
+                    observation.dataset_id,
+                    observation.subject_key,
+                    observation.provider_id,
+                    observation.source_revision,
+                    observation.source_as_of,
+                    transition.change_type,
+                    transition.changed_fields,
+                    transition.reason,
+                )
+            due_at = next_due_at(descriptor, self.settings, job.partition_key)
+            if no_data and observation.retain_previous:
+                committed = self.store.complete_empty_observation(job, observation, due_at)
+            else:
+                committed = self.store.complete_observation(
+                    job,
+                    descriptor,
+                    observation,
+                    due_at,
+                    event=event,
+                )
+            followup_plans = [] if no_data else self.registry.followups(job.dataset_id, observation, self.settings)
+            followup_count = (
+                int(self.store.enqueue_followups(followup_plans, now=self.now_provider()) or 0)
+                if followup_plans and callable(getattr(self.store, "enqueue_followups", None))
+                else 0
+            )
+            self.store.mark_provider_success(descriptor)
+            completed = self.now_provider()
+            response_bytes = len(json.dumps(observation.payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            duration_ms = max(0, int((completed - started).total_seconds() * 1000))
+            self.store.record_run(
+                job,
+                "no-data" if no_data else "success",
+                started_at,
+                iso(completed),
+                duration_ms,
+                response_bytes=response_bytes,
+                source_as_of=observation.source_as_of,
+                source_revision=observation.source_revision,
+                material_change=bool(transition.material and committed.get("changed")),
+            )
+            return {
+                "datasetId": job.dataset_id,
+                "partitionKey": job.partition_key,
+                "status": "no-data" if no_data else "success",
+                "durationMs": duration_ms,
+                "responseBytes": response_bytes,
+                "sourceAsOf": observation.source_as_of,
+                "changed": bool(committed.get("changed")),
+                "materialChange": bool(transition.material and committed.get("changed")),
+                "nextDueAt": "" if descriptor.completion_mode == "once" else due_at,
+                "followupCount": followup_count,
+                "retainedPreviousFact": bool(committed.get("retainedPreviousFact")),
+            }
+        except Exception as error:  # noqa: BLE001 - provider failures are durable operational state.
+            completed = self.now_provider()
+            previous_fact = self.store.current_fact(
+                job.dataset_id,
+                str(job.subject.subject_key or job.partition_key),
+            )
+            previous_payload = previous_fact.get("payload") if isinstance(previous_fact, dict) else None
+            previous_quality = previous_fact.get("quality") if isinstance(previous_fact, dict) else None
+            has_usable_previous_fact = (
+                isinstance(previous_payload, dict)
+                and bool(previous_payload)
+                and not (
+                    isinstance(previous_quality, dict)
+                    and previous_quality.get("dataUsable") is False
+                )
+            )
+            failure_delay = min(
+                descriptor.resolved_cadence_seconds(self.settings),
+                max(60, 30 * (2 ** min(6, max(0, job.attempt_count - 1)))),
+            )
+            due_at = iso(completed + timedelta(seconds=failure_delay))
+            failure = self.store.fail_job(job, descriptor, error, due_at)
+            duration_ms = max(0, int((completed - started).total_seconds() * 1000))
+            self.store.record_run(
+                job,
+                "error",
+                started_at,
+                iso(completed),
+                duration_ms,
+                error_message=str(error)[:500],
+            )
+            return {
+                "datasetId": job.dataset_id,
+                "partitionKey": job.partition_key,
+                "status": "error",
+                "durationMs": duration_ms,
+                "error": str(error)[:500],
+                "providerState": failure.get("state"),
+                # claim_due already increments attempt_count for the current lease.
+                "partitionFailureCount": max(1, int(job.attempt_count or 0)),
+                "failureAlertThreshold": max(1, int(descriptor.failure_threshold or 1)),
+                "hasUsablePreviousFact": has_usable_previous_fact,
+                "previousFactSourceAsOf": str((previous_fact or {}).get("sourceAsOf") or ""),
+                "nextDueAt": due_at,
+            }
+
+    def status(self) -> Dict[str, object]:
+        projection_status = {}
+        loader = getattr(self.evidence_reconciler, "status", None)
+        if callable(loader):
+            projection_status = dict(loader() or {})
+        elif self.evidence_reconciler:
+            projection_status = dict(getattr(self.evidence_reconciler, "last_result", {}) or {})
+        return {
+            "enabled": self.enabled(),
+            "workerId": self.worker_id,
+            "intervalSeconds": self.interval_seconds(),
+            "batchSize": self.batch_size(),
+            "concurrency": self.concurrency(),
+            "leaseSeconds": self.lease_seconds(),
+            "registry": self.registry.descriptors(self.settings),
+            "officialEvidenceProjection": projection_status,
+            **self.store.summary(),
+        }

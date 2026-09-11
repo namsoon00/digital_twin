@@ -88,7 +88,7 @@ class ExternalSignalProvider(
             and platform_enabled not in {"", "0", "false", "no", "off", "disabled"}
             and legacy_collection in {"", "0", "false", "no", "off", "disabled"}
         ):
-            from ..application.external_data.read_model_service import ExternalSignalsReadModelService
+            from digital_twin.modules.market_data.public import ExternalSignalsReadModelService
             from .operational_store import external_data_store
 
             self.external_data_read_model = ExternalSignalsReadModelService(external_data_store(self.settings))

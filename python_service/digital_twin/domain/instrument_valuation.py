@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from .instrument_timeline import normalize_instrument_symbol
+from digital_twin.modules.read_models.contracts import normalize_instrument_symbol
 
 
 @dataclass(frozen=True)

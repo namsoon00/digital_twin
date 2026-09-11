@@ -22,7 +22,7 @@ from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_sig
 from .portfolio_calculations import position_account_value_in_base
 from .valuation.service import evaluate_valuation_models
 from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
-from ..news_intelligence.domain.eligibility import assess_news_eligibility
+from digital_twin.modules.news_intelligence.contracts import assess_news_eligibility
 
 
 def _sector_ratio(position: Position, portfolio: PortfolioSummary) -> float:

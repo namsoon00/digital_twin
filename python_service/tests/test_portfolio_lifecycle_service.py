@@ -10,14 +10,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
-from digital_twin.application.investment_domain_service import InvestmentDomainService
-from digital_twin.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
-from digital_twin.application.portfolio_lifecycle_service import (
-    DecisionActionPlanningService,
-    PortfolioAccountingService,
-    TradeExecutionService,
-)
+from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
+from digital_twin.modules.portfolio.application.investment_domain_service import InvestmentDomainService
+from digital_twin.modules.decisions.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
+from digital_twin.modules.portfolio.application.portfolio_lifecycle_service import DecisionActionPlanningService, PortfolioAccountingService, TradeExecutionService
 from digital_twin.domain.investment_brain import ObservedOutcome
 from digital_twin.domain.investment_mandate import InvestmentMandate
 from digital_twin.domain.events import DomainEvent, ontology_reasoning_requested_event
@@ -29,16 +25,7 @@ from digital_twin.domain.portfolio_analytics import (
     portfolio_risk_snapshot,
     with_policy_limits,
 )
-from digital_twin.domain.portfolio_ledger import (
-    INFERRED_CORPORATE_ACTION,
-    INFERRED_POSITION_DECREASE,
-    INFERRED_POSITION_EXIT,
-    INFERRED_POSITION_INCREASE,
-    SNAPSHOT_CASH_ADJUSTMENT,
-    PortfolioLedger,
-    PortfolioLedgerEntry,
-    execution_ledger_entries,
-)
+from digital_twin.modules.portfolio.domain.portfolio_ledger import INFERRED_CORPORATE_ACTION, INFERRED_POSITION_DECREASE, INFERRED_POSITION_EXIT, INFERRED_POSITION_INCREASE, SNAPSHOT_CASH_ADJUSTMENT, PortfolioLedger, PortfolioLedgerEntry, execution_ledger_entries
 from digital_twin.domain.portfolio_rebalancing import (
     RebalanceState,
     rebalance_transition,

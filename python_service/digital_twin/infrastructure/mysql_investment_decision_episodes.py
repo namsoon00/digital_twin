@@ -21,7 +21,7 @@ from ..domain.hypothesis_outcome_contract import (
     outcome_contract_completeness,
     resolved_outcome_contract,
 )
-from ..domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
+from digital_twin.modules.outcomes.contracts import evaluate_hypothesis_outcome
 from ..domain.market_time_series import market_timezone
 from ..domain.market_hours import infer_market_from_context
 from ..domain.decision_performance import (

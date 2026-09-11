@@ -5,121 +5,74 @@ import uuid
 from types import SimpleNamespace
 from typing import Callable, Dict, Iterable
 
-from ..application.flow_lens_service import FlowLensService
-from ..application.ai_inference_queue_service import (
-    AIInferenceQueueRunner,
-    NotificationAIRequestEnqueuer,
-)
+from digital_twin.modules.read_models.public import FlowLensService
+from digital_twin.modules.decisions.public import AIInferenceQueueRunner, NotificationAIRequestEnqueuer
 from ..application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer, DataPipelineHealthService
-from ..application.decision_continuity_service import DecisionContinuityService
-from ..application.decision_episode_reconciliation_service import DecisionEpisodeReconciliationService
-from ..application.ontology_reasoning_queue_health_service import (
-    OntologyReasoningQueueHealthNotificationEnqueuer,
-    OntologyReasoningQueueHealthService,
-)
-from ..application.investment_alert_coverage_service import (
-    InvestmentAlertCoverageNotificationEnqueuer,
-    InvestmentAlertCoverageService,
-)
+from digital_twin.modules.decisions.public import DecisionContinuityService
+from digital_twin.modules.decisions.public import DecisionEpisodeReconciliationService
+from digital_twin.modules.reasoning.public import OntologyReasoningQueueHealthNotificationEnqueuer, OntologyReasoningQueueHealthService
+from digital_twin.modules.decisions.public import InvestmentAlertCoverageNotificationEnqueuer, InvestmentAlertCoverageService
 from ..application.operational_storage_capacity_service import (
     OperationalStorageCapacityNotificationEnqueuer,
     OperationalStorageCapacityService,
 )
-from ..application.investment_analysis_service import InvestmentAnalysisService
-from ..application.investment_ai_insight_service import InvestmentAIInsightHandoffService
-from ..application.investment_insight_dispatch_service import InvestmentInsightDispatchService
-from ..application.independent_reasoning_engine import (
-    IndependentReasoningInputAssembler,
-    IndependentReasoningJobRunner,
-    ScopedTypeDBInferenceExecutor,
-    V2ReasoningEngine,
-)
-from ..application.independent_reasoning_comparison_service import (
-    IndependentReasoningComparisonService,
-)
-from ..application.investment_reasoning import (
-    InvestmentReasoningOrchestrator,
-    V2GraphDecisionCandidateBuilder,
-)
-from ..application.shared_instrument_inference_service import SharedInstrumentInferenceService
-from ..application.investment_brain_service import InvestmentBrainService
-from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
-from .mysql_outcome_evidence import MySQLOutcomeEvidenceSource
-from ..application.investment_domain_service import InvestmentDomainService
-from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
-from ..application.hypothesis_proposal_service import (
-    HypothesisProposalQueueRunner,
-    HypothesisProposalService,
-)
-from ..application.hypothesis_lifecycle_service import HypothesisLifecycleService
-from ..application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
-from ..application.hypothesis_policy_governance_service import HypothesisPolicyGovernanceService
-from ..application.hypothesis_research_planner_service import HypothesisResearchPlanningService
-from ..application.hypothesis_review_service import HypothesisReviewService
-from ..application.hypothesis_quality_review_service import HypothesisQualityReviewService
-from ..application.hypothesis_outcome_replay_service import HypothesisOutcomeReplayService
-from ..application.historical_decision_replay_service import HistoricalDecisionReplayService
-from ..application.historical_replay_job_service import HistoricalReplayJobService
-from ..application.hypothesis_development_service import HypothesisDevelopmentService
-from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
-from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
-from ..application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
-from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
-from ..application.investment_calendar_research_service import InvestmentCalendarResearchRecommendationService
-from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
-from ..application.instrument_timeline_query_service import InstrumentTimelineQueryService
-from ..application.instrument_valuation_query_service import InstrumentValuationQueryService
-from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
-from ..application.market_data_collection_service import MarketDataCollectionRunner
-from ..application.external_data.collection_service import ExternalDataCollectionService
-from ..application.external_data.research_evidence_projection_service import (
-    ExternalFactResearchEvidenceReconciler,
-    ExternalOfficialEvidenceProjectionService,
-)
-from ..application.model_review_service import ModelReviewRunner
-from ..application.news_collection_service import NewsCollectionRunner
-from ..application.news_ai_analysis_service import NewsAiAnalysisService
-from ..application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
-from ..application.news_pipeline_repair_service import NewsPipelineRepairService
-from ..application.news_digest_service import NewsDigestEnqueuer, NewsDigestEventReconciler
-from ..application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
-from ..application.monitoring_service import MonitorRunner
-from ..application.portfolio_lifecycle_service import (
-    DecisionActionPlanningService,
-    PortfolioAccountingService,
-    TradeExecutionService,
-)
-from ..application.notification.workflow import (
-    CompositeNotificationContextEnricher,
-    DisclosureAnalysisNotificationEnricher,
-    NotificationAIOpinionEnricher,
-    NotificationHoldingSnapshotEnricher,
-    NotificationHypothesisResearchEnricher,
-    NotificationInstrumentIdentityEnricher,
-    NotificationQueueRunner,
-)
-from ..application.notification.intake import NotificationIngressService
-from ..application.official_calendar_sync_service import OfficialCalendarSyncService
-from ..application.ontology_reasoning_service import (
-    OntologyReasoningRunner,
-    lightweight_ontology_reasoning_queue_state,
-)
-from ..application.reasoning_shadow_service import (
-    ReasoningEngineShadowRunner,
-    ReasoningShadowScheduler,
-)
-from ..application.ontology_reasoning_proof_service import OntologyReasoningProofService
-from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
-from ..application.ontology_inference_detail_service import OntologyInferenceDetailRunner
-from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
-from ..application.ontology_portfolio_rebuild_service import (
-    OntologyPortfolioRebuildRunner,
-    OntologyPortfolioScopeRepairRunner,
-    OntologyScopeRepairRouter,
-)
-from ..application.ontology_lab_service import OntologyLabService
-from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
-from ..application.symbol_universe_service import SymbolUniverseService
+from digital_twin.modules.read_models.public import InvestmentAnalysisService
+from digital_twin.modules.decisions.public import InvestmentAIInsightHandoffService
+from digital_twin.modules.decisions.public import InvestmentInsightDispatchService
+from digital_twin.modules.reasoning.public import IndependentReasoningInputAssembler, IndependentReasoningJobRunner, ScopedTypeDBInferenceExecutor, V2ReasoningEngine
+from digital_twin.modules.reasoning.public import IndependentReasoningComparisonService
+from digital_twin.modules.reasoning.public import InvestmentReasoningOrchestrator, V2GraphDecisionCandidateBuilder
+from digital_twin.modules.reasoning.public import SharedInstrumentInferenceService
+from digital_twin.modules.decisions.public import InvestmentBrainService
+from digital_twin.modules.outcomes.public import InvestmentOutcomeObservationService
+from digital_twin.modules.outcomes.infrastructure.mysql_outcome_evidence import MySQLOutcomeEvidenceSource
+from digital_twin.modules.portfolio.public import InvestmentDomainService
+from digital_twin.modules.news_intelligence.public import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
+from digital_twin.modules.model_registry.public import HypothesisProposalQueueRunner, HypothesisProposalService
+from digital_twin.modules.outcomes.public import HypothesisLifecycleService
+from digital_twin.modules.model_registry.public import HypothesisLifecyclePolicyService
+from digital_twin.modules.model_registry.public import HypothesisPolicyGovernanceService
+from digital_twin.modules.news_intelligence.public import HypothesisResearchPlanningService
+from digital_twin.modules.outcomes.public import HypothesisReviewService
+from digital_twin.modules.outcomes.public import HypothesisQualityReviewService
+from digital_twin.modules.outcomes.public import HypothesisOutcomeReplayService
+from digital_twin.modules.outcomes.public import HistoricalDecisionReplayService
+from digital_twin.modules.outcomes.public import HistoricalReplayJobService
+from digital_twin.modules.model_registry.public import HypothesisDevelopmentService
+from digital_twin.modules.model_registry.public import InvestmentStrategyProposalService
+from digital_twin.modules.investment_calendar.public import InvestmentCalendarCandidateService
+from digital_twin.modules.investment_calendar.public import InvestmentCalendarDiscoveryService
+from digital_twin.modules.investment_calendar.public import InvestmentCalendarExtractionService
+from digital_twin.modules.investment_calendar.public import InvestmentCalendarResearchRecommendationService
+from digital_twin.modules.investment_calendar.public import InvestmentCalendarRunner, InvestmentCalendarService
+from digital_twin.modules.read_models.public import InstrumentTimelineQueryService
+from digital_twin.modules.read_models.public import InstrumentValuationQueryService
+from digital_twin.modules.market_data.public import KISRealtimeWebSocketRunner
+from digital_twin.modules.market_data.public import MarketDataCollectionRunner
+from digital_twin.modules.market_data.public import ExternalDataCollectionService
+from digital_twin.modules.market_data.public import ExternalFactResearchEvidenceReconciler, ExternalOfficialEvidenceProjectionService
+from digital_twin.modules.model_registry.public import ModelReviewRunner
+from digital_twin.modules.news_intelligence.public import NewsCollectionRunner
+from digital_twin.modules.news_intelligence.public import NewsAiAnalysisService
+from digital_twin.modules.news_intelligence.public import NewsAnalysisEnrichmentRunner
+from digital_twin.modules.news_intelligence.public import NewsPipelineRepairService
+from digital_twin.modules.news_intelligence.public import NewsDigestEnqueuer, NewsDigestEventReconciler
+from digital_twin.modules.decisions.public import NotificationAIDecisionContextEnricher
+from digital_twin.modules.market_data.public import MonitorRunner
+from digital_twin.modules.portfolio.public import DecisionActionPlanningService, PortfolioAccountingService, TradeExecutionService
+from digital_twin.modules.notifications.public import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIOpinionEnricher, NotificationHoldingSnapshotEnricher, NotificationHypothesisResearchEnricher, NotificationInstrumentIdentityEnricher, NotificationQueueRunner
+from digital_twin.modules.notifications.public import NotificationIngressService
+from digital_twin.modules.investment_calendar.public import OfficialCalendarSyncService
+from digital_twin.modules.reasoning.public import OntologyReasoningRunner, lightweight_ontology_reasoning_queue_state
+from digital_twin.modules.reasoning.public import ReasoningEngineShadowRunner, ReasoningShadowScheduler
+from digital_twin.modules.reasoning.public import OntologyReasoningProofService
+from digital_twin.modules.reasoning.public import OntologyMaintenanceRunner
+from digital_twin.modules.reasoning.public import OntologyInferenceDetailRunner
+from digital_twin.modules.reasoning.public import OntologyWorldProjectionRunner
+from digital_twin.modules.reasoning.public import OntologyPortfolioRebuildRunner, OntologyPortfolioScopeRepairRunner, OntologyScopeRepairRouter
+from digital_twin.modules.model_registry.public import OntologyLabService
+from digital_twin.modules.model_registry.public import RuleChangeCandidateProposalService
+from digital_twin.modules.instruments.public import SymbolUniverseService
 from ..domain.accounts import AccountConfig
 from ..domain.events import (
     DATA_PIPELINE_HEALTH_CHANGED,
@@ -143,17 +96,13 @@ from .event_bus import EventBus, default_event_bus
 from .graph_store_rulebox import rulebox_rules_from_payload
 from .graph_store_lifecycle import ontology_release_seed_artifact
 from .share_notification_links import ActiveShareNotificationLinkResolver
-from .bok_calendar_source import BokPolicyDecisionCalendarSource
-from .opendart_calendar_source import OpenDartEarningsCalendarSource
-from .samsung_ir_calendar_source import SamsungIrEarningsCalendarSource
-from .us_macro_calendar_source import (
-    BeaMacroReleaseCalendarSource,
-    BlsMacroReleaseCalendarSource,
-    FederalReserveFomcCalendarSource,
-)
+from digital_twin.modules.investment_calendar.infrastructure.bok_calendar_source import BokPolicyDecisionCalendarSource
+from digital_twin.modules.investment_calendar.infrastructure.opendart_calendar_source import OpenDartEarningsCalendarSource
+from digital_twin.modules.investment_calendar.infrastructure.samsung_ir_calendar_source import SamsungIrEarningsCalendarSource
+from digital_twin.modules.investment_calendar.infrastructure.us_macro_calendar_source import BeaMacroReleaseCalendarSource, BlsMacroReleaseCalendarSource, FederalReserveFomcCalendarSource
 from .disclosure_analyzer import disclosure_analyzer_from_settings
-from .model_review_queue import ModelReviewEnqueuer
-from .model_reviewer import reviewer_from_settings
+from digital_twin.modules.model_registry.infrastructure.model_review_queue import ModelReviewEnqueuer
+from digital_twin.modules.model_registry.infrastructure.model_reviewer import reviewer_from_settings
 from .notification_ai_reviewer import notification_ai_reviewer_from_settings
 from .hypothesis_proposal_ai import hypothesis_proposal_advisor_from_settings
 from .hypothesis_research_planner_ai import hypothesis_research_planning_advisor_from_settings
@@ -165,8 +114,8 @@ from .typedb_storage_guard import TypeDBCapacityGuard
 from .operational_storage_guard import operational_storage_inventory
 from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
-from .notification.ingress import queued_notifier_for_account, send_events
-from .notification.transport import notifier_for_account, notifier_for_operations
+from digital_twin.modules.notifications.infrastructure.notification.ingress import queued_notifier_for_account, send_events
+from digital_twin.modules.notifications.infrastructure.notification.transport import notifier_for_account, notifier_for_operations
 from .news_sources import NewsSourceGateway
 from .news_ai_analyzer import news_ai_analyzer_from_settings
 from .external_signals import ExternalSignalProvider
@@ -174,7 +123,7 @@ from .external_api.adapters import default_external_dataset_registry
 from .external_api.legacy_import import LegacyExternalSignalImporter
 from .settings import currency_rates, data_dir, runtime_settings, utc_now
 from .graph_writer_guard import LocalGraphWriterGuard
-from .symbol_sources import RemoteSymbolSourceGateway
+from digital_twin.modules.instruments.infrastructure.symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 from .reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from .questdb_time_series import QuestDBTimeSeriesAdapter

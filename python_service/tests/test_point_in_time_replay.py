@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.historical_decision_replay_service import HistoricalDecisionReplayService
+from digital_twin.modules.outcomes.application.historical_decision_replay_service import HistoricalDecisionReplayService
 from digital_twin.domain.investment_brain import decision_replay_manifest
 from digital_twin.domain.point_in_time_replay import (
     DecisionReplayEnvelope,

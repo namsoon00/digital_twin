@@ -4,18 +4,18 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from digital_twin.application.notification.dispatch import NotificationDispatchService
-from digital_twin.application.notification.intake import NotificationIngressService
-from digital_twin.application.notification.presentation import content_body, present_notification
-from digital_twin.application.notification.rendering import NotificationRenderingService
-from digital_twin.application.notification.workflow import NotificationHoldingSnapshotEnricher, NotificationQueueRunner
-from digital_twin.application.typedb_observation_message import _flow_rows, _trigger_rows
+from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
+from digital_twin.modules.notifications.application.notification.intake import NotificationIngressService
+from digital_twin.modules.notifications.application.notification.presentation import content_body, present_notification
+from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
+from digital_twin.modules.notifications.application.notification.workflow import NotificationHoldingSnapshotEnricher, NotificationQueueRunner
+from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, _trigger_rows
 from digital_twin.domain.customer_investment_document import CustomerInvestmentDocument, CustomerInvestmentSection
-from digital_twin.domain.notification.presentation import LEGACY_KINDS, NOTIFICATION_KINDS, notification_kind
-from digital_twin.domain.notification.request import NotificationRequest
+from digital_twin.modules.notifications.domain.notification.presentation import LEGACY_KINDS, NOTIFICATION_KINDS, notification_kind
+from digital_twin.modules.notifications.domain.notification.request import NotificationRequest
 from digital_twin.domain.notification_templates import NotificationTemplate, render_notification, text_context
 from digital_twin.domain.notifications import NotificationJob
-from digital_twin.infrastructure.notification.ingress import enqueue_request
+from digital_twin.modules.notifications.infrastructure.notification.ingress import enqueue_request
 from digital_twin.infrastructure.mysql_notification_jobs import (
     MySQLNotificationJobStore, notification_list_presentation_column, notification_list_presentation_join,
 )
@@ -269,7 +269,7 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         runner = NotificationQueueRunner(queue, Mock(), Mock())
         job = NotificationJob.create("확인된 가격 변화입니다.", message_type="investmentInsight")
         explanation = {"validation": {"state": "invalid", "errors": ["primary-cause-missing", "primary-cause-category-invalid"]}}
-        with patch("digital_twin.application.notification.workflow.build_customer_delivery_explanation", return_value=explanation):
+        with patch("digital_twin.modules.notifications.application.notification.workflow.build_customer_delivery_explanation", return_value=explanation):
             self.assertTrue(runner.apply_customer_delivery_explanation_gate(job))
         queue.mark_suppressed.assert_not_called()
 
@@ -278,7 +278,7 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         runner = NotificationQueueRunner(queue, Mock(), Mock())
         job = NotificationJob.create("판단이 바뀌었습니다.", message_type="investmentInsight")
         explanation = {"validation": {"state": "invalid", "errors": ["action-transition-without-change"]}}
-        with patch("digital_twin.application.notification.workflow.build_customer_delivery_explanation", return_value=explanation):
+        with patch("digital_twin.modules.notifications.application.notification.workflow.build_customer_delivery_explanation", return_value=explanation):
             self.assertFalse(runner.apply_customer_delivery_explanation_gate(job))
         queue.mark_suppressed.assert_called_once()
 

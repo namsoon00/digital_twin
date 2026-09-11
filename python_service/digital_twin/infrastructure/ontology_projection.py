@@ -9,7 +9,7 @@ import json
 import time
 import traceback
 
-from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
+from digital_twin.modules.outcomes.public import InvestmentOutcomeObservationService
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
 from ..domain.decision_performance import evaluate_decision_performance

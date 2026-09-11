@@ -25,12 +25,7 @@ from digital_twin.domain.data_freshness import (
     freshness_from_position,
     sanitize_notification_context_for_freshness,
 )
-from digital_twin.application.notification_ai_gate_message import (
-    notification_cooldown_release_summary,
-    notification_reason_summary,
-    notification_topline_change_summary,
-    prepend_execution_start_badge,
-)
+from digital_twin.modules.notifications.application.notification_ai_gate_message import notification_cooldown_release_summary, notification_reason_summary, notification_topline_change_summary, prepend_execution_start_badge
 from digital_twin.domain.notification_templates import prepend_message_start_badge
 from digital_twin.domain.notification_ai import opinion_lines_for_type
 from digital_twin.domain.accounts import AccountConfig
@@ -45,9 +40,9 @@ from digital_twin.domain.message_types import (
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
-from digital_twin.application.notification_service import NotificationQueueRunner
-from digital_twin.application.notification.dispatch import NotificationDispatchService
-from digital_twin.application.notification.eligibility import NotificationDispatchEligibilityService
+from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
+from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
+from digital_twin.modules.notifications.application.notification.eligibility import NotificationDispatchEligibilityService
 from digital_twin.infrastructure.cli import public_settings_payload
 from digital_twin.infrastructure.notifications import NotificationResult, TelegramNotifier, notifier_for_operations
 from digital_twin.infrastructure.mysql_notification_config import (

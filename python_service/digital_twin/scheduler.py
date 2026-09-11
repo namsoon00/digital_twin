@@ -6,7 +6,7 @@ from .infrastructure.toss_snapshots import build_snapshot
 
 class MonitorRunner:
     def __new__(cls, accounts, *args, **kwargs):
-        from .application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
+        from digital_twin.modules.market_data.public import MonitorRunner as ApplicationMonitorRunner
         from .domain.monitoring import RealtimeMonitor
         from .infrastructure.event_bus import default_event_bus
         from .infrastructure import operational_store as stores

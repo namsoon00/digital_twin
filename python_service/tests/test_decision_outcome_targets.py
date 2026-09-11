@@ -9,14 +9,8 @@ from digital_twin.domain.hypothesis_outcome_contract import (
     outcome_contract_fingerprint,
 )
 from digital_twin.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION
-from digital_twin.application.investment_reasoning.episode_projection import (
-    decision_episode_outcome_contract_readiness,
-    hypothesis_coverage_gap_request_from_subject_case,
-    shadow_hypothesis_observation_episodes,
-)
-from digital_twin.application.investment_outcome_observation_service import (
-    InvestmentOutcomeObservationService,
-)
+from digital_twin.modules.reasoning.application.investment_reasoning.episode_projection import decision_episode_outcome_contract_readiness, hypothesis_coverage_gap_request_from_subject_case, shadow_hypothesis_observation_episodes
+from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from digital_twin.domain.hypothesis_observation import (
     ShadowHypothesisObservationEpisode,
 )
@@ -27,9 +21,7 @@ from digital_twin.domain.investment_reasoning import (
     RuleEvaluationRecord,
     RuleMatchProof,
 )
-from digital_twin.domain.hypothesis_outcome_evaluation import (
-    evaluate_hypothesis_outcome,
-)
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
 from digital_twin.infrastructure.mysql_investment_decision_episodes import (
     MySQLInvestmentDecisionEpisodeStore,
     outcome_target_at,
@@ -38,7 +30,7 @@ from digital_twin.infrastructure.mysql_schema_tuning import (
     MYSQL_OPERATIONAL_COLUMN_WIDTHS,
     ensure_mysql_column_widths,
 )
-from digital_twin.infrastructure.mysql_outcome_evidence import MySQLOutcomeEvidenceSource
+from digital_twin.modules.outcomes.infrastructure.mysql_outcome_evidence import MySQLOutcomeEvidenceSource
 
 
 class RecordingConnection:

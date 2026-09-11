@@ -4,7 +4,7 @@ from html import escape
 from pathlib import Path
 from typing import Dict, Iterable, List
 
-from ..domain.model_review import MODEL_REVIEW_PROMPT_VERSION
+from digital_twin.modules.model_registry.contracts import MODEL_REVIEW_PROMPT_VERSION
 from ..domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, DEFAULT_RELATION_RULE_THRESHOLDS, MIN_CADENCE_MINUTES
 from ..domain.parsing import parse_assignments
 from . import operational_store as stores

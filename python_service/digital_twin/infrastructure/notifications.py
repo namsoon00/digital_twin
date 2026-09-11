@@ -1,26 +1,7 @@
 """Compatibility facade for the notification infrastructure package."""
 
-from .notification.ingress import (
-    QueueingNotifier,
-    account_delivery_context,
-    enqueue_text,
-    notification_queue,
-    notification_templates,
-    queued_notifier_for_account,
-    send_events,
-)
-from .notification.transport import (
-    TELEGRAM_API_GUARD_STATE,
-    TELEGRAM_HTML_PATTERN,
-    TELEGRAM_LINK_PATTERN,
-    TELEGRAM_MESSAGE_LIMIT,
-    ConsoleNotifier,
-    NotificationResult,
-    TelegramNotifier,
-    telegram_message_chunks,
-    telegram_plain_text,
-    uses_telegram_html,
-)
+from digital_twin.modules.notifications.infrastructure.notification.ingress import QueueingNotifier, account_delivery_context, enqueue_text, notification_queue, notification_templates, queued_notifier_for_account, send_events
+from digital_twin.modules.notifications.infrastructure.notification.transport import TELEGRAM_API_GUARD_STATE, TELEGRAM_HTML_PATTERN, TELEGRAM_LINK_PATTERN, TELEGRAM_MESSAGE_LIMIT, ConsoleNotifier, NotificationResult, TelegramNotifier, telegram_message_chunks, telegram_plain_text, uses_telegram_html
 from .settings import runtime_settings
 
 

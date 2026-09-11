@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from digital_twin.application.console_read_model_service import ConsoleReadModelService
+from digital_twin.modules.read_models.application.console_read_model_service import ConsoleReadModelService
 
 
 def component(result, key):

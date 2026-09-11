@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.application.monitoring_service import MonitorRunner
+from digital_twin.modules.market_data.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import (
     INVESTMENT_FOLLOW_UP_TRANSITIONED,

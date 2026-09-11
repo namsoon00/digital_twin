@@ -5,22 +5,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.application.ai_inference_queue_service import (
-    AIInferenceQueueRunner,
-    NotificationAIRequestEnqueuer,
-    ai_failure_diagnostic,
-    ai_response_contract_error,
-    preserve_verified_ai_narrative,
-    typedb_inference_fallback_response,
-)
-from digital_twin.application.ai_insight_notification_projection import (
-    AIInsightNotificationProjectionService,
-)
-from digital_twin.application.notification_ai_gate_audit import (
-    context_with_validated_ai_response,
-)
-from digital_twin.application.notification.admission import NotificationAdmissionOutcome
-from digital_twin.application.notification_service import NotificationQueueRunner
+from digital_twin.modules.decisions.application.ai_inference_queue_service import AIInferenceQueueRunner, NotificationAIRequestEnqueuer, ai_failure_diagnostic, ai_response_contract_error, preserve_verified_ai_narrative, typedb_inference_fallback_response
+from digital_twin.modules.notifications.application.ai_insight_notification_projection import AIInsightNotificationProjectionService
+from digital_twin.modules.decisions.application.notification_ai_gate_audit import context_with_validated_ai_response
+from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionOutcome
+from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.ai_inference_queue import (
     AIInferenceRequest,
     AIInferenceResult,
@@ -1463,7 +1452,7 @@ class AIInferenceQueueTests(unittest.TestCase):
             worker_id="worker-prompt-expansion",
         )
         with patch(
-            "digital_twin.application.ai_inference_queue_service.build_notification_ai_inference_packet",
+            "digital_twin.modules.decisions.application.ai_inference_queue_service.build_notification_ai_inference_packet",
             side_effect=build_with_first_budget_failure,
         ):
             self.assertEqual(1, runner.run_once(limit=1))

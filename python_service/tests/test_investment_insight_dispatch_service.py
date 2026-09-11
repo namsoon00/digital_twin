@@ -1,10 +1,8 @@
 import unittest
 
-from digital_twin.application.investment_insight_dispatch_service import (
-    InvestmentInsightDispatchService,
-)
-from digital_twin.application.notification.rendering import NotificationRenderingService
-from digital_twin.application.notification_ai_gate_message import execution_telegram_message
+from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
+from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
+from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.investment_reasoning import (
     ARCHIVE,
     HANDOFF_AI,

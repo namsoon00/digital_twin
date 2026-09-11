@@ -73,7 +73,7 @@ class NotificationJob:
         )
 
     def to_dict(self) -> Dict[str, object]:
-        from .notification.presentation import presentation_metadata
+        from digital_twin.modules.notifications.contracts import presentation_metadata
 
         payload = asdict(self)
         presentation = presentation_metadata(self.message_type, self.context)

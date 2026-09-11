@@ -4,9 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.instrument_valuation_query_service import (
-    InstrumentValuationQueryService,
-)
+from digital_twin.modules.read_models.application.instrument_valuation_query_service import InstrumentValuationQueryService
 from digital_twin.domain.company_knowledge import (
     build_company_knowledge,
     company_valuation_context,

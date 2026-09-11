@@ -15,11 +15,7 @@ from ..domain.notification_ai_gate_validation import (
 )
 from .local_ai_process_guard import forward_termination_signals, local_ai_capacity_lease
 from .codex_execution_output import codex_execution_output
-from .model_reviewer import (
-    codex_model_label,
-    codex_process_arguments,
-    notification_ai_runtime_dir,
-)
+from digital_twin.modules.model_registry.infrastructure.model_reviewer import codex_model_label, codex_process_arguments, notification_ai_runtime_dir
 from .settings import ROOT_DIR, data_dir, runtime_settings
 
 

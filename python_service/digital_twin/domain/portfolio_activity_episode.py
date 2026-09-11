@@ -11,15 +11,7 @@ from decimal import Decimal
 import hashlib
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from .portfolio_ledger import (
-    INFERRED_CORPORATE_ACTION,
-    INFERRED_POSITION_DECREASE,
-    INFERRED_POSITION_EXIT,
-    INFERRED_POSITION_INCREASE,
-    SNAPSHOT_CASH_ADJUSTMENT,
-    PortfolioLedgerEntry,
-    decimal_value,
-)
+from digital_twin.modules.portfolio.contracts import INFERRED_CORPORATE_ACTION, INFERRED_POSITION_DECREASE, INFERRED_POSITION_EXIT, INFERRED_POSITION_INCREASE, SNAPSHOT_CASH_ADJUSTMENT, PortfolioLedgerEntry, decimal_value
 from .snapshot_portfolio_activity import (
     activity_payload,
     cash_balance_components,

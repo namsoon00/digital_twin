@@ -4,11 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.ontology_lab_service import (  # noqa: E402
-    OntologyLabService,
-    ontology_lab_automation_payload,
-    ontology_lab_notification_text,
-)
+from digital_twin.modules.model_registry.application.ontology_lab_service import OntologyLabService, ontology_lab_automation_payload, ontology_lab_notification_text
 from digital_twin.domain.message_types import (  # noqa: E402
     ONTOLOGY_LAB_EXPERIMENT,
     PORTFOLIO_HOLDINGS_SNAPSHOT,

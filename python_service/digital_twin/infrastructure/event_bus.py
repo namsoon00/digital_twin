@@ -11,11 +11,12 @@ EventHandler = Callable[[DomainEvent], None]
 
 
 class EventBus:
-    def __init__(self, raise_handler_errors: bool = False):
+    def __init__(self, raise_handler_errors: bool = False, recorder: EventHandler = None):
         self.handlers: DefaultDict[str, List[EventHandler]] = defaultdict(list)
         self.published: List[DomainEvent] = []
         self.handler_errors: List[Exception] = []
         self.raise_handler_errors = raise_handler_errors
+        self.recorder = recorder
 
     def subscribe(self, event_name: str, handler: EventHandler) -> None:
         self.handlers[event_name].append(handler)
@@ -33,6 +34,8 @@ class EventBus:
                     raise
 
     def publish(self, event: DomainEvent) -> None:
+        if self.recorder:
+            self.recorder(event)
         self.published.append(event)
         self.dispatch(event)
 
@@ -62,6 +65,4 @@ class JsonEventLog:
 def default_event_bus() -> EventBus:
     from .operational_store import event_log
 
-    bus = EventBus()
-    bus.subscribe_all(event_log().handle)
-    return bus
+    return EventBus(recorder=event_log().handle)

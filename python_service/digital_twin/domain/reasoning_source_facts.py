@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 from typing import Dict, Iterable, List, Mapping, Tuple
 
-from .investment_calendar import InvestmentCalendarEvent
+from digital_twin.modules.investment_calendar.contracts import InvestmentCalendarEvent
 
 
 REASONING_SOURCE_FACT_VERSION = "reasoning-source-fact-v1"

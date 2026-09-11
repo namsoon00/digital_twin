@@ -15,7 +15,7 @@ from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference
 from digital_twin.domain.ontology_tbox import BOUNDED_CONTEXTS, CLASS_DEFS, RELATION_DEFS
 from digital_twin.domain.investment_outcomes import PerformanceAttribution
 from digital_twin.domain.portfolio import PortfolioSummary, Position
-from digital_twin.domain.portfolio_ledger import BUY, SELL, PortfolioLedger, PortfolioLedgerEntry
+from digital_twin.modules.portfolio.domain.portfolio_ledger import BUY, SELL, PortfolioLedger, PortfolioLedgerEntry
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 from digital_twin.domain.portfolio_rebalancing import (

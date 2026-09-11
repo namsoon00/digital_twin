@@ -13,12 +13,7 @@ from ..domain.portfolio_activity_episode import (
     PortfolioStateSnapshot,
 )
 from ..domain.portfolio_decision_cycle import PortfolioDecisionCycle
-from ..domain.portfolio_ledger import (
-    INFERRED_SNAPSHOT_ENTRY_TYPES,
-    PortfolioLedgerEntry,
-    PortfolioReconciliation,
-    execution_ledger_entries,
-)
+from digital_twin.modules.portfolio.contracts import INFERRED_SNAPSHOT_ENTRY_TYPES, PortfolioLedgerEntry, PortfolioReconciliation, execution_ledger_entries
 from ..domain.portfolio_analytics import PortfolioRiskSnapshot
 from ..domain.events import PORTFOLIO_RISK_OBSERVED
 from ..domain.snapshot_portfolio_activity import activity_payload

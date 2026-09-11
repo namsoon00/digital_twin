@@ -1,17 +1,10 @@
 import json
 import unittest
 
-from digital_twin.application.flow_lens_service import position_payload
-from digital_twin.application.capital_flow_service import CapitalFlowService
-from digital_twin.application.notification_ai_gate_message import (
-    _investor_text_from_relation_facts,
-    compact_investor_flow_line,
-)
-from digital_twin.domain.capital_flow import (
-    CapitalFlowObservation,
-    canonical_observations,
-    subject_flow_summary,
-)
+from digital_twin.modules.read_models.application.flow_lens_service import position_payload
+from digital_twin.modules.market_data.application.capital_flow_service import CapitalFlowService
+from digital_twin.modules.notifications.application.notification_ai_gate_message import _investor_text_from_relation_facts, compact_investor_flow_line
+from digital_twin.modules.market_data.domain.capital_flow import CapitalFlowObservation, canonical_observations, subject_flow_summary
 from digital_twin.domain.investor_flow_psychology import (
     investor_flow_contract,
     investor_flow_observation,

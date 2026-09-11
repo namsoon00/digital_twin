@@ -20,7 +20,7 @@ from .decision_evidence_contract import (
     hypothesis_set_evidence_summary,
     temporal_evidence_summary,
 )
-from .decision_continuity import compact_decision_continuity_packet
+from digital_twin.modules.decisions.contracts import compact_decision_continuity_packet
 from .notification_ai import criterion_lines, context_raw_lines, target_label
 from .notification_ai_gate_validation import (
     ai_decision_input_packet,

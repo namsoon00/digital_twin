@@ -1,6 +1,6 @@
 """Runtime composition for the versioned reasoning engine control plane."""
 
-from ..application.reasoning_engine_platform import ReasoningEnginePlatformService
+from digital_twin.modules.reasoning.public import ReasoningEnginePlatformService
 from .mysql_versioned_runtime import MySQLReasoningEngineRegistryStore
 from .mysql_versioned_runtime import (
     MySQLReasoningEngineComparisonStore,

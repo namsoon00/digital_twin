@@ -1,0 +1,1023 @@
+import hashlib
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Iterable, List, Tuple
+from urllib.parse import urlparse
+
+from digital_twin.modules.investment_calendar.domain.investment_calendar import calendar_timezone_for, event_timezone, normalized_event_markets, utc_iso
+from digital_twin.domain.portfolio import utc_now_iso
+
+
+KST = timezone(timedelta(hours=9))
+EVENT_PATTERNS = [
+    {
+        "eventType": "adrListing",
+        "label": "ADR/GDR 상장",
+        "keywords": [
+            "adr",
+            "gdr",
+            "american depositary receipt",
+            "global depositary receipt",
+            "depositary receipt",
+            "f-6",
+            "f6",
+            "예탁증서",
+            "미국예탁증서",
+            "주식예탁증서",
+        ],
+        "importance": 92,
+        "markets": ["US"],
+    },
+    {
+        "eventType": "indexInclusion",
+        "label": "지수 편입",
+        "keywords": [
+            "index inclusion",
+            "included in",
+            "adds",
+            "added to",
+            "msci",
+            "s&p 500",
+            "s&p500",
+            "nasdaq-100",
+            "nasdaq 100",
+            "russell",
+            "kospi200",
+            "kosdaq150",
+            "지수 편입",
+            "편입 예정",
+            "정기변경",
+        ],
+        "importance": 88,
+        "markets": [],
+    },
+    {
+        "eventType": "spinoff",
+        "label": "분할/스핀오프",
+        "keywords": [
+            "spin-off",
+            "spinoff",
+            "split-off",
+            "carve-out",
+            "회사분할",
+            "인적분할",
+            "물적분할",
+            "분할상장",
+            "스핀오프",
+        ],
+        "importance": 86,
+        "markets": [],
+    },
+    {
+        "eventType": "capitalRaise",
+        "label": "증자/자금조달",
+        "keywords": [
+            "capital raise",
+            "share offering",
+            "secondary offering",
+            "follow-on offering",
+            "rights offering",
+            "at-the-market",
+            "atm offering",
+            "convertible bond",
+            "convertible notes",
+            "cb 발행",
+            "bw 발행",
+            "유상증자",
+            "무상증자",
+            "전환사채",
+            "신주인수권부사채",
+            "자금조달",
+        ],
+        "importance": 84,
+        "markets": [],
+    },
+    {
+        "eventType": "listing",
+        "label": "상장/이전상장",
+        "keywords": [
+            "ipo",
+            "listing",
+            "direct listing",
+            "uplisting",
+            "dual listing",
+            "new listing",
+            "listed on",
+            "상장",
+            "신규상장",
+            "이전상장",
+            "재상장",
+            "기업공개",
+        ],
+        "importance": 86,
+        "markets": [],
+    },
+    {
+        "eventType": "capitalMarketEvent",
+        "label": "자본시장 이벤트",
+        "keywords": [
+            "stock split",
+            "reverse split",
+            "share split",
+            "tender offer",
+            "exchange offer",
+            "buyback",
+            "repurchase",
+            "액면분할",
+            "주식분할",
+            "감자",
+            "공개매수",
+            "자사주",
+        ],
+        "importance": 82,
+        "markets": [],
+    },
+]
+EVENT_PATTERN_BY_TYPE = {str(pattern["eventType"]): pattern for pattern in EVENT_PATTERNS}
+STRUCTURED_DATE_KEYS = [
+    "eventDate",
+    "event_date",
+    "listingDate",
+    "listing_date",
+    "expectedListingDate",
+    "firstTradeDate",
+    "effectiveDate",
+    "recordDate",
+    "exDate",
+    "splitDate",
+    "paymentDate",
+    "payableDate",
+    "rightsOfferingDate",
+    "subscriptionDate",
+]
+STRUCTURED_EVENT_TYPE_KEYS = ["calendarEventType", "investmentCalendarEventType", "eventType", "event_type"]
+STRUCTURED_CALENDAR_FIELDS = [
+    {
+        "eventType": "earnings",
+        "label": "실적 발표 예정",
+        "dateKeys": ["Earnings Date", "earningsDate", "earnings_date", "earningsDates"],
+        "importance": 78,
+        "schedulePhase": "earnings",
+    },
+    {
+        "eventType": "dividend",
+        "label": "배당락 예정",
+        "dateKeys": ["Ex-Dividend Date", "exDividendDate", "ex_date", "exDate"],
+        "importance": 62,
+        "schedulePhase": "exDividend",
+    },
+    {
+        "eventType": "dividend",
+        "label": "배당 지급 예정",
+        "dateKeys": ["Dividend Date", "dividendDate", "paymentDate", "payableDate"],
+        "importance": 58,
+        "schedulePhase": "payment",
+    },
+]
+
+
+def clean_text(value: object, limit: int = 1000) -> str:
+    return " ".join(str(value or "").split()).strip()[:limit].rstrip()
+
+
+def lower_text(value: object) -> str:
+    return clean_text(value, 4000).casefold()
+
+
+def unique_texts(values: Iterable[object], limit: int = 50) -> List[str]:
+    result = []
+    for value in values or []:
+        text = clean_text(value, 191)
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def evidence_payload(item: Dict[str, object]) -> Dict[str, object]:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return dict(payload or {})
+
+
+def nested_dicts(item: Dict[str, object]) -> List[Dict[str, object]]:
+    payload = evidence_payload(item)
+    values = [item, payload]
+    for key in ["articleFacts", "filing", "disclosure", "event", "metadata"]:
+        value = payload.get(key)
+        if isinstance(value, dict):
+            values.append(value)
+    return values
+
+
+def structured_calendar_payloads(item: Dict[str, object]) -> List[Dict[str, object]]:
+    payload = evidence_payload(item)
+    values = []
+    for container in [item, payload]:
+        if not isinstance(container, dict):
+            continue
+        for key in ["calendar", "calendarData", "calendar_data", "schedule", "scheduleData"]:
+            value = container.get(key)
+            if isinstance(value, dict):
+                values.append(value)
+    return values
+
+
+def article_facts_text(payload: Dict[str, object]) -> str:
+    facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+    values = []
+    for key in ["eventTakeaway", "numbers", "topics", "keySentences"]:
+        value = facts.get(key)
+        if isinstance(value, list):
+            values.extend(str(item) for item in value)
+        elif value:
+            values.append(str(value))
+    return " ".join(values)
+
+
+def evidence_text(item: Dict[str, object]) -> str:
+    payload = evidence_payload(item)
+    ai_analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
+    summary = ai_analysis.get("summary") if isinstance(ai_analysis.get("summary"), dict) else {}
+    disclosure_analysis = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
+    structured_values = []
+    for container in nested_dicts(item):
+        for key in [
+            "form",
+            "formType",
+            "reportName",
+            "report_nm",
+            "market",
+            "exchange",
+            "calendarEventType",
+            "investmentCalendarEventType",
+        ]:
+            structured_values.append(container.get(key))
+    parts = [
+        item.get("title"),
+        item.get("summary"),
+        item.get("articleSummaryKo"),
+        payload.get("articleSummaryKo"),
+        payload.get("analysisSummary"),
+        payload.get("stockImpactReasonKo"),
+        article_facts_text(payload),
+        summary.get("briefKo"),
+        " ".join(str(value) for value in summary.get("watchPoints") or []),
+        disclosure_analysis.get("summary"),
+        disclosure_analysis.get("impactSummary"),
+        " ".join(str(value) for value in disclosure_analysis.get("confirmedFacts") or []),
+        " ".join(str(value) for value in disclosure_analysis.get("materialNumbers") or []),
+        " ".join(str(value) for value in disclosure_analysis.get("documentDates") or []),
+        " ".join(str(value) for value in disclosure_analysis.get("watchItems") or []),
+        " ".join(clean_text(value, 300) for value in structured_values if clean_text(value, 300)),
+    ]
+    return "\n".join(clean_text(part, 1500) for part in parts if clean_text(part))
+
+
+def matched_event_pattern(text: str):
+    lowered = lower_text(text)
+    best = None
+    best_matches = []
+    for pattern in EVENT_PATTERNS:
+        matches = [keyword for keyword in pattern["keywords"] if keyword.casefold() in lowered]
+        if matches and len(matches) > len(best_matches):
+            best = pattern
+            best_matches = matches
+    return best, best_matches
+
+
+def known_event_type(value: object) -> str:
+    event_type = clean_text(value, 64)
+    return event_type if event_type in EVENT_PATTERN_BY_TYPE else ""
+
+
+def source_parser(item: Dict[str, object]) -> str:
+    payload = evidence_payload(item)
+    identity = lower_text(" ".join([
+        str(item.get("source") or ""),
+        str(payload.get("sourcePlatform") or ""),
+        str(payload.get("provider") or ""),
+        str(payload.get("sourceKind") or ""),
+    ]))
+    try:
+        host = (urlparse(str(item.get("url") or "")).hostname or "").casefold()
+    except ValueError:
+        host = ""
+    if host == "sec.gov" or host.endswith(".sec.gov") or re.search(r"\bsec\s+edgar\b|\bedgar\b", identity):
+        return "sec-edgar"
+    if host in {"dart.fss.or.kr", "opendart.fss.or.kr"} or host.endswith(".dart.fss.or.kr") or re.search(r"\bopen\s*dart\b", identity):
+        return "dart"
+    if host == "kind.krx.co.kr" or host.endswith(".krx.co.kr") or re.search(r"\bkrx\b|\bkind\b", identity):
+        return "krx-kind"
+    if host == "nasdaq.com" or host.endswith(".nasdaq.com") or host == "nyse.com" or host.endswith(".nyse.com"):
+        return "exchange"
+    if (
+        "investor relations" in identity
+        or identity in {"issuer-ir", "corporate-ir", "ir"}
+    ):
+        return "issuer-ir"
+    return "generic"
+
+
+def structured_event_type(item: Dict[str, object], text: str) -> Tuple[str, List[str]]:
+    lowered = lower_text(text)
+    for container in nested_dicts(item):
+        for key in STRUCTURED_EVENT_TYPE_KEYS:
+            event_type = known_event_type(container.get(key))
+            if event_type:
+                return event_type, [key + "=" + event_type]
+    parser = source_parser(item)
+    form_text = lower_text(" ".join(
+        clean_text(container.get(key), 120)
+        for container in nested_dicts(item)
+        for key in ["form", "formType", "filingType", "sourceKind", "reportName", "report_nm"]
+        if clean_text(container.get(key), 120)
+    ))
+    if parser == "sec-edgar":
+        if "f-6" in form_text or re.search(r"\bf6\b", form_text) or " f-6" in lowered:
+            return "adrListing", ["SEC F-6"]
+        if any(form in form_text for form in ["s-1", "f-1", "424b", "424 b", "20-f ipo"]):
+            return "listing", ["SEC registration"]
+        if any(term in lowered for term in ["stock split", "reverse split", "tender offer", "buyback", "repurchase"]):
+            return "capitalMarketEvent", ["SEC capital-market action"]
+    if parser in {"dart", "krx-kind"}:
+        if any(term in lowered for term in ["예탁증서", "gdr", "adr"]):
+            return "adrListing", [parser + " depositary receipt"]
+        if any(term in lowered for term in ["유상증자", "무상증자", "전환사채", "신주인수권부사채", "cb 발행", "bw 발행"]):
+            return "capitalRaise", [parser + " capital raise"]
+        if any(term in lowered for term in ["회사분할", "인적분할", "물적분할", "분할상장", "스핀오프"]):
+            return "spinoff", [parser + " spinoff"]
+        if any(term in lowered for term in ["신규상장", "이전상장", "재상장", "상장예정", "상장 예정"]):
+            return "listing", [parser + " listing"]
+        if any(term in lowered for term in ["액면분할", "주식분할", "감자", "공개매수", "자사주", "자기주식"]):
+            return "capitalMarketEvent", [parser + " capital-market action"]
+    return "", []
+
+
+def parse_year_month_day(year: int, month: int, day: int):
+    try:
+        return datetime(year, month, day, 9, 0, tzinfo=KST)
+    except ValueError:
+        return None
+
+
+def parse_date_from_text(text: str, reference: datetime = None):
+    reference = reference or datetime.now(KST)
+    normalized = clean_text(text, 5000)
+    match = re.search(r"(20\d{2})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})", normalized)
+    if match:
+        return apply_text_clock(
+            parse_year_month_day(int(match.group(1)), int(match.group(2)), int(match.group(3))),
+            normalized,
+        )
+    match = re.search(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일", normalized)
+    if match:
+        parsed = parse_year_month_day(reference.year, int(match.group(1)), int(match.group(2)))
+        if parsed and parsed < reference - timedelta(days=2):
+            parsed = parse_year_month_day(reference.year + 1, int(match.group(1)), int(match.group(2)))
+        return apply_text_clock(parsed, normalized)
+    match = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", normalized)
+    if match:
+        parsed = parse_year_month_day(reference.year, int(match.group(1)), int(match.group(2)))
+        if parsed and parsed < reference - timedelta(days=2):
+            parsed = parse_year_month_day(reference.year + 1, int(match.group(1)), int(match.group(2)))
+        return apply_text_clock(parsed, normalized)
+    quarter = re.search(r"(20\d{2})\s*(?:년)?\s*(?:q([1-4])|([1-4])분기)", normalized, re.IGNORECASE)
+    if quarter:
+        q = int(quarter.group(2) or quarter.group(3))
+        month = {1: 3, 2: 6, 3: 9, 4: 12}[q]
+        return parse_year_month_day(int(quarter.group(1)), month, 30)
+    return None
+
+
+def text_clock(value: object):
+    text = clean_text(value, 5000)
+    match = re.search(
+        r"(?:(오전|오후)\s*)?(\d{1,2}):(\d{2})(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?|오전|오후)?",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    hour = int(match.group(2))
+    minute = int(match.group(3))
+    marker = str(match.group(1) or match.group(4) or "").casefold().replace(".", "")
+    if marker in {"오후", "pm"} and hour < 12:
+        hour += 12
+    if marker in {"오전", "am"} and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute
+
+
+def apply_text_clock(value, source: object):
+    clock = text_clock(source)
+    if not value or not clock:
+        return value
+    return value.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+
+
+def source_time_metadata(value: object) -> Tuple[bool, bool]:
+    text = clean_text(value, 5000)
+    explicit = text_clock(text) is not None
+    absolute = bool(explicit and re.search(r"(?:Z|[+-]\d{2}:?\d{2})\s*$", text, re.IGNORECASE))
+    return explicit, absolute
+
+
+def normalized_clock(value: object, fallback: str = "09:00") -> Tuple[int, int]:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", clean_text(value, 20))
+    if not match:
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", fallback)
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        return 9, 0
+    return hour, minute
+
+
+def candidate_schedule_datetime(
+    parsed: datetime,
+    event_timezone_name: str,
+    display_timezone_name: str,
+    default_time: str,
+    explicit_time: bool,
+    absolute_time: bool,
+):
+    if not parsed:
+        return None
+    if explicit_time and absolute_time:
+        return parsed
+    local_date = parsed.astimezone(KST).date()
+    hour, minute = (parsed.hour, parsed.minute) if explicit_time else normalized_clock(default_time)
+    timezone_name = event_timezone_name if explicit_time else display_timezone_name
+    return datetime(
+        local_date.year,
+        local_date.month,
+        local_date.day,
+        hour,
+        minute,
+        tzinfo=event_timezone(timezone_name),
+    )
+
+
+def parse_structured_date(value: object, reference: datetime = None):
+    text = clean_text(value, 120)
+    if not text:
+        return None
+    if re.fullmatch(r"\d{8}", text):
+        return parse_year_month_day(int(text[:4]), int(text[4:6]), int(text[6:8]))
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return parse_date_from_text(text, reference)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=KST)
+        return parsed.astimezone(KST)
+    except ValueError:
+        return parse_date_from_text(text, reference)
+
+
+def event_date_from_item(item: Dict[str, object], text: str, reference: datetime = None):
+    reference = reference or parse_reference_datetime(item)
+    for container in nested_dicts(item):
+        for key in STRUCTURED_DATE_KEYS:
+            parsed = parse_structured_date(container.get(key), reference)
+            if parsed:
+                explicit_time, absolute_time = source_time_metadata(container.get(key))
+                return parsed, key, explicit_time, absolute_time
+    parsed = parse_date_from_text(text, reference)
+    explicit_time, absolute_time = source_time_metadata(text)
+    return parsed, "text" if parsed else "", explicit_time, absolute_time
+
+
+def structured_calendar_dates(value: object, reference: datetime = None) -> List[datetime]:
+    return [item[0] for item in structured_calendar_schedules(value, reference)]
+
+
+def structured_calendar_schedules(value: object, reference: datetime = None) -> List[Tuple[datetime, bool, bool]]:
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    dates = []
+    seen = set()
+    for raw in values:
+        parsed = parse_structured_date(raw, reference)
+        if not parsed:
+            continue
+        key = utc_iso(parsed)
+        if key in seen:
+            continue
+        seen.add(key)
+        explicit_time, absolute_time = source_time_metadata(raw)
+        dates.append((parsed, explicit_time, absolute_time))
+    return dates
+
+
+def parse_reference_datetime(item: Dict[str, object]):
+    for key in ["publishedAt", "observedAt"]:
+        text = clean_text(item.get(key), 80)
+        if not text:
+            continue
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(KST)
+        except ValueError:
+            continue
+    return datetime.now(KST)
+
+
+def official_source(item: Dict[str, object]) -> bool:
+    return source_parser(item) in {"sec-edgar", "dart", "krx-kind", "exchange", "issuer-ir"}
+
+
+@dataclass
+class CalendarEventCandidate:
+    event_id: str
+    title: str
+    event_type: str
+    starts_at: str
+    status: str
+    importance: int
+    all_day: bool = False
+    symbols: List[str] = field(default_factory=list)
+    markets: List[str] = field(default_factory=list)
+    timezone: str = "Asia/Seoul"
+    source: str = "research-evidence"
+    source_url: str = ""
+    notes: str = ""
+    readiness_state: str = "needs-review"
+    matched_keywords: List[str] = field(default_factory=list)
+    source_evidence_id: str = ""
+    review_candidate_id: str = ""
+    review_reason: str = ""
+    payload: Dict[str, object] = field(default_factory=dict)
+
+    def to_calendar_payload(self, account_ids: Iterable[str] = None) -> Dict[str, object]:
+        return {
+            "eventId": self.event_id,
+            "title": self.title,
+            "eventType": self.event_type,
+            "startsAt": self.starts_at,
+            "timezone": self.timezone,
+            "allDay": self.all_day,
+            "status": self.status,
+            "importance": self.importance,
+            "symbols": list(self.symbols or []),
+            "markets": list(self.markets or []),
+            "accountIds": unique_texts(account_ids or [], 50),
+            "source": self.source,
+            "sourceUrl": self.source_url,
+            "notes": self.notes,
+            "reminderOffsetsMinutes": [1440, 180, 60, 0],
+            "payload": dict(self.payload or {}),
+        }
+
+    def review_required(self) -> bool:
+        return bool(self.review_reason)
+
+    def to_review_payload(self, account_ids: Iterable[str] = None) -> Dict[str, object]:
+        return {
+            "candidateId": self.review_candidate_id,
+            "proposedEventId": self.event_id,
+            "title": self.title,
+            "eventType": self.event_type,
+            "startsAt": self.starts_at,
+            "timezone": self.timezone,
+            "allDay": self.all_day,
+            "status": "pending",
+            "reviewReason": self.review_reason or "needsReview",
+            "importance": self.importance,
+            "readinessState": self.readiness_state,
+            "symbols": list(self.symbols or []),
+            "markets": list(self.markets or []),
+            "accountIds": unique_texts(account_ids or [], 50),
+            "source": self.source,
+            "sourceUrl": self.source_url,
+            "notes": self.notes,
+            "reminderOffsetsMinutes": [1440, 180, 60, 0],
+            "sourceEvidenceId": self.source_evidence_id,
+            "payload": dict(self.payload or {}),
+            "createdAt": utc_now_iso(),
+            "updatedAt": "",
+        }
+
+
+def candidate_id(item: Dict[str, object], event_type: str, starts_at: str) -> str:
+    token = "|".join([
+        str(event_type or ""),
+        str(item.get("symbol") or "").upper(),
+        str(starts_at or ""),
+        str(item.get("url") or ""),
+        str(item.get("title") or ""),
+    ])
+    return "auto-special-event-" + hashlib.sha1(token.encode("utf-8")).hexdigest()[:24]
+
+
+def review_candidate_id(item: Dict[str, object], event_type: str, starts_at: str) -> str:
+    token = "|".join([
+        str(event_type or ""),
+        str(item.get("symbol") or "").upper(),
+        str(starts_at or ""),
+        str(item.get("url") or ""),
+        str(item.get("title") or ""),
+        str(item.get("evidenceId") or item.get("id") or ""),
+    ])
+    return "calendar-review-" + hashlib.sha1(token.encode("utf-8")).hexdigest()[:24]
+
+
+def feedback_requires_review(event_type: str, feedback: Dict[str, object] = None) -> bool:
+    entry = (feedback or {}).get(event_type) if isinstance(feedback, dict) else None
+    if not isinstance(entry, dict):
+        return False
+    accepted = int(entry.get("accepted") or 0)
+    rejected = int(entry.get("rejected") or 0)
+    total = accepted + rejected
+    if total < 3:
+        return False
+    return rejected > accepted
+
+
+def readiness_for(
+    item: Dict[str, object],
+    matched_keywords: List[str],
+    starts_at,
+    official: bool,
+    event_type: str = "",
+    parser: str = "generic",
+    date_source: str = "",
+    structured_match: bool = False,
+    feedback: Dict[str, object] = None,
+) -> tuple:
+    payload = evidence_payload(item)
+    source_trust = str(item.get("sourceTrustState") or payload.get("sourceTrustState") or "unknown").strip().lower()
+    data_state = str(item.get("dataState") or payload.get("dataState") or "partial").strip().lower()
+    validation_state = str(item.get("validationState") or payload.get("validationState") or "conditional").strip().lower()
+    if not starts_at:
+        return "needs-review", "missingDate"
+    if validation_state == "blocked" or data_state in {"insufficient", "unavailable"}:
+        return "blocked", "sourceDataUnavailable"
+    if not official:
+        return "needs-review", "sourceNeedsVerification"
+    if source_trust not in {"trusted", "standard"}:
+        return "needs-review", "sourceTrustNeedsReview"
+    if not matched_keywords:
+        return "needs-review", "eventTermsUnclear"
+    if date_source == "text" and not structured_match:
+        return "needs-review", "dateNeedsVerification"
+    if feedback_requires_review(event_type, feedback):
+        return "needs-review", "feedbackReview"
+    return "ready", ""
+
+
+def markets_for_candidate(item: Dict[str, object], pattern: Dict[str, object], text: str) -> List[str]:
+    markets = list(pattern.get("markets") or [])
+    payload = evidence_payload(item)
+    lowered = lower_text(text)
+    for token, market in [
+        ("nasdaq", "NASDAQ"),
+        ("nyse", "NYSE"),
+        ("new york stock exchange", "NYSE"),
+        ("krx", "KRX"),
+        ("kospi", "KOSPI"),
+        ("kosdaq", "KOSDAQ"),
+        ("msci", "MSCI"),
+        ("s&p", "S&P"),
+        ("russell", "RUSSELL"),
+    ]:
+        if token in lowered and market not in markets:
+            markets.append(market)
+    market = clean_text(item.get("market") or payload.get("market") or payload.get("targetMarket"), 32).upper()
+    if market and market not in markets:
+        markets.append(market)
+    symbol = clean_text(item.get("symbol"), 24).upper()
+    return normalized_event_markets([symbol] if symbol else [], markets)[:8]
+
+
+def calendar_candidate_from_research_item(
+    item: Dict[str, object],
+    register_undated: bool = False,
+    include_review: bool = False,
+    force_review: bool = False,
+    feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
+):
+    if not isinstance(item, dict):
+        return None
+    text = evidence_text(item)
+    parser = source_parser(item)
+    structured_type, structured_matches = structured_event_type(item, text)
+    pattern, matched_keywords = matched_event_pattern(text)
+    if structured_type:
+        pattern = EVENT_PATTERN_BY_TYPE.get(structured_type)
+        matched_keywords = unique_texts(list(structured_matches or []) + list(matched_keywords or []), 20)
+    if not pattern:
+        return None
+    official = official_source(item)
+    # A headline keyword is not a calendar contract, even when the article is
+    # hosted by a high-trust publisher. Require a structured event type or a
+    # filing parser that derived one from the source document.
+    if not structured_type:
+        return None
+    reference = parse_reference_datetime(item)
+    event_type = str(pattern["eventType"])
+    event_date, date_source, explicit_time, absolute_time = event_date_from_item(item, text, reference)
+    missing_date = not event_date
+    if not event_date and register_undated:
+        event_date = reference
+        date_source = "reference"
+        explicit_time = False
+        absolute_time = False
+    readiness_state, readiness_reason = readiness_for(
+        item,
+        matched_keywords,
+        event_date,
+        official,
+        event_type=event_type,
+        parser=parser,
+        date_source=date_source,
+        structured_match=bool(structured_type),
+        feedback=feedback,
+    )
+    if force_review and readiness_state == "ready":
+        readiness_state, readiness_reason = "needs-review", "aiResearchReview"
+    review_reason = readiness_reason if readiness_state != "ready" else ""
+    if readiness_state != "ready" and not include_review:
+        return None
+    title = clean_text(item.get("title"), 180) or str(pattern["label"])
+    symbol = clean_text(item.get("symbol"), 24).upper()
+    symbols = [symbol] if symbol else []
+    markets = markets_for_candidate(item, pattern, text)
+    timezone_name = calendar_timezone_for(symbols, markets)
+    scheduled_at = candidate_schedule_datetime(
+        event_date,
+        timezone_name,
+        display_timezone,
+        default_time,
+        explicit_time,
+        absolute_time,
+    )
+    event_date_utc = utc_iso(scheduled_at) if scheduled_at and (not missing_date or register_undated) else ""
+    display_zone = event_timezone(display_timezone)
+    event_local_time = scheduled_at.astimezone(display_zone).strftime("%H:%M") if scheduled_at else ""
+    time_state = "sourceProvided" if explicit_time else ("estimatedDefault" if scheduled_at else "missing")
+    status = "active" if readiness_state == "ready" and event_date and event_date >= reference - timedelta(days=2) else "tentative"
+    if readiness_state != "ready":
+        status = "needsReview"
+    source = clean_text(item.get("source") or "research-evidence", 120)
+    evidence_id = clean_text(item.get("evidenceId") or item.get("id"), 191)
+    notes = (
+        str(pattern["label"])
+        + " 후보를 뉴스/공시 근거에서 자동 추출했습니다. 확인 키워드: "
+        + ", ".join(matched_keywords[:6])
+        + ". 원문과 일정 확정 여부를 확인하세요."
+    )
+    if review_reason == "missingDate":
+        notes += " 날짜가 명확하지 않아 후보함에서 검토해야 합니다."
+    elif review_reason:
+        notes += " 원문·출처·일정 조건이 충분히 확인되지 않아 후보함에서 검토해야 합니다."
+    payload = {
+        "autoDetected": True,
+        "detector": "research-evidence-calendar-extractor-v1",
+        "readinessState": readiness_state,
+        "matchedKeywords": matched_keywords[:12],
+        "sourceEvidenceId": evidence_id,
+        "sourcePublishedAt": clean_text(item.get("publishedAt"), 80),
+        "sourceObservedAt": clean_text(item.get("observedAt"), 80),
+        "sourceTitle": title,
+        "sourceKind": clean_text(item.get("kind"), 80),
+        "officialSource": official,
+        "sourceParser": parser,
+        "dateSource": date_source,
+        "eventLocalDate": scheduled_at.astimezone(event_timezone(timezone_name)).date().isoformat() if scheduled_at else "",
+        "eventLocalTime": event_local_time,
+        "timeSource": date_source if explicit_time else "settings.investmentCalendarCandidateDefaultTime",
+        "timeState": time_state,
+        "structuredEventType": structured_type,
+        "scheduleState": "dateConfirmed" if official else "estimated",
+        "reviewRequired": bool(review_reason),
+        "reviewReason": review_reason,
+        "needsSourceRefresh": status != "active",
+    }
+    return CalendarEventCandidate(
+        event_id=candidate_id(item, event_type, event_date_utc),
+        review_candidate_id=review_candidate_id(item, event_type, event_date_utc),
+        title=str(pattern["label"]) + ": " + title,
+        event_type=event_type,
+        starts_at=event_date_utc,
+        status=status,
+        importance=int(pattern["importance"]),
+        all_day=not bool(scheduled_at),
+        symbols=symbols,
+        markets=markets,
+        timezone=timezone_name,
+        source=source,
+        source_url=clean_text(item.get("url"), 1000),
+        notes=notes,
+        readiness_state=readiness_state,
+        matched_keywords=matched_keywords,
+        source_evidence_id=evidence_id,
+        review_reason=review_reason,
+        payload=payload,
+    )
+
+
+def structured_calendar_candidates_from_research_item(
+    item: Dict[str, object],
+    force_review: bool = False,
+    feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
+) -> List[CalendarEventCandidate]:
+    """Create review-first candidates from structured provider calendar fields.
+
+    Provider calendar data is useful for a working agenda, but it is not treated
+    as an issuer-confirmed event. The caller can expose the dated item as a
+    tentative calendar entry while the candidate remains reviewable.
+    """
+    if not isinstance(item, dict):
+        return []
+    calendars = structured_calendar_payloads(item)
+    if not calendars:
+        return []
+    reference = parse_reference_datetime(item)
+    source = clean_text(item.get("source") or "research-evidence", 120)
+    source_url = clean_text(item.get("url"), 1000)
+    evidence_id = clean_text(item.get("evidenceId") or item.get("id"), 191)
+    symbol = clean_text(item.get("symbol"), 24).upper()
+    markets = markets_for_candidate(item, {"markets": []}, source)
+    timezone_name = calendar_timezone_for([symbol] if symbol else [], markets)
+    official = official_source(item)
+    candidates = []
+    seen = set()
+    for definition in STRUCTURED_CALENDAR_FIELDS:
+        for calendar in calendars:
+            for field in definition["dateKeys"]:
+                if field not in calendar:
+                    continue
+                for event_date, explicit_time, absolute_time in structured_calendar_schedules(calendar.get(field), reference):
+                    if event_date < reference - timedelta(days=2):
+                        continue
+                    scheduled_at = candidate_schedule_datetime(
+                        event_date,
+                        timezone_name,
+                        display_timezone,
+                        default_time,
+                        explicit_time,
+                        absolute_time,
+                    )
+                    starts_at = utc_iso(scheduled_at)
+                    display_zone = event_timezone(display_timezone)
+                    event_local_time = scheduled_at.astimezone(display_zone).strftime("%H:%M")
+                    time_state = "sourceProvided" if explicit_time else "estimatedDefault"
+                    identity = "|".join([definition["eventType"], definition["schedulePhase"], starts_at, symbol])
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    matched = ["calendar." + field]
+                    readiness_state, readiness_reason = readiness_for(
+                        item,
+                        matched,
+                        event_date,
+                        official,
+                        event_type=definition["eventType"],
+                        parser=source_parser(item),
+                        date_source="calendar." + field,
+                        structured_match=True,
+                        feedback=feedback,
+                    )
+                    if force_review and readiness_state == "ready":
+                        readiness_state, readiness_reason = "needs-review", "aiResearchReview"
+                    review_reason = readiness_reason if readiness_state != "ready" else ""
+                    title_target = symbol or clean_text(item.get("title"), 120) or source
+                    title = title_target + " " + definition["label"]
+                    notes = (
+                        source
+                        + "의 "
+                        + field
+                        + " 기반 일정입니다. 날짜와 발표 시각을 확인하면 등록할 수 있으며, 공식 IR·공시·거래소 출처는 별도 신뢰도 정보로 표시됩니다."
+                    )
+                    payload = {
+                        "autoDetected": True,
+                        "detector": "structured-calendar-source-v1",
+                        "readinessState": readiness_state,
+                        "matchedKeywords": matched,
+                        "sourceEvidenceId": evidence_id,
+                        "sourcePublishedAt": clean_text(item.get("publishedAt"), 80),
+                        "sourceObservedAt": clean_text(item.get("observedAt"), 80),
+                        "sourceTitle": clean_text(item.get("title"), 180),
+                        "sourceKind": clean_text(item.get("kind"), 80),
+                        "officialSource": official,
+                        "sourceParser": source_parser(item),
+                        "dateSource": "calendar." + field,
+                        "eventLocalDate": scheduled_at.astimezone(event_timezone(timezone_name)).date().isoformat(),
+                        "eventLocalTime": event_local_time,
+                        "timeSource": "calendar." + field if explicit_time else "settings.investmentCalendarCandidateDefaultTime",
+                        "timeState": time_state,
+                        "structuredEventType": definition["eventType"],
+                        "schedulePhase": definition["schedulePhase"],
+                        "scheduleState": "confirmed" if official else "estimated",
+                        "reviewRequired": bool(review_reason),
+                        "reviewReason": review_reason,
+                        "needsSourceRefresh": not official,
+                    }
+                    candidates.append(CalendarEventCandidate(
+                        event_id=candidate_id({**item, "title": title}, definition["eventType"], starts_at),
+                        review_candidate_id=review_candidate_id({**item, "title": title}, definition["eventType"], starts_at),
+                        title=title,
+                        event_type=definition["eventType"],
+                        starts_at=starts_at,
+                        status="active" if readiness_state == "ready" else "needsReview",
+                        importance=int(definition["importance"]),
+                        all_day=False,
+                        symbols=[symbol] if symbol else [],
+                        markets=markets[:8],
+                        timezone=timezone_name,
+                        source=source,
+                        source_url=source_url,
+                        notes=notes,
+                        readiness_state=readiness_state,
+                        matched_keywords=matched,
+                        source_evidence_id=evidence_id,
+                        review_reason=review_reason,
+                        payload=payload,
+                    ))
+    return candidates
+
+
+def calendar_candidates_from_research_items(
+    items: Iterable[Dict[str, object]],
+    register_undated: bool = False,
+    feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
+) -> List[CalendarEventCandidate]:
+    candidates = []
+    seen = set()
+    for item in items or []:
+        detected = [calendar_candidate_from_research_item(
+            item,
+            register_undated,
+            feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
+        )]
+        detected.extend(structured_calendar_candidates_from_research_item(
+            item,
+            feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
+        ))
+        for candidate in detected:
+            if not candidate or candidate.review_required() or candidate.event_id in seen:
+                continue
+            seen.add(candidate.event_id)
+            candidates.append(candidate)
+    return candidates
+
+
+def calendar_candidate_sets_from_research_items(
+    items: Iterable[Dict[str, object]],
+    register_undated: bool = False,
+    force_review: bool = False,
+    feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
+) -> Dict[str, List[CalendarEventCandidate]]:
+    ready = []
+    review = []
+    seen_ready = set()
+    seen_review = set()
+    for item in items or []:
+        detected = [calendar_candidate_from_research_item(
+            item,
+            register_undated=register_undated,
+            include_review=True,
+            force_review=force_review,
+            feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
+        )]
+        detected.extend(structured_calendar_candidates_from_research_item(
+            item,
+            force_review=force_review,
+            feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
+        ))
+        for candidate in detected:
+            if not candidate:
+                continue
+            if candidate.review_required():
+                if candidate.review_candidate_id in seen_review:
+                    continue
+                seen_review.add(candidate.review_candidate_id)
+                review.append(candidate)
+                continue
+            if candidate.event_id in seen_ready:
+                continue
+            seen_ready.add(candidate.event_id)
+            ready.append(candidate)
+    return {"ready": ready, "review": review}

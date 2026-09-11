@@ -3,12 +3,7 @@ from collections import defaultdict
 from datetime import timedelta
 from typing import Dict, Iterable, List
 
-from ..domain.capital_flow import (
-    CapitalFlowObservation,
-    canonical_observations,
-    merge_capital_flow_rows,
-    observation_from_row,
-)
+from digital_twin.modules.market_data.contracts import CapitalFlowObservation, canonical_observations, merge_capital_flow_rows, observation_from_row
 from ..domain.market_time_series import (
     MarketTimeSeriesObservation,
     bucket_start,

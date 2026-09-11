@@ -4,7 +4,7 @@ from threading import Lock
 from typing import Dict, Iterable, List, Optional, Tuple
 import uuid
 
-from ..application.notification.admission import NotificationAdmissionPolicy
+from digital_twin.modules.notifications.public import NotificationAdmissionPolicy
 from ..domain.investment_analysis import investment_decision_key
 from ..domain.message_types import (
     HOLDING_TIMING,
@@ -29,7 +29,7 @@ from ..domain.notification_rules import (
 )
 from ..domain.notifications import NotificationJob
 from ..domain.notification_feedback import normalize_notification_feedback
-from ..domain.notification.lifecycle import NotificationLifecycleEvent
+from digital_twin.modules.notifications.contracts import NotificationLifecycleEvent
 from ..domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from ..domain.sent_article_filter import (
     article_event_family_keys,
@@ -2034,7 +2034,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         *,
         persist_suppressed: bool = True,
     ) -> bool:
-        from ..application.notification.intake import NotificationIngressService
+        from digital_twin.modules.notifications.public import NotificationIngressService
 
         NotificationIngressService.prepare_job(job)
         if not job.text.strip():
@@ -2093,7 +2093,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             return self.enqueue_with_connection(connection, job)
 
     def enqueue_request(self, request) -> bool:
-        from ..application.notification.intake import NotificationIngressService
+        from digital_twin.modules.notifications.public import NotificationIngressService
 
         return self.enqueue(NotificationIngressService.job_from_request(request))
 

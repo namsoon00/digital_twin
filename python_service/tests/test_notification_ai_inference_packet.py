@@ -1,10 +1,8 @@
 import json
 import unittest
 
-from digital_twin.application.notification_ai_judgement_service import (
-    NotificationAIJudgementService,
-)
-from digital_twin.application.notification.workflow import NotificationAIValidatedGateEnricher
+from digital_twin.modules.decisions.application.notification_ai_judgement_service import NotificationAIJudgementService
+from digital_twin.modules.decisions.public import NotificationAIValidatedGateEnricher
 from digital_twin.domain.notification_ai_gate_validation import validated_response_from_payload
 from digital_twin.domain.notification_ai_inference_packet import (
     build_notification_ai_inference_packet,

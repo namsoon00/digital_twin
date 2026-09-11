@@ -10,7 +10,7 @@ PYTHON_SERVICE = ROOT / "python_service"
 if str(PYTHON_SERVICE) not in sys.path:
     sys.path.insert(0, str(PYTHON_SERVICE))
 
-from digital_twin.application.notification_replay_service import NotificationReplayService  # noqa: E402
+from digital_twin.modules.notifications.public import NotificationReplayService  # noqa: E402
 from digital_twin.infrastructure import operational_store as stores  # noqa: E402
 from digital_twin.infrastructure.service_factory import build_notification_queue_runner  # noqa: E402
 from digital_twin.infrastructure.settings import runtime_settings  # noqa: E402
@@ -38,4 +38,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

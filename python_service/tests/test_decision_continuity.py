@@ -6,14 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.decision_continuity_service import DecisionContinuityService
-from digital_twin.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
-from digital_twin.application.notification_ai_gate_message import decision_continuity_rows
-from digital_twin.application.notification_decision_memory import (
-    context_with_previous_investment_decision,
-    context_with_previous_investment_insight,
-)
-from digital_twin.domain.decision_continuity import build_decision_continuity_packet
+from digital_twin.modules.decisions.application.decision_continuity_service import DecisionContinuityService
+from digital_twin.modules.decisions.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
+from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
+from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight
+from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
 from digital_twin.domain.investment_decision_actionability import (
     investment_decision_actionability,
 )

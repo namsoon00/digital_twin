@@ -1,6 +1,6 @@
 from typing import Dict
 
-from ....application.external_data.registry import ExternalDatasetRegistry
+from digital_twin.modules.market_data.public import ExternalDatasetRegistry
 from .coingecko import CoinGeckoMarketAdapter
 from .fred import FredMacroAdapter
 from .opendart import OpenDartCompanyFactsAdapter, OpenDartDisclosureAdapter, OpenDartDocumentAdapter

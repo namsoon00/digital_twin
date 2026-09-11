@@ -1,0 +1,269 @@
+from typing import Callable, Dict, Iterable, List, Optional
+
+from digital_twin.domain.data_freshness import age_minutes, int_setting
+from digital_twin.domain.market_data import known_stock
+from digital_twin.domain.repositories import MarketQuoteRepository, SymbolSourceGateway, SymbolUniverseRepository
+from digital_twin.modules.instruments.domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, stale_after_hours, symbol_search_symbol_candidates, symbol_search_terms
+
+
+DEFAULT_SYMBOL_SEEDS = [
+    "005930",
+    "000660",
+    "069500",
+    "091160",
+    "122630",
+    "229200",
+    "360750",
+    "TSLA",
+    "AAPL",
+    "NVDA",
+    "MSFT",
+    "AMD",
+    "PLTR",
+    "MSTR",
+    "COIN",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "IPO",
+    "IPOS",
+    "VIXY",
+    "TLT",
+    "IEF",
+    "HYG",
+    "LQD",
+    "SOXX",
+    "SMH",
+    "GLD",
+    "USO",
+    "UUP",
+]
+MARKET_DATA_ACCOUNT_ID = "__market_data__"
+DEFAULT_SYMBOL_UNIVERSE_LIMIT = 40
+
+
+def seed_symbol(symbol: str) -> ListedSymbol:
+    info = known_stock(symbol)
+    market = info.get("market") or ("NASDAQ" if symbol.isalpha() else "KOSPI")
+    if market == "US":
+        market = "NASDAQ"
+    if market == "KR":
+        market = "KOSPI"
+    return ListedSymbol.create(
+        symbol=info["symbol"],
+        name=info["name"],
+        market=market,
+        exchange=info.get("exchange") or market,
+        currency=info.get("currency") or "",
+        sector=info.get("sector") or "",
+        asset_type=info.get("assetType") or "STOCK",
+        source="Orbit Alpha seed",
+        source_url="local-default",
+    )
+
+
+class SymbolUniverseService:
+    def __init__(
+        self,
+        store: SymbolUniverseRepository,
+        source_gateway: SymbolSourceGateway,
+        settings: Dict[str, str] = None,
+        quote_cache: MarketQuoteRepository = None,
+    ):
+        self.store = store
+        self.source_gateway = source_gateway
+        self.settings = dict(settings or {})
+        self.quote_cache = quote_cache
+        self._seed_checked = False
+
+    def max_age_hours(self) -> int:
+        return stale_after_hours(self.settings.get("symbolUniverseMaxAgeHours"), 24)
+
+    def market_data_max_age_minutes(self) -> int:
+        return int_setting(self.settings, "marketDataMaxAgeMinutes", 240, 1, 1440 * 30)
+
+    def ensure_seed(self) -> None:
+        if self._seed_checked:
+            return
+        if hasattr(self.store, "existing_symbols"):
+            existing = set(self.store.existing_symbols(DEFAULT_SYMBOL_SEEDS) or [])
+            missing = [symbol for symbol in DEFAULT_SYMBOL_SEEDS if symbol not in existing]
+        else:
+            missing = [symbol for symbol in DEFAULT_SYMBOL_SEEDS if not self.store.get(symbol)]
+        if missing:
+            self.store.upsert_many([seed_symbol(symbol) for symbol in missing])
+        self._seed_checked = True
+
+    def summary(self) -> Dict[str, object]:
+        self.ensure_seed()
+        max_age = self.max_age_hours()
+        counts = self.store.counts_by_market()
+        latest = self.store.latest_seen_by_market()
+        markets = []
+        for market in SUPPORTED_MARKETS:
+            last_seen = latest.get(market, "")
+            descriptor = self.source_gateway.source_descriptor(market)
+            markets.append({
+                "market": market,
+                "count": counts.get(market, 0),
+                "lastSeenAt": last_seen,
+                "stale": is_stale(last_seen, max_age),
+                "source": descriptor["source"],
+                "sourceUrl": descriptor["sourceUrl"],
+            })
+        payload = {
+            "markets": markets,
+            "sources": self.store.source_states(),
+            "maxAgeHours": max_age,
+            "total": sum(counts.values()),
+        }
+        if self.quote_cache:
+            payload["marketData"] = self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID)
+        return payload
+
+    def attach_market_data(self, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        if not self.quote_cache or not items:
+            return items
+        quotes = self.quote_cache.load_many("toss", MARKET_DATA_ACCOUNT_ID, [item.get("symbol") for item in items])
+        merged = []
+        for item in items:
+            symbol = str(item.get("symbol") or "").upper()
+            quote = quotes.get(symbol) or {}
+            next_item = dict(item)
+            if quote:
+                updated_at = quote.get("updatedAt") or ""
+                quote_age = age_minutes(updated_at)
+                max_age = self.market_data_max_age_minutes()
+                next_item["marketDataUpdatedAt"] = updated_at
+                next_item["marketDataAgeMinutes"] = quote_age
+                next_item["marketDataMaxAgeMinutes"] = max_age
+                next_item["marketDataStale"] = quote_age is None or quote_age > max_age
+                if next_item["marketDataStale"]:
+                    merged.append(next_item)
+                    continue
+                for key in [
+                    "currentPrice",
+                    "changeRate",
+                    "quoteSource",
+                    "quoteStatus",
+                    "quoteMessage",
+                    "dataQuality",
+                    "volume",
+                    "volumeRatio",
+                    "tradingValue",
+                    "ma5",
+                    "ma20",
+                    "ma60",
+                    "ma120",
+                    "ma200",
+                    "ma20Slope",
+                    "ma60Slope",
+                    "ma20Distance",
+                    "ma60Distance",
+                ]:
+                    if quote.get(key) not in (None, ""):
+                        next_item[key] = quote.get(key)
+            merged.append(next_item)
+        return merged
+
+    def search(self, query: str = "", market: str = "", limit: int = DEFAULT_SYMBOL_UNIVERSE_LIMIT, offset: int = 0) -> Dict[str, object]:
+        self.ensure_seed()
+        max_age = self.max_age_hours()
+        limit_value = max(1, min(500, int(limit or DEFAULT_SYMBOL_UNIVERSE_LIMIT)))
+        offset_value = max(0, int(offset or 0))
+        result_total = self.store.search_count(query=query, market=market)
+        items = self.store.search(query=query, market=market, limit=limit_value, offset=offset_value)
+        payload_items = [item.to_dict(max_age) for item in items]
+        return {
+            "items": self.attach_market_data(payload_items),
+            "summary": self.summary(),
+            "resultTotal": result_total,
+            "limit": limit_value,
+            "offset": offset_value,
+            "hasMore": offset_value + len(items) < result_total,
+        }
+
+    def suggest(self, query: str = "", market: str = "", limit: int = 8) -> Dict[str, object]:
+        self.ensure_seed()
+        max_age = self.max_age_hours()
+        limit_value = max(1, min(20, int(limit or 8)))
+        selected_market = str(market or "").strip()
+        seen = set()
+        items: List[ListedSymbol] = []
+
+        def add(item: ListedSymbol) -> None:
+            key = item.key() if item else ""
+            if not key or key in seen or len(items) >= limit_value:
+                return
+            seen.add(key)
+            items.append(item)
+
+        for symbol in symbol_search_symbol_candidates(query):
+            found = self.store.get(symbol, selected_market) if selected_market else self.store.get(symbol)
+            if found:
+                add(found)
+
+        for term in symbol_search_terms(query):
+            if len(items) >= limit_value:
+                break
+            for item in self.store.search(query=term, market=selected_market, limit=limit_value * 2, offset=0):
+                add(item)
+                if len(items) >= limit_value:
+                    break
+
+        return {
+            "items": [item.to_dict(max_age) for item in items],
+            "query": str(query or "").strip(),
+            "limit": limit_value,
+            "source": "symbol-universe-suggest",
+        }
+
+    def refresh(
+        self,
+        markets: Iterable[str] = None,
+        on_progress: Optional[Callable[[Dict[str, object]], None]] = None,
+    ) -> Dict[str, object]:
+        selected = [str(market or "").upper() for market in (markets or SUPPORTED_MARKETS)]
+        selected = [market for market in selected if market in SUPPORTED_MARKETS]
+        if not selected:
+            selected = list(SUPPORTED_MARKETS)
+        results: List[Dict[str, object]] = []
+
+        def report(market: str, stage: str, count: int = 0, error: str = "") -> None:
+            if not on_progress:
+                return
+            on_progress({
+                "market": market,
+                "stage": stage,
+                "count": max(0, int(count or 0)),
+                "error": str(error or "")[:300],
+            })
+
+        for market in selected:
+            descriptor = self.source_gateway.source_descriptor(market)
+            try:
+                report(market, "connecting")
+                report(market, "fetching")
+                items = self.source_gateway.fetch_market_symbols(market)
+                report(market, "saving", len(items))
+                if hasattr(self.store, "refresh_market"):
+                    count = self.store.refresh_market(market, descriptor["source"], descriptor["sourceUrl"], items)
+                else:
+                    count = self.store.upsert_many(items)
+                    self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "ok", count=count)
+                report(market, "verifying", count)
+                results.append({"market": market, "status": "ok", "count": count, **descriptor})
+            except Exception as error:  # noqa: BLE001 - one source failure must not discard cached symbols.
+                self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "error", error=str(error))
+                report(market, "failed", error=str(error))
+                results.append({"market": market, "status": "error", "count": 0, "error": str(error), **descriptor})
+        if selected:
+            report(selected[-1], "summarizing")
+        return {"results": results, "summary": self.summary()}
+
+    def enrich(self, symbol: str) -> Dict[str, object]:
+        self.ensure_seed()
+        item = self.store.get(symbol)
+        if item:
+            return item.to_dict(self.max_age_hours())
+        return seed_symbol(symbol).to_dict(self.max_age_hours())

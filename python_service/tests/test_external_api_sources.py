@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.notification_ai_gate_message import execution_telegram_message
+from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.external_api_sources import external_api_source_metadata
 from digital_twin.domain.investment_research import research_evidence_from_external_signals
@@ -35,12 +35,7 @@ from digital_twin.infrastructure.kis_market_signals import (
     stage_coverage,
 )
 from digital_twin.infrastructure.toss_snapshots import TossProvider, normalize_price_payload
-from digital_twin.infrastructure.us_macro_calendar_source import (
-    parse_bea_release_events,
-    parse_bls_release_events,
-    parse_fred_bls_release_events,
-    parse_fomc_meeting_events,
-)
+from digital_twin.modules.investment_calendar.infrastructure.us_macro_calendar_source import parse_bea_release_events, parse_bls_release_events, parse_fred_bls_release_events, parse_fomc_meeting_events
 
 
 class MemoryQuoteCache:

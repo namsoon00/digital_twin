@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
+from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_requested_event
 from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
 from digital_twin.domain.portfolio import AlertEvent

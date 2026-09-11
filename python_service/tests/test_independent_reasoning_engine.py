@@ -5,18 +5,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from digital_twin.application.independent_reasoning_engine import (
-    IndependentReasoningInputAssembler,
-    IndependentReasoningJobRunner,
-    ScopedTypeDBInferenceExecutor,
-    V2ReasoningEngine,
-    compact_projection_result,
-    projection_retry_policy,
-    reasoning_job_runtime_eligibility,
-)
-from digital_twin.application.investment_reasoning.decision_synthesis import (
-    V2GraphDecisionCandidateBuilder,
-)
+from digital_twin.modules.reasoning.application.independent_reasoning_engine import IndependentReasoningInputAssembler, IndependentReasoningJobRunner, ScopedTypeDBInferenceExecutor, V2ReasoningEngine, compact_projection_result, projection_retry_policy, reasoning_job_runtime_eligibility
+from digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis import V2GraphDecisionCandidateBuilder
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import (
     canonical_fact_change_contract,
@@ -369,13 +359,13 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         }}}
 
         with patch(
-            "digital_twin.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
+            "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
             return_value={"NVDA": relation},
         ), patch(
-            "digital_twin.application.investment_reasoning.decision_synthesis.decision_synthesis_from_relation_context",
+            "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.decision_synthesis_from_relation_context",
             return_value=synthesis,
         ), patch(
-            "digital_twin.application.investment_reasoning.decision_synthesis.build_investment_insight_events_by_snapshot",
+            "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.build_investment_insight_events_by_snapshot",
             side_effect=lambda _snapshots, events: list(events),
         ):
             first = builder.build(request, [snapshot], {}, projection)
@@ -732,7 +722,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         }
 
         with patch(
-            "digital_twin.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
+            "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
             return_value={"NVDA": relation},
         ):
             result = builder.build(request, [snapshot], {}, projection)
@@ -791,13 +781,13 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         }}}
 
         with patch(
-            "digital_twin.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
+            "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
             return_value={"000660": relation},
         ), patch(
-            "digital_twin.application.investment_reasoning.decision_synthesis.decision_synthesis_from_relation_context",
+            "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.decision_synthesis_from_relation_context",
             return_value=synthesis,
         ), patch(
-            "digital_twin.application.investment_reasoning.decision_synthesis.build_investment_insight_events_by_snapshot",
+            "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.build_investment_insight_events_by_snapshot",
             side_effect=lambda _snapshots, events: list(events),
         ):
             first = builder.build(request, [snapshot], {}, projection)
@@ -2703,7 +2693,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         )
         monotonic_values = iter([100.0, 131.0])
         with patch(
-            "digital_twin.application.independent_reasoning_engine.time.monotonic",
+            "digital_twin.modules.reasoning.application.independent_reasoning_engine.time.monotonic",
             side_effect=lambda: next(monotonic_values),
         ):
             runner.worker_liveness_loop(
@@ -2739,7 +2729,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         )
 
         with patch(
-            "digital_twin.application.independent_reasoning_engine.time.monotonic",
+            "digital_twin.modules.reasoning.application.independent_reasoning_engine.time.monotonic",
             side_effect=[100.0, 101.0],
         ):
             first = runner.recover_transient_failures("v2-active")

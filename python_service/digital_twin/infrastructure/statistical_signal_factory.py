@@ -2,7 +2,7 @@
 
 from typing import Dict
 
-from ..application.statistical_signals import StatisticalSignalPipelineService
+from digital_twin.modules.reasoning.public import StatisticalSignalPipelineService
 from ..domain.statistical_signals import (
     CAPITAL_FLOW_SHADOW_RELEASE_ID,
     DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,

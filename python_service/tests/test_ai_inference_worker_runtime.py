@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from digital_twin import service_manager
-from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
+from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.infrastructure.schedulers import AIInferenceQueueScheduler
 
 

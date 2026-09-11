@@ -13,7 +13,7 @@ from ..domain.events import (
 )
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
-from ..domain.model_review import ModelReviewJob
+from digital_twin.modules.model_registry.contracts import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
@@ -29,8 +29,8 @@ from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitoringCycleRecordResult
-from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
-from .model_review_queue import model_review_payloads_from_event
+from digital_twin.modules.instruments.contracts import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
+from digital_twin.modules.model_registry.infrastructure.model_review_queue import model_review_payloads_from_event
 from .mysql_monitoring import MySQLDependencyError, MySQLMonitorAccountJobStore, ensure_mysql_database_exists, mysql_settings
 from .operational_common import (
     MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
@@ -53,6 +53,10 @@ from .mysql_operational_helpers import (
     research_evidence_change_payload,
 )
 from .mysql_investment_domain import save_mandate_with_connection
+from digital_twin.modules.accounts.domain.account_patch import ACCOUNT_FIELDS
+from digital_twin.modules.accounts.infrastructure.account_identity import write_identity
+from digital_twin.modules.instruments.infrastructure.account_watchlist import mutate_watchlist, write_watchlist
+from digital_twin.modules.notifications.infrastructure.account_preferences import write_preferences
 
 
 class MySQLRuntimeSettingsStore(MySQLOperationalConnection):
@@ -103,7 +107,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
         return self.settings_map
 
     def account_from_row(self, row) -> AccountConfig:
-        watchlist = row["watchlist_symbols"] if row["watchlist_symbols"] else self.settings.get("watchlistSymbols", "")
+        watchlist = row["watchlist_symbols"] if row["watchlist_symbols"] is not None else self.settings.get("watchlistSymbols", "")
         return AccountConfig(
             account_id=row["id"],
             label=row["label"],
@@ -296,6 +300,35 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
         with self.transaction() as connection:
             self.upsert_with_connection(connection, account)
             insert_domain_event_with_connection(connection, event)
+
+    def patch_with_event(self, account: AccountConfig, fields, event: DomainEvent) -> None:
+        fields = set(fields)
+        if not fields.issubset(ACCOUNT_FIELDS):
+            raise ValueError("Unknown account patch fields")
+        stamp = event.occurred_at
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT id FROM service_accounts WHERE id = %s FOR UPDATE", (account.account_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Account was removed before the update")
+            write_identity(connection, account, fields, stamp)
+            write_preferences(connection, account, fields, stamp)
+            if "watchlistSymbols" in fields:
+                write_watchlist(connection, account.account_id, account.watchlist_symbols, stamp)
+            if "investmentStrategyProfile" in fields:
+                connection.execute(
+                    "UPDATE service_accounts SET investment_strategy_profile = %s WHERE id = %s",
+                    (account.investment_strategy_profile, account.account_id),
+                )
+                save_mandate_with_connection(connection, account.investment_mandate(stamp), stamp)
+            connection.execute("UPDATE service_accounts SET updated_at = %s WHERE id = %s", (stamp, account.account_id))
+            insert_domain_event_with_connection(connection, event)
+        account.updated_at = stamp
+
+    def mutate_watchlist(self, account_id, action, symbols):
+        with self.transaction() as connection:
+            return mutate_watchlist(connection, account_id, action, symbols, utc_now())
 
     def remove(self, account_id: str) -> bool:
         with self.transaction() as connection:

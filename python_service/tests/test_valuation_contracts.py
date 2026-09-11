@@ -13,7 +13,7 @@ from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontol
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_valuation_concepts import external_valuation_rows, valuation_values
 from digital_twin.domain.valuation_ai_proposals import ai_valuation_proposal_rows
-from digital_twin.application.notification_ai_gate_message import compact_valuation_detail_rows
+from digital_twin.modules.notifications.application.notification_ai_gate_message import compact_valuation_detail_rows
 from digital_twin.domain.valuation_contracts import (
     annual_eps_observation,
     fair_value_scenarios,

@@ -44,9 +44,9 @@ from .mysql_market_stores import (
 )
 from .mysql_market_time_series import MySQLMarketTimeSeriesStore
 from .mysql_statistical_signals import MySQLStatisticalModelSignalStore
-from .mysql_investment_calendar import MySQLInvestmentCalendarStore
+from digital_twin.modules.investment_calendar.infrastructure.mysql_investment_calendar import MySQLInvestmentCalendarStore
 from .mysql_reasoning_source_facts import MySQLReasoningSourceFactStore
-from .mysql_investment_calendar_candidates import MySQLInvestmentCalendarCandidateStore
+from digital_twin.modules.investment_calendar.infrastructure.mysql_investment_calendar_candidates import MySQLInvestmentCalendarCandidateStore
 from .mysql_investment_strategy_proposals import MySQLInvestmentStrategyProposalStore
 from .mysql_investment_decision_episodes import MySQLInvestmentDecisionEpisodeStore
 from .mysql_hypothesis_lifecycle import MySQLHypothesisLifecycleStore
@@ -67,6 +67,6 @@ from .mysql_versioned_runtime import (
     MySQLTimeSeriesBackendRegistryStore,
     MySQLTimeSeriesProjectionOutboxStore,
 )
-from .mysql_shared_instrument_inference import MySQLSharedInstrumentInferenceStore
+from digital_twin.modules.reasoning.infrastructure.mysql_shared_instrument_inference import MySQLSharedInstrumentInferenceStore
 from .mysql_runtime_checkpoints import MySQLRuntimeCheckpointStore
 from .external_api.mysql_stores import MySQLExternalDataStore

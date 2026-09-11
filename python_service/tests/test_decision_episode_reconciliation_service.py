@@ -1,8 +1,6 @@
 import unittest
 
-from digital_twin.application.decision_episode_reconciliation_service import (
-    DecisionEpisodeReconciliationService,
-)
+from digital_twin.modules.decisions.application.decision_episode_reconciliation_service import DecisionEpisodeReconciliationService
 from digital_twin.domain.notifications import NotificationJob
 
 

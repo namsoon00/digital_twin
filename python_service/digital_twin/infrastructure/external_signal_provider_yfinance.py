@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Tuple
 from ..domain.company_knowledge import optional_number
 from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
-from ..domain.symbol_universe import normalize_market
+from digital_twin.modules.instruments.contracts import normalize_market
 
 
 def json_safe_value(value):

@@ -2,13 +2,7 @@ import unittest
 import uuid
 from types import SimpleNamespace
 
-from digital_twin.application.time_series_platform import (
-    TemporalFeatureSnapshotService,
-    TimeSeriesBackendPlatformService,
-    TimeSeriesProjectionRunner,
-    VersionedMarketTimeSeriesStore,
-    backend_runtime_resolution,
-)
+from digital_twin.modules.market_data.application.time_series_platform import TemporalFeatureSnapshotService, TimeSeriesBackendPlatformService, TimeSeriesProjectionRunner, VersionedMarketTimeSeriesStore, backend_runtime_resolution
 from digital_twin.domain.time_series_storage import (
     TemporalFeatureSnapshot,
     TimeSeriesWatermark,

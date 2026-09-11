@@ -12,7 +12,7 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore, merge_derived_evidence_payload
-from digital_twin.news_intelligence.domain.article import article_source_revision
+from digital_twin.modules.news_intelligence.domain.article import article_source_revision
 from mysql_fixtures import (
     TestNotificationJobStore,
     TestResearchEvidenceStore,

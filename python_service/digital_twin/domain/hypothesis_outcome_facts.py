@@ -2,7 +2,7 @@
 
 from typing import Mapping
 
-from .hypothesis_outcome_evaluation import optional_number
+from digital_twin.modules.outcomes.contracts import optional_number
 
 
 FINANCIAL_METRICS = (

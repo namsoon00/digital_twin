@@ -5,11 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.investment_alert_coverage_service import (
-    InvestmentAlertCoverageNotificationEnqueuer,
-    InvestmentAlertCoverageService,
-)
-from digital_twin.application.ontology_diagnostics_service import OntologyDiagnosticsService
+from digital_twin.modules.decisions.application.investment_alert_coverage_service import InvestmentAlertCoverageNotificationEnqueuer, InvestmentAlertCoverageService
+from digital_twin.modules.read_models.application.ontology_diagnostics_service import OntologyDiagnosticsService
 from digital_twin.domain.message_types import INVESTMENT_ALERT_COVERAGE
 
 

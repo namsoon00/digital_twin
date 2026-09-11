@@ -13,7 +13,7 @@ from ..domain.events import (
 )
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
-from ..domain.model_review import ModelReviewJob
+from digital_twin.modules.model_registry.contracts import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
@@ -29,8 +29,8 @@ from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitoringCycleRecordResult
-from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
-from .model_review_queue import model_review_payloads_from_event
+from digital_twin.modules.instruments.contracts import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
+from digital_twin.modules.model_registry.infrastructure.model_review_queue import model_review_payloads_from_event
 from .mysql_monitoring import MySQLDependencyError, MySQLMonitorAccountJobStore, ensure_mysql_database_exists, mysql_settings
 from .operational_common import (
     MAX_NOTIFICATION_DELIVERY_ATTEMPTS,

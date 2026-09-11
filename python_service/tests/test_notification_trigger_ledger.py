@@ -8,10 +8,7 @@ from digital_twin.domain.notification_rule_models import (
     NotificationRuleConfig,
 )
 from digital_twin.domain.notifications import NotificationJob
-from digital_twin.application.notification.admission import (
-    NotificationAdmissionPolicy,
-    _relation_trigger_provenance,
-)
+from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy, _relation_trigger_provenance
 from digital_twin.domain.notification_rules import default_notification_rule
 
 

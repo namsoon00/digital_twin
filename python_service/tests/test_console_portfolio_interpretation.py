@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from digital_twin.application.console_read_model_service import ConsoleReadModelService
+from digital_twin.modules.read_models.application.console_read_model_service import ConsoleReadModelService
 from digital_twin.domain.investment_reasoning import DecisionSynthesis, FactDelta, SubjectDecisionCase
 
 

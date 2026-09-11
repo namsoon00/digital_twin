@@ -24,32 +24,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List
 
-from ..application.account_service import AccountApplicationService
-from ..application.account_watchlist_service import AccountWatchlistService
-from ..application.console_read_model_service import ConsoleReadModelService
-from ..application.capital_flow_service import CapitalFlowService
-from ..application.external_data.configuration_recovery_service import (
-    ExternalDataConfigurationRecoveryService,
-    sec_metadata_access_ready,
-)
-from ..application.notification_ai_gate_message import (
-    compact_invalidation_line,
-    compact_next_action_line,
-    decision_transition_presentation,
-    execution_headline,
-)
-from ..application.notification.rendering import NotificationRenderingService
-from ..application.notification_replay_service import NotificationReplayService
-from ..application.notification_feedback_service import NotificationFeedbackService
-from ..application.investment_case_query_service import InvestmentCaseQueryService
-from ..application.investment_flow_query_service import InvestmentFlowQueryService
-from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
-from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
-from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
+from digital_twin.modules.accounts.public import AccountApplicationService
+from digital_twin.modules.instruments.public import AccountWatchlistService
+from digital_twin.modules.read_models.public import ConsoleReadModelService
+from digital_twin.modules.market_data.public import CapitalFlowService
+from digital_twin.modules.market_data.public import ExternalDataConfigurationRecoveryService, sec_metadata_access_ready
+from digital_twin.modules.notifications.public import compact_invalidation_line, compact_next_action_line, decision_transition_presentation, execution_headline
+from digital_twin.modules.notifications.public import NotificationRenderingService
+from digital_twin.modules.notifications.public import NotificationReplayService
+from digital_twin.modules.notifications.public import NotificationFeedbackService
+from digital_twin.modules.read_models.public import InvestmentCaseQueryService
+from digital_twin.modules.read_models.public import InvestmentFlowQueryService
+from digital_twin.modules.read_models.public import OntologyCatalogQueryService
+from digital_twin.modules.read_models.public import OntologyDiagnosticsService
+from digital_twin.modules.news_intelligence.public import ResearchEvidenceGovernanceService
 from ..domain.accounts import split_symbols
-from ..domain.instrument_timeline import InstrumentTimelineQuery
+from digital_twin.modules.read_models.contracts import InstrumentTimelineQuery
 from ..domain.instrument_valuation import InstrumentValuationQuery
-from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, SUPPORTED_MARKETS, seed_symbol
+from digital_twin.modules.instruments.public import DEFAULT_SYMBOL_SEEDS, SUPPORTED_MARKETS, seed_symbol
 from ..domain.events import (
     APP_ITEM_REMOVED,
     APP_ITEM_UPDATED,
@@ -112,13 +104,13 @@ from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
-from ..domain.symbol_universe import symbol_search_symbol_candidates
-from ..news_intelligence.application.analyze_article import evidence_eligibility
+from digital_twin.modules.instruments.contracts import symbol_search_symbol_candidates
+from digital_twin.modules.news_intelligence.public import evidence_eligibility
 from ..infrastructure.event_bus import EventBus, JsonEventLog, default_event_bus
 from ..infrastructure.api_performance import ApiPerformanceRegistry
 from ..infrastructure.external_signal_utils import ExternalCircuitOpen, ExternalRateLimited, external_call_target, guarded_external_call
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
-from ..infrastructure.model_reviewer import codex_cli_arguments
+from digital_twin.modules.model_registry.infrastructure.model_reviewer import codex_cli_arguments
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from ..infrastructure.runtime_identity import runtime_identity
@@ -175,7 +167,7 @@ from ..infrastructure.share_runtime import (
     fixed_entry_url,
     request_share_tunnel_rotation,
 )
-from ..infrastructure.flow_lens_read_model import FlowLensReadModel
+from digital_twin.modules.read_models.infrastructure.flow_lens_read_model import FlowLensReadModel
 from ..infrastructure.settings import ROOT_DIR, read_json, runtime_settings, save_runtime_settings, write_private_json
 from ..infrastructure.toss_snapshots import build_snapshot
 
@@ -3550,7 +3542,7 @@ def notification_job_public_payload(
     )
     customer_text = str(job.text or "")
     if context.get("_notificationListProjection"):
-        from ..application.notification.presentation import present_notification
+        from digital_twin.modules.notifications.public import present_notification
 
         customer_text = present_notification(job.message_type, context, customer_text)
     elif job.message_type == INVESTMENT_INSIGHT:
@@ -3644,8 +3636,8 @@ def notification_job_public_payload(
         else "historical-failure" if job.status == "failed"
         else "not-actionable"
     )
-    from ..domain.notification.presentation import presentation_metadata
-    from ..application.notification.presentation import notification_heading
+    from digital_twin.modules.notifications.contracts import presentation_metadata
+    from digital_twin.modules.notifications.public import notification_heading
 
     presentation = presentation_metadata(job.message_type, context)
     payload = {
@@ -4057,7 +4049,7 @@ def _notification_detail_section_payload(
     if section == "ai-review":
         ai = dict(reasoning.get("aiExecution") or {})
         if not include_sensitive:
-            from ..application.notification.query import redact_notification_trace_data
+            from digital_twin.modules.notifications.public import redact_notification_trace_data
 
             ai = dict(redact_notification_trace_data(ai) or {})
             ai.pop("prompt", None)
@@ -4131,7 +4123,7 @@ def notification_job_detail_payload(
             "receiptUpdatedAt": str(receipt.get("receiptUpdatedAt") or ""),
         })
     try:
-        from ..application.notification.query import NotificationTraceQueryService
+        from digital_twin.modules.notifications.public import NotificationTraceQueryService
 
         source_event = {}
         if job.source_event_id and normalized_section in {"reasoning", "delivery"}:

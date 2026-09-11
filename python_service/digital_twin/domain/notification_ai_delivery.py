@@ -17,11 +17,7 @@ from .hypothesis_lifecycle import (
 from .investment_decision_actionability import investment_decision_actionability
 from .investment_reasoning.decision_delta import DecisionDelta
 from .investment_reasoning.disposition import reasoning_disposition_delivery
-from .notification.delivery_policy import (
-    DeliveryPolicyContext,
-    FINAL_AI_DELIVERY_POLICY_VERSION,
-    evaluate_final_decision_delivery,
-)
+from digital_twin.modules.notifications.contracts import DeliveryPolicyContext, FINAL_AI_DELIVERY_POLICY_VERSION, evaluate_final_decision_delivery
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 

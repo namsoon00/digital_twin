@@ -15,7 +15,7 @@ from ..domain.portfolio_calculations import (
 )
 from ..domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import dart_document_text, parse_iso, symbol_assignments, symbol_list
-from .opendart_calendar_source import OPENDART_CORP_CODE_URL, opendart_error_response, parse_opendart_corp_codes
+from digital_twin.modules.investment_calendar.infrastructure.opendart_calendar_source import OPENDART_CORP_CODE_URL, opendart_error_response, parse_opendart_corp_codes
 
 
 class ExternalSignalMarketMixin:

@@ -6,24 +6,12 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from digital_twin.application.external_data.collection_service import ExternalDataCollectionService
-from digital_twin.application.external_data.configuration_recovery_service import (
-    ExternalDataConfigurationRecoveryService,
-)
-from digital_twin.application.external_data.contracts import (
-    CollectionJob,
-    CollectionPartition,
-    DatasetDescriptor,
-    ExternalSubject,
-    FollowupCollectionRequest,
-    SourceObservation,
-)
-from digital_twin.application.external_data.fact_transition_service import ExternalFactTransitionService
-from digital_twin.application.external_data.read_model_service import (
-    ExternalSignalsReadModelService,
-    merge_external_signal_read_models,
-)
-from digital_twin.application.external_data.registry import ExternalDatasetRegistry
+from digital_twin.modules.market_data.application.external_data.collection_service import ExternalDataCollectionService
+from digital_twin.modules.market_data.application.external_data.configuration_recovery_service import ExternalDataConfigurationRecoveryService
+from digital_twin.modules.market_data.application.external_data.contracts import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest, SourceObservation
+from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService
+from digital_twin.modules.market_data.application.external_data.read_model_service import ExternalSignalsReadModelService, merge_external_signal_read_models
+from digital_twin.modules.market_data.application.external_data.registry import ExternalDatasetRegistry
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.knowledge_world_projection import build_knowledge_world_graph
 from digital_twin.domain.market_world_projection import build_market_world_graph

@@ -1,6 +1,6 @@
 import unittest
 
-from digital_twin.application.market_data_collection_service import MarketDataCollectionRunner
+from digital_twin.modules.market_data.application.market_data_collection_service import MarketDataCollectionRunner
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.position_identity import position_with_symbol_identity, preferred_instrument_name
 

@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, List
 
-from ....application.external_data.contracts import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
+from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
 from .base import empty_signals, global_partition, legacy_provider, observation, require_payload, source_as_of
 
 

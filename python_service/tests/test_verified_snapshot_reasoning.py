@@ -7,11 +7,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
-from digital_twin.application.ontology_reasoning_service import (
-    OntologyReasoningRunner,
-    reasoning_request_provenance,
-)
+from digital_twin.modules.market_data.application.kis_realtime_service import KISRealtimeWebSocketRunner
+from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner, reasoning_request_provenance
 from digital_twin.domain.events import (
     MAX_REASONING_SOURCE_FACTS_PER_EVENT,
     DomainEvent,

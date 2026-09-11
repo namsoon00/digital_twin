@@ -1,17 +1,17 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from digital_twin.application.investment_calendar_service import InvestmentCalendarService
-from digital_twin.application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
-from digital_twin.application.official_calendar_sync_service import OfficialCalendarSyncService
+from digital_twin.modules.investment_calendar.application.investment_calendar_service import InvestmentCalendarService
+from digital_twin.modules.investment_calendar.application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
+from digital_twin.modules.investment_calendar.application.official_calendar_sync_service import OfficialCalendarSyncService
 from digital_twin.domain.events import (
     ONTOLOGY_REASONING_REQUESTED,
     DomainEvent,
     ontology_reasoning_requested_event,
 )
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
-from digital_twin.domain.investment_calendar import InvestmentCalendarEvent
-from digital_twin.domain.official_calendar import OfficialCalendarEvent
+from digital_twin.modules.investment_calendar.domain.investment_calendar import InvestmentCalendarEvent
+from digital_twin.modules.investment_calendar.domain.official_calendar import OfficialCalendarEvent
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology

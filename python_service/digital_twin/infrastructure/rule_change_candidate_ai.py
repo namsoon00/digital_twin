@@ -2,11 +2,7 @@ import os
 from typing import Dict, List
 
 from ..domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, rule_change_candidates_from_text
-from .model_reviewer import (
-    background_codex_process_arguments,
-    codex_model_label,
-    run_background_ai_prompt,
-)
+from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, codex_model_label, run_background_ai_prompt
 from .settings import runtime_settings
 
 

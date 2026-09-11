@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from digital_twin.application.independent_reasoning_engine import ScopedTypeDBInferenceExecutor
+from digital_twin.modules.reasoning.application.independent_reasoning_engine import ScopedTypeDBInferenceExecutor
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
 from digital_twin.domain.ontology_contracts import (

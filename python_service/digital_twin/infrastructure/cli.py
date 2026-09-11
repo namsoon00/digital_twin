@@ -9,18 +9,16 @@ import time
 from pathlib import Path
 from typing import Dict, List, Mapping
 
-from ..application.account_service import AccountApplicationService
-from ..application.external_data.configuration_recovery_service import (
-    ExternalDataConfigurationRecoveryService,
-)
+from digital_twin.modules.accounts.public import AccountApplicationService
+from digital_twin.modules.market_data.public import ExternalDataConfigurationRecoveryService
 from ..application.mysql_minimal_retention_service import MySQLMinimalRetentionService
-from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
+from digital_twin.modules.news_intelligence.public import ResearchEvidenceGovernanceService
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.mysql_minimal_retention import mysql_minimal_retention_policy
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_templates import template_variables, text_context
 from ..domain.portfolio import AlertEvent
-from ..news_intelligence.application.revalidate_articles import RevalidateNewsIntelligenceService
+from digital_twin.modules.news_intelligence.public import RevalidateNewsIntelligenceService
 from .admin_preview import write_admin_preview
 from .event_bus import default_event_bus
 from . import operational_store as stores

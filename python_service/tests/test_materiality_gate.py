@@ -8,14 +8,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.news_collection_service import NewsCollectionRunner
-from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
-from digital_twin.application.news_ai_analysis_service import NewsAiAnalysisService
-from digital_twin.application.ontology_reasoning_service import (
-    OntologyReasoningRunner,
-    event_order_key,
-    event_review_level,
-)
+from digital_twin.modules.news_intelligence.application.news_collection_service import NewsCollectionRunner
+from digital_twin.modules.market_data.application.kis_realtime_service import KISRealtimeWebSocketRunner
+from digital_twin.modules.news_intelligence.application.news_ai_analysis_service import NewsAiAnalysisService
+from digital_twin.modules.reasoning.application.ontology_reasoning_service import OntologyReasoningRunner, event_order_key, event_review_level
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, NEWS_ARTICLE_ANALYZED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, ontology_reasoning_requested_event
 from digital_twin.domain.fact_changes import market_fact_change

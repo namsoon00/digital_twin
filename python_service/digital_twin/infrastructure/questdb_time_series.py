@@ -10,12 +10,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping
 
-from ..domain.capital_flow import (
-    boolean_value,
-    merge_capital_flow_rows,
-    observation_from_row,
-    observed_fields_from_coverage,
-)
+from digital_twin.modules.market_data.contracts import boolean_value, merge_capital_flow_rows, observation_from_row, observed_fields_from_coverage
 from ..domain.market_time_series import (
     completed_daily_rows,
     granularity_preferences,

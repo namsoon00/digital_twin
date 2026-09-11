@@ -2,15 +2,7 @@ import hashlib
 import urllib.parse
 from typing import Callable, Dict, Iterable, List
 
-from ....application.external_data.contracts import (
-    CollectionJob,
-    CollectionPartition,
-    DatasetDescriptor,
-    ExternalSubject,
-    FollowupCollectionRequest,
-    SourceObservation,
-    bounded_int,
-)
+from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest, SourceObservation, bounded_int
 from ....domain.disclosure_quality import assess_disclosure_document
 from ....domain.disclosure_taxonomy import classify_disclosure
 from ...external_signal_utils import (

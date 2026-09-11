@@ -2,12 +2,7 @@ import hashlib
 import json
 from typing import Dict, Iterable, List
 
-from ....application.external_data.contracts import (
-    CollectionPartition,
-    DatasetDescriptor,
-    ExternalSubject,
-    SourceObservation,
-)
+from digital_twin.modules.market_data.public import CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
 from ....domain.portfolio import Position, utc_now_iso
 from ...external_signals import ExternalSignalProvider
 

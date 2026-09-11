@@ -4,10 +4,10 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
-from ..news_intelligence.domain.article_quality import inspect_article_body
-from ..news_intelligence.domain.entity import COMPANY_ALIASES
-from ..news_intelligence.domain.entity_resolution import alias_pattern, resolve_target_entity
-from ..news_intelligence.domain.version import NEWS_INTELLIGENCE_VERSION
+from digital_twin.modules.news_intelligence.contracts import inspect_article_body
+from digital_twin.modules.news_intelligence.contracts import COMPANY_ALIASES
+from digital_twin.modules.news_intelligence.contracts import alias_pattern, resolve_target_entity
+from digital_twin.modules.news_intelligence.contracts import NEWS_INTELLIGENCE_VERSION
 
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v8-entity-roles"

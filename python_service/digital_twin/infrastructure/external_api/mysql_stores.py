@@ -4,13 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
-from ...application.external_data.contracts import (
-    CollectionJob,
-    CollectionPartition,
-    DatasetDescriptor,
-    ExternalSubject,
-    SourceObservation,
-)
+from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
 from ...domain.events import (
     DomainEvent,
     external_provider_health_changed_event,

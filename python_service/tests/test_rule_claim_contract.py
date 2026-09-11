@@ -9,7 +9,7 @@ from digital_twin.domain.rule_claim_contract import (
     rule_claim_coverage,
 )
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
-from digital_twin.domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
 from digital_twin.domain.hypothesis_outcome_facts import freeze_outcome_baseline, premise_observation_facts
 from digital_twin.domain.rule_claim_contract import predictive_outcome_contract
 from digital_twin.domain.hypothesis_calibration_identity import claim_validation_fingerprint

@@ -122,7 +122,7 @@ class ExternalSignalCoreMixin:
         entry = self.cache_entry(cached, cache_key)
         cache_fresh = self.is_cache_fresh(entry)
         if getattr(self, "external_data_read_model", None):
-            from ..application.external_data.read_model_service import merge_external_signal_read_models
+            from digital_twin.modules.market_data.public import merge_external_signal_read_models
 
             platform_signals = self.external_data_read_model.signals_for_subjects([
                 str(getattr(position, "symbol", "") or "").upper().strip()

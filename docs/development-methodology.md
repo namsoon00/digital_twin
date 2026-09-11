@@ -8,6 +8,12 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Keep use-case orchestration in `application/`.
 - Keep database, files, HTTP APIs, external vendors, process management, and runtime composition in `infrastructure/`.
 - Use domain events as contracts between feature slices.
+- Organize business implementations under the twelve packages in
+  `digital_twin/modules/`; see [Business Module Architecture](module-architecture.md).
+  Call another module through its explicit `public.py` or `contracts.py` only.
+  Keep immediate reads and transactional edits synchronous; use durable events
+  and existing jobs for slow, independently retryable follow-up work. Module
+  boundaries do not imply asynchronous APIs or separate worker processes.
 - Give every executable RuleBox rule exactly one persisted `RuleClaimContract`.
   Predictive rules own a falsifiable `MarketHypothesisClaim` with an authored
   outcome contract. Policy, execution, data-quality and context rules own
@@ -103,7 +109,8 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   rewrite a legacy decision with current engine metadata to make it appear
   exactly replayable.
 - Do not pass API keys, Telegram tokens, client secrets, or raw account credentials through events, docs, tests, or git-tracked files.
-- Keep old top-level Python modules only as compatibility re-export modules. New code should import from the layer package directly.
+- Keep old top-level Python modules only as compatibility re-export modules.
+  New business code imports its own layer or another module's public contract.
 - Build investment-analysis features ontology-first. New investment facts, relationships, semantic rules, AI context, and notification triggers must enter the TBox/ABox/direct-TypeQL/InferenceBox flow before they influence user-facing investment judgement.
 - Run `npm test` before handoff, then commit and push to `origin/main` unless explicitly told not to.
 - After commit and push, restart project-managed local runtime processes with `npm run python:service:restart`, then confirm with `npm run python:service:status`. Also restart any web, preview, share, or watcher process that the current Codex session started. Do not kill unrelated or user-started processes that cannot be safely identified; report any process that could not be restarted.
@@ -228,9 +235,9 @@ Anti-patterns to avoid:
 Domain:
 
 - `python_service/digital_twin/domain/accounts.py`: account entity/value data
-- `python_service/digital_twin/domain/account_identity.py`: brokerage account identity, credential references, watchlist universe, and delivery-profile separation
+- `python_service/digital_twin/modules/accounts/domain/account_identity.py`: brokerage account identity, credential references, watchlist universe, and delivery-profile separation
 - `python_service/digital_twin/domain/investment_mandate.py`: versioned investment policy, loss/cash/exposure limits, and allowed actions
-- `python_service/digital_twin/domain/portfolio_ledger.py`: immutable ledger entries, FIFO lots, cash, cost basis, and idempotent position reconstruction
+- `python_service/digital_twin/modules/portfolio/domain/portfolio_ledger.py`: immutable ledger entries, FIFO lots, cash, cost basis, and idempotent position reconstruction
 - `python_service/digital_twin/domain/portfolio_analytics.py`: stored-history portfolio return, volatility, drawdown, correlation, benchmark beta, and policy-delta calculations
 - `python_service/digital_twin/domain/risk_exposure.py`: raw exposure snapshots and policy deltas consumed by TypeDB
 - `python_service/digital_twin/domain/portfolio_rebalancing.py`: allocation bands, drift, and review-only rebalance proposals
@@ -238,7 +245,7 @@ Domain:
 - `python_service/digital_twin/domain/investment_outcomes.py`: performance attribution and decision review contracts
 - `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
 - `python_service/digital_twin/domain/investment_brain.py`: investment questions, research plans, competing hypotheses, decision episodes, observed outcomes, and governed learning proposals
-- `python_service/digital_twin/domain/decision_continuity.py`: bounded prior-decision, follow-up, account-action, execution, and outcome memory contract
+- `python_service/digital_twin/modules/decisions/domain/decision_continuity.py`: bounded prior-decision, follow-up, account-action, execution, and outcome memory contract
 - `python_service/digital_twin/domain/investment_evidence_governance.py`: evidence claims, entity resolution, freshness/source quality verification, and research-run audit contracts
 - `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
 - `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
@@ -270,24 +277,24 @@ Domain:
 - `python_service/digital_twin/domain/monitoring.py`: realtime monitoring orchestration rules and cadence filtering
 - `python_service/digital_twin/domain/strategy_alerts.py`: compatibility alert helpers that must not create standalone investment judgement
 - `python_service/digital_twin/domain/external_signal_alerts.py`: external market, crypto, macro, DART, and data-connection alert rules
-- `python_service/digital_twin/domain/model_review.py`: model-change explanation, data validation, and improvement hints for alert messages
+- `python_service/digital_twin/modules/model_registry/domain/model_review.py`: model-change explanation, data validation, and improvement hints for alert messages
 - `python_service/digital_twin/domain/events.py`: event names and event payload factories
 - `python_service/digital_twin/domain/repositories.py`: application-facing ports
 - `python_service/digital_twin/domain/parsing.py`: pure parsing helpers shared by domain rules
 
 Application:
 
-- `python_service/digital_twin/application/account_service.py`: account-management use cases
-- `python_service/digital_twin/application/investment_domain_service.py`: mandate, ledger, rebalance, action-plan, execution, and outcome lifecycle use cases
-- `python_service/digital_twin/application/flow_lens_service.py`: flow-lens snapshot use case with injected account, snapshot, settings, FX, and symbol dependencies
-- `python_service/digital_twin/application/monitoring_service.py`: one monitoring cycle use case
-- `python_service/digital_twin/application/notification/`: version-neutral notification ingress, admission, dispatch eligibility, rendering, channel dispatch, quality policy, lifecycle trace query, and queue workflow
-- `python_service/digital_twin/application/notification_service.py`: compatibility facade for legacy notification-worker imports only
+- `python_service/digital_twin/modules/accounts/application/account_service.py`: account-management use cases
+- `python_service/digital_twin/modules/portfolio/application/investment_domain_service.py`: mandate, ledger, rebalance, action-plan, execution, and outcome lifecycle use cases
+- `python_service/digital_twin/modules/read_models/application/flow_lens_service.py`: flow-lens snapshot use case with injected account, snapshot, settings, FX, and symbol dependencies
+- `python_service/digital_twin/modules/market_data/application/monitoring_service.py`: one monitoring cycle use case
+- `python_service/digital_twin/modules/notifications/application/notification/`: version-neutral notification ingress, admission, dispatch eligibility, rendering, channel dispatch, quality policy, lifecycle trace query, and queue workflow
+- `python_service/digital_twin/modules/notifications/application/notification_service.py`: compatibility facade for legacy notification-worker imports only
 - `python_service/digital_twin/application/scheduler.py`: long-running scheduling loop around a runner
-- `python_service/digital_twin/application/investment_research_orchestration_service.py`: cache-first bounded hypothesis research, verified-evidence persistence, and re-reasoning request orchestration
+- `python_service/digital_twin/modules/news_intelligence/application/investment_research_orchestration_service.py`: cache-first bounded hypothesis research, verified-evidence persistence, and re-reasoning request orchestration
 - `python_service/digital_twin/domain/hypothesis_development.py`: novel-hypothesis development lifecycle, lineage, validation gates, decision-impact classification, and deployment state
-- `python_service/digital_twin/application/hypothesis_proposal_service.py`: evidence-bound novel hypothesis proposals that automatically enter the governed development pipeline
-- `python_service/digital_twin/application/hypothesis_development_service.py`: automatic causal screening, disabled RuleBox candidate compilation, TypeDB preview, historical and post-proposal validation, and explicit deployment approval orchestration
+- `python_service/digital_twin/modules/model_registry/application/hypothesis_proposal_service.py`: evidence-bound novel hypothesis proposals that automatically enter the governed development pipeline
+- `python_service/digital_twin/modules/model_registry/application/hypothesis_development_service.py`: automatic causal screening, disabled RuleBox candidate compilation, TypeDB preview, historical and post-proposal validation, and explicit deployment approval orchestration
 
 Infrastructure:
 
@@ -298,14 +305,14 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/mysql_investment_domain.py`: versioned mandate, append-only ledger, rebalance, action-plan, execution, fill, review, and lifecycle-trace persistence
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
-- `python_service/digital_twin/application/independent_reasoning_engine.py`: independent versioned reasoning input assembly, scoped graph execution, candidate construction, and leased job orchestration
-- `python_service/digital_twin/application/ai_inference_queue_service.py`: immutable notification AI request handoff, leased MAX inference, validation, and result publication
-- `python_service/digital_twin/application/decision_continuity_service.py`: indexed prior-decision continuity assembler used before AI queue capture
-- `python_service/digital_twin/infrastructure/notification/`: durable queue ingress adapters and concrete console/Telegram channel transports
+- `python_service/digital_twin/modules/reasoning/application/independent_reasoning_engine.py`: independent versioned reasoning input assembly, scoped graph execution, candidate construction, and leased job orchestration
+- `python_service/digital_twin/modules/decisions/application/ai_inference_queue_service.py`: immutable notification AI request handoff, leased MAX inference, validation, and result publication
+- `python_service/digital_twin/modules/decisions/application/decision_continuity_service.py`: indexed prior-decision continuity assembler used before AI queue capture
+- `python_service/digital_twin/modules/notifications/infrastructure/notification/`: durable queue ingress adapters and concrete console/Telegram channel transports
 - `python_service/digital_twin/infrastructure/notifications.py`: compatibility facade for legacy notification-infrastructure imports only
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with operational event-log default
-- `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
-- `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
+- `python_service/digital_twin/modules/model_registry/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
+- `python_service/digital_twin/modules/model_registry/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/mysql_ai_inference_queue.py`: subject single-flight AI request/result outbox with semantic coalescing, material-change replacement, leases, heartbeat, retries, and atomic notification release
 - `python_service/digital_twin/infrastructure/investment_research_gateway.py`: hypothesis-scoped composite gateway over existing official/market APIs and full-text news research
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
@@ -345,6 +352,7 @@ Current events:
 
 - `account.saved`
 - `account.removed`
+- `account.watchlist_changed` (owned by `modules/instruments/contracts.py`)
 - `monitoring.snapshot_collected`
 - `monitoring.alerts_detected`
 - `monitoring.cycle_completed`
@@ -360,7 +368,18 @@ Current events:
 - `investment.decision_reviewed`
 - `investment.performance_attributed`
 
-Events are persisted locally to the append-only `domain_events` table through the configured operational event-log adapter. Rebuild projections by replaying that event stream where practical instead of coupling features to mutable state tables. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
+Events are persisted locally to the append-only `domain_events` table through
+the configured operational event-log adapter. The default synchronous bus
+records before dispatch: event persistence failure must propagate before any
+consumer runs. Handler failures remain isolated by default. A transaction that
+has already recorded its event uses `dispatch_recorded` after commit.
+
+Rebuild projections by replaying recorded events where practical. Independent
+follow-up work uses events and durable queues; an immediate result may use an
+injected synchronous public interface. Do not force reads or small edits into
+eventual consistency. An in-memory subscriber is not a durable consumer; its
+recovery cursor, deduplication, retry and account/source identity must be
+specified separately when reliable background execution is required.
 
 `monitoring.alerts_detected` now carries investment notifications only as graph-backed `investmentInsight` events. Legacy investment alert types such as `monitorDecisionChange`, `modelBuy`, and `externalCryptoMove` are not valid realtime investment dispatch inputs. The model-review queue may read legacy-shaped historical jobs for compatibility, but new realtime investment judgement must originate from graph inference. Realtime monitoring and notification delivery workers must never wait for LLM/Codex output. AI-gated investment notifications transition to `awaiting_ai`, run through the dedicated leased AI inference queue, and return to the delivery outbox only after the latest result passes the ontology/action-envelope validator. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
 
@@ -368,18 +387,19 @@ Ontology projection is a read-model boundary, not the source of truth. Aggregate
 
 ## Parallel Development Slices
 
-Use these slices when multiple chat windows work independently:
+Use the twelve ownership packages and sync/async table in
+[Business Module Architecture](module-architecture.md) when multiple sessions
+work independently. Shared ontology contracts and runtime composition still
+need coordination; moving an application service does not isolate every shared
+table or adapter it uses.
 
-- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/operational_store.py`, and account store adapters
-- Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `application/scheduler.py`, `infrastructure/operational_store.py`, and monitor store adapters
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/notification_signal_classification.py`, `application/notification_service.py`, `infrastructure/notifications.py`, `infrastructure/operational_store.py`, and notification store adapters
-- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, `infrastructure/operational_store.py`, and symbol store adapters
-- Providers/data collection: `infrastructure/toss_snapshots.py`
-- Market state and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/ontology_decision_state.py`, and future model-lab application services
-- Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/operational_store.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`, and model-review store adapters
-- Runtime/configuration: `infrastructure/settings.py`, `infrastructure/service_factory.py`, `service_manager.py`
-
-When a change touches more than one slice, keep the cross-slice contract in `domain/events.py` or `domain/repositories.py` and keep each implementation inside its own layer. If one use case must update several context stores atomically, use an explicit recorder or unit-of-work implementation in `infrastructure/` instead of putting cross-context writes into a single context repository.
+Put new owner-specific event definitions and ports inside the module and expose
+the required contract explicitly. Existing shared contracts remain in
+`domain/events.py` and `domain/repositories.py` while callers migrate. If one
+use case must update several stores atomically, use an explicit transaction
+recorder in `infrastructure/`, delegating writes to owner-specific helpers.
+Do not replace an entire account just to change a notification preference or
+watchlist. Do not add cross-module private imports or circular public imports.
 
 ## Testing Expectations
 

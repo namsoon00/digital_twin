@@ -3,10 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from digital_twin.application.external_data.research_evidence_projection_service import (
-    ExternalFactResearchEvidenceReconciler,
-    ExternalOfficialEvidenceProjectionService,
-)
+from digital_twin.modules.market_data.application.external_data.research_evidence_projection_service import ExternalFactResearchEvidenceReconciler, ExternalOfficialEvidenceProjectionService
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult
 from digital_twin.domain.disclosure_quality import disclosure_reasoning_eligibility
 from digital_twin.domain.events import EXTERNAL_FACT_CHANGED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent

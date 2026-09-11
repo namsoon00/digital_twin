@@ -1,5 +1,5 @@
-from .mysql_model_review_jobs import MySQLModelReviewJobStore
+from digital_twin.modules.model_registry.infrastructure.mysql_model_review_jobs import MySQLModelReviewJobStore
 from .mysql_market_quotes import MySQLMarketQuoteCache
-from .mysql_symbol_universe import MySQLSymbolUniverseStore
+from digital_twin.modules.instruments.infrastructure.mysql_symbol_universe import MySQLSymbolUniverseStore
 from .mysql_research_evidence import MySQLResearchEvidenceStore
 from .mysql_ontology_quality import MySQLOntologyQualitySampleStore

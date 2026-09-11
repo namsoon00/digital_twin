@@ -7,8 +7,8 @@ from typing import Dict, Iterable, List, Tuple
 from .investment_research import NewsCollectionTarget, ResearchEvidence
 from .prompt_evidence_admission import attach_prompt_evidence_admission
 from . import news_analysis as news_domain
-from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
-from ..news_intelligence.domain.article import authoritative_event_takeaway
+from digital_twin.modules.news_intelligence.public import annotate_evidence_eligibility
+from digital_twin.modules.news_intelligence.contracts import authoritative_event_takeaway
 
 
 NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v16-grounded-event-summary"

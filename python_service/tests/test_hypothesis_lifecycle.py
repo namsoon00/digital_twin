@@ -7,8 +7,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.hypothesis_lifecycle_service import HypothesisLifecycleService
-from digital_twin.application.investment_brain_service import InvestmentBrainService
+from digital_twin.modules.outcomes.application.hypothesis_lifecycle_service import HypothesisLifecycleService
+from digital_twin.modules.decisions.application.investment_brain_service import InvestmentBrainService
 from digital_twin.domain.hypothesis_lifecycle import (
     HypothesisLifecycleSnapshot,
     lifecycle_snapshots_from_relation_context,
@@ -457,7 +457,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
         service = HypothesisLifecycleService(store)
         first_snapshot = account_snapshot("generation-1")
         with mock.patch(
-            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            "digital_twin.modules.outcomes.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
             return_value={"AAPL": relation_context("generation-1")},
         ):
             first_result = service.observe_snapshot(first_snapshot)
@@ -466,7 +466,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
 
         missing_targets_snapshot = account_snapshot("generation-2", targets=[])
         with mock.patch(
-            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            "digital_twin.modules.outcomes.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
             return_value={},
         ):
             missing_targets_result = service.observe_snapshot(missing_targets_snapshot)
@@ -475,7 +475,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
 
         covered_snapshot = account_snapshot("generation-3", targets=["AAPL"])
         with mock.patch(
-            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            "digital_twin.modules.outcomes.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
             return_value={},
         ):
             covered_result = service.observe_snapshot(covered_snapshot)
@@ -496,7 +496,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
 
         recovered_snapshot = account_snapshot("generation-4", targets=["AAPL"])
         with mock.patch(
-            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            "digital_twin.modules.outcomes.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
             return_value={"AAPL": relation_context("generation-4")},
         ):
             recovered_result = service.observe_snapshot(recovered_snapshot)
@@ -515,7 +515,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
         service = HypothesisLifecycleService(store)
         first_snapshot = account_snapshot("generation-1")
         with mock.patch(
-            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            "digital_twin.modules.outcomes.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
             return_value={"AAPL": relation_context("generation-1")},
         ):
             service.observe_snapshot(first_snapshot)
@@ -536,7 +536,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
             symbols=["AAPL", "MSFT"],
         )
         with mock.patch(
-            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            "digital_twin.modules.outcomes.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
             return_value={},
         ):
             result = service.observe_snapshot(target_snapshot)

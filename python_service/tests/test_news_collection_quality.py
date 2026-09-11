@@ -9,10 +9,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.news_ai_analysis_service import NewsAiAnalysisService
-from digital_twin.application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
-from digital_twin.application.news_collection_service import NewsCollectionRunner, parse_news_timestamp
-from digital_twin.application.news_digest_service import NewsDigestEnqueuer
+from digital_twin.modules.news_intelligence.application.news_ai_analysis_service import NewsAiAnalysisService
+from digital_twin.modules.news_intelligence.application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
+from digital_twin.modules.news_intelligence.application.news_collection_service import NewsCollectionRunner, parse_news_timestamp
+from digital_twin.modules.news_intelligence.application.news_digest_service import NewsDigestEnqueuer
 from digital_twin.domain.data_pipeline_health import evaluate_news_collection_health
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.investment_evidence_governance import article_claim_sentences
@@ -29,10 +29,10 @@ from digital_twin.domain.sent_article_filter import (
 from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpen
 from digital_twin.infrastructure import news_sources
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text, news_article_identity_token
-from digital_twin.news_intelligence.domain.provenance import resolve_source_provenance
-from digital_twin.news_intelligence.domain.article_quality import inspect_article_body
-from digital_twin.news_intelligence.domain.eligibility import review_classification
-from digital_twin.news_intelligence.application.normalize_sources import normalize_evidence_sources
+from digital_twin.modules.news_intelligence.domain.provenance import resolve_source_provenance
+from digital_twin.modules.news_intelligence.domain.article_quality import inspect_article_body
+from digital_twin.modules.news_intelligence.domain.eligibility import review_classification
+from digital_twin.modules.news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 
 class NewsCollectionQualityTests(unittest.TestCase):

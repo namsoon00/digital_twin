@@ -15,7 +15,7 @@ from .ontology_decision_state import (
 )
 from .ontology_rulebox_contracts import WATCHLIST_ALLOWED_ACTIONS, WATCHLIST_TARGET_ROLE
 from .portfolio import Position
-from .symbol_universe import normalize_market
+from digital_twin.modules.instruments.contracts import normalize_market
 
 
 ACTIVE_INVESTMENT_OPINION_VERSION = "active-investment-opinion-v2"

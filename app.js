@@ -16082,7 +16082,7 @@
       conditional: "조건부 사용",
       blocked: "판단 사용 제한"
     };
-    var notificationLabel = ai.notificationDecision === "send" ? "알림 발송" : "웹 기록만";
+    var notificationLabel = ai.notificationDeliveryLabel || (ai.notificationDecision === "send" ? "발송 요청" : "웹 기록만");
     var evidence = Array.isArray(ai.evidence) ? ai.evidence : [];
     var counterEvidence = Array.isArray(ai.counterEvidence) ? ai.counterEvidence : [];
     var nextChecks = Array.isArray(ai.nextChecks) ? ai.nextChecks : [];

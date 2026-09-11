@@ -11,8 +11,10 @@ import hashlib
 import json
 from typing import Dict, Iterable, List, Mapping
 
+from .ontology_contracts import entity_id
 
-ONTOLOGY_EXECUTION_TRACE_VERSION = "ontology-execution-trace-v3-performance-contract"
+
+ONTOLOGY_EXECUTION_TRACE_VERSION = "ontology-execution-trace-v4-match-scope"
 TRACE_RETENTION_DAYS = 30
 ALERT_READ_SET_RETENTION_DAYS = 180
 
@@ -351,6 +353,26 @@ def _match_symbol(item: Mapping[str, object], source_symbols: Iterable[object]) 
     return ""
 
 
+def _account_context_source(item: Mapping[str, object], run: object) -> str:
+    """Identify a native account context, never a stock-level match."""
+    world_id = _text(_run_value(run, "world_id"))
+    account_id = _text(_run_value(run, "account_id"))
+    source_kind = _text(item.get("sourceKind"))
+    source_id = _text(item.get("sourceId"))
+    owner_id = (
+        _text(_run_value(run, "portfolio_id"))
+        if source_kind == "portfolio"
+        else account_id if source_kind == "account" else ""
+    )
+    if (
+        world_id and account_id and owner_id
+        and _text(item.get("worldId")) == world_id
+        and source_id == entity_id(source_kind, owner_id)
+    ):
+        return source_id
+    return ""
+
+
 def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) -> List[Dict[str, object]]:
     values = _mapping(result)
     execution = _mapping(values.get("ruleboxExecution"))
@@ -388,17 +410,23 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
         if _text(value)
     )
     matched_symbols_by_rule: Dict[str, set] = {}
-    match_identity_complete_by_rule: Dict[str, bool] = {}
+    context_sources_by_rule: Dict[str, set] = {}
+    unresolved_identity_rule_ids = set()
+    identified_rule_ids = set()
     match_rows = [
         dict(item)
         for item in native.get("matches") or []
         if isinstance(item, Mapping)
     ]
     inference = _mapping(values.get("inferenceBox"))
+    native_identity_rule_ids = {
+        _text(item.get("ruleId")) for item in match_rows
+    }
     match_rows.extend(
         dict(item)
         for item in inference.get("traces") or []
         if isinstance(item, Mapping)
+        and _text(item.get("ruleId") or item.get("sourceRuleId")) not in native_identity_rule_ids
     )
     for item in match_rows:
         if not isinstance(item, Mapping):
@@ -406,12 +434,22 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
         rule_id = _text(item.get("ruleId") or item.get("sourceRuleId"))
         if not rule_id:
             continue
-        symbol = _match_symbol(item, source_symbols)
-        if symbol:
+        identified_rule_ids.add(rule_id)
+        match_world_id = _text(item.get("worldId"))
+        if match_world_id and match_world_id != world_id:
+            unresolved_identity_rule_ids.add(rule_id)
+            continue
+        context_source = _account_context_source(item, run)
+        symbol = (
+            "" if _text(item.get("sourceKind")) in {"portfolio", "account"}
+            else _match_symbol(item, source_symbols)
+        )
+        if context_source:
+            context_sources_by_rule.setdefault(rule_id, set()).add(context_source)
+        elif symbol:
             matched_symbols_by_rule.setdefault(rule_id, set()).add(symbol)
-            match_identity_complete_by_rule[rule_id] = True
         else:
-            match_identity_complete_by_rule.setdefault(rule_id, False)
+            unresolved_identity_rule_ids.add(rule_id)
     matched_ids.update(
         _text(item.get("ruleId") or item.get("sourceRuleId"))
         for item in match_rows
@@ -442,18 +480,19 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
         normalized_item_status = item_status.lower()
         symbols = _symbols(item.get("candidateSymbols") or source_symbols)
         precise_match_symbols = matched_symbols_by_rule.get(rule_id, set())
-        has_precise_match_identity = bool(match_identity_complete_by_rule.get(rule_id))
+        context_source_ids = sorted(context_sources_by_rule.get(rule_id, set()))
         matched_target_symbols = sorted(set(symbols).intersection(precise_match_symbols))
-        record_matched = bool(matched_target_symbols)
-        unresolved_match_target = False
+        record_matched = bool(matched_target_symbols or context_source_ids)
+        unresolved_match_target = rule_id in unresolved_identity_rule_ids
         if normalized_item_status in normal_non_match_statuses:
             record_matched = False
             matched_target_symbols = []
-        elif rule_id in matched_ids and not has_precise_match_identity:
+            context_source_ids = []
+        elif rule_id in matched_ids and not record_matched:
             # A rule-level match proves that some subject matched, not that
-            # every subject in a batched run matched. Legacy rows without a
-            # sourceId remain usable only for a single unambiguous target.
-            if len(symbols) == 1:
+            # every subject in a batched run matched. Legacy aggregate rows
+            # remain usable only for a single unambiguous target.
+            if len(symbols) == 1 and rule_id not in identified_rule_ids:
                 record_matched = True
                 matched_target_symbols = list(symbols)
             else:
@@ -506,9 +545,11 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
             "queryDurationMs": _integer(item.get("queryDurationMs")),
             "targetSymbols": symbols,
             "matchedTargetSymbols": matched_target_symbols,
+            "contextTargetSymbols": list(symbols) if context_source_ids else [],
+            "matchedContextSourceIds": context_source_ids,
             "matched": record_matched,
             "matchIdentityComplete": bool(
-                record_matched and matched_target_symbols
+                record_matched and not unresolved_match_target
             ),
             "reused": status_group == "selected" and rule_id not in candidate_ids,
             "failureReason": _text(item.get("reason"))[:500],
@@ -533,6 +574,15 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
                     "executionProfileVersion",
                 ]
                 if item.get(key) not in (None, "", [], {})
+            } | {
+                "matchedTargetSymbols": matched_target_symbols,
+                "matchedContextSourceIds": context_source_ids,
+                "contextTargetSymbols": list(symbols) if context_source_ids else [],
+                "matchScope": (
+                    "account-context-and-subject" if context_source_ids and matched_target_symbols
+                    else "account-context" if context_source_ids
+                    else "subject" if matched_target_symbols else "unresolved" if unresolved_match_target else "none"
+                ),
             } | ({
                 "ruleLevelMatched": True,
                 "matchIdentityStatus": "target-unresolved",
@@ -548,7 +598,7 @@ def _detailed_rule_record(item: Mapping[str, object]) -> bool:
         item.get("matched")
         or _integer(item.get("queryCount"))
         or _integer(item.get("queryDurationMs"))
-        or status in {"matched", "evaluated-no-match", "selected"}
+        or status in {"matched", "matched-target-unresolved", "evaluated-no-match", "selected"}
         or failed
     )
 
@@ -588,6 +638,8 @@ def reasoning_rule_trace_summary(
         "compactedRuleCount": max(0, len(outcome_rows) - len(persisted_rows)),
         "queriedRuleCount": len([item for item in outcome_rows if _integer(item.get("queryCount"))]),
         "matchedRuleCount": len([item for item in outcome_rows if item.get("matched")]),
+        "accountContextRuleCount": len([item for item in outcome_rows if item.get("matchedContextSourceIds")]),
+        "unresolvedMatchRuleCount": len([item for item in outcome_rows if item.get("status") == "matched-target-unresolved"]),
         "failedRuleCount": len([
             item for item in outcome_rows
             if any(token in _text(item.get("status")).lower() for token in ("error", "timeout", "failed", "blocked"))

@@ -82,6 +82,17 @@ them. Slot persistence rejects every rule absent from both the prior proof and
 the current execution. Native engine v5 starts a new execution namespace so
 previously manufactured non-match slots cannot become its baseline.
 
+Native engine v6 and execution trace v4 preserve the rule's source kind, exact
+source identity, and logical world. Account-context matches require the exact
+portfolio/account owner in the projection run and that same world. Their
+applicability may be cached for every requested subject, but their trace keeps
+`matchedContextSourceIds` separate from stock `matchedTargetSymbols`; they do
+not become stock hypotheses or actions. A position-level match still belongs
+only to its exact stock. Unknown, foreign-world, or mixed unresolved identities
+cannot create a complete result-slot generation, including a single-target one.
+The slot-persistence stage records written counts or an explicit non-persistence
+state so a successful native query cannot conceal an unusable execution cache.
+
 Comparison input v2 requires identical source scope, snapshot ID/time, payload
 hash, accounts, and symbols. Sharing an event ID is insufficient. SQL pairing and
 the application boundary both enforce this contract.

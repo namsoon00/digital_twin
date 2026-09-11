@@ -556,14 +556,34 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         )
         with self.transaction() as connection:
             self._complete_with_connection(connection, run, stamp)
-            self._replace_execution_trace_with_connection(connection, trace, stamp)
-            self._upsert_rule_result_slots_with_connection(
+            slot_count = self._upsert_rule_result_slots_with_connection(
                 connection,
                 run,
                 result,
                 trace,
                 stamp,
             )
+            trace["stages"].append({
+                "version": trace["version"],
+                "stageKey": "rule-result-slot-persistence",
+                "stageOrder": len(trace["stages"]) + 1,
+                "worldId": run.world_id,
+                "accountId": run.account_id,
+                "inferenceGenerationId": trace.get("inferenceGenerationId"),
+                "lane": trace["lane"],
+                "status": "completed" if slot_count else "not-persisted",
+                "outputCount": slot_count,
+                "detail": {
+                    "catalogueRuleCount": len(result.get("_ruleResultSlotCatalogRuleIds") or []),
+                    "targetSymbolCount": len(run.source_symbols or []),
+                    "unresolvedMatchRuleIds": sorted({
+                        str(item.get("ruleId") or "") for item in trace["ruleOutcomes"]
+                        if item.get("status") == "matched-target-unresolved"
+                    }),
+                },
+            })
+            trace["summary"]["stageCount"] = len(trace["stages"])
+            self._replace_execution_trace_with_connection(connection, trace, stamp)
         return run
 
     def record_rule_result_slots(
@@ -1080,11 +1100,22 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             if rule_id not in executed_rule_ids:
                 continue
             rule_versions[rule_id] = str(item.get("ruleVersion") or "")
+            if item.get("status") == "matched-target-unresolved":
+                return 0
             if not bool(item.get("matched")):
                 continue
             matched_rule_ids.add(rule_id)
             raw_precise = item.get("matchedTargetSymbols")
             identity_complete = item.get("matchIdentityComplete") is not False
+            context_targets = item.get("contextTargetSymbols") or []
+            if identity_complete and item.get("matchedContextSourceIds") and context_targets:
+                # A shared account policy was natively evaluated for this
+                # batch. Cache its applicability without claiming a stock
+                # hypothesis; exact context identity stays in the trace.
+                precise_matches.add(rule_id)
+                for symbol in set(context_targets).intersection(targets):
+                    states_by_symbol[symbol][rule_id] = True
+                continue
             if (
                 identity_complete
                 and isinstance(raw_precise, (list, tuple, set))

@@ -2127,7 +2127,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v5"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v6"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -23183,6 +23183,7 @@ relation ontology-assertion,
                 "worldId": str(world_id or ""),
                 "sourceId": source_id,
                 "sourceLabel": str(row.get("sourceLabel") or ""),
+                "sourceKind": str(rule.source_kind or ""),
                 "matchedConditions": list(condition_context.get("matchedConditions") or []),
                 "evidenceRelationIds": sorted(set(evidence_relation_ids)),
                 "conditionDetailSource": str(condition_context.get("conditionDetailSource") or "direct-typeql-match"),
@@ -24904,7 +24905,7 @@ relation ontology-assertion,
                     {
                         key: item.get(key)
                         for key in [
-                            "ruleId", "sourceId", "sourceLabel",
+                            "ruleId", "sourceId", "sourceLabel", "sourceKind", "worldId",
                             "sourceSymbol", "subjectId", "subjectSymbol",
                         ]
                         if item.get(key) not in (None, "")

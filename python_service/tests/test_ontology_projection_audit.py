@@ -1,8 +1,10 @@
+import json
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
+from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from digital_twin.domain.ontology_execution_trace import reasoning_execution_trace_payload
 from digital_twin.domain.ontology_projection_audit import (
     apply_projection_run_identity,
     build_ontology_projection_run,
@@ -700,6 +702,90 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["changed", "unknown", "known"], updated["candidateRuleIds"])
         self.assertEqual([], updated["deferredRuleIds"])
         self.assertFalse(updated["nativeRuleSelectionEligible"])
+
+    def test_batched_context_proof_does_not_turn_account_policy_into_stock_matches(self):
+        _snapshot, _graph, _fingerprint, original = self.build_run()
+        run = replace(original, world_id="portfolio:local:main", source_symbols=["005930", "NVDA"])
+        context_rule = "graph.portfolio.risk_policy.review.v1"
+        stock_rule = "graph.portfolio.concentration.review.v1"
+        context_match = {
+            "ruleId": context_rule, "sourceKind": "portfolio",
+            "sourceId": entity_id("portfolio", run.portfolio_id),
+            "worldId": run.world_id,
+        }
+        stock_match = {
+            "ruleId": stock_rule, "sourceKind": "position",
+            "sourceId": "position:main:NVDA", "worldId": run.world_id,
+        }
+        result = {
+            "status": "ok",
+            "ruleboxExecution": {
+                "status": "ok", "nativeRuleSelectionFullRuleCount": 2,
+                "nativeRuleSelectionExecutedRuleIds": [context_rule, stock_rule],
+                "typedbNativeRuleMatchedRuleIds": [context_rule, stock_rule],
+                "nativeMatchResult": {
+                    "matches": [context_match, stock_match],
+                    "executedRules": [{"ruleId": rule, "candidateSymbols": run.source_symbols}
+                                      for rule in (context_rule, stock_rule)],
+                },
+            },
+            "inferenceBox": {
+                "generationAligned": True, "inferenceGenerationId": "generation:batch",
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+                "traces": [{"ruleId": context_rule, "symbol": "MAIN"}],
+            },
+            "inferenceReuseProof": {
+                "scopePlanFingerprint": run.context_payload["scopeTopology"]["inferenceReuseScopePlanFingerprint"],
+            },
+            "_ruleResultSlotCatalogRuleIds": [context_rule, stock_rule],
+        }
+        trace = reasoning_execution_trace_payload(run, result)
+        records = {item["ruleId"]: item for item in trace["ruleOutcomes"]}
+        self.assertEqual([], records[context_rule]["matchedTargetSymbols"])
+        self.assertEqual(run.source_symbols, records[context_rule]["contextTargetSymbols"])
+        self.assertEqual("account-context", records[context_rule]["detail"]["matchScope"])
+        self.assertEqual(["NVDA"], records[stock_rule]["matchedTargetSymbols"])
+        self.assertEqual([], records[stock_rule]["contextTargetSymbols"])
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        connection = RecordingConnection()
+        count = store._upsert_rule_result_slots_with_connection(connection, run, result, trace, "now")
+        self.assertEqual(4, count)
+        outcomes = {(params[7], params[8]): params[14] for sql, params in connection.calls}
+        self.assertEqual({("005930", context_rule): 1, ("NVDA", context_rule): 1,
+                          ("005930", stock_rule): 0, ("NVDA", stock_rule): 1}, outcomes)
+
+        # Unknown owners, worlds, kinds, and mixed precise/unknown identities
+        # must not become reusable per-stock evidence, even for one target.
+        for invalid in (
+            {**context_match, "worldId": "portfolio:other"},
+            {**context_match, "sourceId": "portfolio:other"},
+            {**context_match, "worldId": ""},
+            {**context_match, "sourceKind": "stock"},
+            {**context_match, "sourceId": "position:main:NVDA"},
+        ):
+            for targets in (["005930", "NVDA"], ["NVDA"]):
+                with self.subTest(invalid=invalid, targets=targets):
+                    invalid_run = replace(run, source_symbols=targets)
+                    result["ruleboxExecution"]["nativeMatchResult"]["matches"] = [context_match, invalid, stock_match]
+                    invalid_trace = reasoning_execution_trace_payload(invalid_run, result)
+                    connection = RecordingConnection()
+                    count = store._upsert_rule_result_slots_with_connection(connection, invalid_run, result, invalid_trace, "now")
+                    self.assertEqual(0, count)
+                    self.assertFalse(connection.calls)
+
+    def test_slot_persistence_is_audited_when_no_reusable_proof_is_written(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        connection = RecordingConnection()
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.transaction = lambda: ConnectionContext(connection)
+        store._complete_with_connection = lambda *_args: None
+        store.complete_with_execution_trace(run, {"status": "ok"})
+        stages = [params for sql, params in connection.calls
+                  if "INSERT INTO ontology_reasoning_run_stages" in sql]
+        slot_stage = next(row for row in stages if row[1] == "rule-result-slot-persistence")
+        self.assertEqual("not-persisted", slot_stage[8])
+        self.assertEqual(0, slot_stage[13])
+        self.assertEqual(1, json.loads(slot_stage[14])["targetSymbolCount"])
 
     def test_shared_world_can_persist_a_direct_coherent_result_slot_generation(self):
         connection = RecordingConnection()

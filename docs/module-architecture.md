@@ -230,6 +230,61 @@ and repository regressions remain required. Native TypeQL match semantics,
 rules and engine version are unchanged; the atomic control guard and its
 diagnostics are the intentional storage behavior correction.
 
+## TypeDB Connection and Schema Boundary
+
+`modules/reasoning/infrastructure/typedb_runtime/` now owns the connection and
+storage-schema lifecycle. Its nine implementation files are private adapters
+inside the existing reasoning module, not nine additional business modules or
+workers. Forty-six facade methods delegate or alias their implementation here.
+
+| File | Responsibility |
+| --- | --- |
+| `connection.py` | Lazy driver import, shared/dedicated channels, bounded retries, invalidation and database creation |
+| `transactions.py` | Read/write/schema deadlines and optional older-driver compatibility |
+| `readiness.py` | Address/database/TLS/fingerprint cache keys, shared readiness and monotonic expiry |
+| `inspection.py` | Schema catalogue access and persisted schema-contract comparison |
+| `schema_plan.py` | Pure dependency-ordered bootstrap planning and missing-definition/ownership resumption |
+| `migrations.py` | Existing additive storage-identity, scope, fingerprint, world, promoted and semantic schema changes |
+| `bootstrap.py` | Bounded native/HTTP schema commits, deadlines and batch telemetry |
+| `http.py` | TypeDB HTTP transport and bounded response errors |
+| `lifecycle.py` | Schema readiness checks, fresh/partial bootstrap and explicit schema-contract synchronization |
+
+`ports.py` declares a separate capability set for each I/O role. Clock,
+sleep, timeout and error classification callbacks are injected; the process
+cache is passed explicitly with its existing dictionary and lock. Importing
+and executing a pure plan or an injected lifecycle does not load the shared
+repository, application workflows or database drivers. No schema port can
+publish an ABox generation or execute an investment rule.
+
+The composition facade deliberately retains per-repository driver state,
+locks, local readiness and telemetry, plus the shared cache identity. Moving
+those objects between owners is a separate migration; constructing a runtime
+callback bundle does not create a connection or reset cache state. Shared
+channels retain the longest declared operation deadline, while dedicated
+native-rule reads keep their bounded channel lifetime. Failed operations
+invalidate the cached channel before the existing bounded retry policy runs.
+
+Process readiness still uses the original 300-second TTL, and local instance
+readiness is unchanged. A database created by this process bootstraps without
+a catalogue read. Existing fresh candidates must be inspected successfully;
+an inspection or commit failure cannot mark them ready. Completed schema
+batches remain committed, and the next attempt resumes the missing definitions.
+Fresh candidates retain 16-definition batches and a 60-second deadline; normal
+bootstrap retains its 64-definition default. HTTP selection is still explicit
+configuration, not a new automatic transport failover. The legacy normal-mode
+inspection/migration fallback is also unchanged: this extraction does not
+claim universal fail-closed inspection or a single atomic schema transaction.
+
+Thirty-nine synthetic golden scenarios captured from `ad395f3a7455` preserve
+bootstrap plans, migration queries and readiness control flow. Eighteen tests
+also cover concurrent connection creation, dedicated-channel ownership, retry
+admission, TTL/database isolation, create races, optional drivers, HTTP errors,
+partial-commit resumption and import/port boundaries. The transaction recorder
+models commit/rollback only; it does not validate TypeQL or simulate native
+server crashes. Existing native repository and replay suites remain required.
+No investment rules, native engine version, event contract, asynchronous
+boundary, deployment target or database schema definition changed.
+
 ## Synchronous and Asynchronous Boundaries
 
 Use a synchronous public interface when the caller needs an immediate result
@@ -323,10 +378,11 @@ claim that the entire persistence/domain migration is complete:
 - Runtime builders are physically separated and loaded lazily, but some
   reasoning builders still assemble large collaborator graphs. Those graphs
   are not fully described by module import checks alone.
-- `typedb_ontology.py` still has roughly 25,000 lines after query, inference
-  publication and ABox write/control extraction. `ontology_projection.py`
-  remains a large shared adapter. Driver/schema lifecycle, candidate/Manifest
-  planning and verification, projection leases, recovery, maintenance and native
+- `typedb_ontology.py` still has roughly 24,600 lines after query, inference
+  publication, ABox write/control and connection/schema extraction. Its state
+  identities remain at the composition boundary. `ontology_projection.py`
+  remains a large shared adapter. Candidate/Manifest planning and verification,
+  projection leases, recovery, maintenance and native
   execution orchestration still need ownership separation. The atomic control
   limit fix is explicit above; investment semantics are unchanged.
 - The MySQL schema and operational store facade remain shared. Owner helpers
@@ -340,9 +396,9 @@ claim that the entire persistence/domain migration is complete:
 
 Next work should move remaining store ports and table writes one owner at a
 time, then simplify large builder dependency graphs. Following TypeQL and
-InferenceBox publication and scoped ABox write/control extraction, separate
-driver/schema lifecycle and candidate/Manifest orchestration only with immutable
-replay and failure-path tests.
+InferenceBox publication, scoped ABox write/control and connection/schema
+extraction, separate candidate/Manifest orchestration and state ownership only
+with immutable replay and failure-path tests.
 Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
 asynchronous APIs by default.
@@ -368,6 +424,10 @@ asynchronous APIs by default.
 - `test_abox_persistence.py`: original row/control execution fingerprints,
   independent injected execution, separate row/control ports, endpoint checks,
   atomic control limits, world/scope isolation and retained recovery journals.
+- `test_typedb_runtime.py`: original schema-plan/migration/control-flow
+  fingerprints, shared/dedicated driver ownership, retries and deadlines,
+  readiness-cache scope, partial schema resumption, HTTP failures and narrow
+  driver-free port execution.
 - The web smoke test checks changed-field payloads and existing pages.
 - `npm test` is the fast required gate; `npm run python:test:full` checks the
   complete curated regression suite. Tests use the isolated test database, not

@@ -118,7 +118,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # empty-result, fallback and scoped-retention extraction contracts.
         # ABox persistence adds separate row/control ports, original execution
         # parity, endpoint gates and fail-closed atomic activation boundaries.
-        self.assertLessEqual(total, 1118)
+        # Driver sharing, deadline isolation, cache scope, resumable schema
+        # bootstrap and optional HTTP/driver failure contracts are independent
+        # of investment rule semantics and need dedicated runtime coverage.
+        self.assertLessEqual(total, 1136)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

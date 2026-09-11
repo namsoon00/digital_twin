@@ -9,8 +9,6 @@ import socket
 import threading
 import time
 import uuid
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from functools import wraps
@@ -250,6 +248,23 @@ from digital_twin.modules.reasoning.infrastructure.abox_persistence import (
 )
 from digital_twin.modules.reasoning.infrastructure.abox_persistence.ports import ABoxRuntime
 from digital_twin.modules.reasoning.infrastructure.abox_persistence.world_calls import typedb_call_for_world, typedb_world_kwargs
+from digital_twin.modules.reasoning.infrastructure.typedb_runtime import (
+    bootstrap as _typedb_bootstrap,
+    connection as _typedb_connection,
+    http as _typedb_http,
+    inspection as _typedb_inspection,
+    lifecycle as _typedb_lifecycle,
+    migrations as _typedb_migrations,
+    readiness as _typedb_readiness,
+    schema_plan as _typedb_schema_plan,
+    transactions as _typedb_transactions,
+)
+from digital_twin.modules.reasoning.infrastructure.typedb_runtime.ports import SchemaReadinessCache, TypeDBRuntime
+from digital_twin.modules.reasoning.infrastructure.typedb_runtime.constants import (
+    DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+    DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+    DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS,
+)
 
 
 class TypeDBOperationTimeout(TimeoutError):
@@ -2006,20 +2021,6 @@ DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
 # activation and one InferenceBox publication; this value only controls how a
 # verified target set is split into read-only TypeDB work items in between.
 DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
-# A fresh TypeDB database used to receive the complete 1,200+ statement base
-# schema in one transaction. TypeDB recompiles the growing type graph at that
-# boundary, so the cold blue-green candidate could exceed the driver deadline
-# before any durable schema existed. Keep each commit large enough to avoid
-# transaction chatter but bounded well below the monolithic compiler input.
-# TypeDB recompiles the affected schema graph for each definition transaction.
-# The v13 storage schema crossed 1,800 definitions. A live cold-start proved
-# that even 64 definitions can monopolize TypeDB's schema compiler long enough
-# for health probes to time out. Fresh candidates use smaller transactions and
-# a separate per-transaction deadline; the complete seed still owns its larger
-# end-to-end provisioning budget.
-DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE = 64
-DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE = 16
-DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS = 60.0
 
 
 def typedb_node_allowed_attributes(properties: Dict[str, object], kind: object = "") -> Optional[Set[str]]:
@@ -9842,25 +9843,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             }
             raise
 
+    @staticmethod
+    def _typedb_runtime() -> TypeDBRuntime:
+        return TypeDBRuntime(
+            timeout=typedb_operation_timeout,
+            monotonic=time.monotonic,
+            perf_counter=time.perf_counter,
+            sleep=time.sleep,
+            error_code=typedb_error_code,
+        )
+
+    @staticmethod
+    def _typedb_readiness_cache() -> SchemaReadinessCache:
+        return SchemaReadinessCache(
+            entries=TypeDBOntologyGraphRepository._process_base_schema_ready,
+            lock=TypeDBOntologyGraphRepository._process_base_schema_ready_lock,
+            ttl_seconds=TypeDBOntologyGraphRepository._process_base_schema_cache_seconds,
+        )
+
     def with_typedb_retries(self, operation, retry_if=None):
-        attempts = max(1, self.retry_count + 1)
-        last_error = None
-        for index in range(attempts):
-            try:
-                return operation()
-            except Exception as error:  # noqa: BLE001 - TypeDB connectivity can be transient.
-                last_error = error
-                # A driver can retain a broken native transport after a
-                # server restart or a cancelled query.  Retrying through the
-                # same instance only repeats the stall; drop it before the
-                # next bounded attempt.
-                self.invalidate_persistent_driver()
-                if index >= attempts - 1 or (
-                    callable(retry_if) and not bool(retry_if(error))
-                ):
-                    break
-                time.sleep(min(2.0, 0.25 * (index + 1)))
-        raise last_error
+        return _typedb_connection.with_typedb_retries(self, operation, retry_if, runtime=self._typedb_runtime())
 
     def runtime_timeout_seconds(self, key: str, default_seconds: float) -> float:
         try:
@@ -10312,183 +10314,43 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         }
 
     def driver_imports(self) -> Tuple[object, object]:
-        try:
-            from typedb.driver import Credentials, DriverOptions, DriverTlsConfig, TransactionType, TypeDB
-
-            return (TypeDB, Credentials, DriverOptions, DriverTlsConfig, TransactionType), None
-        except Exception as error:  # noqa: BLE001 - optional dependency.
-            return None, error
+        return _typedb_connection.driver_imports()
 
     def create_driver(self, imported, request_timeout_seconds: float = None):
-        TypeDB, Credentials, DriverOptions, DriverTlsConfig, _TransactionType = imported[0]
-        tls_config = DriverTlsConfig.enabled() if self.tls_enabled else DriverTlsConfig.disabled()
-        request_timeout = (
-            self.driver_request_timeout_seconds()
-            if request_timeout_seconds is None
-            else max(1.0, float(request_timeout_seconds))
-        )
-        return TypeDB.driver(
-            self.address,
-            Credentials(self.user, self.password),
-            DriverOptions(
-                tls_config,
-                primary_failover_retries=max(0, min(2, self.retry_count)),
-                # A write transaction can legitimately outlive an individual read
-                # deadline while replacing a large ABox. Do not let the driver's
-                # channel deadline invalidate that transaction before its explicit
-                # write-operation timeout is reached.
-                request_timeout_millis=max(1000, int(request_timeout * 1000)),
-            ),
-        )
+        return _typedb_connection.create_driver(self, imported, request_timeout_seconds)
 
     def open_driver(self, imported, request_timeout_seconds: float = None):
-        if not self._persistent_driver_enabled:
-            return self.create_driver(imported, request_timeout_seconds=request_timeout_seconds)
-        # Transaction-level options still enforce each read/write deadline.
-        # Use the repository's longest declared operation timeout for the
-        # shared channel so a short read does not poison a later valid ABox
-        # write with a smaller driver-wide deadline.
-        with self._persistent_driver_lock:
-            if self._persistent_driver is not None:
-                return self._persistent_driver
-            self._persistent_driver = self.create_driver(
-                imported,
-                request_timeout_seconds=self.driver_request_timeout_seconds(),
-            )
-            return self._persistent_driver
+        return _typedb_connection.open_driver(self, imported, request_timeout_seconds)
 
     def driver_request_timeout_seconds(self) -> float:
-        return max(
-            float(self.timeout_seconds or 0),
-            float(self._query_timeout_seconds or 0),
-            float(self._schema_operation_timeout_seconds or 0),
-            float(self._write_operation_timeout_seconds or 0),
-        )
+        return _typedb_connection.driver_request_timeout_seconds(self)
 
     def open_native_rule_read_driver(self, imported, request_timeout_seconds: float = None):
-        """Open a channel whose deadline matches one bounded native-rule read.
-
-        The process-wide driver intentionally inherits the longest write
-        timeout. Reusing it in worker threads made a short rule transaction
-        wait on that longer channel after the Python SIGALRM guard became
-        unavailable. A dedicated channel keeps the transport and transaction
-        deadlines aligned without affecting ABox writes.
-        """
-        if not self._persistent_driver_enabled or not self.native_rule_dedicated_read_driver_enabled():
-            return self.open_driver(imported, request_timeout_seconds=request_timeout_seconds)
-        return self.create_driver(
-            imported,
-            request_timeout_seconds=request_timeout_seconds,
-        )
+        return _typedb_connection.open_native_rule_read_driver(self, imported, request_timeout_seconds)
 
     def close_native_rule_read_driver(self, driver) -> None:
-        if not self._persistent_driver_enabled or not self.native_rule_dedicated_read_driver_enabled():
-            self.close_driver(driver)
-            return
-        close = getattr(driver, "close", None)
-        if callable(close):
-            close()
+        return _typedb_connection.close_native_rule_read_driver(self, driver)
 
     def write_transaction_options(self):
-        try:
-            from typedb.driver import TransactionOptions
-        except Exception:  # noqa: BLE001 - retain compatibility with older optional drivers.
-            return None
-        return TransactionOptions(
-            transaction_timeout_millis=max(1000, int(self.write_operation_timeout_seconds() * 1000)),
-        )
+        return _typedb_transactions.write_transaction_options(self)
 
     def read_transaction_options(self, timeout_seconds: float = None):
-        """Bound a TypeDB read transaction, not only the individual query call.
-
-        A driver-side transaction deadline keeps one slow direct TypeQL rule
-        from blocking the realtime reasoning worker indefinitely.
-        """
-        try:
-            from typedb.driver import TransactionOptions
-        except Exception:  # noqa: BLE001 - retain compatibility with older optional drivers.
-            return None
-        timeout = self.query_timeout_seconds() if timeout_seconds is None else max(0.5, float(timeout_seconds))
-        return TransactionOptions(
-            transaction_timeout_millis=max(1000, int(timeout * 1000)),
-        )
+        return _typedb_transactions.read_transaction_options(self, timeout_seconds)
 
     def schema_transaction_options(self, timeout_seconds: float = None):
-        """Give TypeDB schema maintenance its configured operation deadline."""
-        try:
-            from typedb.driver import TransactionOptions
-        except Exception:  # noqa: BLE001 - retain compatibility with older optional drivers.
-            return None
-        timeout = (
-            self.schema_operation_timeout_seconds()
-            if timeout_seconds is None
-            else max(1.0, float(timeout_seconds))
-        )
-        timeout_millis = max(1000, int(timeout * 1000))
-        return TransactionOptions(
-            transaction_timeout_millis=timeout_millis,
-            schema_lock_acquire_timeout_millis=timeout_millis,
-        )
+        return _typedb_transactions.schema_transaction_options(self, timeout_seconds)
 
     def schema_transaction(self, driver, transaction_type, timeout_seconds: float = None):
-        """Open a schema transaction while retaining older driver compatibility."""
-        options = self.schema_transaction_options(timeout_seconds)
-        if options is None:
-            return driver.transaction(self.database, transaction_type)
-        try:
-            return driver.transaction(self.database, transaction_type, options=options)
-        except TypeError as error:
-            if "unexpected keyword" not in str(error).lower():
-                raise
-            return driver.transaction(self.database, transaction_type)
+        return _typedb_transactions.schema_transaction(self, driver, transaction_type, timeout_seconds)
 
     def close_driver(self, driver) -> None:
-        if self._persistent_driver_enabled:
-            with self._persistent_driver_lock:
-                if driver is self._persistent_driver:
-                    return
-        close = getattr(driver, "close", None)
-        if callable(close):
-            close()
+        return _typedb_connection.close_driver(self, driver)
 
     def invalidate_persistent_driver(self) -> None:
-        """Drop a cached native channel after an operation failure.
-
-        This is intentionally idempotent because nested repository calls may
-        observe the same transport error while unwinding.
-        """
-        if not self._persistent_driver_enabled:
-            return
-        with self._persistent_driver_lock:
-            driver = self._persistent_driver
-            self._persistent_driver = None
-        close = getattr(driver, "close", None)
-        if callable(close):
-            try:
-                close()
-            except Exception:
-                pass
+        return _typedb_connection.invalidate_persistent_driver(self)
 
     def ensure_database(self, driver) -> None:
-        databases = getattr(driver, "databases", None)
-        if databases is None:
-            self._database_created_in_process = False
-            return
-        try:
-            contains = getattr(databases, "contains", None)
-            if callable(contains) and contains(self.database):
-                self._database_created_in_process = False
-                return
-        except Exception:
-            pass
-        try:
-            databases.create(self.database)
-            self._database_created_in_process = True
-            self.invalidate_process_base_schema_readiness()
-        except Exception as error:
-            self._database_created_in_process = False
-            if "already" not in str(error).lower() and "exist" not in str(error).lower():
-                raise
+        return _typedb_connection.ensure_database(self, driver)
 
     def fresh_candidate_world_bootstrap_required(self, world_id: str = "") -> bool:
         """Return whether this world still has no durable candidate Manifest.
@@ -10514,194 +10376,40 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         )
 
     def process_base_schema_cache_key(self, schema_fingerprint: str) -> Tuple[str, str, bool, str]:
-        return (
-            str(self.address or "").strip(),
-            str(self.database or "").strip(),
-            bool(self.tls_enabled),
-            str(schema_fingerprint or ""),
-        )
+        return _typedb_readiness.process_base_schema_cache_key(self, schema_fingerprint)
 
     def process_base_schema_is_ready(self, schema_fingerprint: str) -> bool:
-        key = self.process_base_schema_cache_key(schema_fingerprint)
-        if not key[0] or not key[1] or not key[3]:
-            return False
-        now = time.monotonic()
-        with TypeDBOntologyGraphRepository._process_base_schema_ready_lock:
-            ready_at = TypeDBOntologyGraphRepository._process_base_schema_ready.get(key)
-            if ready_at is None:
-                return False
-            if now - ready_at > TypeDBOntologyGraphRepository._process_base_schema_cache_seconds:
-                TypeDBOntologyGraphRepository._process_base_schema_ready.pop(key, None)
-                return False
-            return True
+        return _typedb_readiness.process_base_schema_is_ready(self, schema_fingerprint, runtime=self._typedb_runtime(), cache=self._typedb_readiness_cache())
 
     def mark_process_base_schema_ready(self, schema_fingerprint: str) -> None:
-        key = self.process_base_schema_cache_key(schema_fingerprint)
-        if not key[0] or not key[1] or not key[3]:
-            return
-        with TypeDBOntologyGraphRepository._process_base_schema_ready_lock:
-            TypeDBOntologyGraphRepository._process_base_schema_ready[key] = time.monotonic()
+        return _typedb_readiness.mark_process_base_schema_ready(self, schema_fingerprint, runtime=self._typedb_runtime(), cache=self._typedb_readiness_cache())
 
     def invalidate_process_base_schema_readiness(self) -> None:
-        address = str(self.address or "").strip()
-        database = str(self.database or "").strip()
-        tls_enabled = bool(self.tls_enabled)
-        with TypeDBOntologyGraphRepository._process_base_schema_ready_lock:
-            stale_keys = [
-                key
-                for key in TypeDBOntologyGraphRepository._process_base_schema_ready
-                if key[:3] == (address, database, tls_enabled)
-            ]
-            for key in stale_keys:
-                TypeDBOntologyGraphRepository._process_base_schema_ready.pop(key, None)
+        return _typedb_readiness.invalidate_process_base_schema_readiness(self, cache=self._typedb_readiness_cache())
 
     def base_schema_type_names(self) -> set:
-        if self._base_schema_type_names:
-            return set(self._base_schema_type_names)
-        names = set(re.findall(
-            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-            self.schema_query(),
-            flags=re.MULTILINE,
-        ))
-        self._base_schema_type_names = names
-        return set(names)
+        return _typedb_inspection.base_schema_type_names(self)
 
     def typedb_schema_type_names(self, driver) -> set:
-        schema_text = self.typedb_schema_text(driver)
-        return set(re.findall(
-            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-            schema_text,
-            flags=re.MULTILINE,
-        ))
+        return _typedb_inspection.typedb_schema_type_names(self, driver)
 
     def typedb_schema_text(self, driver) -> str:
-        databases = getattr(driver, "databases", None)
-        get_database = getattr(databases, "get", None) if databases is not None else None
-        if not callable(get_database):
-            raise RuntimeError("TypeDB database schema listing is unavailable.")
-        database = get_database(self.database)
-        schema_reader = getattr(database, "type_schema", None)
-        if not callable(schema_reader):
-            schema_reader = getattr(database, "schema", None)
-        if not callable(schema_reader):
-            raise RuntimeError("TypeDB database schema reader is unavailable.")
-        return str(schema_reader() or "")
+        return _typedb_inspection.typedb_schema_text(self, driver)
 
     def base_schema_contract_state(self) -> Dict[str, object]:
-        """Return the persisted base-schema contract without listing TypeDB schema.
+        return _typedb_inspection.base_schema_contract_state(self)
 
-        TypeDB's schema catalogue includes every generated native RuleBox
-        function.  Serialising that catalogue on a large live ABox is far more
-        expensive than the keyed static-manifest read that already protects
-        immutable TBox/RuleBox generations.  The manifest is published only
-        after the matching schema sync succeeds, so it is a safe readiness
-        marker for normal runtime requests.
-        """
-        expected = self.base_schema_contract_metadata()
-        manifest = self.read_seed_static_manifest()
-        metadata = dict(manifest.get("metadata") or {})
-        status = str(manifest.get("status") or "")
-        if status != "ok":
-            return {
-                "status": "unavailable" if status == "error" else "missing",
-                "manifestStatus": status or "missing",
-                "metadata": metadata,
-                **expected,
-            }
-        stored_version = str(metadata.get("schemaContractVersion") or "")
-        stored_fingerprint = str(metadata.get("schemaContractFingerprint") or "")
-        matches = (
-            stored_version == str(expected.get("schemaContractVersion") or "")
-            and stored_fingerprint == str(expected.get("schemaContractFingerprint") or "")
-        )
-        return {
-            "status": "current" if matches else "stale",
-            "manifestStatus": status,
-            "metadata": metadata,
-            "storedSchemaContractVersion": stored_version,
-            "storedSchemaContractFingerprint": stored_fingerprint,
-            **expected,
-        }
-
-    @staticmethod
-    def ontology_storage_identity_migration_required(schema_text: str) -> bool:
-        text = str(schema_text or "")
-        if "ontology-node" not in text or "ontology-assertion" not in text:
-            return False
-        return "ontology-storage-id" not in text or "owns ontology-id @key" in text
+    ontology_storage_identity_migration_required = staticmethod(_typedb_migrations.ontology_storage_identity_migration_required)
 
     def migrate_ontology_storage_identity(self, driver, imported, schema_text: str) -> None:
-        """Separate graph-storage identity from the canonical ontology identifier.
+        return _typedb_migrations.migrate_ontology_storage_identity(self, driver, imported, schema_text, runtime=self._typedb_runtime())
 
-        ABox staging intentionally contains the same real-world facts as the
-        active ABox. ``ontology-id`` is therefore a domain identifier, not a
-        globally unique database key. Older databases made it a TypeDB key,
-        preventing a verified staging generation from coexisting with the
-        active generation during an atomic promotion.
-        """
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        queries = []
-        if "owns ontology-id @key" in str(schema_text or ""):
-            queries.append(
-                "undefine @key from ontology-node owns ontology-id; "
-                "@key from ontology-assertion owns ontology-id;"
-            )
-        queries.append(
-            "define attribute ontology-storage-id, value string; "
-            "ontology-node owns ontology-storage-id @unique; "
-            "ontology-assertion owns ontology-storage-id @unique;"
-        )
-        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB storage identity schema migration"):
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                for query in queries:
-                    tx.query(query).resolve()
-                tx.commit()
-
-    @staticmethod
-    def ontology_scope_schema_migration_required(schema_text: str) -> bool:
-        text = str(schema_text or "")
-        if "ontology-node" not in text or "ontology-assertion" not in text:
-            return False
-        return any(attribute not in text for attribute in [
-            "ontology-scope-id",
-            "ontology-scope-type",
-            "ontology-manifest-id",
-        ])
+    ontology_scope_schema_migration_required = staticmethod(_typedb_migrations.ontology_scope_schema_migration_required)
 
     def migrate_ontology_scope_schema(self, driver, imported) -> None:
-        """Add non-destructive attributes required by scoped ABox manifests."""
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        query = (
-            "define "
-            "attribute ontology-scope-id, value string; "
-            "attribute ontology-scope-type, value string; "
-            "attribute ontology-manifest-id, value string; "
-            "ontology-node owns ontology-scope-id, owns ontology-scope-type, owns ontology-manifest-id; "
-            "ontology-assertion owns ontology-scope-id, owns ontology-scope-type, owns ontology-manifest-id;"
-        )
-        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB scoped ABox schema migration"):
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query(query).resolve()
-                tx.commit()
+        return _typedb_migrations.migrate_ontology_scope_schema(self, driver, imported, runtime=self._typedb_runtime())
 
-    @staticmethod
-    def ontology_content_fingerprint_schema_migration_required(
-        schema_text: str,
-    ) -> bool:
-        text = str(schema_text or "")
-        if "ontology-node" not in text or "ontology-assertion" not in text:
-            return False
-        return (
-            "attribute ontology-content-fingerprint" not in text
-            or not re.search(
-                r"ontology-node[\s\S]*?owns ontology-content-fingerprint",
-                text,
-            )
-            or not re.search(
-                r"ontology-assertion[\s\S]*?owns ontology-content-fingerprint",
-                text,
-            )
-        )
+    ontology_content_fingerprint_schema_migration_required = staticmethod(_typedb_migrations.ontology_content_fingerprint_schema_migration_required)
 
     def migrate_ontology_content_fingerprint_schema(
         self,
@@ -10709,405 +10417,41 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         imported,
         schema_text: str,
     ) -> None:
-        """Add the content identity used by current-state delta writes."""
+        return _typedb_migrations.migrate_ontology_content_fingerprint_schema(self, driver, imported, schema_text, runtime=self._typedb_runtime())
 
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        text = str(schema_text or "")
-        definitions = []
-        if "attribute ontology-content-fingerprint" not in text:
-            definitions.append(
-                "attribute ontology-content-fingerprint, value string;"
-            )
-        if not re.search(
-            r"ontology-node[\s\S]*?owns ontology-content-fingerprint",
-            text,
-        ):
-            definitions.append(
-                "ontology-node owns ontology-content-fingerprint;"
-            )
-        if not re.search(
-            r"ontology-assertion[\s\S]*?owns ontology-content-fingerprint",
-            text,
-        ):
-            definitions.append(
-                "ontology-assertion owns ontology-content-fingerprint;"
-            )
-        if not definitions:
-            return
-        with typedb_operation_timeout(
-            self.schema_operation_timeout_seconds(),
-            "TypeDB current-state content fingerprint schema migration",
-        ):
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query("define " + " ".join(definitions)).resolve()
-                tx.commit()
-
-    @staticmethod
-    def ontology_world_schema_migration_required(schema_text: str) -> bool:
-        text = str(schema_text or "")
-        if "ontology-node" not in text or "ontology-assertion" not in text:
-            return False
-        return any(attribute not in text for attribute in [
-            "ontology-tenant-id",
-            "ontology-world-id",
-            "ontology-world-type",
-        ])
+    ontology_world_schema_migration_required = staticmethod(_typedb_migrations.ontology_world_schema_migration_required)
 
     def migrate_ontology_world_schema(self, driver, imported) -> None:
-        """Add explicit tenant/world ownership without rewriting existing ABox rows."""
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        query = (
-            "define "
-            "attribute ontology-tenant-id, value string; "
-            "attribute ontology-world-id, value string; "
-            "attribute ontology-world-type, value string; "
-            "ontology-node owns ontology-tenant-id, owns ontology-world-id, owns ontology-world-type; "
-            "ontology-assertion owns ontology-tenant-id, owns ontology-world-id, owns ontology-world-type;"
-        )
-        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB ontology world schema migration"):
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query(query).resolve()
-                tx.commit()
+        return _typedb_migrations.migrate_ontology_world_schema(self, driver, imported, runtime=self._typedb_runtime())
 
-    @staticmethod
-    def promoted_schema_migration_required(schema_text: str) -> bool:
-        text = str(schema_text or "")
-        if "ontology-node" not in text:
-            return False
-        promoted = set(
-            typedb_rule_schema_capability_contract().get("directQueryAttributes") or []
-        )
-        return any(
-            attribute not in text or not re.search(r"\bowns\s+" + re.escape(attribute) + r"\b", text)
-            for attribute in promoted
-        )
+    promoted_schema_migration_required = staticmethod(_typedb_migrations.promoted_schema_migration_required)
 
     def migrate_promoted_schema(self, driver, imported, schema_text: str) -> None:
-        """Add only new RuleBox-queryable attributes to an existing schema."""
+        return _typedb_migrations.migrate_promoted_schema(self, driver, imported, schema_text, runtime=self._typedb_runtime())
 
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        text = str(schema_text or "")
-        numeric = set(TYPEDB_NUMERIC_ATTRIBUTES)
-        string = set(TYPEDB_STRING_ATTRIBUTES)
-        contract = typedb_rule_schema_capability_contract()
-        direct = set(contract.get("directQueryAttributes") or [])
-        missing_types = sorted(attribute for attribute in direct if attribute not in text)
-        definitions = [
-            "attribute " + attribute + ", value " + ("double" if attribute in numeric else "string") + ";"
-            for attribute in missing_types
-        ]
-        common_missing = sorted(
-            attribute for attribute in TYPEDB_COMMON_NODE_ATTRIBUTES
-            if attribute in direct
-            and not re.search(r"ontology-node[\s\S]*?\bowns\s+" + re.escape(attribute) + r"\b", text)
-        )
-        if common_missing:
-            definitions.append("ontology-node " + ", ".join("owns " + item for item in common_missing) + ";")
-        for context, attributes in sorted(dict(contract.get("contextAttributes") or {}).items()):
-            context_type = typedb_context_type(context)
-            missing = sorted(
-                attribute for attribute in attributes
-                if not re.search(
-                    re.escape(context_type) + r"[^;]*\bowns\s+" + re.escape(attribute) + r"\b",
-                    text,
-                )
-            )
-            if missing and context_type in text:
-                definitions.append(context_type + " " + ", ".join("owns " + item for item in missing) + ";")
-        if not definitions:
-            return
-        query = "define\n" + "\n".join(definitions)
-        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB promoted attribute schema migration"):
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query(query).resolve()
-                tx.commit()
-
-    @staticmethod
-    def ontology_semantic_schema_migration_required(schema_text: str) -> bool:
-        """Whether the physical TypeDB hierarchy still flattens logical types.
-
-        The logical TBox is versioned independently from the TypeDB schema.
-        This check keeps the migration additive: existing generic instances
-        remain readable while every new write receives a class/relation
-        subtype derived from the active TBox.
-        """
-        type_names = set(re.findall(
-            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-            str(schema_text or ""),
-            flags=re.MULTILINE,
-        ))
-        contract = typedb_rule_schema_capability_contract()
-        desired = semantic_storage_type_names(
-            contract.get("physicalClassNames") or [],
-            contract.get("physicalRelationNames") or [],
-        )
-        return not desired.issubset(type_names)
+    ontology_semantic_schema_migration_required = staticmethod(_typedb_migrations.ontology_semantic_schema_migration_required)
 
     def migrate_ontology_semantic_schema(self, driver, imported, schema_text: str) -> None:
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        existing = set(re.findall(
-            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-            str(schema_text or ""),
-            flags=re.MULTILINE,
-        ))
-        contract = typedb_rule_schema_capability_contract()
-        missing = semantic_storage_type_names(
-            contract.get("physicalClassNames") or [],
-            contract.get("physicalRelationNames") or [],
-        ) - existing
-        definitions = []
-        if "ontology-semantic-type" in missing:
-            definitions.extend([
-                "attribute ontology-semantic-type, value string;",
-                "ontology-node owns ontology-semantic-type;",
-                "ontology-assertion owns ontology-semantic-type;",
-            ])
-            missing.discard("ontology-semantic-type")
-        semantic_definitions = semantic_typeql_schema(
-            missing,
-            context_attribute_ownership=contract.get("contextAttributes") or {},
-            physical_class_names=contract.get("physicalClassNames") or [],
-            physical_relation_names=contract.get("physicalRelationNames") or [],
-        )
-        if semantic_definitions:
-            definitions.append(semantic_definitions.replace("define\n", "", 1))
-        if not definitions:
-            return
-        query = "define\n" + "\n".join(definitions)
-        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB semantic schema migration"):
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query(query).resolve()
-                tx.commit()
+        return _typedb_migrations.migrate_ontology_semantic_schema(self, driver, imported, schema_text, runtime=self._typedb_runtime())
 
-    @staticmethod
-    def schema_definition_statements(schema_text: str) -> List[str]:
-        """Split a TypeQL schema into complete top-level definitions.
+    schema_definition_statements = staticmethod(_typedb_schema_plan.schema_definition_statements)
 
-        The base schema does not contain functions, but using a small lexical
-        scanner here still avoids treating a semicolon inside a future quoted
-        annotation as a transaction boundary.
-        """
-        statements: List[str] = []
-        current: List[str] = []
-        quote = ""
-        escaped = False
-        for character in str(schema_text or ""):
-            if quote:
-                current.append(character)
-                if escaped:
-                    escaped = False
-                elif character == "\\":
-                    escaped = True
-                elif character == quote:
-                    quote = ""
-                continue
-            if character in {'"', "'"}:
-                quote = character
-                current.append(character)
-                continue
-            if character != ";":
-                current.append(character)
-                continue
-            statement = "".join(current).strip()
-            current = []
-            statement = re.sub(r"^(?:define|redefine|undefine)\s+", "", statement, count=1)
-            if statement:
-                statements.append(statement + ";")
-        return statements
+    schema_definition_identity = staticmethod(_typedb_schema_plan.schema_definition_identity)
 
-    @staticmethod
-    def schema_definition_identity(statement: str) -> Tuple[str, str]:
-        match = re.match(
-            r"^\s*(attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-            str(statement or ""),
-        )
-        return (match.group(1), match.group(2)) if match else ("", "")
+    schema_definition_clauses = staticmethod(_typedb_schema_plan.schema_definition_clauses)
 
-    @staticmethod
-    def schema_definition_clauses(statement: str) -> List[str]:
-        """Return normalized comma-delimited clauses after a type header."""
-        text = str(statement or "").strip().rstrip(";").strip()
-        clauses: List[str] = []
-        current: List[str] = []
-        quote = ""
-        escaped = False
-        for character in text:
-            if quote:
-                current.append(character)
-                if escaped:
-                    escaped = False
-                elif character == "\\":
-                    escaped = True
-                elif character == quote:
-                    quote = ""
-                continue
-            if character in {'"', "'"}:
-                quote = character
-                current.append(character)
-                continue
-            if character == ",":
-                clauses.append(re.sub(r"\s+", " ", "".join(current)).strip())
-                current = []
-                continue
-            current.append(character)
-        if current:
-            clauses.append(re.sub(r"\s+", " ", "".join(current)).strip())
-        return [clause for clause in clauses[1:] if clause]
+    schema_subtype_parent = staticmethod(_typedb_schema_plan.schema_subtype_parent)
 
-    @staticmethod
-    def schema_subtype_parent(statement: str) -> str:
-        for clause in TypeDBOntologyGraphRepository.schema_definition_clauses(statement):
-            match = re.match(r"^sub\s+([A-Za-z_][A-Za-z0-9_-]*)$", clause)
-            if match:
-                return match.group(1)
-        return ""
+    schema_topological_definitions = staticmethod(_typedb_schema_plan.schema_topological_definitions)
 
-    @staticmethod
-    def schema_topological_definitions(statements: Iterable[str]) -> List[str]:
-        """Order subtype definitions after their parent without changing them."""
-        by_name = {}
-        source_order = []
-        for statement in statements or []:
-            _kind, name = TypeDBOntologyGraphRepository.schema_definition_identity(statement)
-            if name and name not in by_name:
-                by_name[name] = str(statement or "")
-                source_order.append(name)
-        ordered: List[str] = []
-        visiting = set()
-        visited = set()
-
-        def visit(name: str) -> None:
-            if name in visited:
-                return
-            if name in visiting:
-                raise ValueError("Cyclic TypeDB schema subtype dependency: " + name)
-            visiting.add(name)
-            parent = TypeDBOntologyGraphRepository.schema_subtype_parent(by_name[name])
-            if parent in by_name:
-                visit(parent)
-            visiting.remove(name)
-            visited.add(name)
-            ordered.append(by_name[name])
-
-        for name in source_order:
-            visit(name)
-        return ordered
-
-    @staticmethod
-    def schema_definition_batches(items: Iterable[str], batch_size: int) -> List[List[str]]:
-        rows = [str(item or "").strip() for item in items or [] if str(item or "").strip()]
-        size = max(1, int(batch_size or 1))
-        return [rows[index:index + size] for index in range(0, len(rows), size)]
+    schema_definition_batches = staticmethod(_typedb_schema_plan.schema_definition_batches)
 
     def base_schema_bootstrap_plan(
         self,
         existing_schema_text: str = "",
         batch_size: int = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
     ) -> List[Dict[str, object]]:
-        """Build a resumable, dependency-ordered base-schema write plan."""
-        expected_statements = self.schema_definition_statements(self.schema_query())
-        existing_statements = self.schema_definition_statements(existing_schema_text)
-        expected_by_identity = {
-            self.schema_definition_identity(statement): statement
-            for statement in expected_statements
-            if all(self.schema_definition_identity(statement))
-        }
-        existing_by_identity = {
-            self.schema_definition_identity(statement): statement
-            for statement in existing_statements
-            if all(self.schema_definition_identity(statement))
-        }
-        existing_names = {name for _kind, name in existing_by_identity}
-        batch_size = max(1, min(2048, int(batch_size or DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE)))
-        plan: List[Dict[str, object]] = []
-
-        def append_definition_batches(phase: str, definitions: Iterable[str]) -> None:
-            for batch in self.schema_definition_batches(definitions, batch_size):
-                plan.append({
-                    "phase": phase,
-                    "definitionCount": len(batch),
-                    "query": "define\n" + "\n".join(batch),
-                })
-
-        missing_attributes = [
-            statement
-            for (kind, name), statement in expected_by_identity.items()
-            if kind == "attribute" and name not in existing_names
-        ]
-        append_definition_batches("attributes", missing_attributes)
-
-        assertion_identity = ("relation", "ontology-assertion")
-        node_identity = ("entity", "ontology-node")
-        expected_assertion = expected_by_identity.get(assertion_identity, "")
-        expected_node = expected_by_identity.get(node_identity, "")
-        if assertion_identity not in existing_by_identity:
-            plan.append({
-                "phase": "core-relation",
-                "definitionCount": 1,
-                "query": "define\nrelation ontology-assertion, relates source, relates target;",
-            })
-        if node_identity not in existing_by_identity:
-            plan.append({
-                "phase": "core-entity",
-                "definitionCount": 1,
-                "query": "define\nentity ontology-node @abstract;",
-            })
-
-        def missing_extension_clauses(identity: Tuple[str, str], expected_statement: str) -> List[str]:
-            actual = existing_by_identity.get(identity, "")
-            actual_clauses = set(self.schema_definition_clauses(actual))
-            return [
-                clause
-                for clause in self.schema_definition_clauses(expected_statement)
-                if clause.startswith(("owns ", "plays ")) and clause not in actual_clauses
-            ]
-
-        for identity, expected_statement, phase in [
-            (assertion_identity, expected_assertion, "core-relation-ownership"),
-            (node_identity, expected_node, "core-entity-contract"),
-        ]:
-            _kind, name = identity
-            clauses = missing_extension_clauses(identity, expected_statement)
-            for batch in self.schema_definition_batches(clauses, batch_size):
-                plan.append({
-                    "phase": phase,
-                    "definitionCount": len(batch),
-                    "query": "define\n" + name + " " + ", ".join(batch) + ";",
-                })
-
-        semantic_entity_names = set(semantic_class_types().values())
-        entity_definitions = self.schema_topological_definitions([
-            statement
-            for (kind, name), statement in expected_by_identity.items()
-            if kind == "entity" and name != "ontology-node" and name not in existing_names
-        ])
-        append_definition_batches(
-            "core-entity-subtypes",
-            [
-                statement for statement in entity_definitions
-                if self.schema_definition_identity(statement)[1] not in semantic_entity_names
-            ],
-        )
-        append_definition_batches(
-            "semantic-entity-subtypes",
-            [
-                statement for statement in entity_definitions
-                if self.schema_definition_identity(statement)[1] in semantic_entity_names
-            ],
-        )
-
-        semantic_relation_names = set(semantic_relation_types().values())
-        append_definition_batches(
-            "semantic-relation-subtypes",
-            [
-                statement
-                for (kind, name), statement in expected_by_identity.items()
-                if kind == "relation"
-                and name in semantic_relation_names
-                and name not in existing_names
-            ],
-        )
-        return plan
+        return _typedb_schema_plan.base_schema_bootstrap_plan(self.schema_query(), existing_schema_text, batch_size)
 
     def synchronize_base_schema_batches(
         self,
@@ -11117,57 +10461,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         batch_size: int = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
         operation_timeout_seconds: float = None,
     ) -> Dict[str, object]:
-        """Apply a cold or partially written schema through bounded commits."""
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        bounded_batch_size = max(1, min(2048, int(batch_size or DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE)))
-        plan = self.base_schema_bootstrap_plan(schema_text, batch_size=bounded_batch_size)
-        phase_counts: Dict[str, int] = {}
-        phase_durations_ms: Dict[str, int] = {}
-        batch_metrics = []
-        started_at = time.perf_counter()
-        timeout_seconds = max(
-            1.0,
-            float(operation_timeout_seconds or self.schema_operation_timeout_seconds()),
-        )
-        for index, item in enumerate(plan, start=1):
-            phase = str(item.get("phase") or "schema")
-            phase_counts[phase] = phase_counts.get(phase, 0) + 1
-            query = str(item.get("query") or "")
-            batch_started_at = time.perf_counter()
-            with typedb_operation_timeout(
-                timeout_seconds,
-                "TypeDB base schema batch " + phase,
-            ):
-                with self.schema_transaction(
-                    driver,
-                    TransactionType.SCHEMA,
-                    timeout_seconds=timeout_seconds,
-                ) as tx:
-                    tx.query(query).resolve()
-                    tx.commit()
-            duration_ms = int((time.perf_counter() - batch_started_at) * 1000)
-            phase_durations_ms[phase] = phase_durations_ms.get(phase, 0) + duration_ms
-            batch_metrics.append({
-                "batch": index,
-                "phase": phase,
-                "definitionCount": int(item.get("definitionCount") or 0),
-                "queryBytes": len(query.encode("utf-8")),
-                "durationMs": duration_ms,
-            })
-        result = {
-            "mode": "bounded-schema-batches",
-            "batchSize": bounded_batch_size,
-            "operationTimeoutSeconds": timeout_seconds,
-            "queryCount": len(plan),
-            "definitionCount": sum(int(item.get("definitionCount") or 0) for item in plan),
-            "phaseQueryCounts": phase_counts,
-            "phaseDurationsMs": phase_durations_ms,
-            "batches": batch_metrics,
-            "durationMs": int((time.perf_counter() - started_at) * 1000),
-            "resumed": bool(str(schema_text or "").strip() not in {"", "define"}),
-        }
-        self._last_base_schema_sync = dict(result)
-        return result
+        return _typedb_bootstrap.synchronize_base_schema_batches(self, driver, imported, schema_text, batch_size, operation_timeout_seconds, runtime=self._typedb_runtime())
 
     def typedb_http_json_request(
         self,
@@ -11176,40 +10470,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         timeout_seconds: float,
         token: str = "",
     ) -> Dict[str, object]:
-        """Call the local TypeDB HTTP API without introducing a new client dependency."""
-
-        base = self.http_address
-        if not base:
-            raise RuntimeError("TypeDB HTTP address is unavailable.")
-        if "://" not in base:
-            base = "http://" + base
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = "Bearer " + token
-        request = urllib.request.Request(
-            base + "/" + str(path or "").lstrip("/"),
-            data=body,
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=max(1.0, float(timeout_seconds))) as response:
-                raw = response.read().decode("utf-8").strip()
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")[:600]
-            raise RuntimeError(
-                "TypeDB HTTP " + str(error.code) + ": " + detail
-            ) from error
-        except urllib.error.URLError as error:
-            raise RuntimeError("TypeDB HTTP connection failed: " + str(error.reason)) from error
-        if not raw:
-            return {}
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise RuntimeError("TypeDB HTTP returned invalid JSON: " + raw[:300]) from error
-        return dict(parsed or {}) if isinstance(parsed, dict) else {"result": parsed}
+        return _typedb_http.typedb_http_json_request(self, path, payload, timeout_seconds, token)
 
     def synchronize_base_schema_batches_http(
         self,
@@ -11217,188 +10478,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         batch_size: int = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
         operation_timeout_seconds: float = None,
     ) -> Dict[str, object]:
-        """Bootstrap a fresh schema over HTTP when a long gRPC commit loses keep-alive."""
-
-        bounded_batch_size = max(1, min(2048, int(batch_size or DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE)))
-        timeout_seconds = max(
-            1.0,
-            float(operation_timeout_seconds or self.schema_operation_timeout_seconds()),
-        )
-        signin = self.typedb_http_json_request(
-            "/v1/signin",
-            {"username": self.user, "password": self.password},
-            min(timeout_seconds, 30.0),
-        )
-        token = str(signin.get("token") or "").strip()
-        if not token:
-            raise RuntimeError("TypeDB HTTP sign-in did not return an access token.")
-        plan = self.base_schema_bootstrap_plan(schema_text, batch_size=bounded_batch_size)
-        phase_counts: Dict[str, int] = {}
-        phase_durations_ms: Dict[str, int] = {}
-        batch_metrics = []
-        started_at = time.perf_counter()
-        for index, item in enumerate(plan, start=1):
-            phase = str(item.get("phase") or "schema")
-            query = str(item.get("query") or "")
-            batch_started_at = time.perf_counter()
-            try:
-                self.typedb_http_json_request(
-                    "/v1/query",
-                    {
-                        "databaseName": self.database,
-                        "transactionType": "schema",
-                        "query": query,
-                        "commit": True,
-                        "transactionOptions": {
-                            "transactionTimeoutMillis": int(timeout_seconds * 1000),
-                            "schemaLockAcquireTimeoutMillis": int(timeout_seconds * 1000),
-                        },
-                    },
-                    timeout_seconds,
-                    token=token,
-                )
-            except Exception as error:
-                raise RuntimeError(
-                    "TypeDB HTTP base schema batch failed at "
-                    + str(index) + "/" + str(len(plan)) + " (" + phase + "): " + str(error)
-                ) from error
-            duration_ms = int((time.perf_counter() - batch_started_at) * 1000)
-            phase_counts[phase] = phase_counts.get(phase, 0) + 1
-            phase_durations_ms[phase] = phase_durations_ms.get(phase, 0) + duration_ms
-            batch_metrics.append({
-                "batch": index,
-                "phase": phase,
-                "definitionCount": int(item.get("definitionCount") or 0),
-                "queryBytes": len(query.encode("utf-8")),
-                "durationMs": duration_ms,
-            })
-        result = {
-            "mode": "http-bounded-schema-batches",
-            "batchSize": bounded_batch_size,
-            "operationTimeoutSeconds": timeout_seconds,
-            "queryCount": len(plan),
-            "definitionCount": sum(int(item.get("definitionCount") or 0) for item in plan),
-            "phaseQueryCounts": phase_counts,
-            "phaseDurationsMs": phase_durations_ms,
-            "batches": batch_metrics,
-            "durationMs": int((time.perf_counter() - started_at) * 1000),
-            "resumed": bool(str(schema_text or "").strip() not in {"", "define"}),
-        }
-        self._last_base_schema_sync = dict(result)
-        return result
+        return _typedb_bootstrap.synchronize_base_schema_batches_http(self, schema_text, batch_size, operation_timeout_seconds, runtime=self._typedb_runtime())
 
     def ensure_schema(self, driver, imported) -> None:
-        schema = self.schema_query()
-        schema_fingerprint = hashlib.sha256(schema.encode("utf-8")).hexdigest()
-        if self._base_schema_ready_fingerprint == schema_fingerprint:
-            return
-        if self.process_base_schema_is_ready(schema_fingerprint):
-            self._base_schema_ready_fingerprint = schema_fingerprint
-            return
-        # A blue-green candidate is created from an empty storage directory.
-        # Probing types that cannot exist yet only spends the full driver
-        # timeout and can poison the first connection. Bootstrap a database
-        # created by this process directly. If the database already existed,
-        # a previous bootstrap may have persisted only some batches, so read
-        # that partial schema and resume from the first missing definition.
-        schema_text = ""
-        if self._fresh_candidate_rebuild:
-            if not self._database_created_in_process:
-                # Fail closed when an existing candidate cannot be inspected.
-                # Retrying from a blank schema would redefine completed
-                # batches, hide the original connectivity problem, and turn a
-                # bounded restart into another long bootstrap loop.
-                with typedb_operation_timeout(
-                    self._fresh_schema_bootstrap_timeout_seconds,
-                    "TypeDB partial candidate schema inspection",
-                ):
-                    schema_text = self.typedb_schema_text(driver)
-                schema_type_names = set(re.findall(
-                    r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-                    schema_text,
-                    flags=re.MULTILINE,
-                ))
-                if self.base_schema_type_names().issubset(schema_type_names):
-                    self._base_schema_ready_fingerprint = schema_fingerprint
-                    self.mark_process_base_schema_ready(schema_fingerprint)
-                    return
-            if self.http_address:
-                self.synchronize_base_schema_batches_http(
-                    schema_text,
-                    batch_size=self._fresh_schema_bootstrap_batch_size,
-                    operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
-                )
-            else:
-                self.synchronize_base_schema_batches(
-                    driver,
-                    imported,
-                    schema_text,
-                    batch_size=self._fresh_schema_bootstrap_batch_size,
-                    operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
-                )
-            self._base_schema_ready_fingerprint = schema_fingerprint
-            self.mark_process_base_schema_ready(schema_fingerprint)
-            return
-        try:
-            schema_text = self.typedb_schema_text(driver)
-            schema_type_names = set(re.findall(
-                r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-                schema_text,
-                flags=re.MULTILINE,
-            ))
-            # A new database has no ontology types yet. Reading the static
-            # manifest first issues a query against those missing types and
-            # can invalidate the driver's connection before this schema write.
-            if self.base_schema_type_names().issubset(schema_type_names):
-                contract_state = self.base_schema_contract_state()
-                if str(contract_state.get("status") or "") == "current":
-                    self._base_schema_ready_fingerprint = schema_fingerprint
-                    self.mark_process_base_schema_ready(schema_fingerprint)
-                    return
-            # Migrations extend the generic ontology storage types. A blank
-            # database has neither type, so its first schema write must be
-            # the complete base contract instead of an additive migration.
-            if {"ontology-node", "ontology-assertion"}.issubset(schema_type_names):
-                if self.ontology_storage_identity_migration_required(schema_text):
-                    self.migrate_ontology_storage_identity(driver, imported, schema_text)
-                    schema_text = self.typedb_schema_text(driver)
-                if self.ontology_scope_schema_migration_required(schema_text):
-                    self.migrate_ontology_scope_schema(driver, imported)
-                    schema_text = self.typedb_schema_text(driver)
-                if self.ontology_content_fingerprint_schema_migration_required(
-                    schema_text
-                ):
-                    self.migrate_ontology_content_fingerprint_schema(
-                        driver,
-                        imported,
-                        schema_text,
-                    )
-                    schema_text = self.typedb_schema_text(driver)
-                if self.ontology_world_schema_migration_required(schema_text):
-                    self.migrate_ontology_world_schema(driver, imported)
-                    schema_text = self.typedb_schema_text(driver)
-                if self.promoted_schema_migration_required(schema_text):
-                    self.migrate_promoted_schema(driver, imported, schema_text)
-                    schema_text = self.typedb_schema_text(driver)
-                if self.ontology_semantic_schema_migration_required(schema_text):
-                    self.migrate_ontology_semantic_schema(driver, imported, schema_text)
-                    schema_text = self.typedb_schema_text(driver)
-            schema_type_names = set(re.findall(
-                r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
-                schema_text,
-                flags=re.MULTILINE,
-            ))
-            if self.base_schema_type_names().issubset(schema_type_names):
-                self._base_schema_ready_fingerprint = schema_fingerprint
-                self.mark_process_base_schema_ready(schema_fingerprint)
-                return
-        except Exception:
-            # On a new database or an older driver without schema inspection,
-            # fall through to the idempotent schema definition below.
-            pass
-        self.synchronize_base_schema_batches(driver, imported, schema_text)
-        self._base_schema_ready_fingerprint = schema_fingerprint
-        self.mark_process_base_schema_ready(schema_fingerprint)
+        return _typedb_lifecycle.ensure_schema(self, driver, imported, runtime=self._typedb_runtime())
 
     def read_rows(
         self,
@@ -17748,63 +16831,7 @@ relation ontology-assertion,
         )
 
     def sync_base_schema_contract(self) -> Dict[str, object]:
-        """Synchronise the TypeDB storage schema after a contract change.
-
-        This is intentionally separate from the immutable static graph write:
-        adding a promoted attribute must not rewrite TBox, RuleBox, or the
-        live ABox. The manifest records the successful contract afterwards,
-        keeping future restarts on the bounded sentinel path.
-        """
-        expected = self.base_schema_contract_metadata()
-        if not self.address:
-            return {
-                "configured": False,
-                "saved": False,
-                "status": "disabled",
-                "graphStore": "typedb",
-                **expected,
-            }
-        imported = self.driver_imports()
-        if imported[0] is None:
-            result = self.driver_missing_result(imported[1], PortfolioOntology("typedb-schema-contract"))
-            result.update(expected)
-            return result
-        started_at = time.perf_counter()
-        self._last_base_schema_sync = {}
-        try:
-            def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    self.ensure_schema(driver, imported)
-                finally:
-                    self.close_driver(driver)
-
-            self.with_typedb_retries(operation)
-        except Exception as error:  # noqa: BLE001 - never execute a RuleBox against a partial schema.
-            return {
-                "configured": True,
-                "saved": False,
-                "status": "error",
-                "graphStore": "typedb",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:240],
-                "durationMs": int((time.perf_counter() - started_at) * 1000),
-                **expected,
-            }
-        return {
-            "configured": True,
-            "saved": True,
-            "status": "ok",
-            "graphStore": "typedb",
-            "durationMs": int((time.perf_counter() - started_at) * 1000),
-            "schemaSync": dict(self._last_base_schema_sync or {
-                "mode": "current-schema-contract",
-                "queryCount": 0,
-                "definitionCount": 0,
-            }),
-            **expected,
-        }
+        return _typedb_lifecycle.sync_base_schema_contract(self, runtime=self._typedb_runtime())
 
     def save_static_seed_boxes(
         self,

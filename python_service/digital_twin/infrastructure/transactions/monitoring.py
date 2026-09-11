@@ -1,3 +1,12 @@
+from digital_twin.modules.market_data.infrastructure import (
+    transaction_writes as market_data_writes,
+)
+from digital_twin.modules.notifications.infrastructure import (
+    transaction_writes as notifications_writes,
+)
+from digital_twin.modules.reasoning.infrastructure import (
+    transaction_writes as reasoning_writes,
+)
 import copy
 import json
 from datetime import datetime, timedelta, timezone
@@ -190,41 +199,13 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
         candidates: Iterable[Dict[str, object]],
         stamp: str,
     ) -> int:
-        count = 0
-        for candidate in candidates or []:
-            item = dict(candidate or {}) if isinstance(candidate, dict) else {}
-            observation = item.get("marketObservation") if isinstance(item.get("marketObservation"), dict) else {}
-            symbol = str(item.get("symbol") or "").upper().strip()
-            try:
-                pending_price = float(observation.get("currentPrice") or 0)
-                completed_price = float(observation.get("reasoningBaselinePrice") or observation.get("baselinePrice") or 0)
-            except (TypeError, ValueError):
-                continue
-            if not symbol or pending_price <= 0:
-                continue
-            connection.execute(
-                """
-                INSERT INTO market_observation_reasoning_anchors (
-                    account_id, symbol, completed_price, completed_at,
-                    pending_price, pending_event_id, pending_at, updated_at
-                ) VALUES (%s, %s, %s, '', %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    completed_price = CASE
-                        WHEN completed_price > 0 THEN completed_price
-                        ELSE VALUES(completed_price)
-                    END,
-                    pending_price = VALUES(pending_price),
-                    pending_event_id = VALUES(pending_event_id),
-                    pending_at = VALUES(pending_at),
-                    updated_at = VALUES(updated_at)
-                """,
-                (
-                    str(account_id or ""), symbol, completed_price, pending_price,
-                    str(event_id or ""), str(stamp or utc_now()), str(stamp or utc_now()),
-                ),
-            )
-            count += 1
-        return count
+        return market_data_writes.mark_reasoning_anchor_pending(
+            connection=connection,
+            account_id=account_id,
+            event_id=event_id,
+            candidates=candidates,
+            stamp=stamp,
+        )
 
     def complete(
         self,
@@ -550,8 +531,9 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
         errors = []
         for row in completed_rows or []:
             try:
-                stored_result = json.loads(str(row.get("result_json") or "{}"))
-                repair = job_store.complete(str(row.get("job_id") or ""), stored_result)
+                repair = job_store.repair_completed_receipts(
+                    str(row.get("job_id") or "")
+                )
                 event_ids.update(repair.get("eventIds") or [])
             except Exception as error:  # repair is retried on the next monitor cycle
                 errors.append(str(error)[:300])
@@ -792,26 +774,12 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             previous_state=previous_state,
             settings=self.runtime_settings,
         )
-        connection.execute(
-            """
-            INSERT INTO monitor_snapshots (
-                account_id, account_label, provider, mode, status, generated_at, payload_json, updated_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE account_label = VALUES(account_label), provider = VALUES(provider),
-                mode = VALUES(mode), status = VALUES(status), generated_at = VALUES(generated_at),
-                payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
-            """,
-            (
-                account_id,
-                str(state.get("accountLabel") or ""),
-                str(state.get("provider") or ""),
-                str(state.get("mode") or ""),
-                str(state.get("status") or ""),
-                generated_at,
-                json_dumps(state),
-                updated_at,
-            ),
+        market_data_writes.upsert_monitor_snapshot(
+            connection=connection,
+            account_id=account_id,
+            generated_at=generated_at,
+            state=state,
+            updated_at=updated_at,
         )
         self.upsert_reasoning_snapshot_inputs_with_connection(
             connection,
@@ -821,40 +789,18 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             stamp=updated_at,
             previous_state=previous_state,
         )
-        connection.execute(
-            """
-            INSERT INTO monitor_snapshot_history (
-                account_id, generated_at, payload_json, projection_payload_json, created_at
-            )
-            VALUES (%s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json),
-                projection_payload_json = VALUES(projection_payload_json), created_at = VALUES(created_at)
-            """,
-            (account_id, generated_at, json_dumps(state), json_dumps(temporal_projection), updated_at),
+        market_data_writes.upsert_monitor_snapshot_history(
+            connection=connection,
+            account_id=account_id,
+            generated_at=generated_at,
+            state=state,
+            temporal_projection=temporal_projection,
+            updated_at=updated_at,
         )
-        connection.execute(
-            """
-            INSERT IGNORE INTO verified_reasoning_source_snapshots (
-                snapshot_id, account_id, account_label, provider, mode, status,
-                generated_at, contract_version, fingerprint, symbols_json,
-                payload_json, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                source_snapshot["snapshotId"],
-                source_snapshot["accountId"],
-                source_snapshot["accountLabel"],
-                source_snapshot["provider"],
-                source_snapshot["mode"],
-                source_snapshot["status"],
-                source_snapshot["generatedAt"],
-                source_snapshot["contractVersion"],
-                source_snapshot["fingerprint"],
-                json_dumps(source_snapshot["symbols"]),
-                json_dumps(source_snapshot["payload"]),
-                updated_at,
-                updated_at,
-            ),
+        reasoning_writes.insert_verified_source_snapshot(
+            connection=connection,
+            source_snapshot=source_snapshot,
+            updated_at=updated_at,
         )
 
     def upsert_reasoning_snapshot_inputs_with_connection(
@@ -867,68 +813,14 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         stamp: str = "",
         previous_state: Dict[str, object] = None,
     ) -> None:
-        """Persist target-scoped TypeDB input beside its verified source row.
-
-        The durable mailbox event is inserted in the same monitoring-cycle
-        transaction.  Writing this cache here gives the reasoning worker a
-        small, revision-aligned input without asking it to decode the source
-        provider archive after it has already claimed live queue work.
-        """
-
-        current = dict(state or {}) if isinstance(state, dict) else {}
-        normalized_account_id = str(account_id or "").strip()
-        if not normalized_account_id:
-            return
-        updated_at = str(stamp or utc_now())
-        source_generated_at = str(generated_at or current.get("generatedAt") or updated_at)
-        base = compact_monitor_state_for_reasoning_base(
-            current,
-            settings=self.runtime_settings,
-        )
-        base["accountId"] = str(base.get("accountId") or normalized_account_id)
-        base["generatedAt"] = str(base.get("generatedAt") or source_generated_at)
-        compact_previous = compact_monitor_state_for_ontology(
-            previous_state,
-            settings=self.runtime_settings,
-        ) if isinstance(previous_state, dict) else {}
-        previous_generated_at = str(compact_previous.get("generatedAt") or "")
-        if compact_previous and previous_generated_at and previous_generated_at < source_generated_at:
-            metadata = dict(base.get("metadata") or {})
-            metadata["previousMonitorState"] = compact_previous
-            base["metadata"] = metadata
-        inputs = [("", base)]
-        for symbol in sorted(reasoning_snapshot_symbols(current)):
-            inputs.append((
-                symbol,
-                compact_monitor_state_for_reasoning_symbol(
-                    current,
-                    symbol,
-                    settings=self.runtime_settings,
-                ),
-            ))
-        for symbol, payload in inputs:
-            connection.execute(
-                """
-                INSERT INTO monitor_snapshot_reasoning_inputs (
-                    account_id, generated_at, symbol, payload_json, updated_at
-                ) VALUES (%s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE generated_at = VALUES(generated_at),
-                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
-                """,
-                (
-                    normalized_account_id,
-                    source_generated_at,
-                    str(symbol or ""),
-                    json_dumps(payload),
-                    updated_at,
-                ),
-            )
-        cached_symbols = [str(symbol or "") for symbol, _payload in inputs]
-        placeholders = ", ".join(["%s"] * len(cached_symbols))
-        connection.execute(
-            "DELETE FROM monitor_snapshot_reasoning_inputs "
-            "WHERE account_id = %s AND symbol NOT IN (" + placeholders + ")",
-            tuple([normalized_account_id] + cached_symbols),
+        return reasoning_writes.upsert_reasoning_snapshot_inputs(
+            connection=connection,
+            account_id=account_id,
+            state=state,
+            generated_at=generated_at,
+            stamp=stamp,
+            previous_state=previous_state,
+            _runtime_settings=self.runtime_settings,
         )
 
     def upsert_snapshot_state(
@@ -997,17 +889,12 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         return entries
 
     def mark_sent_with_connection(self, connection, events: Iterable[AlertEvent], stamp: str) -> Dict[str, str]:
-        entries = self.sent_entries(events, stamp)
-        for key, sent_at in entries.items():
-            connection.execute(
-                """
-                INSERT INTO monitor_sent (sent_key_hash, sent_key, sent_at)
-                VALUES (%s, %s, %s)
-                ON DUPLICATE KEY UPDATE sent_at = VALUES(sent_at)
-                """,
-                (_sent_key_hash(key), key, sent_at),
-            )
-        return entries
+        return notifications_writes.mark_monitor_alerts_sent(
+            connection=connection,
+            events=events,
+            stamp=stamp,
+            _sent_entries=self.sent_entries,
+        )
 
     def mark_sent(self, events: Iterable[AlertEvent]) -> None:
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

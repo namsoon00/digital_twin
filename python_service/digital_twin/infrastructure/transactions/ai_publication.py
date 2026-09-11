@@ -1,3 +1,10 @@
+from digital_twin.modules.decisions.infrastructure import (
+    transaction_writes as decisions_writes,
+)
+from digital_twin.modules.notifications.infrastructure import (
+    transaction_writes as notifications_writes,
+)
+
 """MySQL-backed, per-subject single-flight queue for notification AI inference."""
 
 
@@ -612,53 +619,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         }
 
     def insert_request_with_connection(self, connection, request: AIInferenceRequest) -> None:
-        durable_context = compact_ai_queue_context(request.context)
-        connection.execute(
-            """
-            INSERT INTO ai_inference_requests (
-                request_id, notification_job_id, origin_kind, origin_id,
-                material_fingerprint, account_id, account_label,
-                message_type, subject_key, symbol, inference_generation_id,
-                context_hash, prompt_version, model, reasoning_effort, priority,
-                status, attempts, available_at, lease_owner, lease_expires_at,
-                heartbeat_at, superseded_by, created_at, updated_at, started_at,
-                completed_at, last_error, context_json
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-            """,
-            (
-                request.request_id,
-                request.notification_job_id,
-                request.origin_kind,
-                request.origin_id,
-                request.material_fingerprint,
-                request.account_id,
-                request.account_label,
-                request.message_type,
-                request.subject_key,
-                request.symbol,
-                request.inference_generation_id,
-                request.context_hash,
-                request.prompt_version,
-                request.model,
-                request.reasoning_effort,
-                request.priority,
-                request.status,
-                request.attempts,
-                request.available_at,
-                request.lease_owner,
-                request.lease_expires_at,
-                request.heartbeat_at,
-                request.superseded_by,
-                request.created_at,
-                request.updated_at,
-                request.started_at,
-                request.completed_at,
-                request.last_error,
-                json_dumps(durable_context),
-            ),
+        return decisions_writes.insert_ai_request(
+            connection=connection,
+            request=request,
+            _bound_compact_ai_queue_context=compact_ai_queue_context,
         )
 
     def supersede_request_with_connection(
@@ -1073,14 +1037,15 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 )
             )
             if not publishable:
-                if current and _clean(current.get("status")) == AI_INFERENCE_PROCESSING:
-                    connection.execute(
-                        """
-                        UPDATE ai_inference_requests SET status = %s, lease_owner = '',
-                            lease_expires_at = '', completed_at = %s, updated_at = %s
-                        WHERE request_id = %s
-                        """,
-                        (AI_INFERENCE_SUPERSEDED, stamp, stamp, request.request_id),
+                if (
+                    current
+                    and _clean(current.get("status")) == AI_INFERENCE_PROCESSING
+                    and _clean(current.get("lease_owner")) == _clean(worker_id)
+                ):
+                    decisions_writes.supersede_unpublishable_ai_request(
+                        connection=connection,
+                        request=request,
+                        stamp=stamp,
                     )
                 return False
 
@@ -1143,65 +1108,29 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 if existing_audit and _clean(existing_audit.get("artifact_fingerprint")) != artifact_fingerprint:
                     raise ValueError("Immutable AI execution audit fingerprint mismatch: " + request.request_id)
                 if not existing_audit:
-                    connection.execute(
-                        "INSERT INTO ai_inference_execution_audits ("
-                        "request_id, notification_job_id, artifact_fingerprint, prompt_hash, model, "
-                        "reasoning_effort, artifact_gzip, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                        (
-                            request.request_id,
-                            request.notification_job_id,
-                            artifact_fingerprint,
-                            _clean(execution_audit.get("promptHash")),
-                            request.model,
-                            request.reasoning_effort,
-                            gzip.compress(audit_json.encode("utf-8"), compresslevel=6),
-                            stamp,
-                        ),
+                    decisions_writes.insert_ai_execution_audit(
+                        connection=connection,
+                        artifact_fingerprint=artifact_fingerprint,
+                        audit_json=audit_json,
+                        execution_audit=execution_audit,
+                        request=request,
+                        stamp=stamp,
+                        _bound__clean=_clean,
                     )
 
-            connection.execute(
-                """
-                INSERT INTO ai_inference_results (
-                    result_id, request_id, notification_job_id, model,
-                    reasoning_effort, source, validation_state, publication_mode,
-                    ai_authored, publication_contract_passed, contract_failure_code, latency_ms,
-                    prompt_bytes, response_json, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE result_id = VALUES(result_id),
-                    source = VALUES(source), validation_state = VALUES(validation_state),
-                    publication_mode = VALUES(publication_mode), ai_authored = VALUES(ai_authored),
-                    publication_contract_passed = VALUES(publication_contract_passed),
-                    contract_failure_code = VALUES(contract_failure_code),
-                    latency_ms = VALUES(latency_ms), prompt_bytes = VALUES(prompt_bytes),
-                    response_json = VALUES(response_json), created_at = VALUES(created_at)
-                """,
-                (
-                    result.result_id,
-                    result.request_id,
-                    result.notification_job_id,
-                    result.model,
-                    result.reasoning_effort,
-                    result.source,
-                    result.validation_state,
-                    publication_mode,
-                    1 if ai_authored else 0,
-                    1 if publication_contract_passed else 0,
-                    ai_contract_failure_code(contract_error),
-                    result.latency_ms,
-                    result.prompt_bytes,
-                    json_dumps(result.response),
-                    result.created_at,
-                ),
+            decisions_writes.upsert_ai_result(
+                connection=connection,
+                ai_authored=ai_authored,
+                contract_error=contract_error,
+                publication_contract_passed=publication_contract_passed,
+                publication_mode=publication_mode,
+                result=result,
+                _bound_ai_contract_failure_code=ai_contract_failure_code,
             )
-            connection.execute(
-                """
-                UPDATE ai_inference_requests
-                SET status = %s, lease_owner = '', lease_expires_at = '',
-                    heartbeat_at = '', completed_at = %s, updated_at = %s,
-                    last_error = '', context_json = '{}'
-                WHERE request_id = %s
-                """,
-                (AI_INFERENCE_COMPLETED, stamp, stamp, request.request_id),
+            decisions_writes.complete_ai_request(
+                connection=connection,
+                request=request,
+                stamp=stamp,
             )
             completed_context = dict(notification_context or {})
             completed_context["notificationAIInsightProvenance"] = {
@@ -1274,13 +1203,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     only_if_statuses=("awaiting_ai",),
                 )
             if not updated:
-                connection.execute(
-                    """
-                    UPDATE ai_inference_requests SET status = %s, lease_owner = '',
-                        lease_expires_at = '', completed_at = %s, updated_at = %s,
-                        last_error = '' WHERE request_id = %s
-                    """,
-                    (AI_INFERENCE_SUPERSEDED, stamp, stamp, request.request_id),
+                decisions_writes.supersede_unreleased_ai_request(
+                    connection=connection,
+                    request=request,
+                    stamp=stamp,
                 )
                 return False
             if callable(after_complete):
@@ -1306,38 +1232,9 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 )
                 completed_context["investmentAIInsightEpisode"] = insight_episode.to_dict()
                 notification_context["investmentAIInsightEpisode"] = insight_episode.to_dict()
-                connection.execute(
-                    """
-                    INSERT INTO investment_ai_insight_episodes (
-                        episode_id, request_id, result_id, handoff_id,
-                        subject_case_id, account_id, symbol,
-                        source_abox_snapshot_id, inference_generation_id,
-                        candidate_fingerprint, model, reasoning_effort,
-                        validation_state, notification_job_id, payload_json,
-                        created_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    """,
-                    (
-                        insight_episode.episode_id,
-                        insight_episode.request_id,
-                        insight_episode.result_id,
-                        insight_episode.handoff_id,
-                        insight_episode.subject_case_id,
-                        insight_episode.account_id,
-                        insight_episode.symbol,
-                        insight_episode.source_abox_snapshot_id,
-                        insight_episode.inference_generation_id,
-                        insight_episode.candidate_fingerprint,
-                        insight_episode.model,
-                        insight_episode.reasoning_effort,
-                        insight_episode.validation_state,
-                        insight_episode.notification_job_id,
-                        json_dumps(insight_episode.to_dict()),
-                        insight_episode.created_at,
-                    ),
+                decisions_writes.insert_ai_insight_episode(
+                    connection=connection,
+                    insight_episode=insight_episode,
                 )
             insert_domain_event_with_connection(
                 connection,
@@ -1460,43 +1357,19 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         only_if_statuses=(),
         attempts_delta: int = 0,
     ) -> bool:
-        row = connection.execute(
-            "SELECT status, text, payload_json FROM notification_jobs WHERE job_id = %s FOR UPDATE",
-            (_clean(notification_job_id),),
-        ).fetchone()
-        if not row:
-            return False
-        if only_if_statuses and _clean(row.get("status")) not in set(only_if_statuses):
-            return False
-        job = _notification_job_from_row(row)
-        context = dict(replacement_context) if isinstance(replacement_context, dict) else dict(job.context or {})
-        for key, value in dict(context_updates or {}).items():
-            if isinstance(value, dict) and isinstance(context.get(key), dict):
-                context[key] = {**dict(context.get(key) or {}), **value}
-            else:
-                context[key] = value
-        job.context = context
-        job.status = _clean(status) or job.status
-        job.attempts = max(0, int(job.attempts or 0) + int(attempts_delta or 0))
-        job.updated_at = utc_now()
-        job.last_error = _clean(error)
-        cursor = connection.execute(
-            """
-            UPDATE notification_jobs
-            SET status = %s, attempts = %s, updated_at = %s, last_error = %s,
-                processing_started_at = '', retry_at = '', payload_json = %s
-            WHERE job_id = %s
-            """,
-            (
-                job.status,
-                job.attempts,
-                job.updated_at,
-                job.last_error,
-                json_dumps(_compact_notification_payload(job)),
-                job.job_id,
-            ),
+        return notifications_writes.set_ai_delivery_status(
+            connection=connection,
+            notification_job_id=notification_job_id,
+            status=status,
+            error=error,
+            context_updates=context_updates,
+            replacement_context=replacement_context,
+            only_if_statuses=only_if_statuses,
+            attempts_delta=attempts_delta,
+            _bound__clean=_clean,
+            _bound__compact_notification_payload=_compact_notification_payload,
+            _bound__notification_job_from_row=_notification_job_from_row,
         )
-        return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
     def get(self, request_id: str) -> Optional[AIInferenceRequest]:
         with self.connect() as connection:

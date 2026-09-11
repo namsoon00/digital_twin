@@ -433,6 +433,23 @@ packages. Preserve per-repository driver/lock/cache identities and coordinator
 decorators. A cleanup or native-retry change requires failure-path and active
 generation preservation tests, not just query snapshots.
 
+Projection orchestration is phase-bound inside `projection_write`: prepare,
+assemble, select, repair, validate, plan, reuse, audit, journal, publish and
+follow-up. Keep explicit inputs, minimal ports and frozen result envelopes;
+do not introduce a mutable global context or another asynchronous boundary.
+Audit identity must survive exceptions after audit creation. Candidate
+validation and durable source audit precede active generation publication.
+
+Shared transaction coordinators delegate owner writes to each module's
+`infrastructure/transaction_writes.py`. These functions receive a
+`BoundWriteConnection`, cannot open connections or commit, and preserve exact
+SQL/order/rollback behavior. Reasoning job mutations require the current worker
+and claim timestamp, including heartbeats and release binding. Never turn a
+completed job back into pending because a later batch health update failed.
+Completed-job receipt repair reads the locked persisted result through its own
+method; it must not rewrite completion state or repeat inference. See
+`docs/backend-stabilization.md` for the isolated failure rehearsals.
+
 Keep source input assembly in `modules/reasoning/application/projection_input`.
 Inject source-reader, outcome-observer, scorer and cache capabilities separately;
 never pass the TypeDB writer or a notification publisher into those stages.

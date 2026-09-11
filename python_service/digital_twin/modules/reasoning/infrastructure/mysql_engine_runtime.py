@@ -1,3 +1,5 @@
+from .job_ownership import lock_job_claim
+from .job_receipts import publish_job_receipts
 import os
 import socket
 import uuid
@@ -1254,6 +1256,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         event,
         max_symbols: int,
         worker_id: str = "",
+        claimed_at: str = "",
     ) -> Dict[str, object]:
         """Atomically replace one legacy oversized job with bounded shards."""
 
@@ -1273,6 +1276,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 return {"status": "lease-lost", "shardCount": 0}
             if str(worker_id or "") and str(row.get("lease_owner") or "") != str(worker_id or ""):
                 return {"status": "lease-lost", "shardCount": 0}
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             deployment_id = str(row.get("deployment_id") or "")
             priority = int(row.get("priority") or self.event_priority(event))
             first_event = source_events[0]
@@ -1847,7 +1851,20 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     stamp, stamp, stamp, *job_ids,
                 ),
             )
-        return [self.row_payload(row) for row in rows or []]
+        return [
+            self.row_payload(
+                {
+                    **row,
+                    "job_status": "processing",
+                    "lease_owner": str(worker_id or "reasoning-v2"),
+                    "lease_expires_at": lease_until,
+                    "heartbeat_at": stamp,
+                    "claimed_at": stamp,
+                    "current_stage": "claimed",
+                }
+            )
+            for row in rows or []
+        ]
 
     @reasoning_queue_deadlock_retry("reasoning-engine-release-bind")
     def bind_release(
@@ -1855,13 +1872,22 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         job_ids: Iterable[str],
         release_identity: Mapping[str, object],
         reasoning_lane: str,
+        worker_id: str = "",
+        claimed_tokens: Mapping[str, str] = None,
     ) -> None:
         selected = [str(job_id or "") for job_id in job_ids or [] if str(job_id or "")]
         if not selected:
             return
         release = dict(release_identity or {})
         placeholders = ",".join(["%s"] * len(selected))
-        with self.connect() as connection:
+        with self.transaction() as connection:
+            for job_id in sorted(set(selected)):
+                lock_job_claim(
+                    connection,
+                    job_id,
+                    worker_id,
+                    (claimed_tokens or {}).get(job_id, ""),
+                )
             connection.execute(
                 "UPDATE reasoning_engine_jobs SET release_fingerprint = %s, "
                 "validation_cohort_id = %s, runtime_revision = %s, reasoning_lane = %s "
@@ -1882,6 +1908,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         worker_id: str,
         lease_seconds: int,
         progress: Mapping[str, object] = None,
+        claimed_tokens: Mapping[str, str] = None,
     ) -> bool:
         selected = [str(job_id or "") for job_id in job_ids or [] if str(job_id or "")]
         if not selected:
@@ -1892,214 +1919,56 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         stage = str(progress_values.get("stage") or "")[:96]
         details = dict(progress_values.get("details") or {})
         placeholders = ",".join(["%s"] * len(selected))
+        attempt_filter = ""
+        attempt_params = []
+        if claimed_tokens:
+            attempt_filter = (
+                " AND ("
+                + " OR ".join("(job_id = %s AND claimed_at = %s)" for _ in selected)
+                + ")"
+            )
+            for job_id in selected:
+                attempt_params.extend((job_id, str(claimed_tokens.get(job_id) or "")))
         with self.connect() as connection:
             cursor = connection.execute(
                 "UPDATE reasoning_engine_jobs SET heartbeat_at = %s, lease_expires_at = %s, "
                 "stage_started_at = CASE WHEN current_stage <> %s THEN %s ELSE stage_started_at END, "
                 "current_stage = %s, stage_updated_at = %s, stage_details_json = %s, "
                 "updated_at = %s WHERE job_status = 'processing' AND lease_owner = %s "
-                "AND job_id IN (" + placeholders + ")",
+                "AND lease_expires_at > %s AND job_id IN ("
+                + placeholders
+                + ")"
+                + attempt_filter,
                 (
-                    stamp, lease_until, stage, stamp, stage, stamp,
-                    canonical_json(details), stamp, str(worker_id or ""), *selected,
+                    stamp,
+                    lease_until,
+                    stage,
+                    stamp,
+                    stage,
+                    stamp,
+                    canonical_json(details),
+                    stamp,
+                    str(worker_id or ""),
+                    stamp,
+                    *selected,
+                    *attempt_params,
                 ),
             )
         return int(getattr(cursor, "rowcount", 0) or 0) == len(selected)
 
     @reasoning_queue_deadlock_retry("reasoning-engine-job-complete")
-    def complete(self, job_id: str, result: Mapping[str, object], worker_id: str = "") -> Dict[str, object]:
+    def complete(
+        self,
+        job_id: str,
+        result: Mapping[str, object],
+        worker_id: str = "",
+        claimed_at: str = "",
+    ) -> Dict[str, object]:
         stamp = iso_utc()
         values = dict(result or {})
-        completion_summary = {
-            "contractVersion": MARKET_OBSERVATION_REASONING_RECEIPT_VERSION,
-            "anchorCompletionAtomic": True,
-            "status": "not-required",
-            "completedCount": 0,
-            "receiptCount": 0,
-            "eventIds": [],
-            "accountIds": [],
-            "symbols": [],
-            "receipts": [],
-        }
         with self.transaction() as connection:
-            job = connection.execute(
-                "SELECT job_id, deployment_id, source_event_id, source_snapshot_id, source_snapshot_at, "
-                "request_json, release_fingerprint FROM reasoning_engine_jobs "
-                "WHERE job_id = %s FOR UPDATE",
-                (str(job_id or ""),),
-            ).fetchone() or {}
-            if not job:
-                raise RuntimeError("The V2 reasoning job disappeared before completion publication.")
-            request_json = json_value(job.get("request_json"), {})
-            source_event = dict(request_json.get("sourceEvent") or {})
-            scope = market_observation_completion_scope(source_event)
-            lineage_cursor = connection.execute(
-                "SELECT source_event_id, account_id, symbol, source_snapshot_id, source_snapshot_at, "
-                "representation_mode FROM reasoning_engine_job_sources "
-                "WHERE survivor_job_id = %s ORDER BY source_event_id, account_id, symbol",
-                (str(job_id or ""),),
-            )
-            lineage_rows = (
-                lineage_cursor.fetchall() or []
-                if callable(getattr(lineage_cursor, "fetchall", None))
-                else []
-            )
-            evaluated_symbols = {
-                str(value or "").upper().strip()
-                for value in values.get("evaluated_symbols") or values.get("evaluatedSymbols") or []
-                if str(value or "").strip()
-            }
-            account_ids = {
-                str(value or "").strip()
-                for value in values.get("account_ids") or values.get("accountIds") or []
-                if str(value or "").strip()
-            }
-            projection_results = dict(values.get("projection_results") or values.get("projectionResults") or {})
-            account_ids.update(str(value or "").strip() for value in projection_results if str(value or "").strip())
-            if not account_ids:
-                account_ids.update(scope["accountIds"])
-            if not evaluated_symbols:
-                evaluated_symbols.update(scope["symbols"])
-            event_ids = tuple(sorted({
-                *scope["eventIds"],
-                *{
-                    str(row.get("source_event_id") or "").strip()
-                    for row in lineage_rows
-                    if str(row.get("source_event_id") or "").strip()
-                },
-            }))
-            matching_anchors = []
-            if account_ids and evaluated_symbols:
-                account_placeholders = ",".join(["%s"] * len(account_ids))
-                symbol_placeholders = ",".join(["%s"] * len(evaluated_symbols))
-                source_snapshot_at = str(job.get("source_snapshot_at") or "").strip()
-                identity_clause = ""
-                identity_params = ()
-                if event_ids:
-                    event_placeholders = ",".join(["%s"] * len(event_ids))
-                    identity_clause = "pending_event_id IN (" + event_placeholders + ")"
-                    identity_params = tuple(event_ids)
-                if source_snapshot_at:
-                    boundary_clause = "(pending_at <> '' AND pending_at <= %s)"
-                    identity_clause = (
-                        "(" + identity_clause + " OR " + boundary_clause + ")"
-                        if identity_clause else boundary_clause
-                    )
-                    identity_params = identity_params + (source_snapshot_at,)
-                if not identity_clause:
-                    identity_clause = "1 = 0"
-                matching_anchors = connection.execute(
-                    "SELECT account_id, symbol, pending_event_id "
-                    "FROM market_observation_reasoning_anchors "
-                    "WHERE pending_event_id <> '' AND " + identity_clause + " "
-                    "AND account_id IN (" + account_placeholders + ") "
-                    "AND symbol IN (" + symbol_placeholders + ") FOR UPDATE",
-                    identity_params + tuple(sorted(account_ids)) + tuple(sorted(evaluated_symbols)),
-                ).fetchall()
-            release_identity = dict(values.get("release_identity") or values.get("releaseIdentity") or {})
-            release_fingerprint = str(
-                release_identity.get("releaseFingerprint")
-                or values.get("release_fingerprint")
-                or values.get("releaseFingerprint")
-                or job.get("release_fingerprint")
-                or ""
-            )
-            tbox_fingerprint = str(release_identity.get("tboxFingerprint") or "")
-            tbox_release_id = str(release_identity.get("tboxReleaseId") or "")
-            rulebox_release_id = str(release_identity.get("ruleboxReleaseId") or "")
-            rulebox_fingerprint = str(release_identity.get("ruleboxFingerprint") or "")
-            receipts = []
-            for anchor in matching_anchors or []:
-                account_id = str(anchor.get("account_id") or "").strip()
-                symbol = str(anchor.get("symbol") or "").upper().strip()
-                represented_event_id = str(anchor.get("pending_event_id") or "").strip()
-                projection = dict(projection_results.get(account_id) or {})
-                receipt_mode = (
-                    completion_mode(str(job.get("source_event_id") or ""), represented_event_id)
-                    if represented_event_id in event_ids
-                    else COMPLETION_MODE_VERIFIED_LATER_BOUNDARY
-                )
-                receipt = MarketObservationReasoningReceipt(
-                    source_event_id=represented_event_id,
-                    account_id=account_id,
-                    symbol=symbol,
-                    survivor_job_id=str(job_id or ""),
-                    deployment_id=str(job.get("deployment_id") or ""),
-                    source_snapshot_id=str(job.get("source_snapshot_id") or ""),
-                    source_snapshot_at=str(job.get("source_snapshot_at") or ""),
-                    source_abox_snapshot_id=str(
-                        projection.get("sourceAboxSnapshotId")
-                        or projection.get("source_abox_snapshot_id")
-                        or ""
-                    ),
-                    inference_generation_id=str(
-                        projection.get("inferenceGenerationId")
-                        or projection.get("inference_generation_id")
-                        or ""
-                    ),
-                    release_fingerprint=release_fingerprint,
-                    tbox_release_id=tbox_release_id,
-                    tbox_fingerprint=tbox_fingerprint,
-                    rulebox_release_id=rulebox_release_id,
-                    rulebox_fingerprint=rulebox_fingerprint,
-                    completion_mode=receipt_mode,
-                    completed_at=stamp,
-                ).to_dict()
-                connection.execute(
-                    """
-                    INSERT INTO market_observation_reasoning_receipts (
-                        source_event_id, account_id, symbol, survivor_job_id, deployment_id,
-                        source_snapshot_id, source_snapshot_at, source_abox_snapshot_id,
-                        inference_generation_id, release_fingerprint,
-                        tbox_release_id, tbox_fingerprint,
-                        rulebox_release_id, rulebox_fingerprint,
-                        completion_mode, completed_at, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        survivor_job_id = VALUES(survivor_job_id),
-                        deployment_id = VALUES(deployment_id),
-                        source_snapshot_id = VALUES(source_snapshot_id),
-                        source_snapshot_at = VALUES(source_snapshot_at),
-                        source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
-                        inference_generation_id = VALUES(inference_generation_id),
-                        release_fingerprint = VALUES(release_fingerprint),
-                        tbox_release_id = VALUES(tbox_release_id),
-                        tbox_fingerprint = VALUES(tbox_fingerprint),
-                        rulebox_release_id = VALUES(rulebox_release_id),
-                        rulebox_fingerprint = VALUES(rulebox_fingerprint),
-                        completion_mode = VALUES(completion_mode),
-                        completed_at = VALUES(completed_at)
-                    """,
-                    (
-                        receipt["sourceEventId"], receipt["accountId"], receipt["symbol"],
-                        receipt["survivorJobId"], receipt["deploymentId"], receipt["sourceSnapshotId"],
-                        receipt["sourceSnapshotAt"], receipt["sourceAboxSnapshotId"],
-                        receipt["inferenceGenerationId"], receipt["releaseFingerprint"],
-                        receipt["tboxReleaseId"], receipt["tboxFingerprint"],
-                        receipt["ruleboxReleaseId"], receipt["ruleboxFingerprint"],
-                        receipt["completionMode"], stamp, stamp,
-                    ),
-                )
-                updated = connection.execute(
-                    """
-                    UPDATE market_observation_reasoning_anchors
-                    SET completed_price = pending_price, completed_at = %s,
-                        pending_price = 0, pending_event_id = '', pending_at = '', updated_at = %s
-                    WHERE account_id = %s AND symbol = %s AND pending_event_id = %s
-                    """,
-                    (stamp, stamp, account_id, symbol, represented_event_id),
-                )
-                if int(getattr(updated, "rowcount", 0) or 0) == 1:
-                    receipts.append(receipt)
-            completion_summary.update({
-                "status": "completed" if receipts else "not-required",
-                "completedCount": len(receipts),
-                "receiptCount": len(receipts),
-                "eventIds": sorted({item["sourceEventId"] for item in receipts}),
-                "accountIds": sorted({item["accountId"] for item in receipts}),
-                "symbols": sorted({item["symbol"] for item in receipts}),
-                "receipts": receipts,
-            })
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
+            completion_summary = publish_job_receipts(connection, job_id, values, stamp)
             stored_values = {**values, "market_observation_completion_receipt": completion_summary}
             where = "job_id = %s"
             params = [str(job_id or "")]
@@ -2128,9 +1997,33 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 raise RuntimeError("The V2 reasoning job lease was lost before completion publication.")
         return completion_summary
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-receipt-repair")
+    def repair_completed_receipts(self, job_id: str) -> Dict[str, object]:
+        """Repair from the locked durable result without rewriting a job's state."""
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT job_status, result_json FROM reasoning_engine_jobs "
+                "WHERE job_id = %s FOR UPDATE",
+                (str(job_id or ""),),
+            ).fetchone()
+            if not row or str(row.get("job_status") or "") != "completed":
+                return {"status": "not-completed", "eventIds": [], "completedCount": 0}
+            values = json_value(row.get("result_json"), {})
+            if not isinstance(values, Mapping):
+                raise ValueError("A completed reasoning result must be an object.")
+            return publish_job_receipts(connection, job_id, values, iso_utc())
+
     @reasoning_queue_deadlock_retry("reasoning-engine-job-defer")
-    def defer(self, job_id: str, reason: str, retry_after_seconds: int = 15) -> None:
-        with self.connect() as connection:
+    def defer(
+        self,
+        job_id: str,
+        reason: str,
+        retry_after_seconds: int = 15,
+        worker_id: str = "",
+        claimed_at: str = "",
+    ) -> None:
+        with self.transaction() as connection:
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             connection.execute(
                 """
                 UPDATE reasoning_engine_jobs
@@ -2156,6 +2049,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         reason: str,
         retry_after_seconds: int = 30,
         max_attempts: int = 5,
+        worker_id: str = "",
+        claimed_at: str = "",
     ) -> Dict[str, object]:
         """Park a tracked subject whose SharedPremiseWorld is not ready.
 
@@ -2165,6 +2060,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         """
 
         with self.transaction() as connection:
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             row = connection.execute(
                 "SELECT attempts FROM reasoning_engine_jobs WHERE job_id = %s FOR UPDATE",
                 (str(job_id or ""),),
@@ -2225,6 +2121,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         reason: str,
         retry_after_seconds: int = 60,
         max_attempts: int = 2,
+        worker_id: str = "",
+        claimed_at: str = "",
     ) -> Dict[str, object]:
         """Bound retries after scoped and complete-source Manifest repair fail.
 
@@ -2234,6 +2132,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         """
 
         with self.transaction() as connection:
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             row = connection.execute(
                 "SELECT attempts FROM reasoning_engine_jobs WHERE job_id = %s FOR UPDATE",
                 (str(job_id or ""),),
@@ -2306,6 +2205,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         result: Mapping[str, object],
         reason: str,
         reason_code: str = "reasoning-scope-not-applicable",
+        worker_id: str = "",
+        claimed_at: str = "",
     ) -> None:
         """Finish a durable request that has no applicable investment scope."""
 
@@ -2323,7 +2224,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 or "reasoning-scope-not-applicable"
             )[:96],
         })
-        with self.connect() as connection:
+        with self.transaction() as connection:
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             connection.execute(
                 """
                 UPDATE reasoning_engine_jobs
@@ -2351,6 +2253,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         result: Mapping[str, object],
         reason: str,
         reason_code: str = "reasoning-execution-failed",
+        worker_id: str = "",
+        claimed_at: str = "",
     ) -> None:
         """Finish a durable request after a non-transient execution failure."""
 
@@ -2368,7 +2272,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 or "reasoning-execution-failed"
             )[:96],
         })
-        with self.connect() as connection:
+        with self.transaction() as connection:
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             connection.execute(
                 """
                 UPDATE reasoning_engine_jobs
@@ -2533,9 +2438,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         }
 
     @reasoning_queue_deadlock_retry("reasoning-engine-job-supersede")
-    def supersede(self, job_id: str, reason: str) -> None:
+    def supersede(
+        self, job_id: str, reason: str, worker_id: str = "", claimed_at: str = ""
+    ) -> None:
         stamp = iso_utc()
-        with self.connect() as connection:
+        with self.transaction() as connection:
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             connection.execute(
                 """
                 UPDATE reasoning_engine_jobs
@@ -2584,8 +2492,16 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         }
 
     @reasoning_queue_deadlock_retry("reasoning-engine-job-retry")
-    def retry(self, job_id: str, error: str, max_attempts: int = 3) -> Dict[str, object]:
+    def retry(
+        self,
+        job_id: str,
+        error: str,
+        max_attempts: int = 3,
+        worker_id: str = "",
+        claimed_at: str = "",
+    ) -> Dict[str, object]:
         with self.transaction() as connection:
+            lock_job_claim(connection, job_id, worker_id, claimed_at)
             row = connection.execute(
                 "SELECT attempts FROM reasoning_engine_jobs WHERE job_id = %s FOR UPDATE",
                 (str(job_id or ""),),

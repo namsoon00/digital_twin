@@ -1,0 +1,320 @@
+{
+  "sourceRevision": "589a7a8eda08",
+  "stages": {
+    "prepare_attempt": {
+      "inputs": [
+        "_store",
+        "emit_progress",
+        "projection_run",
+        "projection_started",
+        "reasoning_context",
+        "runtime_stages",
+        "snapshot",
+        "target_symbols"
+      ],
+      "outputs": [
+        "compact_reasoning_context",
+        "fresh_candidate_rebuild",
+        "knowledge_world_context",
+        "market_world_context",
+        "pending_activation_recovery",
+        "portfolio_world_context",
+        "shared_premise_proof"
+      ],
+      "sourceStart": 84,
+      "sourceEnd": 311,
+      "sourceBodyHash": "775a33087b8d3e4e7758a8a3e44c7d7c50134142af960718de8dd5aa9b2b9591"
+    },
+    "assemble_source": {
+      "inputs": [
+        "_store",
+        "compact_reasoning_context",
+        "emit_progress",
+        "market_world_context",
+        "portfolio_world_context",
+        "projection_run",
+        "runtime_stages",
+        "shared_premise_proof",
+        "snapshot",
+        "target_symbols"
+      ],
+      "outputs": [
+        "graph",
+        "graph_input",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "observation_followup_targets",
+        "persistence_graph",
+        "planner_topology",
+        "projection_graph",
+        "rulebox_bootstrap",
+        "scoped_identity"
+      ],
+      "sourceStart": 313,
+      "sourceEnd": 426,
+      "sourceBodyHash": "b924edb72eddd8dfbf52d1186c38cd96c2f8dbfa517313a9bba7407a2d2b243c"
+    },
+    "select_source": {
+      "inputs": [
+        "_store",
+        "compact_reasoning_context",
+        "emit_progress",
+        "fresh_candidate_rebuild",
+        "graph",
+        "graph_input",
+        "market_world_context",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "persistence_graph",
+        "planner_topology",
+        "portfolio_world_context",
+        "projection_graph",
+        "rulebox_bootstrap",
+        "runtime_stages",
+        "scoped_identity",
+        "shared_premise_proof",
+        "snapshot",
+        "target_symbols"
+      ],
+      "outputs": [
+        "active_abox",
+        "active_abox_complete",
+        "active_abox_is_scoped_manifest",
+        "evidence_index_upgrade",
+        "graph",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "persistence_graph",
+        "planner_topology",
+        "scoped_identity",
+        "source_scope_plan",
+        "target_scoped_patch"
+      ],
+      "sourceStart": 427,
+      "sourceEnd": 560,
+      "sourceBodyHash": "85950142ff962aa2865a350a1a92079b98e1d41bc095b9a67cee09d92b758874"
+    },
+    "patch_manifest": {
+      "inputs": [
+        "_store",
+        "_bindings",
+        "active_abox",
+        "compact_reasoning_context",
+        "emit_progress",
+        "graph",
+        "graph_input",
+        "market_world_context",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "observation_followup_targets",
+        "persistence_graph",
+        "planner_topology",
+        "portfolio_world_context",
+        "projection_run",
+        "rulebox_bootstrap",
+        "runtime_stages",
+        "scoped_identity",
+        "shared_premise_proof",
+        "snapshot",
+        "target_scoped_patch",
+        "target_symbols"
+      ],
+      "outputs": [
+        "graph",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "persistence_graph",
+        "scoped_identity",
+        "target_scoped_patch"
+      ],
+      "sourceStart": 561,
+      "sourceEnd": 1036,
+      "sourceBodyHash": "be63f5a6b35c320eb7c133c6b3f6040310907638ed5550d57dc575e1cf2a8dd0"
+    },
+    "validate_manifest": {
+      "inputs": [
+        "_store",
+        "active_abox",
+        "active_abox_complete",
+        "active_abox_is_scoped_manifest",
+        "emit_progress",
+        "evidence_index_upgrade",
+        "graph_input",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "persistence_graph",
+        "portfolio_world_context",
+        "projection_run",
+        "runtime_stages",
+        "snapshot",
+        "target_scoped_patch"
+      ],
+      "outputs": [
+        "active_abox",
+        "current_state_migration_mode",
+        "desired_persistence_mode",
+        "evidence_index_upgrade",
+        "physical_state_migration_required",
+        "validation"
+      ],
+      "sourceStart": 1037,
+      "sourceEnd": 1198,
+      "sourceBodyHash": "7994a0ce7cddf91198ad57c5334eb44456a6b6c3db1c5d58366987da4b2e4407"
+    },
+    "plan_inference": {
+      "inputs": [
+        "_store",
+        "active_abox",
+        "compact_reasoning_context",
+        "current_state_migration_mode",
+        "desired_persistence_mode",
+        "emit_progress",
+        "graph_input",
+        "market_world_context",
+        "material_snapshot_id",
+        "persistence_graph",
+        "physical_state_migration_required",
+        "portfolio_world_context",
+        "runtime_stages",
+        "scoped_identity",
+        "snapshot",
+        "source_scope_plan",
+        "target_scoped_patch",
+        "target_symbols"
+      ],
+      "outputs": [
+        "compact_impact_plan",
+        "comparison_scope",
+        "inference_symbols",
+        "persisted_comparison_scope",
+        "projection_scope",
+        "world_impact_route"
+      ],
+      "sourceStart": 1199,
+      "sourceEnd": 1295,
+      "sourceBodyHash": "e8620542ba661493f2cafd1fe7e8705d2b40f32b1923386db26b744539adc136"
+    },
+    "reuse_inference": {
+      "inputs": [
+        "_store",
+        "active_abox",
+        "active_abox_complete",
+        "active_abox_is_scoped_manifest",
+        "compact_impact_plan",
+        "compact_reasoning_context",
+        "comparison_scope",
+        "evidence_index_upgrade",
+        "inference_symbols",
+        "market_world_context",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "pending_activation_recovery",
+        "persisted_comparison_scope",
+        "persistence_graph",
+        "physical_state_migration_required",
+        "portfolio_world_context",
+        "projection_scope",
+        "rulebox_bootstrap",
+        "runtime_stages",
+        "scoped_identity",
+        "snapshot",
+        "validation"
+      ],
+      "outputs": [],
+      "sourceStart": 1299,
+      "sourceEnd": 1396,
+      "sourceBodyHash": "5ee383ba12441749468feb4ff78b3e8dfbb5090466c5018ef46ab4006a7c0eaf"
+    },
+    "create_audit": {
+      "inputs": [
+        "_store",
+        "compact_reasoning_context",
+        "inference_symbols",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "persistence_graph",
+        "rulebox_bootstrap",
+        "runtime_stages",
+        "snapshot",
+        "validation"
+      ],
+      "outputs": [
+        "projection_run"
+      ],
+      "sourceStart": 1397,
+      "sourceEnd": 1424,
+      "sourceBodyHash": "ca2678711f6e54ff3855f11077bd5e1ba767513938a8511646658658a6b29c30"
+    },
+    "begin_publication": {
+      "inputs": [
+        "_store",
+        "active_abox",
+        "desired_persistence_mode",
+        "inference_symbols",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "projection_run",
+        "runtime_stages",
+        "scoped_identity",
+        "snapshot",
+        "target_scoped_patch"
+      ],
+      "outputs": [
+        "current_state_recovery",
+        "current_state_transition"
+      ],
+      "sourceStart": 1425,
+      "sourceEnd": 1517,
+      "sourceBodyHash": "0be35bdd588361200f33f4005800c9199da7f863efc16d36361fe537208317d9"
+    },
+    "publish_candidate": {
+      "inputs": [
+        "_store",
+        "compact_impact_plan",
+        "compact_reasoning_context",
+        "comparison_scope",
+        "current_state_recovery",
+        "current_state_transition",
+        "emit_progress",
+        "graph_input",
+        "inference_symbols",
+        "material_fingerprint",
+        "material_snapshot_id",
+        "pending_activation_recovery",
+        "persisted_comparison_scope",
+        "persistence_graph",
+        "portfolio_world_context",
+        "projection_run",
+        "projection_scope",
+        "rulebox_bootstrap",
+        "runtime_stages",
+        "scoped_identity",
+        "snapshot",
+        "validation"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "sourceStart": 1522,
+      "sourceEnd": 1763,
+      "sourceBodyHash": "c94123c97e8d0bee411ea2531e42dbf1e912b6f8377ac195d3d71eba74dae509"
+    },
+    "schedule_followups": {
+      "inputs": [
+        "_store",
+        "_bindings",
+        "graph",
+        "knowledge_world_context",
+        "market_world_context",
+        "portfolio_world_context",
+        "result",
+        "runtime_stages",
+        "world_impact_route"
+      ],
+      "outputs": [],
+      "sourceStart": 1764,
+      "sourceEnd": 1841,
+      "sourceBodyHash": "72029020e1801bf4b1177610589787f92ee14fbb7eac6eac3c11a0e28a2ffa65"
+    }
+  }
+}

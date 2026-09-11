@@ -1,3 +1,12 @@
+from digital_twin.modules.decisions.infrastructure import (
+    transaction_writes as decisions_writes,
+)
+from digital_twin.modules.outcomes.infrastructure import (
+    transaction_writes as outcomes_writes,
+)
+from digital_twin.modules.portfolio.infrastructure import (
+    transaction_writes as portfolio_writes,
+)
 from contextlib import nullcontext
 from datetime import timedelta, timezone
 from typing import Dict, Iterable, List, Optional
@@ -73,78 +82,17 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 (episode.account_id, episode.symbol),
             ).fetchone()
             previous_payload = _json_loads(prior_row.get("payload_json"), {}) if prior_row else {}
-            connection.execute(
-                """
-                INSERT INTO investment_decision_episodes (
-                    episode_id, account_id, symbol, subject_name, question_id,
-                    hypothesis_set_id, selected_hypothesis_id, action,
-                    review_level, data_state, validation_state,
-                    inference_generation_id, status, decided_at, source,
-                    payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE selected_hypothesis_id = VALUES(selected_hypothesis_id),
-                    action = VALUES(action), review_level = VALUES(review_level),
-                    data_state = VALUES(data_state), validation_state = VALUES(validation_state),
-                    inference_generation_id = VALUES(inference_generation_id),
-                    status = VALUES(status), decided_at = VALUES(decided_at),
-                    source = VALUES(source),
-                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
-                """,
-                (
-                    episode.episode_id,
-                    episode.account_id,
-                    episode.symbol,
-                    episode.subject_name,
-                    episode.question.question_id,
-                    episode.hypothesis_set.hypothesis_set_id,
-                    episode.selected_hypothesis_id,
-                    episode.action,
-                    episode.review_level,
-                    episode.data_state,
-                    episode.validation_state,
-                    episode.inference_generation_id,
-                    episode.status,
-                    episode.decided_at,
-                    episode.source,
-                    json_dumps(payload),
-                    stamp,
-                    stamp,
-                ),
+            decisions_writes.upsert_decision_episode(
+                connection=connection,
+                episode=episode,
+                payload=payload,
+                stamp=stamp,
             )
-            connection.execute(
-                """
-                INSERT INTO investment_flow_current (
-                    account_id, symbol, flow_id, decision_episode_id,
-                    source_abox_snapshot_id, inference_generation_id,
-                    selected_hypothesis_id, action, data_state,
-                    validation_state, decided_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    flow_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(flow_id), flow_id),
-                    decision_episode_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(decision_episode_id), decision_episode_id),
-                    source_abox_snapshot_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(source_abox_snapshot_id), source_abox_snapshot_id),
-                    inference_generation_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(inference_generation_id), inference_generation_id),
-                    selected_hypothesis_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(selected_hypothesis_id), selected_hypothesis_id),
-                    action = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(action), action),
-                    data_state = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(data_state), data_state),
-                    validation_state = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(validation_state), validation_state),
-                    updated_at = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(updated_at), updated_at),
-                    decided_at = GREATEST(investment_flow_current.decided_at, VALUES(decided_at))
-                """,
-                (
-                    episode.account_id,
-                    episode.symbol,
-                    flow_id,
-                    episode.episode_id,
-                    episode.source_abox_snapshot_id,
-                    episode.inference_generation_id,
-                    episode.selected_hypothesis_id,
-                    episode.action,
-                    episode.data_state,
-                    episode.validation_state,
-                    episode.decided_at,
-                    stamp,
-                ),
+            decisions_writes.advance_current_decision_flow(
+                connection=connection,
+                episode=episode,
+                flow_id=flow_id,
+                stamp=stamp,
             )
             self.supersede_prior_follow_ups_for_current(
                 connection,
@@ -153,91 +101,28 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 episode.episode_id,
                 stamp,
             )
-            connection.execute(
-                """
-                INSERT INTO investment_flow_heads (
-                    flow_id, account_id, symbol, decision_episode_id,
-                    source_abox_snapshot_id, inference_generation_id,
-                    selected_hypothesis_id, action, data_state,
-                    validation_state, decided_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE decision_episode_id = VALUES(decision_episode_id),
-                    source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
-                    inference_generation_id = VALUES(inference_generation_id),
-                    selected_hypothesis_id = VALUES(selected_hypothesis_id),
-                    action = VALUES(action), data_state = VALUES(data_state),
-                    validation_state = VALUES(validation_state),
-                    decided_at = VALUES(decided_at), updated_at = VALUES(updated_at)
-                """,
-                (
-                    flow_id,
-                    episode.account_id,
-                    episode.symbol,
-                    episode.episode_id,
-                    episode.source_abox_snapshot_id,
-                    episode.inference_generation_id,
-                    episode.selected_hypothesis_id,
-                    episode.action,
-                    episode.data_state,
-                    episode.validation_state,
-                    episode.decided_at,
-                    stamp,
-                ),
+            decisions_writes.upsert_decision_flow_head(
+                connection=connection,
+                episode=episode,
+                flow_id=flow_id,
+                stamp=stamp,
             )
             if plan is not None:
-                connection.execute(
-                    """
-                    INSERT INTO investment_action_plans (
-                        plan_id, portfolio_id, decision_episode_id, policy_version,
-                        inference_generation_id, action, status, payload_json, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE status = VALUES(status),
-                        payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
-                    """,
-                    (
-                        plan.plan_id,
-                        plan.portfolio_id,
-                        plan.decision_episode_id,
-                        plan.policy_version,
-                        plan.inference_generation_id,
-                        plan.action,
-                        plan.status,
-                        json_dumps(plan.to_dict()),
-                        plan.created_at or stamp,
-                        stamp,
-                    ),
+                portfolio_writes.upsert_decision_action_plan(
+                    connection=connection,
+                    plan=plan,
+                    stamp=stamp,
                 )
             self.sync_outcome_targets(connection, episode, stamp)
             for condition in list(episode.follow_up_conditions or []) + list(episode.unsupported_follow_ups or []):
                 if not isinstance(condition, dict) or not str(condition.get("conditionId") or "").strip():
                     continue
-                connection.execute(
-                    """
-                    INSERT INTO investment_decision_follow_ups (
-                        condition_id, episode_id, account_id, symbol, field_name,
-                        comparison_operator, threshold_value, purpose, status,
-                        observable, payload_json, created_at, updated_at, transitioned_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE status = VALUES(status), observable = VALUES(observable),
-                        payload_json = VALUES(payload_json), updated_at = VALUES(updated_at),
-                        transitioned_at = VALUES(transitioned_at)
-                    """,
-                    (
-                        str(condition.get("conditionId")),
-                        episode.episode_id,
-                        episode.account_id,
-                        episode.symbol,
-                        str(condition.get("field") or ""),
-                        str(condition.get("operator") or ""),
-                        number(condition.get("threshold")),
-                        str(condition.get("purpose") or "switch"),
-                        str(condition.get("status") or "pending"),
-                        1 if condition.get("observable") is not False else 0,
-                        json_dumps(condition),
-                        stamp,
-                        stamp,
-                        str(condition.get("transitionAt") or ""),
-                    ),
+                outcomes_writes.upsert_decision_followup(
+                    connection=connection,
+                    condition=condition,
+                    episode=episode,
+                    stamp=stamp,
+                    _bound_number=number,
                 )
             decision_fields = ("action", "reviewLevel", "dataState", "validationState", "selectedHypothesisId")
             decision_changed = not previous_payload or any(
@@ -268,38 +153,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episode_id: str,
         stamp: str,
     ) -> int:
-        """Keep history immutable while giving one decision ownership of tracking."""
-
-        current = connection.execute(
-            "SELECT decision_episode_id FROM investment_flow_current "
-            "WHERE account_id = %s AND symbol = %s LIMIT 1",
-            (str(account_id or ""), str(symbol or "").upper()),
-        ).fetchone()
-        if str((current or {}).get("decision_episode_id") or "") != str(episode_id or ""):
-            return 0
-        rows = connection.execute(
-            "SELECT condition_id, payload_json FROM investment_decision_follow_ups "
-            "WHERE account_id = %s AND symbol = %s AND episode_id <> %s "
-            "AND status = 'pending' ORDER BY updated_at, condition_id LIMIT 500",
-            (str(account_id or ""), str(symbol or "").upper(), str(episode_id or "")),
-        ).fetchall()
-        changed = 0
-        for row in rows or []:
-            payload = _json_loads(row.get("payload_json"), {})
-            payload.update({
-                "status": "superseded",
-                "trackingStatus": "stopped-newer-decision",
-                "supersededByEpisodeId": str(episode_id or ""),
-                "supersededAt": str(stamp or ""),
-            })
-            cursor = connection.execute(
-                "UPDATE investment_decision_follow_ups SET status = 'superseded', "
-                "payload_json = %s, updated_at = %s WHERE condition_id = %s "
-                "AND status = 'pending'",
-                (json_dumps(payload), stamp, str(row.get("condition_id") or "")),
-            )
-            changed += max(0, int(getattr(cursor, "rowcount", 0) or 0))
-        return changed
+        return outcomes_writes.supersede_prior_followups(
+            connection=connection,
+            account_id=account_id,
+            symbol=symbol,
+            episode_id=episode_id,
+            stamp=stamp,
+        )
 
     def supersede_noncurrent_follow_ups(self, limit: int = 5000) -> Dict[str, object]:
         """One-time repair for conditions created before single-owner tracking."""
@@ -487,113 +347,18 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         }
 
     def sync_outcome_targets(self, connection, episode: DecisionEpisode, stamp: str = "") -> Dict[str, object]:
-        """Persist the immutable observation schedule in the decision transaction."""
-
-        stamp = canonical_investment_timestamp(stamp) or utc_now_iso()
-        facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
-        calibration = facts.get("calibrationPolicy") if isinstance(facts.get("calibrationPolicy"), dict) else {}
-        completeness = self.episode_outcome_contract_completeness(episode)
-        contract = self.episode_outcome_contract(episode) if completeness.get("complete") else {}
-        eligible = bool(
-            episode.selected_hypothesis_id
-            and calibration.get("eligible") is True
-            and completeness.get("complete")
+        return outcomes_writes.schedule_decision_outcomes(
+            connection=connection,
+            episode=episode,
+            stamp=stamp,
+            _episode_outcome_contract=self.episode_outcome_contract,
+            _episode_outcome_contract_completeness=self.episode_outcome_contract_completeness,
+            _episode_outcome_horizons=self.episode_outcome_horizons,
+            _upsert_outcome_target=self.upsert_outcome_target,
+            _bound_contract_benchmark_symbol=contract_benchmark_symbol,
+            _bound_number=number,
+            _bound_outcome_target_at=outcome_target_at,
         )
-        if not eligible:
-            reason = str(
-                "no-selected-hypothesis"
-                if not episode.selected_hypothesis_id
-                else "outcome-contract-incomplete"
-                if not completeness.get("complete")
-                else calibration.get("reason") or "calibration-ineligible"
-            )[:191]
-            target_id = stable_id("decision-outcome-target-excluded", episode.episode_id)
-            payload = {
-                "episodeKind": "decision",
-                "requestId": target_id,
-                "episodeId": episode.episode_id,
-                "symbol": episode.symbol,
-                "horizonMinutes": 0,
-                "decidedAt": episode.decided_at,
-                "targetAt": episode.decided_at,
-                "status": "excluded",
-                "exclusionReason": reason,
-                "predictionContractCompleteness": completeness,
-            }
-            self.upsert_outcome_target(
-                connection,
-                target_id,
-                episode,
-                0,
-                episode.decided_at,
-                0,
-                "",
-                "excluded",
-                reason,
-                payload,
-                stamp,
-            )
-            return {"status": "excluded", "targetCount": 0, "reason": reason}
-
-        connection.execute(
-            "DELETE FROM investment_decision_outcome_targets "
-            "WHERE episode_id = %s AND status = 'excluded'",
-            (episode.episode_id,),
-        )
-        fingerprint = str(contract.get("contractFingerprint") or "")
-        maximum_delay = int(contract.get("maximumObservationDelayMinutes") or 0)
-        fact_delta = facts.get("factDelta") if isinstance(facts.get("factDelta"), dict) else {}
-        baseline_at = canonical_investment_timestamp(
-            fact_delta.get("source_observed_at")
-            or fact_delta.get("sourceObservedAt")
-            or facts.get("sourceAsOf")
-        ) or episode.decided_at
-        target_count = 0
-        for horizon_minutes in self.episode_outcome_horizons(episode):
-            target_at = outcome_target_at(episode, horizon_minutes)
-            if not target_at:
-                continue
-            target_id = stable_id(
-                "decision-outcome-target",
-                episode.episode_id,
-                horizon_minutes,
-                fingerprint,
-            )
-            payload = {
-                "episodeKind": "decision",
-                "requestId": target_id,
-                "episodeId": episode.episode_id,
-                "symbol": episode.symbol,
-                "subjectName": episode.subject_name,
-                "market": str(facts.get("market") or ""),
-                "currency": str(facts.get("currency") or ""),
-                "horizonMinutes": horizon_minutes,
-                "decidedAt": episode.decided_at,
-                "baselineAt": baseline_at,
-                "targetAt": target_at,
-                "maximumObservationDelayMinutes": maximum_delay,
-                "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
-                "hypothesisOutcomeContract": contract,
-                "benchmarkSymbol": contract_benchmark_symbol(contract, facts),
-                "requiresInstrumentBaseline": True,
-                **({"decisionPrice": number(facts.get("currentPrice"))} if number(facts.get("currentPrice")) > 0 else {}),
-                **({"decisionPriceSourceAsOf": facts.get("sourceAsOf")} if facts.get("sourceAsOf") else {}),
-            }
-            self.upsert_outcome_target(
-                connection,
-                target_id,
-                episode,
-                horizon_minutes,
-                target_at,
-                maximum_delay,
-                fingerprint,
-                "pending",
-                "",
-                payload,
-                stamp,
-            )
-            target_count += 1
-        return {"status": "scheduled", "targetCount": target_count}
 
     def save_shadow_hypothesis_observations(
         self,
@@ -848,45 +613,18 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         payload: Dict[str, object],
         stamp: str,
     ) -> None:
-        connection.execute(
-            """
-            INSERT INTO investment_decision_outcome_targets (
-                target_id, episode_id, account_id, symbol, horizon_minutes,
-                target_at, maximum_delay_minutes, contract_fingerprint,
-                status, exclusion_reason, outcome_id, payload_json,
-                created_at, updated_at, observed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '', %s, %s, %s, '')
-            ON DUPLICATE KEY UPDATE
-                target_at = VALUES(target_at),
-                maximum_delay_minutes = VALUES(maximum_delay_minutes),
-                exclusion_reason = IF(
-                    investment_decision_outcome_targets.status = 'observed',
-                    investment_decision_outcome_targets.exclusion_reason,
-                    VALUES(exclusion_reason)
-                ),
-                status = IF(
-                    investment_decision_outcome_targets.status = 'observed',
-                    investment_decision_outcome_targets.status,
-                    VALUES(status)
-                ),
-                payload_json = VALUES(payload_json),
-                updated_at = VALUES(updated_at)
-            """,
-            (
-                target_id,
-                episode.episode_id,
-                episode.account_id,
-                episode.symbol,
-                int(horizon_minutes or 0),
-                str(target_at or ""),
-                int(maximum_delay_minutes or 0),
-                str(contract_fingerprint or ""),
-                str(status or "pending"),
-                str(exclusion_reason or "")[:191],
-                json_dumps(payload),
-                stamp,
-                stamp,
-            ),
+        return outcomes_writes.upsert_decision_outcome_target(
+            connection=connection,
+            target_id=target_id,
+            episode=episode,
+            horizon_minutes=horizon_minutes,
+            target_at=target_at,
+            maximum_delay_minutes=maximum_delay_minutes,
+            contract_fingerprint=contract_fingerprint,
+            status=status,
+            exclusion_reason=exclusion_reason,
+            payload=payload,
+            stamp=stamp,
         )
 
     def backfill_outcome_targets(self, account_id: str, limit: int = 2000) -> Dict[str, object]:

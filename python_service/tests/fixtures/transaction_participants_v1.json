@@ -1,0 +1,527 @@
+{
+  "sourceRevision": "589a7a8eda08",
+  "participants": {
+    "append_ledger_entries": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "append_ledger_entries_with_connection",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "entries",
+        "stamp"
+      ]
+    },
+    "insert_activity_episode": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "activity_episode",
+        "payload",
+        "stamp"
+      ]
+    },
+    "insert_state_snapshot": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "stamp",
+        "state_payload",
+        "state_snapshot"
+      ]
+    },
+    "insert_observation_reconciliation": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "reconciliation",
+        "reconciliation_payload",
+        "stamp"
+      ]
+    },
+    "insert_observation_exposure": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "exposure",
+        "stamp"
+      ]
+    },
+    "upsert_observation_rebalance": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "rebalance_proposal",
+        "stamp"
+      ]
+    },
+    "upsert_observation_cycle": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "cycle_payload",
+        "decision_cycle",
+        "stamp"
+      ]
+    },
+    "insert_action_observation": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "observation",
+        "payload",
+        "stamp"
+      ]
+    },
+    "advance_observation_checkpoint": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "commit_snapshot_observation",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "checkpoint",
+        "checkpoint_payload",
+        "next_version",
+        "stamp"
+      ]
+    },
+    "save_risk_snapshot": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "save_risk_snapshot_with_connection",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "snapshot",
+        "stamp"
+      ]
+    },
+    "save_execution_episode": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "save_execution_episode_with_connection",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "episode",
+        "stamp"
+      ]
+    },
+    "save_decision_review": {
+      "path": "modules/outcomes/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "save_decision_review_with_connection",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "review",
+        "stamp"
+      ]
+    },
+    "save_performance_attribution": {
+      "path": "modules/outcomes/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/portfolio.py",
+      "class": "MySQLInvestmentDomainStore",
+      "method": "save_performance_attribution_with_connection",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "attribution",
+        "stamp"
+      ]
+    },
+    "insert_ai_request": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "insert_request_with_connection",
+      "kind": "method",
+      "bindings": {
+        "_bound_compact_ai_queue_context": "compact_ai_queue_context"
+      },
+      "args": [
+        "connection",
+        "request"
+      ]
+    },
+    "supersede_unpublishable_ai_request": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "complete",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "request",
+        "stamp"
+      ]
+    },
+    "insert_ai_execution_audit": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "complete",
+      "kind": "sql",
+      "bindings": {
+        "_bound__clean": "_clean"
+      },
+      "args": [
+        "connection",
+        "artifact_fingerprint",
+        "audit_json",
+        "execution_audit",
+        "request",
+        "stamp"
+      ]
+    },
+    "upsert_ai_result": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "complete",
+      "kind": "sql",
+      "bindings": {
+        "_bound_ai_contract_failure_code": "ai_contract_failure_code"
+      },
+      "args": [
+        "connection",
+        "ai_authored",
+        "contract_error",
+        "publication_contract_passed",
+        "publication_mode",
+        "result"
+      ]
+    },
+    "complete_ai_request": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "complete",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "request",
+        "stamp"
+      ]
+    },
+    "supersede_unreleased_ai_request": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "complete",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "request",
+        "stamp"
+      ]
+    },
+    "insert_ai_insight_episode": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "complete",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "insight_episode"
+      ]
+    },
+    "set_ai_delivery_status": {
+      "path": "modules/notifications/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/ai_publication.py",
+      "class": "MySQLAIInferenceQueueStore",
+      "method": "set_notification_status_with_connection",
+      "kind": "method",
+      "bindings": {
+        "_bound__clean": "_clean",
+        "_bound__compact_notification_payload": "_compact_notification_payload",
+        "_bound__notification_job_from_row": "_notification_job_from_row"
+      },
+      "args": [
+        "connection",
+        "notification_job_id",
+        "status",
+        "error",
+        "context_updates",
+        "replacement_context",
+        "only_if_statuses",
+        "attempts_delta"
+      ]
+    },
+    "mark_reasoning_anchor_pending": {
+      "path": "modules/market_data/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/monitoring.py",
+      "class": "MySQLMarketObservationReasoningAnchorStore",
+      "method": "mark_pending_with_connection",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "account_id",
+        "event_id",
+        "candidates",
+        "stamp"
+      ]
+    },
+    "upsert_monitor_snapshot": {
+      "path": "modules/market_data/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/monitoring.py",
+      "class": "MySQLMonitorStore",
+      "method": "upsert_snapshot_state_with_connection",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "account_id",
+        "generated_at",
+        "state",
+        "updated_at"
+      ]
+    },
+    "upsert_monitor_snapshot_history": {
+      "path": "modules/market_data/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/monitoring.py",
+      "class": "MySQLMonitorStore",
+      "method": "upsert_snapshot_state_with_connection",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "account_id",
+        "generated_at",
+        "state",
+        "temporal_projection",
+        "updated_at"
+      ]
+    },
+    "insert_verified_source_snapshot": {
+      "path": "modules/reasoning/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/monitoring.py",
+      "class": "MySQLMonitorStore",
+      "method": "upsert_snapshot_state_with_connection",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "source_snapshot",
+        "updated_at"
+      ]
+    },
+    "upsert_reasoning_snapshot_inputs": {
+      "path": "modules/reasoning/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/monitoring.py",
+      "class": "MySQLMonitorStore",
+      "method": "upsert_reasoning_snapshot_inputs_with_connection",
+      "kind": "method",
+      "bindings": {
+        "_runtime_settings": "self.runtime_settings"
+      },
+      "args": [
+        "connection",
+        "account_id",
+        "state",
+        "generated_at",
+        "stamp",
+        "previous_state"
+      ],
+      "docstring": "Persist target-scoped TypeDB input beside its verified source row.\n\n        The durable mailbox event is inserted in the same monitoring-cycle\n        transaction.  Writing this cache here gives the reasoning worker a\n        small, revision-aligned input without asking it to decode the source\n        provider archive after it has already claimed live queue work.\n        "
+    },
+    "mark_monitor_alerts_sent": {
+      "path": "modules/notifications/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/monitoring.py",
+      "class": "MySQLMonitorStore",
+      "method": "mark_sent_with_connection",
+      "kind": "method",
+      "bindings": {
+        "_sent_entries": "self.sent_entries"
+      },
+      "args": [
+        "connection",
+        "events",
+        "stamp"
+      ]
+    },
+    "upsert_decision_episode": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "save",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "episode",
+        "payload",
+        "stamp"
+      ]
+    },
+    "advance_current_decision_flow": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "save",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "episode",
+        "flow_id",
+        "stamp"
+      ]
+    },
+    "upsert_decision_flow_head": {
+      "path": "modules/decisions/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "save",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "episode",
+        "flow_id",
+        "stamp"
+      ]
+    },
+    "upsert_decision_action_plan": {
+      "path": "modules/portfolio/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "save",
+      "kind": "sql",
+      "bindings": {},
+      "args": [
+        "connection",
+        "plan",
+        "stamp"
+      ]
+    },
+    "upsert_decision_followup": {
+      "path": "modules/outcomes/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "save",
+      "kind": "sql",
+      "bindings": {
+        "_bound_number": "number"
+      },
+      "args": [
+        "connection",
+        "condition",
+        "episode",
+        "stamp"
+      ]
+    },
+    "supersede_prior_followups": {
+      "path": "modules/outcomes/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "supersede_prior_follow_ups_for_current",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "account_id",
+        "symbol",
+        "episode_id",
+        "stamp"
+      ],
+      "docstring": "Keep history immutable while giving one decision ownership of tracking."
+    },
+    "schedule_decision_outcomes": {
+      "path": "modules/outcomes/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "sync_outcome_targets",
+      "kind": "method",
+      "bindings": {
+        "_episode_outcome_contract": "self.episode_outcome_contract",
+        "_episode_outcome_contract_completeness": "self.episode_outcome_contract_completeness",
+        "_episode_outcome_horizons": "self.episode_outcome_horizons",
+        "_upsert_outcome_target": "self.upsert_outcome_target",
+        "_bound_contract_benchmark_symbol": "contract_benchmark_symbol",
+        "_bound_number": "number",
+        "_bound_outcome_target_at": "outcome_target_at"
+      },
+      "args": [
+        "connection",
+        "episode",
+        "stamp"
+      ],
+      "docstring": "Persist the immutable observation schedule in the decision transaction."
+    },
+    "upsert_decision_outcome_target": {
+      "path": "modules/outcomes/infrastructure/transaction_writes.py",
+      "source": "infrastructure/transactions/decision_history.py",
+      "class": "MySQLInvestmentDecisionEpisodeStore",
+      "method": "upsert_outcome_target",
+      "kind": "method",
+      "bindings": {},
+      "args": [
+        "connection",
+        "target_id",
+        "episode",
+        "horizon_minutes",
+        "target_at",
+        "maximum_delay_minutes",
+        "contract_fingerprint",
+        "status",
+        "exclusion_reason",
+        "payload",
+        "stamp"
+      ]
+    }
+  }
+}

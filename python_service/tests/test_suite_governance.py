@@ -131,7 +131,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # independent schema parity, authored release and rollback contracts.
         # Integrated storage ownership and projection recovery additionally
         # protect single-call mutations, verified rule caches and lease cleanup.
-        self.assertLessEqual(total, 1225)
+        # Projection phases, owner transaction rollback and attempt-fenced
+        # completion/receipt recovery add 25 focused boundary tests.
+        self.assertLessEqual(total, 1250)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

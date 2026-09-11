@@ -1777,14 +1777,21 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 values = tuple(params or ())
                 self.calls.append((rendered, values))
                 if "FROM reasoning_engine_jobs" in rendered and "FOR UPDATE" in rendered:
-                    return SimpleNamespace(fetchone=lambda: {
-                        "job_id": "job:survivor",
-                        "source_event_id": "event:new-market",
-                        "source_snapshot_id": "snapshot:market",
-                        "source_snapshot_at": "2026-08-28T00:00:00Z",
-                        "request_json": json.dumps({"sourceEvent": source.to_dict()}),
-                        "release_fingerprint": "release:stored",
-                    })
+                    return SimpleNamespace(
+                        fetchone=lambda: {
+                            "job_id": "job:survivor",
+                            "job_status": "processing",
+                            "lease_owner": "worker:1:v2",
+                            "lease_expires_at": "2099-01-01T00:00:00Z",
+                            "source_event_id": "event:new-market",
+                            "source_snapshot_id": "snapshot:market",
+                            "source_snapshot_at": "2026-08-28T00:00:00Z",
+                            "request_json": json.dumps(
+                                {"sourceEvent": source.to_dict()}
+                            ),
+                            "release_fingerprint": "release:stored",
+                        }
+                    )
                 if "FROM market_observation_reasoning_anchors" in rendered:
                     return SimpleNamespace(fetchall=lambda: [{
                         "account_id": "acct",

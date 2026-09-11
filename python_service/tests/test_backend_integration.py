@@ -16,6 +16,13 @@ from types import SimpleNamespace
 import typing
 import unittest
 from unittest.mock import Mock, patch
+from backend_stabilization_fixtures import (
+    ADDED_METHODS,
+    CHANGED_METHODS,
+    STAGES,
+    expand_participants,
+    expand_projection,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
@@ -92,6 +99,8 @@ class BackendIntegrationTests(unittest.TestCase):
                         if isinstance(n, ast.FunctionDef)
                     }
                 method = trees[path][name.split(".")[-1]]
+                if method.name == "record_snapshot":
+                    method = expand_projection(method)
                 if method.name in INTENTIONAL_CHANGES:
                     changed.add(method.name)
                     self.assertNotEqual(entry["bodyHash"], body_hash(method))
@@ -146,6 +155,17 @@ class BackendIntegrationTests(unittest.TestCase):
                 and isinstance(n.value, ast.Name)
                 and n.value.id == "_store"
             }
+            if path.name == "record_ports.py":
+                for stage in STAGES:
+                    used.update(
+                        n.attr
+                        for n in ast.walk(
+                            ast.parse((path.parent / (stage + ".py")).read_text())
+                        )
+                        if isinstance(n, ast.Attribute)
+                        and isinstance(n.value, ast.Name)
+                        and n.value.id == "_store"
+                    )
             module = importlib.import_module(module_name(path.relative_to(ROOT)))
             port = next(
                 (
@@ -202,7 +222,36 @@ class BackendIntegrationTests(unittest.TestCase):
                 set(entry["declarations"]), set(declarations), entry["path"]
             )
             for name, expected in entry["declarations"].items():
-                normalized = WithoutImports().visit(copy.deepcopy(declarations[name]))
+                normalized = WithoutImports().visit(
+                    expand_participants(declarations[name])
+                )
+                if name in CHANGED_METHODS:
+                    baseline = json.loads(
+                        (FIXTURES / "stabilization_storage_members_v1.json").read_text()
+                    )[name]
+                    for member in normalized.body:
+                        key = (
+                            member.name
+                            if isinstance(member, ast.FunctionDef)
+                            else ast.unparse(member)
+                        )
+                        digest = hashlib.sha256(
+                            ast.dump(member, include_attributes=False).encode()
+                        ).hexdigest()
+                        if key in ADDED_METHODS.get(name, set()):
+                            self.assertNotIn(key, baseline)
+                        elif key in CHANGED_METHODS[name]:
+                            self.assertNotEqual(baseline[key], digest, (name, key))
+                        else:
+                            self.assertEqual(baseline[key], digest, (name, key))
+                    self.assertEqual(
+                        set(baseline) | ADDED_METHODS.get(name, set()),
+                        {
+                            n.name if isinstance(n, ast.FunctionDef) else ast.unparse(n)
+                            for n in normalized.body
+                        },
+                    )
+                    continue
                 actual = hashlib.sha256(
                     ast.dump(normalized, include_attributes=False).encode()
                 ).hexdigest()

@@ -8,6 +8,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
 
+from .job_transitions import ClaimedJobTransitions
+
 from digital_twin.domain.context_observation_notifications import is_typedb_context_observation_notification, typedb_review_observation_contract
 from digital_twin.domain.events import DomainEvent
 from digital_twin.domain.independent_reasoning import IndependentReasoningRequest, IndependentReasoningResult, independent_reasoning_request, reasoning_event_scope
@@ -1925,6 +1927,7 @@ class IndependentReasoningJobRunner:
         self.route_reconciliation = None
         self.route_reconciled_at = 0.0
         self.worker_id = worker_id or (socket.gethostname() + ":" + str(os.getpid()) + ":v2-" + uuid.uuid4().hex[:8])
+        self.job_transitions = ClaimedJobTransitions(self.queue, self.worker_id)
         self._shutdown_result: Dict[str, object] = {}
         self._progress_lock = threading.Lock()
         self._current_progress: Dict[str, object] = {}
@@ -2266,6 +2269,7 @@ class IndependentReasoningJobRunner:
             self.worker_id,
             **claim_kwargs,
         )
+        self.job_transitions.remember(jobs)
         if not jobs:
             return {
                 "status": "idle",
@@ -2283,7 +2287,7 @@ class IndependentReasoningJobRunner:
             }
         runtime_excluded_jobs = []
         runtime_eligible_jobs = []
-        exclude = getattr(self.queue, "exclude", None)
+        exclude = self.job_transitions.method("exclude")
         for job in jobs:
             eligibility = reasoning_job_runtime_eligibility(job)
             if bool(eligibility.get("eligible", True)):
@@ -2302,9 +2306,12 @@ class IndependentReasoningJobRunner:
                     str(eligibility.get("reasonCode") or "source-fact-no-longer-current"),
                 )
             else:
-                self.queue.supersede(
+                self.job_transitions.method("supersede")(
                     job["jobId"],
-                    str(eligibility.get("reason") or "The source fact is no longer current."),
+                    str(
+                        eligibility.get("reason")
+                        or "The source fact is no longer current."
+                    ),
                 )
         jobs = runtime_eligible_jobs
         runtime_excluded_job_ids = [job["jobId"] for job in runtime_excluded_jobs]
@@ -2356,7 +2363,7 @@ class IndependentReasoningJobRunner:
         deferred_jobs = [job for job in jobs if job not in selected_jobs]
         for job in deferred_jobs:
             capacity_deferred = job in capacity_deferred_jobs
-            self.queue.defer(
+            self.job_transitions.method("defer")(
                 job["jobId"],
                 (
                     "The current V2 micro-batch reached the native TypeDB target-symbol limit."
@@ -2369,9 +2376,7 @@ class IndependentReasoningJobRunner:
         try:
             release_provider = getattr(self.engine, "release_identity", None)
             release_identity = dict(release_provider() or {}) if callable(release_provider) else {}
-            binder = getattr(self.queue, "bind_release", None)
-            if callable(binder):
-                binder(job_ids, release_identity, reasoning_lane)
+            self.job_transitions.bind_release(job_ids, release_identity, reasoning_lane)
             events = [
                 DomainEvent.from_dict(dict(job.get("sourceEvent") or {}))
                 for job in selected_jobs
@@ -2439,7 +2444,7 @@ class IndependentReasoningJobRunner:
             )
             result["coverage_excluded_job_ids"] = coverage_excluded_job_ids
             if status == "excluded":
-                exclude = getattr(self.queue, "exclude", None)
+                exclude = self.job_transitions.method("exclude")
                 for job_id in job_ids:
                     if callable(exclude):
                         exclude(
@@ -2449,9 +2454,12 @@ class IndependentReasoningJobRunner:
                             str(result.get("reason_code") or result.get("reasonCode") or "reasoning-scope-not-applicable"),
                         )
                     else:
-                        self.queue.supersede(
+                        self.job_transitions.method("supersede")(
                             job_id,
-                            str(result.get("reason") or "The source event has no applicable reasoning scope."),
+                            str(
+                                result.get("reason")
+                                or "The source event has no applicable reasoning scope."
+                            ),
                         )
                 outcome = "excluded"
             elif status == "deferred" and result.get("retryable"):
@@ -2461,32 +2469,43 @@ class IndependentReasoningJobRunner:
                 wait_for_projection = (
                     waits_for_shared_world_projection(result)
                     and not writer_back_pressure
-                    and callable(getattr(self.queue, "await_world_projection", None))
+                    and callable(self.job_transitions.method("await_world_projection"))
                 )
                 target_scope_repair_wait = (
                     waits_for_target_scope_repair(result)
                     and not writer_back_pressure
                     and not wait_for_projection
-                    and callable(getattr(self.queue, "await_target_scope_repair", None))
+                    and callable(
+                        self.job_transitions.method("await_target_scope_repair")
+                    )
                 )
                 for job_id in job_ids:
                     if wait_for_projection:
-                        projection_waits.append(self.queue.await_world_projection(
-                            job_id,
-                            result,
-                            str(result.get("reason") or "SharedPremiseWorld projection is not ready."),
-                            int(result.get("retry_after_seconds") or result.get("retryAfterSeconds") or 30),
-                            max_attempts=_int_setting(
-                                self.settings,
-                                "reasoningEngineV2WorldProjectionMaxAttempts",
-                                5,
-                                1,
-                                20,
-                            ),
-                        ))
+                        projection_waits.append(
+                            self.job_transitions.method("await_world_projection")(
+                                job_id,
+                                result,
+                                str(
+                                    result.get("reason")
+                                    or "SharedPremiseWorld projection is not ready."
+                                ),
+                                int(
+                                    result.get("retry_after_seconds")
+                                    or result.get("retryAfterSeconds")
+                                    or 30
+                                ),
+                                max_attempts=_int_setting(
+                                    self.settings,
+                                    "reasoningEngineV2WorldProjectionMaxAttempts",
+                                    5,
+                                    1,
+                                    20,
+                                ),
+                            )
+                        )
                     elif target_scope_repair_wait:
                         target_scope_repair_waits.append(
-                            self.queue.await_target_scope_repair(
+                            self.job_transitions.method("await_target_scope_repair")(
                                 job_id,
                                 result,
                                 str(
@@ -2508,10 +2527,14 @@ class IndependentReasoningJobRunner:
                             )
                         )
                     else:
-                        self.queue.defer(
+                        self.job_transitions.method("defer")(
                             job_id,
                             str(result.get("reason") or "V2 input is not ready."),
-                            int(result.get("retry_after_seconds") or result.get("retryAfterSeconds") or 15),
+                            int(
+                                result.get("retry_after_seconds")
+                                or result.get("retryAfterSeconds")
+                                or 15
+                            ),
                         )
                 terminal_projection_wait = bool(projection_waits) and all(
                     wait.get("terminal") for wait in projection_waits
@@ -2531,11 +2554,16 @@ class IndependentReasoningJobRunner:
                     if writer_back_pressure
                     else "deferred"
                 )
-            elif status == "rejected" and callable(getattr(self.queue, "supersede", None)):
+            elif status == "rejected" and callable(
+                self.job_transitions.method("supersede")
+            ):
                 for job_id in job_ids:
-                    self.queue.supersede(
+                    self.job_transitions.method("supersede")(
                         job_id,
-                        str(result.get("reason") or "The immutable reasoning source was rejected."),
+                        str(
+                            result.get("reason")
+                            or "The immutable reasoning source was rejected."
+                        ),
                     )
                 outcome = "superseded"
             elif status == "blocked":
@@ -2545,12 +2573,14 @@ class IndependentReasoningJobRunner:
                 failure_code = str(
                     result.get("reason_code") or result.get("reasonCode") or "reasoning-execution-blocked"
                 )
-                fail = getattr(self.queue, "fail", None)
+                fail = self.job_transitions.method("fail")
                 for job_id in job_ids:
                     if callable(fail):
                         fail(job_id, result, failure_reason, failure_code)
                     else:
-                        self.queue.retry(job_id, failure_reason, max_attempts=1)
+                        self.job_transitions.method("retry")(
+                            job_id, failure_reason, max_attempts=1
+                        )
                 outcome = "failed"
             else:
                 for job in coverage_excluded_jobs:
@@ -2562,7 +2592,7 @@ class IndependentReasoningJobRunner:
                         "The immutable source snapshot did not cover the requested "
                         "reasoning symbols: " + ", ".join(missing)
                     )[:300]
-                    exclude = getattr(self.queue, "exclude", None)
+                    exclude = self.job_transitions.method("exclude")
                     if callable(exclude):
                         exclude(
                             job["jobId"],
@@ -2577,22 +2607,26 @@ class IndependentReasoningJobRunner:
                             "source-snapshot-symbol-not-covered",
                         )
                     else:
-                        supersede = getattr(self.queue, "supersede", None)
+                        supersede = self.job_transitions.method("supersede")
                         if callable(supersede):
                             supersede(job["jobId"], reason)
                         else:
-                            self.queue.defer(job["jobId"], reason, 5)
+                            self.job_transitions.method("defer")(
+                                job["jobId"], reason, 5
+                            )
                 atomic_completions = []
                 for job_id in completion_job_ids:
                     parameters = inspect.signature(self.queue.complete).parameters
                     if "worker_id" in parameters:
-                        completion = self.queue.complete(
+                        completion = self.job_transitions.method("complete")(
                             job_id,
                             result,
                             worker_id=self.worker_id,
                         )
                     else:
-                        completion = self.queue.complete(job_id, result)
+                        completion = self.job_transitions.method("complete")(
+                            job_id, result
+                        )
                     if isinstance(completion, Mapping):
                         atomic_completions.append(dict(completion))
                 if completion_job_ids and len(atomic_completions) == len(completion_job_ids) and all(
@@ -2685,14 +2719,19 @@ class IndependentReasoningJobRunner:
             }
         except Exception as error:  # noqa: BLE001 - durable retry owns recovery.
             retries = [
-                self.queue.retry(
+                self.job_transitions.retry(
                     job_id,
                     str(error),
-                    max_attempts=_int_setting(self.settings, "reasoningEngineV2MaxAttempts", 3, 1, 8),
+                    max_attempts=_int_setting(
+                        self.settings, "reasoningEngineV2MaxAttempts", 3, 1, 8
+                    ),
                 )
                 for job_id in job_ids
             ]
             terminal = bool(retries) and all(retry.get("terminal") for retry in retries)
+            ownership_lost = bool(retries) and all(
+                retry.get("status") == "lease-lost" for retry in retries
+            )
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
             health.update({
                 "status": "blocked" if terminal else "degraded",
@@ -2707,7 +2746,11 @@ class IndependentReasoningJobRunner:
             })
             self.registry.update_health(descriptor.deployment_id, health)
             return {
-                "status": "failed" if terminal else "retry",
+                "status": (
+                    "lease-lost"
+                    if ownership_lost
+                    else "failed" if terminal else "retry"
+                ),
                 "processedCount": len(selected_jobs),
                 "reshardedJobCount": len(resharded),
                 "repairedIngressCount": repaired,
@@ -2901,14 +2944,14 @@ class IndependentReasoningJobRunner:
         bounded = []
         resharded = []
         limit = self.native_target_symbol_limit()
-        callback = getattr(self.queue, "reshard_claimed_job", None)
+        callback = self.job_transitions.method("reshard_claimed_job")
         for job in jobs or []:
             symbols = self.job_symbols(job)
             if len(symbols) <= limit:
                 bounded.append(job)
                 continue
             if not callable(callback):
-                self.queue.defer(
+                self.job_transitions.method("defer")(
                     job["jobId"],
                     "Oversized V2 source event requires durable symbol sharding before execution.",
                     5,
@@ -2985,6 +3028,8 @@ class IndependentReasoningJobRunner:
                 kwargs = {}
                 if "progress" in parameters:
                     kwargs["progress"] = self.current_progress()
+                if "claimed_tokens" in parameters:
+                    kwargs["claimed_tokens"] = dict(self.job_transitions.tokens)
                 alive = callback(job_ids, self.worker_id, lease_seconds, **kwargs)
             except Exception:
                 continue

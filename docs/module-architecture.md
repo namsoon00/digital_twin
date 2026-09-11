@@ -619,7 +619,9 @@ located in `infrastructure/transactions/`, not disguised as a single feature:
 | `monitoring.py` | Source snapshot/anchor, recorded event, admission and reasoning ingress |
 
 Business modules cannot import these coordinators. Composition supplies them;
-SQL and transaction bodies are frozen against the pre-move source revision.
+structural fixtures reassemble moved owner writes and compare SQL and transaction
+bodies against the pre-move revision. Explicit ownership/repair fixes have their
+own behavioral tests rather than bypassing all source parity checks.
 The portfolio mandate write helper now belongs to `portfolio/infrastructure/mandate_store.py`
 and accepts an existing connection, so account creation does not import the
 larger portfolio transaction coordinator.
@@ -645,18 +647,39 @@ Two failure behaviors are strengthened without changing investment semantics:
 - Failed RuleBox publication restores the prior in-memory rule list and clears
   the speculative cache. Only successful publication appends the new version.
   Database readback remains authoritative after ambiguous commit responses.
-- Recovery negotiates legacy optional parameters before calling an adapter.
+- Repository world calls and pending-activation recovery negotiate legacy
+  optional parameters before calling an adapter.
   An internal `TypeError` never causes the mutation to run again with weaker
   world/target arguments. Existing queue retry remains the recovery owner.
+
+### Projection Stages And Job Ownership
+
+The follow-on [Backend Stabilization](backend-stabilization.md) batch splits
+`projection_write/record.py` into eleven ordered phases with typed inputs,
+minimal ports and frozen local result envelopes. Validation and source audit
+precede publication; source/world/release identity passes through unchanged.
+Graphs are not deep-copied and phase extraction does not add queue round trips.
+
+Thirty-five writes now live in six owner modules' `transaction_writes.py` files.
+They receive an execute-only `BoundWriteConnection`. Shared coordinators retain
+the single transaction, including event/outbox ordering and checkpoint CAS.
+
+`reasoning/application/job_transitions.py` carries worker and claim identity to
+the existing MySQL queue. Expired, replaced and completed attempts cannot change
+durable state. Heartbeats and release binding use the same identity; a later
+batch error cannot retry already settled work. Receipt publication remains in
+the completion transaction. A separate `repair_completed_receipts` operation
+uses only the locked stored result and never rewrites completion state.
+Late AI publication also cannot supersede a request now owned by another worker.
 
 ## Deliberate Shared Boundaries
 
 - Connection pools, schema/bootstrap, retention, runtime settings and keyed
   application-cache facilities remain shared platform infrastructure. Storage
   ownership checks are architectural guards, not database permission isolation.
-- Multi-owner transaction coordinators are still substantial. Splitting their
-  participants requires connection-bound ports and rollback tests, not replacing
-  one atomic commit with unrelated event callbacks.
+- Multi-owner transaction coordinators are still substantial after the owner
+  participants were extracted. Continue splitting algorithms with rollback
+  tests, not by replacing one atomic commit with unrelated event callbacks.
 - The common ontology kernel and some pure domain contracts remain shared.
   Runtime builders and native/save algorithms may still be large. Import and
   source-parity tests cannot prove every runtime interaction safe.
@@ -670,6 +693,13 @@ retries or failure isolation justify it. Module count is not an async mandate.
 
 ## Verification
 
+- `test_projection_stages.py`: phase ordering, source/audit identity, all early
+  exits, invalid candidates, immutable envelopes and execute-only participants.
+- `test_reasoning_job_fences.py`: different/same-worker reclaims, terminal state,
+  heartbeat expiry, coalesced source/account lineage and persisted-result repair.
+- `test_stabilization_transactions.py`: real isolated MySQL rollback across the
+  four coordinators, AI ownership, publication/receipt/outcome replay and bounded
+  handoff queries. Fixture latency is not a production performance guarantee.
 - `test_backend_integration.py`: 144 moved method contracts, storage declaration
   and transaction parity, owner/legacy identity, resolvable narrow ports, unbound
   global detection, temporal import isolation, exactly-once adapter invocation,

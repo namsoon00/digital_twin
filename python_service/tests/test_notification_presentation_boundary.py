@@ -1,4 +1,5 @@
 import copy
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -15,6 +16,9 @@ from digital_twin.domain.notification.request import NotificationRequest
 from digital_twin.domain.notification_templates import NotificationTemplate, render_notification, text_context
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.infrastructure.notification.ingress import enqueue_request
+from digital_twin.infrastructure.mysql_notification_jobs import (
+    MySQLNotificationJobStore, notification_list_presentation_column,
+)
 
 
 class NotificationPresentationBoundaryTests(unittest.TestCase):
@@ -204,6 +208,45 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
             "ontologyRelationContext": {"decision": {"selectedRuleId": "graph.materiality.alert_candidate.v1"}},
         }
         self.assertEqual("price-change", notification_kind("investmentInsight", context).key)
+
+    def test_lightweight_web_list_keeps_upstream_notification_kind(self):
+        from digital_twin.infrastructure.web_server import notification_job_list_payload
+
+        cases = [
+            ("ai-interpretation", {
+                "notificationDecisionMode": "context-narrative",
+                "notificationWriterProvenance.aiAuthored": True,
+                "notificationAiValidatedResponse.action": "NO_ACTION",
+            }),
+            ("investment-decision", {"notificationAiValidatedResponse.action": "ADD"}),
+            ("price-change", {
+                "notificationDecisionMode": "typedb-context-observation",
+                "ontologyRelationContext.decision.selectedRuleId": "graph.materiality.alert_candidate.v1",
+                "reasoningDeliveryTrigger.facts.confirmedSignalTransitions": [{"signalId": "price"}],
+            }),
+            ("price-change", {
+                "reasoningDeliveryTrigger.facts.cryptoTransitions": [{"symbol": "ETH"}],
+            }),
+            ("relation-change", {"ontologyRelationContext.engine": "typedb"}),
+        ]
+        for expected, fields in cases:
+            with self.subTest(kind=expected):
+                fields["symbolDisplayName"] = "종목 이름"
+                job = MySQLNotificationJobStore.list_job_from_row({
+                    "job_id": "list-job", "message_type": "investmentInsight",
+                    "symbol": "MSTR", "text": "기존 본문은 유지합니다.",
+                    "presentation_json": json.dumps(fields),
+                })
+                with patch.object(NotificationRenderingService, "apply_investment_presentation_contract",
+                                  side_effect=AssertionError("list must not reconstruct a decision")):
+                    payload = notification_job_list_payload(job, 2, {"_skipOperationalSchemaBootstrap": "1"})
+                self.assertEqual(expected, payload["notificationKind"])
+                self.assertIn("종목 이름", payload["title"])
+                self.assertIn("기존 본문은 유지합니다.", payload["textPreview"])
+        columns = notification_list_presentation_column()
+        self.assertIn("$.context.metadata.notificationDecisionMode", columns)
+        self.assertNotIn("'$.context'", columns)
+        self.assertNotIn("'$.context.ontologyRelationContext'", columns)
 
     def test_watchlist_zero_return_is_not_shown(self):
         context = {"ontologyRelationContext": {"facts": {"quantity": 0, "isHolding": False, "isWatchlist": True, "profitLossRate": 0, "currentPrice": 100}}}

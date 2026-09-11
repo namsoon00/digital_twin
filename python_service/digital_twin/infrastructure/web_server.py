@@ -3549,7 +3549,11 @@ def notification_job_public_payload(
         else {}
     )
     customer_text = str(job.text or "")
-    if job.message_type == INVESTMENT_INSIGHT:
+    if context.get("_notificationListProjection"):
+        from ..application.notification.presentation import present_notification
+
+        customer_text = present_notification(job.message_type, context, customer_text)
+    elif job.message_type == INVESTMENT_INSIGHT:
         presentation_job = NotificationJob.from_dict(job.to_dict())
         try:
             NotificationRenderingService.apply_investment_presentation_contract(

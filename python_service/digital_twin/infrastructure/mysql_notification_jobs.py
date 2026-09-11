@@ -54,6 +54,31 @@ from .operational_common import (
 from .settings import utc_now
 
 
+NOTIFICATION_LIST_PRESENTATION_PATHS = (
+    "notificationContent.kind", "notificationContent.subject", "notificationSubject",
+    "symbolDisplayName", "displayTarget", "target", "rawSymbol",
+    "notificationDecisionMode", "notificationWriterProvenance.aiAuthored",
+    "notificationWriterProvenance.writerRole", "notificationAiValidatedResponse.action",
+    "validatedDecisionResponse.action", "notificationInferenceResponse.action",
+    "decisionPublication.outcomeKind", "ontologyRelationContext.decision.selectedRuleId",
+    "ontologyRelationContext.engine", "reasoningDeliveryTrigger.facts.cryptoTransitions",
+    "reasoningDeliveryTrigger.facts.confirmedSignalTransitions",
+)
+
+
+def notification_list_presentation_column() -> str:
+    # Project classification leaves only, never the graph or AI response body.
+    fields = []
+    for path in NOTIFICATION_LIST_PRESENTATION_PATHS:
+        paths = ("$.context." + path, "$.context.metadata." + path)
+        values = [
+            "NULLIF(JSON_EXTRACT(notification_jobs.payload_json, '" + value + "'), 'null')"
+            for value in paths
+        ]
+        fields.extend(["'" + path + "'", "COALESCE(" + ", ".join(values) + ")"])
+    return "JSON_OBJECT(" + ", ".join(fields) + ") AS presentation_json"
+
+
 class MySQLNotificationJobStore(MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
@@ -450,6 +475,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "data_quality", "is_mock", "status", "attempts", "created_at", "updated_at", "last_error", "text",
         )
         columns = ", ".join("notification_jobs." + name + " AS " + name for name in column_names)
+        columns += ", " + notification_list_presentation_column()
         if safe_recipient:
             columns += (
                 ", receipt.read_at AS receipt_read_at"
@@ -975,9 +1001,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     def list_job_from_row(row) -> NotificationJob:
         """Build the small read model used by the outbox list.
 
-        This deliberately does not inspect ``payload_json``.  A missing graph
-        context is represented as an empty mapping; the selected job is then
-        re-read through ``get`` before its reasoning detail is rendered.
+        Only SQL-projected classification leaves are included. The complete
+        immutable context is still loaded exclusively for a selected detail.
         """
         context = {
             "symbol": str(row.get("symbol") or ""),
@@ -986,7 +1011,18 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "apiSource": str(row.get("api_source") or "notification_jobs"),
             "dataQuality": str(row.get("data_quality") or "actual"),
             "isMock": bool(row.get("is_mock")),
+            "_notificationListProjection": True,
         }
+        presentation = _json_loads(row.get("presentation_json"), {})
+        for path in NOTIFICATION_LIST_PRESENTATION_PATHS:
+            value = presentation.get(path)
+            if value in (None, "", {}, []):
+                continue
+            parts = path.split(".")
+            target = context
+            for part in parts[:-1]:
+                target = target.setdefault(part, {})
+            target[parts[-1]] = value
         if any(
             key in row
             for key in (

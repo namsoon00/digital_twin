@@ -67,6 +67,9 @@ and delivered messages use the same catalog. The response exposes `notificationK
 `notificationKindLabel`, and `notificationKindIcon`; `messageType` still identifies
 the existing admin rule and cadence policy. Existing rule-level statistics remain
 rule-level statistics, rather than being silently relabeled as per-kind counts.
+The lightweight web list projects only classification fields from the stored
+context, including legacy metadata paths. It does not fetch full graph traces or
+reconstruct an investment decision merely to display a type label and preview.
 
 Legacy `investmentInsight` is resolved from its publication mode and saved action.
 Reference-only or NO_ACTION results cannot be labeled as investment decisions.

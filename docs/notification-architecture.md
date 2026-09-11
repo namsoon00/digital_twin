@@ -85,6 +85,30 @@ suppression, and an unchanged relation becomes eligible for a scheduled summary
 after the configured interval. This prevents a stable TypeDB fingerprint from
 silencing a position forever.
 
+Completed AI insights use the same `final_ai_insight_delivery_is_authorized`
+contract at outbox admission and dispatch. A reconciled semantic send with
+completed AI execution, writer provenance, a passed publication contract, and a
+material insight transition must not be revoked merely because the preceding
+TypeDB relation fingerprint is unchanged. This authorization does not bypass
+account quiet hours, repeat policy, recipient checks, or final publication
+validation; an unverified response or an abstention cannot use it.
+
+Analysis continuity and customer delivery memory are different histories.
+`previousInvestmentAIInsightEpisode` retains the latest publishable analysis for
+AI context. `previousDeliveredInvestmentAIInsightEpisode` is captured separately
+from account/symbol-scoped episodes with a successful transport receipt. Only
+the latter establishes the customer novelty baseline. Web-only, suppressed,
+failed, queued, and unconfirmed jobs must not erase a still-undelivered insight
+change. Existing in-flight and cooldown policies continue to prevent duplicates.
+When delivery history cannot be read, retain an explicit error and the legacy
+analysis comparison instead of pretending the customer history is empty.
+
+An `AIInsightEpisode` keeps its immutable semantic decision and outbox admission
+receipt. The read model joins the current job and transport receipt as
+`notificationDelivery`; it never rewrites that original episode. The web must
+show queued, suppressed, failed, unconfirmed, and delivered separately. A semantic
+`send` or a `done` job without a transport receipt is not proof of delivery.
+
 Profit/loss transitions are compared at the same one-decimal precision shown
 in the customer message. This prevents a visible `1.0%p` move from being
 silently rejected because hidden raw decimals differ by slightly less.

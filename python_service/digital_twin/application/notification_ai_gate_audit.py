@@ -6,6 +6,7 @@ from ..domain.investment_decision_history import context_with_ai_decision_transi
 from ..domain.investment_decision_actionability import investment_decision_actionability
 from ..domain.investment_insight_assessment import (
     investment_insight_assessment,
+    investment_insight_delivery_transition,
     investment_insight_transition,
 )
 from ..domain.investment_notification_state import (
@@ -356,9 +357,12 @@ def context_with_validated_ai_response(
         invalidation_condition=response.invalidation_condition,
         follow_up_conditions=response.follow_up_conditions,
     )
-    enriched["investmentInsightTransition"] = investment_insight_transition(
+    enriched["investmentInsightAnalysisTransition"] = investment_insight_transition(
         enriched.get("previousInvestmentAIInsightEpisode"),
         response.insight_assessment,
+    )
+    enriched["investmentInsightTransition"] = investment_insight_delivery_transition(
+        enriched, response.insight_assessment,
     )
     narrative_payload = narrative_brief.to_dict()
     narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)

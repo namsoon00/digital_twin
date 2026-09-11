@@ -185,6 +185,49 @@ class AIInferenceQueueTests(unittest.TestCase):
             after_complete=lambda _connection, outcome: projector.reconcile(context, outcome),
         )
 
+    def test_insight_read_model_requires_transport_receipt_for_delivery_memory(self):
+        job, request = self.create_detached_request("subject:delivery-memory")
+        self.queue.enqueue_subject_decision(job, request)
+        claimed = self.queue.claim("worker-delivery-memory", 1, 60)[0]
+        result = AIInferenceResult.create(
+            claimed, {"action": "NO_ACTION", "insightAssessment": {"publishable": True}},
+            source="test AI", validation_state="ready", latency_ms=10, prompt_bytes=100,
+        )
+        context = {
+            **claimed.context,
+            "notificationAiValidatedResponse": result.response,
+            "notificationAiExecutionAudit": {
+                "status": "completed", "adoptionState": "narrative-adopted-action-not-applicable",
+            },
+            "notificationWriterProvenance": {"aiAuthored": True},
+            "decisionReconciliation": {
+                "status": "reconciled", "notificationDecision": "send", "reason": "new insight",
+            },
+        }
+        self.assertTrue(self.complete_detached(claimed, "worker-delivery-memory", result, context))
+
+        def latest():
+            return self.queue.latest_insight_episodes("main", "005930", 1)[0]
+
+        saved = self.notifications.get(job.job_id)
+        self.assertEqual("pending", latest()["notificationDelivery"]["status"])
+        self.assertEqual([], self.queue.latest_delivered_insight_episodes("main", "005930"))
+        self.notifications.mark_suppressed(saved, "unchanged graph")
+        self.assertEqual("suppressed", latest()["notificationDelivery"]["status"])
+        self.assertEqual("send", latest()["reconciliation"]["semanticNotificationDecision"])
+        self.notifications.mark_done(saved)
+        self.assertEqual("unconfirmed", latest()["notificationDelivery"]["status"])
+        self.assertEqual([], self.queue.latest_delivered_insight_episodes("main", "005930"))
+        attempt = self.notifications.start_delivery_attempt(saved, "accountNotification", "account")
+        self.notifications.complete_delivery_attempt(saved, attempt, True, provider="test transport")
+        self.assertEqual("delivered", latest()["notificationDelivery"]["status"])
+        self.assertEqual(1, len(self.queue.latest_delivered_insight_episodes("main", "005930")))
+        self.assertEqual([], self.queue.latest_delivered_insight_episodes("other", "005930"))
+        self.assertEqual([], self.queue.latest_delivered_insight_episodes("main", "MSTR"))
+        saved.account_id = "other"
+        self.notifications.update(saved)
+        self.assertEqual([], self.queue.latest_delivered_insight_episodes("main", "005930"))
+
     def assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist(self):
         diagnostic = ai_failure_diagnostic(
             ValueError(

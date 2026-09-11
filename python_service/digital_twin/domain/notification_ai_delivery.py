@@ -245,13 +245,13 @@ def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -
 
 
 def final_ai_insight_delivery_is_authorized(context: Mapping[str, object]) -> bool:
-    """Honor a completed semantic send decision at final outbox admission.
+    """Honor a completed semantic send decision at admission and dispatch.
 
     Detached AI judgement reconciles the graph candidate and delivery policy
     before creating a notification job.  The generic notification admission
-    layer must not reinterpret that completed decision as an initial graph
-    baseline.  This authorization is deliberately fail-closed and requires
-    the independently persisted execution, writer, publication-contract and
+    layer must not reinterpret that completed decision as an initial or
+    unchanged graph baseline. This fail-closed authorization requires the
+    independently persisted execution, writer, publication-contract and
     insight-transition proofs in addition to the reconciliation result.
     """
 

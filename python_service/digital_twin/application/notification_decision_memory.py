@@ -169,7 +169,9 @@ def context_with_previous_investment_insight(
 ) -> Dict[str, object]:
     """Attach the latest publishable AI insight for semantic change detection."""
 
-    enriched = _mapping(context)
+    enriched = context_with_previous_delivered_investment_insight(
+        context, insight_episode_store, account_id=account_id, symbol=symbol,
+    )
     existing = compact_previous_investment_insight_episode(
         enriched.get("previousInvestmentAIInsightEpisode")
     )
@@ -229,4 +231,65 @@ def context_with_previous_investment_insight(
         ).get("materialFingerprint") or "",
     })
     enriched["investmentInsightHistory"] = audit
+    return enriched
+
+
+def context_with_previous_delivered_investment_insight(
+    context: Mapping[str, object],
+    insight_episode_store=None,
+    *,
+    account_id: str = "",
+    symbol: str = "",
+) -> Dict[str, object]:
+    """Freeze receipt-backed delivery memory separately from AI analysis continuity."""
+
+    enriched = _mapping(context)
+    subject = notification_ai_subject(enriched)
+    resolved_account = str(account_id or enriched.get("accountId") or "").strip()
+    resolved_symbol = str(symbol or subject.get("symbol") or "").strip().upper()
+    captured = _mapping(enriched.get("investmentInsightDeliveryHistory"))
+    if (
+        captured.get("status") in {"found", "not-found"}
+        and captured.get("accountId") == resolved_account
+        and captured.get("symbol") == resolved_symbol
+    ):
+        return enriched
+    audit = {
+        "version": "investment-insight-delivery-history-v1",
+        "status": "unavailable",
+        "accountId": resolved_account,
+        "symbol": resolved_symbol,
+    }
+    reader = getattr(insight_episode_store, "latest_delivered_insight_episodes", None)
+    if not callable(reader) or not resolved_account or not resolved_symbol:
+        enriched["investmentInsightDeliveryHistory"] = audit
+        return enriched
+    try:
+        episodes = reader(account_id=resolved_account, symbol=resolved_symbol, limit=8)
+    except Exception as error:  # noqa: BLE001 - retain analysis, but do not claim delivery history is empty.
+        audit.update({"status": "error", "errorType": type(error).__name__})
+        enriched["investmentInsightDeliveryHistory"] = audit
+        return enriched
+    previous = {}
+    for episode in episodes or []:
+        episode = _mapping(episode)
+        delivery = _mapping(episode.get("notificationDelivery"))
+        if (
+            str(episode.get("accountId") or "") != resolved_account
+            or str(episode.get("symbol") or "").upper() != resolved_symbol
+            or delivery.get("delivered") is not True
+            or not delivery.get("deliveredAt")
+        ):
+            continue
+        previous = compact_previous_investment_insight_episode(episode)
+        if previous:
+            audit["deliveredAt"] = delivery["deliveredAt"]
+            audit["notificationJobId"] = delivery.get("notificationJobId") or ""
+            break
+    enriched["previousDeliveredInvestmentAIInsightEpisode"] = previous
+    audit.update({
+        "status": "found" if previous else "not-found",
+        "previousEpisodeId": previous.get("episodeId") or "",
+    })
+    enriched["investmentInsightDeliveryHistory"] = audit
     return enriched

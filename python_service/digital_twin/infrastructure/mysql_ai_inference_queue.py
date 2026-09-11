@@ -1544,6 +1544,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         account_id: str = "",
         symbol: str = "",
         limit: int = 200,
+        *,
+        delivered_only: bool = False,
     ) -> List[Dict[str, object]]:
         """Read detached AI interpretations without requiring an alert row."""
 
@@ -1557,6 +1559,18 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         if normalized_symbol:
             clauses.append("episode.symbol = %s")
             params.append(normalized_symbol)
+        receipt_query = (
+            "SELECT MAX(attempt.completed_at) FROM notification_delivery_attempts AS attempt "
+            "WHERE attempt.job_id = notification.job_id AND attempt.status = 'delivered' "
+            "AND attempt.completed_at <> ''"
+        )
+        if delivered_only:
+            clauses.extend([
+                "result.ai_authored = 1",
+                "result.publication_contract_passed = 1",
+                "COALESCE(result.contract_failure_code, '') = ''",
+                "(" + receipt_query + ") IS NOT NULL",
+            ])
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         try:
             bounded_limit = max(1, min(1000, int(limit or 200)))
@@ -1566,9 +1580,16 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT episode.payload_json, result.publication_mode, result.ai_authored, "
-                "result.publication_contract_passed, result.contract_failure_code "
+                "result.publication_contract_passed, result.contract_failure_code, "
+                "notification.status AS notification_status, "
+                "notification.last_error AS notification_error, "
+                "(" + receipt_query + ") AS delivered_at "
                 "FROM investment_ai_insight_episodes AS episode "
                 "LEFT JOIN ai_inference_results AS result ON result.result_id = episode.result_id"
+                " LEFT JOIN notification_jobs AS notification "
+                "ON notification.job_id = episode.notification_job_id "
+                "AND notification.account_id = episode.account_id "
+                "AND notification.message_type = 'investmentInsight'"
                 + where
                 + " ORDER BY episode.created_at DESC, episode.episode_id DESC LIMIT %s",
                 tuple(params),
@@ -1594,8 +1615,34 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             payload["contractFailureCode"] = _clean(
                 row.get("contract_failure_code") or payload.get("contractFailureCode")
             )
+            delivered_at = _clean(row.get("delivered_at"))
+            job_id = _clean(payload.get("notificationJobId"))
+            job_status = _clean(row.get("notification_status"))
+            payload["notificationDelivery"] = {
+                "status": (
+                    "delivered" if delivered_at
+                    else "unconfirmed" if job_status in {"done", "sent"}
+                    else job_status or ("unavailable" if job_id else "not-requested")
+                ),
+                "jobStatus": job_status,
+                "notificationJobId": job_id,
+                "delivered": bool(delivered_at),
+                "deliveredAt": delivered_at,
+                "reason": _clean(row.get("notification_error")),
+            }
             result.append(payload)
         return result
+
+    def latest_delivered_insight_episodes(
+        self, account_id: str, symbol: str, limit: int = 8,
+    ) -> List[Dict[str, object]]:
+        """Read customer-visible history without scanning intervening web-only results."""
+
+        if not _clean(account_id) or not _clean(symbol):
+            return []
+        return self.latest_insight_episodes(
+            account_id, symbol, limit, delivered_only=True,
+        )
 
     def trace_for_notification(self, notification_job_id: str) -> Dict[str, object]:
         """Return one read-only AI execution trace for notification diagnostics."""

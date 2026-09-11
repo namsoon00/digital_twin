@@ -76,6 +76,7 @@
     {"file": "test_ai_inference_queue.py", "tier": "integration", "core": true},
     {"file": "test_ai_inference_worker_runtime.py", "tier": "contract", "core": true},
     {"file": "test_notification_ai_delivery.py", "tier": "contract", "core": true},
+    {"file": "test_ai_insight_delivery_boundary.py", "tier": "contract", "core": true},
     {"file": "test_investment_insight_assessment.py", "tier": "contract", "core": true},
     {"file": "test_notification_trigger_ledger.py", "tier": "contract", "core": true},
     {"file": "test_external_api_sources.py", "tier": "contract", "core": true},

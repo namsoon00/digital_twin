@@ -285,7 +285,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             crypto_job.context["inferenceChangeGate"]["deliveryAuthorization"],
         )
         self.assertEqual(
-            "dispatch-inference-change-v4",
+            "dispatch-inference-change-v5",
             crypto_job.context["inferenceChangeGate"]["version"],
         )
 

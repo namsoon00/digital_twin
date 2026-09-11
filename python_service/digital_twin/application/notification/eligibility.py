@@ -17,6 +17,7 @@ from ...domain.market_hours import (
 )
 from ...domain.notification_ai_delivery import (
     explicit_delivery_authorization,
+    final_ai_insight_delivery_is_authorized,
     first_holding_review_candidate_is_admissible,
     verified_typedb_direct_delivery_authorization,
 )
@@ -125,12 +126,18 @@ class NotificationDispatchEligibilityService:
             verified_typedb_direct_delivery_authorization(context)
             or explicit_delivery_authorization(context)
         )
+        if not explicit_authorization and final_ai_insight_delivery_is_authorized(context):
+            reconciliation = context.get("decisionReconciliation") or {}
+            explicit_authorization = {
+                "decision": "validated-ai-insight",
+                "reason": str(reconciliation.get("reason") or ""),
+            }
         first_holding_review = (
             not material
             and first_holding_review_candidate_is_admissible(context)
         )
         context["inferenceChangeGate"] = {
-            "version": "dispatch-inference-change-v4",
+            "version": "dispatch-inference-change-v5",
             "decision": "send" if material or first_holding_review or explicit_authorization else "suppress",
             "material": material,
             "deliveryAuthorization": (

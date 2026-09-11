@@ -659,3 +659,22 @@ def investment_insight_transition(
             else "투자 인사이트의 핵심 의미가 이전과 같습니다."
         ),
     }
+
+
+def investment_insight_delivery_transition(
+    context: Mapping[str, object],
+    current_assessment: object,
+) -> Dict[str, object]:
+    """Compare customer novelty with delivered history, not unfinished delivery."""
+
+    values = _mapping(context)
+    history = _mapping(values.get("investmentInsightDeliveryHistory"))
+    captured = history.get("status") in {"found", "not-found"}
+    previous = values.get(
+        "previousDeliveredInvestmentAIInsightEpisode"
+        if captured else "previousInvestmentAIInsightEpisode"
+    )
+    return {
+        **investment_insight_transition(previous, current_assessment),
+        "comparisonBasis": "delivered-insight" if captured else "analysis-history-fallback",
+    }

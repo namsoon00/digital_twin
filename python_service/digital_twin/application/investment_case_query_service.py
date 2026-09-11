@@ -289,6 +289,21 @@ class InvestmentCaseQueryService:
         insight_transition = item_dict(insight.get("insightTransition"))
         reconciliation = item_dict(saved.get("reconciliation"))
         delivery_policy = item_dict(reconciliation.get("deliveryPolicy"))
+        notification_delivery = item_dict(saved.get("notificationDelivery"))
+        delivery_status = text(notification_delivery.get("status"))
+        delivery_label = {
+            "delivered": "알림 전달 완료",
+            "pending": "발송 대기",
+            "processing": "발송 처리 중",
+            "awaiting_ai": "분석 대기",
+            "failed": "전달 실패",
+            "suppressed": "발송 안 됨",
+            "unconfirmed": "전달 확인 안 됨",
+            "unavailable": "전달 기록 확인 불가",
+            "not-requested": "웹 기록만",
+        }.get(delivery_status) or (
+            "발송 요청" if reconciliation.get("notificationDecision") == "send" else "웹 기록만"
+        )
         current_generation = bool(
             text(saved.get("subjectCaseId")) == text(case.get("subjectCaseId"))
             and text(saved.get("inferenceGenerationId")) == text(case.get("inferenceGenerationId"))
@@ -372,7 +387,9 @@ class InvestmentCaseQueryService:
             "adoptionState": text(delivery_policy.get("aiAdoptionState")),
             "notificationDecision": text(reconciliation.get("notificationDecision")) or "suppress",
             "notificationJobId": text(reconciliation.get("notificationJobId")),
-            "deliveryReason": text(reconciliation.get("reason")),
+            "notificationDelivery": notification_delivery,
+            "notificationDeliveryLabel": delivery_label,
+            "deliveryReason": text(notification_delivery.get("reason") or reconciliation.get("reason")),
             "createdAt": text(saved.get("createdAt")),
             "reason": (
                 "현재 TypeDB 세대와 일치하는 AI 모델 해석입니다."

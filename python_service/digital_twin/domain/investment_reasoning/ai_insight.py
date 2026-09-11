@@ -354,6 +354,9 @@ class AIInsightEpisode:
         transition = _mapping(values.get("investmentInsightTransition"))
         if transition:
             insight["insightTransition"] = transition
+        analysis_transition = _mapping(values.get("investmentInsightAnalysisTransition"))
+        if analysis_transition:
+            insight["analysisTransition"] = analysis_transition
         material = {
             "requestId": _text(getattr(request, "request_id", "")),
             "resultId": _text(getattr(result, "result_id", "")),

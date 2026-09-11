@@ -4353,7 +4353,7 @@
     params.set("inbox", state.notificationInboxFilter || "all");
     if (mobileInfiniteScrollEnabled() && state.notificationJobsCursor) params.set("cursor", state.notificationJobsCursor);
     if (state.notificationJobStatusFilter && state.notificationJobStatusFilter !== "all") params.set("status", state.notificationJobStatusFilter);
-    if (state.notificationJobTypeFilter && state.notificationJobTypeFilter !== "all") params.set("messageType", state.notificationJobTypeFilter);
+    // Presentation kinds filter the loaded page; messageType is a legacy policy key.
     if (state.notificationJobSearch) params.set("query", state.notificationJobSearch);
     return requestJson("/api/notification-jobs?" + params.toString(), { key: "notification-jobs", force: true })
       .then(function (payload) {
@@ -26141,7 +26141,7 @@
       '</select>',
       '</label>',
       '<label class="notification-search-field">',
-      '<span>타입</span>',
+      '<span>현재 목록 종류</span>',
       '<select data-notification-job-filter="messageType">',
       renderNotificationJobFilterOptions(notificationJobFilterOptions(jobs, notificationJobTypeKey), type, function (option) {
         return notificationJobTypeLabel(option, jobs);

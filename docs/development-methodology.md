@@ -433,6 +433,20 @@ packages. Preserve per-repository driver/lock/cache identities and coordinator
 decorators. A cleanup or native-retry change requires failure-path and active
 generation preservation tests, not just query snapshots.
 
+Keep source input assembly in `modules/reasoning/application/projection_input`.
+Inject source-reader, outcome-observer, scorer and cache capabilities separately;
+never pass the TypeDB writer or a notification publisher into those stages.
+The sequence is capture, cache lookup, factual graph, model evidence, lineage
+verification, and cache completion. World/scoped identity is applied afterward.
+Keep pure factual shaping and source-key computation in the reasoning domain,
+and cache implementations in reasoning infrastructure. A cache-key change
+requires replay/freshness review; source equality must include observation
+clocks and frozen release identity. Optional enrichment is not permission to
+replace an immutable source snapshot with current data. Preserve existing
+effectful outcome observation explicitly instead of disguising it as a read.
+Native crash rehearsals must create and stop only their own temporary server;
+never stop the managed TypeDB process to test a failure path.
+
 V2 composition separates launch settings, immutable release binding, warmup,
 release health and decision/delivery wiring. Keep this preparation synchronous
 and preserve its phase order. Do not change frozen release identities or

@@ -1,0 +1,263 @@
+{
+  "sourceRevision": "15c8168f95fd",
+  "members": {
+    "graph_assembly_cache_enabled": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "2bd6a1b6540773d7cd3dd94ffa0d870bf490e334ee205410d06f0dac2b45f36f",
+      "restore": {}
+    },
+    "runtime_context_cache_enabled": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "cd67ddb730ff9cea8738a83c33f3faee11f2702a57b3a91b0bcfc03308fc536e",
+      "restore": {}
+    },
+    "runtime_context_cache_ttl_seconds": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "bcb3ef422a84c208b4eb256ca253e4715033df9916e43e3017e90f2f630bc007",
+      "restore": {}
+    },
+    "runtime_context_cache_max_entries": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "0249e4380063aa3dd61f5e91d8de6083c5fade7fe83734a46f897d8fde2885a9",
+      "restore": {}
+    },
+    "graph_assembly_cache_ttl_seconds": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "7a980e2130c745e8c07995571667e2ade4466d29e85d537689c366974877630a",
+      "restore": {}
+    },
+    "graph_assembly_cache_max_entries": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "bc253949ba29b47266a9bf877e5cc3852cf3d52c4d12110164e7439912bfc12c",
+      "restore": {}
+    },
+    "graph_assembly_persistent_cache_enabled": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "8627f513a4eca7497944534265322fcd3b2eac16a89f4c3c7cf9ea9091b25469",
+      "restore": {}
+    },
+    "graph_assembly_persistent_cache_ttl_seconds": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "4e0002f745efe7445e935200b1e0602836002b50d0cff7491354ddab6b47c5e8",
+      "restore": {}
+    },
+    "graph_assembly_persistent_cache_max_entries": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "800832a901d2a31f520bde8f67d32b000736a633f126edafe534340c8322e722",
+      "restore": {}
+    },
+    "graph_assembly_persistent_cache_max_payload_bytes": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "edf3c178ebabb0e7a1810b744ff0e2792eb7f993fde6c5f30dd07a58e5eb3557",
+      "restore": {}
+    },
+    "performance_setting": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "740b953aa980ca457319bf9b755936bc44ea19adc3d84c31f62e24d0c944645b",
+      "restore": {}
+    },
+    "decision_episode_context_per_symbol_limit": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "55a95721a7454395b0da6b6b9851c0c23e591ad7ebd10588d2d0a47b03e4b048",
+      "restore": {}
+    },
+    "decision_episode_context_maximum_episodes": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "b81b37a9ff99738d245c8b15c85e7de4ae74effd2de89d45fe5914ecee1f064d",
+      "restore": {}
+    },
+    "decision_episode_context_hypothesis_limit": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "03096a54dcab7f3bbc3815080a6b9dcf41f0fb20da0b17fc98554584941c7b63",
+      "restore": {}
+    },
+    "decision_episode_context_outcome_limit": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "1290cd0e7da7843bf741d3af4eea973220dd8deb2650a2ef48a7382576f6737b",
+      "restore": {}
+    },
+    "decision_outcome_history_per_symbol_limit": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "8c3c04417eb803dc0c7900445d1eba211a9442cd91543382829f9f5a9cf88f50",
+      "restore": {}
+    },
+    "decision_outcome_history_maximum_episodes": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "d540187911fc31c84984ad58469c637b1cd3342125cbfbfe1132fe608db34808",
+      "restore": {}
+    },
+    "integer_setting": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "88a53711acddbd6c25f52624034d06f6027f6153041aed542b010649dfd68768",
+      "restore": {}
+    },
+    "hypothesis_lifecycle_abox_projection_enabled": {
+      "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
+      "owner": "ProjectionInputPolicy",
+      "bodyHash": "e4bfad39d21e7a9ddca02b050b94d41ae8bc643adb3d4b9dd45c516c924f1412",
+      "restore": {}
+    },
+    "runtime_context_cache_key": {
+      "path": "digital_twin/modules/reasoning/domain/projection_cache_identity.py",
+      "owner": "ProjectionCacheKeys",
+      "bodyHash": "d688124a9a61006d6b6b034bae009823f57190f86d87ff7e021edb3d1f4c730b",
+      "restore": {}
+    },
+    "graph_assembly_cache_key": {
+      "path": "digital_twin/modules/reasoning/domain/projection_cache_identity.py",
+      "owner": "ProjectionCacheKeys",
+      "bodyHash": "cb0a51511189eeb9d5791afb027d23945455ae7e7d8b2ca19224bc2453d474cd",
+      "restore": {}
+    },
+    "rule_id_from_payload": {
+      "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
+      "owner": "",
+      "bodyHash": "fc29ff3d724b69d75bf81a868e80f021c5089fb6e4ff13fad11bc79d37105218",
+      "restore": {}
+    },
+    "rulebox_relation_subject_patterns": {
+      "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
+      "owner": "",
+      "bodyHash": "e80e0a4f8ce028a023dc2bbdb6852ed732ebe372cca393d1165ed6b2968fb8d9",
+      "restore": {}
+    },
+    "factual_runtime_metadata": {
+      "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
+      "owner": "",
+      "bodyHash": "22ae2f89cd2247bfc9c7bf4a7b27645c372e98aa09a9b458efe5894533198958",
+      "restore": {}
+    },
+    "data_pipeline_health_context": {
+      "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
+      "owner": "",
+      "bodyHash": "ec64582d6f39d3641d810670f7dc8133444d4c4c6f4b547c12ad78cd6b091514",
+      "restore": {}
+    },
+    "graph_for_graph_store_persistence": {
+      "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
+      "owner": "",
+      "bodyHash": "15cccbdd68f233961a20a55409ce5ec1bccce19fcb188a47c91bbb39d196d197",
+      "restore": {
+        "list(fallback_rules or [])": "self.rulebox_rules_for_impact()"
+      }
+    },
+    "decision_episode_projection_context": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/decision_memory.py",
+      "owner": "",
+      "bodyHash": "cfbd8d06748d03e0fa1fab10cdb9582606fc9006aa8c2f5c08a6c7b23c3ecb0f",
+      "restore": {
+        "_inputs": "self",
+        "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
+        "_inputs.graph_cache": "SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE"
+      }
+    },
+    "hypothesis_proposal_context": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/hypotheses.py",
+      "owner": "",
+      "bodyHash": "b88d5797efa0b3e5fdeff75774c1c0bf56311aa250f95db5c5ba5cc1b085c6e2",
+      "restore": {
+        "_inputs": "self",
+        "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
+        "_inputs.graph_cache": "SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE"
+      }
+    },
+    "hypothesis_lifecycle_context": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/hypotheses.py",
+      "owner": "",
+      "bodyHash": "595d9541d91013b54b431ceec3c3acfd71b727ee998e775cee218e92687fa6ae",
+      "restore": {
+        "_inputs": "self",
+        "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
+        "_inputs.graph_cache": "SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE"
+      }
+    },
+    "temporal_observation_windows": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/temporal.py",
+      "owner": "",
+      "bodyHash": "2e5cf7d7b5efc4d54a04c92a07b88cde1733d0a07896bd65076264ecbccd3294",
+      "restore": {
+        "_inputs": "self",
+        "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
+        "_inputs.graph_cache": "SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE"
+      }
+    },
+    "runtime_context": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/context.py",
+      "owner": "",
+      "bodyHash": "85f7a5e5cef9f3b403d9a8f272579abf95a48db11c41ca451d68e7250afc5a72",
+      "restore": {
+        "_inputs": "self",
+        "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
+        "_inputs.graph_cache": "SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE"
+      }
+    },
+    "build_projection_graph": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/identity.py",
+      "owner": "",
+      "bodyHash": "443878d4413a3322831f3851276b7c222c70a78e382f1bd9542a01943c3cb09e",
+      "restore": {
+        "_inputs": "self",
+        "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
+        "_inputs.graph_cache": "SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE"
+      }
+    },
+    "SharedProjectionRuntimeContextCache": {
+      "path": "digital_twin/modules/reasoning/infrastructure/projection_input_cache.py",
+      "owner": "",
+      "bodyHash": "5a414e8a1a897061a73150eb52330c2259d21d8fa50fc698f9b14a12dd9b2e7e",
+      "restore": {}
+    },
+    "SharedPortfolioGraphAssemblyCache": {
+      "path": "digital_twin/modules/reasoning/infrastructure/projection_input_cache.py",
+      "owner": "",
+      "bodyHash": "0edd3b2b034af41373c79f63650b285847e152f120383cbb31abedb0c06f2aa0",
+      "restore": {}
+    },
+    "persistent_graph_assembly_cache_get": {
+      "path": "digital_twin/modules/reasoning/infrastructure/projection_input_cache.py",
+      "owner": "",
+      "bodyHash": "ecc12b52202b353ff3173da0aef1a3641eb8dc77d639eba6daf9243bf5fa68ba",
+      "restore": {
+        "_inputs": "self"
+      }
+    },
+    "persistent_graph_assembly_cache_put": {
+      "path": "digital_twin/modules/reasoning/infrastructure/projection_input_cache.py",
+      "owner": "",
+      "bodyHash": "4da467e9bd491b59dbc4db42d721972166c6fd75a84be39b4a91bd6d563e43a6",
+      "restore": {
+        "_inputs": "self"
+      }
+    },
+    "rule_catalog_requires_statistical_signal_scoring": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/model_evidence.py",
+      "owner": "",
+      "bodyHash": "80ce1d22a51e59273138108fcc7dd836733bfc7ab8783761ea3a6b3c3d0e5eb6",
+      "restore": {}
+    },
+    "governed_statistical_rules_for_catalog": {
+      "path": "digital_twin/modules/reasoning/application/projection_input/model_evidence.py",
+      "owner": "",
+      "bodyHash": "f66c9c90b0acb2affbbf4361b68bb8d3c631510a24dbbcc5ed9733a6d9417f65",
+      "restore": {}
+    }
+  }
+}

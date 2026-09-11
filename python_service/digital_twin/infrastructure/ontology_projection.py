@@ -1,3 +1,38 @@
+from digital_twin.modules.reasoning.domain.projection_input_policy import (
+    ProjectionInputPolicy,
+)
+from digital_twin.modules.reasoning.domain.projection_cache_identity import (
+    ProjectionCacheKeys,
+    PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
+    PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION,
+)
+from digital_twin.modules.reasoning.domain import projection_facts
+from digital_twin.modules.reasoning.domain.projection_facts import (
+    ABOX_STRUCTURAL_RELATION_TYPES,
+    rulebox_relation_subject_patterns,
+    rule_id_from_payload,
+)
+from digital_twin.modules.reasoning.application.projection_input import (
+    ports as projection_input_ports,
+    assembly as projection_assembly,
+)
+from digital_twin.modules.reasoning.application.projection_input.model_evidence import (
+    rule_catalog_requires_statistical_signal_scoring,
+    governed_statistical_rules_for_catalog,
+)
+from digital_twin.modules.reasoning.infrastructure import projection_input_cache
+from digital_twin.modules.reasoning.infrastructure.projection_input_cache import (
+    SharedProjectionRuntimeContextCache,
+    SharedPortfolioGraphAssemblyCache,
+    SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE,
+    SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE,
+)
+import digital_twin.modules.reasoning.application.projection_input.decision_memory as projection_decision_memory
+import digital_twin.modules.reasoning.application.projection_input.hypotheses as projection_hypotheses
+import digital_twin.modules.reasoning.application.projection_input.temporal as projection_temporal
+import digital_twin.modules.reasoning.application.projection_input.context as projection_context
+import digital_twin.modules.reasoning.application.projection_input.identity as projection_identity
+
 from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import replace
@@ -595,34 +630,6 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
 # These edges preserve the factual shape needed to inspect and extend native
 # TypeDB reasoning even when the active catalog currently reads aggregate
 # window properties only.
-ABOX_STRUCTURAL_RELATION_TYPES = {
-    "ASSESSES_HYPOTHESIS_FAMILY",
-    "CALIBRATED_BY_OUTCOME",
-    "COMPARES_WITH_MARKET_PROXY",
-    "HAS_CAPITAL_FLOW_WINDOW",
-    "ISSUES",
-    "OCCURS_IN_SESSION_PHASE",
-    "WINDOW_CONTAINS_OBSERVATION",
-    "PRECEDES",
-    "REPRESENTS_INSTRUMENT",
-    "REPRESENTS_STOCK",
-    "RECONCILES_PORTFOLIO",
-    "RECORDS_PORTFOLIO_ACTIVITY",
-    "INFERRED_FROM_SNAPSHOT_CHANGE",
-    "GROUPS_LEDGER_ACTIVITY",
-    "HAS_PORTFOLIO_ACTIVITY",
-    "HAS_PORTFOLIO_STATE",
-    "OBSERVES_ACCOUNT_ACTION",
-    "OBSERVED_AFTER_DECISION",
-    "OBSERVES_DECISION_CYCLE",
-    "EVALUATES_PORTFOLIO_CANDIDATE",
-    "HAS_RISK_SNAPSHOT",
-    "HAS_POSITION_RISK",
-    "HAS_HYPOTHESIS_ASSESSMENT",
-    "HAS_HYPOTHESIS_CALIBRATION",
-    "HAS_REBALANCE_PROPOSAL",
-    "HAS_REBALANCE_SCENARIO",
-}
 
 
 def utc_now_iso() -> str:
@@ -774,112 +781,10 @@ class SharedMarketWorldProjectionCoordinator:
 SHARED_MARKET_WORLD_PROJECTION_COORDINATOR = SharedMarketWorldProjectionCoordinator()
 
 
-class SharedProjectionRuntimeContextCache:
-    """Reuse immutable runtime context for one exact source boundary briefly."""
-
-    def __init__(self):
-        self.lock = Lock()
-        self.entries: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
-
-    def get(self, key: str, ttl_seconds: float) -> Dict[str, object]:
-        if not key or ttl_seconds <= 0:
-            return {"status": "disabled"}
-        now = time.monotonic()
-        with self.lock:
-            expired = [
-                entry_key
-                for entry_key, entry in self.entries.items()
-                if now - float(entry.get("createdMonotonic") or 0) > ttl_seconds
-            ]
-            for entry_key in expired:
-                self.entries.pop(entry_key, None)
-            entry = self.entries.pop(key, None)
-            if not isinstance(entry, dict):
-                return {"status": "miss"}
-            self.entries[key] = entry
-            return {
-                "status": "hit",
-                "ageMs": int((now - float(entry.get("createdMonotonic") or now)) * 1000),
-                "context": deepcopy(entry.get("context") or {}),
-            }
-
-    def put(self, key: str, context: Dict[str, object], max_entries: int) -> None:
-        if not key or max_entries <= 0:
-            return
-        with self.lock:
-            self.entries.pop(key, None)
-            self.entries[key] = {
-                "createdMonotonic": time.monotonic(),
-                "context": deepcopy(context or {}),
-            }
-            while len(self.entries) > max_entries:
-                self.entries.popitem(last=False)
 
 
-SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE = SharedProjectionRuntimeContextCache()
 
 
-class SharedPortfolioGraphAssemblyCache:
-    """Reuse one immutable source snapshot's pure ABox assembly briefly.
-
-    Target-scoped TypeDB inference runs can arrive one after another for the
-    exact same account snapshot.  Rebuilding the complete ABox for every
-    target adds several seconds without changing the facts TypeDB receives.
-    The cache keeps only the pre-identity graph pair in process memory; every
-    caller gets a deep copy before manifest/scoped-generation fields are
-    applied.  A cache key includes the complete source snapshot, runtime
-    settings, rule catalog hash, and graph-store namespace, so a fresh source
-    observation or configuration change cannot reuse an old graph.
-    """
-
-    def __init__(self):
-        self.lock = Lock()
-        self.entries: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
-
-    def get(self, key: str, ttl_seconds: float) -> Dict[str, object]:
-        if not key or ttl_seconds <= 0:
-            return {"status": "disabled"}
-        now = time.monotonic()
-        with self.lock:
-            expired = [
-                entry_key
-                for entry_key, entry in self.entries.items()
-                if now - float(entry.get("createdMonotonic") or 0) > ttl_seconds
-            ]
-            for entry_key in expired:
-                self.entries.pop(entry_key, None)
-            entry = self.entries.pop(key, None)
-            if not isinstance(entry, dict):
-                return {"status": "miss"}
-            self.entries[key] = entry
-            return {
-                "status": "hit",
-                "ageMs": int((now - float(entry.get("createdMonotonic") or now)) * 1000),
-                "graph": deepcopy(entry["graph"]),
-                "persistenceGraph": deepcopy(entry["persistenceGraph"]),
-                "runtimeContextPacket": deepcopy(entry.get("runtimeContextPacket") or {}),
-            }
-
-    def put(
-        self,
-        key: str,
-        graph: PortfolioOntology,
-        persistence_graph: PortfolioOntology,
-        max_entries: int,
-        runtime_context_packet: Dict[str, object] = None,
-    ) -> None:
-        if not key or max_entries <= 0:
-            return
-        with self.lock:
-            self.entries.pop(key, None)
-            self.entries[key] = {
-                "createdMonotonic": time.monotonic(),
-                "graph": deepcopy(graph),
-                "persistenceGraph": deepcopy(persistence_graph),
-                "runtimeContextPacket": deepcopy(runtime_context_packet or {}),
-            }
-            while len(self.entries) > max_entries:
-                self.entries.popitem(last=False)
 
 
 class SharedOntologyQualityRecordCoordinator:
@@ -983,51 +888,13 @@ class SharedOntologyQualityRecordCoordinator:
                 self.last_result_by_key[key] = self.result_summary(completed)
 
 
-SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v16-frozen-rule-subjects"
-PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = "projection-runtime-context-cache-v1"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
 
-def rule_catalog_requires_statistical_signal_scoring(
-    rule_catalog: Mapping[str, object] = None,
-) -> bool:
-    """Return whether this world phase owns market-model scoring.
-
-    An omitted catalog keeps the compatibility path enabled. A partitioned
-    account overlay has an explicit catalog without ``HAS_MODEL_SIGNAL`` and
-    consumes shared premises instead of scoring the market ABox again.
-    """
-
-    catalog = dict(rule_catalog or {})
-    relation_types = {
-        str(value or "").upper().strip()
-        for value in catalog.get("inputRelationTypes") or []
-        if str(value or "").strip()
-    }
-    has_contract = bool(catalog.get("rules") or relation_types)
-    return not has_contract or "HAS_MODEL_SIGNAL" in relation_types
 
 
-def governed_statistical_rules_for_catalog(
-    rule_catalog: Mapping[str, object] = None,
-):
-    """Keep model-contract scoring inside the active world RuleBox boundary."""
-
-    catalog = dict(rule_catalog or {})
-    active_rule_ids = {
-        rule_id_from_payload(item)
-        for item in catalog.get("rules") or []
-        if isinstance(item, dict) and item.get("enabled") is not False
-    }
-    rules = governed_graph_inference_rules()
-    if not active_rule_ids:
-        return rules
-    return tuple(rule for rule in rules if rule.rule_id in active_rule_ids)
 
 
-def rule_id_from_payload(rule: Dict[str, object]) -> str:
-    return str((rule or {}).get("rule_id") or (rule or {}).get("ruleId") or "").strip()
 
 
 def rulebox_input_relation_types(rules: List[Dict[str, object]]) -> List[str]:
@@ -1044,29 +911,6 @@ def rulebox_input_relation_types(rules: List[Dict[str, object]]) -> List[str]:
     return sorted(relation_types)
 
 
-def rulebox_relation_subject_patterns(rules: List[Dict[str, object]]) -> Set[tuple]:
-    """Return the exact subject side each native relation condition reads.
-
-    The runtime ABox must not retain a relation merely because its type is
-    used somewhere in RuleBox. For example, a portfolio-to-factor edge is not
-    an input to a stock rule that reads ``stock -> HAS_FACTOR_EXPOSURE``.
-    Keeping that distinction prevents volatile portfolio aggregates from
-    forcing every stock scope into a new generation.
-    """
-    patterns = set()
-    for rule in rules or []:
-        if not isinstance(rule, dict) or rule.get("enabled") is False:
-            continue
-        source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock").strip() or "stock"
-        for condition in rule.get("conditions") or []:
-            if not isinstance(condition, dict) or str(condition.get("kind") or "") != "relation":
-                continue
-            relation_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
-            if not relation_type:
-                continue
-            direction = str(condition.get("direction") or "out").strip().lower()
-            patterns.add((source_kind, relation_type, "in" if direction == "in" else "out"))
-    return patterns
 
 
 def rulebox_rules_missing_decision_stage(rules: List[Dict[str, object]]) -> List[str]:
@@ -5238,236 +5082,30 @@ class PortfolioOntologyProjectionRecorder:
         # TypeDB owns condition evaluation. Projection only retains relation
         # types referenced by the active TypeDB catalog and never evaluates
         # target values, thresholds, or polarity in Python.
-        stripped_ids: Set[str] = set()
-        abox_entities = []
-        for item in graph.entities:
-            box = str((item.properties or {}).get("ontologyBox") or "ABox")
-            if box != "ABox":
-                stripped_ids.add(item.entity_id)
-                continue
-            abox_entities.append(item)
-        abox_relations = [
-            item
-            for item in graph.relations
-            if str((item.properties or {}).get("ontologyBox") or "ABox") == "ABox"
-            and item.source not in stripped_ids
-            and item.target not in stripped_ids
-        ]
-        native_relation_types = {
-            str(item or "").upper().strip()
-            for item in (rule_catalog or {}).get("inputRelationTypes") or []
-            if str(item or "").strip()
-        }
-        active_rules = [
-            item
-            for item in (rule_catalog or {}).get("rules") or []
-            if isinstance(item, dict)
-        ]
-        if not active_rules:
-            # ``ensure_rulebox_ready`` deliberately returns a compact catalog
-            # for an immutable V2 release. The executable rule bodies remain
-            # in the recorder and are still authoritative for deciding which
-            # source kinds belong in the persisted ABox. Falling back to the
-            # legacy stock/portfolio surface here removed standalone crypto
-            # subjects before TypeDB could evaluate their native rules.
-            active_rules = self.rulebox_rules_for_impact()
-        subject_patterns = rulebox_relation_subject_patterns(active_rules)
-        if not subject_patterns:
-            # The bootstrap summary may omit full rules. Keep the historic
-            # stock/portfolio surface in that narrow compatibility case.
-            subject_patterns = {
-                (source_kind, relation_type, direction)
-                for source_kind in {"stock", "portfolio"}
-                for relation_type in native_relation_types
-                for direction in {"out", "in"}
-            }
-        source_kinds = {pattern[0] for pattern in subject_patterns}
-        entity_by_id = {item.entity_id: item for item in abox_entities}
-        # The active ABox is both TypeDB's native-rule input and the factual
-        # investment world shown to diagnostics and AI. Keep the category
-        # edges that define that world even when no currently enabled rule
-        # consumes one of them. Otherwise a valid Price/Liquidity concept can
-        # exist as an orphaned node, producing a misleading coverage gap.
-        semantic_relation_types = ABOX_STRUCTURAL_RELATION_TYPES | {
-            str(relation_type or "").upper().strip()
-            for category_types in CATEGORY_RELATIONS.values()
-            for relation_type in category_types
-            if str(relation_type or "").strip()
-        }
-        persisted_relation_types = native_relation_types | semantic_relation_types
-        source_ids = {
-            item.entity_id
-            for item in abox_entities
-            if str(item.kind or "") in source_kinds
-        }
-        def matches_native_subject(relation) -> bool:
-            relation_type = str(relation.relation_type or "").upper().strip()
-            for source_kind, expected_type, direction in subject_patterns:
-                if relation_type != expected_type:
-                    continue
-                subject_id = relation.target if direction == "in" else relation.source
-                subject = entity_by_id.get(subject_id)
-                if subject and str(subject.kind or "") == source_kind:
-                    return True
-            return False
-
-        def should_persist_relation(relation) -> bool:
-            if not persisted_relation_types:
-                return relation.source in source_ids or relation.target in source_ids
-            if matches_native_subject(relation):
-                return True
-            relation_type = str(relation.relation_type or "").upper().strip()
-            return (
-                relation_type in (semantic_relation_types - native_relation_types)
-                and (relation.source in source_ids or relation.target in source_ids)
-            )
-
-        relations = [
-            item
-            for item in abox_relations
-            if should_persist_relation(item)
-        ]
-        # Temporal observations are intentionally structural rather than
-        # direct RuleBox predicates. Once a native subject reaches a window,
-        # retain the small connected observation chain so time-series
-        # reasoning and diagnostics see the same episode.
-        persisted_endpoint_ids = {
-            endpoint
-            for relation in relations
-            for endpoint in (relation.source, relation.target)
-            if str(endpoint or "").strip()
-        } | set(source_ids)
-        structural_relations = [
-            item
-            for item in abox_relations
-            if str(item.relation_type or "").upper().strip() in ABOX_STRUCTURAL_RELATION_TYPES
-        ]
-        def equality_key(value):
-            if isinstance(value, dict):
-                return (
-                    "dict",
-                    tuple(sorted(
-                        ((key, equality_key(item)) for key, item in value.items()),
-                        key=lambda row: repr(row[0]),
-                    )),
+        return projection_facts.graph_for_graph_store_persistence(
+            graph,
+            rule_catalog,
+            fallback_rules=(
+                self.rulebox_rules_for_impact()
+                if not any(
+                    isinstance(item, dict)
+                    for item in (rule_catalog or {}).get("rules") or []
                 )
-            if isinstance(value, list):
-                return ("list", tuple(equality_key(item) for item in value))
-            if isinstance(value, tuple):
-                return ("tuple", tuple(equality_key(item) for item in value))
-            if isinstance(value, set):
-                return ("set", frozenset(equality_key(item) for item in value))
-            try:
-                hash(value)
-            except TypeError:
-                return ("object", type(value).__qualname__, repr(value))
-            return ("value", value)
-
-        def relation_equality_key(relation):
-            # OntologyRelation is a dataclass. Preserve its equality contract
-            # while avoiding an O(structural-relations * retained-relations)
-            # list scan during full-world recovery and contract migrations.
-            return (
-                relation.source,
-                relation.target,
-                relation.relation_type,
-                relation.weight,
-                equality_key(relation.evidence_ids),
-                equality_key(relation.properties),
-            )
-
-        retained_relation_keys = {
-            relation_equality_key(item)
-            for item in relations
-        }
-        while True:
-            additions = [
-                item
-                for item in structural_relations
-                if relation_equality_key(item) not in retained_relation_keys
-                and (item.source in persisted_endpoint_ids or item.target in persisted_endpoint_ids)
-            ]
-            if not additions:
-                break
-            relations.extend(additions)
-            retained_relation_keys.update(
-                relation_equality_key(item)
-                for item in additions
-            )
-            persisted_endpoint_ids.update(
-                endpoint
-                for relation in additions
-                for endpoint in (relation.source, relation.target)
-                if str(endpoint or "").strip()
-            )
-        persisted_entity_ids = source_ids | {
-            endpoint
-            for relation in relations
-            for endpoint in [relation.source, relation.target]
-            if str(endpoint or "").strip()
-        }
-        entities = [item for item in abox_entities if item.entity_id in persisted_entity_ids]
-        evidence = [
-            item
-            for item in graph.evidence
-            if str((item.value or {}).get("ontologyBox") or "ABox") == "ABox"
-            and str(item.subject or "") in source_ids
-        ]
-        # Beliefs are reasoning output, not live observations. Persisting them
-        # in the ABox duplicates the InferenceBox and forces unrelated scope
-        # generations to be rewritten. Native rules consume the factual
-        # entities, relations, and evidence above; derived beliefs remain in
-        # their immutable InferenceBox generation.
-        beliefs = []
-        return PortfolioOntology(
-            graph.portfolio_id,
-            entities=entities,
-            relations=relations,
-            evidence=evidence,
-            beliefs=beliefs,
-            opinions=[],
-            reasoning_cards=[],
-            worldview={
-                **dict(graph.worldview or {}),
-                "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
-                "runtimeProjectionScope": "typedb-rule-input-and-semantic-coverage-relations",
-                "runtimeProjectionSourceEntityCount": len(source_ids),
-                "runtimeProjectionRelationTypeCount": len(persisted_relation_types),
-                "runtimeProjectionRelationSubjectPatternCount": len(subject_patterns),
-                "runtimeProjectionRuleInputRelationTypeCount": len(native_relation_types),
-                "runtimeProjectionSemanticRelationTypeCount": len(semantic_relation_types),
-            },
-            prompt=graph.prompt,
+                else None
+            ),
         )
 
     def graph_assembly_cache_enabled(self) -> bool:
-        value = self.settings.get("ontologyProjectionGraphCacheEnabled")
-        if value is None:
-            # Direct recorder construction in focused unit tests remains
-            # deterministic. The managed runtime explicitly enables the
-            # cache through runtime_settings().
-            return False
-        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+        return ProjectionInputPolicy(self.settings).graph_assembly_cache_enabled()
 
     def runtime_context_cache_enabled(self) -> bool:
-        value = self.settings.get("ontologyProjectionRuntimeContextCacheEnabled")
-        if value is None:
-            return False
-        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+        return ProjectionInputPolicy(self.settings).runtime_context_cache_enabled()
 
     def runtime_context_cache_ttl_seconds(self) -> float:
-        try:
-            value = float(str(self.settings.get("ontologyProjectionRuntimeContextCacheTtlSeconds") or "120"))
-        except (TypeError, ValueError):
-            value = 120.0
-        return max(1.0, min(600.0, value))
+        return ProjectionInputPolicy(self.settings).runtime_context_cache_ttl_seconds()
 
     def runtime_context_cache_max_entries(self) -> int:
-        try:
-            value = int(float(str(self.settings.get("ontologyProjectionRuntimeContextCacheMaxEntries") or "64")))
-        except (TypeError, ValueError):
-            value = 64
-        return max(1, min(256, value))
+        return ProjectionInputPolicy(self.settings).runtime_context_cache_max_entries()
 
     def runtime_context_cache_key(
         self,
@@ -5475,95 +5113,51 @@ class PortfolioOntologyProjectionRecorder:
         active_tbox: Dict[str, object],
         target_symbols: Iterable[object] = None,
     ) -> str:
-        source_snapshot = projection_source_snapshot(snapshot)
-        metadata = dict(source_snapshot.get("metadata") or {})
-        investment_brain = dict(metadata.get("investmentBrain") or {})
-        investment_brain.pop("outcomeObservation", None)
-        if investment_brain:
-            metadata["investmentBrain"] = investment_brain
-        else:
-            metadata.pop("investmentBrain", None)
-        source_snapshot["metadata"] = metadata
-        payload = {
-            "version": PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION,
-            "namespace": self.graph_assembly_cache_namespace(),
-            "sourceSnapshot": stable_value(source_snapshot),
-            "settings": stable_value(self.settings),
-            "activeTBox": stable_value(active_tbox),
-            "targetSymbols": sorted({
-                str(symbol or "").upper().strip()
-                for symbol in target_symbols or []
-                if str(symbol or "").strip()
-            }),
-        }
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return ProjectionCacheKeys(
+            self.settings, self.graph_assembly_cache_namespace()
+        ).runtime_context_cache_key(
+            snapshot,
+            active_tbox,
+            target_symbols,
+        )
 
     def graph_assembly_cache_ttl_seconds(self) -> float:
-        try:
-            value = float(str(self.settings.get("ontologyProjectionGraphCacheTtlSeconds") or "45"))
-        except (TypeError, ValueError):
-            value = 45.0
-        return max(1.0, min(300.0, value))
+        return ProjectionInputPolicy(self.settings).graph_assembly_cache_ttl_seconds()
 
     def graph_assembly_cache_max_entries(self) -> int:
-        try:
-            value = int(float(str(self.settings.get("ontologyProjectionGraphCacheMaxEntries") or "16")))
-        except (TypeError, ValueError):
-            value = 16
-        return max(1, min(128, value))
+        return ProjectionInputPolicy(self.settings).graph_assembly_cache_max_entries()
 
     def graph_assembly_persistent_cache_enabled(self) -> bool:
-        """Enable only when the managed runtime supplies a local MySQL cache.
-
-        Focused recorder tests intentionally construct no durable store. This
-        keeps their graph assertions deterministic while production isolated
-        workers can reuse an exact source assembly across process boundaries.
-        """
-        value = self.settings.get("ontologyProjectionGraphPersistentCacheEnabled")
-        if value is None or not self.graph_assembly_cache_store:
-            return False
-        return str(value).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
+        return ProjectionInputPolicy(
+            self.settings, bool(self.graph_assembly_cache_store)
+        ).graph_assembly_persistent_cache_enabled()
 
     def graph_assembly_persistent_cache_ttl_seconds(self) -> float:
-        try:
-            value = float(str(self.settings.get("ontologyProjectionGraphPersistentCacheTtlSeconds") or "120"))
-        except (TypeError, ValueError):
-            value = 120.0
-        return max(1.0, min(300.0, value))
+        return ProjectionInputPolicy(
+            self.settings
+        ).graph_assembly_persistent_cache_ttl_seconds()
 
     def graph_assembly_persistent_cache_max_entries(self) -> int:
-        try:
-            value = int(float(str(self.settings.get("ontologyProjectionGraphPersistentCacheMaxEntries") or "64")))
-        except (TypeError, ValueError):
-            value = 64
-        return max(1, min(256, value))
+        return ProjectionInputPolicy(
+            self.settings
+        ).graph_assembly_persistent_cache_max_entries()
 
     def graph_assembly_persistent_cache_max_payload_bytes(self) -> int:
-        try:
-            value = int(float(str(self.settings.get("ontologyProjectionGraphPersistentCacheMaxPayloadBytes") or 8 * 1024 * 1024)))
-        except (TypeError, ValueError):
-            value = 8 * 1024 * 1024
-        return max(64 * 1024, min(32 * 1024 * 1024, value))
+        return ProjectionInputPolicy(
+            self.settings
+        ).graph_assembly_persistent_cache_max_payload_bytes()
 
     def persistent_graph_assembly_cache_get(self, cache_key: str) -> Dict[str, object]:
-        if not self.graph_assembly_persistent_cache_enabled():
-            return {"status": "disabled"}
-        getter = getattr(self.graph_assembly_cache_store, "get", None)
-        if not callable(getter):
-            return {"status": "unsupported"}
-        try:
-            result = getter(cache_key, self.graph_assembly_persistent_cache_ttl_seconds())
-        except Exception as error:  # noqa: BLE001 - exact-cache loss must not block TypeDB reasoning.
-            return {"status": "miss", "reason": str(error)[:180]}
-        values = dict(result or {}) if isinstance(result, dict) else {}
-        if (
-            str(values.get("status") or "") == "hit"
-            and isinstance(values.get("graph"), PortfolioOntology)
-            and isinstance(values.get("persistenceGraph"), PortfolioOntology)
-        ):
-            return values
-        return {"status": "miss", **({"reason": str(values.get("reason") or "")[:180]} if values.get("reason") else {})}
+        return projection_input_cache.persistent_graph_assembly_cache_get(
+            projection_input_ports.PersistentCacheInputs(
+                graph_assembly_cache_store=self.graph_assembly_cache_store,
+                graph_assembly_persistent_cache_enabled=self.graph_assembly_persistent_cache_enabled,
+                graph_assembly_persistent_cache_max_entries=self.graph_assembly_persistent_cache_max_entries,
+                graph_assembly_persistent_cache_max_payload_bytes=self.graph_assembly_persistent_cache_max_payload_bytes,
+                graph_assembly_persistent_cache_ttl_seconds=self.graph_assembly_persistent_cache_ttl_seconds,
+            ),
+            cache_key,
+        )
 
     def persistent_graph_assembly_cache_put(
         self,
@@ -5572,24 +5166,19 @@ class PortfolioOntologyProjectionRecorder:
         persistence_graph: PortfolioOntology,
         runtime_context_packet: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        if not self.graph_assembly_persistent_cache_enabled():
-            return {"status": "disabled"}
-        saver = getattr(self.graph_assembly_cache_store, "put", None)
-        if not callable(saver):
-            return {"status": "unsupported"}
-        try:
-            result = saver(
-                cache_key,
-                graph,
-                persistence_graph,
-                self.graph_assembly_persistent_cache_ttl_seconds(),
-                self.graph_assembly_persistent_cache_max_entries(),
-                self.graph_assembly_persistent_cache_max_payload_bytes(),
-                runtime_context_packet,
-            )
-        except Exception as error:  # noqa: BLE001 - durable cache writes are best effort.
-            return {"status": "error", "reason": str(error)[:180]}
-        return dict(result or {}) if isinstance(result, dict) else {"status": "invalid"}
+        return projection_input_cache.persistent_graph_assembly_cache_put(
+            projection_input_ports.PersistentCacheInputs(
+                graph_assembly_cache_store=self.graph_assembly_cache_store,
+                graph_assembly_persistent_cache_enabled=self.graph_assembly_persistent_cache_enabled,
+                graph_assembly_persistent_cache_max_entries=self.graph_assembly_persistent_cache_max_entries,
+                graph_assembly_persistent_cache_max_payload_bytes=self.graph_assembly_persistent_cache_max_payload_bytes,
+                graph_assembly_persistent_cache_ttl_seconds=self.graph_assembly_persistent_cache_ttl_seconds,
+            ),
+            cache_key,
+            graph,
+            persistence_graph,
+            runtime_context_packet,
+        )
 
     def graph_assembly_cache_namespace(self) -> str:
         """Keep test doubles isolated while sharing a real TypeDB runtime."""
@@ -5624,50 +5213,16 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols: List[str] = None,
         input_mode: str = "full",
     ) -> str:
-        """Hash only source inputs; no graph result or credentials are persisted."""
-        source_snapshot = projection_source_snapshot(snapshot)
-        metadata = dict(source_snapshot.get("metadata") or {})
-        investment_brain = dict(metadata.get("investmentBrain") or {})
-        # Outcome observation is attached by this projection's runtime-context
-        # reader. It is derived state, not a new source observation, and must
-        # not turn an otherwise identical retry into a cache miss.
-        investment_brain.pop("outcomeObservation", None)
-        if investment_brain:
-            metadata["investmentBrain"] = investment_brain
-        else:
-            metadata.pop("investmentBrain", None)
-        source_snapshot["metadata"] = metadata
-        frozen_runtime_context = frozen_projection_runtime_context(runtime_context)
-        payload = {
-            # Bump this contract whenever graph-builder behavior changes. The
-            # durable cache can outlive a worker restart, so source equality
-            # alone is not enough to prove a cached graph is reusable.
-            "version": PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
-            "namespace": self.graph_assembly_cache_namespace(),
-            # Cache reuse is stricter than material-generation reuse.  The
-            # observation clock and provider timestamps can change freshness,
-            # session and data-quality facts even when price/volume values are
-            # unchanged.  Removing those fields here previously returned a
-            # stale flow/quality graph while the replay packet contained the
-            # current context.
-            "sourceSnapshot": source_snapshot,
-            "settings": stable_value(self.settings),
-            "activeTBox": stable_value(active_tbox),
-            "runtimeContextHash": hashlib.sha256(
-                json.dumps(
-                    frozen_runtime_context,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ).encode("utf-8")
-            ).hexdigest(),
-            "ruleboxRulesHash": str((rule_catalog or {}).get("ruleboxRulesHash") or ""),
-            "targetSymbols": sorted({str(symbol or "").upper().strip() for symbol in target_symbols or [] if str(symbol or "").strip()}),
-            "inputMode": str(input_mode or "full"),
-        }
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return ProjectionCacheKeys(
+            self.settings, self.graph_assembly_cache_namespace()
+        ).graph_assembly_cache_key(
+            snapshot,
+            rule_catalog,
+            active_tbox,
+            runtime_context,
+            target_symbols,
+            input_mode,
+        )
 
     def build_graph_assembly(
         self,
@@ -5678,483 +5233,39 @@ class PortfolioOntologyProjectionRecorder:
         progress_callback: Callable[..., None] = None,
         reasoning_context: Dict[str, object] = None,
     ) -> tuple:
-        """Build or safely clone the immutable pre-identity ABox graph pair."""
-        stage_timings: Dict[str, int] = {}
-
-        def emit(stage: str, **details) -> None:
-            if not callable(progress_callback):
-                return
-            try:
-                progress_callback("graph_assembly." + str(stage or "unknown"), **details)
-            except Exception:
-                return
-
-        emit("observation_input.start")
-        observation_input = snapshot.projection_observation_input(
-            target_symbols if target_scoped_input else None
-        )
-        input_mode = str(observation_input.get("mode") or "full")
-        input_symbols = list(observation_input.get("targetSymbols") or [])
-        emit("observation_input.done", inputMode=input_mode, targetSymbolCount=len(input_symbols))
-        # TypeDB rules consume facts, research claims, and bounded summaries.
-        # The full provider archive stays on the monitor snapshot for the
-        # research/notification read models and is never copied into this live
-        # ABox assembly path.
-        emit("external_signal_compaction.start")
-        projection_external_signals = compact_external_signals_for_ontology(
-            snapshot.external_signals,
-            target_symbols=input_symbols if input_mode == "target-scoped" else None,
-            settings=self.settings,
-        )
-        input_projection = projection_input_summary(
-            snapshot.external_signals,
-            projection_external_signals,
-            target_symbols=input_symbols if input_mode == "target-scoped" else [],
-        )
-        emit(
-            "external_signal_compaction.done",
-            retainedBytes=int(input_projection.get("projectedExternalSignalBytes") or 0),
-            sourceBytes=int(input_projection.get("sourceExternalSignalBytes") or 0),
-        )
-        graph_input_snapshot = replace(snapshot, external_signals=projection_external_signals)
-        emit("active_tbox.start")
-        active_tbox_started = time.perf_counter()
-        active_tbox = self.active_tbox_context()
-        stage_timings["activeTBoxReadMs"] = int((time.perf_counter() - active_tbox_started) * 1000)
-        emit("active_tbox.done", runtimeMs=stage_timings["activeTBoxReadMs"], status=str(active_tbox.get("status") or ""))
-        emit("runtime_context.start")
-        runtime_context_started = time.perf_counter()
-        runtime_context = self.runtime_context(
-            snapshot,
-            active_tbox=active_tbox,
-            target_symbols=input_symbols if input_mode == "target-scoped" else None,
-            progress_callback=lambda stage, **details: emit(
-                "runtime_context." + str(stage or "unknown"), **details
+        return projection_assembly.build_graph_assembly(
+            projection_input_ports.AssemblyInputs(
+                cache=projection_input_ports.CacheFlowInputs(
+                    graph_assembly_cache_max_entries=self.graph_assembly_cache_max_entries,
+                    graph_assembly_cache_ttl_seconds=self.graph_assembly_cache_ttl_seconds,
+                    graph_cache=SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE,
+                    last_runtime_contexts=self.last_runtime_contexts,
+                    persistent_graph_assembly_cache_get=self.persistent_graph_assembly_cache_get,
+                    persistent_graph_assembly_cache_put=self.persistent_graph_assembly_cache_put,
+                ),
+                capture=projection_input_ports.CaptureInputs(
+                    active_tbox_context=self.active_tbox_context,
+                    last_runtime_context_cache_status=self.last_runtime_context_cache_status,
+                    last_runtime_contexts=self.last_runtime_contexts,
+                    runtime_context=self.runtime_context,
+                    settings=self.settings,
+                ),
+                graph_assembly_cache_enabled=self.graph_assembly_cache_enabled,
+                graph_assembly_cache_key=self.graph_assembly_cache_key,
+                graph_for_graph_store_persistence=self.graph_for_graph_store_persistence,
+                model=projection_input_ports.ModelEvidenceInputs(
+                    last_runtime_contexts=self.last_runtime_contexts,
+                    settings=self.settings,
+                    statistical_signal_service=self.statistical_signal_service,
+                ),
             ),
-        )
-        source_facts = [
-            dict(item)
-            for item in (reasoning_context or {}).get("sourceFacts") or []
-            if isinstance(item, dict)
-        ]
-        if source_facts:
-            runtime_context = {
-                **dict(runtime_context or {}),
-                "reasoningSourceFacts": source_facts,
-                "semanticChangeSet": dict((reasoning_context or {}).get("semanticChangeSet") or {}),
-            }
-            self.last_runtime_contexts[snapshot.account_id] = frozen_projection_runtime_context(runtime_context)
-        try:
-            runtime_context_packet = pack_projection_runtime_contexts({
-                snapshot.account_id: self.last_runtime_contexts.get(snapshot.account_id)
-                or frozen_projection_runtime_context(runtime_context),
-            })
-        except ValueError:
-            # Graph assembly remains decision-critical. An oversized optional
-            # shadow replay packet may skip V2 sampling, but must never block
-            # the active V1 projection.
-            runtime_context_packet = {}
-        stage_timings["runtimeContextMs"] = int(
-            (time.perf_counter() - runtime_context_started) * 1000
-        )
-        runtime_context_cache = dict(
-            self.last_runtime_context_cache_status.get(str(snapshot.account_id or "")) or {}
-        )
-        stage_timings["runtimeContextCacheHit"] = (
-            1 if str(runtime_context_cache.get("status") or "") == "hit" else 0
-        )
-        stage_timings["runtimeContextCacheAgeMs"] = int(
-            runtime_context_cache.get("ageMs") or 0
-        )
-        emit("runtime_context.done", runtimeMs=stage_timings["runtimeContextMs"])
-        decision_memory = (
-            runtime_context.get("decisionEpisodeProjection")
-            if isinstance(runtime_context, dict)
-            else {}
-        )
-        if isinstance(decision_memory, dict):
-            stage_timings["decisionEpisodeSourceCount"] = int(
-                decision_memory.get("sourceEpisodeCount") or 0
-            )
-            stage_timings["decisionEpisodeIncludedCount"] = int(
-                decision_memory.get("includedEpisodeCount") or 0
-            )
-            stage_timings["decisionEpisodeDroppedCount"] = int(
-                decision_memory.get("droppedEpisodeCount") or 0
-            )
-        lifecycle_projection = (
-            runtime_context.get("hypothesisLifecycleAboxProjection")
-            if isinstance(runtime_context, dict)
-            else {}
-        )
-        if isinstance(lifecycle_projection, dict):
-            stage_timings["hypothesisLifecycleAboxProjectionMs"] = int(
-                lifecycle_projection.get("readMs") or 0
-            )
-            stage_timings["hypothesisLifecycleAboxRecordCount"] = int(
-                lifecycle_projection.get("recordCount") or 0
-            )
-            stage_timings["hypothesisLifecycleAboxProjectionEnabled"] = (
-                1 if lifecycle_projection.get("enabled") else 0
-            )
-        cache_enabled = self.graph_assembly_cache_enabled()
-        emit("cache_key.start")
-        cache_key = self.graph_assembly_cache_key(
-            graph_input_snapshot,
+            snapshot,
             rule_catalog,
-            active_tbox,
-            runtime_context,
-            target_symbols=input_symbols,
-            input_mode=input_mode,
-        ) if cache_enabled else ""
-        emit("cache_key.done", enabled=cache_enabled)
-        emit("memory_cache.start")
-        cache_read_started = time.perf_counter()
-        cache_result = SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.get(
-            cache_key,
-            self.graph_assembly_cache_ttl_seconds(),
-        ) if cache_enabled else {"status": "disabled"}
-        stage_timings["graphAssemblyCacheReadMs"] = int(
-            (time.perf_counter() - cache_read_started) * 1000
+            target_symbols,
+            target_scoped_input,
+            progress_callback,
+            reasoning_context,
         )
-        emit("memory_cache.done", runtimeMs=stage_timings["graphAssemblyCacheReadMs"], status=str(cache_result.get("status") or ""))
-        if str(cache_result.get("status") or "") == "hit":
-            try:
-                cached_contexts = unpack_projection_runtime_contexts(
-                    cache_result.get("runtimeContextPacket") or {}
-                )
-                if snapshot.account_id in cached_contexts:
-                    self.last_runtime_contexts[snapshot.account_id] = cached_contexts[snapshot.account_id]
-            except ValueError:
-                pass
-            return (
-                cache_result["graph"],
-                cache_result["persistenceGraph"],
-                {
-                    "status": "hit",
-                    "cacheLayer": "memory",
-                    "ageMs": int(cache_result.get("ageMs") or 0),
-                    "inputMode": input_mode,
-                    "targetSymbols": input_symbols,
-                    "sourcePositionCount": len(observation_input.get("positions") or []),
-                    "referencePositionCount": len(observation_input.get("referencePositions") or []),
-                    "externalSignalProjection": input_projection,
-                    "runtimeStages": stage_timings,
-                },
-            )
-
-        emit("persistent_cache.start")
-        persistent_cache_started = time.perf_counter()
-        persistent_cache_result = self.persistent_graph_assembly_cache_get(cache_key) if cache_enabled else {"status": "disabled"}
-        stage_timings["graphAssemblyPersistentCacheReadMs"] = int(
-            (time.perf_counter() - persistent_cache_started) * 1000
-        )
-        stage_timings["graphAssemblyPersistentCacheHit"] = (
-            1 if str(persistent_cache_result.get("status") or "") == "hit" else 0
-        )
-        emit("persistent_cache.done", runtimeMs=stage_timings["graphAssemblyPersistentCacheReadMs"], status=str(persistent_cache_result.get("status") or ""))
-        if str(persistent_cache_result.get("status") or "") == "hit":
-            graph = persistent_cache_result["graph"]
-            persistence_graph = persistent_cache_result["persistenceGraph"]
-            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.put(
-                cache_key,
-                graph,
-                persistence_graph,
-                self.graph_assembly_cache_max_entries(),
-                persistent_cache_result.get("runtimeContextPacket") or {},
-            )
-            try:
-                cached_contexts = unpack_projection_runtime_contexts(
-                    persistent_cache_result.get("runtimeContextPacket") or {}
-                )
-                if snapshot.account_id in cached_contexts:
-                    self.last_runtime_contexts[snapshot.account_id] = cached_contexts[snapshot.account_id]
-            except ValueError:
-                pass
-            return (
-                deepcopy(graph),
-                deepcopy(persistence_graph),
-                {
-                    "status": "hit",
-                    "cacheLayer": "persistent",
-                    "ageMs": int(persistent_cache_result.get("ageMs") or 0),
-                    "inputMode": input_mode,
-                    "targetSymbols": input_symbols,
-                    "sourcePositionCount": len(observation_input.get("positions") or []),
-                    "referencePositionCount": len(observation_input.get("referencePositions") or []),
-                    "externalSignalProjection": input_projection,
-                    "runtimeStages": stage_timings,
-                },
-            )
-
-        emit("ontology_graph.start")
-        assembly_started = time.perf_counter()
-        graph = build_portfolio_ontology(
-            observation_input.get("positions") or [],
-            snapshot.portfolio,
-            # Current decisions are derived from a preceding TypeDB/AI
-            # pass. Native rules must start from observed portfolio and
-            # market facts, not use their own previous output as evidence.
-            legacy_by_symbol={},
-            external_signals=projection_external_signals,
-            portfolio_id=snapshot.account_id,
-            runtime_context=runtime_context,
-            # The realtime path persists only ABox facts. Static TBox
-            # vocabulary is seeded independently and presentation output is
-            # rebuilt later from the active InferenceBox for an alert or UI.
-            include_tbox=False,
-            include_presentation=False,
-            include_derived_decision_items=False,
-            reference_positions=observation_input.get("referencePositions") or [],
-        )
-        # The graph builder's code-default TBox describes the source tree, but
-        # an immutable V2 deployment executes the TBox frozen into its release.
-        # Persisting the code default here made preflight and projected
-        # fingerprints disagree, disabled exact rule-result slot reuse, and
-        # forced the complete shared RuleBox to run for every observation.
-        graph.worldview["activeTBox"] = deepcopy(active_tbox)
-        event_validity_rows = [
-            item for item in graph.entities
-            if item.kind == "event-validity-assessment"
-        ]
-        stage_timings["eventValidityAssessmentCount"] = len(event_validity_rows)
-        stage_timings["eventDecisionEligibleCount"] = sum(
-            1 for item in event_validity_rows
-            if bool((item.properties or {}).get("eventDecisionEligible"))
-        )
-        stage_timings["eventExpiredCount"] = sum(
-            1 for item in event_validity_rows
-            if str((item.properties or {}).get("eventLifecycleState") or "") == "expired"
-        )
-        statistical_scoring_required = bool(
-            self.statistical_signal_service
-            and rule_catalog_requires_statistical_signal_scoring(rule_catalog)
-        )
-        stage_timings["statisticalSignalScoringRequired"] = (
-            1 if statistical_scoring_required else 0
-        )
-        if statistical_scoring_required:
-            emit("statistical_signals.start", symbolCount=len(input_symbols))
-            signal_started = time.perf_counter()
-            statistical_signal_context = {}
-            statistical_result = {}
-            try:
-                statistical_rules = governed_statistical_rules_for_catalog(rule_catalog)
-                statistical_result = self.statistical_signal_service.run(
-                    account_id=snapshot.account_id,
-                    backend_id=str(
-                        self.settings.get("_reasoningTimeSeriesBackendId")
-                        or self.settings.get("timeSeriesActiveBackendId")
-                        or "market-time-series"
-                    ),
-                    windows=runtime_context.get("temporalObservationWindows") or {},
-                    as_of=str(snapshot.generated_at or runtime_context.get("asOf") or ""),
-                    source_event_id=str(
-                        ((runtime_context.get("metadata") or {}).get("sourceEventId") or "")
-                        if isinstance(runtime_context.get("metadata"), dict)
-                        else ""
-                    ),
-                    graph=graph,
-                    rules=statistical_rules,
-                )
-                feature_snapshot = statistical_result.get("featureSnapshot")
-                signal_snapshot = statistical_result.get("signalSnapshot")
-                signal_bundle = statistical_result.get("signalBundle")
-                statistical_signal_context = {
-                    "temporalFeatureSnapshot": (
-                        feature_snapshot.to_dict(include_windows=False)
-                        if hasattr(feature_snapshot, "to_dict")
-                        else {}
-                    ),
-                    "statisticalSignalSnapshot": (
-                        signal_bundle.to_dict()
-                        if hasattr(signal_bundle, "to_dict")
-                        else signal_snapshot.to_dict()
-                        if hasattr(signal_snapshot, "to_dict")
-                        else {}
-                    ),
-                    "statisticalSignalPipeline": {
-                        "status": str(statistical_result.get("status") or ""),
-                        "decisionEligible": bool(statistical_result.get("decisionEligible")),
-                        "diagnosticReady": bool(statistical_result.get("diagnosticReady")),
-                        "decisionBlockers": list(
-                            statistical_result.get("decisionBlockers") or []
-                        ),
-                        "timings": dict(statistical_result.get("timings") or {}),
-                        "persistence": dict(statistical_result.get("persistence") or {}),
-                        "pointInTime": dict(statistical_result.get("pointInTime") or {}),
-                        "skippedModelReleaseIds": list(
-                            statistical_result.get("skippedModelReleaseIds") or []
-                        ),
-                        "activatedPredictiveRuleCount": len(statistical_rules),
-                        "assessmentCount": int(
-                            getattr(signal_bundle, "assessments", ())
-                            and len(signal_bundle.assessments)
-                            or 0
-                        ),
-                    },
-                }
-            except Exception as error:  # noqa: BLE001 - fail closed: no model contract, no predictive rule.
-                statistical_signal_context = {
-                    "statisticalSignalPipeline": {
-                        "status": "error",
-                        "reason": str(error)[:300],
-                    },
-                }
-            runtime_context = {
-                **dict(runtime_context or {}),
-                **statistical_signal_context,
-            }
-            if bool(
-                statistical_result.get("decisionEligible")
-                or statistical_result.get("diagnosticReady")
-            ):
-                stock_entities = [item for item in graph.entities if item.kind == "stock"]
-                for stock in stock_entities:
-                    symbol = str((stock.properties or {}).get("symbol") or "").upper().strip()
-                    if symbol:
-                        add_position_statistical_signal_concepts(
-                            graph,
-                            stock.entity_id,
-                            symbol,
-                            runtime_context,
-                        )
-            graph.entities = dedupe_entities(graph.entities)
-            graph.relations = dedupe_relations(graph.relations)
-            apply_abox_lifecycle(
-                graph,
-                abox_lifecycle_metadata(
-                    graph.portfolio_id,
-                    runtime_context,
-                    active_tbox,
-                ),
-            )
-            frozen_context = frozen_projection_runtime_context(runtime_context)
-            self.last_runtime_contexts[snapshot.account_id] = frozen_context
-            try:
-                runtime_context_packet = pack_projection_runtime_contexts({
-                    snapshot.account_id: frozen_context,
-                })
-            except ValueError:
-                runtime_context_packet = {}
-            stage_timings["statisticalSignalPipelineMs"] = int(
-                (time.perf_counter() - signal_started) * 1000
-            )
-            emit(
-                "statistical_signals.done",
-                runtimeMs=stage_timings["statisticalSignalPipelineMs"],
-                status=str(
-                    statistical_signal_context.get("statisticalSignalPipeline", {}).get("status")
-                    or "unavailable"
-                ),
-                signalCount=int(
-                    statistical_signal_context.get("statisticalSignalSnapshot", {}).get("signalCount")
-                    or 0
-                ),
-            )
-        elif self.statistical_signal_service:
-            runtime_context = {
-                **dict(runtime_context or {}),
-                "statisticalSignalPipeline": {
-                    "status": "not-required-account-overlay",
-                    "reason": (
-                        "The PortfolioWorld consumes verified shared-premise references; "
-                        "market model contracts are scored once in SharedPremiseWorld."
-                    ),
-                },
-            }
-            frozen_context = frozen_projection_runtime_context(runtime_context)
-            self.last_runtime_contexts[snapshot.account_id] = frozen_context
-            try:
-                runtime_context_packet = pack_projection_runtime_contexts({
-                    snapshot.account_id: frozen_context,
-                })
-            except ValueError:
-                runtime_context_packet = {}
-        emit("ontology_graph.done", runtimeMs=int((time.perf_counter() - assembly_started) * 1000))
-        emit("persistence_graph.start")
-        persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
-        source_calibration_ids = {
-            item.entity_id
-            for item in graph.entities
-            if str(item.kind or "") == "hypothesis-calibration"
-        }
-        persisted_calibration_ids = {
-            item.entity_id
-            for item in persistence_graph.entities
-            if str(item.kind or "") == "hypothesis-calibration"
-        }
-        source_calibration_relations = {
-            (item.source, item.target, item.relation_type)
-            for item in graph.relations
-            if str(item.relation_type or "").upper().strip()
-            in {"CALIBRATED_BY_OUTCOME", "HAS_HYPOTHESIS_CALIBRATION"}
-            and (
-                item.source in source_calibration_ids
-                or item.target in source_calibration_ids
-            )
-        }
-        persisted_calibration_relations = {
-            (item.source, item.target, item.relation_type)
-            for item in persistence_graph.relations
-            if str(item.relation_type or "").upper().strip()
-            in {"CALIBRATED_BY_OUTCOME", "HAS_HYPOTHESIS_CALIBRATION"}
-        }
-        missing_calibration_ids = sorted(
-            source_calibration_ids - persisted_calibration_ids
-        )
-        missing_calibration_relations = sorted(
-            source_calibration_relations - persisted_calibration_relations
-        )
-        stage_timings["hypothesisCalibrationSourceCount"] = len(
-            source_calibration_ids
-        )
-        stage_timings["hypothesisCalibrationPersistedCount"] = len(
-            persisted_calibration_ids
-        )
-        stage_timings["hypothesisCalibrationLineageComplete"] = (
-            0 if missing_calibration_ids or missing_calibration_relations else 1
-        )
-        if missing_calibration_ids or missing_calibration_relations:
-            raise RuntimeError(
-                "ABox hypothesis calibration lineage was removed at the graph "
-                "persistence boundary."
-            )
-        persistence_graph.worldview["activeTBox"] = deepcopy(active_tbox)
-        stage_timings["ontologyGraphAssemblyMs"] = int((time.perf_counter() - assembly_started) * 1000)
-        emit("persistence_graph.done", runtimeMs=stage_timings["ontologyGraphAssemblyMs"])
-        if cache_enabled:
-            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.put(
-                cache_key,
-                graph,
-                persistence_graph,
-                self.graph_assembly_cache_max_entries(),
-                runtime_context_packet,
-            )
-            emit("persistent_cache_write.start")
-            persistent_cache_write_started = time.perf_counter()
-            persistent_cache_write = self.persistent_graph_assembly_cache_put(
-                cache_key,
-                graph,
-                persistence_graph,
-                runtime_context_packet,
-            )
-            stage_timings["graphAssemblyPersistentCacheWriteMs"] = int(
-                (time.perf_counter() - persistent_cache_write_started) * 1000
-            )
-            if str(persistent_cache_write.get("status") or "") == "stored":
-                stage_timings["graphAssemblyPersistentCacheStored"] = 1
-            emit("persistent_cache_write.done", runtimeMs=stage_timings["graphAssemblyPersistentCacheWriteMs"], status=str(persistent_cache_write.get("status") or ""))
-        return graph, persistence_graph, {
-            "status": "miss" if cache_enabled else "disabled",
-            "cacheLayer": "none",
-            "inputMode": input_mode,
-            "targetSymbols": input_symbols,
-            "sourcePositionCount": len(observation_input.get("positions") or []),
-            "referencePositionCount": len(observation_input.get("referencePositions") or []),
-            "externalSignalProjection": input_projection,
-            "runtimeStages": stage_timings,
-        }
 
     def build_projection_graph(
         self,
@@ -6168,141 +5279,25 @@ class PortfolioOntologyProjectionRecorder:
         shared_premise_proof: Dict[str, object] = None,
         reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        """Assemble one immutable projection graph and its scoped identity."""
-        graph_build_started = time.perf_counter()
-        partition = {}
-        assembly_catalog = rule_catalog
-        if self.world_partitioned_reasoning_enabled():
-            partition = self.world_rule_partition(rule_catalog)
-            if str(partition.get("status") or "") != "ready":
-                raise RuntimeError("RuleBox world partition is invalid; PortfolioWorld projection was blocked.")
-            assembly_catalog = self.catalog_for_rules(
-                rule_catalog,
-                partition.get("overlayRules") or [],
-            )
-        graph, persistence_graph, graph_assembly = self.build_graph_assembly(
-            snapshot,
-            assembly_catalog,
-            target_symbols=target_symbols,
-            target_scoped_input=target_scoped_input,
-            progress_callback=progress_callback,
-            reasoning_context=reasoning_context,
-        )
-        if self.world_partitioned_reasoning_enabled():
-            proof = dict(shared_premise_proof or {})
-            if not bool(proof.get("ready")):
-                raise RuntimeError("SharedPremiseWorld premises are not ready; PortfolioWorld projection was blocked.")
-            shared_generation_id = str(
-                proof.get("inferenceGenerationId") or ""
-            ).strip()
-            shared_source_abox_id = str(
-                proof.get("sourceAboxSnapshotId") or ""
-            ).strip()
-            generation_vector = (
-                dict(proof.get("generationVector") or {})
-                if isinstance(proof.get("generationVector"), dict)
-                else {}
-            )
-            if not shared_generation_id or not shared_source_abox_id:
-                raise RuntimeError(
-                    "SharedPremiseWorld generation identity is incomplete; PortfolioWorld projection was blocked."
-                )
-            if generation_vector and (
-                str(generation_vector.get("inferenceGenerationId") or "").strip()
-                != shared_generation_id
-                or str(generation_vector.get("sourceAboxSnapshotId") or "").strip()
-                != shared_source_abox_id
-            ):
-                raise RuntimeError(
-                    "SharedPremiseWorld generation vector is incoherent; PortfolioWorld projection was blocked."
-                )
-            persistence_graph = account_overlay_graph(
-                persistence_graph,
-                partition.get("overlayRules") or [],
-                proof.get("premisesBySymbol") or {},
-                shared_generation_id=shared_generation_id,
-                source_abox_snapshot_id=shared_source_abox_id,
-                premise_proofs_by_symbol=proof.get("symbols") or {},
-            )
-        runtime_stages = dict(graph_assembly.get("runtimeStages") or {})
-        runtime_stages["graphAssemblyCacheHit"] = (
-            1 if str(graph_assembly.get("status") or "") == "hit" else 0
-        )
-        if graph_assembly.get("ageMs") is not None:
-            runtime_stages["graphAssemblyCacheAgeMs"] = int(graph_assembly.get("ageMs") or 0)
-        planner_topology = native_rule_planner_topology(persistence_graph)
-        persistence_graph.worldview["nativeRulePlannerTopology"] = planner_topology
-        resolved_market_world = market_world_context or market_world(
-            portfolio_world_context.market_id,
-            self.settings.get("ontologySharedMarketTenantId") or "shared",
-        )
-        world_metadata_payload = {
-            **world_metadata(portfolio_world_context),
-            "marketWorldId": resolved_market_world.world_id,
-            "marketContextMode": (
-                "shared-premise-account-overlay"
-                if self.world_partitioned_reasoning_enabled()
-                else "incremental-current-state-one-pass"
-                if self.incremental_current_state_reasoning_enabled()
-                else "shared-market-world-with-portfolio-rule-mirror"
+        return projection_identity.build_projection_graph(
+            projection_input_ports.ProjectionIdentityInputs(
+                build_graph_assembly=self.build_graph_assembly,
+                catalog_for_rules=self.catalog_for_rules,
+                incremental_current_state_reasoning_enabled=self.incremental_current_state_reasoning_enabled,
+                settings=self.settings,
+                world_partitioned_reasoning_enabled=self.world_partitioned_reasoning_enabled,
+                world_rule_partition=self.world_rule_partition,
             ),
-        }
-        if self.incremental_current_state_reasoning_enabled():
-            world_metadata_payload.update({
-                "reasoningExecutionMode": "incremental-current-state-one-pass-v1",
-                "sharedPremiseCriticalPath": False,
-                "factSliceProjection": True,
-            })
-        if self.world_partitioned_reasoning_enabled():
-            world_metadata_payload.update({
-                "sharedPremiseWorldId": str((shared_premise_proof or {}).get("worldId") or ""),
-                "sharedPremiseInferenceGenerationId": str(
-                    (shared_premise_proof or {}).get("inferenceGenerationId") or ""
-                ),
-                "sharedPremiseGenerationVector": (
-                    dict((shared_premise_proof or {}).get("generationVector") or {})
-                    if isinstance(
-                        (shared_premise_proof or {}).get("generationVector"),
-                        dict,
-                    )
-                    else {}
-                ),
-            })
-        graph.worldview.update(world_metadata_payload)
-        persistence_graph.worldview.update(world_metadata_payload)
-        material_fingerprint = native_rule_planner_manifest_fingerprint(
-            material_graph_fingerprint(persistence_graph),
-            planner_topology,
+            snapshot,
+            rule_catalog,
+            portfolio_world_context,
+            market_world_context,
+            target_symbols,
+            target_scoped_input,
+            progress_callback,
+            shared_premise_proof,
+            reasoning_context,
         )
-        material_snapshot_id = apply_material_graph_identity(
-            persistence_graph,
-            snapshot.account_id,
-            material_fingerprint,
-            world_id=portfolio_world_context.world_id,
-        )
-        scoped_identity_started = time.perf_counter()
-        scoped_identity = apply_scoped_abox_identity(
-            persistence_graph,
-            snapshot.account_id,
-            world_id=portfolio_world_context.world_id,
-            tenant_id=portfolio_world_context.tenant_id,
-            world_type=portfolio_world_context.world_type,
-        )
-        runtime_stages["scopedAboxIdentityMs"] = int(
-            (time.perf_counter() - scoped_identity_started) * 1000
-        )
-        material_snapshot_id = str(scoped_identity.get("manifestId") or material_snapshot_id)
-        runtime_stages["graphBuildMs"] = int((time.perf_counter() - graph_build_started) * 1000)
-        return {
-            "graph": graph,
-            "persistenceGraph": persistence_graph,
-            "assembly": graph_assembly,
-            "plannerTopology": planner_topology,
-            "materialFingerprint": material_fingerprint,
-            "materialSnapshotId": material_snapshot_id,
-            "scopedIdentity": scoped_identity,
-            "runtimeStages": runtime_stages,
-        }
 
     def async_quality_record_enabled(self) -> bool:
         value = self.settings.get("ontologyAsyncQualityRecordEnabled")
@@ -9519,218 +8514,35 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols: List[str] = None,
         progress_callback: Callable[..., None] = None,
     ) -> Dict[str, object]:
-        account_id = str(snapshot.account_id or "")
-        override = self.runtime_context_overrides.get(account_id)
-        if override:
-            frozen = frozen_projection_runtime_context(override)
-            self.last_runtime_contexts[account_id] = frozen
-            self.last_runtime_context_cache_status[account_id] = {"status": "override"}
-            return deepcopy(frozen)
-
-        def emit(stage: str, **details) -> None:
-            if not callable(progress_callback):
-                return
-            try:
-                progress_callback(str(stage or "unknown"), **details)
-            except Exception:
-                return
-
-        if active_tbox is None:
-            active_tbox = self.active_tbox_context()
-        cache_enabled = self.runtime_context_cache_enabled()
-        cache_key = self.runtime_context_cache_key(
+        return projection_context.runtime_context(
+            projection_input_ports.RuntimeContextInputs(
+                active_tbox_context=self.active_tbox_context,
+                data_pipeline_health_context=self.data_pipeline_health_context,
+                decision_episode_projection_context=self.decision_episode_projection_context,
+                decision_episode_store=self.decision_episode_store,
+                factual_runtime_metadata=self.factual_runtime_metadata,
+                hypothesis_lifecycle_abox_projection_enabled=self.hypothesis_lifecycle_abox_projection_enabled,
+                hypothesis_lifecycle_context=self.hypothesis_lifecycle_context,
+                hypothesis_proposal_context=self.hypothesis_proposal_context,
+                investment_domain_store=self.investment_domain_store,
+                last_runtime_context_cache_status=self.last_runtime_context_cache_status,
+                last_runtime_contexts=self.last_runtime_contexts,
+                performance_setting=self.performance_setting,
+                runtime_cache=SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE,
+                runtime_context_cache_enabled=self.runtime_context_cache_enabled,
+                runtime_context_cache_key=self.runtime_context_cache_key,
+                runtime_context_cache_max_entries=self.runtime_context_cache_max_entries,
+                runtime_context_cache_ttl_seconds=self.runtime_context_cache_ttl_seconds,
+                runtime_context_overrides=self.runtime_context_overrides,
+                settings=self.settings,
+                statistical_signal_service=self.statistical_signal_service,
+                temporal_observation_windows=self.temporal_observation_windows,
+            ),
             snapshot,
             active_tbox,
-            target_symbols=target_symbols,
-        ) if cache_enabled else ""
-        cache_result = SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE.get(
-            cache_key,
-            self.runtime_context_cache_ttl_seconds(),
-        ) if cache_enabled else {"status": "disabled"}
-        self.last_runtime_context_cache_status[account_id] = {
-            "status": str(cache_result.get("status") or "miss"),
-            "ageMs": int(cache_result.get("ageMs") or 0),
-        }
-        emit(
-            "cache." + str(cache_result.get("status") or "miss"),
-            ageMs=int(cache_result.get("ageMs") or 0),
+            target_symbols,
+            progress_callback,
         )
-        if str(cache_result.get("status") or "") == "hit":
-            frozen = frozen_projection_runtime_context(cache_result.get("context") or {})
-            self.last_runtime_contexts[account_id] = frozen
-            return deepcopy(frozen)
-        as_of = str(snapshot.generated_at or "").strip()
-        snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
-        selected_symbols = {
-            str(symbol or "").upper().strip()
-            for symbol in target_symbols or []
-            if str(symbol or "").strip()
-        }
-        available_symbols = {
-            str(getattr(position, "symbol", "") or "").upper().strip()
-            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-            if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
-        }
-        selected_symbols.intersection_update(available_symbols)
-        decision_memory_symbols = selected_symbols or available_symbols
-        emit("decision_episodes.start", symbolCount=len(decision_memory_symbols))
-        decision_memory = self.decision_episode_projection_context(
-            snapshot,
-            target_symbols=decision_memory_symbols,
-        )
-        decision_episodes = list(decision_memory.get("episodes") or [])
-        decision_outcome_history = list(decision_memory.get("outcomeHistoryEpisodes") or [])
-        emit(
-            "decision_episodes.done",
-            episodeCount=len(decision_episodes),
-            outcomeHistoryEpisodeCount=len(decision_outcome_history),
-        )
-        emit("metadata.start")
-        metadata = self.factual_runtime_metadata(
-            snapshot.metadata,
-            target_symbols=selected_symbols or available_symbols,
-            settings=self.settings,
-        )
-        emit("metadata.done", metadataKeyCount=len(metadata))
-        # Projection output is derived state, not a new market observation.
-        # Feeding the previous ABox result back into the next ABox makes an
-        # otherwise unchanged snapshot look materially different.
-        metadata.pop("ontology", None)
-        account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
-        emit("decision_performance.start")
-        decision_performance = {}
-        if hasattr(self.decision_episode_store, "performance"):
-            try:
-                decision_performance = self.decision_episode_store.performance(
-                    account_id=snapshot.account_id,
-                    limit=2000,
-                    as_of=as_of,
-                )
-            except TypeError:
-                # Compatibility stores may not yet expose the point-in-time
-                # parameter. Their bounded result remains diagnostic only.
-                decision_performance = self.decision_episode_store.performance(
-                    account_id=snapshot.account_id,
-                    limit=2000,
-                )
-            except Exception:  # noqa: BLE001 - calibration history still supports the current subject.
-                decision_performance = {}
-        if not decision_performance:
-            decision_performance = evaluate_decision_performance(
-                decision_outcome_history or decision_episodes,
-                minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
-            )
-        emit("decision_performance.done")
-        emit("hypothesis_proposals.start")
-        hypothesis_proposals = self.hypothesis_proposal_context(
-            snapshot,
-            target_symbols=selected_symbols,
-        )
-        emit("hypothesis_proposals.done", proposalCount=len(hypothesis_proposals))
-        lifecycle_projection_started = time.perf_counter()
-        lifecycle_projection = {
-            "mode": "excluded-from-live-abox",
-            "enabled": False,
-            "recordCount": 0,
-            "payloadBytesRead": 0,
-            "keyPrefix": HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
-        }
-        emit("hypothesis_lifecycles.start", mode=lifecycle_projection["mode"])
-        hypothesis_lifecycles = []
-        if self.hypothesis_lifecycle_abox_projection_enabled():
-            hypothesis_lifecycles = self.hypothesis_lifecycle_context(
-                snapshot,
-                target_symbols=selected_symbols,
-            )
-            lifecycle_projection.update({
-                "mode": "compact-opt-in-audit",
-                "enabled": True,
-                "recordCount": len(hypothesis_lifecycles),
-            })
-        lifecycle_projection["readMs"] = int((time.perf_counter() - lifecycle_projection_started) * 1000)
-        emit(
-            "hypothesis_lifecycles.done",
-            lifecycleCount=len(hypothesis_lifecycles),
-            mode=lifecycle_projection["mode"],
-            runtimeMs=lifecycle_projection["readMs"],
-        )
-        emit("pipeline_health.start")
-        data_pipeline_health = self.data_pipeline_health_context(snapshot)
-        emit("pipeline_health.done")
-        emit("temporal_windows.start")
-        temporal_windows = self.temporal_observation_windows(
-            snapshot,
-            target_symbols=selected_symbols,
-        )
-        emit("temporal_windows.done", symbolCount=len(temporal_windows))
-        # Model scoring runs after the factual ABox is complete. This lets all
-        # six model families inspect the exact company, valuation, event,
-        # cross-asset, price and flow facts that TypeDB will receive.
-        statistical_signal_context = {
-            "statisticalSignalPipeline": {
-                "status": "pending-factual-abox",
-            },
-        } if self.statistical_signal_service else {}
-        portfolio_lifecycle = {}
-        if self.investment_domain_store and hasattr(self.investment_domain_store, "ontology_portfolio_lifecycle_context"):
-            emit("portfolio_lifecycle.start")
-            try:
-                portfolio_lifecycle = self.investment_domain_store.ontology_portfolio_lifecycle_context(
-                    "portfolio:" + str(snapshot.account_id or "default")
-                )
-            except Exception:  # noqa: BLE001 - lifecycle enrichment must not invalidate market inference.
-                portfolio_lifecycle = {}
-            emit("portfolio_lifecycle.done", status=str(portfolio_lifecycle.get("status") or "unavailable"))
-        result = {
-            "settings": dict(self.settings),
-            "snapshotId": "abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
-            "asOf": as_of,
-            "activeTBox": active_tbox,
-            "account": {
-                **dict(account_context),
-                "accountId": snapshot.account_id,
-                "accountLabel": snapshot.account_label,
-                "provider": snapshot.provider,
-                "mode": snapshot.mode,
-                "status": snapshot.status,
-            },
-            "metadata": metadata,
-            # DecisionItem is an output projection, not a new observation.
-            # The native ABox uses the aligned InferenceBox for prior
-            # reasoning context and keeps this input empty to avoid feedback.
-            "decisionItems": [],
-            "decisionEpisodes": decision_episodes,
-            # Historical outcomes are aggregated into calibration facts only;
-            # their old decisions and AI prose are not reintroduced as live
-            # reasoning premises.
-            "decisionOutcomeHistory": decision_outcome_history,
-            "decisionEpisodeProjection": dict(decision_memory.get("projection") or {}),
-            "decisionPerformance": decision_performance,
-            "hypothesisProposals": hypothesis_proposals,
-            "hypothesisLifecycles": hypothesis_lifecycles,
-            "hypothesisLifecycleAboxProjection": lifecycle_projection,
-            # A live pipeline health row may change while a delayed retry is
-            # rebuilding the same account snapshot. Only health captured with
-            # the snapshot is causal ABox input; current worker telemetry is
-            # exposed through operational monitoring instead.
-            "dataPipelineHealth": data_pipeline_health,
-            "temporalObservationWindows": temporal_windows,
-            **statistical_signal_context,
-            "portfolioLifecycle": portfolio_lifecycle,
-        }
-        # V1 and any replay engine must consume the same ontology-owned
-        # context. Returning the unfiltered runtime settings here while only
-        # storing the filtered replay packet made shadow parity impossible and
-        # could let infrastructure wiring affect factual graph construction.
-        frozen = frozen_projection_runtime_context(result)
-        self.last_runtime_contexts[account_id] = frozen
-        if cache_enabled:
-            SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE.put(
-                cache_key,
-                frozen,
-                self.runtime_context_cache_max_entries(),
-            )
-        return deepcopy(frozen)
 
     @staticmethod
     def factual_runtime_metadata(
@@ -9738,131 +8550,38 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols=None,
         settings: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        """Keep historical market facts while removing derived decision output.
-
-        Trend and change concepts still need the prior positions/watchlist
-        snapshots. Their embedded decisions, AI context, and prior ontology
-        output are rendered results, however, so carrying them into the next
-        ABox would create a self-triggering inference loop.
-        """
-        source = dict(metadata or {})
-        selected_symbols = {
-            str(symbol or "").upper().strip()
-            for symbol in target_symbols or []
-            if str(symbol or "").strip()
-        }
-
-        def bounded_transition_rows(key: str, value: object) -> object:
-            if key not in {MARKET_SIGNAL_TRANSITION_STATE_KEY, MARKET_SIGNAL_TRANSITION_RESULTS_KEY}:
-                return deepcopy(value)
-            if not isinstance(value, dict) or not selected_symbols:
-                return deepcopy(value)
-            return {
-                str(symbol): deepcopy(payload)
-                for symbol, payload in value.items()
-                if str(symbol or "").upper().strip() in selected_symbols
-            }
-
-        values = {}
-        for key, value in source.items():
-            if key in {"ontology", "hypothesisLifecycle", "reasoningSnapshotReplay", "previousMonitorState", "previousState", "monitorStateHistory"}:
-                continue
-            values[key] = bounded_transition_rows(str(key), value)
-        # This marker describes how the worker acquired the snapshot. It is
-        # operational replay provenance, not a market fact for the ABox.
-        def factual_state(state: object) -> object:
-            if not isinstance(state, dict):
-                return state
-            result = {
-                key: deepcopy(value)
-                for key, value in state.items()
-                if key not in {"decisions", "externalSignals"}
-            }
-            signals = state.get("externalSignals")
-            if isinstance(signals, dict):
-                result["externalSignals"] = compact_external_signals_for_ontology(
-                    signals,
-                    target_symbols=target_symbols,
-                    settings=settings,
-                )
-            nested = result.get("metadata")
-            if isinstance(nested, dict):
-                nested = {
-                    key: bounded_transition_rows(str(key), value)
-                    for key, value in nested.items()
-                }
-                nested.pop("ontology", None)
-                nested.pop("hypothesisLifecycle", None)
-                nested.pop("reasoningSnapshotReplay", None)
-                nested.pop("previousMonitorState", None)
-                nested.pop("previousState", None)
-                nested.pop("monitorStateHistory", None)
-                result["metadata"] = nested
-            return result
-
-        if "previousMonitorState" in source:
-            values["previousMonitorState"] = factual_state(source.get("previousMonitorState"))
-        if isinstance(source.get("previousState"), dict):
-            values["previousState"] = factual_state(source.get("previousState"))
-        if isinstance(source.get("monitorStateHistory"), list):
-            values["monitorStateHistory"] = [
-                factual_state(item)
-                for item in source.get("monitorStateHistory") or []
-                if isinstance(item, dict)
-            ]
-        return values
+        return projection_facts.factual_runtime_metadata(
+            metadata,
+            target_symbols,
+            settings,
+        )
 
     def temporal_observation_windows(
         self,
         snapshot: AccountSnapshot,
         target_symbols=None,
     ) -> Dict[str, object]:
-        if not self.market_time_series_store or not hasattr(self.market_time_series_store, "load_temporal_windows"):
-            return {}
-        symbols = {
-            str(getattr(position, "symbol", "") or "").upper().strip()
-            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-            if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
-        }
-        requested = {
-            str(symbol or "").upper().strip()
-            for symbol in target_symbols or []
-            if str(symbol or "").strip()
-        }
-        if requested:
-            symbols.intersection_update(requested)
-        if not symbols:
-            return {}
-        definitions = parse_temporal_windows(self.settings.get("temporalWindowPeriods"))
-        try:
-            return self.market_time_series_store.load_temporal_windows(
-                snapshot.account_id,
-                symbols,
-                definitions,
-                as_of=str(snapshot.generated_at or ""),
-            )
-        except Exception:  # noqa: BLE001 - short snapshot history remains a valid compatibility fallback.
-            return {}
+        return projection_temporal.temporal_observation_windows(
+            projection_input_ports.TemporalInputs(
+                market_time_series_store=self.market_time_series_store,
+                settings=self.settings,
+            ),
+            snapshot,
+            target_symbols,
+        )
 
     def performance_setting(self, key: str, fallback: float) -> float:
-        try:
-            return float(str(self.settings.get(key) or fallback))
-        except (TypeError, ValueError):
-            return float(fallback)
+        return ProjectionInputPolicy(self.settings).performance_setting(
+            key,
+            fallback,
+        )
 
-    def data_pipeline_health_context(self, snapshot: AccountSnapshot = None) -> Dict[str, object]:
-        """Return only health that belongs to the snapshot being reasoned.
-
-        The current pipeline read model is operational telemetry, not a market
-        fact observed at an older snapshot. Feeding it into a retry made one
-        frozen account snapshot alternately gain and lose missing-data facts.
-        A future collector can persist ``dataPipelineHealth`` in snapshot
-        metadata; until then, per-position source timestamps remain the
-        investment freshness contract.
-        """
-        metadata = dict(getattr(snapshot, "metadata", {}) or {}) if snapshot else {}
-        payload = metadata.get("dataPipelineHealth")
-        return dict(payload or {}) if isinstance(payload, dict) else {}
+    def data_pipeline_health_context(
+        self, snapshot: AccountSnapshot = None
+    ) -> Dict[str, object]:
+        return projection_facts.data_pipeline_health_context(
+            snapshot,
+        )
 
     def decision_episode_context(
         self,
@@ -9882,271 +8601,87 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         target_symbols=None,
     ) -> Dict[str, object]:
-        """Load a bounded, current-subject decision-memory slice for the ABox.
-
-        The decision repository is the complete audit record. Realtime TypeDB
-        projection only needs recent episode links and outcomes for subjects in
-        the current snapshot. Keeping those two concerns separate prevents an
-        old AI/research payload from expanding every live inference graph.
-        """
-        projection = {
-            "mode": "bounded-current-subject-memory",
-            "sourceEpisodeCount": 0,
-            "includedEpisodeCount": 0,
-            "droppedEpisodeCount": 0,
-            "targetSymbolCount": 0,
-            "perSymbolLimit": self.decision_episode_context_per_symbol_limit(),
-            "maximumEpisodeCount": self.decision_episode_context_maximum_episodes(),
-            "outcomeObservation": {},
-            "outcomeHistory": {
-                "mode": "point-in-time-compact-calibration-history",
-                "status": "pending",
-                "includedEpisodeCount": 0,
-                "perSymbolLimit": self.decision_outcome_history_per_symbol_limit(),
-                "maximumEpisodeCount": self.decision_outcome_history_maximum_episodes(),
-            },
-        }
-        if not self.decision_episode_store:
-            projection["status"] = "unavailable"
-            projection["outcomeHistory"]["status"] = "unavailable"
-            return {"episodes": [], "outcomeHistoryEpisodes": [], "projection": projection}
-        try:
-            observation = self.outcome_observation_service.observe_snapshot(snapshot)
-            snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = observation
-            projection["outcomeObservation"] = dict(observation or {})
-        except Exception as error:  # noqa: BLE001 - feedback memory must not block ABox projection.
-            observation = {
-                "status": "error",
-                "reason": str(error)[:180],
-            }
-            snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = observation
-            projection["outcomeObservation"] = observation
-        symbols = sorted({
-            str(symbol or "").upper().strip()
-            for symbol in target_symbols or []
-            if str(symbol or "").strip()
-        })
-        projection["targetSymbolCount"] = len(symbols)
-        per_symbol_limit = int(projection["perSymbolLimit"] or 1)
-        maximum_episode_count = int(projection["maximumEpisodeCount"] or 1)
-        try:
-            if symbols and hasattr(self.decision_episode_store, "list_for_symbols"):
-                source_episodes = self.decision_episode_store.list_for_symbols(
-                    symbols,
-                    account_id=snapshot.account_id,
-                    limit_per_symbol=per_symbol_limit,
-                    as_of=str(snapshot.generated_at or ""),
-                )
-            elif symbols:
-                source_episodes = []
-                for symbol in symbols:
-                    source_episodes.extend(
-                        self.decision_episode_store.list(
-                            snapshot.account_id,
-                            symbol=symbol,
-                            limit=per_symbol_limit,
-                        )
-                    )
-            else:
-                source_episodes = self.decision_episode_store.list(
-                    snapshot.account_id,
-                    limit=maximum_episode_count,
-                )
-        except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
-            projection["status"] = "unavailable"
-            projection["outcomeHistory"]["status"] = "unavailable"
-            return {"episodes": [], "outcomeHistoryEpisodes": [], "projection": projection}
-        outcome_history_episodes = []
-        outcome_history_projection = projection["outcomeHistory"]
-        try:
-            if symbols and hasattr(self.decision_episode_store, "outcome_history_for_symbols"):
-                outcome_history_episodes = self.decision_episode_store.outcome_history_for_symbols(
-                    symbols,
-                    account_id=snapshot.account_id,
-                    as_of=str(snapshot.generated_at or ""),
-                    limit_per_symbol=int(outcome_history_projection["perSymbolLimit"] or 120),
-                    maximum_episode_count=int(outcome_history_projection["maximumEpisodeCount"] or 600),
-                )
-            elif symbols and hasattr(self.decision_episode_store, "performance_episodes"):
-                for symbol in symbols:
-                    outcome_history_episodes.extend(
-                        self.decision_episode_store.performance_episodes(
-                            account_id=snapshot.account_id,
-                            symbol=symbol,
-                            limit=int(outcome_history_projection["perSymbolLimit"] or 120),
-                            as_of=str(snapshot.generated_at or ""),
-                        )
-                    )
-                outcome_history_episodes = outcome_history_episodes[
-                    :int(outcome_history_projection["maximumEpisodeCount"] or 600)
-                ]
-            outcome_history_episodes = [
-                dict(item) for item in outcome_history_episodes or []
-                if isinstance(item, dict)
-            ]
-            outcome_history_projection["includedEpisodeCount"] = len(outcome_history_episodes)
-            outcome_history_projection["status"] = "ok"
-        except Exception as error:  # noqa: BLE001 - recent decision memory remains independently usable.
-            outcome_history_episodes = []
-            outcome_history_projection["status"] = "unavailable"
-            outcome_history_projection["reason"] = str(error)[:180]
-        source_by_id = {}
-        for item in source_episodes or []:
-            episode_id = str(getattr(item, "episode_id", "") or "").strip()
-            symbol = str(getattr(item, "symbol", "") or "").upper().strip()
-            if not episode_id or (symbols and symbol not in symbols):
-                continue
-            source_by_id[episode_id] = item
-        ordered = sorted(
-            source_by_id.values(),
-            key=lambda item: (
-                str(getattr(item, "decided_at", "") or ""),
-                str(getattr(item, "episode_id", "") or ""),
+        return projection_decision_memory.decision_episode_projection_context(
+            projection_input_ports.DecisionMemoryInputs(
+                decision_episode_context_hypothesis_limit=self.decision_episode_context_hypothesis_limit,
+                decision_episode_context_maximum_episodes=self.decision_episode_context_maximum_episodes,
+                decision_episode_context_outcome_limit=self.decision_episode_context_outcome_limit,
+                decision_episode_context_per_symbol_limit=self.decision_episode_context_per_symbol_limit,
+                decision_episode_store=self.decision_episode_store,
+                decision_outcome_history_maximum_episodes=self.decision_outcome_history_maximum_episodes,
+                decision_outcome_history_per_symbol_limit=self.decision_outcome_history_per_symbol_limit,
+                investment_domain_store=self.investment_domain_store,
+                outcome_observation_service=self.outcome_observation_service,
             ),
-            reverse=True,
+            snapshot,
+            target_symbols,
         )
-        projection["sourceEpisodeCount"] = len(ordered)
-        selected_episodes = ordered[:maximum_episode_count]
-        rows = [
-            decision_episode_ontology_context(
-                item,
-                maximum_hypotheses=self.decision_episode_context_hypothesis_limit(),
-                maximum_outcomes=self.decision_episode_context_outcome_limit(),
-            )
-            for item in selected_episodes
-        ]
-        rows = [item for item in rows if item]
-        if rows and self.investment_domain_store:
-            try:
-                feedback = self.investment_domain_store.lifecycle_feedback_for_decisions(
-                    item.get("episodeId") for item in rows
-                )
-                for item in rows:
-                    item.update(dict(feedback.get(str(item.get("episodeId") or "")) or {}))
-            except Exception:
-                pass
-        projection["includedEpisodeCount"] = len(rows)
-        projection["droppedEpisodeCount"] = max(0, len(ordered) - len(rows))
-        projection["status"] = "ok"
-        return {
-            "episodes": rows,
-            "outcomeHistoryEpisodes": outcome_history_episodes,
-            "projection": projection,
-        }
 
     def decision_episode_context_per_symbol_limit(self) -> int:
-        return self.integer_setting("ontologyDecisionEpisodeContextPerSymbolLimit", 3, 1, 12)
+        return ProjectionInputPolicy(
+            self.settings
+        ).decision_episode_context_per_symbol_limit()
 
     def decision_episode_context_maximum_episodes(self) -> int:
-        return self.integer_setting("ontologyDecisionEpisodeContextMaxEpisodes", 24, 1, 60)
+        return ProjectionInputPolicy(
+            self.settings
+        ).decision_episode_context_maximum_episodes()
 
     def decision_episode_context_hypothesis_limit(self) -> int:
-        return self.integer_setting("ontologyDecisionEpisodeContextHypothesisLimit", 3, 1, 8)
+        return ProjectionInputPolicy(
+            self.settings
+        ).decision_episode_context_hypothesis_limit()
 
     def decision_episode_context_outcome_limit(self) -> int:
-        return self.integer_setting("ontologyDecisionEpisodeContextOutcomeLimit", 8, 1, 16)
+        return ProjectionInputPolicy(self.settings).decision_episode_context_outcome_limit()
 
     def decision_outcome_history_per_symbol_limit(self) -> int:
-        return self.integer_setting("ontologyDecisionOutcomeHistoryPerSymbolLimit", 120, 12, 500)
+        return ProjectionInputPolicy(
+            self.settings
+        ).decision_outcome_history_per_symbol_limit()
 
     def decision_outcome_history_maximum_episodes(self) -> int:
-        return self.integer_setting("ontologyDecisionOutcomeHistoryMaxEpisodes", 600, 12, 2000)
+        return ProjectionInputPolicy(
+            self.settings
+        ).decision_outcome_history_maximum_episodes()
 
     def integer_setting(self, key: str, fallback: int, minimum: int, maximum: int) -> int:
-        try:
-            value = int(float(str(self.settings.get(key) or fallback)))
-        except (TypeError, ValueError):
-            value = fallback
-        return max(minimum, min(maximum, value))
+        return ProjectionInputPolicy(self.settings).integer_setting(
+            key,
+            fallback,
+            minimum,
+            maximum,
+        )
 
     def hypothesis_proposal_context(
         self,
         snapshot: AccountSnapshot,
         target_symbols=None,
     ) -> List[Dict[str, object]]:
-        if not self.hypothesis_proposal_store or not hasattr(self.hypothesis_proposal_store, "list_hypothesis_proposals"):
-            return []
-        symbols = {
-            str(getattr(position, "symbol", "") or "").upper().strip()
-            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-            if str(getattr(position, "symbol", "") or "").strip()
-        }
-        requested = {
-            str(symbol or "").upper().strip()
-            for symbol in target_symbols or []
-            if str(symbol or "").strip()
-        }
-        if requested:
-            symbols.intersection_update(requested)
-        try:
-            rows = self.hypothesis_proposal_store.list_hypothesis_proposals("", "", 200)
-        except Exception:  # noqa: BLE001 - proposal memory must not block ABox projection.
-            return []
-        return [
-            dict(item)
-            for item in rows or []
-            if isinstance(item, dict)
-            and str(item.get("accountId") or "") == str(snapshot.account_id or "")
-            and str(item.get("symbol") or "").upper().strip() in symbols
-        ]
+        return projection_hypotheses.hypothesis_proposal_context(
+            projection_input_ports.HypothesisInputs(
+                hypothesis_lifecycle_store=self.hypothesis_lifecycle_store,
+                hypothesis_proposal_store=self.hypothesis_proposal_store,
+            ),
+            snapshot,
+            target_symbols,
+        )
 
     def hypothesis_lifecycle_context(
         self,
         snapshot: AccountSnapshot,
         target_symbols=None,
     ) -> List[Dict[str, object]]:
-        if not self.hypothesis_lifecycle_store:
-            return []
-        symbols = {
-            str(getattr(position, "symbol", "") or "").upper().strip()
-            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-            if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
-        }
-        requested = {
-            str(symbol or "").upper().strip()
-            for symbol in target_symbols or []
-            if str(symbol or "").strip()
-        }
-        if requested:
-            symbols.intersection_update(requested)
-        if not symbols:
-            return []
-        try:
-            if hasattr(self.hypothesis_lifecycle_store, "current_summary_for_subjects"):
-                try:
-                    records = self.hypothesis_lifecycle_store.current_summary_for_subjects(
-                        snapshot.account_id,
-                        symbols,
-                        lifecycle_key_prefix=HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
-                    )
-                except TypeError:
-                    records = self.hypothesis_lifecycle_store.current_summary_for_subjects(snapshot.account_id, symbols)
-            elif hasattr(self.hypothesis_lifecycle_store, "current_for_subjects"):
-                try:
-                    records = self.hypothesis_lifecycle_store.current_for_subjects(
-                        snapshot.account_id,
-                        symbols,
-                        lifecycle_key_prefix=HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
-                    )
-                except TypeError:
-                    records = self.hypothesis_lifecycle_store.current_for_subjects(snapshot.account_id, symbols)
-            else:
-                return []
-        except Exception:  # noqa: BLE001 - lifecycle audit must not block a factual ABox projection.
-            return []
-        return [
-            item.to_dict()
-            for item in (records or {}).values()
-            if hasattr(item, "to_dict")
-        ]
+        return projection_hypotheses.hypothesis_lifecycle_context(
+            projection_input_ports.HypothesisInputs(
+                hypothesis_lifecycle_store=self.hypothesis_lifecycle_store,
+                hypothesis_proposal_store=self.hypothesis_proposal_store,
+            ),
+            snapshot,
+            target_symbols,
+        )
 
     def hypothesis_lifecycle_abox_projection_enabled(self) -> bool:
-        """Keep audit history out of realtime TypeDB input unless explicitly needed.
-
-        Lifecycle records explain a completed generation; they are not source
-        facts or native-rule inputs. Their compact prompt summary is attached
-        after a verified generation by ``HypothesisLifecycleService``.
-        """
-
-        value = self.settings.get("ontologyHypothesisLifecycleAboxProjectionEnabled")
-        return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+        return ProjectionInputPolicy(
+            self.settings
+        ).hypothesis_lifecycle_abox_projection_enabled()

@@ -1,0 +1,14 @@
+{
+  "sourceRevision": "15c8168f95fd",
+  "scenarios": {
+    "full": "cb488702b697595ca939e87f5459124c983d2d0fd1156a6294ec7aa9a21382de",
+    "target": "9c8e842facd92b3f54598b2bb4034f5fa4deb5283abd6bed4602e6b7b7622d51",
+    "source-facts": "c88e4d88fb4d39ec154a52403eef07566249c922c9ff4abcdef9de78a3d2d5f1",
+    "live-context": "89e8230e7d46f4fb66de57cf72433af11dc9df9ec4cfee475a2a49dc33f6aef4",
+    "memory-hit": "7af723bf359c72ad9165d3b840206798d3be4fc19869da2671c41882c6d1b8d3",
+    "persistent-hit": "18446520a2091d8025d4782528d6f6a540259d5ae08a8e30583ec152828a1450",
+    "cache-errors": "994e951f6eb83f3c8e95e6194610d7261952989e1b3db570c396da4715a5204b",
+    "scoring-failure": "9acd6a7fdfb2aca870df4fb652134637c90f22fca896d82efcfc8e0e9c4ffc4c",
+    "world-identity": "4f4bd645d339f7958dbd2c110014f23482e7208bc33954a1162e9cb54b42be0e"
+  }
+}

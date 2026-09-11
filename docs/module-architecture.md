@@ -487,6 +487,57 @@ remain ordered synchronously; subsequent reasoning/AI/delivery jobs retain
 their existing durable event and lease contracts. Frozen phase-body tests
 protect the original release guards and wiring decisions.
 
+## Projection Input Ownership
+
+`modules/reasoning/application/projection_input/` owns the synchronous input
+pipeline. The existing recorder delegates through frozen dependency records
+containing only the capabilities used by each stage:
+
+| Component | Responsibility |
+| --- | --- |
+| `decision_memory`, `hypotheses`, `temporal` | Bounded source queries, account/subject filtering and existing observation clocks |
+| `context`, `capture` | Source metadata, optional enrichment and secret-free replay packets |
+| `assembly` | Order capture, cache lookup, factual graph, model evidence, lineage verification and cache completion |
+| `model_evidence` | Invoke the governed scorer and attach evidence, without selecting an investment action |
+| `identity` | Apply world, release and scoped source identity after successful graph assembly |
+| `cache_flow` | Use injected memory/durable caches without graph-write authority |
+
+Pure factual shaping and source-only cache keys live in the reasoning domain.
+Process caches and best-effort durable cache access live in
+`infrastructure/projection_input_cache.py`. Cache singletons and their lock
+identities are preserved through facade exports. Cache keys still include
+account/source identity, observation timestamps, settings, targets, TBox,
+RuleBox, runtime context and database namespace. Cache reads return copies;
+failed graph construction or missing calibration lineage cannot populate a
+successful assembly cache entry.
+
+The former graph-assembly method is now an explicit six-stage orchestrator.
+Thirty-eight moved members retain frozen source-body contracts, supplemented
+by nine pre-migration execution fingerprints and scoped query, cache isolation,
+parallel account, optional-source failure and replay tests. This is not a
+change to investment rules, source collection, cache policy or database format.
+
+Outcome observation is an explicit effectful input capability, separate from
+source reader protocols. Existing optional-source fallbacks and legacy query
+signatures are preserved. Some enrichment stores still expose current-state
+reads: separating their ownership does not make every historical source a
+fully point-in-time database. An immutable runtime-context override bypasses
+those live reads for captured replay. A complete historical-source migration
+needs its own semantics and release review.
+
+An opt-in native rehearsal creates its own loopback TypeDB process, temporary
+directory and tiny fixture schema. It commits a source-graph fingerprint,
+kills that process with an uncommitted replacement, restarts it, and verifies
+rollback, equivalent cold-cache assembly and a single row after retry:
+
+```bash
+PYTHONPATH=python_service:python_service/tests python3 python_service/tests/verify_projection_input_recovery.py --typedb-command "$HOME/.typedb/typedb"
+```
+
+This rehearsal does not touch managed runtime data or credentials. It verifies
+native transaction durability and source replay, not the full production
+Manifest recovery algorithm or an end-to-end investment engine crash.
+
 ## Remaining Shared Boundaries
 
 This is application-layer modularization with selected ownership fixes, not a
@@ -501,8 +552,10 @@ claim that the entire persistence/domain migration is complete:
 - `typedb_ontology.py` is now roughly 9,200 lines, down from 22,738 at the start
   of this batch. Schema/seed administration, primitive writes, legacy helpers,
   facade methods and some driver/cache identities remain there.
-  `ontology_projection.py` remains large. The extracted save and native-cycle
-  algorithms are deliberately intact; ownership separation does not mean
+  `ontology_projection.py` is roughly 8,700 lines after separating source
+  input assembly; record/save/inference/recovery coordination remains large.
+  The extracted save and native-cycle algorithms are deliberately intact;
+  ownership separation does not mean
   every algorithm is already small or that overall code volume decreased.
 - The MySQL schema and operational store facade remain shared. Owner helpers
   restrict the changed write paths, but do not enforce table ownership for
@@ -515,14 +568,20 @@ claim that the entire persistence/domain migration is complete:
 
 Further changes should move remaining store ports and table writes one owner
 at a time, and simplify the larger save/native algorithms only with immutable
-replay and failure-path tests. Schema/seed administration and projection input
-assembly are separate remaining ownership areas, not part of this batch.
+replay and failure-path tests. Schema/seed administration and the remaining
+projection write/recovery orchestration are separate remaining ownership areas.
 Convert a synchronous follow-up to a durable consumer only when measured
 latency, retries or failure isolation justify it. Do not migrate all modules to
 asynchronous APIs by default.
 
 ## Verification
 
+- `test_projection_input_ownership.py`: frozen source bodies and execution
+  fingerprints, import/capability isolation, bounded point-in-time reads,
+  source/release cache keys, copy/TTL/LRU behavior, failed input preservation,
+  concurrent account isolation and unchanged input policy.
+- `verify_projection_input_recovery.py`: opt-in, isolated native TypeDB
+  uncommitted-transaction crash and deterministic source-packet replay.
 - `test_module_boundaries.py`: twelve real implementations, explicit exports,
   private import bans, acyclic public dependencies, pure domains, lazy
   synchronous account APIs and record-before-dispatch behavior.

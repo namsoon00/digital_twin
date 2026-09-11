@@ -125,7 +125,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # semantic facts, physical ownership and pending-generation safety.
         # The remaining backend owners retain their frozen control flow,
         # explicit capabilities and guarded public entry points.
-        self.assertLessEqual(total, 1174)
+        # Source-bound input assembly separately protects query scope, cache
+        # identity/copy isolation, optional-source failures and replay parity.
+        self.assertLessEqual(total, 1190)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -105,7 +105,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # each need positive and negative contract regression coverage.
         # Cold-start rule coverage, numerical display equivalence, and model
         # completion events each protect a distinct production failure path.
-        self.assertLessEqual(total, 1055)
+        # Flexible notification requests, authoritative kind labels, optional
+        # template recovery, account isolation and queue delivery are separate
+        # contracts; none may silently manufacture an investment decision.
+        self.assertLessEqual(total, 1080)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

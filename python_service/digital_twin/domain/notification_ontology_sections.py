@@ -579,6 +579,8 @@ def notification_ai_opinion_payload(context_or_metadata: Dict[str, object]) -> D
 
 def notification_ai_opinion_lines(context_or_metadata: Dict[str, object]) -> List[str]:
     opinion = notification_ai_opinion_payload(context_or_metadata)
+    if str(opinion.get("engineVersion") or "").startswith("notification-ai-opinion-"):
+        return []
     lines = opinion.get("lines") if isinstance(opinion.get("lines"), list) else []
     return [str(line).strip() for line in lines if str(line or "").strip()]
 

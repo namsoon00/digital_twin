@@ -7,7 +7,7 @@ from ...domain.accounts import AccountConfig
 from ...domain.data_freshness import data_freshness_required, freshness_record
 from ...domain.events import DomainEvent
 from ...domain.message_types import PORTFOLIO_HOLDINGS_SNAPSHOT
-from ...domain.notification_ai import enrich_notification_ai_context
+from ...domain.notification.request import NotificationRequest
 from ...domain.notification_templates import text_context
 from ...domain.portfolio import AlertEvent
 from ..settings import runtime_settings, utc_now
@@ -30,6 +30,15 @@ def account_delivery_context(account: AccountConfig = None) -> Dict[str, object]
     if account and hasattr(account, "message_delivery_context"):
         return account.message_delivery_context()
     return {}
+
+
+def enqueue_request(request: NotificationRequest, queue=None) -> bool:
+    """Public producer boundary; queue policy and transport remain shared."""
+
+    target = queue if queue is not None else notification_queue()
+    if hasattr(target, "enqueue_request"):
+        return bool(target.enqueue_request(request))
+    return bool(target.enqueue(NotificationIngressService.job_from_request(request)))
 
 
 class QueueingNotifier:
@@ -82,7 +91,7 @@ class QueueingNotifier:
         job = ingress.job_from_request(request)
         if not job.text:
             return NotificationResult(False, self.label, "empty notification text")
-        if not self.queue.enqueue(job):
+        if not enqueue_request(request, self.queue):
             return NotificationResult(False, self.label, job.last_error or "notification queue enqueue failed")
         return NotificationResult(True, self.label, "queued=1", queued=1)
 
@@ -137,7 +146,6 @@ def send_events(
     ingress = NotificationIngressService(
         template_renderer=templates.render,
         settings=settings,
-        context_enricher=lambda context: enrich_notification_ai_context(context, settings),
     )
     requests = [
         ingress.request_from_alert(
@@ -156,6 +164,6 @@ def send_events(
     target_queue = queue or notification_queue()
     queued = 0
     for request in requests:
-        if target_queue.enqueue(ingress.job_from_request(request)):
+        if enqueue_request(request, target_queue):
             queued += 1
     return NotificationResult(True, "Notification Queue", "queued=" + str(queued), queued=queued)

@@ -1990,7 +1990,11 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         *,
         persist_suppressed: bool = True,
     ) -> bool:
+        from ..application.notification.intake import NotificationIngressService
+
+        NotificationIngressService.prepare_job(job)
         if not job.text.strip():
+            job.last_error = "empty notification content"
             return False
         existing = connection.execute("SELECT job_id FROM notification_jobs WHERE job_id = %s", (job.job_id,)).fetchone()
         if existing:
@@ -2043,6 +2047,11 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     def enqueue(self, job: NotificationJob) -> bool:
         with self.transaction() as connection:
             return self.enqueue_with_connection(connection, job)
+
+    def enqueue_request(self, request) -> bool:
+        from ..application.notification.intake import NotificationIngressService
+
+        return self.enqueue(NotificationIngressService.job_from_request(request))
 
     def pending(self, limit: int = 10) -> List[NotificationJob]:
         with self.connect() as connection:

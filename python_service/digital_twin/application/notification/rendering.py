@@ -10,9 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from ...domain.context_observation_notifications import (
-    context_observation_evidence_presentation,
-    is_typedb_context_observation_notification,
     typedb_context_observation_contract,
+    typedb_narrative_only_contract,
 )
 from ...domain.customer_evidence_explanation import (
     customer_text_quality_issues,
@@ -25,16 +24,13 @@ from ...domain.customer_investment_document import (
 )
 from ...domain.message_types import INVESTMENT_INSIGHT
 from ...domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from ...domain.notification_ai_gate_validation import local_validated_ai_response
 from ...domain.notification_explanation import INVESTMENT_NOTIFICATION_PRESENTATION_VERSION
-from ...domain.notification_narrative import (
-    apply_narrative_brief_to_response,
-    build_investment_narrative_brief,
-    narrative_fingerprint,
-)
+from ...domain.notification.presentation import presentation_metadata
 from ...domain.notifications import NotificationJob, notification_debug_number
 from ..customer_investment_message import render_customer_investment_document
-from ..notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
+from ..notification_ai_gate_message import execution_telegram_message
+from ..typedb_observation_message import typedb_observation_telegram_message
+from .presentation import content_body, present_notification, typed_customer_document
 
 
 class NotificationRenderingService:
@@ -68,16 +64,29 @@ class NotificationRenderingService:
             job.context = context
             job.text = rendered
             return rendered
+        warnings = []
         if self.context_enricher:
             self.context_enricher(job)
-        self.apply_investment_presentation_contract(job)
-        rendered = (
-            str(self.template_renderer(job) or "").strip()
-            if self.template_renderer
-            else job.text.strip()
-        )
+        try:
+            self.apply_investment_presentation_contract(job)
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            warnings.append("legacy-presentation:" + type(error).__name__)
+        try:
+            rendered = (
+                str(self.template_renderer(job) or "").strip()
+                if self.template_renderer else str(job.context.get("telegramMessage") or job.text).strip()
+            )
+        except Exception as error:  # A broken optional template must not discard the source body.
+            warnings.append("template-fallback:" + type(error).__name__)
+            rendered = ""
+        rendered = rendered or content_body(job.context.get("notificationContent")) or job.text.strip()
         if rendered:
             context = dict(job.context or {})
+            context["notificationPresentation"] = presentation_metadata(job.message_type, context)
+            if warnings:
+                context["notificationPresentationWarnings"] = list(dict.fromkeys([
+                    *context.get("notificationPresentationWarnings", []), *warnings,
+                ]))
             is_investment = str(job.message_type or "") == INVESTMENT_INSIGHT
             original_rendered = rendered
             original_quality_issues = (
@@ -90,6 +99,7 @@ class NotificationRenderingService:
             )
             if is_investment and document_quality.get("status") != "passed":
                 rendered = enforce_customer_message_quality(rendered)
+            rendered = present_notification(job.message_type, context, rendered)
             quality_issues = customer_text_quality_issues(rendered) if is_investment else []
             job.text = rendered
             context["notificationPresentationAudit"] = {
@@ -114,6 +124,8 @@ class NotificationRenderingService:
                 "renderedBytes": len(rendered.encode("utf-8")),
                 "renderedSha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
                 "detailUrl": str(context.get("notificationDetailUrl") or ""),
+                "notificationKind": context["notificationPresentation"]["kind"],
+                "warnings": context.get("notificationPresentationWarnings", []),
                 "writerProvenance": dict(context.get("notificationWriterProvenance") or {}),
                 "claimValidation": dict(context.get("notificationClaimValidation") or {}),
                 "narrativeVersion": str(
@@ -163,188 +175,57 @@ class NotificationRenderingService:
 
     @staticmethod
     def apply_investment_presentation_contract(job: NotificationJob) -> None:
-        """Render every investment insight through one versioned document contract."""
+        """Render saved facts or a validated result; never manufacture an action."""
 
         if str(job.message_type or "") != INVESTMENT_INSIGHT:
             return
         context = dict(job.context or {})
         context.setdefault("messageType", INVESTMENT_INSIGHT)
         context.setdefault("notificationDetailLevel", "concise")
-        canonical_document = customer_investment_document_from_dict(
-            context.get("customerInvestmentDocument")
-        )
-        if canonical_document:
-            canonical_document = normalized_customer_investment_document(
-                replace(
-                    canonical_document,
-                    detail_url=str(
-                        context.get("notificationDetailUrl")
-                        or canonical_document.detail_url
-                        or ""
-                    ).strip(),
-                    sent_at=str(
-                        context.get("sentTime")
-                        or canonical_document.sent_at
-                        or ""
-                    ).strip(),
-                    notification_number=str(
-                        context.get("notificationNumber")
-                        or canonical_document.notification_number
-                        or ""
-                    ).strip(),
-                )
-            )
-            canonical_quality = customer_investment_document_quality(
-                canonical_document
-            )
-            if canonical_quality.get("status") == "passed":
-                rendered = prepend_execution_start_badge(
-                    render_customer_investment_document(canonical_document),
-                    context,
-                )
-                context.update({
-                    "customerInvestmentDocument": canonical_document.to_dict(),
-                    "customerInvestmentDocumentQuality": canonical_quality,
-                    "telegramMessage": rendered,
-                    "readableMessage": html.unescape(
-                        re.sub(r"<[^>]+>", "", rendered)
-                    ),
-                    "notificationPresentationContractVersion": (
-                        INVESTMENT_NOTIFICATION_PRESENTATION_VERSION
-                    ),
-                    "notificationPresentationMode": "canonical-customer-document",
-                })
-                job.context = context
-                return
-        narrative_payload = (
-            dict(context.get("notificationNarrativeBrief") or {})
-            if isinstance(context.get("notificationNarrativeBrief"), dict)
-            else {}
-        )
-        publication = (
-            dict(context.get("notificationNarrativePublication") or {})
-            if isinstance(context.get("notificationNarrativePublication"), dict)
-            else {}
-        )
-        stored_contract = bool(
-            narrative_payload.get("version")
-            and publication.get("version") == "investment-narrative-publication-v1"
-            and isinstance(narrative_payload.get("claims"), list)
-        )
-        validated = context.get("notificationAiValidatedResponse")
-        if stored_contract and not isinstance(validated, dict):
-            validated = context.get("notificationInferenceResponse") or context.get("validatedDecisionResponse")
-        if isinstance(validated, dict) and validated:
-            response = NotificationAIValidatedResponse.from_dict(validated)
-        else:
-            observation = typedb_context_observation_contract(context)
-            response = local_validated_ai_response(
-                context,
-                source=(
-                    "TypeDB context observation"
-                    if observation
-                    else "TypeDB deterministic presentation"
-                ),
+        observation = typedb_context_observation_contract(context)
+        narrative_only = typedb_narrative_only_contract(context)
+        if narrative_only:
+            context.setdefault("notificationDecisionMode", narrative_only.get("decisionMode") or "typedb-review-observation")
+        document = customer_investment_document_from_dict(context.get("customerInvestmentDocument"))
+        if observation and presentation_metadata(job.message_type, context)["kind"] == "price-change":
+            document = None
+        if not document:
+            validated = (
+                context.get("notificationAiValidatedResponse")
+                or context.get("notificationInferenceResponse")
+                or context.get("validatedDecisionResponse")
             )
             if observation:
-                label = str(observation.get("selectedRuleLabel") or "참고 관계").strip()
-                presentation = context_observation_evidence_presentation(context)
-                title = str(presentation.get("title") or "").strip()
-                summary = str(presentation.get("summary") or "").strip()
-                if presentation:
-                    response.investment_view = (
-                        (("검증된 공시 '" + title + "'의 원문 분석이 완료됐습니다. ") if title else "")
-                        + (summary + " " if summary else "")
-                        + "이 자료만으로 매수·매도 행동을 정하지는 않습니다."
-                    )
-                    response.summary = title + " 공시 원문을 확인할 자료가 새로 준비됐습니다. 투자 행동은 정하지 않습니다."
-                    response.current_action_plan = "현재 주문 판단은 보류하고 공시의 실제 변경 내용과 후속 시장 반응을 확인합니다."
-                    response.evidence = list(presentation.get("confirmedFacts") or [])
-                    if not response.evidence and title:
-                        stamp = str(presentation.get("receiptDate") or "").strip()
-                        response.evidence = [
-                            title + ((" · 접수 " + stamp) if stamp else "")
-                        ]
-                    response.next_checks = list(presentation.get("watchItems") or []) or [
-                        "공시에서 확인된 변경 내용과 가격·수급 반응, 후속 정정 여부를 확인합니다."
-                    ]
-                else:
-                    lifecycle_transition = dict(
-                        observation.get("relationLifecycleTransition") or {}
-                    )
-                    if lifecycle_transition:
-                        change_label = str(
-                            lifecycle_transition.get("changeLabel") or label
-                        ).strip()
-                        reason = str(lifecycle_transition.get("reason") or "").strip()
-                        response.investment_view = (
-                            change_label + "이 TypeDB 세대 비교에서 확인됐습니다. "
-                            + (reason + " " if reason else "")
-                            + "이 변화만으로 매수·매도 행동을 정하지는 않습니다."
-                        )
-                        response.summary = change_label + ". 투자 행동은 정하지 않습니다."
-                        response.current_action_plan = (
-                            "현재 주문 판단은 하지 않고 새 가격·수급·뉴스가 이 관계 변화를 확인하는지 봅니다."
-                        )
-                        response.next_checks = response.next_checks or [
-                            "다음 정상 TypeDB 추론에서도 바뀐 관계 상태가 유지되는지 확인합니다."
-                        ]
-                    else:
-                        response.investment_view = (
-                            "TypeDB가 '" + label
-                            + "' 관계를 참고 신호로 확인했습니다. 이 알림은 매수·매도 판단이 아닙니다."
-                        )
-                        response.summary = "TypeDB 참고 관계가 새로 확인됐습니다. 투자 행동은 정하지 않습니다."
-                        response.current_action_plan = "현재 주문 판단은 하지 않고 관계의 다음 변화를 관찰합니다."
-                        response.next_checks = response.next_checks or [
-                            "같은 참고 관계가 다음 데이터 갱신에서도 유지되는지 확인합니다."
-                        ]
-                response.execution_decision = response.current_action_plan
-                response.hypotheses = []
-                response.selected_hypothesis_id = ""
-                response.hypothesis_comparison_state = "not-required"
-                response.hypothesis_selection_source = "not-required"
-                response.decision_abstention = {}
-        if stored_contract:
-            writer = dict(
-                context.get("notificationWriterProvenance")
-                or narrative_payload.get("writerProvenance")
-                or {}
-            )
-        else:
-            narrative = build_investment_narrative_brief(context, response)
-            apply_narrative_brief_to_response(narrative, response)
-            narrative_payload = narrative.to_dict()
-            narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)
-            publication = narrative.publication.to_dict()
-            writer = dict(narrative.writer_provenance)
-        writer_kind = str(writer.get("writerKind") or "deterministic")
-        mode = (
-            "typedb-context-observation"
-            if typedb_context_observation_contract(context)
-            else writer_kind + "-evidence-narrative"
-        )
-        context.update({
-            "validatedDecisionResponse": response.to_dict(),
-            "notificationNarrativeBrief": narrative_payload,
-            "notificationNarrativePublication": publication,
-            "notificationWriterProvenance": writer,
-            "notificationClaimValidation": dict(response.claim_validation or {}),
-        })
-        if bool(writer.get("aiAuthored")):
-            context["notificationAiValidatedResponse"] = response.to_dict()
-        else:
-            context.pop("notificationAiValidatedResponse", None)
-            context["notificationInferenceResponse"] = response.to_dict()
-        rendered = prepend_execution_start_badge(
-            execution_telegram_message(context, response),
-            context,
-        )
+                rendered = typedb_observation_telegram_message(
+                    context, detail_level=str(context.get("notificationDetailLevel") or "concise"),
+                )
+            elif isinstance(validated, dict) and validated.get("action"):
+                response = NotificationAIValidatedResponse.from_dict(validated)
+                if narrative_only:
+                    # Historical narrative responses sometimes carried the dataclass HOLD default.
+                    # Correct the presentation copy, never rewrite the persisted decision.
+                    response = replace(response, action="NO_ACTION")
+                rendered = execution_telegram_message(context, response)
+            else:
+                rendered = str(context.get("telegramMessage") or job.text or "").strip()
+                context["notificationPresentationWarnings"] = ["validated-decision-not-provided"]
+            document = customer_investment_document_from_dict(context.get("customerInvestmentDocument"))
+        if document:
+            document = typed_customer_document(document, job.message_type, context)
+            document = normalized_customer_investment_document(replace(
+                document,
+                detail_url=str(context.get("notificationDetailUrl") or document.detail_url or ""),
+                sent_at=str(context.get("sentTime") or document.sent_at or ""),
+                notification_number=str(context.get("notificationNumber") or document.notification_number or ""),
+            ))
+            context["customerInvestmentDocument"] = document.to_dict()
+            context["customerInvestmentDocumentQuality"] = customer_investment_document_quality(document)
+            rendered = render_customer_investment_document(document)
         context.update({
             "telegramMessage": rendered,
             "readableMessage": html.unescape(re.sub(r"<[^>]+>", "", rendered)),
             "notificationPresentationContractVersion": INVESTMENT_NOTIFICATION_PRESENTATION_VERSION,
-            "notificationPresentationMode": mode,
+            "notificationPresentationMode": "saved-content-only",
         })
         job.context = context
 

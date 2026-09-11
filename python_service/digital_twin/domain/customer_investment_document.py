@@ -743,7 +743,7 @@ def customer_investment_document_quality(
     """Validate the customer boundary without altering the audit vocabulary."""
 
     issues: List[str] = []
-    if document.role not in {"typedb-observation", "ai-judgement", "system-judgement"}:
+    if document.role not in {"typedb-observation", "ai-interpretation", "ai-judgement", "system-judgement"}:
         issues.append("unsupported-role")
     if not _clean_spaces(document.headline):
         issues.append("missing-headline")

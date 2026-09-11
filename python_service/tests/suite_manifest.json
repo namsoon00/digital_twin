@@ -33,6 +33,7 @@
     {"file": "test_notification_data_quality_policy.py", "tier": "unit", "core": true},
     {"file": "test_notification_ai_inference_packet.py", "tier": "unit", "core": true},
     {"file": "test_notification_identity.py", "tier": "unit", "core": true},
+    {"file": "test_notification_presentation_boundary.py", "tier": "contract", "core": true},
     {"file": "test_market_observation_delivery.py", "tier": "unit", "core": true},
     {"file": "test_market_time_series_daily_candles.py", "tier": "unit", "core": true},
     {"file": "test_notification_decision_quality.py", "tier": "unit", "core": true},

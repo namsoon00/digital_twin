@@ -92,7 +92,6 @@ from ..application.portfolio_lifecycle_service import (
 from ..application.notification.workflow import (
     CompositeNotificationContextEnricher,
     DisclosureAnalysisNotificationEnricher,
-    NotificationAIValidatedGateEnricher,
     NotificationAIOpinionEnricher,
     NotificationHoldingSnapshotEnricher,
     NotificationHypothesisResearchEnricher,
@@ -924,14 +923,6 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         template_renderer=stores.notification_template_store(settings).render_job,
         context_enricher=CompositeNotificationContextEnricher(
             identity_enricher,
-            disclosure_enricher,
-            ai_decision_context_enricher,
-            NotificationAIValidatedGateEnricher(
-                notification_ai_reviewer_from_settings(settings) if dry_run else None,
-                settings,
-                stores.investment_decision_episode_store(settings),
-            ),
-            opinion_enricher,
         ),
         operator_reports_enabled=str(settings.get("operatorReasoningReportEnabled", "1")).strip().lower() not in {"0", "false", "no", "off"},
         settings=settings,

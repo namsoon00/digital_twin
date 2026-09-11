@@ -888,7 +888,10 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(quiet_jobs[0].context["quietHoursSuppressed"])
         self.assertIn("22:00-05:00", quiet_jobs[0].last_error)
         self.assertEqual("done", quiet_jobs[1].status)
-        self.assertEqual([("new-york", "뉴욕 알림")], sent)
+        self.assertEqual(1, len(sent))
+        self.assertEqual("new-york", sent[0][0])
+        self.assertIn("뉴욕 알림", sent[0][1])
+        self.assertIn("🔔 알림", sent[0][1])
 
     def test_threshold_summary_keeps_full_detected_and_configured_values(self):
         detected = "비트코인 24시간 +1.2%, 7일 +5.0%로 최근 일주일 상승 흐름이 이어지고 있으며 실제 보유 종목의 가격 반응을 함께 확인해야 합니다"

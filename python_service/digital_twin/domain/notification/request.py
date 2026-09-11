@@ -3,8 +3,10 @@
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Mapping
 
+from .presentation import DEFAULT_POLICY_TYPES
 
-NOTIFICATION_REQUEST_CONTRACT_VERSION = "notification-request-v1"
+
+NOTIFICATION_REQUEST_CONTRACT_VERSION = "notification-request-v2"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -103,6 +105,38 @@ class NotificationRequest:
     dedupe_key: str = ""
     trace: NotificationSourceTrace = field(default_factory=NotificationSourceTrace)
     contract_version: str = NOTIFICATION_REQUEST_CONTRACT_VERSION
+    kind: str = ""
+    subject: Mapping[str, object] = field(default_factory=dict)
+    content: Mapping[str, object] = field(default_factory=dict)
+    extensions: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]):
+        values = _mapping(payload)
+        trace = _mapping(values.get("trace"))
+        fields = {
+            "source_event_id": "sourceEventId", "source_event_name": "sourceEventName",
+            "engine_deployment_id": "engineDeploymentId", "engine_version": "engineVersion",
+            "source_abox_snapshot_id": "sourceAboxSnapshotId", "inference_generation_id": "inferenceGenerationId",
+            "decision_episode_id": "decisionEpisodeId", "decision_continuity_packet_id": "decisionContinuityPacketId",
+            "generated_at": "generatedAt",
+        }
+        known = {"requestId", "accountId", "accountLabel", "messageType", "sourceText", "text", "body",
+                 "context", "dedupeKey", "trace", "contractVersion", "kind", "subject", "content", "extensions"}
+        return cls(
+            request_id=str(values.get("requestId") or ""),
+            account_id=str(values.get("accountId") or ""),
+            account_label=str(values.get("accountLabel") or ""),
+            message_type=str(values.get("messageType") or DEFAULT_POLICY_TYPES.get(str(values.get("kind") or ""), "notification")),
+            source_text=str(values.get("sourceText") or values.get("text") or values.get("body") or ""),
+            context=_mapping(values.get("context")), dedupe_key=str(values.get("dedupeKey") or ""),
+            trace=NotificationSourceTrace(**{key: str(trace.get(alias) or "") for key, alias in fields.items()}),
+            contract_version=str(values.get("contractVersion") or NOTIFICATION_REQUEST_CONTRACT_VERSION),
+            kind=str(values.get("kind") or ""),
+            subject=_mapping(values.get("subject")) or {"name": str(values.get("subject") or "")},
+            content=_mapping(values.get("content")),
+            extensions={**_mapping(values.get("extensions")), **{key: value for key, value in values.items() if key not in known}},
+        )
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)

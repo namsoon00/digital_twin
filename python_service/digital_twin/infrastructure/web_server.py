@@ -3548,8 +3548,8 @@ def notification_job_public_payload(
         if isinstance(context.get("customerInvestmentDocumentQuality"), dict)
         else {}
     )
-    customer_text = notification_customer_text(job)
-    if job.message_type == INVESTMENT_INSIGHT and not customer_document:
+    customer_text = str(job.text or "")
+    if job.message_type == INVESTMENT_INSIGHT:
         presentation_job = NotificationJob.from_dict(job.to_dict())
         try:
             NotificationRenderingService.apply_investment_presentation_contract(
@@ -3640,11 +3640,18 @@ def notification_job_public_payload(
         else "historical-failure" if job.status == "failed"
         else "not-actionable"
     )
+    from ..domain.notification.presentation import presentation_metadata
+    from ..application.notification.presentation import notification_heading
+
+    presentation = presentation_metadata(job.message_type, context)
     payload = {
         "jobId": job.job_id,
         "messageType": job.message_type,
-        "messageTypeLabel": MESSAGE_TYPE_LABELS.get(job.message_type, job.message_type),
-        "messageTypeIcon": notification_message_icon(job.message_type, context),
+        "messageTypeLabel": presentation["label"],
+        "messageTypeIcon": presentation["icon"],
+        "notificationKind": presentation["kind"],
+        "notificationKindLabel": presentation["label"],
+        "notificationKindIcon": presentation["icon"],
         "status": job.status,
         "accountId": job.account_id,
         "accountLabel": job.account_label,
@@ -3654,7 +3661,7 @@ def notification_job_public_payload(
         "updatedAt": job.updated_at,
         "sourceEventId": job.source_event_id,
         "sourceEventName": job.source_event_name,
-        "title": title,
+        "title": notification_heading(job.message_type, context),
         "symbol": symbol,
         "rawSymbol": str(context.get("rawSymbol") or context.get("symbol") or "").strip(),
         "symbolName": str(context.get("symbolDisplayName") or context.get("displaySymbolName") or "").strip(),
@@ -3810,6 +3817,7 @@ def notification_job_list_payload(
         payload["title"] = compact_notification_text(job.source_event_name or headline, 120)
     fields = {
         "jobId", "messageType", "messageTypeLabel", "messageTypeIcon", "status",
+        "notificationKind", "notificationKindLabel", "notificationKindIcon",
         "accountId", "accountLabel", "decisionEpisodeId", "decisionKey",
         "createdAt", "updatedAt", "sourceEventName", "title", "symbol", "rawSymbol",
         "symbolName", "textPreview", "lastError", "suppressionSummary", "nextEligibleAt",

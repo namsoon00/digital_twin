@@ -13,7 +13,6 @@ from .message_types import (
     OPERATOR_REASONING_REPORT,
     TRIGGER_SUMMARIES,
 )
-from .notification_ai import enrich_notification_ai_context
 from .notification_ontology_sections import (
     CURVE_REGIME_LABELS,
     FX_REGIME_LABELS,
@@ -988,7 +987,7 @@ def ai_opinion_block(context: Dict[str, object], rich: bool = False) -> str:
 
 
 def context_with_reasoning_explanation(context: Dict[str, object]) -> Dict[str, object]:
-    values = enrich_notification_ai_context(dict(context or {}))
+    values = dict(context or {})
     raw_symbol = str(values.get("rawSymbol") or values.get("symbol") or "").strip().upper()
     display_symbol = str(
         values.get("symbolDisplayName")
@@ -1181,35 +1180,9 @@ def prepend_test_dispatch_notice(rendered: str, context: Dict[str, object], rich
 
 
 def compact_investment_notification(rendered: str, context: Dict[str, object], max_length: int = 3700) -> str:
-    text = str(rendered or "").strip()
-    if context_message_type(context) != "investmentInsight" or len(text) <= max_length:
-        return text
-    if isinstance((context or {}).get("notificationAiValidatedResponse"), dict) and (context or {}).get("notificationAiValidatedResponse"):
-        return text
-    text = re.sub(
-        r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-        lambda match: re.sub(r"<[^>]+>", "", match.group(2)).strip() + ": " + match.group(1),
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-    text = html.unescape(re.sub(r"<[^>]+>", "", text))
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    notification_number = footer_value_from_context(context, "notificationNumber", "notificationNo", "debugNotificationNumber")
-    if not notification_number:
-        notification_number = notification_debug_number(footer_value_from_context(context, "jobId"))
-    detail_url = str((context or {}).get("notificationDetailUrl") or (context or {}).get("notifyLinkUrl") or "").strip()
-    suffix_rows = ["상세 근거는 서비스 알림 상세에서 확인하세요."]
-    if detail_url:
-        suffix_rows.append("상세 링크: " + detail_url)
-    if notification_number:
-        suffix_rows.append("알림 번호: " + str(notification_number))
-    suffix = "\n\n" + "\n".join(suffix_rows)
-    budget = max(200, max_length - len(suffix))
-    cutoff = text.rfind("\n", 0, budget)
-    if cutoff < int(budget * 0.65):
-        cutoff = budget
-    return text[:cutoff].rstrip() + suffix
+    """Compatibility hook: channel splitting, not truncation, owns size limits."""
+
+    return str(rendered or "").strip()
 
 
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:

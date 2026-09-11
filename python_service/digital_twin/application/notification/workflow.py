@@ -153,7 +153,6 @@ class NotificationHoldingSnapshotEnricher:
         candidates = []
         if account_id and isinstance(states.get(account_id), dict):
             candidates.append(states.get(account_id))
-        candidates.extend(state for key, state in states.items() if key != account_id and isinstance(state, dict))
         for state in candidates:
             positions = state.get("positions") if isinstance(state, dict) else {}
             if isinstance(positions, dict):
@@ -822,6 +821,19 @@ class NotificationQueueRunner:
             )
             return True
         errors = [str(item or "").strip() for item in validation.get("errors") or [] if str(item or "").strip()]
+        presentation_only = {
+            "primary-cause-missing", "primary-cause-category-invalid", "primary-cause-summary-missing",
+            "internal-language-exposed", "supporting-cause-limit-exceeded",
+        }
+        if errors and set(errors).issubset(presentation_only):
+            context.update({
+                "customerDeliveryExplanationRequired": False,
+                "customerDeliveryExplanationValidationState": "partial",
+                "notificationPresentationWarnings": errors,
+            })
+            job.context = context
+            self.record_lifecycle(job, "delivery_reason_validated", "partial", metadata={"warnings": errors})
+            return True
         reason = "사용자 알림 발송 사유 계약 오류"
         if errors:
             reason += ": " + ", ".join(errors[:6])

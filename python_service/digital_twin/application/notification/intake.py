@@ -3,12 +3,13 @@
 from typing import Dict, Mapping
 
 from ...domain.events import DomainEvent
-from ...domain.investment_strategy_guidance import append_strategy_block, merge_strategy_context
-from ...domain.message_types import INVESTMENT_INSIGHT
-from ...domain.notification.request import NotificationRequest, NotificationSourceTrace
+from ...domain.investment_strategy_guidance import merge_strategy_context
+from ...domain.notification.request import NOTIFICATION_REQUEST_CONTRACT_VERSION, NotificationRequest, NotificationSourceTrace
+from ...domain.notification.presentation import presentation_metadata
 from ...domain.notification_templates import alert_context, text_context
 from ...domain.notifications import NotificationJob
 from ...domain.portfolio import AlertEvent
+from .presentation import content_body
 
 
 class NotificationIngressService:
@@ -35,8 +36,6 @@ class NotificationIngressService:
             account_context,
             self.settings,
         )
-        if str(event.rule or "") == INVESTMENT_INSIGHT:
-            context = append_strategy_block(context)
         if callable(self.context_enricher):
             context = dict(self.context_enricher(context) or context)
         source_event_id = str(getattr(source_event, "event_id", "") or "")
@@ -80,6 +79,9 @@ class NotificationIngressService:
         dedupe_key: str = "",
         context: Mapping[str, object] = None,
         request_id: str = "",
+        kind: str = "",
+        subject: Mapping[str, object] = None,
+        content: Mapping[str, object] = None,
     ) -> NotificationRequest:
         values = dict(context or text_context(text, message_type, account_id, account_label))
         trace = NotificationSourceTrace.from_context(
@@ -96,6 +98,9 @@ class NotificationIngressService:
             context=self.context_with_contract(values, trace),
             dedupe_key=str(dedupe_key or ""),
             trace=trace,
+            kind=kind,
+            subject=dict(subject or {}),
+            content=dict(content or {}),
         )
 
     @staticmethod
@@ -105,21 +110,59 @@ class NotificationIngressService:
     ) -> Dict[str, object]:
         values = dict(context or {})
         values["notificationSourceTrace"] = trace.to_dict()
-        values["notificationRequestContractVersion"] = "notification-request-v1"
+        values["notificationRequestContractVersion"] = NOTIFICATION_REQUEST_CONTRACT_VERSION
         return values
 
     @staticmethod
     def job_from_request(request: NotificationRequest) -> NotificationJob:
-        return NotificationJob.create(
-            request.source_text,
+        context = NotificationIngressService.context_with_contract(request.context, request.trace)
+        if request.account_id:
+            context["accountId"] = request.account_id
+            context["accountLabel"] = request.account_label
+        content = dict(request.content or {})
+        if request.kind:
+            content["kind"] = request.kind
+        if request.subject:
+            content["subject"] = dict(request.subject)
+            if request.subject.get("symbol"):
+                context.setdefault("rawSymbol", str(request.subject["symbol"]))
+                context.setdefault("symbol", str(request.subject["symbol"]))
+            if request.subject.get("market"):
+                context.setdefault("market", str(request.subject["market"]))
+        if content:
+            if request.source_text and not content.get("body"):
+                content["body"] = request.source_text
+            context["notificationContent"] = content
+        if request.extensions:
+            context["notificationRequestExtensions"] = dict(request.extensions)
+        job = NotificationJob.create(
+            request.source_text or content_body(content),
             account_id=request.account_id,
             account_label=request.account_label,
             message_type=request.message_type,
             source_event_id=request.trace.source_event_id,
             source_event_name=request.trace.source_event_name,
             dedupe_key=request.dedupe_key,
-            context=dict(request.context or {}),
+            context=context,
         )
+        job.context["notificationRequestId"] = request.request_id or job.job_id
+        NotificationIngressService.prepare_job(job)
+        return job
+
+    @staticmethod
+    def prepare_job(job: NotificationJob) -> None:
+        """Bridge legacy producers without resetting dedupe or cooldown identities."""
+
+        context = dict(job.context or {})
+        context.setdefault("notificationRequestContractVersion", NOTIFICATION_REQUEST_CONTRACT_VERSION)
+        context.setdefault("notificationRequestId", job.job_id)
+        context.setdefault("notificationSourceTrace", NotificationSourceTrace.from_context(
+            context, source_event_id=job.source_event_id, source_event_name=job.source_event_name,
+        ).to_dict())
+        context["notificationPresentation"] = presentation_metadata(job.message_type, context)
+        job.context = context
+        if not job.text.strip():
+            job.text = content_body(context.get("notificationContent"))
 
     def job_from_alert(
         self,

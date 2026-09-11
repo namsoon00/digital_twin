@@ -26035,7 +26035,7 @@
   }
 
   function notificationJobTypeKey(job) {
-    return String((job && job.messageType) || "notification");
+    return String((job && (job.notificationKind || job.messageType)) || "notification");
   }
 
   function notificationJobFilterOptions(jobs, keyFn) {
@@ -26055,6 +26055,9 @@
     var found = (Array.isArray(jobs) ? jobs : []).filter(function (job) {
       return notificationJobTypeKey(job) === type;
     })[0];
+    if (found && found.notificationKind) {
+      return [found.notificationKindIcon, found.notificationKindLabel].filter(Boolean).join(" ");
+    }
     return labelWithNotificationIcon(type, (found && found.messageTypeLabel) || notificationTemplateLabel(type));
   }
 
@@ -26283,7 +26286,7 @@
     return {
       kicker: "Change Notification",
       title: payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "변화 알림",
-      meta: [payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · "),
+      meta: [payload.displaySymbol, notificationJobTypeLabel(notificationJobTypeKey(job), [job]), formatClock(job.createdAt)].filter(Boolean).join(" · "),
       body: renderInstrumentWorkspaceLink(payload.resolvedSymbol, "종목 전체 흐름")
         + renderNotificationInvestmentFlowTransition(payload.investmentFlow)
         + (payload.decisionEpisodeId ? '<div class="oa-linked-detail-action">' + renderWorkDetailButton("investment-case", payload.decisionEpisodeId, "연결된 투자 판단", "text-button primary") + '</div>' : '')
@@ -27880,7 +27883,7 @@
     var receiptActions = '<div class="notification-detail-actions"><button class="text-button compact" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.important ? "false" : "true") + '">' + escapeHtml(job.important ? "중요 해제" : "중요 표시") + '</button><button class="text-button compact" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.acknowledgedAt ? "false" : "true") + '">' + escapeHtml(job.acknowledgedAt ? "확인 취소" : "확인 완료") + '</button></div>';
     return [
       '<aside class="notification-decision-detail" data-notification-detail-mode="' + (compact ? "compact" : "full") + '" data-notification-detail-job-id="' + escapeHtml(jobId) + '" data-notification-active-tab="' + escapeHtml(activeDetailTab) + '" aria-label="선택 알림 판단 상세">',
-      compact ? '<div class="notification-detail-head"><div><p class="label">Decision Report</p><h3>' + escapeHtml(payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단") + '</h3><span>' + escapeHtml([payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · ")) + '</span></div><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span></div>' : '',
+      compact ? '<div class="notification-detail-head"><div><p class="label">Decision Report</p><h3>' + escapeHtml(payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단") + '</h3><span>' + escapeHtml([payload.displaySymbol, notificationJobTypeLabel(notificationJobTypeKey(job), [job]), formatClock(job.createdAt)].filter(Boolean).join(" · ")) + '</span></div><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span></div>' : '',
       compact ? receiptActions : '<div class="notification-detail-toolbar"><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>' + receiptActions + '</div>',
       feedbackActions,
       compact ? '' : renderNotificationDetailTabs(jobId, activeDetailTab),
@@ -27946,7 +27949,7 @@
       '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '"' + cardTypeAttrs("decision-row", notificationJobToneClass(job.status)) + cardFormatAttrs("decision-ticket", "compact") + ' role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
       '<div class="notification-decision-top">',
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
-      '<strong>' + escapeHtml(labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType || "-")) + '</strong>',
+      '<strong>' + escapeHtml(notificationJobTypeLabel(notificationJobTypeKey(job), [job])) + '</strong>',
       renderRecordChangedAt(job),
       '</div>',
       '<div class="notification-decision-target">' + escapeHtml(target || job.messageType || "-") + '</div>',

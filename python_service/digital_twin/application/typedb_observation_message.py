@@ -351,7 +351,7 @@ def _trigger_rows(context: Dict[str, object]) -> List[str]:
             rows.append(
                 CRYPTO_DISPLAY_NAMES[symbol]
                 + " " + horizon + " 변동률이 " + signed_pct(change)
-                + "로 " + direction + " 알림 기준 " + signed_pct(abs(threshold))
+                + "로 " + direction + " 알림 기준 " + signed_pct(abs(threshold) if direction == "상승" else -abs(threshold))
                 + "에 도달해 "
                 + transition_labels.get(
                     str(item.get("transition") or ""),
@@ -612,11 +612,15 @@ def _flow_rows(context: Dict[str, object], limit: int) -> List[str]:
                 continue
             row = horizon + " 변동 " + signed_pct(change)
             if threshold is not None:
-                row += " · 알림 기준 " + signed_pct(abs(threshold))
+                row += " · 알림 기준 " + signed_pct(abs(threshold) if change >= 0 else -abs(threshold))
             rows.append(row)
         return _unique(rows, limit)
     pnl = _number(facts.get("profitLossRate"))
-    if pnl is not None:
+    quantity = _number(facts.get("quantity"))
+    is_holding = (quantity is not None and quantity > 0) or (
+        quantity is None and facts.get("isHolding") is True
+    )
+    if pnl is not None and is_holding:
         rows.append("수익률 " + signed_pct(pnl))
     rows.append(_trend_row(facts))
     volume = _number(facts.get("volume"))
@@ -703,10 +707,12 @@ def _follow_up_rows(context: Dict[str, object]) -> List[str]:
 
 def typedb_observation_telegram_message(
     context: Dict[str, object],
-    response: NotificationAIValidatedResponse,
+    response: NotificationAIValidatedResponse = None,
     detail_level: str = "concise",
 ) -> str:
     """Render relation facts only; AI investment judgement uses another module."""
+
+    from ..domain.notification.presentation import notification_kind
 
     observation = typedb_context_observation_contract(context)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
@@ -741,7 +747,10 @@ def typedb_observation_telegram_message(
     trigger_rows = _trigger_rows(context)
     flow_rows = _flow_rows(context, 3 if detail_level == "concise" else 5)
     follow_up_rows = _follow_up_rows(context)
-    relation_rows = _relation_rows(context, observation)
+    relation_rows = (
+        [] if notification_kind("investmentInsight", context).key == "price-change"
+        else _relation_rows(context, observation)
+    )
     lead = (
         trigger_rows[0]
         if trigger_rows
@@ -751,7 +760,7 @@ def typedb_observation_telegram_message(
         else "가격·수급·뉴스를 연결해 볼 중요한 변화가 확인됐습니다."
     )
     detail_url = str(context.get("notificationDetailUrl") or "").strip()
-    reference = response.reference_date or reference_date(context)
+    reference = (response.reference_date if response else "") or reference_date(context)
     sent = str(context.get("sentTime") or "").strip()
     delivery_profile = _mapping(context.get("messageDeliveryProfile"))
     level = str(

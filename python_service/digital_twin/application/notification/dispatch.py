@@ -19,6 +19,8 @@ class NotificationDispatchService:
 
     def deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
         operations_delivery = is_operations_delivery_message_type(job.message_type)
+        if not operations_delivery and job.account_id and job.account_id not in accounts:
+            raise RuntimeError("알림 수신 계정을 찾을 수 없어 다른 계정으로 대체 발송하지 않았습니다.")
         if operations_delivery:
             if str(job.message_type or "") == ONTOLOGY_REASONING_QUEUE and not self.operations_notifier_factory:
                 raise RuntimeError("운영 알림 전송기가 구성되지 않아 계정 채널로 대체 발송하지 않았습니다.")

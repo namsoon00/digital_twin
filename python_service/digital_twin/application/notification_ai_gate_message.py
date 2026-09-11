@@ -5074,11 +5074,23 @@ def _customer_judgement_identity(
         if isinstance(context.get("notificationWriterProvenance"), dict)
         else response_writer_provenance(response, context)
     )
+    from ..domain.notification.presentation import notification_kind
+
+    kind = notification_kind("investmentInsight", {
+        **context,
+        "notificationWriterProvenance": provenance,
+        "validatedDecisionResponse": response.to_dict(),
+    })
+    if kind.key == "ai-interpretation":
+        return {
+            "role": "ai-interpretation", "icon": kind.icon,
+            "name": kind.label, "summaryName": kind.label, "roleLabel": kind.label,
+        }
     if provenance.get("aiAuthored") is True:
         return {
             "role": "ai-judgement",
-            "icon": "🧠",
-            "name": "AI 종합 판단",
+            "icon": "🧭",
+            "name": "투자 판단",
             "summaryName": "AI 종합 점검",
             "roleLabel": "AI 종합 판단",
         }

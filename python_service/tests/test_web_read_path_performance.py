@@ -217,6 +217,9 @@ class WebReadPathPerformanceTests(unittest.TestCase):
             text="이전 메시지",
             context={
                 "symbol": "NVDA",
+                "notificationAiValidatedResponse": {"action": "HOLD"},
+                "notificationWriterProvenance": {"aiAuthored": True},
+                "decisionPublication": {"outcomeKind": "FINAL_DECISION"},
                 "customerInvestmentDocument": document,
                 "customerInvestmentDocumentQuality": quality,
             },
@@ -240,9 +243,10 @@ class WebReadPathPerformanceTests(unittest.TestCase):
                 settings={"_skipOperationalSchemaBootstrap": "1"},
             )
 
-        self.assertEqual(document, payload["customerInvestmentDocument"])
-        self.assertEqual(quality, payload["customerInvestmentDocumentQuality"])
-        self.assertEqual(document["headline"], payload["title"])
+        self.assertEqual(document, job.context["customerInvestmentDocument"])
+        self.assertEqual(quality, job.context["customerInvestmentDocumentQuality"])
+        self.assertEqual("🧭 투자 판단 · NVDA", payload["customerInvestmentDocument"]["headline"])
+        self.assertEqual("🧭 투자 판단 · NVDA", payload["title"])
         self.assertEqual("ai-judgement", payload["customerInvestmentDocument"]["role"])
 
         summary_payload = web_server.notification_job_public_payload(
@@ -258,7 +262,7 @@ class WebReadPathPerformanceTests(unittest.TestCase):
             stale_minutes=2,
             settings={"_skipOperationalSchemaBootstrap": "1"},
         )
-        self.assertEqual(document, summary_payload["customerInvestmentDocument"])
+        self.assertEqual(payload["customerInvestmentDocument"], summary_payload["customerInvestmentDocument"])
         self.assertNotIn("reasoningTrace", summary_payload)
         self.assertNotIn("customerInvestmentDocument", list_payload)
 

@@ -73,12 +73,18 @@ class NotificationJob:
         )
 
     def to_dict(self) -> Dict[str, object]:
+        from .notification.presentation import presentation_metadata
+
         payload = asdict(self)
+        presentation = presentation_metadata(self.message_type, self.context)
         return {
             "jobId": payload["job_id"],
             "accountId": payload["account_id"],
             "accountLabel": payload["account_label"],
             "messageType": payload["message_type"],
+            "notificationKind": presentation["kind"],
+            "notificationKindLabel": presentation["label"],
+            "notificationKindIcon": presentation["icon"],
             "text": payload["text"],
             "context": payload["context"],
             "status": payload["status"],

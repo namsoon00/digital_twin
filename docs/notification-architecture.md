@@ -18,7 +18,10 @@ remain outside this context.
 
 `domain/notification/` owns immutable contracts:
 
-- `NotificationRequest`: version-neutral producer input.
+- `NotificationRequest`: version-neutral producer input (`notification-request-v2`).
+  Free text is sufficient; structured sections, links and extensions are optional.
+- `NotificationKind`: customer-facing purpose, label and icon. The legacy
+  `messageType` remains the delivery-policy key, not the customer purpose.
 - `NotificationSourceTrace`: source event, engine deployment, ABox snapshot,
   inference generation, and decision continuity identity.
 - `NotificationStage` and `NotificationLifecycleEvent`: append-only processing
@@ -43,14 +46,22 @@ The domain package imports neither MySQL nor Telegram.
 - `eligibility.py`: rechecks live operational state and records non-blocking
   market-hours and freshness advisories at dispatch.
 - `rendering.py`: creates the exact send-time artifact and content hash.
+- `presentation.py`: formats optional content and applies the shared kind
+  identity without selecting or changing an investment action.
 - `dispatch.py`: selects the account or operations audience and records the
   concrete delivery attempt.
 - `workflow.py`: leases jobs and orchestrates the preceding services.
 - `query.py`: builds the chronological trace returned by the web API.
 
-AI validation and existing context enrichers are invoked by the workflow as
-existing collaborators. Their investment semantics are intentionally unchanged
-by this notification refactor.
+AI validation and research run before publication, in the existing AI queue.
+The production rendering pipeline has only an instrument-name enricher. It no
+longer runs disclosure analysis, decision-context reconstruction, AI validation,
+or a deterministic opinion fallback. The compatibility workflow may hand an
+unfinished legacy job to the AI queue, but it does not judge it while rendering.
+
+Rendering reads saved customer documents or validated responses. Missing
+responses retain the source body; they never produce a default HOLD response.
+AI-authored narrative-only publications are `AI 해석`, not `투자 판단`.
 
 ### Delivery Cadence
 
@@ -100,8 +111,11 @@ The old `application/notification_service.py` and
 ## Runtime Flow
 
 1. V1 or V2 produces an `AlertEvent` after its own reasoning completes.
-2. `NotificationIngressService` creates `notification-request-v1` and copies
+2. `NotificationIngressService` creates `notification-request-v2` and copies
    the source event and reasoning identities into `NotificationSourceTrace`.
+   Producers can call `enqueue_request(NotificationRequest)`. Legacy direct
+   `NotificationJob` producers cross the same preparation boundary inside the
+   MySQL adapter, preserving job IDs, source IDs and dedupe keys.
 3. The MySQL adapter evaluates admission policy and atomically stores the job
    plus `received` and `eligibility_checked` events.
 4. The worker claims the job. TypeDB action authority routes it to investment
@@ -113,9 +127,12 @@ The old `application/notification_service.py` and
    and freshness are rechecked as advisories; stale investment data may request
    an asynchronous refresh while the current notification continues. The
    worker then freezes and validates one `CustomerDeliveryExplanation`.
-   A contradictory investment explanation is suppressed and reported to the
-   operations channel. The final text is rendered once and hashed only after
-   that contract passes.
+   A contradictory investment transition is suppressed and reported to the
+   operations channel. Missing optional explanation fields or presentation-only
+   warnings do not veto an otherwise admitted message: the incomplete explanation
+   stays in the audit and the available body is sent. Template exceptions use the
+   source body. Channel splitting owns length limits; rendering never truncates
+   source URLs to satisfy a message-size limit.
 6. A delivery attempt is stored before calling Telegram or another channel.
 7. The attempt and terminal lifecycle state are updated after the channel
    result. The read model exposes attempt start and channel completion as
@@ -161,3 +178,6 @@ New code imports the package modules directly. Existing callers may continue to
 use the compatibility facades during migration. A future reasoning or AI
 modularization must depend on `NotificationRequest` or publish its own domain
 event; it must not move investment rules into this bounded context.
+
+See [Notification Presentation Contract](notification-presentation-contract.md)
+for the flexible input, kind catalog, and compatibility rules.

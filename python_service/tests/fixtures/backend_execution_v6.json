@@ -1,0 +1,27 @@
+{
+  "sourceRevision": "fb9db4df8a24",
+  "scenarios": {
+    "save/ok": "67678550f0d360436ba2d9956b9d95d396218ff2370c475a56ecf253b4c539ea",
+    "save/invalid": "cd5d44f957adb61bf60145217e72d8e83af1f26865a902b15f4ebc3e92598ca5",
+    "save/invalid-patch": "bb2cf5c9d508ba9c7edd1c78bd9ddd6821e3aff64b75ba961a026db4d34b2a95",
+    "save/lease-held": "ada3d241d20326d88ade5a5c3d830e638d60b8aa6e75f7eb22449bbdb2e9eca4",
+    "save/invalid-adopted": "ef5b2d20bbe8e65b5a4f111df39815bd804b9db519ecd870721cbde56acd34e0",
+    "save/adopted": "796f67dd2d778131b44dd9f3d1ec5ad809e7134208292aff174376c4566f3cdf",
+    "save/journal-unreadable": "dcab72fd8dc4095785d9b99d92994df5e150f566da358648b73859e456a32301",
+    "save/journal-same": "7ad6f36dd30573a0c456cef0c28a8108c0c37dbf3b870f0b749c776689702755",
+    "save/journal-other": "50705052542ed4b5ed734b5ef0b06a45c5391e14f1db1e9d542e918c7f190b53",
+    "save/driver-missing": "0857fc342678e832be0831fa4954d220b3a451be60e59a4a8f6e4d29b7c5b33e",
+    "save/index-incomplete": "87162408bb2190a07e06d346b1e9b62d4a04276806a4f7f699e6121ae457c736",
+    "save/cleanup-error": "0db30c3afbd0924ca290cc754929ca1ac36b720262222e361836bc5e0506a9a2",
+    "save/insert-error": "70399718a8e1413da5453cbfb7a83880e1dd6eb45a028a74911d52718f1007be",
+    "save/count-mismatch": "9f46bf5af59fbb6bd52d7dea1b46b660d8af4b0c2c78ce0e0828454791ec4a94",
+    "save/control-error": "96b967b6a567657678eff7cfbc8ad135ec250e65b7774e2ce2eeb8f060be94dc",
+    "save/readback-error": "277466146aaeb6901fdeb1fbeae3c91d21d8f5756b67cd6882a8fcd2b751469a",
+    "save/release-error": "42210c69931b26ffd76c5f11b87b7abdf81114144225a62de051f734ef3f6c61",
+    "native/ok": "6867d9253ab194c0d28f81570ec711a39446c3990722568a02890b95f91fe5ca",
+    "native/held": "d4fbf8f3241271bf636c670e4d97700a6853c4cdbf55afe0f86965d4d45ebdde",
+    "native/error": "02be1d8bed1a96e2ec6080c34ffa25a7580526a22069c5f5cded9590cdec63ed",
+    "native/adopted": "2a8619cae136ab342331c57d149cb76e32687fcfcded990288bdd003e46b762e",
+    "native/invalid-adopted": "500ed4f90434fd826372236810efb1c211a9bb01c443cd30cb92e02ff7e96172"
+  }
+}

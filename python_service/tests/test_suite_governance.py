@@ -123,7 +123,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # of investment rule semantics and need dedicated runtime coverage.
         # Candidate-image closure and guarded recovery separately preserve
         # semantic facts, physical ownership and pending-generation safety.
-        self.assertLessEqual(total, 1154)
+        # The remaining backend owners retain their frozen control flow,
+        # explicit capabilities and guarded public entry points.
+        self.assertLessEqual(total, 1163)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

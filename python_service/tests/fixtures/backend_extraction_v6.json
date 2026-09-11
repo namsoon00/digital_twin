@@ -1,0 +1,224 @@
+{
+  "sourceRevision": "fb9db4df8a24",
+  "methods": {
+    "ScopedABoxManifestMixin.scoped_manifest_marker_graph": {
+      "path": "manifest/graphs.py",
+      "bodyHash": "9f4ee6761c23b9921a59cb2ad889f759d100fe0c99f9a031338a268cb2399c3e",
+      "instance": true,
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='scope_plan', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='changed_scope_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_manifest_pointer_graph": {
+      "path": "manifest/graphs.py",
+      "bodyHash": "1e478bce7a5edb519b9e0d73f0e696a70da1b9b6640f7bc6c61c0d07eb902408",
+      "instance": true,
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='scope_plan', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='previous_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='pending_activation', annotation=Name(id='bool', ctx=Load())), arg(arg='inference_target_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='scope_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=True), Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_manifest_pending_graph": {
+      "path": "manifest/graphs.py",
+      "bodyHash": "601c388b3ebff522547153c4c556f6ff898bdcc5f2faed19d8a3b4cc3c8bcb5d",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='scope_plan', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='previous_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='inference_target_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_manifest_control_graph": {
+      "path": "manifest/graphs.py",
+      "bodyHash": "e5d2097de095bd084c1ff6d98434bf67742a26f06610ba112222c00b2d7a56a0",
+      "instance": true,
+      "runtimeFields": [
+        "utc_now"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='previous_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='pending_activation', annotation=Name(id='bool', ctx=Load())), arg(arg='inference_target_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='scope_ids', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=False), Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.scoped_manifest_control_delta": {
+      "path": "manifest/graphs.py",
+      "bodyHash": "6329f4afda55ae86ebac7d4902fabb93d35b88a1748f4d65a44c9075c21b5482",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='previous_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.scoped_abox_counts_by_scope": {
+      "path": "manifest/counts.py",
+      "bodyHash": "52d98da53cd189fa3acce0506f139ffc5c6a281e136badf3ee14cce9cbdb077e",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='node_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='relation_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.scoped_abox_relation_breakdown": {
+      "path": "manifest/counts.py",
+      "bodyHash": "b702ba87a2a659c1ecf13a96bdb77b3e8d87b65f99c4a3296e127bec39ad6da3",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='relation_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='bucket_limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=24)])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.scoped_abox_relation_persistence_summary": {
+      "path": "manifest/counts.py",
+      "bodyHash": "95f5b535a7a698e17a7c6deee4455af151687dafead2071a79d5a2eb20faa9f1",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='write_plan', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.merged_scoped_abox_counts": {
+      "path": "manifest/counts.py",
+      "bodyHash": "0412492eb0b1610d1bbc8cfda084a6b6b353e92f63ace86da362f0f919aa5c51",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[], vararg=arg(arg='count_sets', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='int', ctx=Load())], ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load())), kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.current_state_delta_plan": {
+      "path": "manifest/counts.py",
+      "bodyHash": "d7b0c2c207cc700b2cf80bd7b5341040569bd0da432e3a8db442037fd6b46e95",
+      "instance": false,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='node_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='relation_rows', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='inventory', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "ScopedABoxManifestMixin.prepare_scoped_manifest_native_rule_indexes": {
+      "path": "manifest/indexes.py",
+      "bodyHash": "32e1770a2be96274c433f08d28e8281824a6f7fe7530135d0043cd66bb5d27d4",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='active_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='persistence_rows', annotation=Subscript(value=Name(id='Tuple', ctx=Load()), slice=Tuple(elts=[Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()), Subscript(value=Name(id='Iterable', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.replace_scoped_manifest_marker_graph": {
+      "path": "manifest/repair.py",
+      "bodyHash": "cc1af96a2e4365705741172dc437a4056f6d27e16735de74ce74b6c000ab9b0b",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code",
+        "typedb_operation_timeout",
+        "utc_now"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='marker_graph', annotation=Name(id='PortfolioOntology', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.repair_active_manifest_native_rule_evidence_index": {
+      "path": "manifest/repair.py",
+      "bodyHash": "c009c699dec2f3358745a52238944566ed626cea3951e7ed39cf08f808bda343",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_projection_coordinator_summary"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='active_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='expected_manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='stable_write_lease_held', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=''), Constant(value=''), Constant(value=False)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.ensure_scoped_manifest_evidence_read_index": {
+      "path": "manifest/repair.py",
+      "bodyHash": "10c32b2c4e4e74b8dc1c7213b2296f8dc15fc94c81543679ae2d0f29e5461fde",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='active_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value='')])",
+      "decorators": [
+        "coordinated_typedb_projection_write('manifest-evidence-index', typedb_projection_world_from_manifest_index)"
+      ]
+    },
+    "ScopedABoxManifestMixin.refresh_market_world_observation_metadata": {
+      "path": "manifest/observation.py",
+      "bodyHash": "7bea4da423d162b9c8f21b9448ddb33b4665bf5b4c5c62ee00efee496be097ea",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='manifest_id', annotation=Name(id='str', ctx=Load())), arg(arg='scope_plan', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load())), arg(arg='market_scope_observed_at', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load())), arg(arg='adopted_write_lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=''), Constant(value=None)])",
+      "decorators": []
+    },
+    "ScopedABoxManifestMixin.save_scoped_abox_graph": {
+      "path": "manifest/save.py",
+      "bodyHash": "57dfcf93cc8edcc7182232dbc267115c68181fd89e7cc6065a9462e1af6a952c",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code",
+        "utc_now"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='graph', annotation=Name(id='PortfolioOntology', ctx=Load())), arg(arg='boxes', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='adopted_write_lease', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
+      "decorators": [
+        "coordinated_typedb_projection_write('scoped-abox-save', typedb_projection_world_from_graph)"
+      ]
+    },
+    "TypeDBOntologyGraphRepository.rebuild_active_manifest_native_rule_evidence_read_index": {
+      "path": "manifest/read_index.py",
+      "bodyHash": "084ffea7185fe731aa44493cc4329890126610da6552d833760d9c05319f0a79",
+      "instance": true,
+      "runtimeFields": [],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='active_metadata', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='world_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='')])",
+      "decorators": []
+    },
+    "TypeDBOntologyGraphRepository.hydrate_native_rule_evidence_field_index": {
+      "path": "manifest/read_index.py",
+      "bodyHash": "4dc171272d3b987486f6b7c92dc05b03b1ce9864bb534d18cecbcd9e93584770",
+      "instance": true,
+      "runtimeFields": [
+        "typedb_error_code"
+      ],
+      "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='evidence_read_index', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='target_symbols', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())), arg(arg='relation_types', annotation=Subscript(value=Name(id='Iterable', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=None)])",
+      "decorators": []
+    }
+  },
+  "helpers": {
+    "native_rule_manifest_index_required": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "45ec933b43416fe6531190b1ec6b68d9742d04c0f6515d5a5763800a90313f97"
+    },
+    "typedb_native_rule_planner_topology_for_execution": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "2eefcfa606cff7f3f9c51ef4c66b9192c8916cd9511126dd78505d6f919db42e"
+    },
+    "native_rule_evidence_read_index_from_rows": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "78a756eab4ca6335c5709abf6f60d724cc56a7c66eef64e5831600d46542497b"
+    },
+    "native_rule_evidence_read_index_from_components": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "fd5d21ea8c9281d0849aeae715b87fd2a2a9db79efb2aa7dfe46120c8f3ace43"
+    },
+    "merge_native_rule_evidence_read_index": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "41f3eca5d1302127a907568e0aa8c28160a9458216b75578a1790de60517218c"
+    },
+    "normalize_native_rule_evidence_read_index": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "dfa2c76c382e965e24ea9aafb2e336ebd9c62ec8b87c4432f475c8c05e550052"
+    },
+    "typedb_native_rule_evidence_read_index_for_execution": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "016bc0bc063f23070a0d73369857bbce4601cb025942463f2d7858f47031de2d"
+    },
+    "typedb_native_rule_evidence_read_allows_active_membership_recovery": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "ea4013795129773d2f04db5196af94e5c8c5842d51d3fa0278ccfd2fef8624b6"
+    },
+    "native_rule_matched_evidence_storage_plan": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "c3df303f373aca7b1d1327ce3d123c396956cb8c5abfd61a6b2c1ee953884017"
+    },
+    "typedb_projection_preflight_graph_for_execution": {
+      "path": "manifest/index_values.py",
+      "bodyHash": "9807aeffa0adf90c08c684fbd0019f62a1531beb14c7496cead4fbcc22035447"
+    }
+  }
+}

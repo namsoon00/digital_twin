@@ -46,11 +46,21 @@ class BackendOwnershipTests(unittest.TestCase):
                         for path in {row['path'] for row in self.contract['methods'].values()}}
 
     def test_moved_control_flow_matches_frozen_pre_migration_code(self):
+        changes = json.loads((ROOT / 'tests/fixtures/backend_semantic_changes.json').read_text())
+        self.assertLessEqual(set(changes), set(self.contract['methods']))
         for name, entry in self.contract['methods'].items():
             method = name.split('.')[1]
             node = next(n for n in self.modules[entry['path']].body if isinstance(n, ast.FunctionDef) and n.name == method)
             with self.subTest(method=name, source=self.contract['sourceRevision']):
-                self.assertEqual(entry['bodyHash'], body_hash(node, restore=True))
+                change = changes.get(name)
+                if change:
+                    self.assertEqual(entry['bodyHash'], change['baselineHash'])
+                    self.assertTrue(change['reason'])
+                    test_file, test_class, test_method = change['regressionTest'].split('.')
+                    tree = ast.parse((ROOT / 'tests' / (test_file + '.py')).read_text())
+                    cls = next(item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == test_class)
+                    self.assertTrue(any(isinstance(item, ast.FunctionDef) and item.name == test_method for item in cls.body))
+                self.assertEqual(change['bodyHash'] if change else entry['bodyHash'], body_hash(node, restore=True))
 
     def test_execution_results_and_callback_order_match_original(self):
         from digital_twin.infrastructure import typedb_ontology as api

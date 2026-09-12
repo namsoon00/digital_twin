@@ -1,5 +1,6 @@
 """Bounded rule-authoring inputs and operational blockers, not investment rules."""
 
+import hashlib
 import json
 import re
 from collections import Counter
@@ -8,11 +9,12 @@ from dataclasses import fields
 from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
-RULE_DESIGN_VERSION = "hypothesis-rule-design-v3"
+RULE_DESIGN_VERSION = "hypothesis-rule-design-v4"
 BLOCKER_KINDS = {
     "missing-observation", "stale-observation", "observation-window",
     "schema-mismatch", "unsupported-capability", "dependency-error", "unclassified",
     "unverified-observation",
+    "condition-not-met", "validation-review",
 }
 DEVELOPMENT_BLOCKERS = {"schema-mismatch", "unsupported-capability", "unclassified", "unverified-observation"}
 
@@ -66,9 +68,56 @@ def blocker_state(blockers):
         return "needs-revision", "development-required"
     if "dependency-error" in kinds:
         return "needs-data", "dependency-error"
+    if "validation-review" in kinds:
+        return "needs-data", "waiting-validation"
+    if "condition-not-met" in kinds:
+        return "needs-data", "waiting-condition"
     if kinds == {"observation-window"}:
         return "needs-data", "waiting-observation"
     return "needs-data", "waiting-data"
+
+
+def validation_requirements(candidate):
+    """Keep post-authoring checks distinct from evidence needed to write a rule.
+
+    Only actual TypeDB execution can discharge an automatic check. Arbitrary
+    empirical/causal requirements need a separate verified review, not a count
+    of price snapshots or an AI assertion that validation passed.
+    """
+    raw = candidate.get("validationRequirements") or []
+    if not isinstance(raw, list):
+        raw = [raw]
+    if len(raw) > 40:
+        raise ValueError("validationRequirements exceeds 40 checks")
+    rows = []
+    for item in raw:
+        row = dict(item) if isinstance(item, dict) else {"requirement": str(item)}
+        requirement = str(row.get("requirement") or "").strip()
+        if not requirement or len(requirement) > 2000:
+            raise ValueError("validationRequirements requires a bounded nonempty requirement")
+        check = str(row.get("check") or "review")
+        if check not in {"typedb-execution", "current-match", "review"}:
+            check = "review"
+        rows.append({"check": check, "requirement": requirement,
+                     "dependencyKey": str(row.get("dependencyKey") or "")[:191]})
+    return rows
+
+
+def compilation_fingerprint(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def authoring_input_fingerprint(case):
+    return compilation_fingerprint({
+        "designVersion": RULE_DESIGN_VERSION,
+        "caseId": case.case_id, "accountId": case.account_id, "symbol": case.symbol,
+        "claim": case.claim, "causalPath": case.causal_path,
+        "supportingEvidenceIds": sorted(case.supporting_evidence_ids),
+        "counterEvidenceIds": sorted(case.counter_evidence_ids),
+        "requiredEvidenceTypes": sorted(case.required_evidence_types),
+        "invalidationConditions": case.invalidation_conditions,
+    })
 
 
 def _mapping(value):

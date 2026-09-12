@@ -4,13 +4,15 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
+from digital_twin.modules.model_registry.application.hypothesis_candidate_compilation import capture_compilation, reusable_compilation
 from digital_twin.modules.model_registry.domain.event_types import HYPOTHESIS_DEVELOPMENT_DEPLOYED, HYPOTHESIS_DEVELOPMENT_TRANSITIONED, HYPOTHESIS_DEVELOPMENT_VALIDATED
 from digital_twin.modules.model_registry.domain.events import hypothesis_development_event
-from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase, TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES, hypothesis_decision_impact, screen_hypothesis_case, validation_gate
+from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase, TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES, default_validation_gates, hypothesis_decision_impact, screen_hypothesis_case, validation_gate
 from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment, normalize_candidate_rules, rulebox_metrics
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_semantic_violations
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import RULE_DESIGN_VERSION, blocker_state, compilation_blockers
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import RULE_DESIGN_VERSION, blocker_state, compilation_blockers, compilation_fingerprint, validation_requirements
+from digital_twin.modules.model_registry.domain.hypothesis_validation import additional_validation_gate, preview_states
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import utc_now_iso
 
@@ -89,7 +91,6 @@ class HypothesisDevelopmentService:
                 "lastCheckedAt": attempted.isoformat(),
                 "owner": "hypothesis-development",
             }
-            case.retry.pop("compilationContext", None)
             self.persist(case, "retry-started")
             try:
                 result = self._process_case(case_id)
@@ -124,13 +125,8 @@ class HypothesisDevelopmentService:
         case = self.case_store.get(case_id) if self.case_store else None
         if not case:
             return {"status": "not-found", "caseId": str(case_id or "")}
-        if case.candidate_rule and case.experiment_id and case.status in {"needs-data", "compiled", "validating"}:
-            experiment = self.experiment_store.get(case.experiment_id) if self.experiment_store else None
-            if experiment:
-                case.transition("validating", "validation")
-                self.persist(case, "validation-resumed")
-                return self.validate(case, experiment)
         case.transition("screening", "screening")
+        case.validation_gates = default_validation_gates()
         self.persist(case, "screening-started")
         screening = screen_hypothesis_case(case)
         case.classification = str(screening.get("classification") or case.classification)
@@ -171,7 +167,7 @@ class HypothesisDevelopmentService:
         candidate_result = self.compile_candidate(case)
         case.retry["compilationContext"] = dict(candidate_result.get("contextSummary") or {})
         candidates = [dict(item) for item in candidate_result.get("candidates") or [] if isinstance(item, dict)]
-        candidate = next((item for item in candidates if isinstance(item.get("proposedRule"), dict)), None)
+        candidate = next((item for item in candidates if isinstance(item.get("proposedRule"), dict) and not compilation_blockers([item])), None)
         if not candidate or compilation_blockers([candidate]):
             blockers = compilation_blockers(candidates)
             needs_data = sorted({item["requirement"] for item in blockers})
@@ -184,6 +180,7 @@ class HypothesisDevelopmentService:
             return {"status": case.status, "case": case.to_dict(), "candidateResult": self.compact_candidate_result(candidate_result)}
         case.retry["blockers"] = []
         case.retry["requirements"] = []
+        case.validation_requirements = validation_requirements(candidate)
         prepared_rule = self.governed_candidate_rule(case, candidate.get("proposedRule") or {})
         candidate["proposedRule"] = prepared_rule
         case.candidate_id = str(candidate.get("id") or "")
@@ -201,11 +198,13 @@ class HypothesisDevelopmentService:
             validation_gate("decision-impact", "판단 영향", "passed", str(case.decision_impact.get("influence") or "explanation-only"), False, case.decision_impact),
         ])
         if rule_conflict:
+            case.compilation_draft["rejectedReason"] = rule_conflict
             case.transition("needs-revision", "compilation", rule_conflict)
             self.persist(case, "candidate-duplicate-blocked", rule_conflict)
             return {"status": case.status, "case": case.to_dict(), "violations": [rule_conflict]}
         structural = self.validate_rule_structure(prepared_rule)
         if structural:
+            case.compilation_draft["rejectedReason"] = " | ".join(structural[:8])
             case.update_gates([
                 validation_gate("structure", "가설 구조", "blocked", " | ".join(structural[:8]), True)
             ])
@@ -217,7 +216,7 @@ class HypothesisDevelopmentService:
         experiment = self.create_experiment(case, candidate)
         case.experiment_id = experiment.experiment_id
         case.transition("validating", "validation")
-        self.persist(case, "validation-started")
+        self.persist(case, "validation-resumed" if candidate_result.get("reused") else "validation-started")
         return self.validate(case, experiment)
 
     def process_pending(self, limit: int = 5) -> Dict[str, object]:
@@ -298,18 +297,32 @@ class HypothesisDevelopmentService:
         }
 
     def compile_candidate(self, case: HypothesisDevelopmentCase) -> Dict[str, object]:
+        if case.compilation_draft and self.ontology_repository:
+            rulebox = self.ontology_repository.rulebox_snapshot()
+            reused = reusable_compilation(case, rulebox, self.world_context(case))
+            if reused:
+                self.persist(case, "compilation-reused")
+                return reused
         if not self.rule_candidate_service or not hasattr(self.rule_candidate_service, "propose_hypothesis"):
             return {"status": "disabled", "reason": "가설 규칙 후보 서비스가 구성되지 않았습니다.", "candidates": []}
+        case.retry.pop("compilationContext", None)
+        case.candidate_rule = {}
+        case.candidate_id = ""
+        case.experiment_id = ""
+        case.validation_requirements = []
         def record_input(summary):
             case.retry["compilationContext"] = dict(summary)
             self.persist(case, "compilation-input-captured")
 
-        return self.rule_candidate_service.propose_hypothesis(
+        result = self.rule_candidate_service.propose_hypothesis(
             case.to_dict(),
             account_id=case.account_id,
             tenant_id=str(self.settings.get("ontologyTenantId") or self.settings.get("tenantId") or ""),
             context_observer=record_input,
         )
+        capture_compilation(case, result, self.world_context(case))
+        self.persist(case, "compilation-candidate-captured")
+        return result
 
     def governed_candidate_rule(self, case: HypothesisDevelopmentCase, rule: Dict[str, object]) -> Dict[str, object]:
         prepared = dict(rule or {})
@@ -334,14 +347,15 @@ class HypothesisDevelopmentService:
             "nextDataRequirements": list(case.required_evidence_types or []),
             "invalidationMode": "typedb-rule-not-materialized-or-condition-invalidated",
         }
+        predictive = GraphInferenceRule.from_dict(prepared).resolved_claim_contract.is_predictive
         derivations = []
         for raw in prepared.get("derivations") or []:
             item = dict(raw) if isinstance(raw, dict) else {}
             item["evidence_role"] = str(item.get("evidence_role") or item.get("evidenceRole") or item.get("polarity") or "context")
             effect = str(item.get("decision_effect") or item.get("decisionEffect") or "defer").lower()
             item["decision_effect"] = effect if effect in {"defer", "constrain"} else "defer"
-            item["candidate_action"] = "HOLD"
-            item["candidate_action_label"] = str(item.get("candidate_action_label") or item.get("candidateActionLabel") or "관찰 유지")
+            item["candidate_action"] = "HOLD" if predictive else ""
+            item["candidate_action_label"] = str(item.get("candidate_action_label") or item.get("candidateActionLabel") or "관찰 유지") if predictive else ""
             derivations.append(item)
         prepared["derivations"] = derivations
         return GraphInferenceRule.from_dict(prepared).to_dict()
@@ -368,7 +382,11 @@ class HypothesisDevelopmentService:
         return "기존 운영 RuleBox의 rule_id와 충돌합니다: " + proposed_id if proposed_id in existing_ids else ""
 
     def create_experiment(self, case: HypothesisDevelopmentCase, candidate: Dict[str, object]) -> OntologyExperiment:
-        experiment_id = "ontology-exp-hypothesis-" + case.fingerprint[:16]
+        experiment_id = "ontology-exp-hypothesis-" + compilation_fingerprint({
+            "caseId": case.case_id, "candidateRule": candidate.get("proposedRule"),
+            "compilationFingerprint": case.compilation_draft.get("contentFingerprint"),
+            "world": self.world_context(case),
+        })[:24]
         existing = self.experiment_store.get(experiment_id) if self.experiment_store else None
         if existing:
             return existing
@@ -398,6 +416,8 @@ class HypothesisDevelopmentService:
                 "contract": "automatic-hypothesis-validation-v1",
                 "gates": [item.get("id") for item in case.validation_gates],
                 "operationalDeploymentRequiresApproval": True,
+                "compilationFingerprint": case.compilation_draft.get("contentFingerprint"),
+                "validationRequirements": case.validation_requirements,
             },
         )
         if self.experiment_store:
@@ -417,6 +437,7 @@ class HypothesisDevelopmentService:
                 "rules": experiment.candidate_rules,
                 "symbols": experiment.symbols,
                 "worldId": world.get("worldId") or "",
+                "includeBaseline": False,
             }) if self.ontology_repository and hasattr(self.ontology_repository, "validate_rulebox_materialization") else {
                 "status": "unavailable",
                 "reason": "TypeDB 후보 검증 기능이 구성되지 않았습니다.",
@@ -425,26 +446,34 @@ class HypothesisDevelopmentService:
             preview = {"status": "error", "reason": "TypeDB 후보 검증 실패: " + str(error)[:500]}
         preview_status = str(preview.get("status") or "")
         matched_count = int(preview.get("matchedCount") or 0)
-        type_status = "passed" if preview_status == "ok" else ("needs-data" if preview_status in {"missing-abox", "incomplete-abox", "provisioning", "unavailable", "error", "typedb-error"} else "blocked")
-        replay_status = "passed" if preview_status == "ok" and matched_count > 0 else ("needs-data" if type_status == "needs-data" or (preview_status == "ok" and matched_count == 0) else "blocked")
+        type_status, replay_status = preview_states(
+            preview, [item.get("rule_id") for item in experiment.candidate_rules],
+            experiment.symbols, world.get("worldId") or "",
+        )
+        if preview_status == "ok" and type_status == "blocked":
+            preview["reason"] = "현재 계정·종목·후보 규칙의 읽기 전용 TypeDB 실행 증명이 불완전합니다."
         minimum_history = max(1, int(self.settings.get("hypothesisDevelopmentMinimumHistoricalSnapshots") or 3))
         history_status = "passed" if len(history) >= minimum_history else "needs-data"
-        holdout = [item for item in history if self.timestamp_after(self.snapshot_generated_at(item), case.created_at)]
+        authored_at = str(case.compilation_draft.get("capturedAt") or case.updated_at)
+        holdout = [item for item in history if self.timestamp_after(self.snapshot_generated_at(item), authored_at)]
         minimum_holdout = max(1, int(self.settings.get("hypothesisDevelopmentMinimumHoldoutSnapshots") or 1))
         holdout_status = "passed" if len(holdout) >= minimum_holdout else "needs-data"
         derivations = [dict(item) for item in case.candidate_rule.get("derivations") or [] if isinstance(item, dict)]
+        predictive = GraphInferenceRule.from_dict(case.candidate_rule).resolved_claim_contract.is_predictive
         policy_safe = bool(derivations) and all(
-            str(item.get("candidate_action") or "").upper() == "HOLD"
+            str(item.get("candidate_action") or "").upper() == ("HOLD" if predictive else "")
             and str(item.get("decision_effect") or "").lower() in {"defer", "constrain"}
             for item in derivations
         )
         policy_status = "passed" if policy_safe else "blocked"
         case.update_gates([
             validation_gate("typedb-preview", "TypeDB 후보 실행", type_status, str(preview.get("reason") or preview_status), True, self.compact_preview(preview)),
-            validation_gate("current-replay", "현재 ABox 재생", replay_status, "후보 규칙 일치 " + str(matched_count) + "건", True, {"matchedCount": matched_count}),
+            validation_gate("current-replay", "현재 ABox 재생", replay_status, ("조회 성공, 현재 후보 조건은 성립하지 않습니다." if type_status == "passed" and matched_count == 0 else "후보 규칙 일치 " + str(matched_count) + "건"), True, {"matchedCount": matched_count, "conditionState": "not-met" if type_status == "passed" and matched_count == 0 else "matched" if replay_status == "passed" else "unknown"}),
             validation_gate("historical-coverage", "과거 자료 범위", history_status, str(len(history)) + "개 스냅샷 중 최소 " + str(minimum_history) + "개 필요", True, {"snapshotCount": len(history), "minimumSnapshotCount": minimum_history}),
-            validation_gate("holdout-observation", "제안 후 관측", holdout_status, "가설 제안 뒤 생성된 " + str(len(holdout)) + "개 스냅샷 중 최소 " + str(minimum_holdout) + "개 필요", True, {"snapshotCount": len(holdout), "minimumSnapshotCount": minimum_holdout, "after": case.created_at}),
-            validation_gate("policy-safety", "정책 안전", policy_status, "후보 행동은 HOLD, 판단 효과는 defer/constrain으로 제한되며 운영 배포에는 승인이 필요합니다.", True, {"operationalDeploymentRequiresApproval": True, "candidateActions": [item.get("candidate_action") for item in derivations], "decisionEffects": [item.get("decision_effect") for item in derivations]}),
+            validation_gate("holdout-observation", "후보 작성 후 관측", holdout_status, "현재 후보 작성 뒤 생성된 " + str(len(holdout)) + "개 스냅샷 중 최소 " + str(minimum_holdout) + "개 필요. 독립 사건 결과 검증과는 별개입니다.", True, {"snapshotCount": len(holdout), "minimumSnapshotCount": minimum_holdout, "after": authored_at}),
+            validation_gate("policy-safety", "정책 안전", policy_status, "예측 후보만 HOLD로 제한하고 참고 후보는 투자 행동을 만들지 않습니다. 운영 배포에는 승인이 필요합니다.", True, {"operationalDeploymentRequiresApproval": True, "candidateActions": [item.get("candidate_action") for item in derivations], "decisionEffects": [item.get("decision_effect") for item in derivations]}),
+            validation_gate("causal-hypothesis", "원래 인과 가설의 검증 계약", "passed" if predictive else "blocked", "예측 가설 계약을 확인했습니다. 사후 결과 검증은 별도로 필요합니다." if predictive else "생성된 후보는 추가 확인용 관계이며 원래 인과 가설을 검증하는 예측 모델·결과 계약이 아닙니다. 참고 조회 성공을 가설 검증 성공으로 바꾸지 않습니다.", True, {"predictiveClaim": predictive, "claimType": GraphInferenceRule.from_dict(case.candidate_rule).resolved_claim_contract.claim_type}),
+            additional_validation_gate(case.validation_requirements, type_status, replay_status),
         ])
         summary = dict(case.validation_summary_payload)
         if summary.get("status") == "validated":
@@ -453,6 +482,13 @@ class HypothesisDevelopmentService:
             event_type = "validation-confirmed"
         elif summary.get("blockedCount"):
             case.transition("blocked", "validation", ", ".join(summary.get("blockedGateIds") or []))
+            case.retry["blockers"] = compilation_blockers([{"blockers": [
+                {"kind": "unsupported-capability" if item.get("id") == "causal-hypothesis" else "schema-mismatch",
+                 "requirement": str(item.get("detail") or item.get("label") or ""),
+                 "dependencyKey": str(item.get("id") or "")}
+                for item in case.validation_gates if item.get("id") in summary.get("blockedGateIds", [])
+            ]}])
+            case.retry["requirements"] = [item["requirement"] for item in case.retry["blockers"]]
             event_name = HYPOTHESIS_DEVELOPMENT_TRANSITIONED
             event_type = "validation-blocked"
         else:
@@ -466,7 +502,9 @@ class HypothesisDevelopmentService:
                     continue
                 kind = "observation-window"
                 if item.get("id") in {"typedb-preview", "current-replay"}:
-                    kind = "dependency-error" if preview_status in {"error", "typedb-error", "unavailable", "provisioning"} else "missing-observation"
+                    kind = "condition-not-met" if type_status == "passed" else ("dependency-error" if preview_status in {"error", "typedb-error", "unavailable", "provisioning"} else "missing-observation")
+                elif item.get("id") == "additional-validation":
+                    kind = "validation-review" if any(row.get("check") == "review" for row in case.validation_requirements) else ("condition-not-met" if type_status == "passed" else "dependency-error")
                 blockers.append({"kind": kind,
                                  "requirement": str(item.get("detail") or item.get("label") or ""),
                                  "dependencyKey": str(item.get("id") or "")})
@@ -615,7 +653,11 @@ class HypothesisDevelopmentService:
             rows = self.monitor_store.load_history(case.account_id, limit=12)
         except Exception:
             return []
-        return [item for item in rows if self.snapshot_has_symbol(item, case.symbol)]
+        history = [item for item in rows if isinstance(item, dict)
+                   and str(item.get("accountId") or item.get("account_id") or case.account_id) == case.account_id
+                   and self.snapshot_has_symbol(item, case.symbol)]
+        return sorted(history, key=lambda item: self.parse_timestamp(self.snapshot_generated_at(item))
+                      or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
     def retry_minutes(self) -> int:
         return max(15, min(24 * 60, int(self.settings.get("hypothesisDevelopmentUnchangedRetryMinutes") or 180)))
@@ -643,25 +685,23 @@ class HypothesisDevelopmentService:
         rows = list(history if history is not None else self.history_for(case))
         latest_state: Dict[str, object] = {}
         if rows:
-            latest = rows[0] if isinstance(rows[0], dict) else {}
+            latest = max((row for row in rows if isinstance(row, dict)),
+                         key=lambda row: self.parse_timestamp(self.snapshot_generated_at(row))
+                         or datetime.min.replace(tzinfo=timezone.utc), default={})
             target = str(case.symbol or "").upper()
-            for key in ["positions", "watchlist"]:
-                for item in latest.get(key) or []:
-                    if not isinstance(item, dict) or str(item.get("symbol") or "").upper() != target:
-                        continue
-                    latest_state = {
-                        name: item.get(name)
-                        for name in [
-                            "symbol", "market", "currentPrice", "changeRate", "volume",
-                            "volumeRatio", "tradeStrength", "bidAskImbalance",
-                            "foreignNetVolume", "institutionNetVolume", "individualNetVolume",
-                            "ma5", "ma20", "ma60", "ma20Slope", "ma60Slope",
-                            "profitLossRate", "quantity", "averagePrice",
-                        ]
-                        if name in item
-                    }
-                    break
-                if latest_state:
+            aliases = {
+                "symbol": "symbol", "market": "market", "currentPrice": "current_price",
+                "changeRate": "change_rate", "volume": "volume", "volumeRatio": "volume_ratio",
+                "tradeStrength": "trade_strength", "bidAskImbalance": "bid_ask_imbalance",
+                "foreignNetVolume": "foreign_net_volume", "institutionNetVolume": "institution_net_volume",
+                "individualNetVolume": "individual_net_volume", "ma5": "ma5", "ma20": "ma20", "ma60": "ma60",
+                "ma20Slope": "ma20_slope", "ma60Slope": "ma60_slope", "profitLossRate": "profit_loss_rate",
+                "quantity": "quantity", "averagePrice": "average_price",
+            }
+            for item in self.snapshot_symbol_items(latest):
+                if str(item.get("symbol") or "").upper() == target:
+                    latest_state = {name: item[name] if name in item else item[alias]
+                                    for name, alias in aliases.items() if name in item or alias in item}
                     break
         payload = {
             "caseFingerprint": case.fingerprint,
@@ -683,13 +723,27 @@ class HypothesisDevelopmentService:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def snapshot_has_symbol(snapshot: Dict[str, object], symbol: str) -> bool:
-        target = str(symbol or "").upper()
+    def snapshot_symbol_items(snapshot: Dict[str, object]) -> List[Dict[str, object]]:
+        # Persisted temporal projections are symbol-keyed maps; older API
+        # snapshots can be lists. Read both without altering stored facts.
+        result = []
         for key in ["positions", "watchlist"]:
-            for item in (snapshot or {}).get(key) or []:
-                if isinstance(item, dict) and str(item.get("symbol") or "").upper() == target:
-                    return True
-        return False
+            values = (snapshot or {}).get(key) or []
+            entries = values.items() if isinstance(values, dict) else (("", item) for item in values)
+            for symbol, item in entries:
+                if not isinstance(item, dict):
+                    continue
+                item_symbol = str(item.get("symbol") or symbol or "").upper()
+                if symbol and str(symbol).upper() != item_symbol:
+                    continue
+                if item_symbol:
+                    result.append({**item, "symbol": item_symbol})
+        return result
+
+    @classmethod
+    def snapshot_has_symbol(cls, snapshot: Dict[str, object], symbol: str) -> bool:
+        target = str(symbol or "").upper()
+        return any(item["symbol"] == target for item in cls.snapshot_symbol_items(snapshot))
 
     @staticmethod
     def snapshot_generated_at(snapshot: Dict[str, object]) -> str:
@@ -762,7 +816,8 @@ class HypothesisDevelopmentService:
                 "status", "reason", "reasonCode", "validationOnly",
                 "mutatedOperationalRuleBox", "wroteInferenceBox", "candidateRuleCount",
                 "matchedCount", "nativeTypeDbReasoningUsed", "typedbNativeFunctionReasoningUsed",
-                "targetSymbols", "worldId", "diff",
+                "typedbDirectTypeqlUsed", "nativeMatchResult", "candidateRuleIds",
+                "targetSymbols", "worldId", "baselineRequested", "diff",
             ]
             if key in (preview or {})
         }

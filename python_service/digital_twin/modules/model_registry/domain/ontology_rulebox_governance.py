@@ -7,7 +7,7 @@ from digital_twin.modules.reasoning.contracts import DECISION_EFFECTS
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, HOLDING_TARGET_ROLE, WATCHLIST_ALLOWED_ACTIONS, WATCHLIST_TARGET_ROLE, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 from digital_twin.modules.model_registry.domain.ontology_rule_knowledge import knowledge_basis_violations
 from digital_twin.modules.model_registry.domain.rule_claim_contract import rule_claim_contract_violations
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import compilation_blockers, rule_design_context
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import compilation_blockers, rule_design_context, validation_requirements
 
 
 RULEBOX_EVIDENCE_ROLES = frozenset({"risk", "support", "counter", "context", "blocking"})
@@ -354,8 +354,12 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
                 "rationale": "why this ontology relation is useful",
                 "expectedEffect": "how this changes AI opinions or alert quality",
                 "risk": "false positive or data risk",
-                "requiresData": ["existing ABox relation or missing data"],
-                "blockers": [{"kind": "missing-observation", "requirement": "specific missing fact", "dependencyKey": "exact observation or capability key"}],
+                "requiresData": [],
+                "blockers": [],
+                "validationRequirements": [
+                    {"check": "current-match", "requirement": "Verify all candidate predicates in the current scoped TypeDB ABox", "dependencyKey": "current-replay"},
+                    {"check": "review", "requirement": "Specific empirical or causal checks not proven by a current match", "dependencyKey": "outcome-validation"},
+                ],
                 "priority": 0,
                 "proposedRule": {
                     "rule_id": "graph.example.context.v1",
@@ -378,11 +382,14 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "제약:",
         "- 매수/매도 지시를 만들지 말고 관계 후보만 제안한다.",
         "- proposedRule.enabled는 반드시 false다.",
-        "- 현재 ABox에서 실제 부재가 확인된 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
+        "- blockers/requiresData에는 후보 명세 자체를 작성할 수 없는 원인만 적는다. 작성 가능한 후보는 proposedRule을 반환하고 blockers와 requiresData는 빈 배열로 둔다.",
+        "- validationRequirements는 작성 후 검증 조건이다. 현재 TypeDB 실행 확인은 typedb-execution, 모든 후보 조건의 현재 일치 확인은 current-match, 독립 사건/미래 관측/연구 교차검증은 review로 구분한다.",
+        "- 미래 관측이나 현재 후보 일치 여부가 미확인이라는 이유만으로 작성 가능한 proposedRule을 비우지 않는다. validationRequirements에 기록하고 검증 단계로 넘긴다.",
+        "- review 검증은 후보가 일치하거나 가격 스냅샷이 많다는 이유로 통과되지 않는다. AI는 검증 결과나 통과 여부를 작성하지 않는다.",
         "- ruleDesign.observationState가 not-queried이면 현재 ABox를 조회하지 않은 명세 작성 단계다. 빈 inferenceBox.relations를 결측 증거로 사용하지 않는다.",
         "- 명세와 모델 계약이 확인되면 현재 사실의 존재를 단정하지 않고 후보를 작성한다. 현재 일치 여부는 후속 TypeDB preview가 검증한다.",
         "- 현재 사실 확인 없이는 작성할 수 없다면 unverified-observation으로 표시한다. 이를 missing-observation이나 관측 기간 부족으로 단정하지 않는다.",
-        "- 부족 항목마다 blockers에 원인을 구분한다. 실제 관측 부재는 missing-observation, 미래 관측 대기는 observation-window, 규칙 명세 불일치는 schema-mismatch, 미구현 모델/공급자는 unsupported-capability다.",
+        "- 작성 차단 항목마다 blockers에 원인을 구분한다. 규칙 명세 불일치는 schema-mismatch, 미구현 모델/공급자는 unsupported-capability다. 단순 후속 검증 요구를 blockers로 옮기지 않는다.",
         "- ruleDesign의 필드 명세와 실제 조건/파생 예시를 사용한다. 명세에 있는 필드를 알 수 없다는 이유로 데이터 수집을 요구하지 않는다.",
         "- evidence ID 보존은 가설의 출처 계보로 처리하며 PRESERVES_RULE_LINEAGE 관측이 있어야 규칙을 작성할 수 있다고 요구하지 않는다.",
         "- 새 예측 모델 등록이 필요하면 unsupported-capability로 명시한다. 기존 모델을 다른 인과 가설의 증거로 바꾸지 않는다.",
@@ -394,7 +401,8 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- hypothesisProposal이 있으면 그 주장 하나만 실행 가능한 후보 규칙으로 변환하고 다른 가설을 추가하지 않는다.",
         "- hypothesisProposal의 evidence ID는 출처 계보이며 조건 field나 relation_type으로 직접 사용하지 않는다.",
         "- derivations에는 decision_stage, evidence_role, decision_effect을 포함한다.",
-        "- 자동 가설 승격 후보의 candidate_action은 HOLD로 제한하고 decision_effect은 defer 또는 constrain만 사용한다.",
+        "- 예측 가설 후보만 candidate_action=HOLD, decision_effect=defer 또는 constrain으로 제한한다. 참고용 관계에는 candidate_action을 넣지 않는다.",
+        "- knowledge_basis, claim_contract, model_input_contract, hypothesis_family_key, hypothesis_lifecycle을 제공 예시에 맞춰 명시한다. 참고용 관계는 원래 인과 가설의 검증 계약을 대신할 수 없다.",
         "- 중복 rule_id를 만들지 않는다.",
         "- 응답은 설명 없이 JSON 하나만 반환한다.",
         "JSON 계약:",
@@ -545,7 +553,9 @@ def normalize_rule_change_candidate(
         "action": str(candidate.get("action") or ("append-disabled-rule" if normalized_rule else "data-required")),
         "requiresData": [str(item) for item in (candidate.get("requiresData") or []) if str(item or "").strip()],
         "blockers": compilation_blockers([candidate]),
+        "validationRequirements": validation_requirements(candidate),
         "proposedRule": normalized_rule,
+        "proposedRuleDraft": proposed if proposed and normalized_rule is None else None,
         "validationWarnings": dedupe_strings(warnings),
     }
     if not payload["id"].startswith(("candidate.", "governance.", "ai-candidate:")):

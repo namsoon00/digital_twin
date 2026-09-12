@@ -192,6 +192,8 @@ class HypothesisDevelopmentCase:
     classification: str = "causal-mechanism"
     candidate_id: str = ""
     candidate_rule: Dict[str, object] = field(default_factory=dict)
+    compilation_draft: Dict[str, object] = field(default_factory=dict)
+    validation_requirements: List[Dict[str, object]] = field(default_factory=list)
     experiment_id: str = ""
     validation_gates: List[Dict[str, object]] = field(default_factory=default_validation_gates)
     validation_summary_payload: Dict[str, object] = field(default_factory=dict)
@@ -219,6 +221,8 @@ class HypothesisDevelopmentCase:
             "inference_generation_ids": "inferenceGenerationIds",
             "candidate_id": "candidateId",
             "candidate_rule": "candidateRule",
+            "compilation_draft": "compilationDraft",
+            "validation_requirements": "validationRequirements",
             "experiment_id": "experimentId",
             "validation_gates": "validationGates",
             "validation_summary_payload": "validationSummary",
@@ -260,6 +264,8 @@ class HypothesisDevelopmentCase:
             classification=clean_text(payload.get("classification") or "causal-mechanism", 80),
             candidate_id=clean_text(payload.get("candidateId") or payload.get("candidate_id"), 191),
             candidate_rule=dict(payload.get("candidateRule") or payload.get("candidate_rule") or {}),
+            compilation_draft=dict(payload.get("compilationDraft") or payload.get("compilation_draft") or {}),
+            validation_requirements=[dict(item) for item in payload.get("validationRequirements") or payload.get("validation_requirements") or [] if isinstance(item, dict)],
             experiment_id=clean_text(payload.get("experimentId") or payload.get("experiment_id"), 191),
             validation_gates=gates or default_validation_gates(),
             validation_summary_payload=dict(payload.get("validationSummary") or payload.get("validation_summary") or {}),

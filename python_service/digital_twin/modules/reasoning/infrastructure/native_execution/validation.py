@@ -109,22 +109,28 @@ def validate_rulebox_materialization(
             "aboxMetadata": abox_metadata,
             "typedbQueryMetrics": _store.query_metrics_snapshot(),
         }
-    try:
-        baseline_inferencebox = _store.inferencebox_snapshot_from_typedb(
-            target_symbols,
-            80,
-            world_id=world_id,
-        )
-    except Exception as error:  # noqa: BLE001 - baseline diff is diagnostic only.
-        baseline_inferencebox = {
-            "status": "error",
-            "graphStore": "typedb",
-            "source": "typedbInferenceBox",
-            "reasonCode": _bindings.typedb_error_code(error),
-            "reason": "TypeDB InferenceBox 기준선 조회 실패: " + str(error)[:180],
-            "relationCount": 0,
-            "traceCount": 0,
-        }
+    baseline_requested = payload.get("includeBaseline") is not False or typedb_bool(payload.get("policyOnly"))
+    if not baseline_requested:
+        # Candidate condition checks do not need a full historic InferenceBox
+        # comparison. Keep execution/ABox checks mandatory and absence explicit.
+        baseline_inferencebox = {"status": "not-requested", "relationCount": None, "traceCount": None}
+    else:
+        try:
+            baseline_inferencebox = _store.inferencebox_snapshot_from_typedb(
+                target_symbols,
+                80,
+                world_id=world_id,
+            )
+        except Exception as error:  # noqa: BLE001 - baseline diff is diagnostic only.
+            baseline_inferencebox = {
+                "status": "error",
+                "graphStore": "typedb",
+                "source": "typedbInferenceBox",
+                "reasonCode": _bindings.typedb_error_code(error),
+                "reason": "TypeDB InferenceBox 기준선 조회 실패: " + str(error)[:180],
+                "relationCount": 0,
+                "traceCount": 0,
+            }
     if typedb_bool(payload.get("policyOnly")):
         # Hypothesis lifecycle and outcome contracts are read by the
         # lifecycle audit after native relation materialization.  Their
@@ -163,6 +169,12 @@ def validate_rulebox_materialization(
         )
         native_query_used = str(native_match_result.get("status") or "") == "ok"
         matched_count = int(number_or_none(native_match_result.get("matchedCount")) or 0)
+        diff = _bindings.materialization_preview_diff_payload(
+            baseline_inferencebox, matched_count, len(enabled_rules), native_query_used,
+        )
+        if not baseline_requested:
+            diff.update({"status": "not-requested", "baselineRelationCount": None,
+                         "baselineTraceCount": None, "matchedMinusBaselineRelations": None})
         return {
             "configured": True,
             "status": "ok" if native_query_used else "error",
@@ -184,12 +196,8 @@ def validate_rulebox_materialization(
             "worldId": world_id,
             "matchedCount": matched_count,
             "baselineInferenceBox": baseline_inferencebox,
-            "diff": _bindings.materialization_preview_diff_payload(
-                baseline_inferencebox,
-                matched_count,
-                len(enabled_rules),
-                native_query_used,
-            ),
+            "baselineRequested": baseline_requested,
+            "diff": diff,
             "nativeTypeDbReasoningUsed": native_query_used,
             "typedbDirectTypeqlUsed": native_query_used,
             "nativeMatchResult": {

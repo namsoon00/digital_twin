@@ -5,8 +5,8 @@
       "reason": "Expose supporting/counter evidence and known data gaps; distinguish lineage-linked records from resolved originals without changing decision eligibility. Covered by test_subject_reasoning_lineage."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
-      "hash": "722f6c0e0f2eab5086f6ccb14a97e7e337c980c57b476cf0d2ceb0112c5afa88",
-      "reason": "Distinguish unqueried ABox from missing facts, retrieve bounded relevant model contracts and receipts, and compact JSON without weakening governance; test_hypothesis_closed_loop."
+      "hash": "6a613c8b446bb12734b31191917c95696e6970e658c5910951cbbc11ccb9de0c",
+      "reason": "Separate authoring blockers from post-compilation TypeDB and empirical validation requirements without declaring them passed; test_hypothesis_candidate_validation."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::compact_candidate_context": {
       "hash": "21bb67833fff6e29653f21b74104803f33ea9dbc4418f937065cb8bb4130015f",
@@ -17,12 +17,12 @@
       "reason": "Do not persist AI assertions of missing data as verified when the authoring phase never queried ABox; test_hypothesis_closed_loop."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::normalize_rule_change_candidate": {
-      "hash": "3f84c29f1de6d96ff808a7528c102919ca6321ed32100deb8f040b633a1a02fd",
-      "reason": "Separate observation gaps from unsupported capabilities and unknown legacy requirements; test_hypothesis_closed_loop."
+      "hash": "c6d732682f7b40ff78fbeee6ce069c32a6687887d0ee73094a1c861d6cd66657",
+      "reason": "Preserve post-authoring requirements and rejected draft syntax separately from executable candidates and legacy blockers; test_hypothesis_candidate_validation."
     },
     "modules/model_registry/domain/hypothesis_development.py::HypothesisDevelopmentCase": {
-      "hash": "80c2f300e983ca4f5924bdfda6112fb3a2762afdd84a35cd115a8144518dbb4e",
-      "reason": "Persist retry ownership and timestamps; test_hypothesis_closed_loop."
+      "hash": "432bf0e27b09b600ca11719303eac700243afc8dc99caa1664a09f4ab004114c",
+      "reason": "Persist exact disabled compilation receipts and post-authoring validation requirements for resumable same-candidate validation; test_hypothesis_candidate_validation."
     },
     "modules/decisions/domain/investment_brain.py::ObservedOutcome": {
       "hash": "efb48388571e3758f0336539efdc7ae945e28dc70c78893581a56909012f25b1",

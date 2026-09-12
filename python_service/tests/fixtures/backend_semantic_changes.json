@@ -1,0 +1,8 @@
+{
+  "TypeDBOntologyGraphRepository.validate_rulebox_materialization": {
+    "baselineHash": "7b4fd394e021d7314caa1d3cc16c70d070c21b374394eaccf236a0f89a4ba7b4",
+    "bodyHash": "27a622416cbf4676cf5fe0aa013a82a6eed0433cef07a02a64fbade62cda22e2",
+    "reason": "Make historic InferenceBox comparison explicitly optional for candidate condition checks; preserve ABox validation, exact native execution, default comparison and policy-only behavior.",
+    "regressionTest": "test_hypothesis_candidate_validation.HypothesisCandidateValidationTests.test_candidate_preview_can_skip_only_diagnostic_baseline_not_abox_or_execution"
+  }
+}

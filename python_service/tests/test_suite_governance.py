@@ -149,7 +149,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Source/lineage resolution, counter-evidence and missing-data counts,
         # trailing/forward EPS periods and lightweight authored notification
         # summaries add four independent read-side presentation regressions.
-        self.assertLessEqual(total, 1404)
+        # Saved hypothesis candidates, scoped native preview and post-authoring
+        # requirements plus persisted-history formats add fifteen regressions.
+        self.assertLessEqual(total, 1419)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

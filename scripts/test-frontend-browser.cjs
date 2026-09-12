@@ -49,6 +49,15 @@ async function routeTo(page, tab, detail, key, pushedDetail = false) {
 async function caseInteractions(page, label) {
   await routeTo(page, "feed", "investment-case", "fixture-case");
   await page.waitForSelector('[data-investment-case-tab="history"]');
+  await page.locator('[role="tab"][data-investment-case-tab="summary"]').click();
+  await page.waitForSelector('.oa-insight-brief');
+  assert.match(await page.locator('.oa-insight-brief').textContent(), /왜 중요한가.*주의할 점.*다음에 확인할 것/s);
+  assert.match(await page.locator('.oa-insight-brief').textContent(), /다음 실적은 아직 발표되지 않았습니다/);
+  assert.equal(await page.locator('.oa-case-detail-content .oa-case-lineage-chain').count(), 0, label + ' technical lineage must not precede the summary');
+  await page.screenshot({path: path.join(screenshots, label + '-insight-summary.png')});
+  await page.locator('[data-investment-case-tab="history"]').click();
+  await page.waitForSelector('.oa-case-history-row');
+  await settle(page);
   const review = page.locator('.oa-decision-review');
   await review.waitFor();
   await review.scrollIntoViewIfNeeded();
@@ -99,6 +108,38 @@ async function caseInteractions(page, label) {
   assert.equal(new URL(page.url()).searchParams.get("detailKey"), null);
   delays.delete("/api/decisions/fixture-legacy");
   results.push({test: label + " case tabs / delayed close", before, after});
+}
+
+async function insightFirstScreens(page, label) {
+  await routeTo(page, "modeling");
+  const first = page.locator('.oa-case-row').first();
+  await first.waitFor();
+  await page.evaluate(() => { window.scrollTo(0, 0); document.querySelector('.workspace-main').scrollTop = 0; });
+  await settle(page);
+  const bounds = await first.evaluate(node => ({top: node.getBoundingClientRect().top, viewport: innerHeight, width: node.clientWidth, content: node.scrollWidth}));
+  assert(bounds.top < bounds.viewport - 140, label + ' first opinion is below the first viewport: ' + JSON.stringify(bounds));
+  assert(bounds.content <= bounds.width + 1, label + ' opinion text overflows');
+  await page.screenshot({path: path.join(screenshots, label + '-opinions-first.png')});
+  await page.locator('.oa-decision-filter-sheet > summary').click();
+  assert(await page.locator('[data-console-decision-filter="scope"]').isVisible(), label + ' scope filter is unreachable');
+  await page.locator('.oa-decision-filter-sheet > summary').click();
+  await first.click();
+  await page.locator('[role="tab"][data-investment-case-tab="summary"]').click();
+  await page.locator('.oa-insight-brief').waitFor();
+  if (page.viewportSize().width >= 1200) assert(await page.locator('.oa-case-siblings').isVisible(), label + ' desktop record navigation missing');
+  const quickLink = await page.locator('.oa-insight-brief [data-investment-case-tab="evidence"]').boundingBox();
+  assert(quickLink.height >= 44, label + ' quick link touch target is too small');
+  await page.screenshot({path: path.join(screenshots, label + '-brief.png')});
+  await page.locator('.oa-insight-brief [data-investment-case-tab="evidence"]').click();
+  await page.waitForSelector('[data-investment-case-panel-tab="evidence"]');
+  await page.locator('button[data-work-detail-close]').first().click();
+  await page.waitForSelector('[data-work-detail-dialog]', {state: 'detached'});
+  await page.locator('[data-action="command-palette"][data-command-palette-mode="search"]').first().click();
+  await page.locator('[data-command-palette-key="calendar"][data-command-palette-result="tab"] strong').click();
+  await page.waitForSelector('.workspace-main[data-scroll-key="calendar"]');
+  assert.equal(await page.locator('[data-command-palette-dialog]').count(), 0, label + ' palette did not navigate');
+  await page.screenshot({path: path.join(screenshots, label + '-calendar-first.png')});
+  results.push({test: label + ' insight-first layout and real palette navigation', ...bounds});
 }
 
 async function hypothesisScheduling(page, label) {
@@ -217,9 +258,30 @@ async function run() {
       });
       await page.waitForSelector('.workspace-main[data-scroll-key="feed"]');
       await instrumentChart(page, mode);
+      await insightFirstScreens(page, mode + "-desktop");
       await caseInteractions(page, mode + "-desktop");
       await hypothesisScheduling(page, mode + "-desktop");
       if (mode === "modules") {
+        const accountScope = await page.evaluate(async () => {
+          const { decisionsState } = await import('/modules/state/decisions.mjs');
+          const { marketState } = await import('/modules/state/market.mjs');
+          const { selectConsoleDecisionRows } = await import('/modules/decisions/selectors.mjs');
+          const { selectConsoleInstrumentRows } = await import('/modules/market/selectors.mjs');
+          const priorFlow = decisionsState.investmentFlow, priorMarket = marketState.marketReadModel;
+          try {
+            decisionsState.investmentFlow = {items: [
+              {caseId: 'a-case', subjectCaseId: 'a-subject', detailType: 'subject-decision-case', accountId: 'a', symbol: 'SAME', updatedAt: new Date().toISOString(), decision: {action: 'HOLD'}},
+              {caseId: 'b-case', accountId: 'b', symbol: 'SAME', updatedAt: new Date().toISOString(), decision: {action: 'SELL'}}
+            ]};
+            marketState.marketReadModel = {items: []};
+            const snapshot = {toss: {accountId: 'a', positions: [{symbol: 'SAME', source: 'toss', currentPrice: 1}], watchlist: []}, investmentAnalysis: {contract: 'fixture', actionQueue: []}};
+            return {roles: selectConsoleDecisionRows(snapshot).map(row => ({accountId: row.accountId, source: row.source})), link: selectConsoleInstrumentRows(snapshot)[0].decision};
+          } finally { decisionsState.investmentFlow = priorFlow; marketState.marketReadModel = priorMarket; }
+        });
+        assert.deepEqual(accountScope.roles.sort((a, b) => a.accountId.localeCompare(b.accountId)), [{accountId: 'a', source: 'holding'}, {accountId: 'b', source: 'unknown'}]);
+        assert.equal(accountScope.link.consoleKey, 'a-subject');
+        assert.equal(accountScope.link.consoleDetailType, 'investment-case');
+        results.push({test: 'account-scoped membership and canonical market decision links'});
         const result = await page.evaluate(async () => {
           const { openWorkDetailLayer, closeWorkDetailLayer } = await import("/modules/navigation/detail.mjs");
           const { notificationsState } = await import("/modules/state/notifications.mjs");
@@ -244,6 +306,7 @@ async function run() {
       await page.waitForSelector('[data-work-detail="market-instrument"]');
       await page.screenshot({path: path.join(screenshots, mode + "-desktop-dark.png")});
       await instrumentChart(page, mode + "-dark");
+      await insightFirstScreens(page, mode + "-desktop-dark");
       assert.deepEqual(errors, [], mode + " dark theme");
       await context.close();
       console.log(mode + ": nine workspaces, rapid navigation, auth query, chart pixels and detail cleanup passed");
@@ -258,6 +321,8 @@ async function run() {
     delays.set("/api/notification-jobs", 1000);
     await page.goto(origin + "/?" + (mode === "modules" ? "modules=1&" : "") + "tab=notifications&token=fixture-readonly");
     await page.waitForSelector('[data-console-row-key="job-001"]');
+    assert.match(await page.locator('[data-console-row-key="job-001"] .oa-alert-reason').textContent(), /본문 미리보기.*Synthetic verified evidence/s);
+    assert.match(await page.locator('[data-console-row-key="job-002"] .oa-alert-reason').textContent(), /이유.*수요 전망/s);
     await page.locator('[data-console-row-key="job-001"]').evaluate(node => { window.__retainedFixtureRow = node; });
     await page.evaluate(() => {
       const scroller = document.querySelector(".workspace-main");
@@ -304,7 +369,15 @@ async function run() {
     await page.evaluate(() => { window.scrollTo(0, 0); document.querySelector(".workspace-main").scrollTop = 0; });
     await page.screenshot({ path: path.join(screenshots, mode + "-mobile-inbox-top.png") });
     await caseInteractions(page, mode + "-mobile");
+    await insightFirstScreens(page, mode + "-mobile");
     await hypothesisScheduling(page, mode + "-mobile");
+    await context.setExtraHTTPHeaders({"x-fixture-theme": "dark"});
+    for (const width of [360, 430]) {
+      await page.setViewportSize({width, height: 844});
+      await page.goto(origin + "/?" + (mode === "modules" ? "modules=1&" : "") + "tab=modeling&token=fixture-readonly");
+      await page.waitForSelector('html[data-theme="dark"] .oa-case-row');
+      await insightFirstScreens(page, mode + "-mobile-dark-" + width);
+    }
     assert.deepEqual(errors, [], "Mobile append and stale response");
     await context.close();
     console.log(mode + " mobile: measured append/tab/case scroll, retained row identity, append deduplication and delayed close passed");

@@ -117,6 +117,7 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertEqual(31.13, payload["marketMetrics"]["currentPER"])
         self.assertEqual(19.25, payload["marketMetrics"]["forwardPER"])
         self.assertEqual(1110.0, payload["marketMetrics"]["trailingEPS"])
+        self.assertEqual("ttm", payload["marketMetrics"]["trailingEPSPeriod"])
         self.assertGreater(payload["valuation"]["fairValue"]["base"], 0)
         self.assertTrue(payload["valuation"]["multipleBand"]["evidenceBacked"])
         self.assertEqual(4, payload["valuation"]["multipleBand"]["sampleCount"])
@@ -186,6 +187,20 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self._assert_query_exposes_market_multiples_and_auditable_fair_value_without_action()
         self._assert_negative_eps_is_explained_as_non_meaningful_per()
         self._assert_query_does_not_expose_a_stale_positive_per_for_a_loss_company()
+
+    def test_trailing_eps_never_inherits_forecast_period(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        original = InstrumentValuationQueryService(
+            monitor_store=StubMonitorStore({"default": self.snapshot_state()}), settings={},
+        )
+        forecast = SimpleNamespace(
+            rows=[{"epsScenario": {"period": "forward-12m"}}],
+            status="reference-only", model_service_version="test",
+        )
+        with patch.object(original.valuation_service, "evaluate", return_value=forecast):
+            payload = original.query(InstrumentValuationQuery("035720", "default"))
+        self.assertEqual("ttm", payload["marketMetrics"]["trailingEPSPeriod"])
 
 
 if __name__ == "__main__":

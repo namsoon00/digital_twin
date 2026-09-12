@@ -251,6 +251,30 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         self.assertNotIn("'$.context'", projection)
         self.assertNotIn("'$.context.ontologyRelationContext'", projection)
 
+    def test_lightweight_list_exposes_authored_summary_without_rebuilding_decision(self):
+        from digital_twin.infrastructure.web.adapters.notification_presentation import notification_job_list_payload
+
+        fields = {
+            "customerInvestmentDocument.headline": "수요 전망 변경",
+            "customerInvestmentDocument.lead": "매출 가정의 재검토가 필요합니다.",
+        }
+        job = MySQLNotificationJobStore.list_job_from_row({
+            "job_id": "summary-job", "message_type": "investmentInsight",
+            "symbol": "TEST", "text": "원문은 상세에 유지합니다.",
+            "presentation_json": json.dumps(fields),
+        })
+        job.context["deliveryReasons"] = ["22:00 quiet hours"]
+        with patch.object(NotificationRenderingService, "apply_investment_presentation_contract",
+                          side_effect=AssertionError("list must not reconstruct a decision")):
+            payload = notification_job_list_payload(job, 2, {"_skipOperationalSchemaBootstrap": "1"})
+        self.assertEqual({
+            "headline": "수요 전망 변경", "reason": "매출 가정의 재검토가 필요합니다.",
+        }, payload["investmentSummary"])
+        self.assertNotIn("customerInvestmentDocument", payload)
+        projection = notification_list_presentation_join()
+        self.assertIn("$.context.customerInvestmentDocument.lead", projection)
+        self.assertNotIn("'$.context.customerInvestmentDocument'", projection)
+
     def test_watchlist_zero_return_is_not_shown(self):
         context = {"ontologyRelationContext": {"facts": {"quantity": 0, "isHolding": False, "isWatchlist": True, "profitLossRate": 0, "currentPrice": 100}}}
         self.assertFalse(any("수익률" in line for line in _flow_rows(context, 5)))

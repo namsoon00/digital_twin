@@ -7,17 +7,16 @@ import { editorWorkDetailPayload, renderWorkDetailButton } from "../navigation/d
 import { mobileInfiniteScrollEnabled, renderMobileInfiniteScrollFooter } from "../navigation/infinite-list.mjs";
 import { renderNotificationDetailMetric } from "../notifications/reasoning.mjs";
 import { appDateTimeParts } from "../settings/preferences.mjs";
-import { consoleMetricTargetAttributes } from "../shared/console.mjs";
+import { consoleMetricTargetAttributes, renderConsoleManagedPage } from "../shared/console.mjs";
 import { formatClock, latestChangedFirst, renderRecordChangedAt } from "../shared/format.mjs";
 import { escapeHtml, uniqueTextItems } from "../shared/text.mjs";
 import { cardFormatAttrs, cardTypeAttrs, renderEmptyState } from "../shell/layout.mjs";
-import { renderManagedPage } from "../shell/pages.mjs";
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";
 import { calendarState } from "../state/calendar.mjs";
 import { settingsState } from "../state/settings.mjs";
 
 function renderInvestmentCalendarPage(snapshot) {
-  return renderManagedPage("calendar", snapshot, [
+  return renderConsoleManagedPage("calendar", [], [
     '<section class="admin-grid investment-calendar-view">',
     renderInvestmentCalendarSummaryPanel(),
     '<div class="investment-calendar-primary-grid">',
@@ -264,13 +263,13 @@ function renderInvestmentCalendarSummaryPanel() {
   return [
     '<article class="panel investment-calendar-summary-panel"' + cardTypeAttrs("source-card", "hold") + '>',
     '<div class="panel-head">',
-    '<div><p class="label">INVESTMENT CALENDAR</p><h2>예정 이벤트와 알림 상태</h2><span>투자 판단은 캘린더 리마인더가 아니라 온톨로지 인사이트에서 따로 생성됩니다.</span></div>',
+    '<div><h2>투자 캘린더</h2></div>',
     '<div class="toolbar investment-calendar-summary-actions">',
-    '<button class="text-button primary" type="button" data-action="run-investment-calendar-reminders"' + (calendarState.investmentCalendarRunning ? ' disabled' : '') + '>' + (calendarState.investmentCalendarRunning ? "확인 중" : "리마인더 확인") + '</button>',
     renderCalendarEntryButton("이벤트 등록", "text-button primary"),
     '<details class="investment-calendar-tool-menu">',
     '<summary class="text-button">일정 도구</summary>',
     '<div class="investment-calendar-tool-menu-list">',
+    '<button class="text-button" type="button" data-action="run-investment-calendar-reminders"' + (calendarState.investmentCalendarRunning ? ' disabled' : '') + '>' + (calendarState.investmentCalendarRunning ? "확인 중" : "리마인더 확인") + '</button>',
     '<button class="text-button" type="button" data-action="refresh-investment-calendar"' + (calendarState.investmentCalendarLoading ? ' disabled' : '') + '>' + (calendarState.investmentCalendarLoading ? "조회 중" : "새로고침") + '</button>',
     '<button class="text-button" type="button" data-action="sync-official-investment-calendar"' + (calendarState.investmentCalendarSyncing ? ' disabled' : '') + '>' + (calendarState.investmentCalendarSyncing ? "동기화 중" : "공식일정 동기화") + '</button>',
     '<button class="text-button" type="button" data-action="discover-investment-calendar"' + (calendarState.investmentCalendarDiscovering ? ' disabled' : '') + '>' + (calendarState.investmentCalendarDiscovering ? "탐색 중" : "일정 탐색") + '</button>',
@@ -280,12 +279,12 @@ function renderInvestmentCalendarSummaryPanel() {
     '</div>',
     '</div>',
     calendarState.investmentCalendarError ? '<p class="form-error">' + escapeHtml(calendarState.investmentCalendarError) + '</p>' : '',
-    '<div class="investment-calendar-kpis">',
+    '<details class="oa-secondary-details" id="disclosure-calendar-metrics"><summary><strong>일정 현황</strong></summary><div class="investment-calendar-kpis">',
     renderCalendarKpi("전체", summary.total || 0, "등록 이벤트", "metric-cell", "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "표시 일정", "metric-cell", upcoming.length ? "watch" : "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("다음", next.startsAt ? investmentCalendarScheduleLabel(next) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold", next.startsAt ? { type: "detail", value: "investment-calendar-event", key: next.eventId || next.id || next.title || "" } : { type: "calendar-entry" }),
-    '</div>',
+    '</div></details>',
     '</article>'
   ].join("");
 }
@@ -752,9 +751,11 @@ function renderInvestmentCalendarRailPanel() {
     '<strong class="investment-calendar-next-time">' + escapeHtml(next.startsAt ? investmentCalendarScheduleLabel(next) : "등록 대기") + '</strong>',
     '<em>' + escapeHtml((String(next.status || "").toLowerCase() === "tentative" ? "검토 전 · " : "") + nextType + " · " + nextTarget) + '</em>',
     '<span class="investment-calendar-next-title">' + escapeHtml(next.startsAt ? investmentCalendarDisplayTitle(next, "투자 이벤트") : "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
+    next.startsAt ? '<p>' + escapeHtml(investmentCalendarImpactText(next)) + '</p>' + renderWorkDetailButton("investment-calendar-event", next.eventId || next.id || next.title, "일정 상세", "text-button compact") : '',
     '</div>',
     renderCalendarEntryButton("이벤트 등록", "text-button primary"),
     '</section>',
+    '<details class="oa-secondary-details" id="disclosure-calendar-operations"><summary><strong>일정 분포·연결 상태</strong></summary><div class="oa-secondary-content">',
     '<section class="panel investment-calendar-type-panel"' + cardTypeAttrs("diagnostic-card", "hold") + '>',
     '<div class="panel-head"><div><p class="label">EVENT MIX</p><h2>유형 분포</h2></div></div>',
     '<div class="investment-calendar-type-strip">',
@@ -771,6 +772,7 @@ function renderInvestmentCalendarRailPanel() {
     renderCalendarRailCheck("판단 연결", "온톨로지 요청", "hold"),
     '</div>',
     '</section>',
+    '</div></details>',
     '</aside>'
   ].join("");
 }

@@ -1,23 +1,32 @@
 import { investmentActionKey } from "./actions.mjs";
-import { decisionStateMeta, stateValueFromSources } from "./signals.mjs";
+import { decisionStateMeta, instrumentItems, stateValueFromSources } from "./signals.mjs";
+import { decisionInView, opinionRecency } from "./recency.mjs";
 import { investmentActionInvalidation, investmentActionUserPresentation, investmentAnalysisModel } from "./strategy.mjs";
 import { formatConsoleNarrative, stockDisplayName } from "../instruments/catalog.mjs";
 import { consoleQualityMeta } from "../shared/console.mjs";
 import { numeric, recordChangedAt, recordChangedAtValue } from "../shared/format.mjs";
 import { decisionsState } from "../state/decisions.mjs";
+import { shellState } from "../state/shell.mjs";
 
 function selectConsoleDecisionRows(snapshot) {
   var analysis = investmentAnalysisModel(snapshot || {});
   var rows = Array.isArray(analysis.actionQueue) ? analysis.actionQueue : [];
   var cases = Array.isArray((decisionsState.investmentFlow || {}).items) ? decisionsState.investmentFlow.items : [];
+  var snapshotAccount = String(((snapshot || {}).toss || {}).accountId || (snapshot || {}).accountId || "default");
+  var instruments = instrumentItems(snapshot || {});
+  var windowHours = (((shellState.dashboardSummary || {}).taskSummary || {}).freshnessWindowHours) || 96;
   if (cases.length) {
     return cases.map(function (item) {
       var decision = item.decision || {};
       var itemSymbol = String(item.symbol || "").toUpperCase();
       var itemName = String(item.name || "").trim();
+      var accountId = String(item.accountId || "default");
       var matched = rows.filter(function (row) {
-        return String(row.symbol || "").toUpperCase() === itemSymbol;
+        return String(row.symbol || "").toUpperCase() === itemSymbol && String(row.accountId || snapshotAccount) === accountId;
       })[0] || {};
+      var instrument = instruments.find(function (row) {
+        return String(row.symbol || "").toUpperCase() === itemSymbol && String(row.accountId || snapshotAccount) === accountId;
+      });
       var action = decisionActionMeta(decision.state === "blocked" ? "BLOCKED" : decision.action, decision.action);
       var dataState = String(decision.dataState || (item.facts || {}).dataState || "partial");
       var readinessState = String(item.readinessState || "warning");
@@ -31,7 +40,7 @@ function selectConsoleDecisionRows(snapshot) {
         decisionKey: String(matched.decisionKey || ""),
         decisionEpisodeId: String(item.episodeId || ""),
         accountId: String(item.accountId || matched.accountId || "default"),
-        accountLabel: String(matched.accountLabel || "기본 계정"),
+        accountLabel: String(matched.accountLabel || (accountId === "default" ? "기본 계정" : accountId)),
         symbol: itemSymbol,
         name: itemName && itemName.toUpperCase() !== itemSymbol ? itemName : stockDisplayName(itemSymbol, matched),
         decision: action.label,
@@ -40,10 +49,11 @@ function selectConsoleDecisionRows(snapshot) {
         tone: readinessState === "blocked" || readinessState === "error" ? "danger" : action.tone,
         reason: formatConsoleNarrative(item.headline || "판단 근거를 확인하세요."),
         invalidation: formatConsoleNarrative(item.nextAction || "무효화 조건과 다음 확인을 살펴보세요."),
-        quality: consoleQualityMeta(dataState === "sufficient" ? "actual" : dataState),
+        quality: dataState === "partial" ? { label: "일부 자료 확인 필요", tone: "caution" } : consoleQualityMeta(dataState === "sufficient" ? "actual" : dataState),
         apiSource: item.detailType === "subject-decision-case" ? "SubjectDecisionCase" : "DecisionEpisode",
         isMock: false,
-        source: String(matched.portfolioRole || matched.source || "holding"),
+        source: instrument ? (instrument.source === "watchlist" ? "watchlist" : "holding") : "unknown",
+        recency: opinionRecency(item, Date.now(), windowHours),
         blocked: readinessState === "blocked" || readinessState === "error" || item.caseStatus === "blocked",
         userActionable: Boolean(attention.userActionable),
         userReviewable: Boolean(attention.userReviewable),
@@ -70,9 +80,7 @@ function selectConsoleDecisionRows(snapshot) {
       };
     }).sort(function (a, b) {
     var changedDiff = recordChangedAtValue(b) - recordChangedAtValue(a);
-      var priority = { action: 0, blocked: 1, review: 2, system: 3, observe: 4 };
-      var priorityDiff = (priority[a.attentionState] == null ? 9 : priority[a.attentionState]) - (priority[b.attentionState] == null ? 9 : priority[b.attentionState]);
-      return priorityDiff || changedDiff || String(a.symbol || "").localeCompare(String(b.symbol || ""));
+      return changedDiff || String(a.symbol || "").localeCompare(String(b.symbol || ""));
     });
   }
   return rows.map(function (row, index) {
@@ -105,6 +113,7 @@ function selectConsoleDecisionRows(snapshot) {
       apiSource: String(row.apiSource || row.source || "investment_analysis"),
       isMock: Boolean(row.isMock) || ["mock", "demo"].indexOf(String(row.dataQuality || row.quality || "").toLowerCase()) >= 0,
       source: String(row.portfolioRole || row.source || "holding"),
+      recency: opinionRecency(row, Date.now(), windowHours),
       blocked: Boolean(graph.blocked) || reviewLevel === "blocked" || validationState === "blocked",
       userActionable: !Boolean(graph.blocked) && ["BUY", "ADD", "SELL", "TRIM", "AVOID"].indexOf(presentation.actionCode || action.code) >= 0,
       userReviewable: !Boolean(graph.blocked) && ["BUY", "ADD", "SELL", "TRIM", "AVOID"].indexOf(presentation.actionCode || action.code) < 0,
@@ -163,16 +172,9 @@ function filteredConsoleDecisionRows(snapshot) {
   var status = String(decisionsState.consoleDecisionStatus || "all");
   return selectConsoleDecisionRows(snapshot).filter(function (row) {
     var view = String(decisionsState.consoleDecisionView || "attention");
-    var actionRequired = Boolean(row.userActionable);
-    var reviewRequired = Boolean(row.userReviewable) || row.attentionState === "review";
-    var changedAt = recordChangedAtValue(row);
-    var recentlyChanged = row.changeState !== "unchanged" || (changedAt && Date.now() - changedAt <= 7 * 24 * 60 * 60 * 1000);
-    if (view === "attention" && !actionRequired && !reviewRequired) return false;
-    if (view === "action" && !actionRequired) return false;
-    if (view === "review" && !reviewRequired) return false;
-    if (view === "recent" && !recentlyChanged) return false;
+    if (!decisionInView(row, view, Date.now())) return false;
     var isWatch = row.source === "watchlist";
-    if (scope === "holding" && isWatch) return false;
+    if (scope === "holding" && row.source !== "holding") return false;
     if (scope === "watchlist" && !isWatch) return false;
     if (action === "BUY_REVIEW" && row.actionCode !== "BUY" && row.actionCode !== "ADD") return false;
     if (action === "SELL_REVIEW" && row.actionCode !== "SELL" && row.actionCode !== "TRIM") return false;

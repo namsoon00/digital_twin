@@ -163,6 +163,25 @@ def fallback_ai_episode():
 
 
 class SubjectReasoningLineageTests(unittest.TestCase):
+    def test_counter_evidence_and_known_gaps_are_not_shown_as_zero(self):
+        subject = subject_case()
+        subject["candidateSet"]["hypotheses"][0]["counterEvidenceIds"] = ["evidence:counter", "evidence:counter"]
+        subject["candidateSet"]["dataGaps"] = ["실적 자료 확인 필요"]
+        evidence = subject_reasoning_lineage(subject, reasoning_case(), fallback_ai_episode())["evidence"]
+        self.assertEqual(["evidence:counter"], evidence["counterIds"])
+        self.assertEqual(1, evidence["counterCount"])
+        self.assertEqual(1, evidence["missingCount"])
+        self.assertEqual(["실적 자료 확인 필요"], evidence["missingData"])
+
+    def test_display_counts_do_not_confuse_lineage_with_original_sources(self):
+        lineage = subject_reasoning_lineage(subject_case(), reasoning_case(), fallback_ai_episode())
+        evidence = lineage["evidence"]
+        self.assertEqual(len(lineage["explanation"]["supportingCauses"]), evidence["supportCount"])
+        self.assertEqual(len(evidence["records"]), evidence["lineageLinkedCount"])
+        self.assertEqual(0, evidence["resolvedCount"])
+        self.assertIsNone(evidence["missingCount"])
+        self.assertTrue(all(row["resolutionState"] == "lineage-linked" for row in evidence["records"]))
+
     def test_batch_proof_is_subject_scoped_and_links_every_reasoning_layer(self):
         lineage = subject_reasoning_lineage(
             subject_case(),

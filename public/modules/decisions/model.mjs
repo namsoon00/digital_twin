@@ -155,7 +155,7 @@ function renderInvestmentModelEvolution(evolution) {
     '<header><div><span class="label">LEARNING LOOP</span><strong>판단 품질 진화</strong></div><em>' + escapeHtml(current.state === "review-required" ? "검토 제안 있음" : current.state === "observing" ? "성과 관찰 중" : "표본 준비 중") + '</em></header>',
     '<div class="investment-model-evolution-metrics">',
     '<div><span>결과 표본</span><strong>' + escapeHtml(Number(observations.eligibleOutcomeEpisodeCount || 0)) + '건</strong><em>연결 ' + escapeHtml(Number(observations.outcomeCoveragePct || 0).toFixed(1)) + '%</em></div>',
-    '<div><span>사용자 평가</span><strong>' + escapeHtml(Number(observations.messageFeedbackSampleCount || 0)) + '건</strong><em>도움됨 ' + escapeHtml(Number(observations.messageHelpfulPct || 0).toFixed(1)) + '%</em></div>',
+    '<div><span>사용자 평가</span><strong>' + escapeHtml(Number(observations.messageFeedbackSampleCount || 0)) + '건</strong><em>' + escapeHtml(Number(observations.messageFeedbackSampleCount || 0) > 0 && observations.messageHelpfulPct != null ? "도움됨 " + Number(observations.messageHelpfulPct).toFixed(1) + "%" : "평가 자료 부족") + '</em></div>',
     '<div><span>검토 제안</span><strong>' + escapeHtml(Number(proposals.reviewRequiredCount || 0)) + '건</strong><em>자동 생성·수동 승인</em></div>',
     '<div><span>후보 비교</span><strong>' + escapeHtml(Number(validation.comparisonSampleCount || 0)) + '건</strong><em>동일 입력 기준</em></div>',
     '</div>',

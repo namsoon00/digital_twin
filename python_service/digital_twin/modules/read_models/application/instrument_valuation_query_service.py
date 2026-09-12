@@ -152,7 +152,6 @@ class InstrumentValuationQueryService:
                 "trailingEPS": trailing_eps,
                 "trailingEPSPeriod": _text(
                     primary.get("epsPeriod")
-                    or eps_scenario.get("period")
                     or "ttm"
                 ) if trailing_eps is not None else "",
                 "expectedEPS": expected_eps,

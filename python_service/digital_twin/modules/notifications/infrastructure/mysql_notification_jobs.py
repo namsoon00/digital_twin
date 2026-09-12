@@ -29,11 +29,13 @@ NOTIFICATION_LIST_PRESENTATION_PATHS = (
     "decisionPublication.outcomeKind", "ontologyRelationContext.decision.selectedRuleId",
     "ontologyRelationContext.engine", "reasoningDeliveryTrigger.facts.cryptoTransitions",
     "reasoningDeliveryTrigger.facts.confirmedSignalTransitions",
+    "customerInvestmentDocument.headline", "customerInvestmentDocument.lead",
+    "notificationContent.summary",
 )
 
 
 def notification_list_presentation_column() -> str:
-    # Project classification leaves only, never the graph or AI response body.
+    # Project identity and authored summary leaves, never the graph or AI body.
     fields = []
     for index, path in enumerate(NOTIFICATION_LIST_PRESENTATION_PATHS):
         values = [

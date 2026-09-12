@@ -10,6 +10,7 @@ import { escapeHtml } from "../shared/text.mjs";
 import { renderManagedPage } from "../shell/pages.mjs";
 import { decisionsState } from "../state/decisions.mjs";
 import { shellState } from "../state/shell.mjs";
+import { decisionInView } from "./recency.mjs";
 
 function renderDecisionConsoleRow(row) {
   var detailType = row.detailType === "subject-decision-case"
@@ -29,10 +30,10 @@ function renderDecisionConsoleRow(row) {
     : (primary.summary || row.reason || "판단 근거를 확인하세요.");
   return [
     '<button class="oa-case-row" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '">',
-    '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "관찰") + '</b><em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.attentionLabel || row.readinessLabel || "확인 필요") + '</em></span></header>',
+    '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : (row.source === "holding" ? "보유" : "보유·관심 상태 미확인"), row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "관찰") + '</b><em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.attentionLabel || row.readinessLabel || "확인 필요") + '</em></span></header>',
     '<div class="oa-case-reason"><span>' + escapeHtml(causeLabel) + '</span><strong>' + escapeHtml(causeText) + '</strong></div>',
-    '<div class="oa-case-next"><span>' + escapeHtml(row.phaseLabel || "투자 케이스") + '</span><p>' + escapeHtml(row.nextAction || row.invalidation || "무효화 조건과 다음 확인을 살펴보세요.") + '</p></div>',
-    '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">케이스 보기 →</b></footer>',
+    row.recency && row.recency.state !== "current" ? '<p class="oa-case-recency caution">' + escapeHtml(row.recency.label) + '</p>' : '',
+    '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + '</em></span><b aria-hidden="true">근거 보기 →</b></footer>',
     '</button>'
   ].join("");
 }
@@ -71,7 +72,7 @@ function decisionExplanationRows(explanation, key) {
 function renderDecisionCauseList(rows, emptyText) {
   rows = Array.isArray(rows) ? rows : [];
   if (!rows.length) return '<p class="oa-decision-empty-note">' + escapeHtml(emptyText || "확인된 항목이 없습니다.") + '</p>';
-  return '<ul class="oa-decision-cause-list">' + rows.slice(0, 4).map(function (item) {
+  return '<ul class="oa-decision-cause-list">' + rows.map(function (item) {
     return '<li><strong>' + escapeHtml(item.title || "판단 근거") + '</strong><span>' + escapeHtml(item.summary || item.effect || "세부 설명 확인 중") + '</span>' + (item.effect && item.summary ? '<em>' + escapeHtml(item.effect) + '</em>' : '') + '</li>';
   }).join("") + '</ul>';
 }
@@ -139,13 +140,15 @@ function renderDecisionFilterToolbar() {
 function renderDecisionViewSwitch(rows) {
   rows = Array.isArray(rows) ? rows : [];
   var counts = {
-    attention: rows.filter(function (row) { return row.userActionable || row.userReviewable || row.attentionState === "review"; }).length,
-    action: rows.filter(function (row) { return row.userActionable; }).length,
-    review: rows.filter(function (row) { return row.userReviewable || row.attentionState === "review"; }).length,
-    recent: rows.filter(function (row) { var value = recordChangedAtValue(row); return row.changeState !== "unchanged" || (value && Date.now() - value <= 7 * 24 * 60 * 60 * 1000); }).length,
+    attention: rows.filter(function (row) { return decisionInView(row, "attention", Date.now()); }).length,
+    action: rows.filter(function (row) { return decisionInView(row, "action", Date.now()); }).length,
+    review: rows.filter(function (row) { return decisionInView(row, "review", Date.now()); }).length,
+    recent: rows.filter(function (row) { return decisionInView(row, "recent", Date.now()); }).length,
     all: rows.length
   };
-  var items = [["attention", "지금 확인"], ["action", "주문 검토"], ["review", "근거 검토"], ["recent", "최근 변화"], ["all", "전체"]];
+  var items = [["attention", "지금 확인"], ["review", "재확인"], ["all", "전체 기록"]];
+  if (decisionsState.consoleDecisionView === "action") items.splice(1, 0, ["action", "주문 검토"]);
+  if (decisionsState.consoleDecisionView === "recent") items.splice(1, 0, ["recent", "최근 변화"]);
   return '<nav class="oa-decision-view-switch" aria-label="투자 의견 범위">' + items.map(function (item) {
     var active = decisionsState.consoleDecisionView === item[0];
     return '<button type="button" data-decision-view="' + item[0] + '"' + (active ? ' class="active" aria-current="page"' : '') + '><strong>' + item[1] + '</strong><span>' + escapeHtml(counts[item[0]]) + '</span></button>';
@@ -375,14 +378,14 @@ function renderDecisionConsole(snapshot) {
   var blocked = allRows.filter(function (row) { return row.blocked; }).length;
   var buy = allRows.filter(function (row) { return row.actionCode === "BUY" || row.actionCode === "ADD"; }).length;
   var sell = allRows.filter(function (row) { return row.actionCode === "SELL" || row.actionCode === "TRIM"; }).length;
-  var actionRequired = allRows.filter(function (row) { return row.userActionable; }).length;
-  var reviewRequired = allRows.filter(function (row) { return row.attentionState === "review"; }).length;
+  var actionRequired = allRows.filter(function (row) { return decisionInView(row, "action", Date.now()); }).length;
+  var reviewRequired = allRows.filter(function (row) { return decisionInView(row, "review", Date.now()); }).length;
   var awaitingOutcome = allRows.filter(function (row) { return String((row.outcome || {}).state || "pending") === "pending"; }).length;
   var metrics = [
-    { label: "행동 검토", value: actionRequired + "건", detail: "실행 가능한 의견", tone: actionRequired ? "caution" : "watch", target: { type: "decision", value: "all", key: "action", quality: "all", status: "action" } },
+    { label: "행동 검토", value: actionRequired + "건", detail: "최근 검토 의견", tone: actionRequired ? "caution" : "neutral", target: { type: "decision", value: "all", key: "action", quality: "all", status: "action" } },
     { label: "매수 검토", value: buy + "건", detail: "조건 확인", tone: buy ? "watch" : "neutral", target: { type: "decision", value: "BUY_REVIEW", key: "all", quality: "all" } },
     { label: "매도 검토", value: sell + "건", detail: "위험 관리", tone: sell ? "danger" : "neutral", target: { type: "decision", value: "SELL_REVIEW", key: "all", quality: "all" } },
-    { label: "근거 확인", value: reviewRequired + "건", detail: "의견과 별도", tone: reviewRequired ? "caution" : "watch", target: { type: "tab", value: "experiments" } },
+    { label: "재확인", value: reviewRequired + "건", detail: "이전 의견·사용 제한", tone: reviewRequired ? "caution" : "neutral", target: { type: "decision", value: "all", key: "review", quality: "all", status: "all" } },
     { label: "판단 보류", value: blocked + "건", detail: "행동 아님", tone: blocked ? "danger" : "watch", target: { type: "tab", value: "experiments" } },
     { label: "결과 대기", value: awaitingOutcome + "건", detail: "성과 관측", target: { type: "decision", value: "all", key: "all", quality: "all" } }
   ];
@@ -394,13 +397,13 @@ function renderDecisionConsole(snapshot) {
     : "검색어나 필터를 조정하세요.";
   var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", emptyDetail, '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
   return renderConsoleManagedPage("modeling", metrics, [
-    '<section class="oa-decision-context"><span>DECISION WORKSPACE</span><strong>판단은 주문이 아니라 현재 근거에 따른 투자 의견입니다.</strong><p>의견이 달라졌거나 행동이 필요한 종목부터 확인하고, 부족한 근거는 별도 점검 화면에서 보완합니다.</p></section>',
     renderDecisionViewSwitch(allRows),
     renderDecisionFilterToolbar(),
     '<div data-console-monitor-destination="decisions" tabindex="-1">',
-    renderConsoleSurface({ kicker: "CURRENT OPINIONS", title: viewLabels[decisionsState.consoleDecisionView] || viewLabels.attention, description: "회사를 열면 판단 당시 데이터, 근거, 추론 과정과 결과 이력을 전체 화면에서 확인합니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
-    '</div>'
-  ].join(""), { leading: renderDecisionWorkspaceNavigation("modeling") });
+    renderConsoleSurface({ title: viewLabels[decisionsState.consoleDecisionView] || viewLabels.attention, meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
+    '</div>',
+    renderDecisionWorkspaceNavigation("modeling")
+  ].join(""), { secondaryMetrics: true });
 }
 
 function investmentFlowConsolePayload() {

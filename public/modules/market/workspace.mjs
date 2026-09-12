@@ -120,7 +120,7 @@ function renderMarketFlowWorkspace(snapshot) {
 
 function renderMarketConsole(snapshot) {
   var rows = filteredConsoleInstrumentRows(snapshot);
-  var evidence = consoleResearchItems().slice().sort(compareResearchEvidenceForDisplay);
+  var evidence = consoleResearchItems();
   var negative = evidence.filter(function (item) { return researchEvidenceImpactMeta(item).tone === "danger"; }).length;
   var portfolio = selectConsolePortfolio(snapshot);
   var quoteReady = rows.filter(function (row) { return row.quoteAvailable; }).length;
@@ -131,9 +131,9 @@ function renderMarketConsole(snapshot) {
   };
   var metrics = [
     { label: "보유 종목", value: portfolio.holdingCount + "개", detail: "계정 기준", target: { type: "market", value: "mine", scope: "holding" } },
-    { label: "관심 종목", value: portfolio.watchCount + "개", detail: "중복 제거", target: { type: "market", value: "mine", scope: "watchlist" } },
+    { label: "관심 전용 종목", value: portfolio.watchCount + "개", detail: "보유와 겹치는 종목 제외", target: { type: "market", value: "mine", scope: "watchlist" } },
     { label: "저장 근거", value: evidence.length + "건", detail: "뉴스·공시", target: { type: "market", value: "news" } },
-    { label: "주요 악재", value: negative + "건", detail: "영향 분석", tone: negative ? "danger" : "watch", target: { type: "market", value: "news" } },
+    { label: "확인된 부정적 근거", value: negative + "건", detail: "미분석 자료의 위험은 미확인", tone: negative ? "danger" : "neutral", target: { type: "market", value: "news" } },
     { label: "시세 상태", value: quoteState.label, detail: quoteState.detail, tone: quoteState.tone, target: { type: "detail", value: "feed-source-board" } }
   ];
   var mode = normalizeMarketWorkspaceMode(marketState.marketWorkspaceMode);
@@ -147,7 +147,7 @@ function renderMarketConsole(snapshot) {
     '<div class="market-workspace market-workspace-' + escapeHtml(mode) + '" data-console-monitor-destination="market" tabindex="-1">',
     workspace,
     '</div>'
-  ].join(""));
+  ].join(""), { secondaryMetrics: true });
 }
 
 export { renderMarketConsole };

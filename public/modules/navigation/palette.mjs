@@ -70,9 +70,9 @@ function renderCommandPalette(snapshot) {
     '<section class="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" tabindex="-1" data-command-palette-dialog data-command-palette-mode="' + escapeHtml(paletteMode) + '">',
     '<header><div><p class="label">' + escapeHtml(paletteMode === "more" ? "Navigation" : "Search") + '</p><h2 id="command-palette-title">' + escapeHtml(paletteMode === "more" ? "더보기" : "전체 검색") + '</h2></div><button class="icon-button danger" type="button" data-command-palette-close title="닫기" aria-label="닫기">&times;</button></header>',
     '<label class="command-palette-input"><span class="sr-only">검색</span><input type="search" data-command-palette-input value="' + escapeHtml(navigationState.commandPaletteQuery || "") + '" placeholder="' + escapeHtml(paletteMode === "more" ? "일정, 운영, 관리 도구 검색" : "화면, 종목, 알림, 설정 검색") + '" autocomplete="off" /></label>',
-    '<div class="command-palette-results" role="list">',
+    '<div class="command-palette-results">',
     matched.length ? matched.map(function (entry) {
-      return '<button type="button" role="listitem" data-command-palette-result="' + escapeHtml(entry.type) + '" data-command-palette-key="' + escapeHtml(entry.key || entry.tab || "") + '" data-command-palette-tab="' + escapeHtml(entry.tab || "") + '"><span><em>' + escapeHtml(entry.group) + '</em><strong>' + escapeHtml(entry.label) + '</strong><small>' + escapeHtml(entry.detail) + '</small></span><b>&rarr;</b></button>';
+      return '<button type="button" data-command-palette-result="' + escapeHtml(entry.type) + '" data-command-palette-key="' + escapeHtml(entry.key || entry.tab || "") + '" data-command-palette-tab="' + escapeHtml(entry.tab || "") + '"><span><em>' + escapeHtml(entry.group) + '</em><strong>' + escapeHtml(entry.label) + '</strong><small>' + escapeHtml(entry.detail) + '</small></span><b>&rarr;</b></button>';
     }).join("") : '<div class="command-palette-empty">조건에 맞는 결과가 없습니다.</div>',
     '</div>',
     '</section>',

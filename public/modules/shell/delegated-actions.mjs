@@ -109,8 +109,7 @@ function bindDelegatedConsoleActions() {
       return;
     }
     var paletteClose = event.target.closest && event.target.closest("[data-command-palette-close]");
-    if (paletteClose && app.contains(paletteClose)) {
-      if (paletteClose.classList.contains("command-palette-backdrop") && event.target !== paletteClose) return;
+    if (paletteClose && app.contains(paletteClose) && (!paletteClose.classList.contains("command-palette-backdrop") || event.target === paletteClose)) {
       event.preventDefault();
       closeCommandPalette();
       return;

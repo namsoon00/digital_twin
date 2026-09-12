@@ -181,8 +181,6 @@ function renderTodayConsole(snapshot) {
   var dashboard = shellState.dashboardSummary || {};
   var dashboardPortfolio = dashboard.portfolio || {};
   var tasks = selectConsoleTodayTasks(snapshot, { collapseCalendar: true });
-  var historicalCount = consoleTodayHistoricalCount();
-  var urgent = tasks.filter(function (task) { return task.priority <= 2; }).length;
   var upcoming = Array.isArray(dashboard.upcomingEvents) && dashboard.upcomingEvents.length ? dashboard.upcomingEvents : investmentCalendarUpcomingEvents();
   var blockers = Array.isArray(dashboard.blockerGroups) ? dashboard.blockerGroups : [];
   var totalValue = hasNumericValue(dashboardPortfolio.invested) ? numeric(dashboardPortfolio.invested) : portfolio.invested;
@@ -191,26 +189,29 @@ function renderTodayConsole(snapshot) {
   var metrics = [
     { label: portfolioInvestedMetricLabel(valuationBasis), value: formatMoney(totalValue), detail: portfolioValuationBasisLabel(valuationBasis) + " · 현금 제외 · " + positionCount + "개 보유", target: { type: "tab", value: "portfolio" } },
     { label: "현금", value: hasNumericValue(dashboardPortfolio.cash) ? formatMoney(dashboardPortfolio.cash) : formatMoney(portfolio.cash), detail: "포트폴리오 원장", target: { type: "tab", value: "portfolio" } },
-    { label: "긴급 작업", value: urgent + "건", detail: "우선순위 1·2", tone: urgent ? "danger" : "watch", target: { type: "detail", value: "today-work-queue" } },
-    { label: "예정 일정", value: upcoming.length + "건", detail: upcoming[0] ? formatClock(upcoming[0].startsAt) : "일정 없음", target: upcoming[0] ? { type: "detail", value: "investment-calendar-event", key: upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "" } : { type: "tab", value: "calendar" } },
+    { label: "확인할 일", value: tasks.length + "건", detail: "투자 의견·전달 확인", target: { type: "detail", value: "today-work-queue" } },
+    { label: "다가오는 일정", value: upcoming.length + "건 표시", detail: "미리보기 · 전체 일정은 캘린더", target: { type: "tab", value: "calendar" } },
     { label: "데이터", value: portfolio.freshness.label, detail: portfolio.freshness.detail, tone: portfolio.freshness.tone, target: { type: "detail", value: "feed-source-board" } }
   ];
   var taskBody = tasks.length ? '<div class="oa-work-list" data-console-keyed-list="today-primary">' + tasks.slice(0, 3).map(renderConsoleTaskRow).join("") + '</div>' : renderConsoleEmpty("오늘 처리할 작업이 없습니다", "새 판단이나 전달 실패가 생기면 우선순위에 따라 표시합니다.");
+  var importantBlockers = blockers.filter(function (item) { return ["blocked", "error"].includes(item.state); });
   var contextBody = [
     '<div class="oa-context-list" data-console-keyed-list="today-blockers">',
-    blockers.length ? blockers.slice(0, 3).map(function (item) {
+    importantBlockers.length ? importantBlockers.slice(0, 3).map(function (item) {
       var blockerTone = ["error", "blocked"].indexOf(String(item.state || "")) >= 0 ? "danger" : "caution";
       return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(item.id || item.label) + '" data-tab="experiments"><span><strong>' + escapeHtml(item.label || "근거 점검") + '</strong><em>' + escapeHtml(formatConsoleNarrative(item.reason || item.effect || "판단 조건을 더 확인해야 합니다.")) + '</em></span><b class="' + blockerTone + '">' + escapeHtml((item.count || 0) + "건") + '</b></button>';
-    }).join("") : '<div class="oa-context-row"><span><strong>묶인 차단 원인 없음</strong><em>현재 판단 기록에서 공통 차단 원인이 발견되지 않았습니다.</em></span></div>',
+    }).join("") : '',
     '</div>',
-    upcoming[0] ? '<button type="button" class="oa-next-event" data-work-detail="investment-calendar-event" data-work-detail-key="' + escapeHtml(upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "") + '"><span>다음 일정</span><strong>' + escapeHtml(upcoming[0].title || "투자 이벤트") + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em><b aria-hidden="true">&rarr;</b></button>' : '',
+    upcoming[0] ? '<button type="button" class="oa-next-event" data-work-detail="investment-calendar-event" data-work-detail-key="' + escapeHtml(upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "") + '"><span>다음 일정</span><strong>' + escapeHtml(investmentCalendarDisplayTitle(upcoming[0])) + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em><p>' + escapeHtml(investmentCalendarImpactText(upcoming[0])) + '</p><b aria-hidden="true">&rarr;</b></button>' : '',
   ].join("");
   return renderConsoleManagedPage("overview", metrics, [
     '<div class="oa-console-grid oa-console-grid-primary">',
-    renderConsoleSurface({ kicker: "PRIORITY QUEUE", title: "지금 처리할 일", description: "최근 " + consoleTodayDecisionWindowHours() + "시간의 판단과 아직 조치 가능한 전달 실패만 표시합니다. 이전 기록은 판단·알림 이력에 남습니다.", meta: "현재 " + tasks.length + "건" + (historicalCount ? " · 이전 " + historicalCount + "건" : ""), actions: tasks.length > 3 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
-    renderConsoleSurface({ kicker: "BLOCKER GROUPS", title: "공통 확인 원인", description: "같은 원인으로 막힌 종목을 데이터·추론·AI 단계별로 묶습니다.", body: renderConsoleLiveRegion("today-context-body", contextBody) }),
-    '</div>'
-  ].join(""));
+    renderConsoleSurface({ title: "오늘 확인할 변화", meta: tasks.length + "건", actions: tasks.length > 3 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
+    importantBlockers.length || upcoming.length ? renderConsoleSurface({ title: "함께 확인할 것", body: renderConsoleLiveRegion("today-context-body", contextBody) }) : '',
+    '</div>',
+    portfolio.freshness.tone !== "watch" ? '<p class="oa-data-notice caution">자료 상태 · ' + escapeHtml(portfolio.freshness.label + " · " + portfolio.freshness.detail) + '</p>' : '',
+    '<nav class="oa-related-links"><button class="text-button" type="button" data-tab="modeling">투자 의견 전체</button><button class="text-button" type="button" data-tab="experiments">근거 점검</button></nav>'
+  ].join(""), { secondaryMetrics: true });
 }
 
 export { renderTodayConsole, todayQueueWorkDetailPayload };

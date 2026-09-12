@@ -1,14 +1,15 @@
 import { investmentReasoningValue } from "./case-reasoning.mjs";
 import { decisionActionMeta } from "./selectors.mjs";
-import { decisionExplanationRows, renderDecisionCauseList, renderDecisionStatusDimensions, renderInvestmentDecisionRationale, renderInvestmentFlowStages, renderInvestmentFlowStateLegend, renderInvestmentInsightAssessmentCard } from "./workspace.mjs";
+import { decisionExplanationRows, renderDecisionCauseList } from "./workspace.mjs";
 import { renderWorkDetailButton } from "../navigation/detail.mjs";
 import { renderDecisionInfoButton } from "../settings/language.mjs";
 import { renderConsoleEmpty } from "../shared/console.mjs";
-import { formatClock, renderRecordChangedAt } from "../shared/format.mjs";
+import { formatClock } from "../shared/format.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";
 import { settingsState } from "../state/settings.mjs";
-import { renderDecisionReview } from "./case-review.mjs";
+import { briefTexts, renderInvestmentBrief } from "./brief.mjs";
+import { evidenceResolutionLabel, evidenceSummary } from "./evidence-summary.mjs";
 
 function investmentCaseOperatorAccess() {
   return !settingsState.serverSettingsLocked && !isStaticPreviewHost();
@@ -127,45 +128,10 @@ function renderInvestmentCaseLineageChain(detail) {
 
 function renderInvestmentCaseSummary(detail, key) {
   var decision = detail.decision || {};
-  var outcome = detail.outcome || {};
   var action = decisionActionMeta(decision.state === "blocked" ? "BLOCKED" : decision.action, decision.action);
-  var checks = Array.isArray(decision.requiredChecks) ? decision.requiredChecks : [];
-  var latestOutcome = outcome.latest || {};
   var modelRelease = ((detail.traceRefs || {}).modelRelease || {});
-  var freshness = detail.freshness || {};
-  var integrity = detail.integrity || {};
-  var integrityIssues = Array.isArray(integrity.issues) ? integrity.issues : [];
-  var explanation = detail.explanation || {};
-  var support = decisionExplanationRows(explanation, "supportingCauses");
-  var counter = decisionExplanationRows(explanation, "counterCauses").concat(decisionExplanationRows(explanation, "constraints"));
-  var judgementBlocked = decision.state === "blocked" || detail.readinessState === "blocked" || detail.readinessState === "error";
-  var supportTitle = judgementBlocked ? "판단에 채택된 근거" : "투자 의견을 지지한 근거";
-  var supportEmpty = judgementBlocked
-    ? "최종 가설이 선택되지 않아 채택된 핵심 근거가 없습니다. 추론 과정에서 부족한 관계와 가설을 확인하세요."
-    : "현재 의견을 지지한 근거를 확인 중입니다.";
-  var changeConditions = Array.isArray(explanation.changeConditions) ? explanation.changeConditions : [];
-  var outcomeText = outcome.count
-    ? [latestOutcome.observedAt ? formatClock(latestOutcome.observedAt) : "최근 관측", latestOutcome.priceChangeFromDecisionPct !== undefined && latestOutcome.priceChangeFromDecisionPct !== null ? "판단 후 " + latestOutcome.priceChangeFromDecisionPct + "%" : "결과 저장됨"].join(" · ")
-    : "다음 관측 결과를 기다리는 중";
   return [
-    '<section class="oa-flow-detail-summary oa-case-summary" data-flow-state="' + escapeHtml(detail.readinessState || "warning") + '">',
-    '<div><span>현재 투자 의견 ' + renderDecisionInfoButton("decision-action", "이 케이스에서 현재 검토할 행동 방향입니다.") + '</span><strong>' + escapeHtml(action.label) + '</strong></div>',
-    '<div><span>판단 상태 ' + renderDecisionInfoButton("decision-readiness", "의견을 사용할 수 있는 근거 수준을 행동과 분리해 표시합니다.") + '</span><strong>' + escapeHtml(detail.readinessLabel || "확인 필요") + '</strong></div>',
-    '<p><strong>' + escapeHtml(detail.phaseLabel || "투자 케이스") + '</strong><span>' + escapeHtml(detail.headline || "판단 근거를 확인하고 있습니다.") + '</span></p>',
-    renderRecordChangedAt(detail),
-    '</section>',
-    '<section class="oa-case-record-contract" data-flow-state="' + escapeHtml(integrity.state || "warning") + '"><div><span>판단 기준 시각</span><strong>' + escapeHtml(formatClock(freshness.decisionAsOf || detail.decidedAt) || "기록 없음") + '</strong><em>원천 ' + escapeHtml(formatClock(freshness.sourceAsOf) || "기준 시각 미기록") + ' · 추론 ' + escapeHtml(formatClock(freshness.inferenceAsOf) || "기준 시각 미기록") + '</em></div><div><span>기록 무결성</span><strong>' + escapeHtml(integrity.label || "확인 필요") + '</strong><em>' + escapeHtml(integrityIssues.length ? integrityIssues[0].detail : "판단 당시 사실과 추론 상세가 연결되어 있습니다.") + '</em></div></section>',
-    renderInvestmentCaseLineageChain(detail),
-    renderInvestmentInsightAssessmentCard(((((detail.reasoningLineage || {}).ai) || {}).insightAssessment) || {}),
-    renderInvestmentDecisionRationale(detail, false),
-    renderDecisionReview(detail.decisionReview, formatClock),
-    '<section class="oa-case-overview-section"><header><strong>처리 상태와 영향</strong>' + renderDecisionInfoButton("decision-readiness", "자료 부족, 관계 추론, AI 비교와 결과 관측을 분리해 각각의 이유를 표시합니다.") + '</header>' + renderDecisionStatusDimensions(detail.statusDimensions, false) + '</section>',
-    '<div class="oa-case-cause-columns"><section><header><strong>' + escapeHtml(supportTitle) + '</strong>' + renderDecisionInfoButton("reasoning-rule", "성립한 관계와 규칙 중 현재 투자 의견에 실제로 채택된 근거입니다.") + '</header>' + renderDecisionCauseList(support, supportEmpty) + '</section><section><header><strong>반대 근거와 제한</strong>' + renderDecisionInfoButton("competing-hypothesis", "다른 결론을 지지하거나 현재 의견의 강도를 낮춘 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 기록된 반대 근거나 제한 조건이 없습니다.") + '</section></div>',
-    '<section class="oa-case-next-check"><header><span>다음 판단</span><strong>의견이 달라지는 조건</strong></header>',
-    changeConditions.length ? '<ul>' + changeConditions.slice(0, 4).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : (checks.length ? '<ul>' + checks.slice(0, 4).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p>' + escapeHtml(detail.nextAction || "현재 판단의 약화 조건과 다음 관측을 확인하세요.") + '</p>'),
-    '</section>',
-    '<dl class="oa-case-key-facts"><div><dt>확인된 사실</dt><dd>' + escapeHtml((detail.facts || {}).summary || "데이터 확인 중") + '</dd></div><div><dt>결과 추적</dt><dd>' + escapeHtml(outcomeText) + '</dd></div></dl>',
-    '<details class="oa-case-process"><summary><span><strong>처리 단계와 색상 의미</strong><em>색상은 투자 방향이 아니라 처리 상태입니다.</em></span></summary><section class="oa-flow-detail-section oa-case-flow">' + renderInvestmentFlowStateLegend() + renderInvestmentFlowStages(detail.stages, false, key) + '</section></details>',
+    renderInvestmentBrief(detail, key, action.label, formatClock),
     '<section class="oa-case-model-link"><span><strong>사용한 판단 기준</strong><em>' + escapeHtml(modelRelease.deploymentId || modelRelease.reasoningEngineVersion || modelRelease.lineageLabel || "릴리스 계보 확인") + '</em></span>' + renderWorkDetailButton("investment-model-overview", "", "판단 기준", "text-button compact") + '</section>'
   ].join("");
 }
@@ -215,30 +181,34 @@ function renderInvestmentCaseCurrentState(detail) {
 
 function renderInvestmentCaseEvidence(detail) {
   var evidence = detail.evidence || {};
+  var counts = evidenceSummary(detail);
+  function countLabel(value) { return value === null ? "미확인" : value + "건"; }
   var explanation = detail.explanation || {};
   var missing = Array.isArray(evidence.missingData) ? evidence.missingData : [];
   var missingItems = Array.isArray(evidence.missingDataItems) ? evidence.missingDataItems : [];
-  var checks = Array.isArray(evidence.requiredChecks) ? evidence.requiredChecks : [];
+  var checks = briefTexts([].concat(evidence.requiredChecks || [], (detail.decision || {}).requiredChecks || [], explanation.changeConditions || [], detail.nextAction || []));
   var supportIds = Array.isArray(evidence.supportingIds) ? evidence.supportingIds : [];
   var counterIds = Array.isArray(evidence.counterIds) ? evidence.counterIds : [];
   var records = Array.isArray(evidence.records) ? evidence.records : [];
   var recordMarkup = records.length ? '<div class="oa-case-evidence-records">' + records.map(function (item) {
     var resolved = item.resolutionState === "resolved";
     var title = '<strong>' + escapeHtml(item.title || item.id || "근거") + '</strong>';
-    return '<article data-evidence-role="' + escapeHtml(item.role || "context") + '" data-evidence-resolution="' + escapeHtml(item.resolutionState || "identifier-only") + '"><header><span>' + escapeHtml(item.roleLabel || "근거") + '</span><em>' + escapeHtml(item.useStateLabel || "판단에 사용") + '</em></header>' + (/^https?:\/\//i.test(String(item.url || "")) ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + title + '</a>' : title) + (item.summary ? '<p>' + escapeHtml(item.summary) + '</p>' : '') + '<footer><span>' + escapeHtml([item.sourcePublisher || item.source, item.kind, formatClock(item.sourceAsOf)].filter(Boolean).join(" · ")) + '</span><b class="' + (resolved ? "watch" : "caution") + '">' + escapeHtml(resolved ? "원천 연결" : "식별자만 저장") + '</b></footer></article>';
+    return '<article data-evidence-role="' + escapeHtml(item.role || "context") + '" data-evidence-resolution="' + escapeHtml(item.resolutionState || "identifier-only") + '"><header><span>' + escapeHtml(item.roleLabel || "근거") + '</span><em>' + escapeHtml(item.useStateLabel || "판단에 사용") + '</em></header>' + (/^https?:\/\//i.test(String(item.url || "")) ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + title + '</a>' : title) + (item.summary ? '<p>' + escapeHtml(item.summary) + '</p>' : '') + '<footer><span>' + escapeHtml([item.sourcePublisher || item.source, item.kind, formatClock(item.sourceAsOf)].filter(Boolean).join(" · ")) + '</span><b class="' + (resolved ? "watch" : "caution") + '">' + escapeHtml(evidenceResolutionLabel(item.resolutionState)) + '</b></footer></article>';
   }).join("") + '</div>' : '<p class="oa-decision-empty-note">저장된 근거 식별자가 없습니다.</p>';
   return [
     '<section class="oa-case-evidence-summary">',
-    '<div><span>지지 근거</span><strong>' + escapeHtml(Number(evidence.supportCount || 0) + "건") + '</strong></div>',
-    '<div><span>반박 근거</span><strong>' + escapeHtml(Number(evidence.counterCount || 0) + "건") + '</strong></div>',
-    '<div><span>누락 자료</span><strong>' + escapeHtml(Number(evidence.missingCount || 0) + "건") + '</strong></div>',
-    '<div><span>원천 연결</span><strong>' + escapeHtml(Number(evidence.resolvedCount || 0) + " / " + records.length + "건") + '</strong></div>',
+    '<div><span>지지 근거</span><strong>' + escapeHtml(countLabel(counts.support)) + '</strong></div>',
+    '<div><span>반박 근거</span><strong>' + escapeHtml(countLabel(counts.counter)) + '</strong></div>',
+    '<div><span>자료 확인 항목</span><strong>' + escapeHtml(countLabel(counts.missing)) + '</strong></div>',
+    '<div><span>원천 자료 연결</span><strong>' + escapeHtml(counts.originals + " / " + counts.records + "건") + '</strong><small>추론 계보 ' + escapeHtml(counts.lineage) + '건</small></div>',
     '</section>',
     '<section class="oa-case-evidence-section"><header><span>검증 근거</span><strong>판단에 실제 사용한 원천</strong>' + renderDecisionInfoButton("evidence-provenance", "근거의 역할, 출처, 기준 시각과 원문 연결 상태를 확인합니다.") + '</header>' + recordMarkup + '</section>',
     '<div class="oa-case-cause-columns"><section><header><strong>의견을 지지한 근거</strong>' + renderDecisionInfoButton("reasoning-rule", "규칙과 가설을 통해 현재 의견 방향을 지지한 항목입니다.") + '</header>' + renderDecisionCauseList(decisionExplanationRows(explanation, "supportingCauses"), "명시적으로 저장된 지지 근거가 없습니다.") + '</section><section><header><strong>반대 근거</strong>' + renderDecisionInfoButton("competing-hypothesis", "현재 의견과 다른 시나리오를 지지하는 근거입니다.") + '</header>' + renderDecisionCauseList(decisionExplanationRows(explanation, "counterCauses"), "명시적으로 저장된 반대 근거가 없습니다.") + '</section></div>',
     '<section class="oa-case-evidence-section"><header><span>자료 한계</span><strong>빠졌거나 적용할 수 없는 자료</strong>' + renderDecisionInfoButton("data-state", "확인되지 않은 자료는 사실처럼 쓰지 않고 판단 범위만 제한합니다.") + '</header>',
-    missingItems.length ? '<ul class="oa-case-gap-list">' + missingItems.map(function (item) { return '<li><strong>' + escapeHtml(item.label || "확인 항목") + '</strong><span>' + escapeHtml(item.detail || item.text || "확인 필요") + '</span><em>' + escapeHtml(item.applicability === "not-applicable" ? "현재 시장에서 적용 안 됨" : item.source || "수집 상태 확인") + '</em></li>'; }).join("") + '</ul>' : (missing.length ? '<ul>' + missing.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p class="oa-flow-complete">명시적으로 기록된 누락 자료가 없습니다.</p>'),
-    checks.length ? '<div class="oa-case-check-list"><strong>다음 검토 순서</strong><ol>' + checks.slice(0, 5).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ol></div>' : '',
+    missingItems.length ? '<ul class="oa-case-gap-list">' + missingItems.map(function (item) { return '<li><strong>' + escapeHtml(item.label || "확인 항목") + '</strong><span>' + escapeHtml(item.detail || item.text || "확인 필요") + '</span><em>' + escapeHtml(item.applicability === "not-applicable" ? "현재 시장에서 적용 안 됨" : item.source || "수집 상태 확인") + '</em></li>'; }).join("") + '</ul>' : '',
+    missing.length ? '<ul>' + missing.map(function (item) { return '<li>' + escapeHtml(typeof item === "string" ? item : item.label || item.detail || "자료 확인 필요") + '</li>'; }).join("") + '</ul>' : '',
+    !missingItems.length && !missing.length ? '<p class="oa-decision-empty-note">' + (counts.missing === 0 ? '기록된 자료 확인 항목은 0건입니다.' : '자료 공백 여부를 확인할 기록이 부족합니다.') + '</p>' : '',
+    checks.length ? '<div class="oa-case-check-list"><strong>다음 확인 조건 전체</strong><ul>' + checks.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul></div>' : '',
     '</section>',
     '<details class="oa-flow-technical"><summary><span><strong>근거 식별자</strong><em>감사와 원문 조회에 사용하는 저장 키</em></span></summary><dl>',
     '<div><dt>원천 스냅샷</dt><dd>' + escapeHtml(evidence.sourceSnapshotId || "연결 필요") + '</dd></div>',
@@ -248,4 +218,4 @@ function renderInvestmentCaseEvidence(detail) {
   ].join("");
 }
 
-export { investmentCaseOperatorAccess, investmentHypothesisQualificationMeta, renderInvestmentCaseCurrentState, renderInvestmentCaseDetailTabs, renderInvestmentCaseEvidence, renderInvestmentCaseSummary };
+export { investmentCaseOperatorAccess, investmentHypothesisQualificationMeta, renderInvestmentCaseCurrentState, renderInvestmentCaseDetailTabs, renderInvestmentCaseEvidence, renderInvestmentCaseLineageChain, renderInvestmentCaseSummary };

@@ -1,5 +1,13 @@
 [
   {
+    "reason": "Insight-first presentation with progressive disclosure, explicit source/lineage counts, current vs historical opinions, account-scoped membership, and working palette navigation. Unit and isolated browser regressions cover these contracts.",
+    "functions": ["renderConsoleManagedPage", "consoleDecisionBySymbol", "selectConsoleDecisionRows", "filteredConsoleDecisionRows", "selectConsoleAlertRows", "renderTodayConsole", "renderMarketConsole", "renderDecisionConsoleRow", "renderDecisionCauseList", "renderDecisionViewSwitch", "renderDecisionConsole", "renderAlertConsoleRow", "renderAlertsConsole", "renderInstrumentValuation", "renderInstrumentSummary", "renderInstrumentDecision", "renderInvestmentCalendarPage", "renderInvestmentCalendarSummaryPanel", "renderInvestmentCalendarRailPanel", "renderInvestmentCaseEvidence", "renderInvestmentCaseTabContent", "investmentFlowWorkDetailPayload", "bindDelegatedConsoleActions", "renderCommandPalette"]
+  },
+  {
+    "reason": "Show missing model feedback as insufficient observations and state the limited capital-flow observation scope explicitly.",
+    "functions": ["renderInvestmentModelEvolution", "renderInvestmentMoneyFlowPanel"]
+  },
+  {
     "reason": "Expose already-loaded hypothesis development cases in model management's validation tab; browser tests cover classified blockers, pending observations and approval controls.",
     "functions": ["renderInvestmentModelManagementWorkspace"]
   },

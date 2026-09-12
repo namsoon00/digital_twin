@@ -1,6 +1,6 @@
 import { investmentActionKey } from "../decisions/actions.mjs";
 import { instrumentItems, marketSignalForItem, parseMarketSignals } from "../decisions/signals.mjs";
-import { investmentAnalysisModel } from "../decisions/strategy.mjs";
+import { selectConsoleDecisionRows } from "../decisions/selectors.mjs";
 import { stockDisplayName } from "../instruments/catalog.mjs";
 import { researchEvidenceImpactMeta } from "../research/quality.mjs";
 import { currentResearchEvidence } from "../research/requests.mjs";
@@ -29,11 +29,15 @@ function consoleEvidenceBySymbol() {
 }
 
 function consoleDecisionBySymbol(snapshot) {
-  var analysis = investmentAnalysisModel(snapshot || {});
-  var rows = Array.isArray(analysis.actionQueue) ? analysis.actionQueue : [];
+  var accountId = String(((snapshot || {}).toss || {}).accountId || (snapshot || {}).accountId || "default");
+  var rows = selectConsoleDecisionRows(snapshot || {}).filter(function (row) { return row.accountId === accountId; });
   return rows.reduce(function (map, row, index) {
     var symbol = String(row && row.symbol || "").toUpperCase();
-    if (symbol && !map[symbol]) map[symbol] = Object.assign({ consoleKey: investmentActionKey(row, index) }, row);
+    if (symbol && !map[symbol]) map[symbol] = Object.assign({}, row, {
+      consoleKey: row.subjectCaseId || row.caseId || row.decisionKey || investmentActionKey(row.raw || row, index),
+      consoleDetailType: row.subjectCaseId || row.caseId ? "investment-case" : "investment-action",
+      reasons: [row.reason].filter(Boolean)
+    });
     return map;
   }, {});
 }

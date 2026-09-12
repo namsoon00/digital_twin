@@ -193,7 +193,7 @@ function renderInvestmentMoneyFlowPanel(snapshot) {
     '<div>',
     '<p class="label">Capital Flow</p>',
     '<h2>외국인·기관 자금 흐름</h2>',
-    '<p class="subtle">계좌 평가액과 분리된 시장 수급 관측값입니다.</p>',
+    '<p class="subtle">관측 범위: ' + escapeHtml(markets.map(function (item) { return item.label || item.key; }).filter(Boolean).join(" · ") || "시장 확인 필요") + ' · ' + escapeHtml(subjects.length + "종목 · " + windowDays + "일") + '. 전체 시장을 대표하는 집계가 아닙니다.</p>',
     '</div>',
     '<div class="capital-flow-head-meta"><span class="tone-chip ' + statusTone + '">' + escapeHtml(statusLabel) + '</span><span class="metric">' + escapeHtml(subjects.length + "종목 · " + windowDays + "일") + '</span></div>',
     '</div>',

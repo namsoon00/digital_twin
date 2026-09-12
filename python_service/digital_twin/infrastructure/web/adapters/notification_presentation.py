@@ -369,6 +369,14 @@ def notification_job_public_payload(
     from digital_twin.modules.notifications.public import notification_heading
 
     presentation = presentation_metadata(job.message_type, context)
+    stored_document = context.get("customerInvestmentDocument")
+    stored_document = stored_document if isinstance(stored_document, dict) else {}
+    stored_content = context.get("notificationContent")
+    stored_content = stored_content if isinstance(stored_content, dict) else {}
+    investment_summary = {
+        "headline": str(stored_document.get("headline") or ""),
+        "reason": str(stored_document.get("lead") or stored_content.get("summary") or ""),
+    }
     payload = {
         "jobId": job.job_id,
         "messageType": job.message_type,
@@ -391,6 +399,7 @@ def notification_job_public_payload(
         "rawSymbol": str(context.get("rawSymbol") or context.get("symbol") or "").strip(),
         "symbolName": str(context.get("symbolDisplayName") or context.get("displaySymbolName") or "").strip(),
         "textPreview": compact_notification_text(customer_text),
+        "investmentSummary": investment_summary,
         "lastError": job.last_error,
         "suppressionSummary": notification_suppression_summary(job),
         "nextEligibleAt": notification_next_eligible_at(context),
@@ -545,7 +554,7 @@ def notification_job_list_payload(
         "notificationKind", "notificationKindLabel", "notificationKindIcon",
         "accountId", "accountLabel", "decisionEpisodeId", "decisionKey",
         "createdAt", "updatedAt", "sourceEventName", "title", "symbol", "rawSymbol",
-        "symbolName", "textPreview", "lastError", "suppressionSummary", "nextEligibleAt",
+        "symbolName", "textPreview", "investmentSummary", "lastError", "suppressionSummary", "nextEligibleAt",
         "processingAgeMinutes", "recoverableProcessing", "deliveryDecision",
         "priorityQueueEligible", "priorityQueueState", "priorityQueueWindowMinutes",
         "apiSource", "dataQuality", "isMock",

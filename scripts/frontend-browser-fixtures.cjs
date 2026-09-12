@@ -12,6 +12,7 @@ const jobs = Array.from({ length: 55 }, (_, index) => ({
   messageType: "investmentInsight", status: index % 3 ? "done" : "failed",
   createdAt: new Date(Date.parse(stamp) - index * 60000).toISOString(),
   textPreview: "Synthetic verified evidence", deliveryReasons: ["Synthetic reason"], isMock: true,
+  investmentSummary: index % 2 ? {headline: "Synthetic alert " + (index + 1), reason: "검증용 자료: 수요 전망이 바뀌어 매출 가정을 다시 확인합니다."} : undefined,
   accountId: "fixture-a", readAt: "", dataQuality: "actual"
 }));
 const snapshot = {
@@ -61,10 +62,20 @@ function payload(url, options = {}) {
     return { items: selected.slice(offset, offset + limit), offset, limit, resultTotal: selected.length, hasMore: offset + limit < selected.length, summary: { total: selected.length, markets: [], sources: [] } };
   }
   if (pathname === "/api/symbol-universe/refresh") return { status: "idle", running: false, history: [] };
-  if (pathname === "/api/decisions") return { version: "investment-case-v1", items: [], summary: {}, operatorView: { stages: [], issues: [] } };
+  if (pathname === "/api/decisions") return { version: "investment-case-v1", items: items.slice(0, 5).map((item, i) => ({
+    caseId: i ? "fixture-case-" + i : "fixture-case", accountId: "fixture-a", symbol: item.symbol,
+    name: i ? "검증용 기업 " + (i + 1) : "검증용 반도체 기업", updatedAt: stamp, lastVerifiedAt: new Date().toISOString(),
+    headline: "검증용 자료: 수요 변화의 지속 여부를 확인하고 있습니다.", readinessState: "warning", readinessLabel: "일부 자료 확인 필요",
+    attention: {state: "review", userReviewable: true}, decision: {action: "HOLD", dataState: "partial"},
+    explanation: {constraints: [{summary: "실적 자료 확인 필요"}]}
+  })), summary: {}, operatorView: { stages: [], issues: [] } };
   if (pathname.startsWith("/api/decisions/")) return {
     caseId: pathname.split("/")[3], episodeId: "fixture-resolved", resolvedFromLegacyKey: pathname.endsWith("fixture-legacy"),
     symbol: "TEST01", name: "MOCK Synthetic case", accountId: "fixture-a", decision: { action: "HOLD" },
+    headline: "검증용 자료: 수요 변화의 지속 여부를 확인합니다.", updatedAt: stamp,
+    freshness: {decisionAsOf: stamp, sourceAsOf: stamp},
+    explanation: {primaryCause: {summary: "매출과 수요 변화의 연결을 확인했습니다."},
+      constraints: [{summary: "검증용 경고: 다음 실적은 아직 발표되지 않았습니다."}], changeConditions: ["다음 실적의 수요 변화"]},
     decisionReview: {state: "data-gap", previousSummary: "검증용 가설: 수요 증가가 다음 분기 매출에 반영되는지 확인합니다.",
       capturedAt: stamp, packetId: "synthetic-review", interpretation: "자료 부족은 가설 실패가 아니며, 관측 수익률은 실제 매매 수익을 뜻하지 않습니다.",
       verifiedChanges: [{label: "20일 평균 가격 회복", status: "satisfied"}], nextChecks: ["다음 분기 매출 발표"],
@@ -81,7 +92,10 @@ function payload(url, options = {}) {
     action: "HOLD", decidedAt: new Date(Date.parse(stamp)-i*3600000).toISOString(),
     summary: "MOCK history record "+(i+1), change: { evidenceChanged: true }
   })) };
-  if (pathname.includes("investment-calendar")) return { events: [], candidates: [], summary: {} };
+  if (pathname.includes("investment-calendar")) return { events: [{eventId: "fixture-calendar-1", title: "검증용 반도체 기업 실적 발표",
+    startsAt: new Date(Date.now() + 86400000).toISOString(), eventType: "earnings", status: "tentative", symbols: ["TEST01"],
+    importance: 80, description: "실적과 수요 전망을 확인하는 검증용 일정입니다.", source: "MOCK fixture", updatedAt: stamp,
+    reminderOffsetsMinutes: []}], candidates: [], summary: {total: 1, upcoming: 1} };
   if (pathname === "/api/investment-brain/hypothesis-development") return {
     count: 2, summary: {statuses: {"needs-revision": 1, "needs-data": 1}}, cases: [
       {caseId: "fixture-development", symbol: "TEST01", title: "검증용 수요 가설", claim: "수요와 매출 관계를 검증하는 테스트 자료입니다.",

@@ -1,10 +1,11 @@
 import { renderInvestmentCaseReasoning } from "./case-reasoning.mjs";
-import { investmentCaseOperatorAccess, renderInvestmentCaseCurrentState, renderInvestmentCaseDetailTabs, renderInvestmentCaseEvidence, renderInvestmentCaseSummary } from "./case-summary.mjs";
+import { investmentCaseOperatorAccess, renderInvestmentCaseCurrentState, renderInvestmentCaseDetailTabs, renderInvestmentCaseEvidence, renderInvestmentCaseLineageChain, renderInvestmentCaseSummary } from "./case-summary.mjs";
+import { renderDecisionReview } from "./case-review.mjs";
 import { decisionActionMeta } from "./selectors.mjs";
-import { renderInvestmentFlowStages, renderInvestmentFlowStateLegend } from "./workspace.mjs";
+import { renderDecisionStatusDimensions, renderInvestmentDecisionRationale, renderInvestmentFlowStages, renderInvestmentFlowStateLegend, renderInvestmentInsightAssessmentCard } from "./workspace.mjs";
 import { createPanelScrollMemory } from "../navigation/panel-scroll.mjs";
 import { renderConsoleEmpty, renderConsoleListSkeleton } from "../shared/console.mjs";
-import { formatClock } from "../shared/format.mjs";
+import { formatClock, recordChangedAtValue } from "../shared/format.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { bindAutoGrowingTextareas } from "../shell/forms.mjs";
 import { decorateRenderedBusyControls, syncNetworkActivityDom } from "../shell/network-activity.mjs";
@@ -92,8 +93,12 @@ function renderInvestmentCaseTabContent(key, active, detail) {
   var normalized = normalizeInvestmentCaseDetailTab(active);
   if (normalized === "current") return renderInvestmentCaseCurrentState(detail);
   if (normalized === "evidence") return renderInvestmentCaseEvidence(detail);
-  if (normalized === "reasoning") return renderInvestmentCaseReasoning(detail);
-  if (normalized === "history") return renderInvestmentCaseHistory(key);
+  if (normalized === "reasoning") {
+    var ai = (detail.reasoningLineage || {}).ai || {};
+    var assessment = ai.status === "ai-authored" && ai.publicationContractPassed === true ? renderInvestmentInsightAssessmentCard(ai.insightAssessment) : "";
+    return renderInvestmentDecisionRationale(detail, false) + assessment + renderInvestmentCaseReasoning(detail) + renderInvestmentCaseLineageChain(detail) + renderDecisionStatusDimensions(detail.statusDimensions, false);
+  }
+  if (normalized === "history") return renderDecisionReview(detail.decisionReview, formatClock) + renderInvestmentCaseHistory(key);
   if (normalized === "trace") return renderInvestmentCaseTrace(key);
   return renderInvestmentCaseSummary(detail, key);
 }
@@ -133,11 +138,18 @@ function investmentFlowWorkDetailPayload(key) {
   var availableViews = Array.isArray(detail.availableViews) ? detail.availableViews : [];
   if (availableViews.length && availableViews.indexOf(active) < 0) active = "summary";
   var content = renderInvestmentCaseTabContent(key, active, detail);
+  var siblings = ((decisionsState.investmentFlow || {}).items || []).filter(function (item) {
+    return Boolean(item.subjectCaseId || item.caseId || item.episodeId) && String(item.accountId || "default") === String(detail.accountId || "default");
+  }).sort(function (a, b) { return recordChangedAtValue(b) - recordChangedAtValue(a); });
+  var siblingList = '<nav class="oa-case-siblings" aria-label="같은 계정의 투자 기록"><strong>같은 계정의 투자 기록</strong>' + siblings.map(function (item) {
+    var itemKey = item.subjectCaseId || item.caseId || item.episodeId;
+    return '<button type="button" data-work-detail="investment-case" data-work-detail-key="' + escapeHtml(itemKey) + '"' + (itemKey === key ? ' aria-current="true"' : '') + '><strong>' + escapeHtml(item.name || item.symbol) + '</strong><span>' + escapeHtml(formatClock(item.updatedAt || item.decidedAt) || "시각 미기록") + '</span></button>';
+  }).join("") + '</nav>';
   return {
     kicker: "Investment Case",
     title: detail.name || detail.symbol || "투자 케이스 상세",
     meta: [detail.symbol, action.label, detail.accountId, detail.readinessLabel].filter(Boolean).join(" · "),
-    body: renderInvestmentCaseDetailTabs(key, active, detail) + '<div class="oa-case-detail-content" role="tabpanel" data-work-detail-region="investment-case-content" data-investment-case-panel-key="' + escapeHtml(key) + '" data-investment-case-panel-tab="' + escapeHtml(active) + '">' + content + '</div>'
+    body: '<div class="oa-case-workspace">' + siblingList + '<div class="oa-case-workspace-main">' + renderInvestmentCaseDetailTabs(key, active, detail) + '<div class="oa-case-detail-content" role="tabpanel" data-work-detail-region="investment-case-content" data-investment-case-panel-key="' + escapeHtml(key) + '" data-investment-case-panel-tab="' + escapeHtml(active) + '">' + content + '</div></div></div>'
   };
 }
 

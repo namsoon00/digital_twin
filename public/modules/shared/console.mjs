@@ -7,6 +7,7 @@ import { focusElementWithoutScroll } from "../navigation/scroll.mjs";
 import { loadNotificationJobs, resetNotificationJobsPaging } from "../notifications/requests.mjs";
 import { render } from "../render/scheduler.mjs";
 import { escapeHtml } from "./text.mjs";
+import { renderSecondaryDisclosure } from "./disclosure.mjs";
 import { pageStructureMeta } from "../shell/catalog.mjs";
 import { app } from "../shell/root.mjs";
 import { calendarState } from "../state/calendar.mjs";
@@ -250,11 +251,14 @@ function renderConsoleListSkeleton(rowClass, labels, rowCount) {
 function renderConsoleManagedPage(pageId, metrics, content, options) {
   var structure = pageStructureMeta(pageId);
   options = options || {};
+  var secondaryMetrics = options.secondaryMetrics === true;
+  var metricMarkup = metrics && metrics.length ? renderConsoleMetricStrip(metrics, options) : "";
   return [
     '<div class="managed-page oa-console-page oa-console-page-' + escapeHtml(pageId) + '" data-console-workspace="' + escapeHtml(pageId) + '" data-structure-layer="' + escapeHtml(structure.layer) + '">',
     options.leading || '',
-    renderConsoleMetricStrip(metrics, options),
+    secondaryMetrics ? "" : metricMarkup,
     content,
+    secondaryMetrics && metricMarkup ? renderSecondaryDisclosure(pageId + "-metrics", "전체 현황", metricMarkup) : "",
     '</div>'
   ].join("");
 }

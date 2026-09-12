@@ -1,5 +1,9 @@
 {
   "domain": {
+    "modules/read_models/domain/investment_reasoning_detail.py::subject_reasoning_lineage": {
+      "hash": "ab307e9f2d914887d1b6903d079c4e36a29d5860ccd2ed324a15b1914ebcd5e3",
+      "reason": "Expose supporting/counter evidence and known data gaps; distinguish lineage-linked records from resolved originals without changing decision eligibility. Covered by test_subject_reasoning_lineage."
+    },
     "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
       "hash": "722f6c0e0f2eab5086f6ccb14a97e7e337c980c57b476cf0d2ceb0112c5afa88",
       "reason": "Distinguish unqueried ABox from missing facts, retrieve bounded relevant model contracts and receipts, and compact JSON without weakening governance; test_hypothesis_closed_loop."

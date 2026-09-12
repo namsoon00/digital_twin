@@ -75,7 +75,7 @@ function renderInstrumentSummary(row) {
     '<div class="work-detail-row"><b>수급</b><div><strong>' + escapeHtml(row.flowLabel + " " + row.flowDisplay) + '</strong><span>거래량 비율 ' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</span></div><em>' + escapeHtml(row.quality.label) + '</em></div>',
     '</div></section>',
     '<section class="work-detail-section"><strong>연결 상태</strong><div class="instrument-link-summary">',
-    '<span><b>' + escapeHtml(row.decision ? "판단 연결" : "판단 대기") + '</b><em>' + escapeHtml(row.decision ? ((row.decision.reasons || [])[0] || row.decision.action || "판단 근거") : "추론 결과가 생성되면 연결됩니다.") + '</em>' + (row.decision && row.decision.consoleKey ? renderWorkDetailButton("investment-action", row.decision.consoleKey, "판단 상세", "text-button compact") : '') + '</span>',
+    '<span><b>' + escapeHtml(row.decision ? "판단 연결" : "판단 대기") + '</b><em>' + escapeHtml(row.decision ? ((row.decision.reasons || [])[0] || row.decision.action || "판단 근거") : "추론 결과가 생성되면 연결됩니다.") + '</em>' + (row.decision && row.decision.consoleKey ? renderWorkDetailButton(row.decision.consoleDetailType || "investment-action", row.decision.consoleKey, "판단 상세", "text-button compact") : '') + '</span>',
     '<span><b>근거 ' + escapeHtml(evidence.length) + '건</b><em>' + escapeHtml(evidence.length ? "뉴스·공시 상세는 타임라인에서 확인" : "연결된 뉴스 근거 없음") + '</em></span>',
     '</div></section>',
     '</div>',
@@ -263,7 +263,7 @@ function renderInstrumentValuation(row, view) {
     renderInstrumentValuationMetric("PEG", hasNumericValue(metrics.pegRatio) ? instrumentValuationDecimal(metrics.pegRatio, "배", 2) : "자료 없음", "PER와 이익 성장의 비교", "hold"),
     '</div>',
     '<section class="instrument-valuation-band">',
-    '<div class="instrument-valuation-section-head"><div><span class="label">FAIR VALUE RANGE</span><h4>우리 기준 적정가</h4></div><span class="tone-chip ' + escapeHtml(decisionTone) + '">' + escapeHtml(decisionLabel) + '</span></div>',
+    '<div class="instrument-valuation-section-head"><div><span class="label">VALUATION SCENARIOS</span><h4>' + (evidenceBacked ? '근거 기반 가격 범위' : '초기 가정별 가격 시나리오') + '</h4></div><span class="tone-chip ' + escapeHtml(decisionTone) + '">' + escapeHtml(decisionLabel) + '</span></div>',
     '<p class="instrument-valuation-model"><strong>' + escapeHtml(instrumentValuationModelLabel(valuation.model)) + '</strong><span>현재가 ' + escapeHtml(instrumentValuationPrice(currentPrice, currency)) + '</span></p>',
     modelHasFairValue ? '<div class="instrument-valuation-scenarios">' + [
       renderInstrumentValuationScenario("보수적", fairValue.low, safety.conservativePct, currency, "hold"),
@@ -480,7 +480,7 @@ function renderInstrumentDecision(row, view) {
     return event.type === "decision" || event.type === "hypothesis";
   });
   var current = row.decision
-    ? '<section class="work-detail-section primary"><span class="label">CURRENT DECISION</span><strong>' + escapeHtml(row.decision.action || row.decision.decision || "판단 확인") + '</strong><p>' + escapeHtml((row.decision.reasons || [])[0] || "판단 근거 상세를 확인하세요.") + '</p>' + renderWorkDetailButton("investment-action", row.decision.consoleKey, "판단 근거 전체", "text-button primary compact") + '</section>'
+    ? '<section class="work-detail-section primary"><span class="label">CURRENT DECISION</span><strong>' + escapeHtml(row.decision.action || row.decision.decision || "판단 확인") + '</strong><p>' + escapeHtml((row.decision.reasons || [])[0] || "판단 근거 상세를 확인하세요.") + '</p>' + (row.decision.recency && row.decision.recency.state !== "current" ? '<p class="caution">' + escapeHtml(row.decision.recency.label) + ' · 저장 당시의 의견입니다.</p>' : '') + renderWorkDetailButton(row.decision.consoleDetailType || "investment-action", row.decision.consoleKey, "판단 근거 전체", "text-button primary compact") + '</section>'
     : '<div class="instrument-empty"><strong>현재 연결된 투자 판단이 없습니다.</strong><p>추론과 검증을 통과한 판단이 생성되면 가설 세대와 함께 표시합니다.</p></div>';
   return [
     '<section class="instrument-decision-workspace">',

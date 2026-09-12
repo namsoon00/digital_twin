@@ -146,7 +146,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # persisted SQL schedule add eight anti-stagnation boundaries.
         # Relevant contract retrieval, unqueried-data claims, explicit blockers,
         # and account/symbol-scoped model receipts add four authoring regressions.
-        self.assertLessEqual(total, 1400)
+        # Source/lineage resolution, counter-evidence and missing-data counts,
+        # trailing/forward EPS periods and lightweight authored notification
+        # summaries add four independent read-side presentation regressions.
+        self.assertLessEqual(total, 1404)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

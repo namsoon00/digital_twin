@@ -1348,6 +1348,10 @@ def subject_reasoning_lineage(
         for item in facts
         for evidence_id in item.get("evidenceIds") or []
     ], 200)
+    counter_ids = _unique([
+        evidence_id for item in hypotheses
+        for evidence_id in item.get("counterEvidenceIds") or []
+    ], 200)
     evidence_records = [{
         "id": evidence_id,
         "role": next((item.get("role") for item in facts if evidence_id in (item.get("evidenceIds") or [])), "context"),
@@ -1361,6 +1365,14 @@ def subject_reasoning_lineage(
         "source": next((item.get("source") for item in facts if evidence_id in (item.get("evidenceIds") or [])), "TypeDB"),
         "sourceAsOf": next((item.get("asOf") for item in facts if evidence_id in (item.get("evidenceIds") or [])), ""),
     } for evidence_id in evidence_ids]
+    data_gaps = list(candidate.get("data_gaps") or candidate.get("dataGaps") or [])
+    data_constraints = [item for item in rules if item.get("evidenceRole") == "data-quality"]
+    missing_items = [{
+        "label": item.get("label") or "자료 확인 필요",
+        "detail": item.get("description") or "이 자료 조건이 현재 판단을 제한합니다.",
+        "source": "저장된 판단 규칙",
+        "applicability": "needs-check",
+    } for item in data_constraints]
     return {
         "version": SUBJECT_REASONING_LINEAGE_VERSION,
         "status": "ok" if not blocking_issues else "integrity-blocked",
@@ -1462,9 +1474,15 @@ def subject_reasoning_lineage(
         },
         "evidence": {
             "supportingIds": _unique([evidence_id for item in hypotheses for evidence_id in item.get("supportingEvidenceIds") or []], 200),
-            "counterIds": _unique([evidence_id for item in hypotheses for evidence_id in item.get("counterEvidenceIds") or []], 200),
+            "counterIds": counter_ids,
             "records": evidence_records,
-            "resolvedCount": len(evidence_records),
+            "supportCount": len(supporting_causes[:6]),
+            "counterCount": len(counter_ids),
+            "missingCount": len(missing_items) + len(data_gaps) if missing_items or data_gaps else None,
+            "missingData": data_gaps,
+            "missingDataItems": missing_items,
+            "lineageLinkedCount": len(evidence_records),
+            "resolvedCount": 0,
             "identifierOnlyCount": 0,
         },
         "ai": {

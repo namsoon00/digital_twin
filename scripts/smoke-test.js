@@ -960,11 +960,11 @@ function checkWorkflowConsoleContract() {
   assertOk(
     code.indexOf('return "/api/decisions?"') >= 0 &&
       code.indexOf("renderInvestmentCaseDetailTabs") >= 0 &&
-      code.indexOf('["summary", "요약"]') >= 0 &&
-      code.indexOf('["current", "판단 당시·현재"]') >= 0 &&
+      code.indexOf('["summary", "핵심 해석"]') >= 0 &&
+      code.indexOf('["current", "확인된 수치"]') >= 0 &&
       code.indexOf('["evidence", "근거·반대"]') >= 0 &&
-      code.indexOf('["reasoning", "추론 과정"]') >= 0 &&
-      code.indexOf('["history", "변화·결과"]') >= 0 &&
+      code.indexOf('["reasoning", "모델·가설"]') >= 0 &&
+      code.indexOf('["history", "변화 이력"]') >= 0 &&
       code.indexOf("renderDecisionStatusDimensions") >= 0 &&
       code.indexOf("renderInvestmentDecisionRationale") >= 0 &&
       code.indexOf("renderInvestmentFlowStateLegend") >= 0 &&

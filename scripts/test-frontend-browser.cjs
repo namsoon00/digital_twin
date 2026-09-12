@@ -51,7 +51,7 @@ async function caseInteractions(page, label) {
   await page.waitForSelector('[data-investment-case-tab="history"]');
   await page.locator('[role="tab"][data-investment-case-tab="summary"]').click();
   await page.waitForSelector('.oa-insight-brief');
-  assert.match(await page.locator('.oa-insight-brief').textContent(), /왜 중요한가.*주의할 점.*다음에 확인할 것/s);
+  assert.match(await page.locator('.oa-insight-brief').textContent(), /무엇을 확인했나.*내 투자에 어떤 의미인가.*왜 그렇게 보나.*무엇을 더 확인해야 하나/s);
   assert.match(await page.locator('.oa-insight-brief').textContent(), /다음 실적은 아직 발표되지 않았습니다/);
   assert.equal(await page.locator('.oa-case-detail-content .oa-case-lineage-chain').count(), 0, label + ' technical lineage must not precede the summary');
   await page.screenshot({path: path.join(screenshots, label + '-insight-summary.png')});
@@ -111,6 +111,34 @@ async function caseInteractions(page, label) {
 }
 
 async function insightFirstScreens(page, label) {
+  await routeTo(page, "notifications");
+  const alertFilters = page.locator('#disclosure-alerts-filters');
+  await alertFilters.waitFor();
+  const reset = alertFilters.locator('[data-action="reset-notification-job-filters"]');
+  if (await reset.isEnabled()) {
+    if (await alertFilters.getAttribute('open') === null) await alertFilters.locator(':scope > summary').click();
+    await reset.click();
+    if (await alertFilters.getAttribute('open') !== null) await alertFilters.locator(':scope > summary').click();
+  }
+  await page.locator('[data-console-row-key="job-001"]').waitFor();
+  const delivery = page.locator('#disclosure-alert-delivery-job-001');
+  assert.equal(await delivery.getAttribute('open'), null, label + ' delivery state not secondary');
+  await delivery.locator(':scope > summary').click();
+  assert(await delivery.locator('.oa-secondary-content').isVisible(), label + ' delivery state inaccessible');
+  await delivery.locator(':scope > summary').click();
+  await routeTo(page, "overview");
+  await page.locator('#disclosure-today-awaiting').waitFor();
+  const today = page.locator('[data-console-keyed-list="today-primary"]');
+  assert.doesNotMatch(await today.textContent(), /Synthetic alert|검증용 기업 5|미확정|전달 상태/);
+  await page.locator('#disclosure-today-awaiting > summary').click();
+  assert.match(await page.locator('#disclosure-today-awaiting').textContent(), /검증용 기업 5/);
+  await page.locator('#disclosure-today-awaiting > summary').click();
+  await page.locator('#disclosure-today-operations > summary').click();
+  assert.match(await page.locator('[data-console-keyed-list="today-operations"]').textContent(), /Synthetic alert 1/);
+  await page.locator('#disclosure-today-operations > summary').click();
+  await page.evaluate(() => { window.scrollTo(0, 0); document.querySelector('.workspace-main').scrollTop = 0; });
+  await settle(page);
+  await page.screenshot({path: path.join(screenshots, label + '-today-reading.png')});
   await routeTo(page, "modeling");
   const first = page.locator('.oa-case-row').first();
   await first.waitFor();
@@ -120,6 +148,13 @@ async function insightFirstScreens(page, label) {
   assert(bounds.top < bounds.viewport - 140, label + ' first opinion is below the first viewport: ' + JSON.stringify(bounds));
   assert(bounds.content <= bounds.width + 1, label + ' opinion text overflows');
   await page.screenshot({path: path.join(screenshots, label + '-opinions-first.png')});
+  assert.equal(await page.locator('.oa-case-row').count(), 4, label + ' pending record mixed into opinions');
+  await page.locator('[data-decision-view="review"]').first().click();
+  await page.waitForFunction(() => document.querySelectorAll('.oa-case-row').length === 1);
+  assert.match(await page.locator('.oa-case-row').textContent(), /검증용 기업 5/);
+  assert.match(await page.locator('.oa-case-row').textContent(), /투자 의견 미확정/);
+  await page.locator('[data-decision-view="attention"]').first().click();
+  await page.waitForFunction(() => document.querySelectorAll('.oa-case-row').length === 4);
   await page.locator('.oa-decision-filter-sheet > summary').click();
   assert(await page.locator('[data-console-decision-filter="scope"]').isVisible(), label + ' scope filter is unreachable');
   await page.locator('.oa-decision-filter-sheet > summary').click();
@@ -127,10 +162,22 @@ async function insightFirstScreens(page, label) {
   await page.locator('[role="tab"][data-investment-case-tab="summary"]').click();
   await page.locator('.oa-insight-brief').waitFor();
   if (page.viewportSize().width >= 1200) assert(await page.locator('.oa-case-siblings').isVisible(), label + ' desktop record navigation missing');
-  const quickLink = await page.locator('.oa-insight-brief [data-investment-case-tab="evidence"]').boundingBox();
+  const quickLink = await page.locator('.oa-insight-brief [data-investment-case-tab="evidence"]').first().boundingBox();
   assert(quickLink.height >= 44, label + ' quick link touch target is too small');
   await page.screenshot({path: path.join(screenshots, label + '-brief.png')});
-  await page.locator('.oa-insight-brief [data-investment-case-tab="evidence"]').click();
+  const questions = await page.locator('.oa-reading-questions').evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
+  assert(questions.content <= questions.width + 1, label + ' investment explanation overflows');
+  await page.locator('.oa-insight-brief [data-investment-case-tab="reasoning"]').click();
+  await page.locator('.oa-reading-models').waitFor();
+  assert.match(await page.locator('.oa-reading-models').textContent(), /수요가 매출에 반영되는가.*주문 증가/s);
+  const modelRecords = page.locator('.oa-secondary-details').filter({has: page.locator('summary strong', {hasText: '모델·규칙과 성립 조건 전체'})});
+  assert.equal(await modelRecords.getAttribute('open'), null, label + ' technical model detail is not secondary');
+  await modelRecords.locator(':scope > summary').click();
+  assert(await page.locator('.oa-reasoning-inventory').isVisible(), label + ' full model records inaccessible');
+  await modelRecords.locator(':scope > summary').click();
+  await page.screenshot({path: path.join(screenshots, label + '-model-reading.png')});
+  await page.locator('[role="tab"][data-investment-case-tab="summary"]').click();
+  await page.locator('.oa-insight-brief [data-investment-case-tab="evidence"]').first().click();
   await page.waitForSelector('[data-investment-case-panel-tab="evidence"]');
   await page.locator('button[data-work-detail-close]').first().click();
   await page.waitForSelector('[data-work-detail-dialog]', {state: 'detached'});

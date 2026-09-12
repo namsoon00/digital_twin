@@ -8,7 +8,8 @@ notification dispatch, or data collection. No live records are rewritten.
 
 ## Reading Order
 
-- Today: up to three current tasks, important blockers and the next event.
+- Today: up to three current investment interpretations or opinions and the next
+  event. Unfinished analysis and collection/delivery problems are separate groups.
 - Decisions: current review, recheck and all records. Current review excludes
   blocked or outdated records; recheck retains them without invalidating history.
 - Decision detail: stored opinion, why it matters, limitations, next checks and
@@ -27,6 +28,43 @@ notification dispatch, or data collection. No live records are rewritten.
 
 Aggregate metrics and administrative information remain reachable. Disclosures
 have stable identities so background rendering can retain their open state.
+
+## Question-Oriented Reading (2026-09-13)
+
+`read_models/domain/investment_reading.py` projects existing case data into the
+versioned `investment-reading-v1` presentation contract. List and dashboard
+responses carry only the compact reading; detail carries the explanations,
+recorded numeric facts and their source timestamps. Projection performs no extra
+database/API query and never creates an investment opinion or changes a record.
+
+The main detail answers four questions in order:
+
+1. What was observed? Saved changes and numeric facts, with their original dates.
+2. What does it mean for my investment? Only the approved current-generation AI
+   investment implication, or an explicit statement that no interpretation exists.
+3. Why? Supporting explanations, counterarguments, constraints and missing data
+   remain separate. Absence of recorded counterarguments does not mean no risk.
+4. What needs checking? Saved next checks and invalidation conditions. The UI
+   does not promise automatic monitoring or fabricate a future event.
+
+`NO_ACTION` is not a holding recommendation. A case without a final action or a
+validated interpretation belongs to preparation/recheck, not current opinions.
+An approved interpretation without action authority is explicitly labeled as
+reference interpretation with no trading opinion. Old records retain their
+original dates and stay accessible in history and recheck.
+
+The model tab first shows the saved hypothesis contract's expected outcome,
+plain-language basis, qualification reason and falsification condition. Raw
+facts, relations, model conditions, rules and processing lineage remain in
+separate disclosures; they are not deleted or rewritten. Only a known engine
+wiring sentence and identifier diagnostics are omitted from the reading layer.
+Full source records retain them for audit.
+
+Desktop uses a two-column question layout with same-account navigation; mobile
+uses one column and links with at least 44px targets. Tab IDs and persistent
+panel/scroll lifecycle remain unchanged. This iteration changes presentation,
+not model quality or data availability; a missing explanation is not filled by
+an invented insight.
 
 ## Data Semantics
 

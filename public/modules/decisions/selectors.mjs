@@ -31,8 +31,10 @@ function selectConsoleDecisionRows(snapshot) {
       var dataState = String(decision.dataState || (item.facts || {}).dataState || "partial");
       var readinessState = String(item.readinessState || "warning");
       var attention = item.attention && typeof item.attention === "object" ? item.attention : {};
+      var reading = item.reading && typeof item.reading === "object" ? item.reading : null;
       return {
-        key: String(item.caseId || item.episodeId || item.symbol),
+        key: String(item.subjectCaseId || item.caseId || item.episodeId || accountId + ":" + item.symbol),
+        reading: reading,
         caseId: String(item.caseId || ""),
         detailType: String(item.detailType || "investment-case"),
         subjectCaseId: String(item.subjectCaseId || ""),
@@ -45,9 +47,9 @@ function selectConsoleDecisionRows(snapshot) {
         name: itemName && itemName.toUpperCase() !== itemSymbol ? itemName : stockDisplayName(itemSymbol, matched),
         decision: action.label,
         actionCode: action.code,
-        actionLabel: action.label,
+        actionLabel: reading ? reading.status : action.label,
         tone: readinessState === "blocked" || readinessState === "error" ? "danger" : action.tone,
-        reason: formatConsoleNarrative(item.headline || "판단 근거를 확인하세요."),
+        reason: reading ? reading.headline : formatConsoleNarrative(item.headline || "판단 근거를 확인하세요."),
         invalidation: formatConsoleNarrative(item.nextAction || "무효화 조건과 다음 확인을 살펴보세요."),
         quality: dataState === "partial" ? { label: "일부 자료 확인 필요", tone: "caution" } : consoleQualityMeta(dataState === "sufficient" ? "actual" : dataState),
         apiSource: item.detailType === "subject-decision-case" ? "SubjectDecisionCase" : "DecisionEpisode",
@@ -159,6 +161,7 @@ function decisionActionMeta(value, fallback) {
     SELL: { label: "매도 검토", tone: "danger" },
     AVOID: { label: "진입 회피", tone: "danger" },
     BLOCKED: { label: "판단 보류", tone: "caution" },
+    NO_ACTION: { label: "투자 의견 미확정", tone: "hold" },
     OBSERVE: { label: "관찰", tone: "hold" }
   };
   return Object.assign({ code: code }, values[code] || values.OBSERVE);

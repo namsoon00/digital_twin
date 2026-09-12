@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 from digital_twin.modules.read_models.domain.investment_case import INVESTMENT_CASE_VERSION, investment_case_history_item, investment_case_id, investment_case_snapshot, parse_investment_case_id
 from digital_twin.modules.read_models.domain.investment_analysis import investment_decision_key
 from digital_twin.modules.read_models.domain.investment_reasoning_detail import subject_reasoning_lineage
+from digital_twin.modules.read_models.domain.investment_reading import investment_reading
 from digital_twin.modules.read_models.domain.investment_flow import FLOW_STAGE_LABELS, FLOW_STATE_LABELS, decision_flow_projection, item_dict, text
 from digital_twin.modules.read_models.application.investment_flow_query_service import InvestmentFlowQueryService
 
@@ -103,6 +104,7 @@ class InvestmentCaseQueryService:
             key=lambda item: (text(item.get("updatedAt") or item.get("decidedAt")), text(item.get("symbol"))),
             reverse=True,
         )
+        items = [{**item, "reading": investment_reading(item, compact=True)} for item in items]
         status_counts = Counter(text(item.get("status")) or "active" for item in items)
         readiness_counts = Counter(text(item.get("readinessState")) or "warning" for item in items)
         attention_counts = Counter(
@@ -761,7 +763,8 @@ class InvestmentCaseQueryService:
     def detail(self, case_id: str) -> Dict[str, object]:
         subject_case = self._subject_case(case_id)
         if subject_case:
-            return self._subject_detail(case_id, subject_case)
+            payload = self._subject_detail(case_id, subject_case)
+            return {**payload, "reading": investment_reading(payload)}
         episode, snapshot = self._resolve(case_id)
         if not episode or not snapshot:
             return self._not_found(case_id)
@@ -782,7 +785,7 @@ class InvestmentCaseQueryService:
             "historyEndpoint": f"/api/investment-cases/{snapshot.case_id}/history",
             "traceEndpoint": f"/api/investment-cases/{snapshot.case_id}/trace",
         })
-        return payload
+        return {**payload, "reading": investment_reading(payload)}
 
     def _subject_case(self, subject_case_id: str) -> Dict[str, object]:
         getter = getattr(self.subject_case_repository, "get", None)

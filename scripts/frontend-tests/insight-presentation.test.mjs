@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { investmentBrief, renderInvestmentBrief } from "../../public/modules/decisions/brief.mjs";
+import { investmentBrief, investmentReading, renderInvestmentBrief } from "../../public/modules/decisions/brief.mjs";
+import { groupTodayTasks } from "../../public/modules/overview/task-groups.mjs";
 import { opinionRecency, decisionInView } from "../../public/modules/decisions/recency.mjs";
 import { evidenceSummary, evidenceResolutionLabel } from "../../public/modules/decisions/evidence-summary.mjs";
 import { notificationEventSummary } from "../../public/modules/notifications/summary.mjs";
@@ -47,6 +48,11 @@ test("unvalidated AI assessment is excluded from the brief", () => {
     publishable: true, causalMechanism: "must not publish", invalidationCondition: "must not publish"
   }}}});
   assert.doesNotMatch(JSON.stringify(brief), /must not publish/);
+  const old = investmentBrief({reasoningLineage: {ai: {status: "ai-authored", publicationContractPassed: true,
+    aiAuthored: true, currentGeneration: false, insightAssessment: {
+      publishable: true, causalMechanism: "must not publish", invalidationCondition: "must not publish"
+    }}}});
+  assert.doesNotMatch(JSON.stringify(old), /must not publish/);
 });
 
 test("brief translates internal storage terms without rewriting the stored reasoning", () => {
@@ -58,7 +64,7 @@ test("brief translates internal storage terms without rewriting the stored reaso
 });
 
 test("brief escapes external text and preserves dates and source warnings", () => {
-  const html = renderInvestmentBrief({headline: '<script>alert(1)</script>', updatedAt: "2026-09-12T00:00:00Z"}, 'x" onclick="bad', "의견 없음", value => value);
+  const html = renderInvestmentBrief({headline: '<script>alert(1)</script>', decision: {action: "HOLD"}, updatedAt: "2026-09-12T00:00:00Z"}, 'x" onclick="bad', "의견 없음", value => value);
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>| onclick="bad/);
   assert.match(html, /2026-09-12T00:00:00Z/);
@@ -102,4 +108,48 @@ test("secondary disclosure has a stable identity and defaults closed", () => {
   assert.match(html, /id="disclosure-test-metrics"/);
   assert.doesNotMatch(html, / open[ >]/);
   assert.match(html, /<summary>/);
+});
+
+test("operational failures never occupy the investor queue and input order is preserved", () => {
+  const tasks = [{kind: "알림", key: "failure"}, {kind: "판단", key: "new"},
+    {kind: "판단", key: "pending", reading: {kind: "awaiting"}}, {kind: "데이터", key: "connection"},
+    {kind: "일정", key: "earnings"}, {kind: "판단", key: "older"}];
+  const before = JSON.stringify(tasks);
+  const groups = groupTodayTasks(tasks);
+  assert.deepEqual(groups.investment.map(x => x.key), ["new", "older"]);
+  assert.deepEqual(groups.operations.map(x => x.key), ["failure", "connection"]);
+  assert.deepEqual(groups.pending.map(x => x.key), ["pending"]);
+  assert.deepEqual(groups.calendar.map(x => x.key), ["earnings"]);
+  assert.equal(JSON.stringify(tasks), before);
+});
+
+test("an unfinished current analysis belongs to preparation, not investment opinions", () => {
+  const row = {recency: {state: "current"}, reading: {kind: "awaiting"}, userReviewable: true, userActionable: true};
+  assert.equal(decisionInView(row, "attention", Date.now()), false);
+  assert.equal(decisionInView(row, "action", Date.now()), false);
+  assert.equal(decisionInView(row, "review", Date.now()), true);
+  assert.equal(decisionInView({...row, reading: {kind: "interpretation"}}, "attention", Date.now()), true);
+});
+
+test("legacy NO_ACTION and blocked HOLD never become a holding recommendation", () => {
+  for (const decision of [{action: "NO_ACTION"}, {action: "HOLD", state: "blocked"}]) {
+    const reading = investmentReading({decision, headline: "TypeDB 추론 완료"}, "관찰");
+    assert.equal(reading.kind, "awaiting");
+    assert.equal(reading.status, "투자 의견 미확정");
+    assert.doesNotMatch(reading.headline, /TypeDB/);
+  }
+});
+
+test("reading links each question to evidence and separates missing data from counterarguments", () => {
+  const reading = {version: "investment-reading-v1", kind: "interpretation", status: "참고 해석 · 매매 의견 없음",
+    headline: "검증용 해석", meaning: "검증용 영향", changes: ["검증용 변화"], reasons: ["주문 증가"],
+    reasonLabel: "검토한 설명", counters: ["주문 취소 증가"], gaps: ["분기 실적 미발표"], limits: [],
+    nextChecks: ["다음 실적"], facts: [{label: "계좌 내 비중", value: 31.75222, unit: "%", asOf: "2026-09-13T00:00:00Z"}]};
+  const html = renderInvestmentBrief({reading}, "case-test", "NO_ACTION", value => value);
+  assert.match(html, /무엇을 확인했나.*내 투자에 어떤 의미인가.*왜 그렇게 보나.*무엇을 더 확인해야 하나/s);
+  assert.match(html, /다르게 볼 근거.*주문 취소 증가/s);
+  assert.match(html, /부족한 자료 1건.*분기 실적 미발표/s);
+  assert.match(html, /31.75%/);
+  assert.doesNotMatch(html, /자동.*추적|자료 상태 확인 필요|31.75222/);
+  for (const tab of ["current", "reasoning", "evidence"]) assert.match(html, new RegExp('data-investment-case-tab="' + tab + '"'));
 });

@@ -13,9 +13,11 @@ function opinionRecency(item, now, windowHours) {
 function decisionInView(row, view, now) {
   var current = !row.recency || row.recency.state === "current";
   var attention = Boolean(row.userActionable || row.userReviewable || row.attentionState === "review");
-  if (view === "attention") return current && !row.blocked && attention;
-  if (view === "action") return current && !row.blocked && Boolean(row.userActionable);
-  if (view === "review") return !current || Boolean(row.blocked);
+  var pending = row.reading && ["awaiting", "unavailable"].includes(row.reading.kind);
+  var interpreted = row.reading && ["opinion", "interpretation"].includes(row.reading.kind);
+  if (view === "attention") return current && !row.blocked && !pending && (attention || interpreted);
+  if (view === "action") return current && !row.blocked && !pending && Boolean(row.userActionable);
+  if (view === "review") return !current || Boolean(row.blocked) || Boolean(pending);
   if (view === "recent") {
     var at = Date.parse(row.updatedAt || "");
     return Number.isFinite(at) && at >= Number(now) - 7 * 86400000;

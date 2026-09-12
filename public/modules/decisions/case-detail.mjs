@@ -1,4 +1,5 @@
-import { renderInvestmentCaseReasoning } from "./case-reasoning.mjs";
+import { renderInvestmentCaseReasoning, renderInvestmentModelReading } from "./case-reasoning.mjs";
+import { renderSecondaryDisclosure } from "../shared/disclosure.mjs";
 import { investmentCaseOperatorAccess, renderInvestmentCaseCurrentState, renderInvestmentCaseDetailTabs, renderInvestmentCaseEvidence, renderInvestmentCaseLineageChain, renderInvestmentCaseSummary } from "./case-summary.mjs";
 import { renderDecisionReview } from "./case-review.mjs";
 import { decisionActionMeta } from "./selectors.mjs";
@@ -96,7 +97,10 @@ function renderInvestmentCaseTabContent(key, active, detail) {
   if (normalized === "reasoning") {
     var ai = (detail.reasoningLineage || {}).ai || {};
     var assessment = ai.status === "ai-authored" && ai.publicationContractPassed === true ? renderInvestmentInsightAssessmentCard(ai.insightAssessment) : "";
-    return renderInvestmentDecisionRationale(detail, false) + assessment + renderInvestmentCaseReasoning(detail) + renderInvestmentCaseLineageChain(detail) + renderDecisionStatusDimensions(detail.statusDimensions, false);
+    return renderInvestmentModelReading(detail)
+      + renderSecondaryDisclosure("case-model-records-" + key, "모델·규칙과 성립 조건 전체", renderInvestmentCaseReasoning(detail), "사실·관계·가설 원본")
+      + renderSecondaryDisclosure("case-assessment-" + key, "분석 결과와 제한 사유", renderInvestmentDecisionRationale(detail, false) + assessment + renderDecisionStatusDimensions(detail.statusDimensions, false))
+      + renderSecondaryDisclosure("case-lineage-" + key, "처리 기록과 연결 상태", renderInvestmentCaseLineageChain(detail));
   }
   if (normalized === "history") return renderDecisionReview(detail.decisionReview, formatClock) + renderInvestmentCaseHistory(key);
   if (normalized === "trace") return renderInvestmentCaseTrace(key);
@@ -132,8 +136,6 @@ function investmentFlowWorkDetailPayload(key) {
         : renderConsoleListSkeleton("oa-decision-row", ["현재 판단", "핵심 신호", "다음 확인"], 5)
     };
   }
-  var decision = detail.decision || {};
-  var action = decisionActionMeta(decision.action, decision.action);
   var active = normalizeInvestmentCaseDetailTab(decisionsState.investmentCaseDetailTabs[key]);
   var availableViews = Array.isArray(detail.availableViews) ? detail.availableViews : [];
   if (availableViews.length && availableViews.indexOf(active) < 0) active = "summary";
@@ -148,7 +150,7 @@ function investmentFlowWorkDetailPayload(key) {
   return {
     kicker: "Investment Case",
     title: detail.name || detail.symbol || "투자 케이스 상세",
-    meta: [detail.symbol, action.label, detail.accountId, detail.readinessLabel].filter(Boolean).join(" · "),
+    meta: [detail.symbol, detail.accountId === "default" ? "기본 계정" : detail.accountId].filter(Boolean).join(" · "),
     body: '<div class="oa-case-workspace">' + siblingList + '<div class="oa-case-workspace-main">' + renderInvestmentCaseDetailTabs(key, active, detail) + '<div class="oa-case-detail-content" role="tabpanel" data-work-detail-region="investment-case-content" data-investment-case-panel-key="' + escapeHtml(key) + '" data-investment-case-panel-tab="' + escapeHtml(active) + '">' + content + '</div></div></div>'
   };
 }

@@ -28,12 +28,17 @@ function renderDecisionConsoleRow(row) {
   var causeText = readinessBlocked
     ? (primaryIssue.reason || primary.summary || row.reason || "현재 의견을 사용할 수 없는 이유를 확인하세요.")
     : (primary.summary || row.reason || "판단 근거를 확인하세요.");
+  var reading = row.reading;
+  if (reading) {
+    causeLabel = reading.kind === "opinion" || reading.kind === "interpretation" ? "투자 의미" : "확인이 필요한 이유";
+    causeText = reading.meaning || reading.headline;
+  }
   return [
     '<button class="oa-case-row" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '">',
-    '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : (row.source === "holding" ? "보유" : "보유·관심 상태 미확인"), row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "관찰") + '</b><em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.attentionLabel || row.readinessLabel || "확인 필요") + '</em></span></header>',
+    '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : (row.source === "holding" ? "보유" : "보유·관심 상태 미확인"), row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "투자 의견 미확정") + '</b>' + (reading ? '' : '<em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.attentionLabel || row.readinessLabel || "확인 필요") + '</em>') + '</span></header>',
     '<div class="oa-case-reason"><span>' + escapeHtml(causeLabel) + '</span><strong>' + escapeHtml(causeText) + '</strong></div>',
     row.recency && row.recency.state !== "current" ? '<p class="oa-case-recency caution">' + escapeHtml(row.recency.label) + '</p>' : '',
-    '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + '</em></span><b aria-hidden="true">근거 보기 →</b></footer>',
+    '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.isMock ? "MOCK" : row.quality.label || "자료 확인") + '</em></span><b aria-hidden="true">해석과 근거 &rarr;</b></footer>',
     '</button>'
   ].join("");
 }
@@ -146,7 +151,7 @@ function renderDecisionViewSwitch(rows) {
     recent: rows.filter(function (row) { return decisionInView(row, "recent", Date.now()); }).length,
     all: rows.length
   };
-  var items = [["attention", "지금 확인"], ["review", "재확인"], ["all", "전체 기록"]];
+  var items = [["attention", "투자 의견"], ["review", "판단 준비·재확인"], ["all", "전체 기록"]];
   if (decisionsState.consoleDecisionView === "action") items.splice(1, 0, ["action", "주문 검토"]);
   if (decisionsState.consoleDecisionView === "recent") items.splice(1, 0, ["recent", "최근 변화"]);
   return '<nav class="oa-decision-view-switch" aria-label="투자 의견 범위">' + items.map(function (item) {
@@ -160,11 +165,11 @@ function decisionQueueWorkDetailPayload() {
   var page = consolePageSlice(rows, "decision", 12);
   var body = page.items.length
     ? '<div class="oa-case-list" data-console-keyed-list="decision-full">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>'
-    : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB 추론과 투자 분석 데이터가 생성되면 표시합니다.");
+    : renderConsoleEmpty("확인할 투자 의견이 없습니다", "현재 범위에 저장된 투자 의견이 없습니다.");
   return editorWorkDetailPayload(
-    "Action Queue",
-    "전체 투자 행동 후보",
-    "canonical 판단 큐 " + rows.length + "건",
+    "Investment Views",
+    "종목별 투자 해석",
+    rows.length + "건",
     '<section class="oa-detail-queue">' + renderConsoleLiveRegion("decision-full-body", body) + renderConsolePager("decision", page) + '</section>'
   );
 }
@@ -389,13 +394,13 @@ function renderDecisionConsole(snapshot) {
     { label: "판단 보류", value: blocked + "건", detail: "행동 아님", tone: blocked ? "danger" : "watch", target: { type: "tab", value: "experiments" } },
     { label: "결과 대기", value: awaitingOutcome + "건", detail: "성과 관측", target: { type: "decision", value: "all", key: "all", quality: "all" } }
   ];
-  var viewLabels = { attention: "지금 확인할 투자 의견", action: "주문 전 검토 의견", review: "근거를 더 확인할 의견", recent: "최근 달라진 의견", all: "전체 투자 의견" };
+  var viewLabels = { attention: "내 종목 투자 의견", action: "주문 전 검토 의견", review: "판단 준비·이전 의견 재확인", recent: "최근 달라진 의견", all: "전체 분석 기록" };
   var emptyDetail = decisionsState.consoleDecisionView === "action"
     ? "현재 주문을 검토할 의견은 없습니다. 근거 검토에는 행동을 바꿀 수 있는 확인 항목이 표시됩니다."
     : decisionsState.consoleDecisionView === "attention"
-    ? "현재 사용자 확인이 필요한 판단 변화가 없습니다."
+    ? (reviewRequired ? reviewRequired + "개 기록은 아직 의견이 확정되지 않았거나 재확인이 필요합니다." : "현재 확인할 투자 의견이 없습니다.")
     : "검색어나 필터를 조정하세요.";
-  var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", emptyDetail, '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
+  var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("확인할 투자 의견이 없습니다", emptyDetail, '<button class="text-button primary" type="button" data-decision-view="' + (reviewRequired ? 'review' : 'all') + '">' + (reviewRequired ? '준비·재확인 기록 보기' : '전체 기록 보기') + '</button>');
   return renderConsoleManagedPage("modeling", metrics, [
     renderDecisionViewSwitch(allRows),
     renderDecisionFilterToolbar(),

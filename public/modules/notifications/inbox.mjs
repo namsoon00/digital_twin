@@ -13,11 +13,12 @@ function renderAlertConsoleRow(row) {
   return [
     '<article class="oa-alert-card' + (row.readAt ? "" : " unread") + (row.important ? " important" : "") + '" data-console-row-key="' + escapeHtml(row.key) + '">',
     '<header><div><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(row.type) + '</em></div></header>',
-    '<section class="oa-alert-change"><span>확인한 변화</span><strong>' + escapeHtml(row.changeSummary || row.movement.change || "변화 요약 미기록") + '</strong></section>',
+    row.changeSummary ? '<section class="oa-alert-change"><span>무엇이 달라졌나</span><strong>' + escapeHtml(row.changeSummary) + '</strong></section>' : '',
     '<section class="oa-alert-reason"><span>' + escapeHtml(row.reasonLabel || "이유") + '</span><p>' + escapeHtml(row.reason) + '</p></section>',
-    '<div class="oa-alert-delivery"><span><b>' + escapeHtml(row.channel) + ' · 전달 ' + escapeHtml(row.status) + '</b><em>' + escapeHtml(row.isMock ? "MOCK" : row.dataQuality === "actual" ? "실데이터" : "자료 상태 미확인") + '</em></span>' + renderRecordChangedAt(row) + '</div>',
+    '<div class="oa-alert-source">' + renderRecordChangedAt(row) + '<span>' + escapeHtml(row.isMock ? "MOCK" : row.dataQuality === "actual" ? "실데이터" : "자료 상태 미확인") + '</span></div>',
+    renderSecondaryDisclosure("alert-delivery-" + row.key, "전달 상태", '<p>' + escapeHtml(row.channel + ' · ' + row.status) + '</p>', row.status),
     '<footer>',
-    row.decisionEpisodeId ? renderWorkDetailButton("investment-case", row.decisionEpisodeId, "연결된 판단", "text-button compact") : '',
+    row.decisionEpisodeId ? renderWorkDetailButton("investment-case", row.decisionEpisodeId, "종목의 투자 해석", "text-button compact") : '',
     '<span class="oa-alert-actions"><button class="icon-button" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.important ? "false" : "true") + '" aria-label="중요 표시" title="중요 표시">' + (row.important ? '&#9733;' : '&#9734;') + '</button><button class="icon-button" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.acknowledgedAt ? "false" : "true") + '" aria-label="확인 완료" title="확인 완료">&#10003;</button><button class="icon-button primary" type="button" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '" aria-label="알림 상세" title="알림 상세">&rarr;</button></span>',
     '</footer>',
     '</article>'

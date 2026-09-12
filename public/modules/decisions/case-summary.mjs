@@ -17,13 +17,13 @@ function investmentCaseOperatorAccess() {
 
 function renderInvestmentCaseDetailTabs(key, active, detail) {
   var tabs = [
-    ["summary", "요약"],
-    ["current", "판단 당시·현재"],
+    ["summary", "핵심 해석"],
+    ["current", "확인된 수치"],
     ["evidence", "근거·반대"],
-    ["reasoning", "추론 과정"],
-    ["history", "변화·결과"]
+    ["reasoning", "모델·가설"],
+    ["history", "변화 이력"]
   ];
-  if (investmentCaseOperatorAccess()) tabs.push(["trace", "기술 계보"]);
+  if (investmentCaseOperatorAccess()) tabs.push(["trace", "운영 추적"]);
   var available = Array.isArray((detail || {}).availableViews) ? detail.availableViews : [];
   if (available.length) tabs = tabs.filter(function (item) { return available.indexOf(item[0]) >= 0; });
   return '<nav class="oa-case-detail-tabs" role="tablist" aria-label="투자 케이스 상세 보기">' + tabs.map(function (item) {
@@ -129,10 +129,9 @@ function renderInvestmentCaseLineageChain(detail) {
 function renderInvestmentCaseSummary(detail, key) {
   var decision = detail.decision || {};
   var action = decisionActionMeta(decision.state === "blocked" ? "BLOCKED" : decision.action, decision.action);
-  var modelRelease = ((detail.traceRefs || {}).modelRelease || {});
   return [
     renderInvestmentBrief(detail, key, action.label, formatClock),
-    '<section class="oa-case-model-link"><span><strong>사용한 판단 기준</strong><em>' + escapeHtml(modelRelease.deploymentId || modelRelease.reasoningEngineVersion || modelRelease.lineageLabel || "릴리스 계보 확인") + '</em></span>' + renderWorkDetailButton("investment-model-overview", "", "판단 기준", "text-button compact") + '</section>'
+    '<section class="oa-case-model-link"><span><strong>투자 모델 전체</strong></span>' + renderWorkDetailButton("investment-model-overview", "", "모델 살펴보기", "text-button compact") + '</section>'
   ].join("");
 }
 

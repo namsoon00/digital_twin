@@ -10,6 +10,7 @@ const jobs = Array.from({ length: 55 }, (_, index) => ({
   id: "job-" + String(index + 1).padStart(3, "0"), jobId: "job-" + String(index + 1).padStart(3, "0"),
   title: "Synthetic alert " + (index + 1), symbol: items[index % items.length].symbol,
   messageType: "investmentInsight", status: index % 3 ? "done" : "failed",
+  priorityQueueEligible: index === 0,
   createdAt: new Date(Date.parse(stamp) - index * 60000).toISOString(),
   textPreview: "Synthetic verified evidence", deliveryReasons: ["Synthetic reason"], isMock: true,
   investmentSummary: index % 2 ? {headline: "Synthetic alert " + (index + 1), reason: "검증용 자료: 수요 전망이 바뀌어 매출 가정을 다시 확인합니다."} : undefined,
@@ -22,6 +23,23 @@ const snapshot = {
   portfolio: { total: 10000, invested: 8000, cash: 2000, concentration: 5, markets: [], sectors: [] },
   tossDecision: { headline: "Fixture", urgentCount: 0, holdingCount: 48, watchCount: 0, items: [], rules: [] }
 };
+
+function reading(kind = "opinion") {
+  return {version: "investment-reading-v1", kind, status: kind === "opinion" ? "보유 유지" : "투자 의견 미확정",
+    headline: kind === "opinion" ? "검증용 자료: 수요 변화의 지속 여부를 확인합니다." : "검증용 자료: 다음 실적을 확인하기 전에는 투자 의견이 없습니다.",
+    meaning: kind === "opinion" ? "주문 증가가 다음 분기 매출에 반영되는지 확인할 이유가 있습니다." : "",
+    meaningEmpty: "투자 의견을 확정할 자료가 부족합니다.",
+    changes: ["검증용 변화: 신규 주문이 늘었습니다."], changeEmpty: "비교 기록 없음",
+    reasons: ["매출과 수요 변화의 연결을 확인했습니다."], reasonLabel: "검토한 설명",
+    counters: ["검증용 반대 근거: 주문 취소가 늘었습니다."], gaps: [],
+    limits: ["검증용 경고: 다음 실적은 아직 발표되지 않았습니다."], nextChecks: ["다음 실적의 수요 변화"],
+    facts: [{label: "계좌 내 비중", value: 31.75, unit: "%", asOf: stamp, source: "MOCK"},
+      {label: "보유 수익률", value: -0.43884, unit: "%", asOf: stamp, source: "MOCK"}],
+    sourceAt: stamp, opinionAt: stamp,
+    explanations: [{id: "fixture-model", title: "수요가 매출에 반영되는가", claim: "주문 증가와 다음 분기 매출을 함께 확인합니다.",
+      selected: false, qualification: "shadow", reason: "", conditions: ["주문 취소 확대"]}]
+  };
+}
 
 function payload(url, options = {}) {
   const pathname = url.pathname;
@@ -66,13 +84,15 @@ function payload(url, options = {}) {
     caseId: i ? "fixture-case-" + i : "fixture-case", accountId: "fixture-a", symbol: item.symbol,
     name: i ? "검증용 기업 " + (i + 1) : "검증용 반도체 기업", updatedAt: stamp, lastVerifiedAt: new Date().toISOString(),
     headline: "검증용 자료: 수요 변화의 지속 여부를 확인하고 있습니다.", readinessState: "warning", readinessLabel: "일부 자료 확인 필요",
-    attention: {state: "review", userReviewable: true}, decision: {action: "HOLD", dataState: "partial"},
-    explanation: {constraints: [{summary: "실적 자료 확인 필요"}]}
+    attention: {state: "review", userReviewable: true}, decision: {action: i === 4 ? "NO_ACTION" : "HOLD", dataState: "partial"},
+    explanation: {constraints: [{summary: "실적 자료 확인 필요"}]},
+    reading: reading(i === 4 ? "awaiting" : "opinion")
   })), summary: {}, operatorView: { stages: [], issues: [] } };
   if (pathname.startsWith("/api/decisions/")) return {
     caseId: pathname.split("/")[3], episodeId: "fixture-resolved", resolvedFromLegacyKey: pathname.endsWith("fixture-legacy"),
     symbol: "TEST01", name: "MOCK Synthetic case", accountId: "fixture-a", decision: { action: "HOLD" },
     headline: "검증용 자료: 수요 변화의 지속 여부를 확인합니다.", updatedAt: stamp,
+    reading: reading(),
     freshness: {decisionAsOf: stamp, sourceAsOf: stamp},
     explanation: {primaryCause: {summary: "매출과 수요 변화의 연결을 확인했습니다."},
       constraints: [{summary: "검증용 경고: 다음 실적은 아직 발표되지 않았습니다."}], changeConditions: ["다음 실적의 수요 변화"]},

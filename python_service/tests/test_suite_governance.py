@@ -151,7 +151,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # summaries add four independent read-side presentation regressions.
         # Saved hypothesis candidates, scoped native preview and post-authoring
         # requirements plus persisted-history formats add fifteen regressions.
-        self.assertLessEqual(total, 1419)
+        # Six read-only investor presentation cases cover authored meaning,
+        # unknown opinions, evidence roles, source clocks and compact identity.
+        self.assertLessEqual(total, 1425)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

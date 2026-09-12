@@ -46,5 +46,9 @@
   {
     "reason": "Content-addressed release version is shared by bundle, HTML and service worker.",
     "functions": ["registerOrbitAlphaServiceWorker"]
+  },
+  {
+    "reason": "Separate investment opinions from unfinished analysis and operational tasks; question-oriented detail labels preserve the same routes and full evidence.",
+    "functions": ["decisionActionMeta", "selectConsoleTodayTasks", "todayQueueWorkDetailPayload", "decisionQueueWorkDetailPayload", "renderInvestmentCaseDetailTabs"]
   }
 ]

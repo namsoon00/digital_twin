@@ -101,6 +101,15 @@ function renderInvestmentReasoningInventory(reasoning) {
   }).join("") + '</div>';
 }
 
+function renderInvestmentModelReading(detail) {
+  var models = Array.isArray((detail.reading || {}).explanations) ? detail.reading.explanations : [];
+  if (!models.length) return renderConsoleEmpty("검토한 설명을 확인할 수 없습니다", "이 기록에는 읽을 수 있는 모델·가설 설명이 연결되지 않았습니다.");
+  return '<section class="oa-reading-models"><h3>어떤 설명을 검토했나?</h3>' + models.map(function (item, index) {
+    var qualification = investmentHypothesisQualificationMeta({status: item.qualification});
+    return '<article><header><span>' + escapeHtml(item.selected ? "선택한 설명" : "검토한 가설") + '</span><strong>' + escapeHtml(item.title || "설명 " + (index + 1)) + '</strong></header>' + (item.claim !== item.title ? '<p>' + escapeHtml(item.claim || "설명 문장이 기록되지 않았습니다.") + '</p>' : '') + '<footer>' + escapeHtml(qualification.label) + '</footer>' + (item.reason ? '<p><strong>검증 상태의 이유</strong> ' + escapeHtml(item.reason) + '</p>' : '') + (item.conditions.length ? '<details><summary>이 설명을 다시 확인할 조건</summary><ul>' + item.conditions.map(function (condition) { return '<li>' + escapeHtml(condition) + '</li>'; }).join("") + '</ul></details>' : '') + '</article>';
+  }).join("") + '</section>';
+}
+
 function renderInvestmentCaseReasoning(detail) {
   var explanation = detail.explanation || {};
   var comparison = explanation.comparison || {};
@@ -158,4 +167,4 @@ function renderInvestmentCaseScenarios(detail) {
   }).join("") + '</div>';
 }
 
-export { investmentReasoningValue, renderInvestmentCaseReasoning };
+export { investmentReasoningValue, renderInvestmentCaseReasoning, renderInvestmentModelReading };

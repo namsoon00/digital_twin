@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional
 
 from digital_twin.platform.domain.operational_health import OPERATIONAL_HEALTH_CONTRACT_VERSION, OperationalHealthSignal, assess_operational_health, reasoning_engine_health_signals
+from digital_twin.modules.read_models.domain.investment_reading import investment_reading
 
 
 CONSOLE_READ_MODEL_VERSION = "console-read-model-v2"
@@ -135,6 +136,7 @@ class ConsoleReadModelService:
                     "readinessState", "readinessLabel", "headline", "nextAction", "decidedAt", "updatedAt",
                 ]
             } | {
+                "reading": _mapping(row.get("reading")) or investment_reading(row, compact=True),
                 "facts": {"dataState": _text(_mapping(row.get("facts")).get("dataState"))},
                 "decision": _mapping(row.get("decision")),
                 "outcome": {
@@ -198,7 +200,8 @@ class ConsoleReadModelService:
                 historical_task_count += 1
                 continue
             tasks.append({
-                "id": _text(item.get("caseId") or item.get("episodeId")),
+                "id": _text(item.get("subjectCaseId") or item.get("caseId") or item.get("episodeId")),
+                "accountId": _text(item.get("accountId")) or "default",
                 "symbol": _text(item.get("symbol")).upper(),
                 "name": _text(item.get("name")) or _text(item.get("symbol")).upper(),
                 "action": action,
@@ -207,7 +210,8 @@ class ConsoleReadModelService:
                 "attentionState": _text(attention.get("state")) or "action",
                 "taskType": "trade-review" if actionable else "evidence-review",
                 "updatedAt": updated_at,
-                "detailPath": "/?tab=modeling&detail=investment-case&detailKey=" + _text(item.get("caseId") or item.get("episodeId")),
+                "reading": _mapping(item.get("reading")) or investment_reading(item, compact=True),
+                "detailPath": "/?tab=modeling&detail=investment-case&detailKey=" + _text(item.get("subjectCaseId") or item.get("caseId") or item.get("episodeId")),
             })
         tasks.sort(key=lambda item: (_iso_timestamp(item.get("updatedAt")), item.get("symbol", "")), reverse=True)
 

@@ -86,7 +86,10 @@ function payload(url, options = {}) {
     count: 2, summary: {statuses: {"needs-revision": 1, "needs-data": 1}}, cases: [
       {caseId: "fixture-development", symbol: "TEST01", title: "검증용 수요 가설", claim: "수요와 매출 관계를 검증하는 테스트 자료입니다.",
         status: "needs-revision", updatedAt: stamp, retry: {state: "development-required", attemptCount: 2, lastAttemptAt: stamp,
-          blockers: [{kind: "unsupported-capability", requirement: "분기 수요를 검증할 모델 계약 등록이 필요합니다."}]}},
+          blockers: [{kind: "unsupported-capability", requirement: "분기 수요를 검증할 모델 계약 등록이 필요합니다."},
+            {kind: "unverified-observation", requirement: "현재 자료는 조회 전이며 결측 여부는 확인되지 않았습니다."}],
+          compilationContext: {modelAssessmentContext: {snapshots: [{asOf: stamp, assessments: [{status: "not-supported",
+            ruleLabel: "위험 이벤트 이후 가격 방어", failedConditionIds: ["fixture-condition"], unknownConditionIds: []}]}]}}}},
       {caseId: "fixture-observation", symbol: "TEST02", title: "검증용 관측 대기", claim: "미래 관측을 기다리는 테스트 자료입니다.",
         status: "needs-data", updatedAt: "2026-09-11T23:59:00Z", retry: {state: "waiting-observation", attemptCount: 1,
           nextCheckAt: "2026-09-12T03:00:00Z", blockers: [{kind: "observation-window", requirement: "제안 후 관측 기간을 기다립니다."}]}}

@@ -2007,7 +2007,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleCandidateAiEnabled": value("ontologyRuleCandidateAiEnabled", "ONTOLOGY_RULE_CANDIDATE_AI_ENABLED", "1"),
         "ontologyRuleCandidateAiUseCodex": value("ontologyRuleCandidateAiUseCodex", "ONTOLOGY_RULE_CANDIDATE_AI_USE_CODEX", "1"),
         "ontologyRuleCandidateAiCommand": value("ontologyRuleCandidateAiCommand", "ONTOLOGY_RULE_CANDIDATE_AI_COMMAND", ""),
-        "ontologyRuleCandidateAiTimeoutSeconds": value("ontologyRuleCandidateAiTimeoutSeconds", "ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS", "120"),
+        "ontologyRuleCandidateAiTimeoutSeconds": value("ontologyRuleCandidateAiTimeoutSeconds", "ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS", "300"),
         "ontologyRuleCandidateAiIntervalMinutes": value("ontologyRuleCandidateAiIntervalMinutes", "ONTOLOGY_RULE_CANDIDATE_AI_INTERVAL_MINUTES", "60"),
         "ontologyRuleCandidateAiMaxCandidates": value("ontologyRuleCandidateAiMaxCandidates", "ONTOLOGY_RULE_CANDIDATE_AI_MAX_CANDIDATES", "3"),
         "temporalWindowHistoryLimit": value("temporalWindowHistoryLimit", "TEMPORAL_WINDOW_HISTORY_LIMIT", "96"),

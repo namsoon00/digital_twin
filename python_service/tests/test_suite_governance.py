@@ -144,7 +144,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and shared AI/web memory add 13 unit and isolated SQL boundaries.
         # Scoped authoring, classified blockers, ready-queue fairness and a
         # persisted SQL schedule add eight anti-stagnation boundaries.
-        self.assertLessEqual(total, 1396)
+        # Relevant contract retrieval, unqueried-data claims, explicit blockers,
+        # and account/symbol-scoped model receipts add four authoring regressions.
+        self.assertLessEqual(total, 1400)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

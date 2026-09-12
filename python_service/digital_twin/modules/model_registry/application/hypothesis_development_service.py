@@ -89,6 +89,7 @@ class HypothesisDevelopmentService:
                 "lastCheckedAt": attempted.isoformat(),
                 "owner": "hypothesis-development",
             }
+            case.retry.pop("compilationContext", None)
             self.persist(case, "retry-started")
             try:
                 result = self._process_case(case_id)
@@ -105,7 +106,7 @@ class HypothesisDevelopmentService:
                 if invalid:
                     case.retry["nextCheckAt"] = ""
                 self.persist(case, "retry-failed", case.blocked_reason)
-                return {"status": "error", "caseId": case_id, "reason": case.blocked_reason}
+                return {"status": "error", "caseId": case_id, "reason": case.blocked_reason, "case": case.to_dict()}
             case = self.case_store.get(case_id) or case
             if case.status == "needs-data":
                 case.retry["state"] = blocker_state(case.retry.get("blockers") or [
@@ -165,10 +166,13 @@ class HypothesisDevelopmentService:
             case.retry["requirements"] = [item["requirement"] for item in case.retry["blockers"]]
             self.persist(case, "screening-stopped", case.blocked_reason)
             return {"status": case.status, "case": case.to_dict()}
+        case.transition("screening", "compilation")
+        self.persist(case, "compilation-started")
         candidate_result = self.compile_candidate(case)
+        case.retry["compilationContext"] = dict(candidate_result.get("contextSummary") or {})
         candidates = [dict(item) for item in candidate_result.get("candidates") or [] if isinstance(item, dict)]
         candidate = next((item for item in candidates if isinstance(item.get("proposedRule"), dict)), None)
-        if not candidate:
+        if not candidate or compilation_blockers([candidate]):
             blockers = compilation_blockers(candidates)
             needs_data = sorted({item["requirement"] for item in blockers})
             case.retry["requirements"] = needs_data[:40]
@@ -296,10 +300,15 @@ class HypothesisDevelopmentService:
     def compile_candidate(self, case: HypothesisDevelopmentCase) -> Dict[str, object]:
         if not self.rule_candidate_service or not hasattr(self.rule_candidate_service, "propose_hypothesis"):
             return {"status": "disabled", "reason": "가설 규칙 후보 서비스가 구성되지 않았습니다.", "candidates": []}
+        def record_input(summary):
+            case.retry["compilationContext"] = dict(summary)
+            self.persist(case, "compilation-input-captured")
+
         return self.rule_candidate_service.propose_hypothesis(
             case.to_dict(),
             account_id=case.account_id,
             tenant_id=str(self.settings.get("ontologyTenantId") or self.settings.get("tenantId") or ""),
+            context_observer=record_input,
         )
 
     def governed_candidate_rule(self, case: HypothesisDevelopmentCase, rule: Dict[str, object]) -> Dict[str, object]:

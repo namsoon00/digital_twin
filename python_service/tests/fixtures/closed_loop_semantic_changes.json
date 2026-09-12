@@ -1,12 +1,16 @@
 {
   "domain": {
     "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
-      "hash": "21e7790a682e6818637d963029cc914206c69281e94581ac96f33dddff9d7c1d",
-      "reason": "Require typed blockers and scoped authoring examples without relaxing model governance; test_hypothesis_closed_loop."
+      "hash": "722f6c0e0f2eab5086f6ccb14a97e7e337c980c57b476cf0d2ceb0112c5afa88",
+      "reason": "Distinguish unqueried ABox from missing facts, retrieve bounded relevant model contracts and receipts, and compact JSON without weakening governance; test_hypothesis_closed_loop."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::compact_candidate_context": {
-      "hash": "bad9e83f89dbb9f74fdab3c03619fe7ee36226894e3a283d71be23d4a10c6f6c",
-      "reason": "Preserve bounded rule syntax, original generation references and explicit authoring-only status; test_hypothesis_closed_loop."
+      "hash": "21bb67833fff6e29653f21b74104803f33ea9dbc4418f937065cb8bb4130015f",
+      "reason": "Replace the first thirty unrelated summaries with relevant contracts and scoped immutable model assessments; test_hypothesis_closed_loop."
+    },
+    "modules/model_registry/domain/ontology_rulebox_governance.py::rule_change_candidates_from_text": {
+      "hash": "2d5230104fed6d431968956575c6acba79d491525cc04b1ffc7b94f52f868f6c",
+      "reason": "Do not persist AI assertions of missing data as verified when the authoring phase never queried ABox; test_hypothesis_closed_loop."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::normalize_rule_change_candidate": {
       "hash": "3f84c29f1de6d96ff808a7528c102919ca6321ed32100deb8f040b633a1a02fd",

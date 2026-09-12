@@ -106,15 +106,22 @@ async function hypothesisScheduling(page, label) {
   await page.locator('[data-investment-model-management-tab="validation"]').click();
   await page.waitForSelector('[data-hypothesis-development-select="fixture-development"]');
   await page.locator('[data-hypothesis-development-select="fixture-development"]').click();
-  const retry = page.locator('.hypothesis-development-retry');
+  const retry = page.locator('.hypothesis-development-retry').first();
   await retry.scrollIntoViewIfNeeded();
   assert.match(await retry.textContent(), /개발·명세 수정 필요/);
   assert.match(await retry.textContent(), /기능 보완.*모델 계약 등록/s);
+  assert.match(await retry.textContent(), /미조회 자료 확인 필요.*결측 여부는 확인되지 않았습니다/s);
   assert.match(await retry.textContent(), /예약 없음/);
   assert.equal(await page.locator('[data-hypothesis-development-approve="fixture-development"]').isDisabled(), true);
+  const modelAssessments = page.locator('.hypothesis-model-assessments');
+  assert.match(await modelAssessments.textContent(), /조건 미충족.*위험 이벤트 이후 가격 방어.*미충족 1개.*확인 불가 0개/s);
   const bounds = await retry.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
   assert(bounds.content <= bounds.width + 1, label + ' hypothesis retry overflows');
   await retry.screenshot({path: path.join(screenshots, label + '-hypothesis-retry.png')});
+  await modelAssessments.scrollIntoViewIfNeeded();
+  const modelBounds = await modelAssessments.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
+  assert(modelBounds.content <= modelBounds.width + 1, label + ' model assessments overflow');
+  await modelAssessments.screenshot({path: path.join(screenshots, label + '-hypothesis-model-assessments.png')});
   await page.locator('[data-hypothesis-development-select="fixture-observation"]').click();
   await page.waitForFunction(() => document.querySelector('.hypothesis-development-retry')?.textContent.includes('관측 기간 대기'));
   assert.match(await page.locator('.hypothesis-development-retry').textContent(), /관측 기간 대기/);
@@ -148,18 +155,18 @@ async function instrumentChart(page, label) {
   assert.equal(new URL(page.url()).searchParams.get("token"), "fixture-readonly", "Deep-link auth query was lost");
   await page.locator('[data-instrument-workspace-tab="chart"]').click();
   await page.waitForSelector('[data-instrument-candle-chart] canvas', {timeout: 15000});
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-instrument-candle-chart] canvas')].some(canvas => {
-    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
-    const colors = new Set();
-    for (let i = 0; i < data.length; i += 4) if (data[i+3]) colors.add(`${data[i]},${data[i+1]},${data[i+2]}`);
-    return colors.size > 10;
-  }));
-  const pixels = await page.locator('[data-instrument-candle-chart] canvas').evaluateAll(canvases => Math.max(...canvases.map(canvas => {
-    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
-    const colors = new Set();
-    for (let i = 0; i < data.length; i += 4) if (data[i+3]) colors.add(`${data[i]},${data[i+1]},${data[i+2]}`);
-    return colors.size;
-  })));
+  // Keep the measured pixels from the successful frame, not a later redraw.
+  const paintedFrame = await page.waitForFunction(() => {
+    const maximum = Math.max(...[...document.querySelectorAll('[data-instrument-candle-chart] canvas')].map(canvas => {
+      const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+      const colors = new Set();
+      for (let i = 0; i < data.length; i += 4) if (data[i+3]) colors.add(`${data[i]},${data[i+1]},${data[i+2]}`);
+      return colors.size;
+    }));
+    return maximum > 10 ? maximum : false;
+  });
+  const pixels = await paintedFrame.jsonValue();
+  await paintedFrame.dispose();
   assert(pixels > 10, "Chart canvas is blank or uniform");
   assert.match(await page.locator('.instrument-chart-meta').textContent(), /41개/);
   assert.match(await page.locator('.instrument-source-strip').textContent(), /MOCK synthetic candles.*41건/);

@@ -378,11 +378,18 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "제약:",
         "- 매수/매도 지시를 만들지 말고 관계 후보만 제안한다.",
         "- proposedRule.enabled는 반드시 false다.",
-        "- ABox에 없는 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
+        "- 현재 ABox에서 실제 부재가 확인된 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
+        "- ruleDesign.observationState가 not-queried이면 현재 ABox를 조회하지 않은 명세 작성 단계다. 빈 inferenceBox.relations를 결측 증거로 사용하지 않는다.",
+        "- 명세와 모델 계약이 확인되면 현재 사실의 존재를 단정하지 않고 후보를 작성한다. 현재 일치 여부는 후속 TypeDB preview가 검증한다.",
+        "- 현재 사실 확인 없이는 작성할 수 없다면 unverified-observation으로 표시한다. 이를 missing-observation이나 관측 기간 부족으로 단정하지 않는다.",
         "- 부족 항목마다 blockers에 원인을 구분한다. 실제 관측 부재는 missing-observation, 미래 관측 대기는 observation-window, 규칙 명세 불일치는 schema-mismatch, 미구현 모델/공급자는 unsupported-capability다.",
         "- ruleDesign의 필드 명세와 실제 조건/파생 예시를 사용한다. 명세에 있는 필드를 알 수 없다는 이유로 데이터 수집을 요구하지 않는다.",
         "- evidence ID 보존은 가설의 출처 계보로 처리하며 PRESERVES_RULE_LINEAGE 관측이 있어야 규칙을 작성할 수 있다고 요구하지 않는다.",
         "- 새 예측 모델 등록이 필요하면 unsupported-capability로 명시한다. 기존 모델을 다른 인과 가설의 증거로 바꾸지 않는다.",
+        "- ruleDesign.capabilityIndex에서 관련 등록 규칙과 정확한 모델 계약을 확인한다. 전체 예시가 3개라는 이유로 나머지 기능이 없다고 단정하지 않는다.",
+        "- 이미 있는 가설보다 강한 인과 주장을 추가하려면 그 차이를 구체적으로 설명한다. 비슷한 등록 모델이 있다는 사실만으로 새 주장이 검증됐다고 판단하지 않는다.",
+        "- modelAssessmentContext는 명시된 계정·종목·시각의 저장된 모델 평가다. not-supported/failedConditionIds는 모델 미등록이나 필수 원천 자료 결측을 뜻하지 않는다.",
+        "- 모델 평가가 현재 TypeDB 세대와 같다고 추측하거나 과거 제안 시점의 증거로 소급하지 않는다. 현재 성립 여부는 후보 preview에서 확인한다.",
         "- relation_type, condition field, target filters는 제공된 RuleBox/InferenceBox/TBox에서 확인 가능한 형태를 우선 사용한다.",
         "- hypothesisProposal이 있으면 그 주장 하나만 실행 가능한 후보 규칙으로 변환하고 다른 가설을 추가하지 않는다.",
         "- hypothesisProposal의 evidence ID는 출처 계보이며 조건 field나 relation_type으로 직접 사용하지 않는다.",
@@ -393,7 +400,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "JSON 계약:",
         json.dumps(contract, ensure_ascii=False, indent=2),
         "입력 컨텍스트:",
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
     ])
 
 
@@ -405,24 +412,9 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
         "trigger": context.get("trigger") or "manual",
         "symbols": list(context.get("symbols") or [])[:30],
         "ruleBox": {
+            "status": rulebox.get("status"),
             "ruleCount": rulebox.get("ruleCount"),
             "relationTypes": list(rulebox.get("relationTypes") or [])[:40],
-            "rules": [
-                {
-                    "rule_id": item.get("rule_id") or item.get("ruleId"),
-                    "label": item.get("label"),
-                    "enabled": item.get("enabled"),
-                    "action_group": item.get("action_group") or item.get("actionGroup"),
-                    "action_level": item.get("action_level") or item.get("actionLevel"),
-                    "conditionCount": len(item.get("conditions") or []),
-                    "derivationTypes": [
-                        derivation.get("relation_type") or derivation.get("relationType")
-                        for derivation in (item.get("derivations") or [])[:4]
-                    ],
-                }
-                for item in list(rulebox.get("rules") or [])[:30]
-                if isinstance(item, dict)
-            ],
         },
         "inferenceBox": {
             "status": inferencebox.get("status"),
@@ -458,6 +450,7 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
             "invalidationConditions": list(proposal.get("invalidationConditions") or [])[:12],
         } if proposal else {},
         "ruleDesign": rule_design_context(context),
+        "modelAssessmentContext": context.get("modelAssessmentContext") or {"status": "not-queried", "snapshots": []},
         "existingCandidates": [
             {"id": item.get("id"), "status": item.get("status"), "title": item.get("title")}
             for item in list(rulebox.get("changeCandidates") or [])[:20]
@@ -480,6 +473,15 @@ def rule_change_candidates_from_text(text: str, context: Dict[str, object] = Non
         for item in raw_candidates
         if isinstance(item, dict)
     ]
+    unqueried = ((context or {}).get("inferenceBox") or {}).get("status") == "deferred-validation"
+    if unqueried:
+        for candidate in candidates:
+            for blocker in candidate.get("blockers") or []:
+                if blocker.get("kind") in {"missing-observation", "stale-observation"}:
+                    blocker.update({
+                        "kind": "unverified-observation", "owner": "development",
+                        "requirement": "현재 ABox 미조회로 확인되지 않은 AI 요구사항: " + blocker["requirement"],
+                    })
     return [item for item in candidates if item]
 
 

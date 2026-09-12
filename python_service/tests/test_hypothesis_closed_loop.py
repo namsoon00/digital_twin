@@ -1,4 +1,5 @@
 import copy
+import json
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -15,11 +16,11 @@ from digital_twin.modules.decisions.domain.notification_ai_decision_brief import
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
 from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight import AIInsightEpisode, AIInsightHandoff
 from digital_twin.modules.read_models.application.investment_case_query_service import InvestmentCaseQueryService
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import RULE_DESIGN_VERSION, blocker_state, compilation_blockers, rule_design_context
-from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, normalize_rule_change_candidate
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import RULE_DESIGN_VERSION, authoring_capability_index, blocker_state, compilation_blockers, rule_design_context
+from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, normalize_rule_change_candidate, rule_change_candidates_from_text
 from digital_twin.modules.model_registry.application.ontology_lab_service import OntologyLabService
 from digital_twin.modules.model_registry.application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
-from digital_twin.infrastructure.rule_change_candidate_ai import FallbackRuleChangeCandidateAdvisor
+from digital_twin.infrastructure.rule_change_candidate_ai import CommandRuleChangeCandidateAdvisor, FallbackRuleChangeCandidateAdvisor
 
 
 class CaseStore:
@@ -109,10 +110,15 @@ class HypothesisClosedLoopTests(unittest.TestCase):
 
     def test_dependency_failure_is_durable_and_throttled(self):
         service, store, candidate = self.development()
-        candidate.propose_hypothesis.side_effect = TimeoutError("test unavailable")
+        def unavailable(*args, **kwargs):
+            kwargs["context_observer"]({"ruleboxSnapshotId": "registered:1", "observationState": "not-queried"})
+            raise TimeoutError("test unavailable")
+        candidate.propose_hypothesis.side_effect = unavailable
         result = service.process_pending()
         self.assertEqual("error", result["results"][0]["status"])
         self.assertEqual("dependency-error", store.get("case:1").retry["state"])
+        self.assertEqual("compilation", store.get("case:1").stage)
+        self.assertEqual("registered:1", store.get("case:1").retry["compilationContext"]["ruleboxSnapshotId"])
         self.assertEqual(0, service.process_pending()["processedCount"])
 
     def test_newest_terminal_rows_do_not_starve_old_data_gap(self):
@@ -133,7 +139,8 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         self.assertIn("candidate_action", design["derivationFields"])
         self.assertEqual("portfolio:main", design["scope"]["worldId"])
         prompt = build_rule_change_candidate_prompt(context)
-        self.assertIn('"field": "fixture"', prompt)
+        prompt_context = json.loads(prompt.split("입력 컨텍스트:\n", 1)[1])
+        self.assertEqual("fixture", prompt_context["ruleDesign"]["examples"][0]["conditions"][0]["target_property_filters"]["field"])
         self.assertIn(RULE_DESIGN_VERSION, prompt)
         self.assertEqual([], rule_design_context(context, max_bytes=1)["examples"])
         repository = SimpleNamespace(rulebox_snapshot=Mock(return_value=context["ruleBox"]),
@@ -177,6 +184,122 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         self.assertEqual("waiting-data", store.get("case:1").retry["state"])
         candidate.propose_hypothesis.assert_not_called()
 
+    def test_authoring_retrieves_relevant_contract_beyond_first_thirty_rules(self):
+        rules = [{"rule_id": "graph.a." + str(i), "label": "가격 확인", "conditions": [],
+                  "claim_contract": {"claimType": "market-hypothesis", "statement": "가격 확인"}}
+                 for i in range(40)]
+        event_rule = {
+            "rule_id": "graph.z.absorption", "label": "위험 이벤트 가격 방어 흡수 가설",
+            "claim_contract": {"claimType": "market-hypothesis", "statement": "위험 이벤트 충격 흡수"},
+            "conditions": [{"relation_type": "HAS_MODEL_SIGNAL", "target_property_filters": {
+                "signalType": "event-abnormal-return-support", "releaseId": "event-production-v2",
+                "hypothesisContractId": "graph.z.absorption"}}],
+            "model_input_contract": {"conditionProfiles": [{"relationType": "HAS_TEMPORAL_WINDOW"}]},
+            "derivations": [{"evidence_role": "support"}],
+        }
+        context = {"ruleBox": {"rules": rules + [event_rule]},
+                   "hypothesisProposal": {"title": "공시 이벤트 충격 흡수 가설", "claim": "가격 방어로 충격 흡수",
+                                          "retry": {"compilationContext": {"exampleRuleIds": ["graph.a.0"]}}},
+                   "inferenceBox": {"status": "deferred-validation"}}
+        design = rule_design_context(context)
+        self.assertEqual(event_rule, next(row for row in rules + [event_rule] if row["rule_id"] == design["examples"][0]["rule_id"]))
+        indexed = design["capabilityIndex"]["rules"][0]
+        self.assertEqual("graph.z.absorption", indexed["modelEvidence"][0]["hypothesisContractId"])
+        self.assertIn("HAS_TEMPORAL_WINDOW", indexed["inputRelations"])
+        self.assertEqual("partial-loaded-release", design["capabilityIndex"]["coverage"])
+        self.assertEqual(41, len(design["capabilityIndex"]["registeredRuleIds"]))
+        self.assertEqual(41, design["capabilityIndex"]["totalRuleCount"])
+        self.assertEqual("not-queried", design["observationState"])
+        tiny = authoring_capability_index(rules + [event_rule], max_bytes=1)
+        self.assertEqual("partial-loaded-release", tiny["coverage"])
+        self.assertEqual(41, tiny["omittedRuleCount"])
+
+    def test_unqueried_abox_cannot_be_reported_as_verified_missing_data(self):
+        payload = json.dumps({"candidates": [{"blockers": [{
+            "kind": "missing-observation", "requirement": "event absent", "dependencyKey": "event:1"
+        }]}]})
+        context = {"hypothesisProposal": {"claim": "fixture"}, "inferenceBox": {"status": "deferred-validation"}}
+        candidate = rule_change_candidates_from_text(payload, context)[0]
+        blocker = candidate["blockers"][0]
+        self.assertEqual("unverified-observation", blocker["kind"])
+        self.assertIn("미조회", blocker["requirement"])
+        self.assertEqual(("needs-revision", "development-required"), blocker_state([blocker]))
+        # The actual validation owner may still report a proven data gap.
+        checked = rule_change_candidates_from_text(payload, {"inferenceBox": {"status": "ok"}})[0]
+        self.assertEqual("missing-observation", checked["blockers"][0]["kind"])
+        self.assertIn("빈 inferenceBox.relations를 결측 증거로 사용하지 않는다", build_rule_change_candidate_prompt(context))
+
+    def test_a_candidate_does_not_override_its_explicit_compilation_blockers(self):
+        service, store, advisor = self.development()
+        advisor.propose_hypothesis.return_value = {
+            "contextSummary": {"observationState": "not-queried", "exampleRuleIds": ["registered:1"]},
+            "candidates": [{"proposedRule": {"rule_id": "new-rule"}, "blockers": [{
+                "kind": "unsupported-capability", "requirement": "exact model not registered",
+                "dependencyKey": "model:new-rule",
+            }]}],
+        }
+        service.create_experiment = Mock(side_effect=AssertionError("blocked candidate entered validation"))
+        service.process("case:1")
+        saved = store.get("case:1")
+        self.assertEqual("needs-revision", saved.status)
+        self.assertEqual("not-queried", saved.retry["compilationContext"]["observationState"])
+        service.create_experiment.assert_not_called()
+
+    def test_authoring_reads_only_scoped_exact_model_receipts_and_keeps_failed_conditions(self):
+        rule = {"rule_id": "graph.absorption", "label": "충격 흡수", "conditions": [{
+            "relation_type": "HAS_MODEL_SIGNAL", "target_property_filters": {
+                "releaseId": "event-v2", "hypothesisContractId": "graph.absorption",
+            }}]}
+        model_store = SimpleNamespace(latest=Mock(return_value={
+            "accountId": "main", "modelReleaseId": "event-v2", "snapshotId": "snapshot:1",
+            "asOf": "2026-09-12T00:00:00Z", "sourceFeatureSnapshotId": "feature:1",
+            "assessments": [
+                {"subjectId": "MSTR", "hypothesisContractId": "graph.absorption", "status": "not-supported",
+                 "failedConditionIds": ["event-response"], "unknownConditionIds": [], "assessmentId": "assessment:1"},
+                {"subjectId": "AAPL", "hypothesisContractId": "graph.absorption", "status": "supported"},
+                {"subjectId": "MSTR", "hypothesisContractId": "graph.unrelated", "status": "supported"},
+            ],
+        }))
+        repository = SimpleNamespace(rulebox_snapshot=Mock(return_value={"status": "ok", "rules": [rule]}),
+                                     inferencebox_snapshot=Mock(side_effect=AssertionError("live detail not needed")))
+        advisor = SimpleNamespace(propose=Mock(return_value=[]))
+        service = RuleChangeCandidateProposalService(repository, advisor, model_signal_store=model_store)
+        result = service.propose_hypothesis(hypothesis().to_dict())
+        self.assertIsNone(result["contextSummary"]["inferenceRelationCount"])
+        receipt = result["contextSummary"]["modelAssessmentContext"]
+        self.assertEqual("available", receipt["status"])
+        self.assertEqual("MSTR", receipt["symbol"])
+        self.assertEqual(1, len(receipt["snapshots"][0]["assessments"]))
+        assessment = receipt["snapshots"][0]["assessments"][0]
+        self.assertEqual("not-supported", assessment["status"])
+        self.assertEqual(["event-response"], assessment["failedConditionIds"])
+        model_store.latest.assert_called_once_with("main", subject_id="MSTR", model_release_id="event-v2")
+        repository.inferencebox_snapshot.assert_not_called()
+        supplied = advisor.propose.call_args.args[0]
+        self.assertIn('"failedConditionIds"', build_rule_change_candidate_prompt(supplied))
+        model_store.latest.return_value["accountId"] = "other"
+        rejected = service.model_assessment_context(supplied, "main")
+        self.assertEqual([], rejected["snapshots"])
+        self.assertEqual("partial", rejected["status"])
+        self.assertIn("scope mismatch", rejected["errors"][0]["reason"])
+        model_store.latest.side_effect = TimeoutError("fixture")
+        failed = service.model_assessment_context(supplied, "main")
+        self.assertEqual([], failed["snapshots"])
+        self.assertEqual("partial", failed["status"])
+        model_store.latest.side_effect = None
+        model_store.latest.return_value["accountId"] = "main"
+        model_store.latest.return_value["assessments"][0]["evidenceIds"] = ["evidence:" + "x" * 13000]
+        bounded = service.model_assessment_context(supplied, "main")
+        self.assertEqual([], bounded["snapshots"][0]["assessments"])
+        self.assertEqual(1, bounded["omittedAssessmentCount"])
+        model_store.latest.return_value = {}
+        supplied["ruleBox"]["rules"] = [{"rule_id": "graph." + str(index), "conditions": [{
+            "relation_type": "HAS_MODEL_SIGNAL", "target_property_filters": {"releaseId": "event-" + str(index)},
+        }]} for index in range(4)]
+        partial = service.model_assessment_context(supplied, "main")
+        self.assertEqual("partial", partial["status"])
+        self.assertEqual(1, partial["omittedReleaseCount"])
+
     def test_price_only_changes_do_not_recompile_missing_schema_or_observation(self):
         service, store, _ = self.development()
         case = store.get("case:1")
@@ -210,6 +333,8 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         advisor.propose_hypothesis.assert_called_once()
 
     def test_hypothesis_ai_outage_is_not_swallowed_as_no_candidates(self):
+        self.assertEqual(300, CommandRuleChangeCandidateAdvisor(["fixture"]).timeout_seconds)
+        self.assertEqual(120, CommandRuleChangeCandidateAdvisor(["fixture"], timeout_seconds=120).timeout_seconds)
         primary = SimpleNamespace(propose=Mock(side_effect=TimeoutError("offline")))
         advisor = FallbackRuleChangeCandidateAdvisor(primary)
         with self.assertRaises(TimeoutError):

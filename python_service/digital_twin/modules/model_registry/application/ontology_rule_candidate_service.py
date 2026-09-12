@@ -1,5 +1,7 @@
-from typing import Dict, Iterable, List
+import json
+from typing import Callable, Dict, Iterable, List
 
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import ranked_authoring_rules, rule_design_context
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 
 
@@ -19,12 +21,14 @@ class RuleChangeCandidateProposalService:
         event_reader=None,
         settings: Dict[str, object] = None,
         strategy_proposal_service=None,
+        model_signal_store=None,
     ):
         self.ontology_repository = ontology_repository
         self.advisor = advisor
         self.event_reader = event_reader
         self.settings = dict(settings or {})
         self.strategy_proposal_service = strategy_proposal_service
+        self.model_signal_store = model_signal_store
 
     def propose(
         self,
@@ -35,6 +39,7 @@ class RuleChangeCandidateProposalService:
         account_id: str = "",
         tenant_id: str = "",
         hypothesis_proposal: Dict[str, object] = None,
+        context_observer: Callable[[Dict[str, object]], None] = None,
     ) -> Dict[str, object]:
         if not self.ontology_repository or not self.advisor:
             return {"status": "disabled", "reason": "Rule candidate advisor is not configured.", "candidateCount": 0, "savedCount": 0}
@@ -47,8 +52,25 @@ class RuleChangeCandidateProposalService:
                 raise RuntimeError(box + " unavailable: " + str((context.get(box) or {}).get("reason") or ""))
         if isinstance(hypothesis_proposal, dict) and hypothesis_proposal:
             context["hypothesisProposal"] = dict(hypothesis_proposal)
-        candidates = self.advisor.propose(context)
-        candidates = list(candidates or [])[: self.max_candidates()]
+            context["modelAssessmentContext"] = self.model_assessment_context(context, account_id)
+        design = rule_design_context(context) if hypothesis_proposal else {}
+        context_summary = {
+            "designVersion": design.get("version"),
+            "ruleboxSnapshotId": design.get("ruleboxSnapshotId"),
+            "ruleboxRulesHash": design.get("rulesHash"),
+            "observationState": design.get("observationState"),
+            "exampleRuleIds": [item.get("rule_id") or item.get("ruleId") for item in design.get("examples") or []],
+            "capabilityIndexCoverage": (design.get("capabilityIndex") or {}).get("coverage"),
+            "capabilityIndexRuleCount": (design.get("capabilityIndex") or {}).get("includedRuleCount"),
+            "modelAssessmentContext": context.get("modelAssessmentContext") or {},
+            "recentEventCount": len(context.get("recentEvents") or []),
+            "alertCount": len(context.get("alerts") or []),
+            "ruleCount": (context.get("ruleBox") or {}).get("ruleCount", 0),
+            "inferenceRelationCount": (context.get("inferenceBox") or {}).get("relationCount"),
+        }
+        if context_observer:
+            context_observer(context_summary)
+        candidates = list(self.advisor.propose(context) or [])[: self.max_candidates()]
         persist_as_general_candidate = not bool(hypothesis_proposal)
         save_result = self.ontology_repository.save_rule_change_candidates(candidates, {
             "trigger": trigger,
@@ -70,22 +92,78 @@ class RuleChangeCandidateProposalService:
             "candidates": candidates,
             "saveResult": save_result,
             "advisor": self.advisor_metadata(),
-            "contextSummary": {
-                "recentEventCount": len(context.get("recentEvents") or []),
-                "alertCount": len(context.get("alerts") or []),
-                "ruleCount": ((context.get("ruleBox") or {}).get("ruleCount") if isinstance(context.get("ruleBox"), dict) else 0),
-                "inferenceRelationCount": ((context.get("inferenceBox") or {}).get("relationCount") if isinstance(context.get("inferenceBox"), dict) else 0),
-            },
+            "contextSummary": context_summary,
         }
         if not hypothesis_proposal and self.strategy_proposal_service and hasattr(self.strategy_proposal_service, "propose_from_rule_candidates"):
             result["strategyProposalResult"] = self.strategy_proposal_service.propose_from_rule_candidates(result, context)
         return result
+
+    def model_assessment_context(self, context, account_id):
+        """Read bounded, subject-specific evaluation receipts; never re-score facts."""
+        symbols = context.get("symbols") or []
+        if not self.model_signal_store or not account_id or len(symbols) != 1:
+            return {"status": "not-queried", "snapshots": []}
+        symbol = symbols[0]
+        rules = ranked_authoring_rules(context)[:8]
+        rule_ids = {str(row.get("rule_id") or row.get("ruleId") or "") for row in rules}
+        labels = {str(row.get("rule_id") or row.get("ruleId") or ""): str(row.get("label") or "") for row in rules}
+        release_ids = []
+        for rule in rules:
+            for condition in rule.get("conditions") or []:
+                if not isinstance(condition, dict) or (condition.get("relation_type") or condition.get("relationType")) != "HAS_MODEL_SIGNAL":
+                    continue
+                filters = condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}
+                release_id = filters.get("releaseId") if isinstance(filters, dict) else None
+                if isinstance(release_id, str) and release_id and release_id not in release_ids:
+                    release_ids.append(release_id)
+        snapshots = []
+        errors = []
+        remaining_bytes = 12000
+        omitted_assessments = 0
+        for release_id in release_ids[:3]:
+            try:
+                payload = self.model_signal_store.latest(account_id, subject_id=symbol, model_release_id=release_id) or {}
+                if not payload:
+                    continue
+                if payload.get("accountId") != account_id or payload.get("modelReleaseId") != release_id:
+                    raise ValueError("Model assessment scope mismatch")
+                assessments = []
+                for item in payload.get("assessments") or []:
+                    if not isinstance(item, dict) or item.get("subjectId") != symbol or item.get("hypothesisContractId") not in rule_ids:
+                        continue
+                    receipt = {key: item.get(key) for key in (
+                        "assessmentId", "subjectId", "hypothesisContractId", "status", "decisionEligibility",
+                        "matchedConditionIds", "failedConditionIds", "unknownConditionIds", "evidenceIds",
+                        "sourceFeatureSnapshotId", "observedAt", "knowledgeCutoffAt", "scorerVersion",
+                    )}
+                    receipt["ruleLabel"] = labels.get(str(item.get("hypothesisContractId") or ""), "")
+                    size = len(json.dumps(receipt, ensure_ascii=False).encode("utf-8"))
+                    if size > remaining_bytes or len(assessments) >= 8:
+                        omitted_assessments += 1
+                        continue
+                    assessments.append(receipt)
+                    remaining_bytes -= size
+                snapshots.append({
+                    "snapshotId": payload.get("snapshotId"), "asOf": payload.get("asOf"),
+                    "modelReleaseId": release_id, "sourceFeatureSnapshotId": payload.get("sourceFeatureSnapshotId"),
+                    "assessments": assessments,
+                })
+            except Exception as error:  # noqa: BLE001 - authoring can proceed with explicitly unknown observations.
+                errors.append({"modelReleaseId": release_id, "reason": str(error)[:250]})
+        return {
+            "status": "partial" if errors or omitted_assessments or len(release_ids) > 3 else ("available" if snapshots else "not-recorded"),
+            "purpose": "authoring-reference-not-historical-replay-or-current-inference-proof",
+            "accountId": account_id, "symbol": symbol, "snapshots": snapshots, "errors": errors,
+            "omittedReleaseCount": max(0, len(release_ids) - 3),
+            "omittedAssessmentCount": omitted_assessments,
+        }
 
     def propose_hypothesis(
         self,
         proposal: Dict[str, object],
         account_id: str = "",
         tenant_id: str = "",
+        context_observer: Callable[[Dict[str, object]], None] = None,
     ) -> Dict[str, object]:
         proposal = dict(proposal or {})
         symbol = str(proposal.get("symbol") or "").upper().strip()
@@ -95,6 +173,7 @@ class RuleChangeCandidateProposalService:
             account_id=str(account_id or proposal.get("accountId") or ""),
             tenant_id=str(tenant_id or ""),
             hypothesis_proposal=proposal,
+            context_observer=context_observer,
         )
 
     def build_context(

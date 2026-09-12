@@ -1,17 +1,20 @@
 """Bounded rule-authoring inputs and operational blockers, not investment rules."""
 
 import json
+import re
+from collections import Counter
 from dataclasses import fields
 
 from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
-RULE_DESIGN_VERSION = "hypothesis-rule-design-v2"
+RULE_DESIGN_VERSION = "hypothesis-rule-design-v3"
 BLOCKER_KINDS = {
     "missing-observation", "stale-observation", "observation-window",
     "schema-mismatch", "unsupported-capability", "dependency-error", "unclassified",
+    "unverified-observation",
 }
-DEVELOPMENT_BLOCKERS = {"schema-mismatch", "unsupported-capability", "unclassified"}
+DEVELOPMENT_BLOCKERS = {"schema-mismatch", "unsupported-capability", "unclassified", "unverified-observation"}
 
 
 def compilation_blockers(candidates):
@@ -68,22 +71,101 @@ def blocker_state(blockers):
     return "needs-data", "waiting-data"
 
 
-def rule_design_context(context, max_bytes=20000):
+def _mapping(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _rule_id(rule):
+    return str(rule.get("rule_id") or rule.get("ruleId") or "")
+
+
+def _search_terms(value):
+    return set(re.findall(r"[a-z0-9]+|[가-힣]{2,}", str(value).lower()))
+
+
+def ranked_authoring_rules(context):
     rulebox = context.get("ruleBox") or {}
     proposal = context.get("hypothesisProposal") or {}
     inference = context.get("inferenceBox") or {}
     rules = [row for row in rulebox.get("rules") or [] if isinstance(row, dict)]
-    referenced = json.dumps({
-        "causalPath": proposal.get("causalPath"),
-        "supportingEvidenceIds": proposal.get("supportingEvidenceIds"),
-        "counterEvidenceIds": proposal.get("counterEvidenceIds"),
-    }, ensure_ascii=False)
+    referenced = json.dumps({key: proposal.get(key) for key in (
+        "causalPath", "supportingEvidenceIds", "counterEvidenceIds", "relatedRuleIds", "sourceRuleIds",
+    )}, ensure_ascii=False)
+    terms = _search_terms(" ".join([
+        str(proposal.get("title") or ""), str(proposal.get("claim") or ""),
+        " ".join(str(item) for item in proposal.get("causalPath") or []),
+    ]))
     matched_ids = {str(row.get("ruleId") or "") for row in inference.get("relations") or [] if isinstance(row, dict)}
+    rule_terms = {
+        _rule_id(row): _search_terms(json.dumps({
+            "label": row.get("label"),
+            "claim": _mapping(row.get("claim_contract") or row.get("claimContract")).get("statement"),
+        }, ensure_ascii=False)) for row in rules
+    }
+    frequency = Counter(term for values in rule_terms.values() for term in values)
+    # Lexical retrieval selects documentation only, never an investment rule.
     rules.sort(key=lambda row: (
-        not bool((row.get("rule_id") or row.get("ruleId")) and str(row.get("rule_id") or row.get("ruleId")) in referenced),
-        str(row.get("rule_id") or row.get("ruleId") or "") not in matched_ids,
-        str(row.get("rule_id") or row.get("ruleId") or ""),
+        not bool(_rule_id(row) and _rule_id(row) in referenced),
+        _rule_id(row) not in matched_ids,
+        -sum(1 / frequency[term] for term in sorted(terms & rule_terms[_rule_id(row)])),
+        _rule_id(row),
     ))
+    return rules
+
+
+def authoring_capability_index(rules, max_bytes=12000):
+    """Index the loaded release, without declaring facts or absent capabilities."""
+    rows = []
+    used = 0
+    for rule in rules[:16]:
+        claim = _mapping(rule.get("claim_contract") or rule.get("claimContract"))
+        model = _mapping(rule.get("model_input_contract") or rule.get("modelInputContract"))
+        conditions = rule.get("conditions") or []
+        model_conditions = model.get("conditionProfiles") or []
+        row = {
+            "ruleId": _rule_id(rule), "label": rule.get("label"),
+            "enabled": rule.get("enabled"),
+            "claimType": claim.get("claimType"),
+            "thesisFamily": claim.get("thesisFamily"),
+            "modelEvidence": [
+                {key: value for key, value in _mapping(
+                    item.get("target_property_filters") or item.get("targetPropertyFilters")
+                ).items() if key in {"signalType", "releaseId", "hypothesisContractId"}}
+                for item in conditions if isinstance(item, dict)
+                and (item.get("relation_type") or item.get("relationType")) == "HAS_MODEL_SIGNAL"
+            ],
+            "inputRelations": sorted({
+                str(item.get("relation_type") or item.get("relationType"))
+                for item in list(conditions) + list(model_conditions) if isinstance(item, dict)
+                and (item.get("relation_type") or item.get("relationType"))
+            }),
+        }
+        size = len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
+        if size + used > max_bytes:
+            continue
+        rows.append(row)
+        used += size
+    registered_ids = []
+    id_bytes = 0
+    for rule in rules:
+        identifier = _rule_id(rule)
+        size = len(json.dumps(identifier, ensure_ascii=False).encode("utf-8")) + 2
+        if id_bytes + size > max_bytes:
+            break
+        registered_ids.append(identifier)
+        id_bytes += size
+    return {
+        "rules": rows, "includedRuleCount": len(rows), "totalRuleCount": len(rules),
+        "omittedRuleCount": len(rules) - len(rows),
+        "coverage": "complete-loaded-release" if len(rows) == len(rules) else "partial-loaded-release",
+        "registeredRuleIds": registered_ids, "omittedRuleIdCount": len(rules) - len(registered_ids),
+        "authority": "registered-contracts-only-not-current-observations",
+    }
+
+
+def rule_design_context(context, max_bytes=20000):
+    rulebox = context.get("ruleBox") or {}
+    rules = ranked_authoring_rules(context)
     examples = []
     used = 0
     for row in rules:
@@ -106,6 +188,8 @@ def rule_design_context(context, max_bytes=20000):
         "ruleboxSnapshotId": rulebox.get("ruleboxSnapshotId"),
         "rulesHash": rulebox.get("rulesHash") or rulebox.get("ruleboxRulesHash"),
         "scope": {"symbols": list(context.get("symbols") or []), "worldId": context.get("worldId")},
+        "observationState": "not-queried" if (context.get("inferenceBox") or {}).get("status") == "deferred-validation" else "inference-summary-only",
+        "capabilityIndex": authoring_capability_index(rules),
         "ruleFields": [item.name for item in fields(GraphInferenceRule)],
         "conditionFields": [item.name for item in fields(GraphRuleCondition)],
         "derivationFields": [item.name for item in fields(GraphRuleDerivation)],
@@ -114,6 +198,8 @@ def rule_design_context(context, max_bytes=20000):
         "blockerKinds": sorted(BLOCKER_KINDS),
         "boundaries": [
             "Examples prove authoring syntax, not current ABox availability or investment validity.",
+            "Unqueried or omitted data are unknown, not missing. Candidate preview owns current ABox verification.",
+            "The capability index covers only this loaded release; an omitted example is not an unsupported model.",
             "Evidence IDs are provenance. Do not require a PRESERVES_RULE_LINEAGE fact to write a condition.",
             "Use observed fields and filters from scoped examples; unknown capabilities require development review.",
             "Predictive claims require an exact governed model contract and outcome contract; do not invent model evidence.",

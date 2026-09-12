@@ -222,8 +222,15 @@ function renderHypothesisDevelopmentCaseDetail(item) {
   var retry = item.retry || {};
   var requirements = Array.isArray(retry.requirements) ? retry.requirements : [];
   var retryLabels = { processing: "검증 진행 중", "waiting-data": "자료 갱신 대기", "waiting-observation": "관측 기간 대기", "development-required": "개발·명세 수정 필요", "dependency-error": "연결 복구 대기", completed: "이번 검증 완료" };
-  var blockerLabels = { "missing-observation": "자료 수집", "stale-observation": "자료 갱신", "observation-window": "관측 대기", "schema-mismatch": "명세 수정", "unsupported-capability": "기능 보완", "dependency-error": "연결 복구", unclassified: "원인 확인" };
+  var blockerLabels = { "missing-observation": "자료 수집", "stale-observation": "자료 갱신", "observation-window": "관측 대기", "unverified-observation": "미조회 자료 확인 필요", "schema-mismatch": "명세 수정", "unsupported-capability": "기능 보완", "dependency-error": "연결 복구", unclassified: "원인 확인" };
   var blockers = Array.isArray(retry.blockers) ? retry.blockers : [];
+  var modelContext = (retry.compilationContext || {}).modelAssessmentContext || {};
+  var modelRows = (Array.isArray(modelContext.snapshots) ? modelContext.snapshots : []).flatMap(function (snapshot) {
+    return (Array.isArray(snapshot.assessments) ? snapshot.assessments : []).map(function (assessment) {
+      return { assessment: assessment, asOf: snapshot.asOf };
+    });
+  });
+  var modelStatusLabels = { supported: "조건 충족", "not-supported": "조건 미충족", unknown: "확인 불가", "insufficient-data": "자료 부족" };
   return [
     '<section class="hypothesis-development-detail">',
     '<div class="hypothesis-development-detail-head">',
@@ -246,6 +253,12 @@ function renderHypothesisDevelopmentCaseDetail(item) {
     '<div><dt>다음 정기 확인</dt><dd>' + escapeHtml(retry.nextCheckAt ? formatClock(retry.nextCheckAt) : "예약 없음") + '</dd></div></dl>' +
     (blockers.length ? '<ul>' + blockers.slice(0, 8).map(function (blocker) { return '<li><strong>' + escapeHtml(blockerLabels[blocker.kind] || "원인 확인") + '</strong> · ' + escapeHtml(blocker.requirement || "") + '</li>'; }).join("") + '</ul>' :
       (requirements.length ? '<ul>' + requirements.slice(0, 8).map(function (text) { return '<li>' + escapeHtml(text) + '</li>'; }).join("") + '</ul>' : '')) + '</section>',
+    modelRows.length ? '<section class="hypothesis-development-retry hypothesis-model-assessments"><header><strong>저장된 모델 평가</strong></header><ul>' + modelRows.slice(0, 6).map(function (row) {
+      var assessment = row.assessment;
+      return '<li><strong>' + escapeHtml(modelStatusLabels[assessment.status] || "검토 필요") + '</strong> · ' + escapeHtml(assessment.ruleLabel || "등록 가설") +
+        '<br><span>평가 기준 ' + escapeHtml(row.asOf ? formatClock(row.asOf) : "시각 확인 필요") +
+        ' · 미충족 ' + escapeHtml((assessment.failedConditionIds || []).length) + '개 · 확인 불가 ' + escapeHtml((assessment.unknownConditionIds || []).length) + '개</span></li>';
+    }).join("") + '</ul></section>' : '',
     item.blockedReason ? '<p class="form-error">' + escapeHtml(item.blockedReason) + '</p>' : '',
     '<div class="ontology-experiment-actions">',
     '<button class="text-button" type="button" data-hypothesis-development-process="' + escapeHtml(item.caseId || "") + '"' + (busy || ["deployed", "observing", "retired"].indexOf(String(item.status || "")) >= 0 ? ' disabled' : '') + '>검증 다시 실행</button>',

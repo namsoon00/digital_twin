@@ -84,6 +84,7 @@ def build_rule_change_candidate_service(settings=None) -> RuleChangeCandidatePro
         event_reader=stores.event_log(configured_settings),
         settings=configured_settings,
         strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings),
+        model_signal_store=stores.statistical_model_signal_store(configured_settings),
     )
 
 

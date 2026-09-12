@@ -27,9 +27,9 @@ class LocalRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
 
 
 class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
-    def __init__(self, command, timeout_seconds: int = 120, source: str = "AI", settings=None):
+    def __init__(self, command, timeout_seconds: int = 300, source: str = "AI", settings=None):
         self.command = command
-        self.timeout_seconds = max(30, int(timeout_seconds or 120))
+        self.timeout_seconds = max(30, int(timeout_seconds or 300))
         self.source = str(source or "AI")
         self.settings = dict(settings or {})
 
@@ -95,7 +95,7 @@ class FallbackRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
 def rule_change_candidate_advisor_from_settings(settings: Dict[str, str] = None) -> RuleChangeCandidateAdvisor:
     settings = settings or runtime_settings()
     use_codex = str(settings.get("ontologyRuleCandidateAiUseCodex") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_USE_CODEX") or "1").strip() != "0"
-    timeout = int(settings.get("ontologyRuleCandidateAiTimeoutSeconds") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS") or 120)
+    timeout = int(settings.get("ontologyRuleCandidateAiTimeoutSeconds") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS") or 300)
     if use_codex:
         command = background_codex_process_arguments()
         if command:

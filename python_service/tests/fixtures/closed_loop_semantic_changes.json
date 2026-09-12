@@ -1,12 +1,28 @@
 {
   "domain": {
+    "modules/model_registry/domain/hypothesis_development.py::HYPOTHESIS_DEVELOPMENT_STATUSES": {
+      "hash": "b5d2825d3633b12f90e53ac3dd93fd6a9aa4001fe60b44c6419a7089d02f67db",
+      "reason": "Persist isolated observation, adoption readiness, monitoring and superseded experiments; test_ontology_evolution."
+    },
+    "modules/model_registry/domain/hypothesis_development.py::TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES": {
+      "hash": "721ef863701a22a5f9b751da2bc5d9b2769dcceb679f800dcbd5bf10be437e03",
+      "reason": "A superseded experiment must not alter another release; test_ontology_evolution."
+    },
+    "modules/model_registry/domain/hypothesis_development.py::NON_CAUSAL_PROPOSAL_TERMS": {
+      "hash": "cba462b002bc625217ce6e19c99e36e7feb58929851814caac137b403270a77c",
+      "reason": "Remove keyword-based causal rejection; retain only the empty compatibility symbol. test_ontology_evolution."
+    },
+    "modules/model_registry/domain/hypothesis_development.py::screen_hypothesis_case": {
+      "hash": "2c56a9e349c2a841cf5a8efe092c9ea6c17b42df7e9c02f782b8d95546e2acce",
+      "reason": "Structural screening cannot establish or refute causality based on wording; test_ontology_evolution."
+    },
     "modules/read_models/domain/investment_reasoning_detail.py::subject_reasoning_lineage": {
       "hash": "ab307e9f2d914887d1b6903d079c4e36a29d5860ccd2ed324a15b1914ebcd5e3",
       "reason": "Expose supporting/counter evidence and known data gaps; distinguish lineage-linked records from resolved originals without changing decision eligibility. Covered by test_subject_reasoning_lineage."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
-      "hash": "6a613c8b446bb12734b31191917c95696e6970e658c5910951cbbc11ccb9de0c",
-      "reason": "Separate authoring blockers from post-compilation TypeDB and empirical validation requirements without declaring them passed; test_hypothesis_candidate_validation."
+      "hash": "f335828e253496660fd68d4c0661416fe97ee5e7df8d045c04784fb746c69830",
+      "reason": "Author genuine action hypotheses with a frozen comparison baseline and paired forward-outcome contract; never auto-pass unsupported causal research. test_ontology_evolution."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::compact_candidate_context": {
       "hash": "21bb67833fff6e29653f21b74104803f33ea9dbc4418f937065cb8bb4130015f",
@@ -21,8 +37,8 @@
       "reason": "Preserve post-authoring requirements and rejected draft syntax separately from executable candidates and legacy blockers; test_hypothesis_candidate_validation."
     },
     "modules/model_registry/domain/hypothesis_development.py::HypothesisDevelopmentCase": {
-      "hash": "432bf0e27b09b600ca11719303eac700243afc8dc99caa1664a09f4ab004114c",
-      "reason": "Persist exact disabled compilation receipts and post-authoring validation requirements for resumable same-candidate validation; test_hypothesis_candidate_validation."
+      "hash": "65fe8269d24791bac4cf6cc30e457c073713cb8d0d347ec37e55e1cccf408c92",
+      "reason": "Persist immutable evolution plans, forward comparisons and release receipts separately from technical validation; test_ontology_evolution."
     },
     "modules/decisions/domain/investment_brain.py::ObservedOutcome": {
       "hash": "efb48388571e3758f0336539efdc7ae945e28dc70c78893581a56909012f25b1",
@@ -62,13 +78,17 @@
     }
   },
   "storage": {
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineRegistryStore": {
+      "hash": "670bef0c97f7142c87f98b034e845cf89e1376850dbf78862d96c2450bc570db",
+      "reason": "Commit both release statuses, active/delivery ownership and adoption/rollback receipt atomically under a version guard; test_ontology_evolution."
+    },
     "modules/model_registry/infrastructure/mysql_hypothesis_development.py::MySQLHypothesisDevelopmentStore": {
-      "hash": "c4391e508bece457b995be24a15a37221e78c23ac7140edfca18add612c41bf1",
-      "reason": "Persist indexed UTC due times with audit and nonblocking same-case locks; test_stabilization_transactions."
+      "hash": "7ffa88fb67fbd40d3cbbdb1daead30587d4e1de09d95e15d213e60959ff89f6e",
+      "reason": "Schedule evolution and bounded authoring retries and preserve evolution audit receipts; test_ontology_evolution and test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
-      "hash": "b4fbd2a4c024a14cf6b5895802b5ac689290e1b275a1a38487f433a804e5295e",
-      "reason": "Future baselines and atomic immutable outcome repair; test_stabilization_transactions."
+      "hash": "d521370d72960bfdcda57f5f0d80994783a4554fe4e705185991ed1d7e954091",
+      "reason": "Preserve first eligible prediction anchors and expose exact forward comparison reads; test_ontology_evolution and test_stabilization_transactions."
     }
   }
 }

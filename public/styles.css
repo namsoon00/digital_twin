@@ -36435,6 +36435,12 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
   }
 }
 
+@media (min-width: 601px) {
+  .ontology-evolution-status dl > div {
+    grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  }
+}
+
 .hypothesis-development-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

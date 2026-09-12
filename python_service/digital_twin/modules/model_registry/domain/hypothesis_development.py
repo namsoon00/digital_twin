@@ -27,26 +27,21 @@ HYPOTHESIS_DEVELOPMENT_STATUSES = {
     "retired",
     "rolled-back",
     "blocked",
+    "shadow-observing",
+    "adoption-ready",
+    "evolution-monitoring",
+    "superseded",
 }
 
 TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES = {
     "rejected",
     "retired",
     "rolled-back",
+    "superseded",
 }
 
-NON_CAUSAL_PROPOSAL_TERMS = {
-    "evidence sufficiency",
-    "insufficient evidence",
-    "temporary co-movement",
-    "data gap",
-    "verification check",
-    "근거 충분성",
-    "근거 부족",
-    "자료 부족",
-    "일시적 동행",
-    "검증 확인",
-}
+# Compatibility symbol only; wording is not a causal validation contract.
+NON_CAUSAL_PROPOSAL_TERMS = frozenset()
 
 
 def clean_text(value: object, limit: int = 2000) -> str:
@@ -199,6 +194,7 @@ class HypothesisDevelopmentCase:
     validation_summary_payload: Dict[str, object] = field(default_factory=dict)
     decision_impact: Dict[str, object] = field(default_factory=dict)
     deployment: Dict[str, object] = field(default_factory=dict)
+    evolution: Dict[str, object] = field(default_factory=dict)
     validation_input_fingerprint: str = ""
     validation_attempted_at: str = ""
     retry: Dict[str, object] = field(default_factory=dict)
@@ -271,6 +267,7 @@ class HypothesisDevelopmentCase:
             validation_summary_payload=dict(payload.get("validationSummary") or payload.get("validation_summary") or {}),
             decision_impact=dict(payload.get("decisionImpact") or payload.get("decision_impact") or {}),
             deployment=dict(payload.get("deployment") or {}),
+            evolution=dict(payload.get("evolution") or {}),
             retry=dict(payload.get("retry") or {}),
             validation_input_fingerprint=clean_text(
                 payload.get("validationInputFingerprint")
@@ -345,8 +342,6 @@ class HypothesisDevelopmentCase:
 
 
 def screen_hypothesis_case(case: HypothesisDevelopmentCase) -> Dict[str, object]:
-    compact = (case.title + " " + case.claim).casefold()
-    non_causal = next((term for term in NON_CAUSAL_PROPOSAL_TERMS if term in compact), "")
     issues = []
     needs_data = []
     if not case.claim:
@@ -357,14 +352,9 @@ def screen_hypothesis_case(case: HypothesisDevelopmentCase) -> Dict[str, object]
         issues.append("invalidation-condition-missing")
     if not case.supporting_evidence_ids:
         needs_data.append("supporting-evidence-missing")
-    if non_causal:
-        issues.append("non-causal-proposal:" + non_causal)
     status = "passed"
     classification = "causal-mechanism"
-    if non_causal:
-        status = "rejected"
-        classification = "data-or-verification-constraint"
-    elif issues:
+    if issues:
         status = "needs-revision"
     elif needs_data:
         status = "needs-data"
@@ -377,7 +367,7 @@ def screen_hypothesis_case(case: HypothesisDevelopmentCase) -> Dict[str, object]
             "structure",
             "가설 구조",
             "passed" if status == "passed" else ("needs-data" if status == "needs-data" else "blocked"),
-            ", ".join(issues + needs_data) or "원인·경로·반증 조건이 구조 계약을 충족했습니다.",
+            ", ".join(issues + needs_data) or "주장·연결 경로·반증 조건을 확인했습니다. 예측 가능성과 인과성은 별도 검증합니다.",
             True,
             {"causalPathLength": len(case.causal_path), "invalidationConditionCount": len(case.invalidation_conditions)},
         ),

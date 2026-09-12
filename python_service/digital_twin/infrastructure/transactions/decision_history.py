@@ -162,6 +162,10 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             utc_now_iso=utc_now_iso,
         )
 
+    def ontology_evolution_comparison(self, plan, observed_after=""):
+        from .decision_history_parts.evolution_comparison import read_comparison
+        return read_comparison(plan, connect=self.connect, observed_after=observed_after)
+
     def sync_shadow_hypothesis_observation_targets(
         self,
         connection,

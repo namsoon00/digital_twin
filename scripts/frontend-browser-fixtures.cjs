@@ -117,7 +117,7 @@ function payload(url, options = {}) {
     importance: 80, description: "실적과 수요 전망을 확인하는 검증용 일정입니다.", source: "MOCK fixture", updatedAt: stamp,
     reminderOffsetsMinutes: []}], candidates: [], summary: {total: 1, upcoming: 1} };
   if (pathname === "/api/investment-brain/hypothesis-development") return {
-    count: 2, summary: {statuses: {"needs-revision": 1, "needs-data": 1}}, cases: [
+    count: 3, summary: {statuses: {"needs-revision": 1, "needs-data": 1, "shadow-observing": 1}}, cases: [
       {caseId: "fixture-development", symbol: "TEST01", title: "검증용 수요 가설", claim: "수요와 매출 관계를 검증하는 테스트 자료입니다.",
         status: "needs-revision", updatedAt: stamp, retry: {state: "development-required", attemptCount: 2, lastAttemptAt: stamp,
           blockers: [{kind: "unsupported-capability", requirement: "분기 수요를 검증할 모델 계약 등록이 필요합니다."},
@@ -126,7 +126,12 @@ function payload(url, options = {}) {
             ruleLabel: "위험 이벤트 이후 가격 방어", failedConditionIds: ["fixture-condition"], unknownConditionIds: []}]}]}}}},
       {caseId: "fixture-observation", symbol: "TEST02", title: "검증용 관측 대기", claim: "미래 관측을 기다리는 테스트 자료입니다.",
         status: "needs-data", updatedAt: "2026-09-11T23:59:00Z", retry: {state: "waiting-observation", attemptCount: 1,
-          nextCheckAt: "2026-09-12T03:00:00Z", blockers: [{kind: "observation-window", requirement: "제안 후 관측 기간을 기다립니다."}]}}
+          nextCheckAt: "2026-09-12T03:00:00Z", blockers: [{kind: "observation-window", requirement: "제안 후 관측 기간을 기다립니다."}]}},
+      {caseId: "fixture-evolution", symbol: "TEST01", title: "검증용 독립 실험", status: "shadow-observing", updatedAt: stamp,
+        evolution: {state: "shadow-observing", reason: "independent-outcomes-required",
+          plan: {createdAt: stamp, fingerprint: "0123456789abcdef".repeat(4), baseline: {deploymentId: "baseline-fixture", comparisonRuleId: "graph.fixture.recovery.v1", comparisonHorizonMinutes: 60},
+            policy: {mode: "automatic", version: "fixture-policy", minimumIndependentPairs: 20, minimumDistinctDays: 5, maximumShadowDays: 30}},
+          deployment: {deploymentId: "candidate-fixture"}, assessment: {independentPairCount: 0, distinctDayCount: 0, excludedCount: 2}}}
     ], events: []
   };
   return { items: [], summary: {}, status: "ready", jobs: [], terms: [], rules: [], templates: [], schedules: [] };

@@ -36,6 +36,37 @@ def bind_v2_release(
         str(deployment_health.get("candidateReleaseId") or "").strip()
         and str(deployment_health.get("ruleboxFingerprint") or "").strip()
     )
+    read_release_artifact = getattr(platform.registry, "release_artifact", None)
+    stored_release_artifact = (
+        dict(read_release_artifact(descriptor.deployment_id) or {})
+        if callable(read_release_artifact) else {}
+    )
+    stored_payload = dict(stored_release_artifact.get("artifact") or {})
+    if stored_release_artifact and (stored_release_artifact.get("valid") is False or not stored_payload):
+        raise RuntimeError("The stored reasoning release artifact is corrupt or empty")
+    restored = {}
+    if stored_payload:
+        if (stored_release_artifact.get("valid") is False
+                or stored_payload.get("releaseBundle") != descriptor.release_bundle.to_dict()):
+            raise RuntimeError("The stored reasoning release artifact is invalid or belongs to another release")
+        if descriptor.deployment_id not in protected_deployment_ids and not frozen_release_recorded:
+            read_manifest = getattr(repository, "read_seed_static_manifest", None)
+            try:
+                manifest = dict(read_manifest() or {}) if callable(read_manifest) else {}
+            except Exception:
+                manifest = {}
+            metadata = dict(manifest.get("metadata") or {})
+            if (manifest.get("status") != "ok"
+                    or metadata.get("ruleboxRulesHash") != stored_payload.get("ruleboxFingerprint")
+                    or metadata.get("tboxFingerprint") != stored_payload.get("tboxFingerprint")):
+                restored = dict(repository.seed_release_artifact(stored_payload) or {})
+                if not restored.get("saved"):
+                    raise RuntimeError("Candidate release artifact restoration failed: " + str(restored.get("status")))
+            # The authored artifact, not today's code catalog, defines a candidate.
+            frozen_release_recorded = True
+            deployment_health = {**deployment_health,
+                "ruleboxFingerprint": restored.get("runtimeRuleboxFingerprint") or "",
+                "tboxFingerprint": stored_payload.get("tboxFingerprint") or ""}
     candidate_rulebox, rulebox_release_preflight = prepare_v2_rulebox_release(
         repository,
         candidate_settings,
@@ -55,19 +86,13 @@ def bind_v2_release(
         or payload_hash(candidate_rulebox.get("rules") or [])
     )
     runtime_tbox_metadata = repository.active_tbox_metadata()
-    release_seed_artifact = ontology_release_seed_artifact(
+    release_seed_artifact = stored_payload or ontology_release_seed_artifact(
         default_graph_inference_rules(),
         language_registry=investment_language_registry(configured),
         tbox_metadata=default_tbox_metadata(),
         release_bundle=descriptor.release_bundle.to_dict(),
     )
     save_release_artifact = getattr(platform.registry, "save_release_artifact", None)
-    read_release_artifact = getattr(platform.registry, "release_artifact", None)
-    stored_release_artifact = (
-        dict(read_release_artifact(descriptor.deployment_id) or {})
-        if callable(read_release_artifact)
-        else {}
-    )
     runtime_tbox_fingerprint = str(runtime_tbox_metadata.get("fingerprint") or "")
     read_static_manifest = getattr(repository, "read_seed_static_manifest", None)
     runtime_static_manifest = (

@@ -1103,6 +1103,8 @@ class ReasoningEnginePlatformService:
         deployment_id: str,
         release_id: str,
         graph_database: str = "",
+        release_seed_artifact: Mapping[str, object] = None,
+        expected_baseline_deployment_id: str = "",
     ) -> Dict[str, object]:
         """Register a new V2 candidate without disturbing active delivery."""
 
@@ -1115,6 +1117,8 @@ class ReasoningEnginePlatformService:
             }
 
         control = self.registry.control()
+        if expected_baseline_deployment_id and control.active_deployment_id != expected_baseline_deployment_id:
+            return {"status": "blocked", "blockers": ["evolution-baseline-changed"]}
         protected = {
             str(control.active_deployment_id or ""),
             str(control.delivery_deployment_id or ""),
@@ -1150,6 +1154,10 @@ class ReasoningEnginePlatformService:
         active_is_v2 = str(
             active_row.get("engineVersion") or active_row.get("engine_version") or ""
         ).strip().lower() == "v2"
+        if release_seed_artifact and expected_baseline_deployment_id:
+            if not active_is_v2:
+                return {"status": "blocked", "blockers": ["evolution-requires-v2-baseline"]}
+            base = self.deployment_descriptor(expected_baseline_deployment_id)
         protected_graph_stores = set()
         for protected_id in protected:
             protected_row = dict(self.registry.get(protected_id) or {})
@@ -1190,6 +1198,19 @@ class ReasoningEnginePlatformService:
             or ""
         ).strip() if active_is_v2 else ""
         bundle = base.release_bundle
+        authored_artifact = dict(release_seed_artifact or {})
+        if authored_artifact:
+            from digital_twin.modules.model_registry.contracts import GraphInferenceRule, rulebox_rules_hash
+            from digital_twin.modules.reasoning.domain.ontology_schema import normalize_tbox_metadata
+            from digital_twin.modules.model_registry.contracts import rulebox_semantic_violations
+
+            authored_rules = authored_artifact.get("rules") or []
+            violations = rulebox_semantic_violations([GraphInferenceRule.from_dict(row) for row in authored_rules])
+            tbox = normalize_tbox_metadata(authored_artifact.get("tboxMetadata") or {})
+            if (not authored_rules or violations
+                    or rulebox_rules_hash(authored_rules) != authored_artifact.get("ruleboxFingerprint")
+                    or tbox.get("fingerprint") != authored_artifact.get("tboxFingerprint")):
+                return {"status": "blocked", "blockers": ["invalid-authored-release"], "violations": violations}
         descriptor = ReasoningEngineDescriptor(
             engine_family=base.engine_family,
             engine_version=base.engine_version,
@@ -1198,8 +1219,8 @@ class ReasoningEnginePlatformService:
             graph_store_binding=candidate_graph_store,
             time_series_backend_id=inherited_time_series or base.time_series_backend_id,
             release_bundle=EngineReleaseBundle(
-                tbox_release_id=bundle.tbox_release_id,
-                rulebox_release_id=bundle.rulebox_release_id,
+                tbox_release_id=(str(tbox.get("version")) + "@" + str(tbox.get("fingerprint"))) if authored_artifact else bundle.tbox_release_id,
+                rulebox_release_id=("ontology-evolution@" + str(authored_artifact["ruleboxFingerprint"])) if authored_artifact else bundle.rulebox_release_id,
                 prompt_release_id=bundle.prompt_release_id,
                 feature_set_version=bundle.feature_set_version,
                 model_signal_release_id=bundle.model_signal_release_id,
@@ -1221,7 +1242,7 @@ class ReasoningEnginePlatformService:
             from digital_twin.modules.reasoning.domain.ontology_schema import default_tbox_metadata
             from digital_twin.infrastructure.graph_store_lifecycle import ontology_release_seed_artifact
 
-            release_artifact = ontology_release_seed_artifact(
+            release_artifact = {**authored_artifact, "releaseBundle": descriptor.release_bundle.to_dict()} if authored_artifact else ontology_release_seed_artifact(
                 default_graph_inference_rules(),
                 language_registry=investment_language_registry(self.settings),
                 tbox_metadata=default_tbox_metadata(),

@@ -50,6 +50,8 @@ _EXPORTS = {'IndependentReasoningComparisonService': ('digital_twin.modules.reas
  'lightweight_ontology_reasoning_queue_state': ('digital_twin.modules.reasoning.application.ontology_reasoning_service',
                                                 'lightweight_ontology_reasoning_queue_state')}
 
+_EXPORTS['append_rule_to_release_artifact'] = ('digital_twin.modules.reasoning.infrastructure.static_seed.artifact', 'append_rule_to_release_artifact')
+
 __all__ = list(_EXPORTS)
 
 

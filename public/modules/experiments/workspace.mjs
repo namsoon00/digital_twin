@@ -9,6 +9,7 @@ import { cardTypeAttrs, renderEmptyState } from "../shell/layout.mjs";
 import { renderManagedPage } from "../shell/pages.mjs";
 import { experimentsState } from "../state/experiments.mjs";
 import { hypothesesState } from "../state/hypotheses.mjs";
+import { renderOntologyEvolution } from "./evolution.mjs";
 
 function renderOntologyExperimentsPage(snapshot) {
   var experiments = ontologyExperimentItems();
@@ -181,6 +182,10 @@ function hypothesisDevelopmentStatusMeta(status) {
     "needs-revision": "수정 필요",
     blocked: "차단",
     "rolled-back": "자동 복원",
+    "shadow-observing": "격리 실험 관측",
+    "adoption-ready": "반영 조건 확인",
+    "evolution-monitoring": "반영 후 검증",
+    superseded: "기준 변경으로 종료",
     retired: "종료"
   };
   var tone = ["blocked", "invalidated", "rolled-back"].indexOf(value) >= 0 ? "danger"
@@ -221,7 +226,7 @@ function renderHypothesisDevelopmentCaseDetail(item) {
   var busy = Boolean(hypothesesState.hypothesisDevelopmentAction);
   var retry = item.retry || {};
   var requirements = Array.isArray(retry.requirements) ? retry.requirements : [];
-  var retryLabels = { processing: "검증 진행 중", "waiting-data": "자료 갱신 대기", "waiting-observation": "관측 기간 대기", "development-required": "개발·명세 수정 필요", "dependency-error": "연결 복구 대기", completed: "이번 검증 완료" };
+  var retryLabels = { processing: "검증 진행 중", "waiting-data": "자료 갱신 대기", "waiting-observation": "관측 기간 대기", "development-required": "개발·명세 수정 필요", "dependency-error": "연결 복구 대기", "authoring-retry": "AI 명세 수정 예약", "evolution-waiting": "독립 결과 검증 예약", completed: "이번 검증 완료" };
   var blockerLabels = { "missing-observation": "자료 수집", "stale-observation": "자료 갱신", "observation-window": "관측 대기", "unverified-observation": "미조회 자료 확인 필요", "schema-mismatch": "명세 수정", "unsupported-capability": "기능 보완", "dependency-error": "연결 복구", unclassified: "원인 확인" };
   var blockers = Array.isArray(retry.blockers) ? retry.blockers : [];
   var modelContext = (retry.compilationContext || {}).modelAssessmentContext || {};
@@ -247,6 +252,7 @@ function renderHypothesisDevelopmentCaseDetail(item) {
     path.length ? '<div class="hypothesis-development-path">' + path.map(function (step, index) { return '<span><b>' + escapeHtml(index + 1) + '</b>' + escapeHtml(step) + '</span>'; }).join("") + '</div>' : '',
     '<div class="hypothesis-development-evidence"><span>지지 근거 <strong>' + escapeHtml(supporting.length) + '</strong></span><span>반대 근거 <strong>' + escapeHtml(counter.length) + '</strong></span><span>원본 제안 <strong>' + escapeHtml((item.sourceProposalIds || []).length) + '</strong></span></div>',
     '<div class="hypothesis-development-gates">' + gates.map(renderHypothesisDevelopmentGate).join("") + '</div>',
+    renderOntologyEvolution(item.evolution || {}, formatClock),
     '<section class="hypothesis-development-retry"><header><strong>재검증 상태</strong><span>' + escapeHtml(retryLabels[retry.state] || "다음 검증 대기") + '</span></header><dl>' +
     '<div><dt>실행 횟수</dt><dd>' + escapeHtml(Number(retry.attemptCount || 0)) + '회</dd></div>' +
     '<div><dt>마지막 시도</dt><dd>' + escapeHtml(retry.lastAttemptAt ? formatClock(retry.lastAttemptAt) : "기록 없음") + '</dd></div>' +
@@ -276,14 +282,14 @@ export function renderHypothesisDevelopmentPanel() {
   return [
     '<article class="panel hypothesis-development-panel"' + cardTypeAttrs("process-card", cases.length ? "watch" : "hold") + '>',
     '<div class="panel-head">',
-    '<div><p class="label">Hypothesis Promotion</p><h2>가설 자동 승격·검증</h2><p class="subtle">AI 제안을 자동 선별하고 후보 규칙과 TypeDB 검증까지 진행합니다. 운영 RuleBox 반영은 승인 후 실행됩니다.</p></div>',
+    '<div><p class="label">Ontology Evolution</p><h2>가설 개발·검증</h2></div>',
     '<div class="settings-actions"><span class="tone-chip ' + escapeHtml(Number(statuses["approval-required"] || 0) ? "watch" : "hold") + '">승인 필요 ' + escapeHtml(statuses["approval-required"] || 0) + '건</span><button class="text-button" type="button" data-hypothesis-development-refresh' + (hypothesesState.hypothesisDevelopmentLoading ? ' disabled' : '') + '>새로고침</button><button class="text-button" type="button" data-hypothesis-development-process=""' + (hypothesesState.hypothesisDevelopmentAction ? ' disabled' : '') + '>대기 검증</button></div>',
     '</div>',
     '<div class="hypothesis-development-summary">',
     renderOntologyExperimentMetric("전체", payload.count == null ? cases.length : payload.count, "cases"),
     renderOntologyExperimentMetric("자료 필요", statuses["needs-data"] || 0, "needs data"),
-    renderOntologyExperimentMetric("검증 완료", statuses["approval-required"] || statuses.validated || 0, "validated"),
-    renderOntologyExperimentMetric("운영 반영", Number(statuses.deployed || 0) + Number(statuses.observing || 0), "deployed"),
+    renderOntologyExperimentMetric("독립 결과 관측", Number(statuses["shadow-observing"] || 0) + Number(statuses["adoption-ready"] || 0), "shadow"),
+    renderOntologyExperimentMetric("반영 후 검증", Number(statuses["evolution-monitoring"] || 0) + Number(statuses.strengthened || 0), "adopted"),
     '</div>',
     hypothesesState.hypothesisDevelopmentError ? '<p class="form-error">' + escapeHtml(hypothesesState.hypothesisDevelopmentError) + '</p>' : '',
     hypothesesState.hypothesisDevelopmentLoading && !hypothesesState.hypothesisDevelopmentLoaded ? '<div class="rule-strip"><span>가설 개발 계보와 검증 게이트를 읽는 중입니다.</span></div>' : '',

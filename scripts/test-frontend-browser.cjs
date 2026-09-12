@@ -213,6 +213,15 @@ async function hypothesisScheduling(page, label) {
   await page.locator('[data-hypothesis-development-select="fixture-observation"]').click();
   await page.waitForFunction(() => document.querySelector('.hypothesis-development-retry')?.textContent.includes('관측 기간 대기'));
   assert.match(await page.locator('.hypothesis-development-retry').textContent(), /관측 기간 대기/);
+  await page.locator('[data-hypothesis-development-select="fixture-evolution"]').click();
+  const evolution = page.locator('.ontology-evolution-status');
+  await evolution.scrollIntoViewIfNeeded();
+  assert.match(await evolution.textContent(), /검증 후 자동 반영.*독립된 결과가 더 필요/s);
+  assert.match(await evolution.textContent(), /0 \/ 20건/);
+  assert.equal(await page.locator('[data-hypothesis-development-approve="fixture-evolution"]').isDisabled(), true);
+  const evolutionBounds = await evolution.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth, height: node.clientHeight}));
+  assert(evolutionBounds.height > 0 && evolutionBounds.content <= evolutionBounds.width + 1, label + ' evolution status overflows');
+  await evolution.screenshot({path: path.join(screenshots, label + '-ontology-evolution.png')});
   await page.locator('button[data-work-detail-close]').first().click();
   await page.waitForSelector('[data-work-detail-dialog]', {state: 'detached'});
   results.push({test: label + ' hypothesis blockers and approval gate', ...bounds});

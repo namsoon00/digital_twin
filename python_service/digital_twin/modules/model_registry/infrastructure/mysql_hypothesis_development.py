@@ -29,7 +29,10 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM hypothesis_development_cases "
-                "WHERE status IN ('proposed', 'screening', 'compiled', 'validating', 'needs-data') "
+                "WHERE status IN ('proposed', 'screening', 'compiled', 'validating', 'needs-data', "
+                "'shadow-observing', 'adoption-ready', 'evolution-monitoring', 'needs-revision', 'blocked') "
+                "AND (status NOT IN ('needs-revision', 'blocked') OR "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.retry.state')) = 'authoring-retry') "
                 "AND next_check_at <= %s "
                 "ORDER BY next_check_at ASC, created_at ASC, case_id LIMIT %s",
                 (utc_now_iso(), max(1, min(500, int(limit)))),
@@ -110,7 +113,9 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
                 (
                     event_id, case.case_id, str(event_type or "updated")[:80],
                     case.status, case.stage, str(reason or "")[:1000],
-                    json_dumps({"caseId": case.case_id, "status": case.status, "stage": case.stage, "retry": case.retry}),
+                    json_dumps({"caseId": case.case_id, "status": case.status, "stage": case.stage, "retry": case.retry,
+                                "evolution": {key: value for key, value in case.evolution.items() if key != "plan"},
+                                "evolutionPlanFingerprint": (case.evolution.get("plan") or {}).get("fingerprint")}),
                     stamp,
                 ),
             )
@@ -130,7 +135,8 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
             row = connection.execute(
                 "SELECT MIN(COALESCE(NULLIF(next_check_at, ''), created_at)) AS ready_at "
                 "FROM hypothesis_development_cases WHERE status IN "
-                "('proposed', 'screening', 'compiled', 'validating', 'needs-data') AND next_check_at <= %s",
+                "('proposed', 'screening', 'compiled', 'validating', 'needs-data', "
+                "'shadow-observing', 'adoption-ready', 'evolution-monitoring') AND next_check_at <= %s",
                 (utc_now_iso(),),
             ).fetchone() or {}
         return str(row.get("ready_at") or "")

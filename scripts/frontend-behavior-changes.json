@@ -1,5 +1,9 @@
 [
   {
+    "reason": "Separate technical validation, paired forward evidence, isolated candidate adoption and post-adoption monitoring. Covered by evolution.test.mjs and test_ontology_evolution.",
+    "functions": ["hypothesisDevelopmentStatusMeta", "renderHypothesisDevelopmentPanel", "renderHypothesisDevelopmentCaseDetail"]
+  },
+  {
     "reason": "Insight-first presentation with progressive disclosure, explicit source/lineage counts, current vs historical opinions, account-scoped membership, and working palette navigation. Unit and isolated browser regressions cover these contracts.",
     "functions": ["renderConsoleManagedPage", "consoleDecisionBySymbol", "selectConsoleDecisionRows", "filteredConsoleDecisionRows", "selectConsoleAlertRows", "renderTodayConsole", "renderMarketConsole", "renderDecisionConsoleRow", "renderDecisionCauseList", "renderDecisionViewSwitch", "renderDecisionConsole", "renderAlertConsoleRow", "renderAlertsConsole", "renderInstrumentValuation", "renderInstrumentSummary", "renderInstrumentDecision", "renderInvestmentCalendarPage", "renderInvestmentCalendarSummaryPanel", "renderInvestmentCalendarRailPanel", "renderInvestmentCaseEvidence", "renderInvestmentCaseTabContent", "investmentFlowWorkDetailPayload", "bindDelegatedConsoleActions", "renderCommandPalette"]
   },

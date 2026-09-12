@@ -51,8 +51,18 @@ def save_shadow_hypothesis_observations(
     if not rows:
         return []
     stamp = utc_now_iso()
+    saved_rows = []
     with _transaction() as connection:
         for episode in rows:
+            existing = connection.execute(
+                "SELECT payload_json FROM investment_hypothesis_observation_episodes WHERE episode_id = %s FOR UPDATE",
+                (episode.episode_id,),
+            ).fetchone() or {}
+            frozen = _json_loads(existing.get("payload_json"), {})
+            if (frozen.get("readiness") or {}).get("eligible") is True:
+                # A later poll must not move a prediction's start price or evidence.
+                saved_rows.append(ShadowHypothesisObservationEpisode.from_dict(frozen))
+                continue
             payload = episode.to_dict()
             connection.execute(
                 """
@@ -104,7 +114,8 @@ def save_shadow_hypothesis_observations(
                     episode,
                     stamp,
                 )
-    return rows
+            saved_rows.append(episode)
+    return saved_rows
 
 
 def shadow_observation_episodes_by_ids(

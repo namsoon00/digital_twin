@@ -56,10 +56,21 @@ def build_hypothesis_development_service(settings=None, research_store=None) -> 
     from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.model_registry.public import HypothesisDevelopmentService
+    from digital_twin.modules.model_registry.public import OntologyEvolutionService
+    from digital_twin.modules.model_registry.infrastructure.evolution_policy import evolution_policy
+    from digital_twin.infrastructure.ontology_evolution_runtime import OntologyEvolutionRuntime
+    from digital_twin.infrastructure.reasoning_engine_factory import build_reasoning_engine_platform
+    from digital_twin.modules.portfolio.contracts import utc_now_iso
 
     configured_settings = settings or runtime_settings()
+    case_store = stores.hypothesis_development_store(configured_settings)
+    evolution = OntologyEvolutionService(
+        OntologyEvolutionRuntime(build_reasoning_engine_platform(configured_settings),
+                                 stores.investment_decision_episode_store(configured_settings), case_store),
+        evolution_policy(configured_settings), utc_now_iso,
+    )
     return HypothesisDevelopmentService(
-        case_store=stores.hypothesis_development_store(configured_settings),
+        case_store=case_store,
         proposal_store=research_store or stores.investment_research_store(configured_settings),
         experiment_store=stores.ontology_experiment_store(configured_settings),
         rule_candidate_service=build_rule_change_candidate_service(configured_settings),
@@ -67,6 +78,7 @@ def build_hypothesis_development_service(settings=None, research_store=None) -> 
         monitor_store=stores.monitor_store(configured_settings),
         event_publisher=default_event_bus(),
         settings=configured_settings,
+        evolution_service=evolution,
     )
 
 

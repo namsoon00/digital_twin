@@ -356,6 +356,48 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
             )
         return self.control()
 
+    def switch_evolution_release(self, previous, target, receipt, *, expected_version, rollback=False):
+        """Switch ownership, statuses and the adoption receipt in one transaction."""
+        stamp = iso_utc()
+        with self.transaction() as connection:
+            control = connection.execute(
+                "SELECT * FROM reasoning_engine_control WHERE control_id = 'global' FOR UPDATE"
+            ).fetchone() or {}
+            if (int(control.get("version") or 0) != expected_version
+                    or control.get("active_deployment_id") != previous
+                    or control.get("delivery_deployment_id") != previous
+                    or control.get("candidate_deployment_id") != target):
+                raise RuntimeError("Evolution release ownership changed concurrently")
+            rows = connection.execute(
+                "SELECT deployment_id, deployment_status, last_health_json FROM reasoning_engine_deployments "
+                "WHERE deployment_id IN (%s, %s) ORDER BY deployment_id FOR UPDATE", (previous, target)
+            ).fetchall()
+            deployments = {row["deployment_id"]: row for row in rows}
+            if len(deployments) != 2 or deployments[target]["deployment_status"] != "candidate":
+                raise RuntimeError("Evolution target is not a verified candidate")
+            receipt_owner = previous if rollback else target
+            health = json_value(deployments[receipt_owner].get("last_health_json"), {})
+            health["ontologyEvolution"] = {**health.get("ontologyEvolution", {}), **receipt}
+            connection.execute(
+                "UPDATE reasoning_engine_deployments SET last_health_json = %s WHERE deployment_id = %s",
+                (canonical_json(health), receipt_owner),
+            )
+            connection.execute(
+                "UPDATE reasoning_engine_deployments SET deployment_status = 'candidate', updated_at = %s WHERE deployment_id = %s",
+                (stamp, previous),
+            )
+            connection.execute(
+                "UPDATE reasoning_engine_deployments SET deployment_status = 'active', updated_at = %s WHERE deployment_id = %s",
+                (stamp, target),
+            )
+            connection.execute(
+                "UPDATE reasoning_engine_control SET active_deployment_id = %s, delivery_deployment_id = %s, "
+                "candidate_deployment_id = %s, version = %s, updated_at = %s WHERE control_id = 'global'",
+                (target, target, previous, expected_version + 1, stamp),
+            )
+        return EngineControlState(active_deployment_id=target, delivery_deployment_id=target,
+                                  candidate_deployment_id=previous, version=expected_version + 1)
+
     def update_health(self, deployment_id: str, health: Mapping[str, object]) -> None:
         clean_deployment_id = str(deployment_id or "")
         with self.transaction() as connection:

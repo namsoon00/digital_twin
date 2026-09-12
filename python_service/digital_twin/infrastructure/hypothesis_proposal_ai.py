@@ -24,7 +24,7 @@ class CommandHypothesisProposalAdvisor(HypothesisProposalAdvisor):
 
     def propose(self, context: Dict[str, object]) -> List[Dict[str, object]]:
         if not self.command:
-            return []
+            raise RuntimeError("Hypothesis proposal AI is enabled but no command is configured")
         completed = run_background_ai_prompt(
             self.command,
             hypothesis_proposal_prompt(context),
@@ -34,18 +34,6 @@ class CommandHypothesisProposalAdvisor(HypothesisProposalAdvisor):
         if completed.returncode != 0:
             raise RuntimeError((completed.stderr or completed.stdout or "hypothesis proposal AI failed").strip())
         return proposal_rows_from_text(completed.stdout)
-
-
-class FallbackHypothesisProposalAdvisor(HypothesisProposalAdvisor):
-    def __init__(self, primary, fallback=None):
-        self.primary = primary
-        self.fallback = fallback or LocalHypothesisProposalAdvisor()
-
-    def propose(self, context: Dict[str, object]) -> List[Dict[str, object]]:
-        try:
-            return self.primary.propose(context)
-        except Exception:  # noqa: BLE001 - proposal generation cannot block investment judgement.
-            return self.fallback.propose(context)
 
 
 def hypothesis_proposal_prompt(context: Dict[str, object]) -> str:
@@ -70,9 +58,13 @@ def proposal_rows_from_text(text: str) -> List[Dict[str, object]]:
             raw = raw[start:end + 1]
     try:
         payload = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
-    return [item for item in payload.get("proposals") or [] if isinstance(item, dict)][:3]
+    except (TypeError, ValueError) as error:
+        raise ValueError("Hypothesis AI returned invalid JSON") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("proposals"), list):
+        raise ValueError("Hypothesis AI must return a proposals array")
+    if any(not isinstance(item, dict) for item in payload["proposals"]):
+        raise ValueError("Hypothesis AI proposals must be objects")
+    return payload["proposals"][:3]
 
 
 def hypothesis_proposal_advisor_from_settings(settings: Dict[str, object] = None):
@@ -82,6 +74,5 @@ def hypothesis_proposal_advisor_from_settings(settings: Dict[str, object] = None
         return LocalHypothesisProposalAdvisor()
     timeout = int(settings.get("investmentBrainNovelHypothesisAiTimeoutSeconds") or 120)
     command = background_codex_process_arguments()
-    if command:
-        return FallbackHypothesisProposalAdvisor(CommandHypothesisProposalAdvisor(command, timeout, settings))
-    return LocalHypothesisProposalAdvisor()
+    # Failures propagate to the durable request owner; an outage is not "no hypothesis".
+    return CommandHypothesisProposalAdvisor(command, timeout, settings)

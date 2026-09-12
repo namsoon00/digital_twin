@@ -1,6 +1,7 @@
 """Exact release artifact serialization and rehydration; no runtime reads."""
 
 from typing import Dict, Iterable, Mapping
+from copy import deepcopy
 from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
 from digital_twin.modules.model_registry.contracts import GraphInferenceRule
@@ -107,6 +108,42 @@ def ontology_seed_graph_from_artifact(
         relations=relations,
         worldview=dict(graph_payload.get("worldview") or {}),
     )
+
+
+def append_rule_to_release_artifact(baseline, candidate):
+    """Add one rule and its graph edges without regenerating the frozen TBox."""
+    from digital_twin.modules.model_registry.contracts import rulebox_rules_hash
+
+    result = deepcopy(baseline)
+    rule = GraphInferenceRule.from_dict({**candidate, "enabled": True})
+    existing_ids = {row.get("rule_id") for row in result.get("rules") or []}
+    if not rule.rule_id or rule.rule_id in existing_ids:
+        raise ValueError("Evolution must add a new, versioned rule id")
+    addition = ontology_seed_graph([rule])
+    graph = result["graph"]
+    known = {row["id"] for row in graph["entities"]}
+    added = []
+    for item in addition.entities:
+        row = item.to_dict()
+        if row["id"] in known:
+            continue
+        # New executable vocabulary needs a schema migration, not an invented AI type.
+        if row.get("properties", {}).get("ontologyBox") == "TBox":
+            raise ValueError("Candidate requires an unsupported TBox extension: " + row["id"])
+        added.append(row)
+    graph["entities"].extend(added)
+    new_ids = {row["id"] for row in added}
+    all_ids = known | new_ids
+    for edge in addition.relations:
+        row = edge.to_dict()
+        if row["source"] not in new_ids and row["target"] not in new_ids:
+            continue
+        if row["source"] not in all_ids or row["target"] not in all_ids:
+            raise ValueError("Candidate contains an unbound relation")
+        graph["relations"].append(row)
+    result["rules"].append(rule.to_dict())
+    result["ruleboxFingerprint"] = rulebox_rules_hash(result["rules"])
+    return result
 
 
 def graph_box_entity_counts(graph: PortfolioOntology) -> Dict[str, int]:

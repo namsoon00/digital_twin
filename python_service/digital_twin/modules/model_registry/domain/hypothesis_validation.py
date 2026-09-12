@@ -35,7 +35,7 @@ def additional_validation_gate(requirements, type_status, replay_status):
         check = item["check"]
         status = {"typedb-execution": type_status, "current-match": replay_status}.get(check, "not-run")
         checks.append({**item, "status": status,
-                       "authority": "TypeDB-preview" if check != "review" else "verified-review-required"})
+                       "authority": "independent-forward-outcomes" if check == "paired-forward-outcomes" else "verified-review-required" if check == "review" else "TypeDB-preview"})
     status = "passed"
     if any(row["status"] == "blocked" for row in checks):
         status = "blocked"

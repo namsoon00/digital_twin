@@ -141,6 +141,10 @@ _EXPORTS.update({
     'user_facing_investment_language': ('digital_twin.modules.model_registry.domain.investment_ubiquitous_language', 'user_facing_investment_language'),
 })
 
+_EXPORTS['rulebox_semantic_violations'] = ('digital_twin.modules.model_registry.domain.ontology_rulebox_governance', 'rulebox_semantic_violations')
+_EXPORTS['validate_evolution_plan'] = ('digital_twin.modules.model_registry.domain.ontology_evolution', 'validate_plan')
+_EXPORTS['evolution_fingerprint'] = ('digital_twin.modules.model_registry.domain.ontology_evolution', 'fingerprint')
+
 __all__ = list(_EXPORTS)
 
 

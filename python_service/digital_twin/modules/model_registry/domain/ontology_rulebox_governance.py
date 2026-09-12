@@ -358,7 +358,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
                 "blockers": [],
                 "validationRequirements": [
                     {"check": "current-match", "requirement": "Verify all candidate predicates in the current scoped TypeDB ABox", "dependencyKey": "current-replay"},
-                    {"check": "review", "requirement": "Specific empirical or causal checks not proven by a current match", "dependencyKey": "outcome-validation"},
+                    {"check": "paired-forward-outcomes", "requirement": "Compare preregistered independent future outcomes against the frozen baseline", "dependencyKey": "outcome-validation"},
                 ],
                 "priority": 0,
                 "proposedRule": {
@@ -383,7 +383,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- 매수/매도 지시를 만들지 말고 관계 후보만 제안한다.",
         "- proposedRule.enabled는 반드시 false다.",
         "- blockers/requiresData에는 후보 명세 자체를 작성할 수 없는 원인만 적는다. 작성 가능한 후보는 proposedRule을 반환하고 blockers와 requiresData는 빈 배열로 둔다.",
-        "- validationRequirements는 작성 후 검증 조건이다. 현재 TypeDB 실행 확인은 typedb-execution, 모든 후보 조건의 현재 일치 확인은 current-match, 독립 사건/미래 관측/연구 교차검증은 review로 구분한다.",
+        "- validationRequirements는 작성 후 검증 조건이다. TypeDB 실행은 typedb-execution, 현재 일치는 current-match, 고정된 기존 가설과 독립 미래 결과 비교는 paired-forward-outcomes로 구분한다. 자동 결과 계약으로 검증할 수 없는 인과 연구 요구만 review다.",
         "- 미래 관측이나 현재 후보 일치 여부가 미확인이라는 이유만으로 작성 가능한 proposedRule을 비우지 않는다. validationRequirements에 기록하고 검증 단계로 넘긴다.",
         "- review 검증은 후보가 일치하거나 가격 스냅샷이 많다는 이유로 통과되지 않는다. AI는 검증 결과나 통과 여부를 작성하지 않는다.",
         "- ruleDesign.observationState가 not-queried이면 현재 ABox를 조회하지 않은 명세 작성 단계다. 빈 inferenceBox.relations를 결측 증거로 사용하지 않는다.",
@@ -401,7 +401,9 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- hypothesisProposal이 있으면 그 주장 하나만 실행 가능한 후보 규칙으로 변환하고 다른 가설을 추가하지 않는다.",
         "- hypothesisProposal의 evidence ID는 출처 계보이며 조건 field나 relation_type으로 직접 사용하지 않는다.",
         "- derivations에는 decision_stage, evidence_role, decision_effect을 포함한다.",
-        "- 예측 가설 후보만 candidate_action=HOLD, decision_effect=defer 또는 constrain으로 제한한다. 참고용 관계에는 candidate_action을 넣지 않는다.",
+        "- 예측 후보는 근거에 맞는 candidate_action과 decision_effect를 유지한다. 보유로 강제 변경하지 않는다. 실제 발송 권한은 격리된 후보에게 없으며 검증 전에는 운영에 반영되지 않는다. 참고용 관계에는 candidate_action을 넣지 않는다.",
+        "- model_input_contract.comparisonBaselineRuleId에 동일한 예측 대상·관측 기간·결과 측정 기준을 가진 기존 규칙 ID를 지정한다. 결과를 본 뒤 기준을 바꾸거나 쉽게 통과하려고 결과 임계치를 완화하지 않는다. 자동 실험은 source_kind=stock인 제안 계정·종목에 한정된다.",
+        "- 새로운 데이터 종류나 TBox 스키마가 필요하면 그 확장 요구를 명시한다. 존재하지 않는 자료나 모델을 있다고 가정해 기존 관계 이름에 끼워 넣지 않는다.",
         "- knowledge_basis, claim_contract, model_input_contract, hypothesis_family_key, hypothesis_lifecycle을 제공 예시에 맞춰 명시한다. 참고용 관계는 원래 인과 가설의 검증 계약을 대신할 수 없다.",
         "- 중복 rule_id를 만들지 않는다.",
         "- 응답은 설명 없이 JSON 하나만 반환한다.",

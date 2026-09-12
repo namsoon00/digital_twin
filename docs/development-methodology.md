@@ -301,7 +301,8 @@ Application:
 - `python_service/digital_twin/modules/news_intelligence/application/investment_research_orchestration_service.py`: cache-first bounded hypothesis research, verified-evidence persistence, and re-reasoning request orchestration
 - `python_service/digital_twin/modules/model_registry/domain/hypothesis_development.py`: novel-hypothesis development lifecycle, lineage, validation gates, decision-impact classification, and deployment state
 - `python_service/digital_twin/modules/model_registry/application/hypothesis_proposal_service.py`: evidence-bound novel hypothesis proposals that automatically enter the governed development pipeline
-- `python_service/digital_twin/modules/model_registry/application/hypothesis_development_service.py`: automatic causal screening, disabled RuleBox candidate compilation, TypeDB preview, historical and post-proposal validation, and explicit deployment approval orchestration
+- `python_service/digital_twin/modules/model_registry/application/hypothesis_development_service.py`: structural screening, disabled candidate compilation and TypeDB preview. Predictive candidates enter the policy-governed evolution lifecycle described in `docs/ontology-evolution.md`; legacy manual approvals remain a separate path.
+- `python_service/digital_twin/modules/model_registry/application/ontology_evolution_service.py`: immutable experimental plans, paired forward-outcome admission, automatic isolated-release adoption and post-adoption monitoring. Operational ownership switches and receipts must commit atomically; query success is never investment validation.
 
 Infrastructure:
 

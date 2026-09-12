@@ -13,7 +13,8 @@
       "function": "bind_v2_release",
       "importCount": 7,
       "returnBundle": true,
-      "bodyHash": "7483329becb0547444a8f68811a5b2c790f73d5ad7fd7bcd03d2e5d180818463"
+      "bodyHash": "2a8699c903bb4e3ba33b4036871480b67b74ad5085ac59fb0717c34d05fe090b",
+      "reviewedChange": "Restore and bind stored immutable candidate artifacts instead of regenerating the current default catalog; covered by test_ontology_evolution cold-start regression."
     },
     {
       "file": "reasoning_warmup.py",

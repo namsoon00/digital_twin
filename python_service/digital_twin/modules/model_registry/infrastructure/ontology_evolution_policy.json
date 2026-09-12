@@ -1,0 +1,16 @@
+{
+  "version": "ontology-evolution-policy-v1",
+  "mode": "automatic",
+  "allowedChanges": ["add-predictive-rule"],
+  "minimumIndependentPairs": 20,
+  "minimumDistinctDays": 5,
+  "independenceMinutes": 1440,
+  "minimumImprovement": 0.05,
+  "maximumContradictionRate": 0.35,
+  "minimumWinLowerBound": 0.5,
+  "retryMinutes": 60,
+  "maximumAuthoringAttempts": 3,
+  "maximumEvidenceRows": 500,
+  "maximumShadowDays": 30,
+  "baselineRuleIds": []
+}

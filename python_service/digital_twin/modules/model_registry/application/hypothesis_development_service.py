@@ -15,6 +15,7 @@ from digital_twin.modules.model_registry.domain.hypothesis_compilation import RU
 from digital_twin.modules.model_registry.domain.hypothesis_validation import additional_validation_gate, preview_states
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import utc_now_iso
+from .ontology_evolution_service import EVOLUTION_STATUSES
 
 
 class HypothesisDevelopmentService:
@@ -30,6 +31,7 @@ class HypothesisDevelopmentService:
         monitor_store=None,
         event_publisher=None,
         settings: Dict[str, object] = None,
+        evolution_service=None,
     ):
         self.case_store = case_store
         self.proposal_store = proposal_store
@@ -39,6 +41,7 @@ class HypothesisDevelopmentService:
         self.monitor_store = monitor_store
         self.event_publisher = event_publisher
         self.settings = dict(settings or {})
+        self.evolution_service = evolution_service
 
     def ingest_proposal(self, proposal: Dict[str, object], inference_generation_id: str = "") -> Dict[str, object]:
         incoming = HypothesisDevelopmentCase.from_proposal(proposal, inference_generation_id)
@@ -51,7 +54,7 @@ class HypothesisDevelopmentService:
             if existing:
                 case.merge_proposal(proposal, inference_generation_id)
             self.persist(case, "proposal-merged" if existing else "proposal-ingested")
-        if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES or case.status in {"approval-required", "deployed", "observing"}:
+        if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES or case.status in {"approval-required", "deployed", "observing"} or (case.evolution.get("plan") and case.status == "strengthened"):
             return {"status": case.status, "case": case.to_dict(), "merged": bool(existing)}
         result = self.process(case.case_id, force=not bool(existing))
         result["merged"] = bool(existing)
@@ -65,10 +68,16 @@ class HypothesisDevelopmentService:
             case = self.case_store.get(case_id) if self.case_store else None
             if not case:
                 return {"status": "not-found", "caseId": case_id}
-            if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES | {"approval-required", "deployed", "observing"}:
+            if self.evolution_service and case.status in EVOLUTION_STATUSES:
+                ready = self.parse_timestamp(case.retry.get("nextCheckAt"))
+                if not force and ready and ready > datetime.now(timezone.utc):
+                    return {"status": "deferred-unchanged", "caseId": case_id}
+                return self.evolution_service.advance(case, self.persist)
+            if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES | {"approval-required", "deployed", "observing"} or (case.evolution.get("plan") and case.status == "strengthened"):
                 return {"status": case.status, "case": case.to_dict()}
             if not force and case.status in {"needs-revision", "blocked"}:
-                return {"status": "development-required", "caseId": case_id}
+                if not self.evolution_service or int(case.retry.get("authoringAttempts") or 0) >= self.evolution_service.policy["maximumAuthoringAttempts"]:
+                    return {"status": "development-required", "caseId": case_id}
             if not force and not self.validation_retry_due(case):
                 attempted = self.parse_timestamp(case.retry.get("lastAttemptAt") or case.validation_attempted_at)
                 now = datetime.now(timezone.utc)
@@ -106,9 +115,13 @@ class HypothesisDevelopmentService:
                 case.retry["requirements"] = [case.blocked_reason]
                 if invalid:
                     case.retry["nextCheckAt"] = ""
+                    self.schedule_authoring_retry(case)
                 self.persist(case, "retry-failed", case.blocked_reason)
                 return {"status": "error", "caseId": case_id, "reason": case.blocked_reason, "case": case.to_dict()}
             case = self.case_store.get(case_id) or case
+            if case.status in EVOLUTION_STATUSES:
+                result["case"] = case.to_dict()
+                return result
             if case.status == "needs-data":
                 case.retry["state"] = blocker_state(case.retry.get("blockers") or [
                     {"kind": "missing-observation"}
@@ -117,9 +130,19 @@ class HypothesisDevelopmentService:
                 case.retry["state"] = "development-required" if case.status in {"needs-revision", "blocked"} else "completed"
             if case.status != "needs-data":
                 case.retry["nextCheckAt"] = ""
+            if case.status in {"needs-revision", "blocked"}:
+                self.schedule_authoring_retry(case)
             self.persist(case, "retry-finished", case.blocked_reason)
             result["case"] = case.to_dict()
             return result
+
+    def schedule_authoring_retry(self, case):
+        if (self.evolution_service and int(case.retry.get("authoringAttempts") or 0)
+                < self.evolution_service.policy["maximumAuthoringAttempts"]):
+            case.retry["state"] = "authoring-retry"
+            case.retry["nextCheckAt"] = (datetime.now(timezone.utc) + timedelta(
+                minutes=self.evolution_service.policy["retryMinutes"])).isoformat()
+            case.compilation_draft["rejectedReason"] = case.blocked_reason or "candidate-needs-revision"
 
     def _process_case(self, case_id: str) -> Dict[str, object]:
         case = self.case_store.get(case_id) if self.case_store else None
@@ -220,7 +243,9 @@ class HypothesisDevelopmentService:
         return self.validate(case, experiment)
 
     def process_pending(self, limit: int = 5) -> Dict[str, object]:
-        statuses = {"proposed", "screening", "compiled", "validating", "needs-data"}
+        statuses = {"proposed", "screening", "compiled", "validating", "needs-data"} | EVOLUTION_STATUSES
+        if self.evolution_service:
+            statuses |= {"needs-revision", "blocked"}
         reader = getattr(self.case_store, "pending", None)
         scanned = reader(limit=50) if callable(reader) else (self.case_store.list(limit=500) if self.case_store else [])
         candidates = [
@@ -306,6 +331,10 @@ class HypothesisDevelopmentService:
         if not self.rule_candidate_service or not hasattr(self.rule_candidate_service, "propose_hypothesis"):
             return {"status": "disabled", "reason": "가설 규칙 후보 서비스가 구성되지 않았습니다.", "candidates": []}
         case.retry.pop("compilationContext", None)
+        attempts = int(case.retry.get("authoringAttempts") or 0)
+        if self.evolution_service and attempts >= self.evolution_service.policy["maximumAuthoringAttempts"]:
+            raise ValueError("candidate-authoring-budget-exhausted")
+        case.retry["authoringAttempts"] = attempts + 1
         case.candidate_rule = {}
         case.candidate_id = ""
         case.experiment_id = ""
@@ -327,6 +356,13 @@ class HypothesisDevelopmentService:
     def governed_candidate_rule(self, case: HypothesisDevelopmentCase, rule: Dict[str, object]) -> Dict[str, object]:
         prepared = dict(rule or {})
         prepared["enabled"] = False
+        if self.evolution_service:
+            if prepared.get("source_kind", prepared.get("sourceKind")) != "stock":
+                raise ValueError("Automatic evolution currently requires a stock-scoped source")
+            prepared["model_input_contract"] = {
+                **dict(prepared.get("model_input_contract") or prepared.get("modelInputContract") or {}),
+                "evolutionScope": {"worldId": portfolio_world_id(case.account_id), "symbol": case.symbol},
+            }
         prepared["hypothesis_family_key"] = str(prepared.get("hypothesis_family_key") or prepared.get("hypothesisFamilyKey") or "ai-hypothesis." + case.fingerprint[:16])
         conditions = []
         for index, raw in enumerate(prepared.get("conditions") or []):
@@ -336,26 +372,30 @@ class HypothesisDevelopmentService:
             item["hypothesis_scope"] = str(item.get("hypothesis_scope") or item.get("hypothesisScope") or ("account" if case.account_id else "market"))
             item["evidence_group_key"] = str(item.get("evidence_group_key") or item.get("evidenceGroupKey") or condition_id)
             conditions.append(item)
+        if self.evolution_service:
+            # Keep the entire scoped experiment in its private overlay, not a shared premise.
+            for condition in conditions:
+                condition["hypothesis_scope"] = "account"
         prepared["conditions"] = conditions
         formation = [str(item.get("condition_id") or "") for item in conditions if str(item.get("role") or "required").lower() not in {"optional", "negative", "exclude", "not"}]
+        lifecycle = dict(prepared.get("hypothesis_lifecycle") or prepared.get("hypothesisLifecycle") or {})
         prepared["hypothesis_lifecycle"] = {
-            **dict(prepared.get("hypothesis_lifecycle") or prepared.get("hypothesisLifecycle") or {}),
             "formationConditionIds": formation,
             "invalidationConditionIds": case.invalidation_conditions,
             "validityMinutes": int(self.settings.get("hypothesisDevelopmentDefaultValidityMinutes") or 1440),
             "requiredFreshnessDomains": list(case.required_evidence_types or ["research"]),
             "nextDataRequirements": list(case.required_evidence_types or []),
             "invalidationMode": "typedb-rule-not-materialized-or-condition-invalidated",
+            **lifecycle,
         }
         predictive = GraphInferenceRule.from_dict(prepared).resolved_claim_contract.is_predictive
         derivations = []
         for raw in prepared.get("derivations") or []:
             item = dict(raw) if isinstance(raw, dict) else {}
             item["evidence_role"] = str(item.get("evidence_role") or item.get("evidenceRole") or item.get("polarity") or "context")
-            effect = str(item.get("decision_effect") or item.get("decisionEffect") or "defer").lower()
-            item["decision_effect"] = effect if effect in {"defer", "constrain"} else "defer"
-            item["candidate_action"] = "HOLD" if predictive else ""
-            item["candidate_action_label"] = str(item.get("candidate_action_label") or item.get("candidateActionLabel") or "관찰 유지") if predictive else ""
+            if not predictive:
+                item["candidate_action"] = ""
+                item["candidate_action_label"] = ""
             derivations.append(item)
         prepared["derivations"] = derivations
         return GraphInferenceRule.from_dict(prepared).to_dict()
@@ -415,7 +455,7 @@ class HypothesisDevelopmentService:
             validation_contract={
                 "contract": "automatic-hypothesis-validation-v1",
                 "gates": [item.get("id") for item in case.validation_gates],
-                "operationalDeploymentRequiresApproval": True,
+                "operationalDeploymentRequiresApproval": not bool(self.evolution_service),
                 "compilationFingerprint": case.compilation_draft.get("contentFingerprint"),
                 "validationRequirements": case.validation_requirements,
             },
@@ -460,22 +500,24 @@ class HypothesisDevelopmentService:
         holdout_status = "passed" if len(holdout) >= minimum_holdout else "needs-data"
         derivations = [dict(item) for item in case.candidate_rule.get("derivations") or [] if isinstance(item, dict)]
         predictive = GraphInferenceRule.from_dict(case.candidate_rule).resolved_claim_contract.is_predictive
-        policy_safe = bool(derivations) and all(
-            str(item.get("candidate_action") or "").upper() == ("HOLD" if predictive else "")
-            and str(item.get("decision_effect") or "").lower() in {"defer", "constrain"}
-            for item in derivations
-        )
+        policy_safe = bool(derivations) and case.candidate_rule.get("enabled") is False and not self.validate_rule_structure(case.candidate_rule)
         policy_status = "passed" if policy_safe else "blocked"
         case.update_gates([
             validation_gate("typedb-preview", "TypeDB 후보 실행", type_status, str(preview.get("reason") or preview_status), True, self.compact_preview(preview)),
             validation_gate("current-replay", "현재 ABox 재생", replay_status, ("조회 성공, 현재 후보 조건은 성립하지 않습니다." if type_status == "passed" and matched_count == 0 else "후보 규칙 일치 " + str(matched_count) + "건"), True, {"matchedCount": matched_count, "conditionState": "not-met" if type_status == "passed" and matched_count == 0 else "matched" if replay_status == "passed" else "unknown"}),
             validation_gate("historical-coverage", "과거 자료 범위", history_status, str(len(history)) + "개 스냅샷 중 최소 " + str(minimum_history) + "개 필요", True, {"snapshotCount": len(history), "minimumSnapshotCount": minimum_history}),
             validation_gate("holdout-observation", "후보 작성 후 관측", holdout_status, "현재 후보 작성 뒤 생성된 " + str(len(holdout)) + "개 스냅샷 중 최소 " + str(minimum_holdout) + "개 필요. 독립 사건 결과 검증과는 별개입니다.", True, {"snapshotCount": len(holdout), "minimumSnapshotCount": minimum_holdout, "after": authored_at}),
-            validation_gate("policy-safety", "정책 안전", policy_status, "예측 후보만 HOLD로 제한하고 참고 후보는 투자 행동을 만들지 않습니다. 운영 배포에는 승인이 필요합니다.", True, {"operationalDeploymentRequiresApproval": True, "candidateActions": [item.get("candidate_action") for item in derivations], "decisionEffects": [item.get("decision_effect") for item in derivations]}),
+            validation_gate("policy-safety", "실험 격리", policy_status, "후보의 원래 행동과 반증 조건을 유지하되 운영 규칙은 비활성으로 보관합니다. 별도 실험 버전은 알림 권한이 없습니다.", True, {"candidateEnabled": False, "candidateActions": [item.get("candidate_action") for item in derivations], "decisionEffects": [item.get("decision_effect") for item in derivations]}),
             validation_gate("causal-hypothesis", "원래 인과 가설의 검증 계약", "passed" if predictive else "blocked", "예측 가설 계약을 확인했습니다. 사후 결과 검증은 별도로 필요합니다." if predictive else "생성된 후보는 추가 확인용 관계이며 원래 인과 가설을 검증하는 예측 모델·결과 계약이 아닙니다. 참고 조회 성공을 가설 검증 성공으로 바꾸지 않습니다.", True, {"predictiveClaim": predictive, "claimType": GraphInferenceRule.from_dict(case.candidate_rule).resolved_claim_contract.claim_type}),
             additional_validation_gate(case.validation_requirements, type_status, replay_status),
         ])
         summary = dict(case.validation_summary_payload)
+        if (self.evolution_service and self.evolution_service.policy["mode"] != "disabled"
+                and type_status == "passed" and predictive and policy_safe
+                and not summary.get("blockedCount")):
+            self.complete_experiment(experiment, case, preview, history, holdout)
+            self.persist(case, "technical-validation-completed")
+            return self.evolution_service.start(case, self.persist)
         if summary.get("status") == "validated":
             case.transition("approval-required", "approval")
             event_name = HYPOTHESIS_DEVELOPMENT_VALIDATED
@@ -631,7 +673,8 @@ class HypothesisDevelopmentService:
             "summary": {"statuses": statuses, "approvalRequiredCount": statuses.get("approval-required", 0)},
             "cases": [item.to_dict() for item in rows],
             "events": self.case_store.events(limit=100) if self.case_store and hasattr(self.case_store, "events") else [],
-            "governance": "automatic-validation-human-deployment-approval",
+            "governance": "policy-governed-shadow-evolution" if self.evolution_service else "automatic-validation-human-deployment-approval",
+            "evolutionPolicy": dict(self.evolution_service.policy) if self.evolution_service else {},
         }
 
     def report(self, case_id: str) -> Dict[str, object]:

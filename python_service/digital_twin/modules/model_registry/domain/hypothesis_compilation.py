@@ -9,7 +9,7 @@ from dataclasses import fields
 from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
-RULE_DESIGN_VERSION = "hypothesis-rule-design-v4"
+RULE_DESIGN_VERSION = "hypothesis-rule-design-v5-evolution"
 BLOCKER_KINDS = {
     "missing-observation", "stale-observation", "observation-window",
     "schema-mismatch", "unsupported-capability", "dependency-error", "unclassified",
@@ -96,7 +96,7 @@ def validation_requirements(candidate):
         if not requirement or len(requirement) > 2000:
             raise ValueError("validationRequirements requires a bounded nonempty requirement")
         check = str(row.get("check") or "review")
-        if check not in {"typedb-execution", "current-match", "review"}:
+        if check not in {"typedb-execution", "current-match", "paired-forward-outcomes", "review"}:
             check = "review"
         rows.append({"check": check, "requirement": requirement,
                      "dependencyKey": str(row.get("dependencyKey") or "")[:191]})

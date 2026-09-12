@@ -22,6 +22,8 @@ _EXPORTS = {'HypothesisDevelopmentService': ('digital_twin.modules.model_registr
  'RuleChangeCandidateProposalService': ('digital_twin.modules.model_registry.application.ontology_rule_candidate_service',
                                         'RuleChangeCandidateProposalService')}
 
+_EXPORTS['OntologyEvolutionService'] = ('digital_twin.modules.model_registry.application.ontology_evolution_service', 'OntologyEvolutionService')
+
 __all__ = list(_EXPORTS)
 
 

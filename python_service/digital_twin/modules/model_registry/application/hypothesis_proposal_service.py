@@ -43,7 +43,7 @@ class HypothesisProposalService:
         }
         if self.store and hasattr(self.store, "list_hypothesis_proposals"):
             for item in self.store.list_hypothesis_proposals("", str(symbol or "").upper(), 100) or []:
-                if isinstance(item, dict) and str(item.get("claim") or "").strip():
+                if isinstance(item, dict) and item.get("accountId") == str(account_id or "") and str(item.get("claim") or "").strip():
                     existing_claims.add(str(item.get("claim") or "").strip().casefold())
         rows = []
         development_rows = []
@@ -75,6 +75,7 @@ class HypothesisProposalService:
             if self.store and hasattr(self.store, "save_hypothesis_proposal"):
                 self.store.save_hypothesis_proposal(proposal)
             rows.append(proposal.to_dict())
+            existing_claims.add(claim.casefold())
             self.publish(hypothesis_proposed_event(proposal.to_dict()))
             if self.development_service and hasattr(self.development_service, "ingest_proposal"):
                 try:

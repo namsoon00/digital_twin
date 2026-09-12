@@ -122,6 +122,15 @@ def typedb_native_match_query(
     symbols = clean_symbols_from_payload(list(target_symbols or []))
     if symbols and typedb_source_kind_uses_symbol_scope(source_kind):
         clauses.append(typedb_value_match("$source", "ontology-symbol", symbols, "==", "sourceSymbol"))
+    evolution_scope = (rule.get("model_input_contract") or rule.get("modelInputContract") or {}).get("evolutionScope")
+    if evolution_scope is not None:
+        if not isinstance(evolution_scope, dict) or not evolution_scope.get("worldId") or not evolution_scope.get("symbol"):
+            raise ValueError("An evolution rule must retain its validated world and symbol")
+        # Authorization scope remains a TypeDB predicate, including indexed reads.
+        clauses.append(typedb_value_match("$source", "ontology-symbol", [str(evolution_scope["symbol"])], "==", "evolutionSymbol"))
+        clauses.append('$source has ontology-world-id $evolutionWorld; $evolutionWorld == ' + typedb_string(evolution_scope["worldId"]) + ';')
+        if world_id_variable or world_id:
+            clauses.append('$evolutionWorld == ' + (world_id_variable or typedb_string(world_id)) + ';')
     columns = ["sourceId", "sourceLabel"]
     evidence_columns: List[str] = []
     condition_evidence_columns: Dict[str, str] = {}

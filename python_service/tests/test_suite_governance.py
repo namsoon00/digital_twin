@@ -153,9 +153,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # requirements plus persisted-history formats add fifteen regressions.
         # Six read-only investor presentation cases cover authored meaning,
         # unknown opinions, evidence roles, source clocks and compact identity.
-        # Ontology evolution adds 26 independent outcome, immutable release,
+        # Ontology evolution adds 27 independent outcome, immutable release,
         # authorization-scope and automatic rollback boundaries.
-        self.assertLessEqual(total, 1451)
+        self.assertLessEqual(total, 1452)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

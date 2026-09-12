@@ -72,6 +72,12 @@ class OntologyEvolutionService:
                 return self.rollback(case, persist, {"reason": "runtime-contract-failure"}, "operational-failure")
             if monitoring and timestamp(self.clock()) >= timestamp(case.evolution["adoptedAt"]) + timedelta(days=policy["maximumShadowDays"]):
                 return self.rollback(case, persist, {"reason": "monitoring-window-expired"}, "post-adoption-window-expired")
+            if not monitoring and timestamp(self.clock()) >= timestamp(plan["createdAt"]) + timedelta(days=policy["maximumShadowDays"]):
+                result = self.runtime.retire(plan, deployment)
+                if result.get("status") == "retired":
+                    case.transition("retired", "evolution")
+                    return self.finish(case, persist, "observation-window-expired")
+                return self.wait(case, persist, "candidate-retirement-pending", result)
             evidence = self.runtime.comparison(plan, deployment, observed_after=case.evolution.get("adoptedAt") or "")
             assessment = evaluate_comparison(plan, evidence, now=self.clock(),
                                              observed_after=case.evolution.get("adoptedAt") or "")
@@ -101,12 +107,11 @@ class OntologyEvolutionService:
                     case.transition("evolution-monitoring", "evolution")
                     return self.finish(case, persist, "paired-holdout-and-runtime-checks-passed", terminal=False)
                 return self.wait(case, persist, result.get("reason") or "runtime-readiness-required", result)
-            expired = timestamp(self.clock()) >= timestamp(plan["createdAt"]) + timedelta(days=policy["maximumShadowDays"])
-            if assessment["status"] == "not-better" or expired:
+            if assessment["status"] == "not-better":
                 result = self.runtime.retire(plan, deployment)
                 if result.get("status") == "retired":
                     case.transition("retired", "evolution")
-                    return self.finish(case, persist, "not-better-than-baseline" if not expired else "observation-window-expired")
+                    return self.finish(case, persist, "not-better-than-baseline")
                 return self.wait(case, persist, "candidate-retirement-pending", result)
             return self.wait(case, persist, "external-validation-required" if external_review else assessment["reason"])
         except Exception as error:

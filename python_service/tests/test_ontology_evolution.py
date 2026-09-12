@@ -168,6 +168,29 @@ class EvolutionTests(unittest.TestCase):
             service.advance(item, Mock())
             runtime.adopt.assert_not_called()
 
+    def test_expired_candidate_retires_before_result_read_or_promotion(self):
+        for mode in ("automatic", "shadow"):
+            for status in ("shadow-observing", "adoption-ready"):
+                with self.subTest(mode=mode, status=status):
+                    item = case()
+                    item.status = status
+                    item.candidate_rule = {"rule_id": "graph.candidate.v1"}
+                    policy = {**self.policy, "mode": mode}
+                    plan = create_plan(item, item.candidate_rule, self.plan["baseline"], policy, START.isoformat())
+                    item.evolution = {"plan": plan, "deployment": {"deploymentId": "candidate"}}
+                    runtime = SimpleNamespace(state=Mock(return_value={"status": "shadow"}),
+                        comparison=Mock(side_effect=ConnectionError("Outcome reader unavailable")),
+                        retire=Mock(return_value={"status": "waiting"}), adopt=Mock())
+                    service = OntologyEvolutionService(runtime, policy, lambda: (START + timedelta(days=30)).isoformat())
+                    self.assertEqual("candidate-retirement-pending", service.advance(item, Mock())["reason"])
+                    self.assertTrue(item.retry["nextCheckAt"])
+                    runtime.retire.return_value = {"status": "retired"}
+                    self.assertEqual("observation-window-expired", service.advance(item, Mock())["reason"])
+                    self.assertEqual("retired", item.status)
+                    self.assertEqual("", item.retry["nextCheckAt"])
+                    runtime.comparison.assert_not_called()
+                    runtime.adopt.assert_not_called()
+
 
 class EvolutionArtifactTests(unittest.TestCase):
     @classmethod

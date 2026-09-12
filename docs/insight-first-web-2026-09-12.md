@@ -36,6 +36,9 @@ versioned `investment-reading-v1` presentation contract. List and dashboard
 responses carry only the compact reading; detail carries the explanations,
 recorded numeric facts and their source timestamps. Projection performs no extra
 database/API query and never creates an investment opinion or changes a record.
+The console list and dashboard cache keys include this presentation version so
+the first response after deployment cannot reuse a disk cache from the old UI
+contract. Refresh TTLs and last-success handling remain unchanged.
 
 The main detail answers four questions in order:
 

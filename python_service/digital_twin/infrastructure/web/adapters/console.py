@@ -19,6 +19,9 @@ from typing import Dict
 from typing import List
 
 
+INVESTMENT_READING_CACHE_VERSION = "investment-reading-v1"
+
+
 DASHBOARD_READ_MODEL = StaleReadModelCache(
     "console-dashboard",
     ttl_seconds=20,
@@ -101,7 +104,7 @@ def _console_dashboard_source_payload(query: Dict[str, List[str]]) -> Dict[str, 
 def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     account_id = first_query(query, "accountId") or "default"
     watchlist = ",".join(sorted(filter(None, first_query(query, "watchlistSymbols").upper().split(","))))
-    cache_key = account_id + "|" + watchlist
+    cache_key = INVESTMENT_READING_CACHE_VERSION + "|" + account_id + "|" + watchlist
     return cached_api_payload(
         DASHBOARD_READ_MODEL,
         cache_key,
@@ -204,6 +207,7 @@ def console_market_evidence_api_payload(query: Dict[str, List[str]]) -> Dict[str
 
 def console_decisions_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     cache_key = "|".join([
+        INVESTMENT_READING_CACHE_VERSION,
         str(first_query(query, "accountId") or first_query(query, "account") or "default"),
         str(first_query(query, "symbol") or "all").upper(),
         str(first_query(query, "limit") or "100"),

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
@@ -175,6 +176,15 @@ class ConsoleDecisionReadModelTest(unittest.TestCase):
         self.assertEqual("account-a", task["accountId"])
         self.assertEqual("awaiting", task["reading"]["kind"])
         self.assertIn(row["subjectCaseId"], task["detailPath"])
+        # A process restart must not serve the pre-reading disk cache first.
+        from digital_twin.infrastructure.web.adapters import console
+        with patch.object(console, "cached_api_payload", return_value={}) as cached:
+            console.console_decisions_api_payload({"accountId": ["account-a"], "symbol": ["TEST"], "limit": ["3"]})
+            decision_cache_key = cached.call_args.args[1]
+            console.console_dashboard_api_payload({"accountId": ["account-a"]})
+            dashboard_cache_key = cached.call_args.args[1]
+        self.assertEqual("investment-reading-v1|account-a|TEST|3|user", decision_cache_key)
+        self.assertEqual("investment-reading-v1|account-a|", dashboard_cache_key)
 
     def test_blocked_saved_opinion_and_technical_checks_remain_read_only(self):
         case = {"decision": {"action": "HOLD", "state": "blocked", "requiredChecks": [

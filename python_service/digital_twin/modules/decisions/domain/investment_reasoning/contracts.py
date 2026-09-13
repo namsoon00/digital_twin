@@ -80,6 +80,7 @@ class FactDelta:
     lane: str
     subject_ids: Tuple[str, ...] = ()
     subject_revisions: Dict[str, str] = field(default_factory=dict)
+    source_boundaries: Tuple[Dict[str, object], ...] = ()
     version: str = FACT_DELTA_VERSION
 
     @classmethod
@@ -92,6 +93,12 @@ class FactDelta:
             for subject_id, revision in _mapping(context.get("subjectRevisions")).items()
             if str(subject_id or "").strip() and str(revision or "").strip()
         }
+        boundaries = list(context.get("verifiedSourceSnapshots") or [])
+        if isinstance(context.get("verifiedSourceSnapshot"), Mapping):
+            boundaries.append(context["verifiedSourceSnapshot"])
+        boundaries = {str(item.get("snapshotId")): {
+            key: item[key] for key in ("snapshotId", "accountId", "generatedAt", "fingerprint") if key in item
+        } for item in boundaries if isinstance(item, Mapping) and item.get("snapshotId")}
         return cls(
             source_event_ids=_texts(getattr(request, "source_event_ids", ())),
             account_ids=_texts(getattr(request, "account_ids", ())),
@@ -105,6 +112,7 @@ class FactDelta:
             lane=_reasoning_lane(fact_types, work_classes),
             subject_ids=_texts(context.get("subjectIds") or subject_revisions.keys()),
             subject_revisions=dict(sorted(subject_revisions.items())),
+            source_boundaries=tuple(boundaries[key] for key in sorted(boundaries)),
         )
 
     def to_dict(self) -> Dict[str, object]:
@@ -112,6 +120,7 @@ class FactDelta:
         for key in [
             "source_event_ids", "account_ids", "symbols", "fact_types",
             "scope_families", "work_classes", "subject_ids",
+            "source_boundaries",
         ]:
             payload[key] = list(payload[key])
         return payload
@@ -137,6 +146,7 @@ class FactDelta:
                 if str(subject_id or "").strip() and str(revision or "").strip()
             },
             version=str(payload.get("version") or FACT_DELTA_VERSION),
+            source_boundaries=tuple(dict(item) for item in payload.get("source_boundaries") or payload.get("sourceBoundaries") or [] if isinstance(item, Mapping)),
         )
 
 

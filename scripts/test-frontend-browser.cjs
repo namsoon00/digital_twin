@@ -218,6 +218,7 @@ async function hypothesisScheduling(page, label) {
   await evolution.scrollIntoViewIfNeeded();
   assert.match(await evolution.textContent(), /검증 후 자동 반영.*독립된 결과가 더 필요/s);
   assert.match(await evolution.textContent(), /0 \/ 20건/);
+  assert.match(await evolution.textContent(), /실험에 필요한 자료.*현재가 관측.*관측 간격 300초/s);
   assert.equal(await page.locator('[data-hypothesis-development-approve="fixture-evolution"]').isDisabled(), true);
   const evolutionBounds = await evolution.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth, height: node.clientHeight}));
   assert(evolutionBounds.height > 0 && evolutionBounds.content <= evolutionBounds.width + 1, label + ' evolution status overflows');

@@ -113,6 +113,15 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   and reject every observation that was not known by the replay cutoff. Never
   rewrite a legacy decision with current engine metadata to make it appear
   exactly replayable.
+- Ontology evolution must freeze observation requirements with the plan and
+  preserve actual point-in-time inputs for the first independent experimental
+  observations. Candidate and comparator must reference the same input bundle;
+  snapshot IDs or matching result labels alone are not proof of equal inputs.
+  Unsupported collection, future observations, and lost history are distinct
+  states. Keep experimental evidence finite-lived and separate from one-day
+  raw operating retention. See `docs/ontology-evolution.md` for the supported
+  replay scope; do not imply full historical TypeDB reconstruction from a
+  source-packet manifest.
 - Do not pass API keys, Telegram tokens, client secrets, or raw account credentials through events, docs, tests, or git-tracked files.
 - Keep old top-level Python modules only as compatibility re-export modules.
   New business code imports its own layer or another module's public contract.

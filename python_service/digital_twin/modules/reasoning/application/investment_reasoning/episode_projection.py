@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from digital_twin.modules.decisions.contracts import DecisionEpisode, canonical_investment_timestamp, reasoning_case_decision_episode_id, scoped_decision_follow_ups, stable_id
@@ -264,6 +265,7 @@ def frozen_hypothesis_outcome_contract(
 def shadow_hypothesis_observation_episodes(
     reasoning_case: ReasoningCase,
     subject_case: SubjectDecisionCase,
+    experiment_plans=(),
 ) -> Tuple[ShadowHypothesisObservationEpisode, ...]:
     """Freeze non-executable predictive candidates for research-only outcomes."""
 
@@ -271,7 +273,12 @@ def shadow_hypothesis_observation_episodes(
     research_ids = set(candidate_set.eligible_hypothesis_ids) - set(
         candidate_set.execution_eligible_hypothesis_ids
     )
-    if not research_ids:
+    experiment_claims = {plan["baseline"][key]["claimContractId"] for plan in experiment_plans
+                         for key in ("candidateClaim", "comparisonClaim")}
+    experiment_ids = {item.hypothesis_id for item in candidate_set.hypotheses
+                      if (item.claim_contract or {}).get("claimContractId") in experiment_claims
+                      and item.hypothesis_id in candidate_set.eligible_hypothesis_ids}
+    if not research_ids and not experiment_ids:
         return ()
     effective_at = canonical_investment_timestamp(
         reasoning_case.fact_delta.source_observed_at
@@ -280,7 +287,7 @@ def shadow_hypothesis_observation_episodes(
     )
     episodes = []
     for hypothesis in candidate_set.hypotheses:
-        if hypothesis.hypothesis_id not in research_ids:
+        if hypothesis.hypothesis_id not in research_ids | experiment_ids:
             continue
         preliminary_contract, preliminary_readiness = frozen_hypothesis_outcome_contract(
             hypothesis,
@@ -321,7 +328,7 @@ def shadow_hypothesis_observation_episodes(
             claim_identity,
             independence_bucket,
         )
-        episodes.append(ShadowHypothesisObservationEpisode(
+        episode = ShadowHypothesisObservationEpisode(
             episode_id=episode_id,
             candidate_set_id=candidate_set.candidate_set_id,
             account_id=subject_case.account_id,
@@ -342,9 +349,25 @@ def shadow_hypothesis_observation_episodes(
             outcome_contract=outcome_contract,
             hypothesis=payload,
             readiness=readiness,
+            input_provenance={"requestId": getattr(reasoning_case, "request_id", ""),
+                              "deploymentId": getattr(reasoning_case, "deployment_id", ""),
+                              "releaseFingerprint": getattr(reasoning_case, "release_fingerprint", ""),
+                              "sourceBoundaries": [dict(item) for item in getattr(reasoning_case.fact_delta, "source_boundaries", ())
+                                                   if item.get("accountId") == subject_case.account_id]},
             status="scheduled" if readiness.get("eligible") else "excluded",
-        ))
-    return tuple(episodes)
+        )
+        if hypothesis.hypothesis_id in research_ids:
+            episodes.append(episode)
+        for plan in experiment_plans:
+            for side, key in (("candidate", "candidateClaim"), ("baseline", "comparisonClaim")):
+                binding = plan["baseline"][key]
+                if (claim.claim_contract_id == binding["claimContractId"]
+                        and claim_validation_fingerprint(hypothesis.claim_contract) == binding["validationFingerprint"]):
+                    episodes.append(replace(episode,
+                        episode_id=stable_id("experiment-observation", plan["fingerprint"], side, effective_at),
+                        input_provenance={**episode.input_provenance, "experimentPlanFingerprint": plan["fingerprint"], "experimentSide": side}))
+    # Freeze the first candidate anchor before attaching its unchanged comparator.
+    return tuple(sorted(episodes, key=lambda item: {"candidate": 0, "baseline": 1}.get(item.input_provenance.get("experimentSide"), 2)))
 
 
 def decision_episode_from_reasoning_case(

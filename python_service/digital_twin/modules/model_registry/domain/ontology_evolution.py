@@ -41,6 +41,9 @@ def validate_policy(value):
         raise ValueError("Evolution baseline rules must be explicitly configured")
     if policy["independenceMinutes"] < 1440:
         raise ValueError("Evolution uses preregistered daily anchors; independence must be at least one day")
+    retention = policy.get("experimentEvidenceRetentionDays", 7)
+    if type(retention) is not int or not 1 <= retention <= 90:
+        raise ValueError("Invalid experiment evidence retention")
     return policy
 
 
@@ -66,6 +69,8 @@ def create_plan(case, rule, baseline, policy, created_at):
         "validationRequirements": list(case.validation_requirements),
         "policyFingerprint": fingerprint(policy),
     }
+    if baseline.get("observationRequirements"):
+        plan["observationRequirements"] = baseline["observationRequirements"]
     plan["fingerprint"] = fingerprint(plan)
     return plan
 
@@ -131,6 +136,8 @@ def evaluate_comparison(plan, evidence, *, now, observed_after=""):
             reason = "overlapping-observation"
         elif row.get("eligible") is not True:
             reason = "incomplete-observation"
+        elif plan.get("observationRequirements") and (not row.get("datasetFingerprint") or row.get("inputState") != "ready"):
+            reason = "frozen-experiment-inputs-required"
         elif row.get("candidateOutcome") not in {"corroborated", "contradicted"} or row.get("baselineOutcome") not in {"corroborated", "contradicted"}:
             reason = "inconclusive-pair"
         if end and end > start:
@@ -173,4 +180,5 @@ def evaluate_comparison(plan, evidence, *, now, observed_after=""):
         "evidenceIds": [row["id"] for row in accepted],
         "policyFingerprint": plan["policyFingerprint"], "candidateFingerprint": plan["fingerprint"],
         "evaluatedAt": now, "automaticDeployment": False,
+        "dataSummary": dict(evidence.get("dataSummary") or {}),
     }

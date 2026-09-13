@@ -48,6 +48,8 @@ class OntologyEvolutionService:
                     case.transition("retired", "evolution")
                     return self.finish(case, persist, "candidate-start-window-expired")
                 deployment = self.runtime.stage(plan)
+                if deployment.get("dataReadiness"):
+                    case.evolution["dataReadiness"] = deployment["dataReadiness"]
                 if deployment.get("status") == "superseded":
                     case.transition("superseded", "evolution")
                     return self.finish(case, persist, "baseline-or-candidate-replaced")
@@ -79,6 +81,7 @@ class OntologyEvolutionService:
                     return self.finish(case, persist, "observation-window-expired")
                 return self.wait(case, persist, "candidate-retirement-pending", result)
             evidence = self.runtime.comparison(plan, deployment, observed_after=case.evolution.get("adoptedAt") or "")
+            case.evolution["dataSummary"] = dict(evidence.get("dataSummary") or {})
             assessment = evaluate_comparison(plan, evidence, now=self.clock(),
                                              observed_after=case.evolution.get("adoptedAt") or "")
             case.evolution["monitoring" if monitoring else "assessment"] = assessment

@@ -2964,6 +2964,54 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ontology_experiment_observation_plans (
+        plan_fingerprint CHAR(64) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        deployment_id VARCHAR(191) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        plan_json LONGTEXT NOT NULL,
+        monitoring_from VARCHAR(40) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        capture_until VARCHAR(40) NOT NULL,
+        expires_at VARCHAR(40) NOT NULL,
+        KEY idx_experiment_observation_scope (account_id, symbol, deployment_id, status),
+        KEY idx_experiment_observation_expiry (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_experiment_datasets (
+        plan_fingerprint CHAR(64) NOT NULL,
+        dataset_id VARCHAR(96) NOT NULL,
+        source_snapshot_id VARCHAR(191) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        expires_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (plan_fingerprint, dataset_id),
+        UNIQUE KEY uq_experiment_input_source (plan_fingerprint, source_snapshot_id),
+        KEY idx_experiment_input_expiry (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_experiment_dataset_members (
+        plan_fingerprint CHAR(64) NOT NULL,
+        phase_at VARCHAR(40) NOT NULL,
+        bucket_key VARCHAR(32) NOT NULL,
+        side VARCHAR(16) NOT NULL,
+        episode_id VARCHAR(191) NOT NULL,
+        dataset_id VARCHAR(96) NOT NULL DEFAULT '',
+        input_status VARCHAR(32) NOT NULL,
+        input_reason VARCHAR(240) NOT NULL,
+        episode_json LONGTEXT NOT NULL,
+        outcome_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        expires_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (plan_fingerprint, phase_at, bucket_key, side),
+        KEY idx_experiment_member_episode (plan_fingerprint, episode_id),
+        KEY idx_experiment_member_expiry (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS hypothesis_development_cases (
         case_id VARCHAR(191) PRIMARY KEY,
         fingerprint VARCHAR(64) NOT NULL,

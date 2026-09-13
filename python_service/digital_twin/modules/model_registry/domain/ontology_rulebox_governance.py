@@ -403,6 +403,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- derivations에는 decision_stage, evidence_role, decision_effect을 포함한다.",
         "- 예측 후보는 근거에 맞는 candidate_action과 decision_effect를 유지한다. 보유로 강제 변경하지 않는다. 실제 발송 권한은 격리된 후보에게 없으며 검증 전에는 운영에 반영되지 않는다. 참고용 관계에는 candidate_action을 넣지 않는다.",
         "- model_input_contract.comparisonBaselineRuleId에 동일한 예측 대상·관측 기간·결과 측정 기준을 가진 기존 규칙 ID를 지정한다. 결과를 본 뒤 기준을 바꾸거나 쉽게 통과하려고 결과 임계치를 완화하지 않는다. 자동 실험은 source_kind=stock인 제안 계정·종목에 한정된다.",
+        "- 추가 관측이 필요하면 model_input_contract.observationRequirements에 metric, label, lookbackMinutes, minimumSamples, cadenceSeconds, maximumDelayMinutes를 명시한다. 현재 보관 어댑터는 source-packet(필수 자동), price, volume, profitLossRate의 확인된 원천 스냅샷과 최대 1440분 이력을 지원한다. 알 수 없는 지표를 비슷한 값으로 대체하지 않는다. 미지원 요구도 명시하면 개발 필요로 분리된다. 관측 요구를 쓰는 것만으로 수집기가 생성되지는 않는다. 결과 관측은 claim_contract의 실제 outcomeContract를 사용한다.",
         "- 새로운 데이터 종류나 TBox 스키마가 필요하면 그 확장 요구를 명시한다. 존재하지 않는 자료나 모델을 있다고 가정해 기존 관계 이름에 끼워 넣지 않는다.",
         "- knowledge_basis, claim_contract, model_input_contract, hypothesis_family_key, hypothesis_lifecycle을 제공 예시에 맞춰 명시한다. 참고용 관계는 원래 인과 가설의 검증 계약을 대신할 수 없다.",
         "- 중복 rule_id를 만들지 않는다.",

@@ -59,6 +59,7 @@ def build_hypothesis_development_service(settings=None, research_store=None) -> 
     from digital_twin.modules.model_registry.public import OntologyEvolutionService
     from digital_twin.modules.model_registry.infrastructure.evolution_policy import evolution_policy
     from digital_twin.infrastructure.ontology_evolution_runtime import OntologyEvolutionRuntime
+    from digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations import MySQLExperimentObservationStore
     from digital_twin.infrastructure.reasoning_engine_factory import build_reasoning_engine_platform
     from digital_twin.modules.portfolio.contracts import utc_now_iso
 
@@ -66,7 +67,8 @@ def build_hypothesis_development_service(settings=None, research_store=None) -> 
     case_store = stores.hypothesis_development_store(configured_settings)
     evolution = OntologyEvolutionService(
         OntologyEvolutionRuntime(build_reasoning_engine_platform(configured_settings),
-                                 stores.investment_decision_episode_store(configured_settings), case_store),
+                                 stores.investment_decision_episode_store(configured_settings), case_store,
+                                 MySQLExperimentObservationStore(configured_settings)),
         evolution_policy(configured_settings), utc_now_iso,
     )
     return HypothesisDevelopmentService(

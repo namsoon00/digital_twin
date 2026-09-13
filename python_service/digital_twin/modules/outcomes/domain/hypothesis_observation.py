@@ -57,6 +57,7 @@ class ShadowHypothesisObservationEpisode:
     outcome_contract: Dict[str, object] = field(default_factory=dict)
     hypothesis: Dict[str, object] = field(default_factory=dict)
     readiness: Dict[str, object] = field(default_factory=dict)
+    input_provenance: Dict[str, object] = field(default_factory=dict)
     status: str = "scheduled"
     version: str = SHADOW_HYPOTHESIS_OBSERVATION_VERSION
 
@@ -98,6 +99,7 @@ class ShadowHypothesisObservationEpisode:
             "outcomeContract": dict(self.outcome_contract),
             "hypothesis": dict(self.hypothesis),
             "readiness": dict(self.readiness),
+            "inputProvenance": dict(self.input_provenance),
             "status": self.status,
             "version": self.version,
         }
@@ -194,6 +196,7 @@ class ShadowHypothesisObservationEpisode:
             outcome_contract=outcome_contract,
             hypothesis=hypothesis,
             readiness=dict(payload.get("readiness") or {}),
+            input_provenance=dict(payload.get("inputProvenance") or {}),
             status=str(payload.get("status") or "scheduled").lower(),
             version=str(payload.get("version") or SHADOW_HYPOTHESIS_OBSERVATION_VERSION),
         )

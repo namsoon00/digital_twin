@@ -13,6 +13,8 @@ from digital_twin.modules.portfolio.infrastructure import (
     transaction_writes as portfolio_writes,
 )
 from contextlib import nullcontext
+from digital_twin.modules.model_registry.infrastructure import experiment_observation_writes
+from digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations import active_observation_plans
 from datetime import timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
@@ -160,7 +162,12 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             _sync_shadow_hypothesis_observation_targets=self.sync_shadow_hypothesis_observation_targets,
             _transaction=self.transaction,
             utc_now_iso=utc_now_iso,
+            capture_experiment_prediction=experiment_observation_writes.capture_prediction,
         )
+
+    def experiment_observation_plans(self, account_id, symbol, deployment_id, observed_at):
+        with self.connect() as connection:
+            return active_observation_plans(connection, account_id, symbol, deployment_id, observed_at)
 
     def ontology_evolution_comparison(self, plan, observed_after=""):
         from .decision_history_parts.evolution_comparison import read_comparison
@@ -662,6 +669,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             outcome,
             _transaction=self.transaction,
             utc_now_iso=utc_now_iso,
+            capture_experiment_outcome=experiment_observation_writes.capture_outcome,
         )
 
     def outcome_max_delay_minutes(self) -> int:

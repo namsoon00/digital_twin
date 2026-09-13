@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_experiment_observations.py", "tier": "unit", "core": true},
     {"file": "test_ontology_evolution.py", "tier": "unit", "core": true},
     {"file": "test_hypothesis_candidate_validation.py", "tier": "unit", "core": true},
     {"file": "test_hypothesis_closed_loop.py", "tier": "unit", "core": true},

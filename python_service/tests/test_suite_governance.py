@@ -155,7 +155,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # unknown opinions, evidence roles, source clocks and compact identity.
         # Ontology evolution adds 27 independent outcome, immutable release,
         # authorization-scope and automatic rollback boundaries.
-        self.assertLessEqual(total, 1452)
+        # Frozen experiment inputs add 25 provenance, retention and collection-contract boundaries.
+        self.assertLessEqual(total, 1477)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

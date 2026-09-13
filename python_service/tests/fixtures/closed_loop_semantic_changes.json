@@ -1,5 +1,13 @@
 {
   "domain": {
+    "modules/decisions/domain/investment_reasoning/contracts.py::FactDelta": {
+      "hash": "f701c872ca24936a4b48830ccb77a236d079dde80b4e05c54b20fdbf1163bfb8",
+      "reason": "Carry allowlisted immutable source boundaries into experimental observations without fabricating lineage for legacy requests; test_experiment_observations."
+    },
+    "modules/outcomes/domain/hypothesis_observation.py::ShadowHypothesisObservationEpisode": {
+      "hash": "eb43dac2448132ed1b08f16ef413f41bcc27fd5302bb9fd1d60bf8e85270f547",
+      "reason": "Persist experimental input provenance with the original prediction while retaining legacy empty provenance and outcome eligibility; test_experiment_observations."
+    },
     "modules/model_registry/domain/hypothesis_development.py::HYPOTHESIS_DEVELOPMENT_STATUSES": {
       "hash": "b5d2825d3633b12f90e53ac3dd93fd6a9aa4001fe60b44c6419a7089d02f67db",
       "reason": "Persist isolated observation, adoption readiness, monitoring and superseded experiments; test_ontology_evolution."
@@ -21,8 +29,8 @@
       "reason": "Expose supporting/counter evidence and known data gaps; distinguish lineage-linked records from resolved originals without changing decision eligibility. Covered by test_subject_reasoning_lineage."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
-      "hash": "f335828e253496660fd68d4c0661416fe97ee5e7df8d045c04784fb746c69830",
-      "reason": "Author genuine action hypotheses with a frozen comparison baseline and paired forward-outcome contract; never auto-pass unsupported causal research. test_ontology_evolution."
+      "hash": "b9fbb1bceeb3bbf407c3d2146fef11aac262805b3b1998f276f3fb76a3c0fed5",
+      "reason": "Author genuine action hypotheses with a frozen comparator and explicit observation requirements; unsupported collection remains a gap, not invented historical evidence. test_ontology_evolution and test_experiment_observations."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::compact_candidate_context": {
       "hash": "21bb67833fff6e29653f21b74104803f33ea9dbc4418f937065cb8bb4130015f",
@@ -87,8 +95,8 @@
       "reason": "Schedule evolution and bounded authoring retries and preserve evolution audit receipts; test_ontology_evolution and test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
-      "hash": "d521370d72960bfdcda57f5f0d80994783a4554fe4e705185991ed1d7e954091",
-      "reason": "Preserve first eligible prediction anchors and expose exact forward comparison reads; test_ontology_evolution and test_stabilization_transactions."
+      "hash": "0672b95bcadce2ca7e69f64b92e6d24715ca4f42ba50fe8654000d0204ce9d0d",
+      "reason": "Capture finite experimental inputs and final outcomes atomically with the original ledger; exact plan-scoped readers do not change investment authority. test_experiment_observations, test_ontology_evolution and test_stabilization_transactions."
     }
   }
 }

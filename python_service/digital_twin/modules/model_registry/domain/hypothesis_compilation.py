@@ -9,7 +9,7 @@ from dataclasses import fields
 from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
-RULE_DESIGN_VERSION = "hypothesis-rule-design-v5-evolution"
+RULE_DESIGN_VERSION = "hypothesis-rule-design-v6-observation-contract"
 BLOCKER_KINDS = {
     "missing-observation", "stale-observation", "observation-window",
     "schema-mismatch", "unsupported-capability", "dependency-error", "unclassified",

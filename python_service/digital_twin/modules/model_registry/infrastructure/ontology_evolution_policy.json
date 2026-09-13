@@ -1,5 +1,5 @@
 {
-  "version": "ontology-evolution-policy-v1",
+  "version": "ontology-evolution-policy-v2-observation-data",
   "mode": "automatic",
   "allowedChanges": ["add-predictive-rule"],
   "minimumIndependentPairs": 20,
@@ -12,5 +12,6 @@
   "maximumAuthoringAttempts": 3,
   "maximumEvidenceRows": 500,
   "maximumShadowDays": 30,
+  "experimentEvidenceRetentionDays": 7,
   "baselineRuleIds": []
 }

@@ -19,7 +19,30 @@ const reasons = {
   "evolution-disabled-by-operator": "자동 진화가 중지된 상태입니다.",
   "external-validation-required": "자동 비교로 확인할 수 없는 별도 연구 조건이 남아 반영하지 않았습니다.",
   "post-adoption-window-expired": "운영 반영 후 정해진 기간 안에 검증을 마치지 못해 이전 버전으로 복원했습니다.",
+  "observation-future-collection": "현재 보관 자료만으로는 부족합니다. 수집 중인 자료로 새 관측 기간을 채운 뒤 시작합니다.",
+  "observation-unsupported": "필요한 지표나 관측 기간을 현재 수집·보관 기능이 지원하지 않습니다. 수집 기능을 먼저 보완해야 합니다.",
+  "observation-unavailable": "실험 입력 저장소를 사용할 수 없어 비교를 시작하지 않았습니다.",
 };
+
+const dataStates = { ready: "자료 확보", "future-collection": "새 관측 대기", unsupported: "수집·보관 기능 보완 필요", "historical-unrecoverable": "당시 자료 복구 불가" };
+
+function renderObservationRequirements(plan, evolution) {
+  const requirements = plan.observationRequirements;
+  if (!requirements) return '<p>이전 실험에는 입력 보존 명세가 없습니다. 과거 결과를 재현 가능한 실험으로 취급하지 않습니다.</p>';
+  const coverage = evolution.dataReadiness?.requirements || [];
+  const summary = evolution.dataSummary || {};
+  return '<details class="experiment-observation-requirements" open><summary>실험에 필요한 자료</summary><dl>' +
+    requirements.inputs.map(row => {
+      const observed = coverage.find(item => item.metric === row.metric && item.lookbackMinutes === row.lookbackMinutes);
+      return '<div><dt>' + escapeHtml(row.label) + '</dt><dd>' +
+        escapeHtml(row.lookbackMinutes ? '직전 ' + row.lookbackMinutes + '분' : '판단 시점') +
+        ' · 최소 ' + escapeHtml(row.minimumSamples) + '건 · 관측 간격 ' + escapeHtml(row.cadenceSeconds) + '초' +
+        ' · ' + escapeHtml(observed ? dataStates[observed.state] || "확인 필요" : "입력 고정 시 확인") + '</dd></div>';
+    }).join('') +
+    '<div><dt>원본 입력이 보존된 비교 시점</dt><dd>' + escapeHtml(summary.capturedInputs ?? 0) + '건</dd></div>' +
+    '<div><dt>입력 복구 불가 / 결과 대기</dt><dd>' + escapeHtml(summary.unavailableInputs ?? 0) + ' / ' + escapeHtml(summary.pendingOutcomes ?? 0) + '건</dd></div>' +
+    '<div><dt>실험 종료 후 자료 보관</dt><dd>' + escapeHtml(plan.policy?.experimentEvidenceRetentionDays ?? 7) + '일</dd></div></dl></details>';
+}
 
 export function renderOntologyEvolution(evolution = {}, formatClock = value => String(value || "")) {
   const plan = evolution.plan;
@@ -42,6 +65,7 @@ export function renderOntologyEvolution(evolution = {}, formatClock = value => S
     '<div><dt>후보 고정 시각</dt><dd>' + escapeHtml(formatClock(plan.createdAt)) + '</dd></div>' +
     '<div><dt>운영 반영 시각</dt><dd>' + escapeHtml(evolution.adoptedAt ? formatClock(evolution.adoptedAt) : "반영 전") + '</dd></div>' +
     '</dl>' +
+    renderObservationRequirements(plan, evolution) +
     (pendingReview ? '<p class="form-error">자동 결과 비교로 검증할 수 없는 별도 연구 조건이 남아 있습니다.</p>' : '') +
     '<details><summary>검증 기준과 추적</summary><p>정책 ' + escapeHtml(policy.version || "-") +
     ' · 최대 관측 기간 ' + escapeHtml(policy.maximumShadowDays ?? "-") + '일</p>' +

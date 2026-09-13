@@ -11,6 +11,7 @@ _EXPORTS['HypothesisLifecycleRepository'] = ('digital_twin.modules.model_registr
 
 
 _EXPORTS.update({
+    'observation_requirements': ('digital_twin.modules.model_registry.domain.experiment_observations', 'observation_requirements'),
     'ACCOUNT_FIELDS': ('digital_twin.modules.model_registry.domain.hypothesis_scoping', 'ACCOUNT_FIELDS'),
     'ACCOUNT_ONLY_SCOPE': ('digital_twin.modules.model_registry.domain.hypothesis_scoping', 'ACCOUNT_ONLY_SCOPE'),
     'AI_PROMPT_REGISTRY_VERSION': ('digital_twin.modules.model_registry.domain.ontology_relation_contracts', 'AI_PROMPT_REGISTRY_VERSION'),

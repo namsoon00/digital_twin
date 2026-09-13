@@ -2,6 +2,7 @@
 
 from digital_twin.modules.model_registry.contracts import (
     GraphInferenceRule, evolution_fingerprint, validate_evolution_plan,
+    observation_requirements,
 )
 from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint
 from digital_twin.modules.reasoning.public import append_rule_to_release_artifact
@@ -33,9 +34,10 @@ def comparison_measurement(rule):
 
 
 class OntologyEvolutionRuntime:
-    def __init__(self, platform, outcome_store, lock_store):
+    def __init__(self, platform, outcome_store, lock_store, observation_store=None):
         self.platform, self.registry = platform, platform.registry
         self.outcomes, self.locks = outcome_store, lock_store
+        self.observations = observation_store
 
     def baseline(self, candidate, policy):
         control = self.registry.control()
@@ -71,7 +73,9 @@ class OntologyEvolutionRuntime:
                 "comparisonRuleId": comparable[0]["rule_id"],
                 "comparisonHorizonMinutes": horizon,
                 "comparisonClaim": claim_binding(comparable[0]),
-                "candidateClaim": claim_binding(candidate)}
+                "candidateClaim": claim_binding(candidate),
+                "observationRequirements": observation_requirements(candidate, comparable[0], cadence_seconds=(
+                    self.observations.collector_cadence_seconds() if self.observations else 180))}
 
     def stage(self, plan):
         validate_evolution_plan(plan)
@@ -79,6 +83,8 @@ class OntologyEvolutionRuntime:
         if scope != {"worldId": portfolio_world_id(plan["accountId"]), "symbol": plan["symbol"]}:
             raise ValueError("Evolution candidate cannot escape its validated account and symbol")
         deployment_id = "evolution-" + plan["fingerprint"][:20]
+        if not self.observations:
+            return {"status": "waiting", "reason": "observation-unavailable"}
         with self.locks.processing_lock("ontology-evolution-control") as acquired:
             if not acquired:
                 return {"status": "waiting", "reason": "evolution-control-busy"}
@@ -91,6 +97,7 @@ class OntologyEvolutionRuntime:
                 artifact = self.registry.release_artifact(deployment_id)
                 if not artifact.get("valid") or artifact["artifact"].get("evolutionPlanFingerprint") != plan["fingerprint"]:
                     raise RuntimeError("candidate-release-plan-mismatch")
+                self.observations.register(plan, deployment_id)
                 return {"status": "staged", "deploymentId": deployment_id, "artifactFingerprint": artifact["artifactFingerprint"]}
             other = self.registry.get(control.candidate_deployment_id) if control.candidate_deployment_id else {}
             if other and other.get("status") not in {"retired", "blocked"}:
@@ -102,7 +109,12 @@ class OntologyEvolutionRuntime:
                         return {"status": "superseded", "reason": "candidate-release-terminated"}
                     self.registry.set_control(control.active_deployment_id, control.delivery_deployment_id,
                                               deployment_id, expected_version=control.version)
+                    self.observations.register(plan, deployment_id)
                     return {"status": "staged", "deploymentId": deployment_id, "artifactFingerprint": artifact["artifactFingerprint"]}
+            data_readiness = self.observations.prepare(plan)
+            if data_readiness["state"] != "ready":
+                return {"status": "waiting", "reason": "observation-" + data_readiness["state"], "dataReadiness": data_readiness}
+            self.observations.register(plan, deployment_id)
             artifact = append_rule_to_release_artifact(saved["artifact"], plan["candidateRule"])
             artifact["evolutionPlanFingerprint"] = plan["fingerprint"]
             result = self.platform.register_v2_release(
@@ -114,6 +126,7 @@ class OntologyEvolutionRuntime:
             if result.get("status") != "registered":
                 return {"status": "waiting", "reason": "candidate-registration-blocked", "result": result}
             return {"status": "staged", "deploymentId": deployment_id,
+                    "dataReadiness": data_readiness,
                     "artifactFingerprint": result["releaseSeedArtifact"]["artifactFingerprint"]}
 
     def state(self, plan, deployment):
@@ -121,14 +134,20 @@ class OntologyEvolutionRuntime:
         row = self.registry.get(deployment["deploymentId"]) or {}
         ownership = (row.get("health") or {}).get("ontologyEvolution") or {}
         if ownership.get("state") == "rolled-back" and control.active_deployment_id == plan["baseline"]["deploymentId"]:
+            if self.observations:
+                self.observations.close(plan)
             return {"status": "rolled-back"}
         if control.active_deployment_id == deployment["deploymentId"]:
             if ownership.get("planFingerprint") != plan["fingerprint"] or not ownership.get("adoptedAt"):
                 raise RuntimeError("active-evolution-receipt-missing")
+            if self.observations:
+                self.observations.monitoring(plan, ownership["adoptedAt"])
             return {"status": "active", "adoptedAt": ownership["adoptedAt"],
                     "criticalFailure": (row.get("health") or {}).get("status") in {"corrupt", "invalid-contract"}}
         if (control.active_deployment_id != plan["baseline"]["deploymentId"]
                 or control.candidate_deployment_id != deployment["deploymentId"]):
+            if self.observations:
+                self.observations.close(plan)
             return {"status": "superseded"}
         return {"status": "shadow"}
 
@@ -137,7 +156,9 @@ class OntologyEvolutionRuntime:
         if (not artifact.get("valid") or artifact.get("artifactFingerprint") != deployment.get("artifactFingerprint")
                 or artifact["artifact"].get("evolutionPlanFingerprint") != plan["fingerprint"]):
             return {"status": "unavailable", "reason": "candidate-artifact-mismatch"}
-        return self.outcomes.ontology_evolution_comparison(plan, observed_after=observed_after)
+        if not self.observations or not plan.get("observationRequirements"):
+            return {"status": "unavailable", "reason": "frozen-experiment-inputs-required"}
+        return self.observations.comparison(plan, observed_after=observed_after)
 
     def adopt(self, plan, deployment, assessment):
         validate_evolution_plan(plan)
@@ -159,6 +180,8 @@ class OntologyEvolutionRuntime:
                 expected_version=self.registry.control().version,
             )
             self.platform.synchronize_control_capabilities(control)
+            if self.observations:
+                self.observations.monitoring(plan, receipt["adoptedAt"])
             return {"status": "promoted", "adoptedAt": receipt["adoptedAt"], "control": control.to_dict()}
 
     def rollback(self, plan, deployment, assessment):
@@ -176,6 +199,8 @@ class OntologyEvolutionRuntime:
                 expected_version=control.version, rollback=True,
             )
             self.platform.synchronize_control_capabilities(result)
+            if self.observations:
+                self.observations.close(plan)
             return {"status": "rolled-back", "control": result.to_dict()}
 
     def retire(self, plan, deployment):
@@ -188,6 +213,8 @@ class OntologyEvolutionRuntime:
             if control.candidate_deployment_id == deployment["deploymentId"]:
                 self.registry.set_control(control.active_deployment_id, control.delivery_deployment_id, "", expected_version=control.version)
             self.registry.transition(deployment["deploymentId"], "retired")
+            if self.observations:
+                self.observations.close(plan)
             return {"status": "retired"}
 
     def finish_monitoring(self, plan, deployment):
@@ -200,4 +227,9 @@ class OntologyEvolutionRuntime:
             if control.candidate_deployment_id == plan["baseline"]["deploymentId"]:
                 self.registry.set_control(control.active_deployment_id, control.delivery_deployment_id, "", expected_version=control.version)
             # The old immutable artifact remains available for an explicit recovery.
+            if self.observations:
+                self.observations.close(plan)
             return {"status": "completed"}
+
+    def cleanup_observations(self):
+        return self.observations.cleanup() if self.observations else {}

@@ -130,6 +130,7 @@ function payload(url, options = {}) {
       {caseId: "fixture-evolution", symbol: "TEST01", title: "검증용 독립 실험", status: "shadow-observing", updatedAt: stamp,
         evolution: {state: "shadow-observing", reason: "independent-outcomes-required",
           plan: {createdAt: stamp, fingerprint: "0123456789abcdef".repeat(4), baseline: {deploymentId: "baseline-fixture", comparisonRuleId: "graph.fixture.recovery.v1", comparisonHorizonMinutes: 60},
+            observationRequirements: {inputs: [{metric: "price", label: "현재가 관측", lookbackMinutes: 60, minimumSamples: 12, cadenceSeconds: 300}]},
             policy: {mode: "automatic", version: "fixture-policy", minimumIndependentPairs: 20, minimumDistinctDays: 5, maximumShadowDays: 30}},
           deployment: {deploymentId: "candidate-fixture"}, assessment: {independentPairCount: 0, distinctDayCount: 0, excludedCount: 2}}}
     ], events: []

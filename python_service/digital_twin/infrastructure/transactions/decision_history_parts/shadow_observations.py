@@ -40,6 +40,7 @@ def save_shadow_hypothesis_observations(
     _sync_shadow_hypothesis_observation_targets: Callable[..., Dict[str, object]],
     _transaction: ConnectionFactory,
     utc_now_iso: Callable[[], str],
+    capture_experiment_prediction=None,
 ) -> List[ShadowHypothesisObservationEpisode]:
     """Persist research-only predictions without creating decision authority."""
 
@@ -109,6 +110,8 @@ def save_shadow_hypothesis_observations(
                 ),
             )
             if episode.observation_eligible:
+                if callable(capture_experiment_prediction):
+                    capture_experiment_prediction(connection, episode, stamp)
                 _sync_shadow_hypothesis_observation_targets(
                     connection,
                     episode,
@@ -374,6 +377,7 @@ def save_shadow_hypothesis_outcome(
     *,
     _transaction: ConnectionFactory,
     utc_now_iso: Callable[[], str],
+    capture_experiment_outcome=None,
 ) -> ObservedOutcome:
     payload = outcome.to_dict()
     stamp = utc_now_iso()
@@ -423,6 +427,8 @@ def save_shadow_hypothesis_outcome(
             "SET status = 'observed', updated_at = %s WHERE episode_id = %s",
             (stamp, episode.episode_id),
         )
+        if callable(capture_experiment_outcome):
+            capture_experiment_outcome(connection, episode, outcome, stamp)
         connection.execute(
             "UPDATE investment_hypothesis_observation_targets "
             "SET status = %s, outcome_id = %s, observed_at = %s, updated_at = %s "

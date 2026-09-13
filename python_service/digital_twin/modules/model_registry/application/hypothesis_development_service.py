@@ -243,6 +243,9 @@ class HypothesisDevelopmentService:
         return self.validate(case, experiment)
 
     def process_pending(self, limit: int = 5) -> Dict[str, object]:
+        cleanup = getattr(getattr(self.evolution_service, "runtime", None), "cleanup_observations", None)
+        if callable(cleanup):
+            cleanup()
         statuses = {"proposed", "screening", "compiled", "validating", "needs-data"} | EVOLUTION_STATUSES
         if self.evolution_service:
             statuses |= {"needs-revision", "blocked"}

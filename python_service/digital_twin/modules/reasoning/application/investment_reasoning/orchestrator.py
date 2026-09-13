@@ -424,9 +424,15 @@ class InvestmentReasoningOrchestrator:
                         value_class="invalid-inference-contract",
                     )
                 self._persist_subject(subject_case)
+            experiment_reader = getattr(self.decision_episode_store, "experiment_observation_plans", None)
+            experiment_plans = experiment_reader(
+                subject_case.account_id, subject_case.symbol, reasoning_case.deployment_id,
+                reasoning_case.fact_delta.source_observed_at,
+            ) if callable(experiment_reader) else []
             shadow_episodes = shadow_hypothesis_observation_episodes(
                 reasoning_case,
                 subject_case,
+                experiment_plans=experiment_plans,
             )
             save_shadow = getattr(
                 self.decision_episode_store,

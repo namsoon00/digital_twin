@@ -45,16 +45,24 @@
       "reason": "Expose supporting/counter evidence and known data gaps; distinguish lineage-linked records from resolved originals without changing decision eligibility. Covered by test_subject_reasoning_lineage."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
-      "hash": "b9fbb1bceeb3bbf407c3d2146fef11aac262805b3b1998f276f3fb76a3c0fed5",
-      "reason": "Author genuine action hypotheses with a frozen comparator and explicit observation requirements; unsupported collection remains a gap, not invented historical evidence. test_ontology_evolution and test_experiment_observations."
+      "hash": "56a661a3da0ba68ba33a5ad39de7c0321d576c751c19d177fe7a7b8f151a8dca",
+      "reason": "Preserve frozen comparator and automatic source-identity requirements while passing failed authoring feedback and requiring explicit unsupported-model blockers. test_hypothesis_closed_loop, test_ontology_evolution and test_experiment_observations."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::compact_candidate_context": {
-      "hash": "21bb67833fff6e29653f21b74104803f33ea9dbc4418f937065cb8bb4130015f",
-      "reason": "Replace the first thirty unrelated summaries with relevant contracts and scoped immutable model assessments; test_hypothesis_closed_loop."
+      "hash": "9a0df6fcc8e945c1de0e6a8fb89824f856a2389ec30ac73d9b4fd8048cd147a1",
+      "reason": "Pass bounded prior failures and rejected specifications alongside relevant contracts and scoped immutable model assessments; test_hypothesis_closed_loop."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::rule_change_candidates_from_text": {
-      "hash": "2d5230104fed6d431968956575c6acba79d491525cc04b1ffc7b94f52f868f6c",
-      "reason": "Do not persist AI assertions of missing data as verified when the authoring phase never queried ABox; test_hypothesis_closed_loop."
+      "hash": "5e1fbe96396484e82dd4f88a3fa933c1bcd5864fc8b67b66d7ed2dee3269c54c",
+      "reason": "Reject candidate responses lacking both a rule and a blocker; retain unqueried observation assertions as unverified. test_hypothesis_closed_loop."
+    },
+    "modules/model_registry/domain/ontology_rulebox_governance.py::rule_model_signal_family_violations": {
+      "hash": "72383e9d897613162f17605ed6ad48409132f6cebf5775a1b1117d93e50da595",
+      "reason": "Validate exact authored model bindings and their actual hypothesis family, not rule-name migration guesses; reject unknown, mismatched or non-exact bindings. test_ontology_rulebox."
+    },
+    "modules/model_registry/domain/statistical_signals/rule_contracts.py::rule_statistical_signal_contract": {
+      "hash": "ad1fb4bb6d0e41117d60fe4157fa31d3b6f646937befd5a897a1d9942240e3ac",
+      "reason": "Read explicit HAS_MODEL_SIGNAL release/type/contract bindings before legacy migration routing; preserve referenced hypothesis identity and validate every declared release. test_ontology_rulebox and test_statistical_signals."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::normalize_rule_change_candidate": {
       "hash": "c6d732682f7b40ff78fbeee6ce069c32a6687887d0ee73094a1c861d6cd66657",
@@ -111,8 +119,8 @@
       "reason": "Commit both release statuses, active/delivery ownership and adoption/rollback receipt atomically under a version guard; test_ontology_evolution."
     },
     "modules/model_registry/infrastructure/mysql_hypothesis_development.py::MySQLHypothesisDevelopmentStore": {
-      "hash": "22a45d9457846f5a25967bd854cc9dc9d97551885e28c4966f5113bda3477619",
-      "reason": "Recover legacy authoring cases once under existing budgets and include them in reserved-slot age; test_hypothesis_closed_loop and test_stabilization_transactions."
+      "hash": "3b44f3e909503b35c73a9447db7ccb1f9e698bb4851531beb2a717e8654f3a85",
+      "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
       "hash": "0672b95bcadce2ca7e69f64b92e6d24715ca4f42ba50fe8654000d0204ce9d0d",

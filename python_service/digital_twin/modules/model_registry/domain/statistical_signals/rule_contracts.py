@@ -6,7 +6,7 @@ TypeDB condition or changes the current action envelope.
 
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.modules.model_registry.domain.statistical_signals.registry import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, model_release
+from digital_twin.modules.model_registry.domain.statistical_signals.registry import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, model_release, signal_hypothesis_family
 
 
 RULE_SIGNAL_CONTRACT_VERSION = "rule-statistical-signal-contract-v2"
@@ -168,6 +168,36 @@ def _signal_mapping(rule_id: str, theory_family: str):
     return (signal_type,), "model-signal-production", (release_id,), priority
 
 
+def _authored_model_signal_bindings(rule):
+    """Executable model bindings override legacy name-based migration hints."""
+    conditions = (rule.get("conditions") or []) if isinstance(rule, Mapping) else getattr(rule, "conditions", [])
+    bindings, blockers = [], []
+    found = False
+    for condition in conditions:
+        row = condition if isinstance(condition, Mapping) else condition.to_dict()
+        if (row.get("relation_type") or row.get("relationType")) != "HAS_MODEL_SIGNAL":
+            continue
+        found = True
+        filters = row.get("target_property_filters") or row.get("targetPropertyFilters") or {}
+        keys = ("signalType", "releaseId", "hypothesisContractId")
+        if not all(isinstance(filters.get(key), str) and filters[key].strip() for key in keys):
+            blockers.append("model-signal-binding-must-be-exact")
+            continue
+        binding = {key: filters[key].strip() for key in keys}
+        try:
+            release = model_release(binding["releaseId"])
+        except ValueError:
+            blockers.append("model-signal-release-not-registered")
+            continue
+        if binding["signalType"] not in release.signal_types:
+            blockers.append("signal-type-not-declared-by-model-release")
+        if filters.get("hypothesisFamilyId") != signal_hypothesis_family(binding["signalType"]):
+            blockers.append("model-signal-family-filter-mismatch")
+        if binding not in bindings:
+            bindings.append(binding)
+    return (bindings, blockers) if found else None
+
+
 def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
     rule_id = _rule_id(rule)
     basis = _knowledge_basis(rule)
@@ -184,6 +214,13 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
             "migrationPriority": 0,
         }
     signal_types, state, release_ids, priority = _signal_mapping(rule_id, theory_family)
+    authored = _authored_model_signal_bindings(rule)
+    promotion_blockers = []
+    if authored is not None:
+        bindings, promotion_blockers = authored
+        signal_types = tuple(dict.fromkeys(item["signalType"] for item in bindings))
+        release_ids = tuple(dict.fromkeys(item["releaseId"] for item in bindings))
+        state = "model-signal-production" if bindings else "unmapped"
     releases = [model_release(release_id) for release_id in release_ids]
     release_by_type = {
         signal_type: (
@@ -195,11 +232,11 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
         )
         for signal_type in signal_types
     }
-    promotion_blockers = []
-    if any(
-        signal_type not in release.signal_types
-        for signal_type, release in zip(signal_types, releases)
-    ):
+    if authored is not None:
+        release_by_type = {item["signalType"]: item["releaseId"] for item in bindings}
+        if any(release_by_type[item["signalType"]] != item["releaseId"] for item in bindings):
+            promotion_blockers.append("ambiguous-model-signal-release-binding")
+    if any(signal_type not in model_release(release_by_type[signal_type]).signal_types for signal_type in signal_types):
         promotion_blockers.append("signal-type-not-declared-by-model-release")
     if any(release.status != "production" for release in releases):
         promotion_blockers.append("model-release-not-production")
@@ -221,6 +258,7 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
         and all(release.decision_eligibility in {"eligible", "conditional"} for release in releases)
         and not promotion_blockers
     )
+    contract_ids = sorted({item["hypothesisContractId"] for item in bindings}) if authored is not None else [rule_id]
     return {
         "version": RULE_SIGNAL_CONTRACT_VERSION,
         "required": True,
@@ -230,8 +268,9 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
             else "disabled-awaiting-model-signal"
         ),
         "candidateDecisionAuthority": "typedb-model-signal-rule",
-        "hypothesisContractBinding": "exact-rule-id",
-        "hypothesisContractId": rule_id,
+        "hypothesisContractBinding": "exact-rule-id" if contract_ids == [rule_id] else "explicit-model-conditions",
+        "hypothesisContractId": contract_ids[0] if len(contract_ids) == 1 else "",
+        **({"modelSignalBindings": bindings} if authored is not None and (contract_ids != [rule_id] or promotion_blockers) else {}),
         "signalTypes": list(signal_types),
         "releaseIds": list(release_ids),
         "signalReleaseIdsByType": release_by_type,

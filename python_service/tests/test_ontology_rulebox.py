@@ -215,6 +215,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
             rulebox_rules_from_payload({"rules": invalid_rules}, strict_governance=True)
 
     def test_predictive_rule_rejects_a_model_signal_from_another_thesis_family(self):
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rule_model_signal_family_violations
+        from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract
+
+        absorption = next(item for item in default_graph_inference_rules()
+                          if item.rule_id == "graph.temporal.risk_event_absorption.support.v1")
+        renamed = replace(absorption, rule_id="graph.disclosure.risk_event_absorption.conditioned_support.v1")
+        contract = rule_statistical_signal_contract(renamed)
+        self.assertEqual(["event-abnormal-return-support"], contract["signalTypes"])
+        self.assertEqual(absorption.rule_id, contract["hypothesisContractId"])
+        self.assertEqual("explicit-model-conditions", contract["hypothesisContractBinding"])
+        self.assertEqual([], rule_model_signal_family_violations(renamed))
+        model_condition = next(item for item in renamed.conditions if item.relation_type == "HAS_MODEL_SIGNAL")
+        for changes in ({"releaseId": "not-registered"}, {"signalType": "price-trend-break-risk"},
+                        {"hypothesisFamilyId": "event-risk"}, {"hypothesisContractId": ""},
+                        {"signalType": ["event-abnormal-return-support", "event-abnormal-return-risk"]}):
+            with self.subTest(binding=changes):
+                invalid_condition = replace(model_condition, target_property_filters={**model_condition.target_property_filters, **changes})
+                invalid_rule = replace(renamed, conditions=[invalid_condition if item is model_condition else item for item in renamed.conditions])
+                self.assertFalse(rule_statistical_signal_contract(invalid_rule)["productionEligible"])
+                self.assertTrue(rule_model_signal_family_violations(invalid_rule))
+
         rule = next(
             item for item in default_graph_inference_rules()
             if item.rule_id == "graph.price.rebound.failure.v1"

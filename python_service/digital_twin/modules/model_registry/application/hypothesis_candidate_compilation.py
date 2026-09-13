@@ -22,9 +22,9 @@ def capture_compilation(case, result, world):
     }
 
 
-def reusable_compilation(case, rulebox, world):
+def reusable_compilation(case, rulebox, world, *, revalidate_rejected=False):
     draft = case.compilation_draft
-    if not draft or draft.get("designVersion") != RULE_DESIGN_VERSION or draft.get("rejectedReason"):
+    if not draft or draft.get("designVersion") != RULE_DESIGN_VERSION or (draft.get("rejectedReason") and not revalidate_rejected):
         return None
     if draft.get("inputFingerprint") != authoring_input_fingerprint(case) or draft.get("world") != world:
         return None

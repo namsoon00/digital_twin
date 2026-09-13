@@ -33,6 +33,29 @@ from digital_twin.modules.model_registry.infrastructure.mysql_hypothesis_develop
 
 
 class TransactionStabilizationTests(StabilizationDatabaseCase):
+    def test_interrupted_hypothesis_selection_ignores_schedule_but_respects_owner_lock(self):
+        from digital_twin.modules.model_registry.application.hypothesis_development_service import HypothesisDevelopmentService
+        store = MySQLHypothesisDevelopmentStore(self.settings)
+        key = "interrupted:" + uuid.uuid4().hex
+        self.addCleanup(self.sql, "DELETE FROM hypothesis_development_cases WHERE case_id=%s", (key,))
+        self.addCleanup(self.sql, "DELETE FROM hypothesis_development_events WHERE case_id=%s", (key,))
+        case = HypothesisDevelopmentCase(case_id=key, fingerprint=key, account_id="fixture", symbol="MSTR",
+            title="Fixture", claim="Fixture", status="screening", stage="compilation",
+            retry={"state": "processing", "authoringAttempts": 2,
+                   "nextCheckAt": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()})
+        store.save(case)
+        restarted = MySQLHypothesisDevelopmentStore(self.settings)
+        service = HypothesisDevelopmentService(restarted, None, None, None, None)
+        self.assertIn(key, [row.case_id for row in restarted.interrupted_candidates()])
+        self.assertNotIn(key, [row.case_id for row in restarted.pending()])
+        with store.processing_lock(key) as owned:
+            self.assertTrue(owned)
+            self.assertEqual(0, service.recover_interrupted()["recoveredCount"])
+        self.assertEqual([key], service.recover_interrupted()["caseIds"])
+        self.assertEqual(2, restarted.get(key).retry["authoringAttempts"])
+        self.assertIn(key, [row.case_id for row in restarted.pending()])
+        self.assertEqual(0, service.recover_interrupted()["recoveredCount"])
+
     def assert_legacy_authoring_selection_and_ready_age_match_after_recovery(self):
         store = MySQLHypothesisDevelopmentStore(self.settings)
         self.addCleanup(self.sql, "DELETE FROM hypothesis_development_cases WHERE case_id IN (%s,%s,%s,%s,%s,%s)",

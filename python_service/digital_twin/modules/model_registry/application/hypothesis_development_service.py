@@ -6,12 +6,13 @@ from typing import Dict, Iterable, List
 
 from digital_twin.modules.model_registry.application.hypothesis_candidate_compilation import capture_compilation, reusable_compilation
 from digital_twin.modules.model_registry.domain.event_types import HYPOTHESIS_DEVELOPMENT_DEPLOYED, HYPOTHESIS_DEVELOPMENT_TRANSITIONED, HYPOTHESIS_DEVELOPMENT_VALIDATED
+from digital_twin.modules.model_registry.domain.experiment_observations import authored_observation_requirements
 from digital_twin.modules.model_registry.domain.events import hypothesis_development_event
 from digital_twin.modules.model_registry.domain.hypothesis_development import AUTHORING_SCHEDULE_VERSION, authoring_recovery_eligible, HypothesisDevelopmentCase, TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES, default_validation_gates, hypothesis_decision_impact, screen_hypothesis_case, validation_gate
 from digital_twin.modules.model_registry.domain.ontology_experiments import OntologyExperiment, normalize_candidate_rules, rulebox_metrics
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_semantic_violations
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred, RULE_DESIGN_VERSION, blocker_state, compilation_blockers, compilation_fingerprint, validation_requirements
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred, HypothesisAuthoringResponseError, RULE_DESIGN_VERSION, authoring_feedback, blocker_state, compilation_blockers, compilation_fingerprint, validation_requirements
 from digital_twin.modules.model_registry.domain.hypothesis_validation import additional_validation_gate, preview_states
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import utc_now_iso
@@ -91,8 +92,10 @@ class HypothesisDevelopmentService:
                 self.persist(case, "retry-deferred")
                 return {"status": "deferred-unchanged", "caseId": case_id}
             attempted = datetime.now(timezone.utc)
+            feedback = authoring_feedback(case.to_dict())
             case.retry = {
                 **case.retry,
+                "authoringFeedback": feedback,
                 "attemptCount": int(case.retry.get("attemptCount") or 0) + 1,
                 "lastAttemptAt": attempted.isoformat(),
                 "lastInputFingerprint": self.validation_input_fingerprint(case),
@@ -126,12 +129,13 @@ class HypothesisDevelopmentService:
             except Exception as error:
                 case = self.case_store.get(case_id) or case
                 invalid = isinstance(error, (ValueError, TypeError))
+                invalid_response = isinstance(error, HypothesisAuthoringResponseError)
                 case.transition("needs-revision" if invalid else "needs-data", case.stage, str(error)[:500])
                 case.retry["state"] = "development-required" if invalid else "dependency-error"
-                case.retry["blockers"] = [{"kind": "schema-mismatch" if invalid else "dependency-error",
+                case.retry["blockers"] = [{"kind": "invalid-candidate" if invalid_response else ("schema-mismatch" if invalid else "dependency-error"),
                                            "requirement": case.blocked_reason,
                                            "owner": "development" if invalid else "runtime",
-                                           "dependencyKey": "rule-candidate-runtime"}]
+                                           "dependencyKey": "authoring-response-contract" if invalid_response else "rule-candidate-runtime"}]
                 case.retry["requirements"] = [case.blocked_reason]
                 if invalid:
                     case.retry["nextCheckAt"] = ""
@@ -187,6 +191,65 @@ class HypothesisDevelopmentService:
                 self.persist(case, "authoring-schedule-recovered", case.blocked_reason)
                 recovered.append(case.case_id)
         return {"recoveredCount": len(recovered), "caseIds": recovered}
+
+    def recover_interrupted(self, limit: int = 5) -> Dict[str, object]:
+        """The exclusive DB lock, not elapsed AI time, proves the owner is gone."""
+        reader = getattr(self.case_store, "interrupted_candidates", None)
+        if not callable(reader):
+            return {"recoveredCount": 0, "caseIds": []}
+        recovered = []
+        for item in reader(limit=max(1, min(50, limit))):
+            with self.case_store.processing_lock(item.case_id) as acquired:
+                if not acquired:
+                    continue
+                case = self.case_store.get(item.case_id)
+                if not case or case.retry.get("state") != "processing" or case.evolution.get("plan"):
+                    continue
+                if case.status not in {"proposed", "screening", "compiled", "validating", "needs-data", "needs-revision", "blocked"}:
+                    continue
+                if case.status in {"needs-revision", "blocked"}:
+                    case.transition("screening", case.stage, case.blocked_reason)
+                case.retry.update({
+                    "state": "interrupted", "reasonCode": "worker-interrupted",
+                    "nextCheckAt": utc_now_iso(), "lastCheckedAt": utc_now_iso(),
+                    "interruptedAttemptAt": case.retry.get("lastAttemptAt"),
+                })
+                self.persist(case, "processing-recovered", "처리 잠금이 해제된 중단 작업을 재예약했습니다.")
+                recovered.append(case.case_id)
+        return {"recoveredCount": len(recovered), "caseIds": recovered}
+
+    def revalidate_saved_candidate(self, case_id: str) -> Dict[str, object]:
+        """Explicit repair after a validator fix, without rewriting AI evidence."""
+        with self.case_store.processing_lock(case_id) as acquired:
+            if not acquired:
+                return {"status": "already-processing", "caseId": case_id}
+            case = self.case_store.get(case_id)
+            if not case:
+                return {"status": "not-found", "caseId": case_id}
+            if case.status not in {"needs-revision", "blocked", "needs-data"} or case.evolution.get("plan"):
+                return {"status": "revalidation-not-applicable", "caseId": case_id}
+            candidate_result = reusable_compilation(
+                case, self.ontology_repository.rulebox_snapshot(), self.world_context(case), revalidate_rejected=True,
+            )
+            if not candidate_result:
+                return {"status": "revalidation-context-changed", "caseId": case_id}
+            candidates = [row for row in candidate_result["candidates"]
+                          if isinstance(row.get("proposedRule"), dict) and not compilation_blockers([row])]
+            prepared = self.governed_candidate_rule(case, candidates[0]["proposedRule"])
+            violations = self.validate_rule_structure(prepared)
+            conflict = self.existing_rule_id_conflict(prepared)
+            if violations or conflict:
+                return {"status": "revalidation-blocked", "caseId": case_id, "violations": violations + ([conflict] if conflict else [])}
+            previous_reason = case.compilation_draft.pop("rejectedReason", "") or case.blocked_reason
+            stamp = utc_now_iso()
+            case.retry.update({
+                "state": "validation-retry", "nextCheckAt": stamp,
+                "savedCandidateRevalidation": {"at": stamp, "previousReason": previous_reason,
+                                                "contentFingerprint": case.compilation_draft["contentFingerprint"]},
+            })
+            case.transition("compiled", "compilation")
+            self.persist(case, "candidate-revalidation-scheduled", previous_reason)
+        return self.process(case_id, force=False)
 
     def _process_case(self, case_id: str) -> Dict[str, object]:
         case = self.case_store.get(case_id) if self.case_store else None
@@ -290,6 +353,7 @@ class HypothesisDevelopmentService:
         cleanup = getattr(getattr(self.evolution_service, "runtime", None), "cleanup_observations", None)
         if callable(cleanup):
             cleanup()
+        interrupted = self.recover_interrupted(limit=max(1, int(limit or 5)))
         recovery = self.recover_authoring_backlog(limit=max(1, int(limit or 5)))
         statuses = {"proposed", "screening", "compiled", "validating", "needs-data"} | EVOLUTION_STATUSES
         if self.evolution_service:
@@ -326,6 +390,7 @@ class HypothesisDevelopmentService:
             "results": results,
             "scannedCount": len(scanned),
             "authoringRecovery": recovery,
+            "interruptedRecovery": interrupted,
         }
 
     def ready_wait_minutes(self) -> float:
@@ -452,6 +517,7 @@ class HypothesisDevelopmentService:
 
     def validate_rule_structure(self, rule: Dict[str, object]) -> List[str]:
         try:
+            authored_observation_requirements(rule)
             enabled = GraphInferenceRule.from_dict({**dict(rule or {}), "enabled": True})
         except ValueError as error:
             return [str(error)]
@@ -758,7 +824,7 @@ class HypothesisDevelopmentService:
     def validation_retry_due(self, case: HypothesisDevelopmentCase) -> bool:
         """Retry a needs-data experiment only after new input or a slow health retry."""
 
-        if case.retry.get("state") == "authoring-retry":
+        if case.retry.get("state") in {"authoring-retry", "interrupted", "validation-retry"}:
             ready = self.parse_timestamp(case.retry.get("nextCheckAt"))
             return not ready or ready <= datetime.now(timezone.utc)
         attempted = self.parse_timestamp(case.retry.get("lastAttemptAt") or case.validation_attempted_at)

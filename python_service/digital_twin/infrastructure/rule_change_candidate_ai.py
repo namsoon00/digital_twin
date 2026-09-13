@@ -2,7 +2,7 @@ import os
 from typing import Dict, List
 
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, rule_change_candidates_from_text
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred, HypothesisAuthoringResponseError
 from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, codex_model_label, run_background_ai_prompt
 from .local_ai_process_guard import LocalAICapacityUnavailable
 from .settings import runtime_settings
@@ -29,9 +29,9 @@ class LocalRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
 
 
 class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
-    def __init__(self, command, timeout_seconds: int = 300, source: str = "AI", settings=None):
+    def __init__(self, command, timeout_seconds: int = 0, source: str = "AI", settings=None):
         self.command = command
-        self.timeout_seconds = max(30, int(timeout_seconds or 300))
+        self.timeout_seconds = max(0, int(timeout_seconds or 0))
         self.source = str(source or "AI")
         self.settings = dict(settings or {})
 
@@ -52,8 +52,12 @@ class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
         if completed.returncode != 0:
             raise RuntimeError((completed.stderr or output or "rule candidate AI command failed").strip())
         if not output:
+            if context.get("hypothesisProposal"):
+                raise HypothesisAuthoringResponseError("authoring-response-invalid: AI 작성 응답이 비어 있습니다.")
             raise RuntimeError("rule candidate AI command returned empty output")
         candidates = rule_change_candidates_from_text(output, context)
+        if context.get("hypothesisProposal") and not candidates:
+            raise HypothesisAuthoringResponseError("authoring-response-invalid: candidates 배열에 후보 또는 명시적인 작성 차단 사유가 필요합니다.")
         for candidate in candidates:
             candidate["source"] = self.source
         return candidates
@@ -100,7 +104,7 @@ class FallbackRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
 def rule_change_candidate_advisor_from_settings(settings: Dict[str, str] = None) -> RuleChangeCandidateAdvisor:
     settings = settings or runtime_settings()
     use_codex = str(settings.get("ontologyRuleCandidateAiUseCodex") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_USE_CODEX") or "1").strip() != "0"
-    timeout = int(settings.get("ontologyRuleCandidateAiTimeoutSeconds") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS") or 300)
+    timeout = int(settings.get("ontologyRuleCandidateAiTimeoutSeconds", os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS", "0")) or 0)
     if use_codex:
         command = background_codex_process_arguments()
         if command:

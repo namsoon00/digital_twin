@@ -7,7 +7,7 @@ from digital_twin.modules.reasoning.contracts import DECISION_EFFECTS
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, HOLDING_TARGET_ROLE, WATCHLIST_ALLOWED_ACTIONS, WATCHLIST_TARGET_ROLE, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 from digital_twin.modules.model_registry.domain.ontology_rule_knowledge import knowledge_basis_violations
 from digital_twin.modules.model_registry.domain.rule_claim_contract import rule_claim_contract_violations
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import compilation_blockers, rule_design_context, validation_requirements
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import authoring_feedback, compilation_blockers, rule_design_context, validation_requirements
 
 
 RULEBOX_EVIDENCE_ROLES = frozenset({"risk", "support", "counter", "context", "blocking"})
@@ -110,7 +110,10 @@ def rule_model_signal_family_violations(rule: GraphInferenceRule) -> List[str]:
     from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract
 
     rule_id = str(rule.rule_id or "").strip() or "<missing-rule-id>"
-    signal_types = list(rule_statistical_signal_contract(rule).get("signalTypes") or [])
+    contract = rule_statistical_signal_contract(rule)
+    if "modelSignalBindings" in contract and contract.get("promotionBlockers"):
+        return [rule_id + ": invalid model signal binding: " + ", ".join(contract["promotionBlockers"])]
+    signal_types = list(contract.get("signalTypes") or [])
     if not signal_types:
         return [rule_id + ": predictive rule has no governed model signal type"]
     signal_families = sorted({
@@ -399,11 +402,14 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- 모델 평가가 현재 TypeDB 세대와 같다고 추측하거나 과거 제안 시점의 증거로 소급하지 않는다. 현재 성립 여부는 후보 preview에서 확인한다.",
         "- relation_type, condition field, target filters는 제공된 RuleBox/InferenceBox/TBox에서 확인 가능한 형태를 우선 사용한다.",
         "- hypothesisProposal이 있으면 그 주장 하나만 실행 가능한 후보 규칙으로 변환하고 다른 가설을 추가하지 않는다.",
+        "- authoringFeedback에 이전 실패 사유와 후보가 있으면 그 문제를 수정한다. 같은 빈 후보를 반복하지 않는다. 작성이 불가능하면 proposedRule=null과 구체적인 blockers를 반드시 함께 반환한다.",
+        "- 조건 결합을 새로 검증하는 일과 미등록 모델을 이미 있다고 주장하는 일은 다르다. 기존 모델의 정확한 신호를 재사용할 수 있으면 원래 예측 대상과 결과 계약을 유지해 비활성 후보를 작성한다. 초가산성·장기 인과 효과처럼 기존 계약에 없는 주장은 별도의 모델 확장 요구로 남긴다.",
         "- hypothesisProposal의 evidence ID는 출처 계보이며 조건 field나 relation_type으로 직접 사용하지 않는다.",
         "- derivations에는 decision_stage, evidence_role, decision_effect을 포함한다.",
         "- 예측 후보는 근거에 맞는 candidate_action과 decision_effect를 유지한다. 보유로 강제 변경하지 않는다. 실제 발송 권한은 격리된 후보에게 없으며 검증 전에는 운영에 반영되지 않는다. 참고용 관계에는 candidate_action을 넣지 않는다.",
         "- model_input_contract.comparisonBaselineRuleId에 동일한 예측 대상·관측 기간·결과 측정 기준을 가진 기존 규칙 ID를 지정한다. 결과를 본 뒤 기준을 바꾸거나 쉽게 통과하려고 결과 임계치를 완화하지 않는다. 자동 실험은 source_kind=stock인 제안 계정·종목에 한정된다.",
         "- 추가 관측이 필요하면 model_input_contract.observationRequirements에 metric, label, lookbackMinutes, minimumSamples, cadenceSeconds, maximumDelayMinutes를 명시한다. 현재 보관 어댑터는 source-packet(필수 자동), price, volume, profitLossRate의 확인된 원천 스냅샷과 최대 1440분 이력을 지원한다. 알 수 없는 지표를 비슷한 값으로 대체하지 않는다. 미지원 요구도 명시하면 개발 필요로 분리된다. 관측 요구를 쓰는 것만으로 수집기가 생성되지는 않는다. 결과 관측은 claim_contract의 실제 outcomeContract를 사용한다.",
+        "- source-packet은 시스템이 자동 보존하는 원천 식별 요건이므로 observationRequirements에 직접 추가하거나 기간·주기를 바꾸지 않는다. 추가 관측에는 필요한 지표만 명시하며 기간·개수·주기는 정수로 작성한다.",
         "- 새로운 데이터 종류나 TBox 스키마가 필요하면 그 확장 요구를 명시한다. 존재하지 않는 자료나 모델을 있다고 가정해 기존 관계 이름에 끼워 넣지 않는다.",
         "- knowledge_basis, claim_contract, model_input_contract, hypothesis_family_key, hypothesis_lifecycle을 제공 예시에 맞춰 명시한다. 참고용 관계는 원래 인과 가설의 검증 계약을 대신할 수 없다.",
         "- 중복 rule_id를 만들지 않는다.",
@@ -460,6 +466,7 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
             "requiredEvidenceTypes": list(proposal.get("requiredEvidenceTypes") or [])[:12],
             "invalidationConditions": list(proposal.get("invalidationConditions") or [])[:12],
         } if proposal else {},
+        "authoringFeedback": ((proposal.get("retry") or {}).get("authoringFeedback") or authoring_feedback(proposal)) if proposal else {},
         "ruleDesign": rule_design_context(context),
         "modelAssessmentContext": context.get("modelAssessmentContext") or {"status": "not-queried", "snapshots": []},
         "existingCandidates": [
@@ -493,6 +500,14 @@ def rule_change_candidates_from_text(text: str, context: Dict[str, object] = Non
                         "kind": "unverified-observation", "owner": "development",
                         "requirement": "현재 ABox 미조회로 확인되지 않은 AI 요구사항: " + blocker["requirement"],
                     })
+    if (context or {}).get("hypothesisProposal"):
+        for candidate in candidates:
+            if not candidate.get("proposedRule") and not candidate.get("blockers"):
+                detail = " | ".join(candidate.get("validationWarnings") or [])
+                candidate["blockers"] = compilation_blockers([{"blockers": [{
+                    "kind": "invalid-candidate", "dependencyKey": "authoring-response-contract",
+                    "requirement": detail or "proposedRule과 작성 차단 사유가 모두 비어 있습니다. 실행 가능한 명세 또는 미지원 계약의 구체적인 이름이 필요합니다.",
+                }]}])
     return [item for item in candidates if item]
 
 

@@ -158,7 +158,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Frozen experiment inputs add 25 provenance, retention and collection-contract boundaries.
         # Source-bound briefs and official release/read-model isolation add 25 focused regressions.
         # Twenty source recovery, official statistics and event-window regressions.
-        self.assertLessEqual(total, 1522)
+        # Nine authoring response, bounded repair, owner-lock interruption and
+        # immutable saved-candidate revalidation regressions.
+        self.assertLessEqual(total, 1531)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

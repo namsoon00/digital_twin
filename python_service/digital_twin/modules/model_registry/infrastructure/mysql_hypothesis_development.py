@@ -13,6 +13,18 @@ from digital_twin.infrastructure.operational_common import json_dumps
 
 
 class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
+    def interrupted_candidates(self, limit: int = 5):
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM hypothesis_development_cases "
+                "WHERE status IN ('proposed', 'screening', 'compiled', 'validating', 'needs-data', 'needs-revision', 'blocked') "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.retry.state')) = 'processing' "
+                "AND COALESCE(JSON_LENGTH(JSON_EXTRACT(payload_json, '$.evolution.plan')), 0) = 0 "
+                "ORDER BY updated_at ASC, case_id LIMIT %s",
+                (max(1, min(50, int(limit))),),
+            ).fetchall()
+        return [HypothesisDevelopmentCase.from_dict(_json_loads(row.get("payload_json"), {})) for row in rows]
+
     def authoring_recovery_candidates(self, version: str, maximum_attempts: int, limit: int = 5):
         with self.connect() as connection:
             rows = connection.execute(

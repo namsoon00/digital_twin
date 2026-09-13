@@ -16,7 +16,7 @@ from digital_twin.modules.decisions.domain.notification_ai_decision_brief import
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
 from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight import AIInsightEpisode, AIInsightHandoff
 from digital_twin.modules.read_models.application.investment_case_query_service import InvestmentCaseQueryService
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred, RULE_DESIGN_VERSION, authoring_capability_index, blocker_state, compilation_blockers, rule_design_context
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred, HypothesisAuthoringResponseError, RULE_DESIGN_VERSION, authoring_capability_index, authoring_feedback, blocker_state, compilation_blockers, rule_design_context
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, normalize_rule_change_candidate, rule_change_candidates_from_text
 from digital_twin.modules.model_registry.application.ontology_lab_service import OntologyLabService
 from digital_twin.modules.model_registry.application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
@@ -40,6 +40,9 @@ class CaseStore:
 
     def authoring_recovery_candidates(self, version, maximum_attempts, limit=5):
         return [case for case in self.list() if authoring_recovery_eligible(case, maximum_attempts)][:limit]
+
+    def interrupted_candidates(self, limit=5):
+        return [case for case in self.list() if case.retry.get("state") == "processing"][:limit]
 
     @contextmanager
     def processing_lock(self, case_id):
@@ -66,6 +69,100 @@ def previous_outcome(eligibility="excluded-criterion-data-gap"):
 
 
 class HypothesisClosedLoopTests(unittest.TestCase):
+    def test_authoring_response_cannot_silently_drop_an_empty_or_invalid_rule(self):
+        context = {"hypothesisProposal": {"caseId": "case:1"}}
+        for raw in ({"title": "empty"}, {"title": "invalid", "proposedRule": {"conditions": "invalid"}}):
+            with self.subTest(raw=raw):
+                parsed = rule_change_candidates_from_text(json.dumps({"candidates": [raw]}), context)
+                self.assertEqual("invalid-candidate", parsed[0]["blockers"][0]["kind"])
+        raw = {"title": "unsupported", "proposedRule": None, "blockers": [
+            {"kind": "unsupported-capability", "requirement": "unregistered interaction model"}]}
+        parsed = rule_change_candidates_from_text(json.dumps({"candidates": [raw]}), context)
+        self.assertEqual("unsupported-capability", parsed[0]["blockers"][0]["kind"])
+
+    def test_authoring_timeout_is_opt_in_and_empty_responses_are_errors(self):
+        with patch("digital_twin.infrastructure.rule_change_candidate_ai.run_background_ai_prompt") as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout='{"candidates": []}', stderr="")
+            advisor = CommandRuleChangeCandidateAdvisor(["fixture"])
+            with self.assertRaises(HypothesisAuthoringResponseError):
+                advisor.propose({"hypothesisProposal": {"caseId": "case:1"}})
+            self.assertEqual(0, run.call_args.args[2])
+            self.assertEqual(0, advisor.metadata()["timeoutSeconds"])
+            self.assertEqual([], advisor.propose({}))
+            explicit = CommandRuleChangeCandidateAdvisor(["fixture"], timeout_seconds=45)
+            explicit.propose({})
+            self.assertEqual(45, run.call_args.args[2])
+            run.return_value.stdout = ""
+            with self.assertRaises(HypothesisAuthoringResponseError):
+                advisor.propose({"hypothesisProposal": {"caseId": "case:1"}})
+
+    def test_invalid_authoring_response_is_not_classified_as_database_or_schema_failure(self):
+        service, store, candidate = self.development()
+        candidate.propose_hypothesis.side_effect = HypothesisAuthoringResponseError("empty response")
+        self.assertEqual("error", service.process("case:1")["status"])
+        saved = store.get("case:1")
+        self.assertEqual("needs-revision", saved.status)
+        self.assertEqual("invalid-candidate", saved.retry["blockers"][0]["kind"])
+        self.assertEqual("authoring-response-contract", saved.retry["blockers"][0]["dependencyKey"])
+
+    def test_failed_specification_and_checks_reach_next_authoring_prompt(self):
+        case = hypothesis(status="needs-revision")
+        case.blocked_reason = "missing exact model contract"
+        case.validation_gates = [{"id": "causal-hypothesis", "status": "blocked", "detail": "reference is not predictive"}]
+        case.compilation_draft = {"candidates": [{"title": "previous", "proposedRule": {
+            "rule_id": "graph.previous", "conditions": [], "claim_contract": {"claimType": "causal-context"},
+            "domain_manifest": {"mustNotLeak": True}}, "validationWarnings": ["invalid claim"]}]}
+        service, store, candidate = self.development([case])
+        service.process(case.case_id)
+        proposal = candidate.propose_hypothesis.call_args.args[0]
+        prompt = build_rule_change_candidate_prompt({"hypothesisProposal": proposal})
+        self.assertIn("missing exact model contract", prompt)
+        self.assertIn("reference is not predictive", prompt)
+        self.assertIn("graph.previous", prompt)
+        self.assertNotIn("mustNotLeak", prompt)
+        huge = {"compilationDraft": {"candidates": [{"proposedRule": {"conditions": ["x" * 100000]}}]}}
+        self.assertLessEqual(len(json.dumps(authoring_feedback(huge)).encode()), 18000)
+        huge.update({"blockedReason": "실패" * 2000,
+                     "validationGates": [{"id": "gate", "status": "blocked", "detail": "상세" * 1000}] * 6,
+                     "retry": {"blockers": [{"kind": "schema-mismatch", "requirement": "조건" * 500 + str(i)} for i in range(6)]}})
+        for budget in (18000, 512):
+            self.assertLessEqual(len(json.dumps(authoring_feedback(huge, max_bytes=budget), ensure_ascii=False).encode()), budget)
+
+    def test_interrupted_recovery_requires_released_lock_not_elapsed_timeout(self):
+        case = hypothesis(status="screening")
+        case.retry = {"state": "processing", "lastAttemptAt": datetime.now(timezone.utc).isoformat(),
+                      "nextCheckAt": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),
+                      "authoringAttempts": 2}
+        service, store, candidate = self.development([case])
+        store.acquired = False
+        self.assertEqual(0, service.recover_interrupted()["recoveredCount"])
+        store.acquired = True
+        self.assertEqual(1, service.recover_interrupted()["recoveredCount"])
+        saved = store.get(case.case_id)
+        self.assertEqual(2, saved.retry["authoringAttempts"])
+        self.assertEqual("worker-interrupted", saved.retry["reasonCode"])
+        self.assertTrue(service.validation_retry_due(saved))
+        self.assertEqual(0, service.recover_interrupted()["recoveredCount"])
+        candidate.propose_hypothesis.assert_not_called()
+        for status in ("proposed", "needs-data", "needs-revision", "blocked"):
+            with self.subTest(interrupted_status=status):
+                pending = hypothesis(status=status)
+                pending.retry = {"state": "processing", "authoringAttempts": 3}
+                resumed, rows, advisor = self.development([pending])
+                self.assertEqual(1, resumed.recover_interrupted()["recoveredCount"])
+                self.assertEqual(3, rows.get(pending.case_id).retry["authoringAttempts"])
+                self.assertNotIn(rows.get(pending.case_id).status, {"needs-revision", "blocked"})
+                advisor.propose_hypothesis.assert_not_called()
+
+    def test_interrupted_recovery_does_not_touch_closed_cases_or_active_plans(self):
+        for status, evolution in [("retired", {}), ("screening", {"plan": {"planId": "frozen"}})]:
+            case = hypothesis(status=status)
+            case.retry = {"state": "processing"}
+            case.evolution = evolution
+            service, store, _ = self.development([case])
+            self.assertEqual(0, service.recover_interrupted()["recoveredCount"])
+            self.assertEqual(status, store.get(case.case_id).status)
+
     @staticmethod
     def enable_evolution(service, mode="automatic"):
         service.evolution_service = SimpleNamespace(policy={
@@ -419,7 +516,7 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         advisor.propose_hypothesis.assert_called_once()
 
     def test_hypothesis_ai_outage_is_not_swallowed_as_no_candidates(self):
-        self.assertEqual(300, CommandRuleChangeCandidateAdvisor(["fixture"]).timeout_seconds)
+        self.assertEqual(0, CommandRuleChangeCandidateAdvisor(["fixture"]).timeout_seconds)
         self.assertEqual(120, CommandRuleChangeCandidateAdvisor(["fixture"], timeout_seconds=120).timeout_seconds)
         primary = SimpleNamespace(propose=Mock(side_effect=TimeoutError("offline")))
         advisor = FallbackRuleChangeCandidateAdvisor(primary)

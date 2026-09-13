@@ -11,6 +11,29 @@ OBSERVATION_CONTRACT = "experiment-observations-v1"
 DATASET_CONTRACT = "experiment-dataset-v1"
 
 
+def authored_observation_requirements(source, *, cadence_seconds=180):
+    extra = (source.get("model_input_contract") or source.get("modelInputContract") or {}).get("observationRequirements") or []
+    if not isinstance(extra, list) or len(extra) > 24:
+        raise ValueError("observationRequirements must contain at most 24 requirements")
+    rows = []
+    for raw in extra:
+        if not isinstance(raw, dict) or not isinstance(raw.get("metric"), str) or not raw["metric"].strip():
+            raise ValueError("Every observation requirement needs an explicit metric")
+        row = {"metric": raw["metric"].strip()[:96], "label": str(raw.get("label") or raw["metric"])[:240]}
+        for key, default, minimum, maximum in (
+            ("lookbackMinutes", 0, 0, 525600), ("minimumSamples", 1, 1, 10000),
+            ("cadenceSeconds", cadence_seconds, 1, 86400), ("maximumDelayMinutes", 10, 0, 10080),
+        ):
+            value = raw.get(key, default)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError("Invalid observation requirement: " + key)
+            row[key] = value
+        if row["metric"] == "source-packet":
+            raise ValueError("The source-packet identity requirement cannot be overridden")
+        rows.append(row)
+    return rows
+
+
 def observation_requirements(rule, baseline_rule, *, cadence_seconds=180):
     """Preserve authored needs and derive future measurements from the actual claims."""
     from .ontology_rulebox_contracts import GraphInferenceRule
@@ -20,23 +43,7 @@ def observation_requirements(rule, baseline_rule, *, cadence_seconds=180):
                                "cadenceSeconds": cadence_seconds, "maximumDelayMinutes": 10}}
     outcomes = {}
     for source in (rule, baseline_rule):
-        extra = (source.get("model_input_contract") or {}).get("observationRequirements") or []
-        if not isinstance(extra, list) or len(extra) > 24:
-            raise ValueError("observationRequirements must contain at most 24 requirements")
-        for raw in extra:
-            if not isinstance(raw, dict) or not isinstance(raw.get("metric"), str) or not raw["metric"].strip():
-                raise ValueError("Every observation requirement needs an explicit metric")
-            row = {"metric": raw["metric"].strip()[:96], "label": str(raw.get("label") or raw["metric"])[:240]}
-            for key, default, minimum, maximum in (
-                ("lookbackMinutes", 0, 0, 525600), ("minimumSamples", 1, 1, 10000),
-                ("cadenceSeconds", cadence_seconds, 1, 86400), ("maximumDelayMinutes", 10, 0, 10080),
-            ):
-                value = raw.get(key, default)
-                if type(value) is not int or not minimum <= value <= maximum:
-                    raise ValueError("Invalid observation requirement: " + key)
-                row[key] = value
-            if row["metric"] == "source-packet":
-                raise ValueError("The source-packet identity requirement cannot be overridden")
+        for row in authored_observation_requirements(source, cadence_seconds=cadence_seconds):
             # Different windows for the same metric remain separate requirements.
             inputs[fingerprint(row)] = row
         claim = GraphInferenceRule.from_dict(source).resolved_claim_contract.to_dict()

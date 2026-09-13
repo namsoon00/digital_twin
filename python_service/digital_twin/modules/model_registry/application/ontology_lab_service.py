@@ -785,6 +785,9 @@ class OntologyLabService:
         queue_deferral = self.reasoning_queue_deferral()
         if queue_deferral:
             development = self.hypothesis_development_service
+            interrupted = getattr(development, "recover_interrupted", None)
+            if callable(interrupted):
+                queue_deferral["interruptedRecovery"] = interrupted(limit=1)
             recover = getattr(development, "recover_authoring_backlog", None)
             if callable(recover):
                 queue_deferral["authoringRecovery"] = recover(limit=1)

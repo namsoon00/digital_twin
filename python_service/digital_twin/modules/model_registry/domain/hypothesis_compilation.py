@@ -15,12 +15,61 @@ BLOCKER_KINDS = {
     "schema-mismatch", "unsupported-capability", "dependency-error", "unclassified",
     "unverified-observation",
     "condition-not-met", "validation-review",
+    "invalid-candidate",
 }
-DEVELOPMENT_BLOCKERS = {"schema-mismatch", "unsupported-capability", "unclassified", "unverified-observation"}
+DEVELOPMENT_BLOCKERS = {"schema-mismatch", "unsupported-capability", "unclassified", "unverified-observation", "invalid-candidate"}
 
 
 class HypothesisAuthoringDeferred(RuntimeError):
     """The authoring provider could not start; this is not a model attempt."""
+
+
+class HypothesisAuthoringResponseError(ValueError):
+    """An unusable authoring response, not evidence that no hypothesis exists."""
+
+
+def authoring_feedback(proposal, max_bytes=18000):
+    """Carry bounded failed specifications, not mutable runtime/model context."""
+    if max_bytes < 256:
+        raise ValueError("authoring feedback requires at least 256 bytes")
+    draft = _mapping(proposal.get("compilationDraft"))
+    retry = _mapping(proposal.get("retry"))
+    feedback = {
+        "previousReason": str(proposal.get("blockedReason") or draft.get("rejectedReason") or "")[:2000],
+        "blockers": [{**item, "requirement": item["requirement"][:500]} for item in
+                     compilation_blockers([{"blockers": retry.get("blockers") or []}])[:6]],
+        "failedChecks": [{"id": str(item.get("id") or "")[:191], "detail": str(item.get("detail") or "")[:1000]}
+                         for item in proposal.get("validationGates") or [] if isinstance(item, dict)
+                         and item.get("status") in {"blocked", "failed"}][:6],
+        "attempts": retry.get("authoringAttempts", 0),
+        "previousCandidates": [],
+    }
+    while len(json.dumps(feedback, ensure_ascii=False).encode()) > max_bytes:
+        feedback["truncated"] = True
+        if feedback["failedChecks"]:
+            feedback["failedChecks"].pop()
+        elif feedback["blockers"]:
+            feedback["blockers"].pop()
+        else:
+            feedback["previousReason"] = feedback["previousReason"][:len(feedback["previousReason"]) // 2]
+    for item in draft.get("candidates") or []:
+        if not isinstance(item, dict):
+            continue
+        rule = item.get("proposedRuleDraft") or item.get("proposedRule")
+        compact = {key: item.get(key) for key in (
+            "title", "rationale", "blockers", "requiresData", "validationWarnings", "validationRequirements",
+        )}
+        compact["proposedRule"] = {key: value for key, value in (rule or {}).items() if key in {
+            "rule_id", "label", "source_kind", "enabled", "conditions", "derivations", "knowledge_basis",
+            "claim_contract", "model_input_contract", "hypothesis_family_key", "hypothesis_lifecycle",
+        }} if isinstance(rule, dict) else None
+        if len(json.dumps({**feedback, "previousCandidates": [compact]}, ensure_ascii=False).encode()) <= max_bytes:
+            feedback["previousCandidates"] = [compact]
+        else:
+            if len(json.dumps({**feedback, "previousCandidateOmitted": "byte-limit"}, ensure_ascii=False).encode()) <= max_bytes:
+                feedback["previousCandidateOmitted"] = "byte-limit"
+        break
+    return feedback
 
 
 def compilation_blockers(candidates):

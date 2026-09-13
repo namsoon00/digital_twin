@@ -91,6 +91,62 @@ class HypothesisCandidateValidationTests(unittest.TestCase):
         advisor.propose_hypothesis.assert_called_once()
         self.assertEqual(2, repository.validate_rulebox_materialization.call_count)
 
+    def test_validator_repair_reuses_exact_saved_candidate_without_resetting_authoring_budget(self):
+        service, store, advisor, repository, _ = self.service()
+        valid = service.validate_rule_structure
+        service.validate_rule_structure = Mock(return_value=["validator defect"])
+        service.process("case:1")
+        case = store.get("case:1")
+        case.retry["authoringAttempts"] = 3
+        store.save(case)
+        fingerprint = case.compilation_draft["contentFingerprint"]
+        service.validate_rule_structure = valid
+        result = service.revalidate_saved_candidate("case:1")
+        self.assertEqual("needs-data", result["status"])
+        saved = store.get("case:1")
+        self.assertEqual(3, saved.retry["authoringAttempts"])
+        self.assertEqual(fingerprint, saved.compilation_draft["contentFingerprint"])
+        self.assertEqual("validator defect", saved.retry["savedCandidateRevalidation"]["previousReason"])
+        advisor.propose_hypothesis.assert_called_once()
+        repository.validate_rulebox_materialization.assert_called_once()
+
+    def test_saved_candidate_revalidation_refuses_changed_scope_or_explicit_blockers(self):
+        for change in ("release", "evidence", "tamper", "blocker", "plan", "invalid", "busy"):
+            with self.subTest(change=change):
+                service, store, advisor, repository, _ = self.service()
+                valid = service.validate_rule_structure
+                service.validate_rule_structure = Mock(return_value=["validator defect"])
+                service.process("case:1")
+                service.validate_rule_structure = valid
+                case = store.get("case:1")
+                if change == "release":
+                    repository.rulebox_snapshot.return_value["rulesHash"] = "changed"
+                elif change == "evidence":
+                    case.supporting_evidence_ids.append("new-evidence")
+                elif change == "tamper":
+                    case.compilation_draft["candidates"][0]["proposedRule"]["label"] = "tampered"
+                elif change == "blocker":
+                    result = copy.deepcopy(advisor.propose_hypothesis.return_value)
+                    result["candidates"][0]["blockers"] = [{"kind": "unsupported-capability", "requirement": "missing model"}]
+                    capture_compilation(case, result, service.world_context(case))
+                elif change == "plan":
+                    case.evolution = {"plan": {"planId": "frozen"}}
+                elif change == "invalid":
+                    service.validate_rule_structure = Mock(return_value=["still invalid"])
+                elif change == "busy":
+                    store.acquired = False
+                store.save(case)
+                if change == "tamper":
+                    with self.assertRaisesRegex(ValueError, "fingerprint mismatch"):
+                        service.revalidate_saved_candidate("case:1")
+                else:
+                    self.assertIn(service.revalidate_saved_candidate("case:1")["status"], {
+                        "revalidation-context-changed", "revalidation-not-applicable", "revalidation-blocked", "already-processing",
+                    })
+                self.assertEqual(case.to_dict(), store.get("case:1").to_dict())
+                advisor.propose_hypothesis.assert_called_once()
+                repository.validate_rulebox_materialization.assert_not_called()
+
     def test_draft_survives_failure_before_experiment_creation(self):
         service, store, advisor, _, _ = self.service()
         original = service.create_experiment
@@ -112,6 +168,16 @@ class HypothesisCandidateValidationTests(unittest.TestCase):
         self.assertTrue(case.compilation_draft["candidates"][0]["proposedRule"])
         self.assertFalse(case.candidate_rule)
         repository.validate_rulebox_materialization.assert_not_called()
+        for requirement in ({"metric": "source-packet", "lookbackMinutes": 1440},
+                            {"metric": "price", "minimumSamples": "three"}):
+            with self.subTest(observation=requirement):
+                service, store, advisor, repository, _ = self.service()
+                rule = advisor.propose_hypothesis.return_value["candidates"][0]["proposedRule"]
+                rule["model_input_contract"]["observationRequirements"] = [requirement]
+                result = service.process("case:1")
+                self.assertEqual("needs-revision", result["status"])
+                self.assertEqual("compilation", store.get("case:1").stage)
+                repository.validate_rulebox_materialization.assert_not_called()
 
     def test_changed_evidence_release_or_scope_invalidates_authoring_reuse(self):
         service, store, advisor, repository, _ = self.service()

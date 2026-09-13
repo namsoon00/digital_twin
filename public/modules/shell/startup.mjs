@@ -1,7 +1,7 @@
 import { loadServiceAccounts } from "../accounts/commands.mjs";
 import { closeInvestmentCalendarCandidateConfirmation } from "../calendar/commands.mjs";
 import { scheduleAppNavScrollState, scheduleTopbarScrollState } from "../navigation/chrome.mjs";
-import { closeWorkDetailLayer, trapWorkDetailFocus } from "../navigation/detail.mjs";
+import { closeWorkDetailLayer, loadInformationWorkDetail, trapWorkDetailFocus } from "../navigation/detail.mjs";
 import { bindMobileInfiniteScroll, mobileInfiniteScrollEnabled } from "../navigation/infinite-list.mjs";
 import { mobileInfiniteScrollModeCell } from "../navigation/infinite-runtime.mjs";
 import { layoutLifetime, viewLifetime } from "../navigation/lifecycle.mjs";
@@ -160,6 +160,7 @@ registerOrbitAlphaServiceWorker();
 connectRealtime();
 primeActiveTabData(navigationState.activeTab);
 render();
+loadInformationWorkDetail(navigationState.workDetailLayer);
 if (navigationState.workDetailLayer && navigationState.workDetailLayer.type === "notification-job" && navigationState.workDetailLayer.key) {
   loadNotificationJobDetail(navigationState.workDetailLayer.key);
 }

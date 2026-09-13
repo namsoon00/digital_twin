@@ -1,5 +1,5 @@
 import { setAppNavHidden } from "./chrome.mjs";
-import { restoreWorkDetailFocus } from "./detail.mjs";
+import { loadInformationWorkDetail, restoreWorkDetailFocus } from "./detail.mjs";
 import { viewLifetime } from "./lifecycle.mjs";
 import { primeActiveTabData, scheduleTabDataPreload } from "./preload.mjs";
 import { activePageMode, initialAccountSection, initialExperimentSection, initialFeedSection, initialMarketWorkspaceMode, initialNotificationSection, initialOntologyExperimentId, initialOntologySection, initialOperationsView, initialPageModeForTab, initialPortfolioView, initialSettingsSection, initialStrategySection, initialTab, initialWorkDetailLayer, normalizeTabId, writeTabHistory } from "./routes.mjs";
@@ -89,6 +89,7 @@ function syncTabFromLocation() {
   portfolioState.activePortfolioView = nextPortfolioView;
   operationsState.activeOperationsView = nextOperationsView;
   navigationState.workDetailLayer = nextWorkDetailLayer;
+  if (detailChanged) loadInformationWorkDetail(nextWorkDetailLayer);
   if (detailChanged && nextDetailType === "notification-job" && nextDetailKey) {
     loadNotificationJobDetail(nextDetailKey);
   }

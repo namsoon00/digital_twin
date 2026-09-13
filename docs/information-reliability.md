@@ -57,6 +57,8 @@ A baseline must have been observed and recorded by publication, no older than 24
 
 The comparison describes price movement across a time window, not a causal effect attributable to the event. Detail reads refresh on reopening after the one-minute cache expires. This is **read-time observation**, not background follow-up alerts. Exact publication time and retained intraday history are prerequisites; older events may have no usable observations because existing retention rules still apply.
 
+Initial deep links, in-app detail opens and browser history navigation share the same information-detail loader. List payloads are not a substitute for the dedicated detail read. Browser regressions omit calendar detail records from the list and omit price observations from news list items so this distinction is tested end to end.
+
 ## Configuration and Operations
 
 - External API settings: `externalOfficialReleaseEnabled`, default `1`.
@@ -76,3 +78,5 @@ Live verification on 2026-09-13 captured and date-matched the July 29 FOMC state
 The follow-up verification captured the August 27 BOK statement and matched the source excerpt for a 2.75% to 3.00% policy-rate change. Historical domestic body verification increased from 56 to 75 of 122 retained disclosures during the audit. Forty-four SEC filings still lacked document access because the local contact email was unset; they were kept as metadata, not silently promoted to verified bodies. A bounded recovery scan subsequently queued 43 additional missing domestic bodies and explicitly reported those 44 SEC blocks. Queue admission is not proof of completed analysis.
 
 After processing those jobs and sequentially replaying retained bodies, 121 of 122 domestic disclosures had verified bodies and analysis-ready source inputs. The remaining Kakao receipt `20260824000219` returned `official-file-not-found`; its terminal state prevents repeated downloads. The SEC contact requirement remained unresolved. These counts certify collection and source linkage, not the correctness of every AI interpretation. The final full test rerun passed 1,317 Python tests and 36 frontend tests; an earlier pre-existing 200 ms subprocess-start timing failure passed in isolation and on the full rerun without changing production AI behavior.
+
+The restarted BLS public API worker collected the August 2026 statistical vintage at `2026-09-13T09:08:17Z`: CPI index-derived changes 0.3960% monthly and 3.3965% yearly, payroll change 162,000 people and unemployment 4.1%. These are retained series calculations, not asserted original release figures. The existing BLS release-page 403 remained a separate coverage gap.

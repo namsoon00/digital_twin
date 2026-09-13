@@ -48,6 +48,13 @@ import { ontologyState } from "../state/ontology.mjs";
 
 var workDetailReturnFocus = null;
 
+function loadInformationWorkDetail(detail) {
+  if (!detail || !detail.key) return Promise.resolve();
+  if (["research-evidence", "feed-impact"].includes(detail.type)) return loadResearchEvidenceDetail(detail.key);
+  if (detail.type === "investment-calendar-event") return loadInvestmentCalendarDetail(detail.key);
+  return Promise.resolve();
+}
+
 function openWorkDetailLayer(type, key) {
   if (!type) return;
   viewLifetime.invalidate();
@@ -71,12 +78,7 @@ function openWorkDetailLayer(type, key) {
   if (navigationState.workDetailLayer.type === "notification-job") {
     loadNotificationJobDetail(navigationState.workDetailLayer.key);
   }
-  if (navigationState.workDetailLayer.type === "research-evidence") {
-    loadResearchEvidenceDetail(navigationState.workDetailLayer.key);
-  }
-  if (navigationState.workDetailLayer.type === "investment-calendar-event") {
-    loadInvestmentCalendarDetail(navigationState.workDetailLayer.key);
-  }
+  loadInformationWorkDetail(navigationState.workDetailLayer);
   if (navigationState.workDetailLayer.type === "portfolio-interpretation") {
     loadPortfolioInterpretation(false);
   }
@@ -384,4 +386,4 @@ function editorWorkDetailPayload(kicker, title, meta, body) {
   };
 }
 
-export { activeOverlayDialog, closeWorkDetailLayer, editorWorkDetailPayload, focusWorkDetailLayer, openWorkDetailLayer, renderInfoIconButton, renderWorkDetailButton, renderWorkDetailLayer, restoreWorkDetailFocus, trapWorkDetailFocus };
+export { activeOverlayDialog, closeWorkDetailLayer, editorWorkDetailPayload, focusWorkDetailLayer, loadInformationWorkDetail, openWorkDetailLayer, renderInfoIconButton, renderWorkDetailButton, renderWorkDetailLayer, restoreWorkDetailFocus, trapWorkDetailFocus };

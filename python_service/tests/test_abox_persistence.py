@@ -158,6 +158,7 @@ for name in sys.modules:
         self.assertFalse(any(event[0] == "begin" for event in reused["journal"]))
 
     def test_control_patch_preserves_other_worlds_and_unchanged_scope_pointers(self):
+        self.assert_large_scope_deletion_compacts_without_splitting_activation()
         for full in [False, True]:
             with self.subTest(full=full):
                 store = RecordingABoxStore(api.TypeDBOntologyGraphRepository)
@@ -176,6 +177,38 @@ for name in sys.modules:
                 self.assertEqual(NEW, store.controls[WORLD, "worldview-manifest-active-pointer", ""]["manifest"])
                 self.assertIn((WORLD, "abox-activation-pending", ""), store.controls)
 
+    def assert_large_scope_deletion_compacts_without_splitting_activation(self):
+        scopes = ["scope:" + str(index) for index in range(180)]
+        store = RecordingABoxStore(api.TypeDBOntologyGraphRepository)
+        for world in [WORLD, OTHER_WORLD]:
+            for entity in control_graph(OLD, pending=False, scopes=scopes).entities:
+                store.controls[world, entity.kind, entity.properties.get("scopeId", "")] = dict(entity.properties, worldId=world)
+        other_world = {key: value for key, value in store.controls.items() if key[0] == OTHER_WORLD}
+        graph = control_graph(scopes=scopes[:-1])
+        result = store.replace_scoped_abox_control_graph(
+            store, store.driver_imports(), graph, world_id=WORLD, scope_ids=scopes,
+        )
+        self.assertGreater(result["unbatchedQueryCount"], 256)
+        self.assertLessEqual(result["queryCount"], 256)
+        self.assertEqual(1, store.commits)
+        self.assertTrue(result["atomic"])
+        self.assertNotIn((WORLD, "abox-scope-active-pointer", scopes[-1]), store.controls)
+        for scope in scopes[:-1]:
+            self.assertEqual(NEW, store.controls[WORLD, "abox-scope-active-pointer", scope]["manifest"])
+        self.assertIn((WORLD, "abox-scope-active-pointer", "scope:b"), store.controls)
+        self.assertEqual(other_world, {key: value for key, value in store.controls.items() if key[0] == OTHER_WORLD})
+        self.assertEqual([], controls.scoped_pointer_delete_batches([], WORLD))
+        for query in controls.scoped_pointer_delete_batches(scopes, WORLD):
+            self.assertIn('has ontology-world-id "' + WORLD + '"', query)
+            self.assertLessEqual(query.count("has ontology-scope-id"), 16)
+        failed = RecordingABoxStore(api.TypeDBOntologyGraphRepository, "control-delete")
+        before = failed.state()
+        with self.assertRaises(RuntimeError):
+            failed.replace_scoped_abox_control_graph(failed, failed.driver_imports(), graph,
+                                                     world_id=WORLD, scope_ids=scopes)
+        self.assertEqual(before, failed.state())
+        self.assertEqual(0, failed.commits)
+
     def test_oversized_control_patch_fails_before_any_write_at_every_limit_boundary(self):
         for raw_limit, limit in [(None, 256), (1, 8), (8, 8), (9, 9), (512, 512), (999, 512)]:
             for excess in [0, 1]:
@@ -183,7 +216,7 @@ for name in sys.modules:
                     store = RecordingABoxStore(api.TypeDBOntologyGraphRepository)
                     store.stage_candidate()
                     before = store.state()
-                    scopes = ["scope:" + str(i) for i in range((limit - 4) // 2)]
+                    scopes = []
                     graph = control_graph(scopes=scopes)
                     required = 2 + len(scopes) + len(graph.entities)
                     for i in range(limit + excess - required):
@@ -228,7 +261,7 @@ for name in sys.modules:
             result = store.prepare_pending_abox_activation_for_inference(WORLD)
         self.assertEqual("error", result["status"])
         self.assertEqual("typedbAtomicControlPatchLimit", result["reasonCode"])
-        self.assertEqual(14, result["requiredControlQueryCount"])
+        self.assertEqual(10, result["requiredControlQueryCount"])
         self.assertEqual(8, result["atomicControlQueryLimit"])
         self.assertTrue(result["preservedPreviousAbox"])
         self.assertEqual(before, store.state())

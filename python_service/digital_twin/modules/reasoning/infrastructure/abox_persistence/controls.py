@@ -77,6 +77,14 @@ def replace_scoped_abox_control_graph(
     raw_limit = number_or_none(runtime.settings().get("typedbScopedControlWriteTransactionQueryCount"))
     transaction_limit = int(raw_limit) if raw_limit is not None else 256
     transaction_limit = max(8, min(512, transaction_limit))
+    unbatched_query_count = len(queries)
+    if len(queries) > transaction_limit and not replace_all_scope_pointers:
+        # A disjunction selects the union of scope pointers without joining
+        # independent nodes. Keep the world boundary outside every branch.
+        delete_queries = delete_queries[:2] + scoped_pointer_delete_batches(
+            clean_scope_ids, world_id,
+        )
+        queries = delete_queries + insert_queries
     # Never split pointer deletion, replacement and the recovery journal into
     # separate commits. An oversized patch must fail before the first write.
     if len(queries) > transaction_limit:
@@ -114,7 +122,33 @@ def replace_scoped_abox_control_graph(
         "queryCount": len(queries),
         "transactionCount": 1,
         "atomic": True,
+        **({"unbatchedQueryCount": unbatched_query_count}
+           if len(queries) != unbatched_query_count else {}),
     }
+
+
+def scoped_pointer_delete_batches(scope_ids: Iterable[str], world_id: str) -> list:
+    """Delete only named pointers, with bounded union queries, never a join."""
+    scopes = sorted({str(value).strip() for value in scope_ids if str(value).strip()})
+    queries = []
+    for offset in range(0, len(scopes), 16):
+        batch = scopes[offset:offset + 16]
+        if len(batch) == 1:
+            queries.append(scoped_abox_control_delete_query(
+                "abox-scope-active-pointer", world_id, batch[0],
+            ))
+            continue
+        branches = " or ".join(
+            "{ $n has ontology-scope-id " + typedb_string(scope_id) + "; }"
+            for scope_id in batch
+        )
+        queries.append(
+            'match $n isa ontology-node, has ontology-box "ABoxControl", '
+            'has ontology-kind "abox-scope-active-pointer"'
+            + (", has ontology-world-id " + typedb_string(world_id) if world_id else "")
+            + "; " + branches + "; delete $n;"
+        )
+    return queries
 
 
 def clear_scoped_abox_pending_activation(

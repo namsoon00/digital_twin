@@ -1,5 +1,9 @@
 {
   "domain": {
+    "modules/reasoning/domain/abox_lifecycle/invariants.py::validate_manifest_patch_plan": {
+      "hash": "8381c391f1a266597b33d559a0bc61fd684fe0302a58198d5f46058b55cba57c",
+      "reason": "Limit derived-assertion ownership to semantic replacement roots while retaining final endpoint validation; test_abox_lifecycle."
+    },
     "modules/decisions/domain/ai_inference_queue.py::notification_ai_review_mode": {
       "hash": "1c2047e1f5d5c19197b3b8a475505d1ce6a6ddaf761cdc1e8963ca67fb2e32a6",
       "reason": "Preserve graph-proven narrative-only authority over stale investment-mode defaults; test_ai_inference_queue."

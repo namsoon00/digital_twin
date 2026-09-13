@@ -159,12 +159,15 @@ class RecordingABoxStore:
             values = dict((key, json.loads(value)) for key, value in re.findall(
                 r'has (ontology-kind|ontology-world-id|ontology-scope-id) ("(?:\\.|[^"\\])*")', query,
             ))
+            scope_ids = {json.loads(value) for value in re.findall(
+                r'has ontology-scope-id ("(?:\\.|[^"\\])*")', query,
+            )}
             for key in list(self.controls):
                 if key[1] != values["ontology-kind"]:
                     continue
                 if "ontology-world-id" in values and key[0] != values["ontology-world-id"]:
                     continue
-                if "ontology-scope-id" in values and key[2] != values["ontology-scope-id"]:
+                if scope_ids and key[2] not in scope_ids:
                     continue
                 del self.controls[key]
 

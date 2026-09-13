@@ -60,6 +60,18 @@ function currentInvestmentCalendar() {
   };
 }
 
+function loadInvestmentCalendarDetail(eventId) {
+  var key = String(eventId || "");
+  var cache = calendarState.investmentCalendarDetails || (calendarState.investmentCalendarDetails = {});
+  if (!key || isStaticPreviewHost() || (cache[key] && Date.now() - cache[key].loadedAt < 60000)) return Promise.resolve();
+  return requestJson("/api/investment-calendar/events/" + encodeURIComponent(key), { key: "calendar-detail:" + key, cacheTtlMs: 60000 })
+    .then(function (payload) { if (payload && payload.event) cache[key] = { event: payload.event, loadedAt: Date.now() }; })
+    .catch(function () { return null; })
+    .finally(function () { render(); });
+}
+
+export { loadInvestmentCalendarDetail };
+
 function currentInvestmentCalendarCandidates() {
   return calendarState.investmentCalendarCandidates || {
     candidates: [],

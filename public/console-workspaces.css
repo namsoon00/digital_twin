@@ -1238,6 +1238,7 @@
 }
 
 .information-brief .inline-detail-block,
+.calendar-release-information .inline-detail-block,
 .work-detail-body .calendar-release-information {
   border: 0;
   border-bottom: 1px solid var(--line);

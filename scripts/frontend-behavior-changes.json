@@ -1,5 +1,9 @@
 [
   {
+    "reason": "Calendar details load persisted past events and price observation windows; date-only timestamps do not invent times. Recovery/statistics and browser regressions cover the new contracts.",
+    "functions": ["investmentCalendarEventByKey", "initializeCalendarState"]
+  },
+  {
     "reason": "Source-bound facts and analysis are distinct; calendar actual releases are date-matched and operational reminder times are not official publication times. Covered by information-reliability.test.mjs and Python information/release tests.",
     "functions": ["renderResearchEvidenceInlineDetail", "researchEvidenceWorkDetailPayload", "researchEvidenceKoreanSummary", "investmentCalendarTimeStateLabel", "renderInvestmentCalendarEvent", "investmentCalendarEventWorkDetailPayload", "researchEvidenceItemByKey", "loadResearchEvidenceDetail"]
   },

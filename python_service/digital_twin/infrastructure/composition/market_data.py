@@ -187,6 +187,8 @@ def build_external_data_collection_runner(settings=None) -> ExternalDataCollecti
     from digital_twin.infrastructure.composition.events import news_event_bus
     from digital_twin.infrastructure.disclosure_analyzer import disclosure_analyzer_from_settings
     from digital_twin.infrastructure.external_api.adapters import default_external_dataset_registry
+    from digital_twin.infrastructure.external_api.adapters.base import legacy_provider
+    from digital_twin.modules.market_data.application.external_data.document_recovery_service import OfficialDocumentRecoveryService
     from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.market_data.public import (
@@ -227,6 +229,12 @@ def build_external_data_collection_runner(settings=None) -> ExternalDataCollecti
             max_replay_age_minutes=int(number(configured_settings.get("externalEvidenceProjectionMaxReplayAgeMinutes")) or 180),
         ),
         worker_id="external-data-" + str(os.getpid()),
+        document_recovery=OfficialDocumentRecoveryService(
+            configured_settings, evidence_projector.evidence_store.document_recovery_candidates,
+            store, registry, evidence_projector,
+            access_ready=lambda dataset: legacy_provider(configured_settings).sec_document_access_configured()
+            if dataset == "sec.document" else bool(configured_settings.get("opendartApiKey")),
+        ),
     )
 
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { informationSourceUrl, renderResearchInformation } from "../../public/modules/research/information.mjs";
+import { informationSourceUrl, informationTime, renderInformationReaction, renderResearchInformation } from "../../public/modules/research/information.mjs";
 import { releaseValue, renderCalendarReleaseInformation } from "../../public/modules/calendar/results.mjs";
 
 test("facts, opinions and unregistered follow-ups have distinct labels", () => {
@@ -36,4 +36,18 @@ test("release failure and absence never render an invented actual", () => {
   const html = renderCalendarReleaseInformation({releaseInformation: {statusLabel: "결과 수집 오류", collection: {state: "error"}}});
   assert.match(html, /결과 수집 오류/);
   assert.doesNotMatch(html, /calendar-release-values/);
+});
+
+test("latest statistics are separate from original release and retain formulas", () => {
+  const html = renderCalendarReleaseInformation({releaseInformation:{statusLabel:"결과 수집 오류", latestStatistics:{label:"최근 공표 통계 · 현재 조회값",referencePeriod:"2026-08",note:"최초 발표값이 아닙니다.",sourceUrl:"https://api.bls.gov/",metrics:[{label:"실업률",actual:4.1,unit:"%",formula:"reported level",inputs:[{seriesId:"LNS14000000",period:"2026-08",value:4.1}]}]}}});
+  assert.match(html, /4.1%/); assert.match(html, /최초 발표값이 아닙니다/);
+  assert.match(html, /LNS14000000/); assert.match(html, /reported level/);
+  assert.equal(informationTime("20260827"), "2026-08-27 (시각 미확인)");
+  assert.equal(informationTime("2026-08-27"), "2026-08-27 (시각 미확인)");
+});
+
+test("observed price windows do not imply automated alerts or causal proof", () => {
+  const html = renderInformationReaction({version:"information-price-observation-v1",label:"공개 전후 가격 관측",observations:[{symbol:"EXAMPLE",horizonMinutes:60,status:"observed",priceChangePercent:2,baseline:{price:100},outcome:{price:102,currency:"USD",provider:"sample"}}],note:"시간상 전후 비교"});
+  assert.match(html, /\+2.00%/); assert.match(html, /시간상 전후 비교/);
+  assert.match(html, /후속 자동 알림 미등록/);
 });

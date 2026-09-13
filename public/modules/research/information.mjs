@@ -8,8 +8,24 @@ function informationSourceUrl(value) {
 }
 
 function informationTime(value) {
+  if (/^\d{8}$/.test(String(value || ""))) return String(value).slice(0, 4) + "-" + String(value).slice(4, 6) + "-" + String(value).slice(6, 8) + " (시각 미확인)";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return value + " (시각 미확인)";
   var date = new Date(value || "");
   return Number.isFinite(date.getTime()) ? date.toLocaleString("ko-KR", { timeZone: "Asia/Seoul", hour12: false }) + " KST" : "미확인";
+}
+
+function renderInformationReaction(reaction) {
+  if (!reaction || reaction.version !== "information-price-observation-v1") return '';
+  var rows = reaction.observations || [];
+  return '<section class="inline-detail-block"><strong>' + escapeHtml(reaction.label) + '</strong>' +
+    rows.map(function (row) {
+      var label = row.symbol + " · " + (row.horizonMinutes === 1440 ? "24시간" : row.horizonMinutes + "분") + " 후";
+      if (row.status !== "observed") return '<p>' + escapeHtml(label + ": " + row.label) + '</p>';
+      var change = Number(row.priceChangePercent);
+      return '<p><b>' + escapeHtml(label + " " + (change > 0 ? "+" : "") + change.toFixed(2) + "%") + '</b><br>' +
+        escapeHtml(row.baseline.price + " → " + row.outcome.price + " " + row.outcome.currency) + '<br><span class="subtle">' +
+        escapeHtml(informationTime(row.baseline.sourceAsOf) + " → " + informationTime(row.outcome.sourceAsOf) + " · " + row.outcome.provider) + '</span></p>';
+    }).join("") + '<p class="subtle">' + escapeHtml(reaction.note || "") + '</p><p class="subtle">조회 시 재확인 · 후속 자동 알림 미등록</p></section>';
 }
 
 function renderInformationLink(url, label) {
@@ -39,6 +55,7 @@ function renderResearchInformation(item, options) {
     }).join("") + '</ul>' : '<p>본문에서 대조한 문장이 없습니다.</p>',
     '</section>',
     brief.interpretation ? '<section class="inline-detail-block"><strong>의미 · 분석 의견</strong><p>' + escapeHtml(brief.interpretation) + '</p></section>' : '',
+    renderInformationReaction(brief.marketReaction),
     followUps.length ? '<section class="inline-detail-block"><strong>후속 확인 과제</strong><ul>' + followUps.map(function (entry) {
       return '<li>' + escapeHtml(entry.text) + '<p class="subtle">' + escapeHtml(entry.statusLabel) + '</p></li>';
     }).join("") + '</ul></section>' : '',
@@ -56,4 +73,4 @@ function renderResearchInformation(item, options) {
   ].join("");
 }
 
-export { informationSourceUrl, informationTime, renderInformationLink, renderResearchInformation };
+export { informationSourceUrl, informationTime, renderInformationLink, renderInformationReaction, renderResearchInformation };

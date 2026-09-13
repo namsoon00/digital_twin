@@ -557,21 +557,34 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
 
     def calendar_release_facts(self, limit: int = 160) -> Dict[str, object]:
         """Bounded release history plus independent collection health; no vendor I/O."""
-        datasets = ("official.bls-release", "official.fomc-release")
+        datasets = ("official.bls-release", "official.fomc-release", "official.bok-release", "official.bls-statistics")
+        placeholders = ", ".join(["%s"] * len(datasets))
         with self.connect() as connection:
             current = connection.execute(
-                "SELECT * FROM external_fact_current WHERE dataset_id IN (%s, %s)", datasets,
+                "SELECT * FROM external_fact_current WHERE dataset_id IN (" + placeholders + ")", datasets,
             ).fetchall()
             history = connection.execute(
-                "SELECT * FROM external_fact_revision WHERE dataset_id IN (%s, %s) ORDER BY fetched_at DESC LIMIT %s",
+                "SELECT * FROM external_fact_revision WHERE dataset_id IN (" + placeholders + ") ORDER BY fetched_at DESC LIMIT %s",
                 (*datasets, max(1, min(300, int(limit)))),
             ).fetchall()
             states = connection.execute(
-                "SELECT dataset_id, partition_key, active, last_success_at, next_due_at, last_error FROM external_dataset_state WHERE dataset_id IN (%s, %s)", datasets,
+                "SELECT dataset_id, partition_key, active, last_success_at, next_due_at, last_error FROM external_dataset_state WHERE dataset_id IN (" + placeholders + ")", datasets,
             ).fetchall()
         return {"facts": [self._fact_row(row) for row in [*current, *history]],
                 "collection": {str(row["partition_key"]): {"active": bool(row["active"]), "lastSuccessAt": row["last_success_at"],
                     "nextAttemptAt": row["next_due_at"], "error": str(row["last_error"] or "")[:240]} for row in states}}
+
+    def retained_document_fact(self, request):
+        identity = str(request.watermark.get("receiptNo") or request.watermark.get("accessionNumber") or "")
+        if request.dataset_id not in {"opendart.document", "sec.document"} or not identity:
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM external_fact_revision WHERE dataset_id = %s AND subject_key = %s "
+                "AND source_revision LIKE %s AND JSON_EXTRACT(quality_json, '$.dataUsable') = true "
+                "ORDER BY fetched_at DESC LIMIT 1", (request.dataset_id, request.subject.subject_key, identity + ":%"),
+            ).fetchone()
+        return self._fact_row(row) if row else None
 
     def complete_observation(
         self,

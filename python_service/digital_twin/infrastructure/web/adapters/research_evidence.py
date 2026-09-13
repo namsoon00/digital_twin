@@ -496,6 +496,11 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
         observed_at=projected.observed_at,
     ).to_dict()
     payload["analysisSource"] = analysis_source
+    if payload.get("informationBrief", {}).get("state") == "source-linked":
+        from digital_twin.modules.market_data.public import InformationObservationService
+        payload["informationBrief"]["marketReaction"] = InformationObservationService(stores.market_time_series_store()).observe(
+            projected.published_at, [projected.symbol],
+        )
     if hasattr(repository, "story_history"):
         payload["storyTimeline"] = [
             {

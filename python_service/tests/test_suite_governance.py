@@ -157,7 +157,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # authorization-scope and automatic rollback boundaries.
         # Frozen experiment inputs add 25 provenance, retention and collection-contract boundaries.
         # Source-bound briefs and official release/read-model isolation add 25 focused regressions.
-        self.assertLessEqual(total, 1502)
+        # Twenty source recovery, official statistics and event-window regressions.
+        self.assertLessEqual(total, 1522)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

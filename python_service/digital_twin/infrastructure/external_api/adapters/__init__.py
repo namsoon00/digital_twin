@@ -4,6 +4,7 @@ from digital_twin.modules.market_data.public import ExternalDatasetRegistry
 from .coingecko import CoinGeckoMarketAdapter
 from .fred import FredMacroAdapter
 from .official_release import OfficialReleaseAdapter
+from .bls_statistics import BlsStatisticsAdapter
 from .opendart import OpenDartCompanyFactsAdapter, OpenDartDisclosureAdapter, OpenDartDocumentAdapter
 from .public_data_portal import (
     PublicDataPortalMarketIndexAdapter,
@@ -32,6 +33,8 @@ def default_external_dataset_registry(
         FredMacroAdapter(),
         OfficialReleaseAdapter("bls"),
         OfficialReleaseAdapter("fomc"),
+        OfficialReleaseAdapter("bok"),
+        BlsStatisticsAdapter(),
         OpenDartDisclosureAdapter(opendart_corp_code_lookup),
         OpenDartDocumentAdapter(),
         OpenDartCompanyFactsAdapter(opendart_corp_code_lookup),

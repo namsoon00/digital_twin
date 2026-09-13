@@ -32,7 +32,8 @@ def source_url(value):
 
 def _time(value):
     try:
-        result = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        text = str(value or "")
+        result = datetime.strptime(text, "%Y%m%d") if re.fullmatch(r"\d{8}", text) else datetime.fromisoformat(text.replace("Z", "+00:00"))
         return result if result.tzinfo else result.replace(tzinfo=timezone.utc)
     except ValueError:
         return None

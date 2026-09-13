@@ -31,6 +31,7 @@ import { loadPortfolioInterpretation } from "../portfolio/requests.mjs";
 import { strategyProposalsWorkDetailPayload } from "../proposals/detail.mjs";
 import { pendingRenderTransitionCell, render } from "../render/scheduler.mjs";
 import { loadResearchEvidenceDetail } from "../research/requests.mjs";
+import { loadInvestmentCalendarDetail } from "../calendar/commands.mjs";
 import { feedPipelineWorkDetailPayload, feedQualityWorkDetailPayload, feedSourcesWorkDetailPayload, researchEvidenceWorkDetailPayload } from "../research/workspace.mjs";
 import { investmentLanguageWorkDetailPayload, settingsAiRuntimeWorkDetailPayload, settingsDataSourcesWorkDetailPayload, settingsDiagnosticsWorkDetailPayload, settingsOperationsNotificationsWorkDetailPayload, settingsPreferencesWorkDetailPayload, settingsRuntimeWorkDetailPayload, settingsUserNotificationsWorkDetailPayload } from "../settings/legacy.mjs";
 import { escapeHtml } from "../shared/text.mjs";
@@ -72,6 +73,9 @@ function openWorkDetailLayer(type, key) {
   }
   if (navigationState.workDetailLayer.type === "research-evidence") {
     loadResearchEvidenceDetail(navigationState.workDetailLayer.key);
+  }
+  if (navigationState.workDetailLayer.type === "investment-calendar-event") {
+    loadInvestmentCalendarDetail(navigationState.workDetailLayer.key);
   }
   if (navigationState.workDetailLayer.type === "portfolio-interpretation") {
     loadPortfolioInterpretation(false);

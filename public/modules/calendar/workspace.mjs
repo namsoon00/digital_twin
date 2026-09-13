@@ -801,6 +801,8 @@ function investmentCalendarEntryWorkDetailPayload() {
 
 function investmentCalendarEventByKey(key) {
   var target = String(key || "");
+  var detail = (calendarState.investmentCalendarDetails || {})[target];
+  if (detail && detail.event) return detail.event;
   return investmentCalendarEvents().filter(function (event) {
     return String(event.eventId || event.id || event.title || "") === target;
   })[0] || null;

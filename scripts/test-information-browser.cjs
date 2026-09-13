@@ -24,11 +24,14 @@ const calendar = {
     release: {referencePeriod: "검증용 기간", releasedAt: stamp, releasedDate: stamp.slice(0,10), firstCollectedAt: stamp, lastCollectedAt: stamp, sourceUrl: "https://www.bls.gov", source: "BLS",
       metrics: [{label: "소비자물가 전월 대비", actual: 0, previous: 0.1, unit: "%", excerpt: "Synthetic official source excerpt."}]}}
 };
+evidence.informationBrief.marketReaction = {version:"information-price-observation-v1",label:"공개 전후 가격 관측",note:"시간상 전후 비교이며 사건의 인과관계를 의미하지 않습니다.",observations:[{symbol:"TEST01",horizonMinutes:60,status:"observed",priceChangePercent:2,baseline:{price:100,sourceAsOf:stamp,provider:"fixture"},outcome:{price:102,sourceAsOf:stamp,provider:"fixture",currency:"USD"}}]};
+calendar.releaseInformation.latestStatistics = {label:"최근 공표 통계 · 보관된 조회본",referencePeriod:"2026-08",source:"BLS Public Data API",sourceUrl:"https://api.bls.gov/",fetchedAt:stamp,ageHours:24,freshnessState:"stale",note:"최초 발표값이나 발표 전 예상치가 아닙니다.",metrics:[{label:"소비자물가 전월 대비",actual:0.4,unit:"%",formula:"(current / previous - 1) * 100",inputs:[{seriesId:"CUSR0000SA0",period:"2026-08",value:100.4},{seriesId:"CUSR0000SA0",period:"2026-07",value:100}]}]};
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, "http://localhost");
   if (url.pathname.startsWith("/api/")) {
     let data;
     if (url.pathname === "/api/research-evidence/fixture-information") data = {item: evidence};
+    else if (url.pathname === "/api/investment-calendar/events/fixture-result") data = {event: calendar};
     else if (["/api/market/evidence", "/api/research-evidence"].includes(url.pathname)) data = {items: [evidence], total: 1, summary: {}};
     else if (url.pathname.includes("investment-calendar")) data = {events: [calendar], candidates: [], summary: {total: 1}};
     else data = fixtures.payload(url);
@@ -59,6 +62,7 @@ async function run() {
       await brief.waitFor();
       assert.match(await brief.textContent(), /요약 · 분석.*원문과 대조한 내용.*의미 · 분석 의견.*자동 관찰 미등록/s);
       assert.match(await brief.textContent(), /같은 사건의 보도 이력/);
+      assert.match(await brief.textContent(), /공개 전후 가격 관측.*\+2.00%/s);
       assert.equal(await brief.locator('a[href^="https://"]').count(), 2);
       let bounds = await brief.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
       assert(bounds.content <= bounds.width + 1, "News overflow " + width);
@@ -67,8 +71,12 @@ async function run() {
       const result = page.locator('[data-work-detail-dialog] .calendar-release-information');
       await result.waitFor();
       assert.match(await result.textContent(), /공식 발표 결과 확보.*0%.*직전 기간 0.1%/s);
+      assert.match(await result.textContent(), /최근 공표 통계.*최초 발표값이나 발표 전 예상치가 아닙니다/s);
+      assert.match(await result.textContent(), /수집 후 24시간 경과.*재확인이 지연/s);
       await result.locator("details summary").first().click();
       assert(await result.getByText("Synthetic official source excerpt.").isVisible());
+      await result.getByText("통계 원값과 계산식", {exact:true}).click();
+      assert(await result.getByText(/CUSR0000SA0/).isVisible());
       bounds = await result.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
       assert(bounds.content <= bounds.width + 1, "Calendar overflow " + width);
       await page.screenshot({path: path.join(screenshots, "calendar-" + width + ".png")});

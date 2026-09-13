@@ -3,7 +3,9 @@
 from digital_twin.modules._exports import resolve_export
 
 
-_EXPORTS = {'CapitalFlowService': ('digital_twin.modules.market_data.application.capital_flow_service',
+_EXPORTS = {'verified_bls_statistics': ('digital_twin.modules.market_data.domain.bls_statistics', 'verified_bls_statistics'),
+ 'InformationObservationService': ('digital_twin.modules.market_data.application.information_observation_service', 'InformationObservationService'),
+ 'CapitalFlowService': ('digital_twin.modules.market_data.application.capital_flow_service',
                         'CapitalFlowService'),
  'CollectionJob': ('digital_twin.modules.market_data.application.external_data.contracts', 'CollectionJob'),
  'CollectionPartition': ('digital_twin.modules.market_data.application.external_data.contracts',

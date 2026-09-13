@@ -103,8 +103,8 @@
   },
   "storage": {
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::MySQLResearchEvidenceStore": {
-      "hash": "02eb30f192b39c2c2a8a75c1a3b8c201a9fd62d9d29a1653731b0abcc36497de",
-      "reason": "Add bounded same-symbol, same-kind, explicit story-identity history without changing existing storage mutations; test_information_reliability and test_research_evidence_store."
+      "hash": "257c08ed255edb005813ba1f3a4f98322a8586f2ddc50969a78367b92c67c978",
+      "reason": "Add bounded missing-document candidate reads to the exact story-history query without changing existing storage mutations; test_information_recovery and test_information_reliability."
     },
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineRegistryStore": {
       "hash": "670bef0c97f7142c87f98b034e845cf89e1376850dbf78862d96c2450bc570db",

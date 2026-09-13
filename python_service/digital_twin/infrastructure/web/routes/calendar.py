@@ -6,6 +6,7 @@ from digital_twin.infrastructure.web.adapters.calendar import delete_investment_
 from digital_twin.infrastructure.web.adapters.calendar import discover_investment_calendar_payload
 from digital_twin.infrastructure.web.adapters.calendar import investment_calendar_candidates_payload
 from digital_twin.infrastructure.web.adapters.calendar import investment_calendar_payload
+from digital_twin.infrastructure.web.adapters.calendar import investment_calendar_event_payload
 from digital_twin.infrastructure.web.adapters.calendar import investment_calendar_reminders_once_payload
 from digital_twin.infrastructure.web.adapters.calendar import investment_calendar_sync_official_payload
 from digital_twin.infrastructure.web.adapters.calendar import reject_investment_calendar_candidate_payload
@@ -29,6 +30,7 @@ class CalendarRoutes:
     discover_investment_calendar_payload: Callable[..., object] = discover_investment_calendar_payload
     investment_calendar_candidates_payload: Callable[..., object] = investment_calendar_candidates_payload
     investment_calendar_payload: Callable[..., object] = investment_calendar_payload
+    investment_calendar_event_payload: Callable[..., object] = investment_calendar_event_payload
     investment_calendar_reminders_once_payload: Callable[..., object] = investment_calendar_reminders_once_payload
     investment_calendar_sync_official_payload: Callable[..., object] = investment_calendar_sync_official_payload
     reject_investment_calendar_candidate_payload: Callable[..., object] = reject_investment_calendar_candidate_payload
@@ -81,8 +83,7 @@ class CalendarRoutes:
         if calendar_event_match:
             event_id = urllib.parse.unquote(calendar_event_match.group(1))
             if request.command == "GET":
-                payload = self.investment_calendar_payload({"limit": ["500"]})
-                payload["event"] = next((item for item in payload.get("events") or [] if item.get("eventId") == event_id), None)
+                payload = self.investment_calendar_event_payload(event_id)
                 return request.send_payload(200 if payload.get("event") else 404, payload if payload.get("event") else {"error": "투자 캘린더 이벤트를 찾지 못했습니다."})
             if request.command == "DELETE":
                 if not request.ensure_writable("공유 모드에서는 투자 캘린더 이벤트를 변경할 수 없습니다."):

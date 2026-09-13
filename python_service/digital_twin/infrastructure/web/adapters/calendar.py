@@ -54,6 +54,24 @@ def investment_calendar_payload(query: Dict[str, List[str]]) -> Dict[str, object
     return investment_calendar_read_service().list_events(investment_calendar_query_payload(query))
 
 
+def investment_calendar_observation_payload(event):
+    from digital_twin.infrastructure import operational_store as stores
+    from digital_twin.modules.market_data.public import InformationObservationService
+    information = event.get("releaseInformation") or {}
+    release = information.get("release") or {}
+    symbols = list(event.get("symbols") or [])
+    if not symbols:
+        symbols = ["^KS11", "USDKRW=X"] if (event.get("payload") or {}).get("country") == "KR" else ["^GSPC", "^IXIC"]
+    information["marketReaction"] = InformationObservationService(stores.market_time_series_store()).observe(release.get("releasedAt") or "", symbols)
+    event["releaseInformation"] = information
+    return event
+
+
+def investment_calendar_event_payload(event_id):
+    event = investment_calendar_read_service().get_event(event_id)
+    return {"event": investment_calendar_observation_payload(event)} if event else {}
+
+
 def save_investment_calendar_event_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return investment_calendar_service().save_event(payload if isinstance(payload, dict) else {})
 

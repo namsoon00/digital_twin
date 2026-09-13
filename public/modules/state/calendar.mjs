@@ -5,6 +5,7 @@ const calendarState = {};
 function initializeCalendarState(cachedSnapshot) {
   return {
     investmentCalendar: null,
+    investmentCalendarDetails: {},
     investmentCalendarLoading: false,
     investmentCalendarError: "",
     investmentCalendarSaving: false,

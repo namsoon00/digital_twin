@@ -131,6 +131,20 @@ class InvestmentCalendarService:
     def default_window_days(self) -> int:
         return int_setting(self.settings, "investmentCalendarDefaultWindowDays", 45, 1, 366)
 
+    def get_event(self, event_id):
+        from digital_twin.modules.investment_calendar.domain.release_information import calendar_release_information
+        event = self.repository.get(event_id)
+        if not event:
+            return None
+        row = enrich_symbol_display_records([event.to_dict()], self.symbol_repository)[0]
+        try:
+            snapshot = self.release_reader() if self.release_reader else {}
+        except Exception:
+            snapshot = {"error": "공식 결과 저장소 조회 실패"}
+        row["releaseInformation"] = calendar_release_information(row, snapshot,
+            enabled=truthy(self.settings.get("externalOfficialReleaseEnabled"), True) and truthy(self.settings.get("externalDataPlatformEnabled"), True))
+        return row
+
     def list_events(self, query: Dict[str, object] = None) -> Dict[str, object]:
         query = query if isinstance(query, dict) else {}
         now = datetime.now(timezone.utc)

@@ -198,11 +198,13 @@ function loadResearchEvidence(force) {
 
 function loadResearchEvidenceDetail(evidenceId) {
   var key = String(evidenceId || "").trim();
-  if (!key || researchState.researchEvidenceDetails[key] || isStaticPreviewHost()) return Promise.resolve();
-  return requestJson("/api/research-evidence/" + encodeURIComponent(key), { key: "research-evidence:" + key })
+  var cached = researchState.researchEvidenceDetails[key];
+  if (!key || (cached && Date.now() - Number(cached.detailLoadedAt || 0) < 60000) || isStaticPreviewHost()) return Promise.resolve();
+  return requestJson("/api/research-evidence/" + encodeURIComponent(key), { key: "research-evidence:" + key, cacheTtlMs: 60000 })
     .then(function (payload) {
       var item = payload && payload.item;
       if (!item) return;
+      item.detailLoadedAt = Date.now();
       researchState.researchEvidenceDetails[key] = item;
       if (researchState.researchEvidence && Array.isArray(researchState.researchEvidence.items)) {
         researchState.researchEvidence.items = researchState.researchEvidence.items.map(function (row) {

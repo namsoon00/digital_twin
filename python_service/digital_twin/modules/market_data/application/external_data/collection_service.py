@@ -51,6 +51,7 @@ class ExternalDataCollectionService:
         evidence_reconciler=None,
         worker_id: str = "external-data-1",
         now_provider=None,
+        document_recovery=None,
     ):
         self.settings = dict(settings or {})
         self.registry = registry
@@ -62,6 +63,7 @@ class ExternalDataCollectionService:
         self.now_provider = now_provider or utc_now
         self._last_partition_sync_at = None
         self._last_cleanup_at = None
+        self.document_recovery = document_recovery
 
     def enabled(self) -> bool:
         return setting_enabled(self.settings, "externalDataPlatformEnabled", True)
@@ -122,6 +124,7 @@ class ExternalDataCollectionService:
         projection_before = self.reconcile_official_evidence()
         cleanup = self.cleanup_history_if_due(force=force)
         sync = self.sync_partitions(force=force)
+        recovery = self.recover_documents()
         if force and hasattr(self.store, "make_due"):
             self.store.make_due()
         jobs = self.store.claim_due(
@@ -135,6 +138,7 @@ class ExternalDataCollectionService:
                 "status": "idle",
                 "processedCount": 0,
                 "partitionSync": sync,
+                "documentRecovery": recovery,
                 "legacyMigration": migration,
                 "historyCleanup": cleanup,
                 "officialEvidenceProjection": projection_before,
@@ -174,6 +178,7 @@ class ExternalDataCollectionService:
             "noDataCount": len(no_data),
             "results": results,
             "partitionSync": sync,
+            "documentRecovery": recovery,
             "legacyMigration": migration,
             "historyCleanup": cleanup,
             "officialEvidenceProjection": {
@@ -182,6 +187,15 @@ class ExternalDataCollectionService:
             },
             "summary": self.store.summary(),
         }
+
+    def recover_documents(self) -> Dict[str, object]:
+        if not self.document_recovery:
+            return {"status": "not-configured"}
+        try:
+            return self.document_recovery.run_once()
+        except Exception as error:
+            self.document_recovery.record_failure(error)
+            return {"status": "error", "reason": str(error)[:240]}
 
     def reconcile_official_evidence(self) -> Dict[str, object]:
         if not self.evidence_reconciler:
@@ -404,5 +418,6 @@ class ExternalDataCollectionService:
             "leaseSeconds": self.lease_seconds(),
             "registry": self.registry.descriptors(self.settings),
             "officialEvidenceProjection": projection_status,
+            "documentRecovery": self.document_recovery.last_result if self.document_recovery else {"status": "not-configured"},
             **self.store.summary(),
         }

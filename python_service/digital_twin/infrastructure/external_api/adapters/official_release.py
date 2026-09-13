@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from digital_twin.modules.market_data.public import CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
 from digital_twin.modules.market_data.domain.official_release import RELEASE_URLS, latest_fomc_statement_url, parse_official_release
+from digital_twin.modules.market_data.domain.bok_release import BOK_HOME, latest_bok_statement_url, parse_bok_statement
 from ...external_signal_utils import default_text_fetcher, external_call_target, guarded_external_call
 
 
@@ -9,7 +10,7 @@ class OfficialReleaseAdapter:
     """Runs behind the existing leased, rate-limited external-data worker."""
 
     def __init__(self, source, fetch_text=None, now=None):
-        if source not in {"bls", "fomc"}:
+        if source not in {"bls", "fomc", "bok"}:
             raise ValueError("Unsupported release source")
         self.source = source
         self.fetch_text = fetch_text or default_text_fetcher
@@ -25,19 +26,19 @@ class OfficialReleaseAdapter:
         )
 
     def partitions(self, _subjects, settings):
-        keys = ["cpi", "employment"] if self.source == "bls" else ["fomc"]
+        keys = ["cpi", "employment"] if self.source == "bls" else [self.source]
         return [CollectionPartition(self.descriptor.dataset_id, key, ExternalSubject("release:" + key, source="official-release"), self.descriptor.priority) for key in keys]
 
     def fetch(self, job, settings):
         indicator = job.partition_key
-        if indicator not in ({"cpi", "employment"} if self.source == "bls" else {"fomc"}):
+        if indicator not in ({"cpi", "employment"} if self.source == "bls" else {self.source}):
             raise ValueError("Official release partition mismatch")
         headers = {"Accept": "text/html", "User-Agent": "OrbitAlpha/1.0 (official release reader)"}
         try:
             timeout = max(1, min(30, float(settings.get("externalApiTimeoutSeconds") or 12)))
         except (TypeError, ValueError):
             timeout = 12
-        url = RELEASE_URLS[indicator]
+        url = BOK_HOME if indicator == "bok" else RELEASE_URLS[indicator]
         def fetch(url):
             return guarded_external_call(settings, self.descriptor.provider_id, external_call_target(url),
                 lambda: self.fetch_text(url, headers, timeout), state=self.guard_state, rate_limit_seconds=5)
@@ -46,7 +47,10 @@ class OfficialReleaseAdapter:
         if indicator == "fomc":
             url = latest_fomc_statement_url(markup, self.now())
             markup = fetch(url)
-        result = parse_official_release(indicator, markup, url, self.now())
+        elif indicator == "bok":
+            url = latest_bok_statement_url(markup, self.now())
+            markup = fetch(url)
+        result = parse_bok_statement(markup, url, self.now()) if indicator == "bok" else parse_official_release(indicator, markup, url, self.now())
         fetched_at = self.now().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         return SourceObservation(
             dataset_id=self.descriptor.dataset_id, provider_id=self.descriptor.provider_id,

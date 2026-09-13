@@ -23,7 +23,7 @@ EXTERNAL_SIGNAL_MAP_FIELDS = {
 }
 
 EXTERNAL_SIGNAL_ARCHIVE_FIELDS = {"sourceArchive"}
-CALENDAR_REFERENCE_DATASETS = {"official.bls-release", "official.fomc-release"}
+CALENDAR_REFERENCE_DATASETS = {"official.bls-release", "official.fomc-release", "official.bok-release", "official.bls-statistics"}
 
 
 def merge_dict(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:

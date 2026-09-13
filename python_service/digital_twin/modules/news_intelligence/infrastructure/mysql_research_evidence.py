@@ -194,6 +194,17 @@ def merge_derived_evidence_payload(
 
 
 class MySQLResearchEvidenceStore(MySQLOperationalConnection):
+    def document_recovery_candidates(self, limit=25, after_id=""):
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM research_evidence WHERE kind IN ('filing', 'disclosure', 'sec-filing', 'sec_filing') "
+                "AND lifecycle_state IN ('active', 'expired') AND evidence_id > %s "
+                "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.documentVerified')), 'false') <> 'true' "
+                "ORDER BY evidence_id LIMIT %s",
+                (str(after_id), max(1, min(100, int(limit)))),
+            ).fetchall()
+        return [research_evidence_from_row(row) for row in rows]
+
     @staticmethod
     def _news_analysis_release(payload: Dict[str, object]) -> str:
         values = dict(payload or {})

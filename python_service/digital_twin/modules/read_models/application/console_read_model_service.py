@@ -787,6 +787,7 @@ class ConsoleReadModelService:
             "analysisReady", "documentHash", "documentCharCount", "officialDocumentPreview",
             "disclosureDocumentQuality", "documentLifecycle", "disclosureAnalysis", "sourceRevision",
             "sourceAsOf", "sourceFetchedAt", "sourceDocuments", "disclosureCategory",
+            "informationBrief",
         ]
         projected = {key: row.get(key) for key in keys if key in row}
         projected.update(detail)

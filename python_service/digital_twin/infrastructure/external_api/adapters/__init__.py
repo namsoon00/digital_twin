@@ -3,6 +3,7 @@ from typing import Dict
 from digital_twin.modules.market_data.public import ExternalDatasetRegistry
 from .coingecko import CoinGeckoMarketAdapter
 from .fred import FredMacroAdapter
+from .official_release import OfficialReleaseAdapter
 from .opendart import OpenDartCompanyFactsAdapter, OpenDartDisclosureAdapter, OpenDartDocumentAdapter
 from .public_data_portal import (
     PublicDataPortalMarketIndexAdapter,
@@ -29,6 +30,8 @@ def default_external_dataset_registry(
     adapters = [
         CoinGeckoMarketAdapter(),
         FredMacroAdapter(),
+        OfficialReleaseAdapter("bls"),
+        OfficialReleaseAdapter("fomc"),
         OpenDartDisclosureAdapter(opendart_corp_code_lookup),
         OpenDartDocumentAdapter(),
         OpenDartCompanyFactsAdapter(opendart_corp_code_lookup),

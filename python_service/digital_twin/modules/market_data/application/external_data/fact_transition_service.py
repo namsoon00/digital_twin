@@ -94,6 +94,8 @@ class ExternalFactTransitionService:
         changed = bool(fields) or previous_revision != str(source_revision or "")
         if not changed:
             return FactTransition(False, False, "unchanged", [], "same source revision")
+        if dataset_id in {"official.bls-release", "official.fomc-release"}:
+            return FactTransition(True, False, "calendar-reference", fields, "official release retained for calendar display; no investment authority")
         if dataset_id in self.DISCOVERY_DATASETS:
             return FactTransition(
                 True,

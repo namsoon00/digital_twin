@@ -221,6 +221,9 @@ class ExternalDataCollectionService:
     def _process_job(self, job) -> Dict[str, object]:
         adapter = self.registry.adapter(job.dataset_id)
         descriptor = adapter.descriptor
+        if not descriptor.enabled(self.settings):
+            self.store.defer_job(job, next_due_at(descriptor, self.settings, job.partition_key), "dataset-disabled")
+            return {"datasetId": job.dataset_id, "partitionKey": job.partition_key, "status": "disabled"}
         started = self.now_provider()
         started_at = iso(started)
         reservation = self.store.reserve_provider_call(descriptor, now=started)

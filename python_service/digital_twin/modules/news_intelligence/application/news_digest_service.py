@@ -19,6 +19,7 @@ from digital_twin.modules.portfolio.contracts import utc_now_iso
 from digital_twin.modules.decisions.contracts import assess_prompt_evidence
 from digital_twin.modules.notifications.contracts import article_digest_context_item, article_has_new_story_fact, article_identity_keys, article_weak_identity_keys, article_story_cluster_id, collect_article_identity_keys_from_context
 from digital_twin.modules.news_intelligence.domain.eligibility import assess_news_eligibility
+from digital_twin.modules.news_intelligence.domain.information_brief import build_information_brief
 
 
 KST = timezone(timedelta(hours=9))
@@ -303,6 +304,10 @@ def grouped_event_items(items: List[Dict[str, object]]) -> List[List[Dict[str, o
 
 
 def confirmed_fact_lines(item: Dict[str, object]) -> List[str]:
+    brief = item.get("informationBrief")
+    if isinstance(brief, dict):
+        return [bounded_text(str(fact.get("label") or "원문 기재") + ": " + str(fact.get("text") or ""), 260)
+                for fact in brief.get("facts") or [] if isinstance(fact, dict) and fact.get("text")][:3]
     payload = item_payload(item)
     if item_event_kind(item) == "disclosure":
         analysis = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
@@ -1211,6 +1216,8 @@ class NewsDigestEnqueuer:
                 hydrated.append(compact)
                 continue
             current = canonical.to_dict()
+            if str(canonical.kind).lower() in {"news", "disclosure", "filing", "sec-filing", "sec_filing"}:
+                current["informationBrief"] = build_information_brief(canonical)
             if item_event_kind(current) == "news":
                 try:
                     current["_newsAiAnalysisCurrent"] = bool(news_ai_analysis_is_current(canonical))
@@ -1408,20 +1415,26 @@ class NewsDigestEnqueuer:
         original_title = item_original_title(primary) or clean_text(primary.get("title"))
         translated_title = item_translated_title(primary)
         summary = item_summary(primary)
+        brief = primary.get("informationBrief")
+        source_bound = isinstance(brief, dict)
+        if source_bound:
+            summary = brief.get("summary") or "현재 원문에 대응하는 요약이 없습니다."
         facts = confirmed_fact_lines(primary)
         interpretations: List[str] = []
-        for value in [item_investment_impact(primary), item_impact_reason(primary)]:
+        for value in ([brief.get("interpretation")] if source_bound else [item_investment_impact(primary), item_impact_reason(primary)]):
             text = bounded_text(value, 360)
             if text and not any(summary_texts_similar(text, existing) for existing in interpretations):
                 interpretations.append(text)
-        if not interpretations:
+        if not interpretations and not source_bound:
             if item_event_kind(primary) == "disclosure":
                 interpretations.append("공시 메타데이터만으로 방향을 단정하지 않고, 원문 세부 내용과 시장 반응을 함께 확인합니다.")
             else:
                 interpretations.append("원문과 가격 반응을 추가로 확인한 뒤 조건부 해석을 보완합니다.")
         watch_line = item_watch_text(primary)
+        if source_bound:
+            watch_line = ", ".join(str(check.get("text") or "") for check in brief.get("followUps") or [] if isinstance(check, dict)) or "등록된 확인 과제 없음"
         action_boundary = item_action_boundary(primary)
-        url = clean_text(primary.get("url"))
+        url = clean_text(brief.get("sourceUrl") if source_bound else primary.get("url"))
         link = '<a href="' + html_attr(url) + '">원문 보기</a>' if url else "원문 링크 없음"
         reason_lines = alert_reason_lines(items)
         number = tracking_number or notification_debug_number(event.event_id)
@@ -1442,19 +1455,18 @@ class NewsDigestEnqueuer:
             parts.extend(["한국어 제목", "• 번역 생성 중"])
         parts.extend([
             "",
-            "한 줄 요약",
+            "접수 정보 · 본문 미확보" if source_bound and brief.get("summaryRole") == "metadata" else "한 줄 요약",
             "• " + html_text(summary or "본문 요약 생성 전입니다."),
             "",
-            "확인된 사실",
+            "원문과 대조한 내용" if source_bound else "확인된 사실",
             *("• " + html_text(line) for line in facts),
+            *(["• 본문에서 대조한 문장 없음"] if source_bound and not facts else []),
+            *(["", "AI 해석 · 조건부", *("• " + html_text(line) for line in interpretations[:2])] if interpretations else []),
             "",
-            "AI 해석 · 조건부",
-            *("• " + html_text(line) for line in interpretations[:2]),
-            "",
-            "시장 확인",
+            "추가 확인 과제 · 자동 관찰 미등록" if source_bound else "시장 확인",
             "• 다음 확인: " + html_text(watch_line),
         ])
-        if action_boundary and not summary_texts_similar(action_boundary, watch_line):
+        if not source_bound and action_boundary and not summary_texts_similar(action_boundary, watch_line):
             parts.append("• 판단 경계: " + html_text(action_boundary))
         parts.extend([
             "",

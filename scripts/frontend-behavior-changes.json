@@ -1,5 +1,9 @@
 [
   {
+    "reason": "Source-bound facts and analysis are distinct; calendar actual releases are date-matched and operational reminder times are not official publication times. Covered by information-reliability.test.mjs and Python information/release tests.",
+    "functions": ["renderResearchEvidenceInlineDetail", "researchEvidenceWorkDetailPayload", "researchEvidenceKoreanSummary", "investmentCalendarTimeStateLabel", "renderInvestmentCalendarEvent", "investmentCalendarEventWorkDetailPayload", "researchEvidenceItemByKey", "loadResearchEvidenceDetail"]
+  },
+  {
     "reason": "Separate technical validation, paired forward evidence, isolated candidate adoption and post-adoption monitoring. Covered by evolution.test.mjs and test_ontology_evolution.",
     "functions": ["hypothesisDevelopmentStatusMeta", "renderHypothesisDevelopmentPanel", "renderHypothesisDevelopmentCaseDetail"]
   },

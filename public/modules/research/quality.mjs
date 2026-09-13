@@ -312,6 +312,7 @@ function researchEvidenceTextCorpus(item) {
 }
 
 function researchEvidenceKoreanSummary(item) {
+  if ((item || {}).informationBrief) return item.informationBrief.summary || "현재 원문에 대응하는 요약이 없습니다.";
   item = item || {};
   var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
   var disclosure = item.disclosureAnalysis && typeof item.disclosureAnalysis === "object" ? item.disclosureAnalysis

@@ -7,6 +7,7 @@ import { currentResearchEvidence, formatFeedTime } from "./requests.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { cardFormatAttrs, cardTypeAttrs, renderEmptyState } from "../shell/layout.mjs";
 import { researchState } from "../state/research.mjs";
+import { renderResearchInformation } from "./information.mjs";
 
 function compareResearchEvidenceForDisplay(left, right) {
   var leftMeta = researchEvidenceImpactMeta(left);
@@ -95,6 +96,7 @@ function feedEvidenceKey(item, index) {
 }
 
 function researchEvidenceItemByKey(key) {
+  if (researchState.researchEvidenceDetails[key]) return researchState.researchEvidenceDetails[key];
   var evidence = currentResearchEvidence();
   var items = Array.isArray(evidence.items) ? evidence.items : [];
   return items.filter(function (item, index) {
@@ -175,6 +177,9 @@ function renderResearchEvidenceDetailPanel(items, emptyTitle) {
 
 function renderResearchEvidenceInlineDetail(item) {
   item = item || {};
+  if (item.informationBrief) {
+    return renderResearchInformation(item) + (item.evidenceId && item.evidenceId !== "preview:005930:news" ? '<button class="text-button danger" type="button" data-research-delete="' + escapeHtml(item.evidenceId) + '"' + (researchState.researchEvidenceDeleting === item.evidenceId ? ' disabled' : '') + '>근거 삭제</button>' : '');
+  }
   var symbol = String(item.symbol || "").toUpperCase();
   var displayName = stockDisplayName(symbol, item.payload || item);
   var time = item.publishedAt || item.observedAt || "";
@@ -231,7 +236,7 @@ function renderResearchEvidenceInlineDetail(item) {
     '<span>기사 관계 ' + escapeHtml(sourceMeta.relationshipLabel) + '</span>',
     '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
     '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
-    '<span>독립 출처 ' + escapeHtml(String(claimMeta.independentSources || 1)) + '곳</span>',
+    '<span>독립 출처 ' + escapeHtml(String(claimMeta.independentSources || 0)) + '곳</span>',
     '<span>공식 근거 ' + escapeHtml(String(claimMeta.officialCount)) + '건</span>',
     '<span class="' + escapeHtml(promptAdmission.tone) + '">AI 사용 ' + escapeHtml(promptAdmission.label) + '</span>',
     '<span class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</span>',
@@ -249,6 +254,12 @@ function renderResearchEvidenceInlineDetail(item) {
 function researchEvidenceWorkDetailPayload(key) {
   var item = researchEvidenceItemByKey(key);
   if (!item) return null;
+  if (item.informationBrief) {
+    var title = researchEvidenceTranslationMeta(item);
+    return { kicker: "뉴스·공시", title: title.displayTitle || item.title || "자료 상세",
+      meta: [item.symbol, item.source, formatFeedTime(item.publishedAt)].filter(Boolean).join(" · "),
+      body: renderResearchInformation(item, { showTitle: false }) };
+  }
   var symbol = String(item.symbol || "").toUpperCase();
   var displayName = stockDisplayName(symbol, item.payload || item);
   var time = item.publishedAt || item.observedAt || "";

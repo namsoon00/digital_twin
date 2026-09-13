@@ -49,8 +49,7 @@ class ExternalDatasetRegistry:
         return [
             adapter.descriptor.dataset_id
             for adapter in self.adapters()
-            if adapter.descriptor.enabled(settings)
-            and adapter.descriptor.partition_strategy != "followup"
+            if adapter.descriptor.partition_strategy != "followup"
         ]
 
     def followups(

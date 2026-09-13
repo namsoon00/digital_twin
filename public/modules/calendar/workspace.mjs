@@ -1,5 +1,6 @@
 import { currentInvestmentCalendar, currentInvestmentCalendarCandidates, defaultInvestmentCalendarDraft, investmentCalendarCandidateById, investmentCalendarEventTypes } from "./commands.mjs";
 import { INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE } from "./constants.mjs";
+import { renderCalendarReleaseInformation } from "./results.mjs";
 import { decisionStateMeta } from "../decisions/signals.mjs";
 import { stockDisplayName, textWithDisplaySymbol } from "../instruments/catalog.mjs";
 import { renderInstrumentWorkspaceLink } from "../instruments/workspace.mjs";
@@ -123,6 +124,8 @@ function investmentCalendarTimeStateLabel(event) {
   if (value === "userConfirmed") return "사용자 확인 시각";
   if (value === "sourceProvided") return "출처 제공 시각";
   if (value === "estimatedDefault") return "확인 전 기본 시각";
+  if (value === "operationalDefault") return "발표시각 미확정 · 알림 기준";
+  if (value === "official") return "공식 발표 시각";
   if (payload.autoDetected && payload.scheduleState === "estimated") return "확인 전 기본 시각";
   if ((event || {}).allDay) return "종일 일정";
   return "등록 시각";
@@ -472,6 +475,7 @@ function renderInvestmentCalendarEvent(event) {
     investmentCalendarSymbolMetaLabel(event) ? '<span>' + escapeHtml(investmentCalendarSymbolMetaLabel(event)) + '</span>' : '',
     String(event.status || "").toLowerCase() === "tentative" ? '<span>검토 전 일정</span>' : '',
     investmentCalendarPayload(event).timeState === "operationalDefault" ? '<span>시각은 알림 기준</span>' : '',
+    event.releaseInformation ? '<span>' + escapeHtml(event.releaseInformation.statusLabel) + '</span>' : '',
     '<span>' + escapeHtml(investmentCalendarReminderLabel(event)) + '</span>',
     '</div>',
     event.notes ? '<p class="subtle">' + escapeHtml(investmentCalendarDisplayText(event, event.notes)) + '</p>' : '',
@@ -813,8 +817,9 @@ function investmentCalendarEventWorkDetailPayload(key) {
     meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? formatClock(event.startsAt) : "", investmentCalendarTargetLabel(event), investmentCalendarSymbolMetaLabel(event)].filter(Boolean).join(" · "),
     body: [
       renderInstrumentWorkspaceLink((event.symbols || [])[0], "종목 전체 흐름"),
+      renderCalendarReleaseInformation(event),
       '<section class="work-detail-section primary">',
-      '<strong>투자 영향</strong>',
+      '<strong>경제적 의미 · 일반 배경</strong>',
       '<p>' + escapeHtml(investmentCalendarImpactText(event)) + '</p>',
       renderInvestmentCalendarWatchList(event),
       '</section>',

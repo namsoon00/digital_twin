@@ -212,7 +212,7 @@ function loadResearchEvidenceDetail(evidenceId) {
     })
     .catch(function () { return null; })
     .finally(function () {
-      if (navigationState.workDetailLayer && navigationState.workDetailLayer.type === "research-evidence" && navigationState.workDetailLayer.key === key) render();
+      if (researchState.expandedResearchEvidenceKey === key || (navigationState.workDetailLayer && navigationState.workDetailLayer.type === "research-evidence" && navigationState.workDetailLayer.key === key)) render();
     });
 }
 

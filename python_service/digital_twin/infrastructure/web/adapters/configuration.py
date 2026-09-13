@@ -474,6 +474,8 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "investmentCalendarDiscoveryMaxSymbols",
         "investmentCalendarDiscoveryHorizonDays",
         "investmentCalendarOfficialMacroSyncEnabled",
+        "externalOfficialReleaseEnabled",
+        "externalOfficialReleaseCadenceSeconds",
         "investmentCalendarOfficialMacroSyncIntervalHours",
         "investmentCalendarOfficialMacroSyncRateLimitSeconds",
         "investmentCalendarOfficialMacroSyncTimeoutSeconds",

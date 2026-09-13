@@ -1227,3 +1227,79 @@
     animation: none;
   }
 }
+
+.information-brief,
+.calendar-release-information {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.information-brief .inline-detail-block,
+.work-detail-body .calendar-release-information {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 16px 0;
+}
+
+.information-brief li,
+.calendar-release-information li {
+  color: var(--ink);
+}
+
+.information-brief .inline-detail-block p,
+.work-detail-body .calendar-release-information p {
+  font-weight: 400;
+  line-height: 1.6;
+  margin: 6px 0;
+}
+
+.information-source-link {
+  display: inline-block;
+  width: auto;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 6px 0;
+}
+
+.information-brief ul,
+.information-brief ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.information-brief li + li {
+  margin-top: 14px;
+}
+
+.information-brief details summary,
+.calendar-release-information details summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.calendar-release-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.calendar-release-values dd {
+  margin: 6px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.calendar-release-values dd.subtle {
+  font-size: 12px;
+  font-weight: 400;
+}

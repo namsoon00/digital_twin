@@ -23,6 +23,7 @@ EXTERNAL_SIGNAL_MAP_FIELDS = {
 }
 
 EXTERNAL_SIGNAL_ARCHIVE_FIELDS = {"sourceArchive"}
+CALENDAR_REFERENCE_DATASETS = {"official.bls-release", "official.fomc-release"}
 
 
 def merge_dict(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
@@ -131,7 +132,7 @@ class ExternalSignalsReadModelService:
         }
         datasets = set()
         stale = set()
-        rows = self.fact_store.list_current(subject_keys)
+        rows = [row for row in self.fact_store.list_current(subject_keys) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
         for row in rows:
             fragment = row.get("payload") if isinstance(row.get("payload"), dict) else {}
             for key, value in fragment.items():
@@ -155,6 +156,8 @@ class ExternalSignalsReadModelService:
                 result["cryptoFetchedAt"] = str(row.get("fetchedAt") or "")
                 result["cryptoLastAttemptAt"] = str(row.get("updatedAt") or row.get("fetchedAt") or "")
         for status in self.fact_store.provider_statuses():
+            if status.get("datasetId") in CALENDAR_REFERENCE_DATASETS:
+                continue
             state = str(status.get("state") or "unknown")
             if state in {"failed", "circuit_open"}:
                 result["statuses"].append({

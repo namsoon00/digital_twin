@@ -111,6 +111,7 @@ class InvestmentCalendarService:
         event_publisher=None,
         symbol_repository=None,
         reasoning_source_fact_store=None,
+        release_reader=None,
     ):
         self.repository = repository
         self.account_repository = account_repository
@@ -119,6 +120,7 @@ class InvestmentCalendarService:
         self.event_publisher = event_publisher
         self.symbol_repository = symbol_repository
         self.reasoning_source_fact_store = reasoning_source_fact_store
+        self.release_reader = release_reader
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentCalendarEnabled"), True)
@@ -177,6 +179,20 @@ class InvestmentCalendarService:
             [event.to_dict() for event in events],
             self.symbol_repository,
         )
+        from digital_twin.modules.investment_calendar.domain.release_information import calendar_release_information
+
+        release_snapshot = {}
+        if self.release_reader and events:
+            try:
+                release_snapshot = self.release_reader()
+            except Exception:  # Read failures are not evidence that a release did not occur.
+                release_snapshot = {"error": "공식 결과 저장소 조회 실패"}
+        for row in event_rows:
+            row["releaseInformation"] = calendar_release_information(
+                row, release_snapshot, now,
+                enabled=truthy(self.settings.get("externalOfficialReleaseEnabled"), True)
+                and truthy(self.settings.get("externalDataPlatformEnabled"), True),
+            )
         return {
             "generatedAt": utc_now_iso(),
             "events": event_rows,

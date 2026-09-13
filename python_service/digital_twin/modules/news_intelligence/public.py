@@ -49,6 +49,8 @@ _EXPORTS = {'HypothesisResearchPlanningService': ('digital_twin.modules.news_int
                            'resolve_target_entity'),
  'story_identity': ('digital_twin.modules.news_intelligence.domain.story', 'story_identity')}
 
+_EXPORTS['build_information_brief'] = ('digital_twin.modules.news_intelligence.domain.information_brief', 'build_information_brief')
+
 __all__ = list(_EXPORTS)
 
 

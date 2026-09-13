@@ -288,11 +288,14 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         limit: int,
         lease_seconds: int,
         now: datetime = None,
+        dataset_ids: Iterable[str] = None,
     ) -> List[CollectionJob]:
         current = now or utc_now()
         stamp = iso(current)
         lease_until = iso(current + timedelta(seconds=max(15, int(lease_seconds or 120))))
         row_limit = max(1, min(100, int(limit or 1)))
+        datasets = sorted({str(value) for value in dataset_ids or []})
+        dataset_filter = " AND dataset_id IN (" + ", ".join(["%s"] * len(datasets)) + ")" if datasets else ""
 
         def mutation(connection):
             rows = connection.execute(
@@ -303,11 +306,12 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 WHERE active = 1
                   AND next_due_at <= %s
                   AND (job_status = 'pending' OR lease_until = '' OR lease_until <= %s)
+                """ + dataset_filter + """
                 ORDER BY priority DESC, next_due_at, dataset_id, partition_key
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
                 """,
-                (stamp, stamp, row_limit),
+                (stamp, stamp, *datasets, row_limit),
             ).fetchall()
             jobs: List[CollectionJob] = []
             for row in rows:
@@ -550,6 +554,24 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 ),
             )
         return bool(cursor.rowcount)
+
+    def calendar_release_facts(self, limit: int = 160) -> Dict[str, object]:
+        """Bounded release history plus independent collection health; no vendor I/O."""
+        datasets = ("official.bls-release", "official.fomc-release")
+        with self.connect() as connection:
+            current = connection.execute(
+                "SELECT * FROM external_fact_current WHERE dataset_id IN (%s, %s)", datasets,
+            ).fetchall()
+            history = connection.execute(
+                "SELECT * FROM external_fact_revision WHERE dataset_id IN (%s, %s) ORDER BY fetched_at DESC LIMIT %s",
+                (*datasets, max(1, min(300, int(limit)))),
+            ).fetchall()
+            states = connection.execute(
+                "SELECT dataset_id, partition_key, active, last_success_at, next_due_at, last_error FROM external_dataset_state WHERE dataset_id IN (%s, %s)", datasets,
+            ).fetchall()
+        return {"facts": [self._fact_row(row) for row in [*current, *history]],
+                "collection": {str(row["partition_key"]): {"active": bool(row["active"]), "lastSuccessAt": row["last_success_at"],
+                    "nextAttemptAt": row["next_due_at"], "error": str(row["last_error"] or "")[:240]} for row in states}}
 
     def complete_observation(
         self,

@@ -30,6 +30,7 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
         event_publisher=event_publisher or default_event_bus(),
         symbol_repository=stores.symbol_universe_store(configured_settings),
         reasoning_source_fact_store=stores.reasoning_source_fact_store(configured_settings),
+        release_reader=stores.external_data_store(configured_settings).calendar_release_facts,
     )
 
 

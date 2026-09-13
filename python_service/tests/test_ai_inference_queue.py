@@ -354,10 +354,15 @@ class AIInferenceQueueTests(unittest.TestCase):
         }
         queue = Queue()
         orchestrator = Orchestrator()
+        job.context["notificationAiReviewMode"] = "investment-judgement"
+
+        def prepare(job):
+            job.context["notificationAiReviewMode"] = "investment-judgement"
 
         outcome = NotificationAIRequestEnqueuer(
             queue,
             reasoning_orchestrator=orchestrator,
+            context_preparer=prepare,
         ).enqueue_subject_decision(job)
 
         self.assertEqual("awaiting-ai-insight", outcome["status"])

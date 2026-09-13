@@ -8,6 +8,19 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.portfolio.contracts import utc_now_iso
 
 
+AUTHORING_SCHEDULE_VERSION = "hypothesis-authoring-schedule-v1"
+
+
+def authoring_recovery_eligible(case, maximum_attempts: int) -> bool:
+    return bool(
+        case.status in {"needs-revision", "blocked"}
+        and not case.evolution.get("plan")
+        and case.retry.get("state") != "authoring-retry"
+        and case.retry.get("authoringScheduleVersion") != AUTHORING_SCHEDULE_VERSION
+        and int(case.retry.get("authoringAttempts") or 0) < maximum_attempts
+    )
+
+
 HYPOTHESIS_DEVELOPMENT_STATUSES = {
     "proposed",
     "screening",

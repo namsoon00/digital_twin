@@ -108,6 +108,20 @@ class ABoxLifecycleContractTests(unittest.TestCase):
             ["changed-derived-relation-not-replaced"],
             [item["code"] for item in result["patchPlanViolations"]],
         )
+        # The same endpoint may be staged just as a binding companion, without
+        # acquiring semantic ownership of every other symbol's derived facts.
+        companion_only = self.selection([self.evidence_scope])
+        companion_only["replacementRootScopeIds"] = []
+        rebound = finalize_manifest_patch_plan(companion_only, self.change_set, self.incoming, self.active)
+        self.assertTrue(rebound["manifestPatchContract"]["validation"]["valid"])
+        directive = next(item for item in rebound["manifestPatchContract"]["relationDirectives"]
+                         if item["scopeId"] == self.link_scope)
+        self.assertEqual("rebind-active", directive["disposition"])
+        self.incoming[0]["nodeIds"] = []
+        orphaned = finalize_manifest_patch_plan(companion_only, self.change_set, self.incoming, self.active)
+        self.assertFalse(orphaned["applied"])
+        self.assertIn("relation-endpoint-missing-from-final-scope",
+                      [item["code"] for item in orphaned["patchPlanViolations"]])
 
     def test_complete_source_accepts_explicit_derived_relation_replacement(self):
         result = finalize_manifest_patch_plan(

@@ -13,6 +13,20 @@ from digital_twin.infrastructure.operational_common import json_dumps
 
 
 class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
+    def authoring_recovery_candidates(self, version: str, maximum_attempts: int, limit: int = 5):
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM hypothesis_development_cases "
+                "WHERE status IN ('needs-revision', 'blocked') "
+                "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.retry.state')), '') <> 'authoring-retry' "
+                "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.retry.authoringScheduleVersion')), '') <> %s "
+                "AND COALESCE(JSON_EXTRACT(payload_json, '$.retry.authoringAttempts'), 0) < %s "
+                "AND COALESCE(JSON_LENGTH(JSON_EXTRACT(payload_json, '$.evolution.plan')), 0) = 0 "
+                "ORDER BY created_at ASC, case_id LIMIT %s",
+                (version, maximum_attempts, max(1, min(50, limit))),
+            ).fetchall()
+        return [HypothesisDevelopmentCase.from_dict(_json_loads(row.get("payload_json"), {})) for row in rows]
+
     @contextmanager
     def processing_lock(self, case_id: str):
         name = "hypothesis:" + hashlib.sha256(str(case_id).encode()).hexdigest()[:48]
@@ -136,7 +150,10 @@ class MySQLHypothesisDevelopmentStore(MySQLOperationalConnection):
                 "SELECT MIN(COALESCE(NULLIF(next_check_at, ''), created_at)) AS ready_at "
                 "FROM hypothesis_development_cases WHERE status IN "
                 "('proposed', 'screening', 'compiled', 'validating', 'needs-data', "
-                "'shadow-observing', 'adoption-ready', 'evolution-monitoring') AND next_check_at <= %s",
+                "'shadow-observing', 'adoption-ready', 'evolution-monitoring', 'needs-revision', 'blocked') "
+                "AND (status NOT IN ('needs-revision', 'blocked') OR "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.retry.state')) = 'authoring-retry') "
+                "AND next_check_at <= %s",
                 (utc_now_iso(),),
             ).fetchone() or {}
         return str(row.get("ready_at") or "")

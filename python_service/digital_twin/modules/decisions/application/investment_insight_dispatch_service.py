@@ -137,24 +137,40 @@ class InvestmentInsightDispatchService:
                 "queued": False,
             })
 
-        ai_result = (
-            dict(self.ai_handoff_service.enqueue(ai_events) or {})
-            if ai_events and self.ai_handoff_service is not None
-            else {
-                "status": "not-requested",
-                "candidateCount": len(ai_events),
-                "queuedCount": 0,
-                "webOnlyCount": len(ai_events),
-                "queuedEvents": [],
-                "outcomes": [],
-            }
-        )
+        try:
+            if ai_events and self.ai_handoff_service is None:
+                raise RuntimeError("AI handoff service is unavailable")
+            ai_result = (
+                dict(self.ai_handoff_service.enqueue(ai_events) or {})
+                if ai_events and self.ai_handoff_service is not None
+                else {
+                    "status": "not-requested",
+                    "candidateCount": len(ai_events),
+                    "queuedCount": 0,
+                    "webOnlyCount": len(ai_events),
+                    "queuedEvents": [],
+                    "outcomes": [],
+                }
+            )
+            if len(ai_events) != len(ai_result.get("outcomes") or []):
+                raise ValueError("AI handoff must return one outcome per subject")
+        except Exception as error:
+            for event in ai_events:
+                self.reasoning_orchestrator.record_ai_handoff_outcome(
+                    event.metadata["investmentSubjectDecisionCaseId"],
+                    {"status": "handoff-error", "errorType": type(error).__name__,
+                     "reason": "AI 요청 전달 중 오류가 발생했습니다. 추론 작업 재시도에서 다시 확인합니다."},
+                )
+            raise
         ai_queued_events = list(ai_result.get("queuedEvents") or [])
         ai_outcomes = [dict(item or {}) for item in ai_result.get("outcomes") or []]
         for event, outcome in zip(ai_events, ai_outcomes):
             outcome.setdefault("route", HANDOFF_AI)
             outcome.setdefault("eventKey", str(getattr(event, "key", "") or ""))
             outcome.setdefault("symbol", str(getattr(event, "symbol", "") or "").upper())
+            self.reasoning_orchestrator.record_ai_handoff_outcome(
+                event.metadata["investmentSubjectDecisionCaseId"], outcome,
+            )
         outcomes.extend(ai_outcomes)
 
         typedb_count = len(typedb_queued_events)

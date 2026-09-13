@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock
 
 from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
@@ -176,6 +177,13 @@ class FakeOrchestrator:
         self.reconciled.append(dict(outcome))
         return case
 
+    def record_ai_handoff_outcome(self, subject_case_id, outcome):
+        from digital_twin.modules.reasoning.application.investment_reasoning.orchestrator import InvestmentReasoningOrchestrator
+        return InvestmentReasoningOrchestrator.record_ai_handoff_outcome(self, subject_case_id, outcome)
+
+    def _persist_subject(self, subject, **kwargs):
+        self.cases[subject.subject_case_id] = subject
+
 
 class FakeIngress:
     @staticmethod
@@ -223,6 +231,53 @@ class FakeAIHandoff:
 
 
 class InvestmentInsightDispatchServiceTests(unittest.TestCase):
+    def assert_queue_receipt_distinguishes_admission_from_dispatch_intent(self):
+        for status, state in [
+            ("awaiting-ai-insight", "awaiting-ai"), ("coalesced-material", "coalesced-ai"),
+            ("coalesced-active", "coalesced-ai"), ("web-only-no-decision-value", "archived"),
+            ("handoff-error", "failed"),
+        ]:
+            with self.subTest(status=status):
+                case = subject_case("subject:review", outcome="REVIEW_ONLY")
+                case.mark_delivery("handoff-ai")
+                orchestrator = FakeOrchestrator([case])
+                receipt = {"status": status, "requestId": "request:existing", "unsafeContext": {"raw": "omit"}}
+                orchestrator.record_ai_handoff_outcome(case.subject_case_id, receipt)
+                self.assertEqual(state, case.delivery_state)
+                self.assertEqual("REVIEW_ONLY", case.stage)
+                self.assertEqual("REVIEW_ONLY", case.publication.outcome_kind)
+                self.assertEqual(status, case.delivery_reason_code)
+                self.assertNotIn("unsafeContext", case.ai_handoff_outcome)
+                self.assertFalse(case.delivery_eligible)
+                self.assertEqual("request:existing" if state == "awaiting-ai" else "", case.ai_request_id)
+                roundtrip = SubjectDecisionCase.from_dict(case.to_dict())
+                self.assertEqual(case.ai_handoff_outcome, roundtrip.ai_handoff_outcome)
+                version = case.version
+                orchestrator.record_ai_handoff_outcome(case.subject_case_id, receipt)
+                self.assertEqual(version, case.version)
+
+    def assert_late_queue_receipt_does_not_regress_delivery(self):
+        case = subject_case("subject:fast", outcome="REVIEW_ONLY")
+        case.mark_delivery("delivered", "sent")
+        orchestrator = FakeOrchestrator([case])
+        orchestrator.record_ai_handoff_outcome(case.subject_case_id, {"status": "awaiting-ai-insight"})
+        self.assertEqual("delivered", case.delivery_state)
+        self.assertEqual("sent", case.delivery_reason)
+
+    def assert_dispatch_failure_is_recorded_and_remains_retryable(self):
+        for handoff in [None, Mock(enqueue=Mock(side_effect=RuntimeError("unavailable"))),
+                        Mock(enqueue=Mock(return_value={"outcomes": []}))]:
+            case = subject_case("subject:failure", action_authority="originate",
+                                eligible=("hypothesis:1",), outcome="READY")
+            orchestrator = FakeOrchestrator([case])
+            service = InvestmentInsightDispatchService(FakeIngress(), FakeNotificationQueue(), handoff, orchestrator)
+            with self.assertRaises((RuntimeError, ValueError)):
+                service.dispatch([alert(case, {"investmentSubjectDecisionCaseId": case.subject_case_id,
+                                              "requiresAiJudgement": True}, "failure")])
+            self.assertEqual("failed", case.delivery_state)
+            self.assertEqual("handoff-error", case.ai_handoff_outcome["status"])
+            self.assertEqual("READY", case.stage)
+
     def test_domain_dispatch_routes_are_explicit_and_fail_closed(self):
         observation = subject_case("subject:observation")
         material_context = context_observation(observation)
@@ -270,6 +325,9 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         )
 
     def test_dispatch_keeps_typedb_publication_and_ai_handoff_independent(self):
+        self.assert_queue_receipt_distinguishes_admission_from_dispatch_intent()
+        self.assert_late_queue_receipt_does_not_regress_delivery()
+        self.assert_dispatch_failure_is_recorded_and_remains_retryable()
         observation = subject_case("subject:observation")
         actionable = subject_case(
             "subject:actionable",

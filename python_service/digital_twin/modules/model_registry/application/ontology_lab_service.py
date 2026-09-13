@@ -785,6 +785,9 @@ class OntologyLabService:
         queue_deferral = self.reasoning_queue_deferral()
         if queue_deferral:
             development = self.hypothesis_development_service
+            recover = getattr(development, "recover_authoring_backlog", None)
+            if callable(recover):
+                queue_deferral["authoringRecovery"] = recover(limit=1)
             wait_reader = getattr(development, "ready_wait_minutes", None)
             maximum_yield = max(15, int(self.settings.get("hypothesisDevelopmentMaximumQueueYieldMinutes") or 30))
             if callable(wait_reader) and wait_reader() >= maximum_yield:

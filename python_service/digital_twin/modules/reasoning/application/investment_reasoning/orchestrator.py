@@ -850,6 +850,38 @@ class InvestmentReasoningOrchestrator:
         self._persist_subject(subject_case)
         return subject_case
 
+    def record_ai_handoff_outcome(self, subject_case_id: str, outcome: Mapping[str, object]):
+        """Keep queue admission distinct from the intention to request AI."""
+
+        subject = self.required_subject(subject_case_id)
+        receipt = {key: outcome[key] for key in (
+            "status", "requestId", "subjectCaseId", "reason", "reasonCode", "existing",
+            "refreshRequired", "errorType",
+        ) if key in outcome}
+        status = str(receipt.get("status") or "handoff-outcome-missing")
+        if subject.ai_handoff_outcome == receipt:
+            return subject
+        subject.ai_handoff_outcome = receipt
+        queued = status in {"awaiting-ai-insight", "pending", "processing", "retry"}
+        coalesced = status in {"coalesced-material", "coalesced-identical", "coalesced-active"}
+        reason = str(receipt.get("reason") or receipt.get("reasonCode") or (
+            "AI 요청이 큐에 등록됐습니다. 최종 알림 발송은 분석 뒤 따로 판단합니다." if queued else
+            "동일한 판단 의미의 AI 요청에 병합했습니다. 중복 분석은 실행하지 않습니다." if coalesced else
+            "이 종목의 AI 분석 결과가 이미 저장돼 있습니다." if status in {"completed", "completed-insight"} else status
+        ))
+        # A fast consumer may already have published while dispatch is saving its receipt.
+        if not subject.ai_judgment and subject.delivery_state not in {"queued", "delivered"}:
+            _mark_subject_delivery(
+                subject,
+                "awaiting-ai" if queued else "coalesced-ai" if coalesced else
+                "failed" if status in {"handoff-error", "handoff-outcome-missing"} else "archived",
+                reason, eligible=False, reason_code=status, value_class="ai-handoff",
+            )
+        if queued and receipt.get("requestId") and not subject.ai_request_id:
+            subject.ai_request_id = str(receipt["requestId"])
+        self._persist_subject(subject)
+        return subject
+
     def context_observation_validated(
         self,
         case_id: str,

@@ -19,6 +19,10 @@ BLOCKER_KINDS = {
 DEVELOPMENT_BLOCKERS = {"schema-mismatch", "unsupported-capability", "unclassified", "unverified-observation"}
 
 
+class HypothesisAuthoringDeferred(RuntimeError):
+    """The authoring provider could not start; this is not a model attempt."""
+
+
 def compilation_blockers(candidates):
     result = []
     seen = set()

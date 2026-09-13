@@ -28,12 +28,45 @@ from digital_twin.modules.portfolio.application.investment_domain_service import
 )
 from digital_twin.modules.outcomes.infrastructure.transaction_writes import upsert_decision_outcome_target
 from digital_twin.infrastructure.transactions.decision_history_parts.target_queries import PendingTargetRead, pending_outcome_targets
-from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase
+from digital_twin.modules.model_registry.domain.hypothesis_development import AUTHORING_SCHEDULE_VERSION, HypothesisDevelopmentCase
 from digital_twin.modules.model_registry.infrastructure.mysql_hypothesis_development import MySQLHypothesisDevelopmentStore
 
 
 class TransactionStabilizationTests(StabilizationDatabaseCase):
+    def assert_legacy_authoring_selection_and_ready_age_match_after_recovery(self):
+        store = MySQLHypothesisDevelopmentStore(self.settings)
+        self.addCleanup(self.sql, "DELETE FROM hypothesis_development_cases WHERE case_id IN (%s,%s,%s,%s,%s,%s)",
+                        ("legacy", "blocked", "exhausted", "enrolled", "running", "closed"))
+        for name, status, retry, evolution in [
+            ("legacy", "needs-revision", {}, {}),
+            ("blocked", "blocked", {"authoringAttempts": 2}, {}),
+            ("exhausted", "blocked", {"authoringAttempts": 3}, {}),
+            ("enrolled", "needs-revision", {"authoringScheduleVersion": AUTHORING_SCHEDULE_VERSION}, {}),
+            ("running", "blocked", {}, {"plan": {"planId": "active"}}),
+            ("closed", "rejected", {}, {}),
+        ]:
+            store.save(HypothesisDevelopmentCase(
+                case_id=name, fingerprint=name, account_id="fixture", symbol="MSTR",
+                title="Fixture", claim="Fixture", status=status, retry=retry, evolution=evolution,
+            ))
+        candidates = store.authoring_recovery_candidates(AUTHORING_SCHEDULE_VERSION, 3)
+        self.assertEqual({"legacy", "blocked"}, {case.case_id for case in candidates})
+        self.assertEqual(1, len(store.authoring_recovery_candidates(AUTHORING_SCHEDULE_VERSION, 3, limit=1)))
+        self.assertEqual([], store.pending())
+        case = store.get("legacy")
+        due = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat().replace("+00:00", "Z")
+        case.retry.update({"state": "authoring-retry", "authoringScheduleVersion": AUTHORING_SCHEDULE_VERSION,
+                           "nextCheckAt": due})
+        store.save(case)
+        restarted = MySQLHypothesisDevelopmentStore(self.settings)
+        self.assertEqual(["legacy"], [case.case_id for case in restarted.pending()])
+        self.assertEqual(due, restarted.oldest_ready_at())
+        self.assertEqual(["blocked"], [case.case_id for case in restarted.authoring_recovery_candidates(AUTHORING_SCHEDULE_VERSION, 3)])
+        self.sql("DELETE FROM hypothesis_development_cases WHERE case_id IN (%s,%s,%s,%s,%s,%s)",
+                 ("legacy", "blocked", "exhausted", "enrolled", "running", "closed"))
+
     def test_ready_hypothesis_selection_survives_restart_and_skips_future_backlog(self):
+        self.assert_legacy_authoring_selection_and_ready_age_match_after_recovery()
         store = MySQLHypothesisDevelopmentStore(self.settings)
         prefix = "schedule:" + uuid.uuid4().hex
         now = datetime.now(timezone.utc)

@@ -467,9 +467,12 @@ class NotificationAIRequestEnqueuer:
     def enqueue_subject_decision(self, job: NotificationJob) -> Dict[str, object]:
         """Start AI interpretation before a notification job exists."""
 
+        review_mode = notification_ai_review_mode(dict(job.context or {}))
         if self.context_preparer:
             self.context_preparer(job)
         context = dict(job.context or {})
+        if review_mode == "context-narrative":
+            context["notificationAiReviewMode"] = review_mode
         context.setdefault("messageType", job.message_type)
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
@@ -543,6 +546,7 @@ class NotificationAIRequestEnqueuer:
                 "notificationJobId": "",
                 "subjectCaseId": subject_case_id,
                 "subjectStage": captured_stage,
+                "reason": "이 종목 판단은 이미 종료되어 새 매매 판단 요청을 만들지 않습니다.",
             }
 
         action_eligibility = notification_ai_action_eligibility(context)

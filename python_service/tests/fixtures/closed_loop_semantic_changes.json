@@ -1,5 +1,17 @@
 {
   "domain": {
+    "modules/decisions/domain/ai_inference_queue.py::notification_ai_review_mode": {
+      "hash": "1c2047e1f5d5c19197b3b8a475505d1ce6a6ddaf761cdc1e8963ca67fb2e32a6",
+      "reason": "Preserve graph-proven narrative-only authority over stale investment-mode defaults; test_ai_inference_queue."
+    },
+    "modules/reasoning/domain/independent_reasoning.py::IndependentReasoningResult": {
+      "hash": "3447534073bcc115cecdae2a2e944af1ee91b57244a64f56ce827de7efa0e2cf",
+      "reason": "Record per-subject queue admission outcomes, not just AI dispatch intent; test_investment_insight_dispatch_service."
+    },
+    "modules/decisions/domain/investment_reasoning/subject_case.py::SubjectDecisionCase": {
+      "hash": "e5a1ede49496ff874d11ee300c1d09c41fda5d44e4479a35a010c982a8f5f3dc",
+      "reason": "Persist and reload AI handoff receipts independently from investment authority and delivery; test_investment_insight_dispatch_service."
+    },
     "modules/decisions/domain/investment_reasoning/contracts.py::FactDelta": {
       "hash": "f701c872ca24936a4b48830ccb77a236d079dde80b4e05c54b20fdbf1163bfb8",
       "reason": "Carry allowlisted immutable source boundaries into experimental observations without fabricating lineage for legacy requests; test_experiment_observations."
@@ -91,8 +103,8 @@
       "reason": "Commit both release statuses, active/delivery ownership and adoption/rollback receipt atomically under a version guard; test_ontology_evolution."
     },
     "modules/model_registry/infrastructure/mysql_hypothesis_development.py::MySQLHypothesisDevelopmentStore": {
-      "hash": "7ffa88fb67fbd40d3cbbdb1daead30587d4e1de09d95e15d213e60959ff89f6e",
-      "reason": "Schedule evolution and bounded authoring retries and preserve evolution audit receipts; test_ontology_evolution and test_stabilization_transactions."
+      "hash": "22a45d9457846f5a25967bd854cc9dc9d97551885e28c4966f5113bda3477619",
+      "reason": "Recover legacy authoring cases once under existing budgets and include them in reserved-slot age; test_hypothesis_closed_loop and test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
       "hash": "0672b95bcadce2ca7e69f64b92e6d24715ca4f42ba50fe8654000d0204ce9d0d",

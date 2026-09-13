@@ -196,7 +196,10 @@ def validate_manifest_patch_plan(
     # generic; relation kinds declare lifecycle metadata when the scope plan
     # is built, and the planner no longer needs provider-specific knowledge.
     if change_set.source_graph_complete:
-        changed_dependencies: Set[str] = selected | retired
+        # Endpoint companions may be selected only to preserve physical bindings.
+        # They do not own unrelated assertions found in a complete-source repair.
+        # Missing endpoints are still rejected against the final inventories above.
+        changed_dependencies: Set[str] = replacement_roots | retired
         for scope_id in sorted(set(active).intersection(incoming)):
             before = active[scope_id]
             after = incoming[scope_id]

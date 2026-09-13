@@ -409,11 +409,12 @@ def notification_ai_queue_priority(context: Dict[str, object]) -> int:
 
 
 def notification_ai_review_mode(context: Dict[str, object]) -> str:
+    # Graph-proven actionless reviews cannot be upgraded by a stale prompt default.
+    if typedb_narrative_only_contract(context):
+        return AI_REVIEW_MODE_CONTEXT_NARRATIVE
     configured = _clean(_mapping(context).get("notificationAiReviewMode")).lower()
     if configured in {AI_REVIEW_MODE_INVESTMENT_JUDGEMENT, AI_REVIEW_MODE_CONTEXT_NARRATIVE}:
         return configured
-    if typedb_narrative_only_contract(context):
-        return AI_REVIEW_MODE_CONTEXT_NARRATIVE
     return AI_REVIEW_MODE_INVESTMENT_JUDGEMENT
 
 

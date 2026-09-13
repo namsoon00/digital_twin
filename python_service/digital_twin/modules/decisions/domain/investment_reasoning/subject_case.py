@@ -331,6 +331,7 @@ class SubjectDecisionCase:
     abstention: Optional[DecisionAbstention] = None
     publication: Optional[DecisionPublication] = None
     inference_dispatch_decision: Optional[InferenceDispatchDecision] = None
+    ai_handoff_outcome: Dict[str, object] = field(default_factory=dict)
     delivery_state: str = "not-requested"
     delivery_reason: str = ""
     delivery_eligible: Optional[bool] = None
@@ -467,6 +468,7 @@ class SubjectDecisionCase:
             "sourceSubjectRevision": self.source_subject_revision,
             "stage": self.stage,
             "aiRequestId": self.ai_request_id,
+            "aiHandoffOutcome": dict(self.ai_handoff_outcome),
             "notificationJobId": self.notification_job_id,
             "aiJudgment": self.ai_judgment.to_dict() if self.ai_judgment else {},
             "finalDecision": self.final_decision.to_dict() if self.final_decision else {},
@@ -519,6 +521,7 @@ class SubjectDecisionCase:
             ),
             stage=str(payload.get("stage") or SUBJECT_CREATED),
             ai_request_id=str(payload.get("aiRequestId") or ""),
+            ai_handoff_outcome=dict(payload.get("aiHandoffOutcome") or {}),
             notification_job_id=str(payload.get("notificationJobId") or ""),
             ai_judgment=AIJudgmentResult.from_dict(judgment) if judgment else None,
             final_decision=FinalDecision.from_dict(decision) if decision else None,

@@ -4,10 +4,10 @@ import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from digital_twin.modules.model_registry.application.hypothesis_development_service import HypothesisDevelopmentService
-from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase
+from digital_twin.modules.model_registry.domain.hypothesis_development import AUTHORING_SCHEDULE_VERSION, authoring_recovery_eligible, HypothesisDevelopmentCase
 from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from digital_twin.modules.outcomes.domain.outcome_recovery import frozen_outcome_facts, outcome_needs_data, validate_outcome_repair
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet, compact_decision_continuity_packet
@@ -16,11 +16,12 @@ from digital_twin.modules.decisions.domain.notification_ai_decision_brief import
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
 from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight import AIInsightEpisode, AIInsightHandoff
 from digital_twin.modules.read_models.application.investment_case_query_service import InvestmentCaseQueryService
-from digital_twin.modules.model_registry.domain.hypothesis_compilation import RULE_DESIGN_VERSION, authoring_capability_index, blocker_state, compilation_blockers, rule_design_context
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred, RULE_DESIGN_VERSION, authoring_capability_index, blocker_state, compilation_blockers, rule_design_context
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, normalize_rule_change_candidate, rule_change_candidates_from_text
 from digital_twin.modules.model_registry.application.ontology_lab_service import OntologyLabService
 from digital_twin.modules.model_registry.application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from digital_twin.infrastructure.rule_change_candidate_ai import CommandRuleChangeCandidateAdvisor, FallbackRuleChangeCandidateAdvisor
+from digital_twin.infrastructure.local_ai_process_guard import LocalAICapacityUnavailable
 
 
 class CaseStore:
@@ -36,6 +37,9 @@ class CaseStore:
 
     def save(self, case, event_type="updated", reason=""):
         self.rows[case.case_id] = case.to_dict()
+
+    def authoring_recovery_candidates(self, version, maximum_attempts, limit=5):
+        return [case for case in self.list() if authoring_recovery_eligible(case, maximum_attempts)][:limit]
 
     @contextmanager
     def processing_lock(self, case_id):
@@ -62,6 +66,84 @@ def previous_outcome(eligibility="excluded-criterion-data-gap"):
 
 
 class HypothesisClosedLoopTests(unittest.TestCase):
+    @staticmethod
+    def enable_evolution(service, mode="automatic"):
+        service.evolution_service = SimpleNamespace(policy={
+            "mode": mode, "maximumAuthoringAttempts": 3, "retryMinutes": 60,
+        })
+
+    def assert_legacy_authoring_recovery_is_bounded_once_and_survives_restart(self):
+        cases = [hypothesis("legacy:" + str(i), "needs-revision") for i in range(3)]
+        service, store, candidate = self.development(cases)
+        self.enable_evolution(service)
+        self.assertEqual(2, service.recover_authoring_backlog(limit=2)["recoveredCount"])
+        recovered = store.get("legacy:0")
+        self.assertEqual("authoring-retry", recovered.retry["state"])
+        self.assertEqual(AUTHORING_SCHEDULE_VERSION, recovered.retry["authoringScheduleVersion"])
+        self.assertTrue(service.validation_retry_due(recovered))
+        self.assertNotIn("authoringAttempts", recovered.retry)
+        restarted = HypothesisDevelopmentService(store, None, None, candidate, None)
+        self.enable_evolution(restarted)
+        self.assertEqual(1, restarted.recover_authoring_backlog()["recoveredCount"])
+        self.assertEqual(0, restarted.recover_authoring_backlog()["recoveredCount"])
+        result = restarted.process("legacy:0", force=False)
+        self.assertEqual("needs-data", result["case"]["status"])
+        self.assertEqual(1, store.get("legacy:0").retry["authoringAttempts"])
+        candidate.propose_hypothesis.assert_called_once()
+
+    def assert_recovery_preserves_policy_budget_active_plans_and_closed_cases(self):
+        cases = [hypothesis("budget", "blocked"), hypothesis("active", "blocked"),
+                 hypothesis("done", "rejected"), hypothesis("legacy", "needs-revision")]
+        cases[0].retry["authoringAttempts"] = 3
+        cases[1].evolution["plan"] = {"planId": "existing"}
+        service, store, candidate = self.development(cases)
+        self.enable_evolution(service, mode="disabled")
+        self.assertEqual(0, service.recover_authoring_backlog()["recoveredCount"])
+        self.enable_evolution(service)
+        store.acquired = False
+        self.assertEqual(0, service.recover_authoring_backlog()["recoveredCount"])
+        store.acquired = True
+        self.assertEqual(["legacy"], service.recover_authoring_backlog()["caseIds"])
+        self.assertEqual(3, store.get("budget").retry["authoringAttempts"])
+        self.assertEqual("existing", store.get("active").evolution["plan"]["planId"])
+        candidate.propose_hypothesis.assert_not_called()
+
+    def assert_failed_authoring_keeps_budget_and_retry_time_without_busy_loop(self):
+        service, store, candidate = self.development([hypothesis(status="needs-revision")])
+        self.enable_evolution(service)
+        candidate.propose_hypothesis.side_effect = ValueError("invalid candidate")
+        result = service.process_pending(limit=1)
+        self.assertEqual(1, result["authoringRecovery"]["recoveredCount"])
+        self.assertEqual("error", result["results"][0]["status"])
+        case = store.get("case:1")
+        self.assertEqual(1, case.retry["authoringAttempts"])
+        self.assertEqual("authoring-retry", case.retry["state"])
+        scheduled = case.retry["nextCheckAt"]
+        self.assertFalse(service.validation_retry_due(case))
+        self.assertEqual("deferred-unchanged", service.process("case:1", force=False)["status"])
+        self.assertEqual(scheduled, store.get("case:1").retry["nextCheckAt"])
+        self.assertEqual(0, service.process_pending(limit=1)["processedCount"])
+        candidate.propose_hypothesis.assert_called_once()
+
+    def assert_capacity_wait_does_not_consume_authoring_budget_or_claim_data_gap(self):
+        with patch("digital_twin.infrastructure.rule_change_candidate_ai.run_background_ai_prompt",
+                   side_effect=LocalAICapacityUnavailable("busy")):
+            with self.assertRaises(HypothesisAuthoringDeferred):
+                CommandRuleChangeCandidateAdvisor(["fixture"]).propose({"hypothesisProposal": {}})
+        service, store, candidate = self.development([hypothesis(status="needs-revision")])
+        self.enable_evolution(service)
+        candidate.propose_hypothesis.side_effect = HypothesisAuthoringDeferred("busy")
+        result = service.process_pending(limit=1)["results"][0]
+        self.assertEqual("deferred-capacity", result["status"])
+        case = store.get("case:1")
+        self.assertEqual("needs-revision", case.status)
+        self.assertEqual(0, case.retry["authoringAttempts"])
+        self.assertEqual("authoring-capacity-unavailable", case.retry["reasonCode"])
+        ready = service.parse_timestamp(case.retry["nextCheckAt"])
+        self.assertLessEqual((ready - datetime.now(timezone.utc)).total_seconds(), 300)
+        self.assertEqual(0, service.process_pending(limit=1)["processedCount"])
+        candidate.propose_hypothesis.assert_called_once()
+
     def development(self, cases=None):
         store = CaseStore(cases or [hypothesis()])
         candidate = SimpleNamespace(propose_hypothesis=Mock(return_value={
@@ -75,6 +157,10 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         return service, store, candidate
 
     def test_precompile_data_gap_retries_and_survives_worker_restart(self):
+        self.assert_legacy_authoring_recovery_is_bounded_once_and_survives_restart()
+        self.assert_recovery_preserves_policy_budget_active_plans_and_closed_cases()
+        self.assert_failed_authoring_keeps_budget_and_retry_time_without_busy_loop()
+        self.assert_capacity_wait_does_not_consume_authoring_budget_or_claim_data_gap()
         service, store, candidate = self.development()
         self.assertEqual(1, service.process_pending()["processedCount"])
         saved = store.get("case:1")
@@ -346,10 +432,14 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         service.settings = {}
         service.enabled = lambda: True
         service.reasoning_queue_deferral = lambda: {"status": "deferred-reasoning-queue", "runCount": 0}
-        development = SimpleNamespace(ready_wait_minutes=Mock(return_value=31), process_pending=Mock(return_value={"processedCount": 1}))
+        development = SimpleNamespace(ready_wait_minutes=Mock(return_value=31),
+                                      recover_authoring_backlog=Mock(return_value={"recoveredCount": 1}),
+                                      process_pending=Mock(return_value={"processedCount": 1}))
         service.hypothesis_development_service = development
         result = service.run_once()
         self.assertEqual("development-reserved-slot", result["status"])
+        self.assertEqual(1, result["authoringRecovery"]["recoveredCount"])
+        development.recover_authoring_backlog.assert_called_once_with(limit=1)
         development.process_pending.assert_called_once_with(limit=1)
         development.ready_wait_minutes.return_value = 2
         self.assertEqual("deferred-reasoning-queue", service.run_once()["status"])

@@ -2,7 +2,9 @@ import os
 from typing import Dict, List
 
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, rule_change_candidates_from_text
+from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred
 from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, codex_model_label, run_background_ai_prompt
+from .local_ai_process_guard import LocalAICapacityUnavailable
 from .settings import runtime_settings
 
 
@@ -37,12 +39,15 @@ class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
         if not self.command:
             raise RuntimeError("rule candidate AI command is not configured")
         prompt = build_rule_change_candidate_prompt(context)
-        completed = run_background_ai_prompt(
-            self.command,
-            prompt,
-            self.timeout_seconds,
-            self.settings,
-        )
+        try:
+            completed = run_background_ai_prompt(
+                self.command,
+                prompt,
+                self.timeout_seconds,
+                self.settings,
+            )
+        except LocalAICapacityUnavailable as error:
+            raise HypothesisAuthoringDeferred(str(error)) from error
         output = completed.stdout.strip()
         if completed.returncode != 0:
             raise RuntimeError((completed.stderr or output or "rule candidate AI command failed").strip())

@@ -1647,6 +1647,7 @@ class V2ReasoningEngine:
         ai_handoff_status = "shadow-delivery-blocked"
         insight_dispatch_status = "shadow-delivery-blocked"
         insight_dispatch_routes = {}
+        insight_dispatch_outcomes = ()
         if delivery_authorized and self.insight_dispatch_service is not None:
             delivery_started = time.perf_counter()
             dispatch = getattr(self.insight_dispatch_service, "dispatch", None)
@@ -1659,6 +1660,10 @@ class V2ReasoningEngine:
             delivery_events = list(handoff.get("queuedEvents") or [])
             insight_dispatch_status = str(handoff.get("status") or "web-only")
             insight_dispatch_routes = dict(handoff.get("routeCounts") or {})
+            insight_dispatch_outcomes = tuple({key: row[key] for key in (
+                "status", "route", "symbol", "subjectCaseId", "requestId", "reason", "reasonCode",
+                "existing", "refreshRequired",
+            ) if key in row} for row in handoff.get("outcomes") or [])
             typedb_published_count = int(handoff.get("typedbPublishedCount") or 0)
             ai_queued_count = int(
                 handoff.get("aiQueuedCount")
@@ -1834,6 +1839,7 @@ class V2ReasoningEngine:
             delivery_events=tuple(alert_event_payload(event) for event in delivery_events),
             delivery_authorized=delivery_authorized,
             ai_handoff_status=ai_handoff_status,
+            insight_dispatch_outcomes=insight_dispatch_outcomes,
             insight_dispatch_status=insight_dispatch_status,
             insight_dispatch_routes=insight_dispatch_routes,
             trace_complete=bool(identities) and all(

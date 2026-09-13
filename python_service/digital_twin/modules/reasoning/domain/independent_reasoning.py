@@ -533,6 +533,7 @@ class IndependentReasoningResult:
     ai_handoff_status: str = "not-requested"
     insight_dispatch_status: str = "not-requested"
     insight_dispatch_routes: Dict[str, int] = field(default_factory=dict)
+    insight_dispatch_outcomes: Tuple[Dict[str, object], ...] = ()
     trace_complete: bool = False
     retryable: bool = False
     retry_after_seconds: int = 0
@@ -559,6 +560,7 @@ class IndependentReasoningResult:
             "candidate_events",
             "decision_syntheses",
             "delivery_events",
+            "insight_dispatch_outcomes",
         ]:
             payload[key] = list(payload[key])
         return payload

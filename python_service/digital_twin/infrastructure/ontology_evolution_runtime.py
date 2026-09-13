@@ -8,29 +8,13 @@ from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint
 from digital_twin.modules.reasoning.public import append_rule_to_release_artifact
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import utc_now_iso
+from digital_twin.modules.model_registry.contracts import comparison_measurement
 
 
 def claim_binding(rule):
     claim = GraphInferenceRule.from_dict(rule).resolved_claim_contract.to_dict()
     return {"claimContractId": claim["claimContractId"],
             "validationFingerprint": claim_validation_fingerprint(claim)}
-
-
-def comparison_measurement(rule):
-    claim = GraphInferenceRule.from_dict(rule).resolved_claim_contract
-    contract = claim.to_dict().get("outcomeContract") or {}
-    criteria = contract.get("criteria") or []
-    measurements = sorted((str(row.get("metric") or ""), str(row.get("unit") or ""),
-                           str(row.get("benchmarkSymbol") or ""), abs(float(row.get("threshold") or 0)),
-                           str(row.get("role") or ""), bool(row.get("required")),
-                           int(row.get("horizonMinutes") or 0), str(row.get("failureOutcome") or ""),
-                           tuple(sorted(row.get("sourcePolicy") or [])),
-                           tuple(sorted(row.get("requiredObservationDomains") or [])),
-                           "strict" if row.get("operator") in {"<", ">"} else
-                           "inclusive" if row.get("operator") in {"<=", ">="} else str(row.get("operator")))
-                          for row in criteria)
-    return (claim.prediction_target, claim.outcome_metric,
-            tuple(contract.get("outcomeHorizonMinutes") or []), tuple(measurements))
 
 
 class OntologyEvolutionRuntime:
@@ -97,8 +81,7 @@ class OntologyEvolutionRuntime:
                 artifact = self.registry.release_artifact(deployment_id)
                 if not artifact.get("valid") or artifact["artifact"].get("evolutionPlanFingerprint") != plan["fingerprint"]:
                     raise RuntimeError("candidate-release-plan-mismatch")
-                self.observations.register(plan, deployment_id)
-                return {"status": "staged", "deploymentId": deployment_id, "artifactFingerprint": artifact["artifactFingerprint"]}
+                return self.staged_candidate(plan, deployment_id, artifact["artifactFingerprint"])
             other = self.registry.get(control.candidate_deployment_id) if control.candidate_deployment_id else {}
             if other and other.get("status") not in {"retired", "blocked"}:
                 return {"status": "waiting", "reason": "another-candidate-or-rollback-release-in-use"}
@@ -109,8 +92,7 @@ class OntologyEvolutionRuntime:
                         return {"status": "superseded", "reason": "candidate-release-terminated"}
                     self.registry.set_control(control.active_deployment_id, control.delivery_deployment_id,
                                               deployment_id, expected_version=control.version)
-                    self.observations.register(plan, deployment_id)
-                    return {"status": "staged", "deploymentId": deployment_id, "artifactFingerprint": artifact["artifactFingerprint"]}
+                    return self.staged_candidate(plan, deployment_id, artifact["artifactFingerprint"])
             data_readiness = self.observations.prepare(plan)
             if data_readiness["state"] != "ready":
                 return {"status": "waiting", "reason": "observation-" + data_readiness["state"], "dataReadiness": data_readiness}
@@ -128,6 +110,18 @@ class OntologyEvolutionRuntime:
             return {"status": "staged", "deploymentId": deployment_id,
                     "dataReadiness": data_readiness,
                     "artifactFingerprint": result["releaseSeedArtifact"]["artifactFingerprint"]}
+
+    def staged_candidate(self, plan, deployment_id, artifact_fingerprint):
+        row = self.registry.get(deployment_id) or {}
+        receipt = (row.get("health") or {}).get("ontologyEvolution") or {}
+        expected = {"state": "shadow", "planFingerprint": plan["fingerprint"]}
+        if receipt and any(receipt.get(key) != value for key, value in expected.items()):
+            raise RuntimeError("candidate-experiment-ownership-mismatch")
+        if not receipt:
+            # Repair only an already verified immutable experiment registration.
+            self.registry.patch_health(deployment_id, {"ontologyEvolution": expected})
+        self.observations.register(plan, deployment_id)
+        return {"status": "staged", "deploymentId": deployment_id, "artifactFingerprint": artifact_fingerprint}
 
     def state(self, plan, deployment):
         control = self.registry.control()

@@ -287,6 +287,29 @@ class EvolutionArtifactTests(unittest.TestCase):
             runtime.stage(plan)
         platform.registry.control.assert_not_called()
 
+    def test_existing_experiment_registration_recovers_worker_ownership_not_rollback(self):
+        candidate = copy.deepcopy(self.candidate)
+        candidate["model_input_contract"]["evolutionScope"] = {"worldId": "portfolio:local:test", "symbol": "TEST"}
+        plan = create_plan(case(), candidate, {"deploymentId": "base", "artifactFingerprint": "base-hash"}, evolution_policy(), START.isoformat())
+        deployment_id = "evolution-" + plan["fingerprint"][:20]
+        platform, locks, observations = Mock(), Mock(), Mock()
+        locks.processing_lock.return_value = nullcontext(True)
+        platform.registry.control.return_value = SimpleNamespace(active_deployment_id="base", candidate_deployment_id=deployment_id)
+        row = {"status": "provisioning", "health": {}}
+        platform.registry.get.return_value = row
+        platform.registry.release_artifact.side_effect = lambda key: (
+            {"artifactFingerprint": "base-hash"} if key == "base" else
+            {"valid": True, "artifactFingerprint": "candidate-hash", "artifact": {"evolutionPlanFingerprint": plan["fingerprint"]}})
+        runtime = OntologyEvolutionRuntime(platform, Mock(), locks, observations)
+        self.assertEqual("staged", runtime.stage(plan)["status"])
+        expected = {"state": "shadow", "planFingerprint": plan["fingerprint"]}
+        platform.registry.patch_health.assert_called_once_with(deployment_id, {"ontologyEvolution": expected})
+        observations.register.assert_called_once_with(plan, deployment_id)
+        row["health"]["ontologyEvolution"] = {**expected, "state": "rolled-back"}
+        with self.assertRaisesRegex(RuntimeError, "ownership-mismatch"):
+            runtime.stage(plan)
+        platform.registry.patch_health.assert_called_once()
+
     def test_baseline_is_selected_from_persisted_model_contract(self):
         candidate = copy.deepcopy(self.candidate)
         candidate['model_input_contract']['comparisonBaselineRuleId'] = self.rule.rule_id

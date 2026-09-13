@@ -349,6 +349,9 @@ def deduplicate_candidates(candidates: List[Dict[str, object]]) -> List[Dict[str
 
 
 def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
+    if context.get("authoringContract"):
+        from .hypothesis_authoring import build_hypothesis_design_prompt
+        return build_hypothesis_design_prompt(context, compact_candidate_context(context))
     payload = compact_candidate_context(context or {})
     contract = {
         "candidates": [
@@ -480,6 +483,22 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
 def rule_change_candidates_from_text(text: str, context: Dict[str, object] = None) -> List[Dict[str, object]]:
     payload = json_object_from_text(text)
     raw_candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    if (context or {}).get("authoringContract"):
+        from .hypothesis_authoring import assemble_hypothesis_design
+        prepared = []
+        for raw in raw_candidates[:3]:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                if raw.get("hypothesisDesign") is not None or raw.get("proposedRule") is not None:
+                    raw = assemble_hypothesis_design(raw, context)
+            except (ValueError, TypeError, KeyError) as error:
+                raw = {**raw, "proposedRule": None, "blockers": [{
+                    "kind": "schema-mismatch", "requirement": str(error)[:1000],
+                    "dependencyKey": "registered-hypothesis-design",
+                }]}
+            prepared.append(raw)
+        raw_candidates = prepared
     rulebox = (context or {}).get("ruleBox") if isinstance((context or {}).get("ruleBox"), dict) else {}
     existing_rule_ids = {
         str(item.get("rule_id") or item.get("ruleId") or "").strip()
@@ -574,6 +593,7 @@ def normalize_rule_change_candidate(
         "validationRequirements": validation_requirements(candidate),
         "proposedRule": normalized_rule,
         "proposedRuleDraft": proposed if proposed and normalized_rule is None else None,
+        **({"hypothesisDesign": candidate["hypothesisDesign"]} if "hypothesisDesign" in candidate else {}),
         "validationWarnings": dedupe_strings(warnings),
     }
     if not payload["id"].startswith(("candidate.", "governance.", "ai-candidate:")):

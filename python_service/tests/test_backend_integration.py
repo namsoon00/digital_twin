@@ -245,7 +245,14 @@ class BackendIntegrationTests(unittest.TestCase):
                         digest = hashlib.sha256(
                             ast.dump(member, include_attributes=False).encode()
                         ).hexdigest()
-                        if key in ADDED_METHODS.get(name, set()):
+                        change_key = entry["path"] + "::" + name + "." + key
+                        if change_key in changes:
+                            reviewed = changes[change_key]
+                            checked_changes.add(change_key)
+                            self.assertTrue(reviewed["reason"])
+                            self.assertNotEqual(baseline[key], reviewed["hash"])
+                            self.assertEqual(reviewed["hash"], digest, (name, key))
+                        elif key in ADDED_METHODS.get(name, set()):
                             self.assertNotIn(key, baseline)
                         elif key in CHANGED_METHODS[name]:
                             self.assertNotEqual(baseline[key], digest, (name, key))

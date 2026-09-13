@@ -193,6 +193,18 @@ class EngineControlState:
         return asdict(self)
 
 
+def candidate_consumes_source_events(control, candidate, configured_id="") -> bool:
+    """Experimental candidates consume inputs; retained rollback identities do not."""
+    candidate_id = str(control.candidate_deployment_id or "")
+    if (not candidate_id or candidate_id in {control.active_deployment_id, control.delivery_deployment_id}
+            or candidate.get("engineVersion") != "v2" or candidate.get("status") in {"retired", "blocked"}):
+        return False
+    evolution = (candidate.get("health") or {}).get("ontologyEvolution") or {}
+    if evolution.get("planFingerprint"):
+        return evolution.get("state") == "shadow"
+    return candidate_id == str(configured_id or "")
+
+
 class InvestmentReasoningEngine(Protocol):
     def descriptor(self) -> ReasoningEngineDescriptor:
         ...

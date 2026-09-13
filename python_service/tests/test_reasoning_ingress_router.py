@@ -1,4 +1,5 @@
 import unittest
+import json
 from contextlib import nullcontext
 from unittest.mock import patch
 
@@ -108,6 +109,29 @@ class ReasoningIngressRouterTests(unittest.TestCase):
             ["v2-r14", "v2-r15"],
             MySQLReasoningEngineJobStore.target_deployments_with_connection(Connection()),
         )
+
+    def test_evolution_ingress_and_rollback_do_not_depend_on_legacy_settings(self):
+        class Connection:
+            state = "shadow"
+            status = "provisioning"
+
+            def execute(self, sql, params=()):
+                if "FROM reasoning_engine_control" in sql:
+                    return Cursor({"active_deployment_id": "active", "delivery_deployment_id": "active", "candidate_deployment_id": "evolution"})
+                if "FROM reasoning_engine_deployments" in sql:
+                    return Cursor(many=[{"deployment_id": "active"}, {"deployment_id": "evolution", "deployment_status": self.status,
+                        "last_health_json": json.dumps({"ontologyEvolution": {"state": self.state, "planFingerprint": "plan"}})}])
+                if "FROM runtime_settings" in sql:
+                    return Cursor({"value": "active"})
+                raise AssertionError(sql)
+
+        connection = Connection()
+        self.assertEqual(["active", "evolution"], MySQLReasoningEngineJobStore.target_deployments_with_connection(connection))
+        for state in ("adopted", "rolled-back"):
+            connection.state = state
+            self.assertEqual(["active"], MySQLReasoningEngineJobStore.target_deployments_with_connection(connection))
+        connection.state, connection.status = "shadow", "retired"
+        self.assertEqual(["active"], MySQLReasoningEngineJobStore.target_deployments_with_connection(connection))
 
     @patch.object(MySQLReasoningEngineJobStore, "bind_source_boundaries_with_connection")
     @patch.object(MySQLReasoningEngineJobStore, "ingress_event_with_connection")

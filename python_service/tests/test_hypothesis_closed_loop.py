@@ -429,10 +429,12 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         service.create_experiment.assert_not_called()
 
     def test_authoring_reads_only_scoped_exact_model_receipts_and_keeps_failed_conditions(self):
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+        example = next(row for row in default_graph_inference_rules() if row.rule_id == "graph.temporal.risk_event_absorption.support.v1").to_dict()
         rule = {"rule_id": "graph.absorption", "label": "충격 흡수", "conditions": [{
             "relation_type": "HAS_MODEL_SIGNAL", "target_property_filters": {
                 "releaseId": "event-v2", "hypothesisContractId": "graph.absorption",
-            }}]}
+            }}], "derivations": example["derivations"]}
         model_store = SimpleNamespace(latest=Mock(return_value={
             "accountId": "main", "modelReleaseId": "event-v2", "snapshotId": "snapshot:1",
             "asOf": "2026-09-12T00:00:00Z", "sourceFeatureSnapshotId": "feature:1",

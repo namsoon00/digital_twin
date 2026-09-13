@@ -45,16 +45,16 @@
       "reason": "Expose supporting/counter evidence and known data gaps; distinguish lineage-linked records from resolved originals without changing decision eligibility. Covered by test_subject_reasoning_lineage."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::build_rule_change_candidate_prompt": {
-      "hash": "56a661a3da0ba68ba33a5ad39de7c0321d576c751c19d177fe7a7b8f151a8dca",
-      "reason": "Preserve frozen comparator and automatic source-identity requirements while passing failed authoring feedback and requiring explicit unsupported-model blockers. test_hypothesis_closed_loop, test_ontology_evolution and test_experiment_observations."
+      "hash": "b6dc81bd9d4deeda62e5e1ff29636c348233ed5edfea77d2dc8554026445faf1",
+      "reason": "Select registered predictive models, separate compatible comparators and additional conditions for hypothesis authoring; retain immutable outcome contracts, prior failures and unsupported-capability blockers. test_hypothesis_authoring, test_hypothesis_closed_loop and test_experiment_observations."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::compact_candidate_context": {
       "hash": "9a0df6fcc8e945c1de0e6a8fb89824f856a2389ec30ac73d9b4fd8048cd147a1",
       "reason": "Pass bounded prior failures and rejected specifications alongside relevant contracts and scoped immutable model assessments; test_hypothesis_closed_loop."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::rule_change_candidates_from_text": {
-      "hash": "5e1fbe96396484e82dd4f88a3fa933c1bcd5864fc8b67b66d7ed2dee3269c54c",
-      "reason": "Reject candidate responses lacking both a rule and a blocker; retain unqueried observation assertions as unverified. test_hypothesis_closed_loop."
+      "hash": "e91857028ffd1465e33f2b19b09a7001cfd3c4ffb7cdbca369eee1b243256f29",
+      "reason": "Compile bounded AI design selections against the exact registered catalog before existing semantic validation; reject internal-field overrides and retain explicit blockers. test_hypothesis_authoring and test_hypothesis_closed_loop."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::rule_model_signal_family_violations": {
       "hash": "72383e9d897613162f17605ed6ad48409132f6cebf5775a1b1117d93e50da595",
@@ -65,8 +65,8 @@
       "reason": "Read explicit HAS_MODEL_SIGNAL release/type/contract bindings before legacy migration routing; preserve referenced hypothesis identity and validate every declared release. test_ontology_rulebox and test_statistical_signals."
     },
     "modules/model_registry/domain/ontology_rulebox_governance.py::normalize_rule_change_candidate": {
-      "hash": "c6d732682f7b40ff78fbeee6ce069c32a6687887d0ee73094a1c861d6cd66657",
-      "reason": "Preserve post-authoring requirements and rejected draft syntax separately from executable candidates and legacy blockers; test_hypothesis_candidate_validation."
+      "hash": "c32a6056a3a7993312c65765e45e0f55c50295c964af30d9a86acf4842abc762",
+      "reason": "Preserve registered hypothesisDesign selections alongside executable candidates, rejected drafts and unresolved review obligations; test_hypothesis_authoring and test_hypothesis_candidate_validation."
     },
     "modules/model_registry/domain/hypothesis_development.py::HypothesisDevelopmentCase": {
       "hash": "65fe8269d24791bac4cf6cc30e457c073713cb8d0d347ec37e55e1cccf408c92",
@@ -110,6 +110,10 @@
     }
   },
   "storage": {
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.target_deployments_with_connection": {
+      "hash": "321ef2f154b3bffca77fdaa78184f4ae3651289cb978d85d149acd62c6f41394",
+      "reason": "Route isolated experiments from authoritative candidate control and their shadow ownership receipt, not a stale configured release ID; retain active/delivery routing and exclude retired or rollback-only releases. test_reasoning_ingress_router, test_ai_inference_worker_runtime and test_ontology_evolution."
+    },
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::MySQLResearchEvidenceStore": {
       "hash": "257c08ed255edb005813ba1f3a4f98322a8586f2ddc50969a78367b92c67c978",
       "reason": "Add bounded missing-document candidate reads to the exact story-history query without changing existing storage mutations; test_information_recovery and test_information_reliability."

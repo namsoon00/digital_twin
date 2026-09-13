@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Dict, Iterable, List, Mapping, Optional
-from digital_twin.modules.reasoning.domain.reasoning_engine_versions import EngineControlState, ReasoningEngineDescriptor, engine_status, engine_transition_allowed
+from digital_twin.modules.reasoning.domain.reasoning_engine_versions import EngineControlState, ReasoningEngineDescriptor, candidate_consumes_source_events, engine_status, engine_transition_allowed
 from digital_twin.modules.reasoning.domain.reasoning_shadow import reasoning_comparison_summary
 from digital_twin.modules.reasoning.domain.independent_reasoning import independent_reasoning_request, merge_reasoning_events, reasoning_event_scope, reasoning_queue_slot_key, shard_reasoning_event
 from digital_twin.shared_kernel.events import DomainEvent
@@ -850,10 +850,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             if str(control.get(key) or "").strip()
         ))
         deployments = []
+        rows = []
         if requested:
             placeholders = ",".join(["%s"] * len(requested))
             rows = connection.execute(
-                "SELECT deployment_id FROM reasoning_engine_deployments "
+                "SELECT deployment_id, deployment_status, last_health_json FROM reasoning_engine_deployments "
                 "WHERE engine_version = 'v2' AND deployment_id IN (" + placeholders + ")",
                 tuple(requested),
             ).fetchall()
@@ -874,11 +875,13 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             if str(control.get(key) or "").strip() in deployment_set
         }
         candidate = str(control.get("candidate_deployment_id") or "").strip()
-        # After promotion the candidate pointer becomes a rollback identity.
-        # Only the explicitly configured validation release receives duplicate
-        # candidate work; the rollback release is rebuilt from the event log if
-        # it is selected again.
-        if candidate and candidate == configured and candidate in deployment_set:
+        selected = next((row for row in rows if row["deployment_id"] == candidate), {})
+        descriptor = {"engineVersion": "v2" if selected else "", "status": selected.get("deployment_status"),
+                      "health": json_value(selected.get("last_health_json"), {})}
+        ownership = EngineControlState(active_deployment_id=str(control.get("active_deployment_id") or ""),
+                                       delivery_deployment_id=str(control.get("delivery_deployment_id") or ""),
+                                       candidate_deployment_id=candidate)
+        if candidate_consumes_source_events(ownership, descriptor, configured):
             delivery_targets.add(candidate)
         return sorted(delivery_targets)
 

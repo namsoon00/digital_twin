@@ -9,7 +9,7 @@ import { cardTypeAttrs, renderEmptyState } from "../shell/layout.mjs";
 import { renderManagedPage } from "../shell/pages.mjs";
 import { experimentsState } from "../state/experiments.mjs";
 import { hypothesesState } from "../state/hypotheses.mjs";
-import { renderOntologyEvolution } from "./evolution.mjs";
+import { renderHypothesisProgress, renderOntologyEvolution } from "./evolution.mjs";
 
 function renderOntologyExperimentsPage(snapshot) {
   var experiments = ontologyExperimentItems();
@@ -251,6 +251,7 @@ function renderHypothesisDevelopmentCaseDetail(item) {
     '</div>',
     path.length ? '<div class="hypothesis-development-path">' + path.map(function (step, index) { return '<span><b>' + escapeHtml(index + 1) + '</b>' + escapeHtml(step) + '</span>'; }).join("") + '</div>' : '',
     '<div class="hypothesis-development-evidence"><span>지지 근거 <strong>' + escapeHtml(supporting.length) + '</strong></span><span>반대 근거 <strong>' + escapeHtml(counter.length) + '</strong></span><span>원본 제안 <strong>' + escapeHtml((item.sourceProposalIds || []).length) + '</strong></span></div>',
+    renderHypothesisProgress(item, formatClock),
     '<div class="hypothesis-development-gates">' + gates.map(renderHypothesisDevelopmentGate).join("") + '</div>',
     renderOntologyEvolution(item.evolution || {}, formatClock),
     '<section class="hypothesis-development-retry"><header><strong>재검증 상태</strong><span>' + escapeHtml(retryLabels[retry.state] || "다음 검증 대기") + '</span></header><dl>' +

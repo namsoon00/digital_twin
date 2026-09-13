@@ -4,6 +4,7 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {}
+_EXPORTS['candidate_consumes_source_events'] = ('digital_twin.modules.reasoning.domain.reasoning_engine_versions', 'candidate_consumes_source_events')
 
 _EXPORTS['ONTOLOGY_GRAPH_REPOSITORY_CONTRACT'] = ('digital_twin.modules.reasoning.domain.repositories', 'ONTOLOGY_GRAPH_REPOSITORY_CONTRACT')
 _EXPORTS['OntologyGraphRepository'] = ('digital_twin.modules.reasoning.domain.repositories', 'OntologyGraphRepository')

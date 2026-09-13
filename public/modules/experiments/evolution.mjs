@@ -26,6 +26,20 @@ const reasons = {
 
 const dataStates = { ready: "자료 확보", "future-collection": "새 관측 대기", unsupported: "수집·보관 기능 보완 필요", "historical-unrecoverable": "당시 자료 복구 불가" };
 
+export function renderHypothesisProgress(item = {}, formatClock = value => String(value || "")) {
+  const progress = item.progress;
+  if (!progress) return "";
+  const repair = item.retry?.contractRepair;
+  return '<section class="hypothesis-development-retry" aria-label="가설 진행 상태"><header><strong>' +
+    escapeHtml(progress.label) + '</strong></header><p>' + escapeHtml(progress.nextAction) + '</p><dl>' +
+    '<div><dt>누적 AI 작성</dt><dd>' + escapeHtml(progress.authoringAttempts) + '회</dd></div>' +
+    '<div><dt>다음 확인</dt><dd>' + escapeHtml(progress.nextCheckAt ? formatClock(progress.nextCheckAt) : '자동 예약 없음') + '</dd></div>' +
+    '<div><dt>비교 실험</dt><dd>' + escapeHtml(progress.experimentStateLabel || (progress.experimentStarted ? '격리 버전 관측 중' : '아직 시작하지 않음')) + '</dd></div>' +
+    (repair ? '<div><dt>명세 보정</dt><dd>' + escapeHtml(repair.attemptsUsed) + ' / ' + escapeHtml(repair.attemptLimit) +
+      '회 · 기존 ' + escapeHtml(repair.previousAttempts) + '회 기록 유지</dd></div>' : '') +
+    '</dl></section>';
+}
+
 function renderObservationRequirements(plan, evolution) {
   const requirements = plan.observationRequirements;
   if (!requirements) return '<p>이전 실험에는 입력 보존 명세가 없습니다. 과거 결과를 재현 가능한 실험으로 취급하지 않습니다.</p>';

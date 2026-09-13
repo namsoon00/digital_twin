@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderOntologyEvolution } from "../../public/modules/experiments/evolution.mjs";
+import { renderHypothesisProgress, renderOntologyEvolution } from "../../public/modules/experiments/evolution.mjs";
 
 test("evolution shows pending evidence rather than invented performance", () => {
   const html = renderOntologyEvolution({reason: "independent-outcomes-required", plan: {
@@ -38,4 +38,18 @@ test("observation needs distinguish future collection from unsupported sources",
   assert.match(html, /실험 종료 후 자료 보관.*7일/s);
   assert.match(html, /2건/);
   assert.doesNotMatch(html, /<unsafe>|undefined|NaN/);
+});
+
+test("hypothesis progress separates contract repair from experiment observations", () => {
+  const html = renderHypothesisProgress({progress: {label: "가설 명세 수정 필요", nextAction: "<b>수정</b>",
+    authoringAttempts: 4, experimentStarted: false}, retry: {contractRepair: {attemptsUsed: 1, attemptLimit: 1, previousAttempts: 3}}});
+  assert.match(html, /아직 시작하지 않음/);
+  assert.match(html, /자동 예약 없음/);
+  assert.match(html, /기존 3회 기록 유지/);
+  assert.doesNotMatch(html, /<b>수정|undefined|NaN/);
+  const retired = renderHypothesisProgress({progress: {label: '비교 종료', authoringAttempts: 4,
+    experimentStarted: true, experimentStateLabel: '비교 종료 · 미반영'}});
+  assert.match(retired, /비교 종료 · 미반영/);
+  assert.doesNotMatch(retired, /관측 중/);
+  assert.equal(renderHypothesisProgress(), "");
 });

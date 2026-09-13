@@ -1290,6 +1290,10 @@ class ReasoningEnginePlatformService:
                 ) in {"saved", "unchanged"},
             },
         }
+        if authored_artifact.get("evolutionPlanFingerprint"):
+            health_update["ontologyEvolution"] = {
+                "state": "shadow", "planFingerprint": authored_artifact["evolutionPlanFingerprint"],
+            }
         if str(graph_store_selection.get("mode") or "") == "reuse-existing":
             # Reusing a verified retired delivery store preserves its complete
             # base schema. The immutable release artifact still replaces the

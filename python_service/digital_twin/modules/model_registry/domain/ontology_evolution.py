@@ -9,6 +9,25 @@ from datetime import datetime, timezone
 EVOLUTION_CONTRACT = "ontology-evolution-plan-v1"
 
 
+def comparison_measurement(rule):
+    from .ontology_rulebox_contracts import GraphInferenceRule
+
+    claim = GraphInferenceRule.from_dict(rule).resolved_claim_contract
+    contract = claim.to_dict().get("outcomeContract") or {}
+    criteria = contract.get("criteria") or []
+    measurements = sorted((str(row.get("metric") or ""), str(row.get("unit") or ""),
+                           str(row.get("benchmarkSymbol") or ""), abs(float(row.get("threshold") or 0)),
+                           str(row.get("role") or ""), bool(row.get("required")),
+                           int(row.get("horizonMinutes") or 0), str(row.get("failureOutcome") or ""),
+                           tuple(sorted(row.get("sourcePolicy") or [])),
+                           tuple(sorted(row.get("requiredObservationDomains") or [])),
+                           "strict" if row.get("operator") in {"<", ">"} else
+                           "inclusive" if row.get("operator") in {"<=", ">="} else str(row.get("operator")))
+                          for row in criteria)
+    return (claim.prediction_target, claim.outcome_metric,
+            tuple(contract.get("outcomeHorizonMinutes") or []), tuple(measurements))
+
+
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":"), allow_nan=False).encode()).hexdigest()

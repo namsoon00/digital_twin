@@ -9,7 +9,7 @@ from dataclasses import fields
 from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
-RULE_DESIGN_VERSION = "hypothesis-rule-design-v6-observation-contract"
+RULE_DESIGN_VERSION = "hypothesis-rule-design-v7-registered-design"
 BLOCKER_KINDS = {
     "missing-observation", "stale-observation", "observation-window",
     "schema-mismatch", "unsupported-capability", "dependency-error", "unclassified",
@@ -161,9 +161,9 @@ def compilation_fingerprint(value):
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def authoring_input_fingerprint(case):
+def authoring_input_fingerprint(case, *, design_version=RULE_DESIGN_VERSION):
     return compilation_fingerprint({
-        "designVersion": RULE_DESIGN_VERSION,
+        "designVersion": design_version,
         "caseId": case.case_id, "accountId": case.account_id, "symbol": case.symbol,
         "claim": case.claim, "causalPath": case.causal_path,
         "supportingEvidenceIds": sorted(case.supporting_evidence_ids),

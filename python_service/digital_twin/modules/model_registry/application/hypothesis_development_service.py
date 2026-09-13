@@ -14,6 +14,7 @@ from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts impor
 from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_semantic_violations
 from digital_twin.modules.model_registry.domain.hypothesis_compilation import HypothesisAuthoringDeferred, HypothesisAuthoringResponseError, RULE_DESIGN_VERSION, authoring_feedback, blocker_state, compilation_blockers, compilation_fingerprint, validation_requirements
 from digital_twin.modules.model_registry.domain.hypothesis_validation import additional_validation_gate, preview_states
+from digital_twin.modules.model_registry.domain.hypothesis_recovery import authoring_budget_available, begin_contract_repair, blocks_reauthoring, development_progress, repairable_specification
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import utc_now_iso
 from .ontology_evolution_service import EVOLUTION_STATUSES
@@ -76,8 +77,10 @@ class HypothesisDevelopmentService:
                 return self.evolution_service.advance(case, self.persist)
             if case.status in TERMINAL_HYPOTHESIS_DEVELOPMENT_STATUSES | {"approval-required", "deployed", "observing"} or (case.evolution.get("plan") and case.status == "strengthened"):
                 return {"status": case.status, "case": case.to_dict()}
-            if not force and case.status in {"needs-revision", "blocked"}:
-                if not self.authoring_retry_enabled() or int(case.retry.get("authoringAttempts") or 0) >= self.evolution_service.policy["maximumAuthoringAttempts"]:
+            if case.status in {"needs-revision", "blocked"}:
+                if self.evolution_service and not authoring_budget_available(case, self.evolution_service.policy["maximumAuthoringAttempts"]):
+                    return {"status": "development-required", "caseId": case_id}
+                if not force and (not self.authoring_retry_enabled() or blocks_reauthoring(case)):
                     return {"status": "development-required", "caseId": case_id}
             if not force and not self.validation_retry_due(case):
                 if case.retry.get("state") == "authoring-retry":
@@ -108,6 +111,7 @@ class HypothesisDevelopmentService:
             self.persist(case, "retry-started")
             previous_status = case.status
             authoring_attempts = int(case.retry.get("authoringAttempts") or 0)
+            repair_attempts = int((case.retry.get("contractRepair") or {}).get("attemptsUsed") or 0)
             try:
                 result = self._process_case(case_id)
             except HypothesisAuthoringDeferred as error:
@@ -124,6 +128,8 @@ class HypothesisDevelopmentService:
                                   "requirement": "AI 실행 슬롯 대기", "dependencyKey": "authoring-capacity"}],
                     "requirements": ["AI 실행 슬롯 대기"],
                 })
+                if case.retry.get("contractRepair"):
+                    case.retry["contractRepair"]["attemptsUsed"] = repair_attempts
                 self.persist(case, "authoring-capacity-deferred", case.blocked_reason)
                 return {"status": "deferred-capacity", "caseId": case_id, "case": case.to_dict()}
             except Exception as error:
@@ -164,8 +170,8 @@ class HypothesisDevelopmentService:
         return bool(self.evolution_service and self.evolution_service.policy["mode"] != "disabled")
 
     def schedule_authoring_retry(self, case, *, recovered: bool = False):
-        if (self.authoring_retry_enabled() and int(case.retry.get("authoringAttempts") or 0)
-                < self.evolution_service.policy["maximumAuthoringAttempts"]):
+        if (self.authoring_retry_enabled() and not blocks_reauthoring(case)
+                and authoring_budget_available(case, self.evolution_service.policy["maximumAuthoringAttempts"])):
             case.retry["state"] = "authoring-retry"
             case.retry["authoringScheduleVersion"] = AUTHORING_SCHEDULE_VERSION
             case.retry["nextCheckAt"] = (datetime.now(timezone.utc) + timedelta(
@@ -187,10 +193,31 @@ class HypothesisDevelopmentService:
                 case = self.case_store.get(item.case_id)
                 if not case or not authoring_recovery_eligible(case, maximum):
                     continue
+                if blocks_reauthoring(case):
+                    case.retry.update({"authoringScheduleVersion": AUTHORING_SCHEDULE_VERSION,
+                                       "state": "development-required", "nextCheckAt": ""})
+                    self.persist(case, "authoring-development-required", case.blocked_reason)
+                    continue
                 self.schedule_authoring_retry(case, recovered=True)
                 self.persist(case, "authoring-schedule-recovered", case.blocked_reason)
                 recovered.append(case.case_id)
         return {"recoveredCount": len(recovered), "caseIds": recovered}
+
+    def schedule_contract_repair(self, case_id: str) -> Dict[str, object]:
+        """One explicit migration attempt; cumulative authoring budgets are not reset."""
+        if not self.authoring_retry_enabled():
+            return {"status": "disabled", "caseId": case_id}
+        with self.case_store.processing_lock(case_id) as acquired:
+            if not acquired:
+                return {"status": "already-processing", "caseId": case_id}
+            case = self.case_store.get(case_id)
+            if not case or not repairable_specification(case):
+                return {"status": "repair-not-applicable", "caseId": case_id}
+            if case.compilation_draft.get("world") != self.world_context(case):
+                return {"status": "repair-context-changed", "caseId": case_id}
+            begin_contract_repair(case, utc_now_iso())
+            self.persist(case, "authoring-contract-repair-scheduled", case.blocked_reason)
+            return {"status": "scheduled", "caseId": case_id, "progress": development_progress(case)}
 
     def recover_interrupted(self, limit: int = 5) -> Dict[str, object]:
         """The exclusive DB lock, not elapsed AI time, proves the owner is gone."""
@@ -446,13 +473,14 @@ class HypothesisDevelopmentService:
             return {"status": "disabled", "reason": "가설 규칙 후보 서비스가 구성되지 않았습니다.", "candidates": []}
         case.retry.pop("compilationContext", None)
         attempts = int(case.retry.get("authoringAttempts") or 0)
-        if self.evolution_service and attempts >= self.evolution_service.policy["maximumAuthoringAttempts"]:
+        if self.evolution_service and not authoring_budget_available(case, self.evolution_service.policy["maximumAuthoringAttempts"]):
             raise ValueError("candidate-authoring-budget-exhausted")
         case.retry["authoringAttempts"] = attempts + 1
+        if case.retry.get("contractRepair"):
+            case.retry["contractRepair"]["attemptsUsed"] += 1
         case.candidate_rule = {}
         case.candidate_id = ""
         case.experiment_id = ""
-        case.validation_requirements = []
         self.persist(case, "authoring-attempt-started")
         def record_input(summary):
             case.retry["compilationContext"] = dict(summary)
@@ -787,7 +815,7 @@ class HypothesisDevelopmentService:
             "status": "ok",
             "count": len(rows),
             "summary": {"statuses": statuses, "approvalRequiredCount": statuses.get("approval-required", 0)},
-            "cases": [item.to_dict() for item in rows],
+            "cases": [{**item.to_dict(), "progress": development_progress(item)} for item in rows],
             "events": self.case_store.events(limit=100) if self.case_store and hasattr(self.case_store, "events") else [],
             "governance": "policy-governed-shadow-evolution" if self.evolution_service else "automatic-validation-human-deployment-approval",
             "evolutionPolicy": dict(self.evolution_service.policy) if self.evolution_service else {},
@@ -800,7 +828,7 @@ class HypothesisDevelopmentService:
         experiment = self.experiment_store.get(case.experiment_id) if self.experiment_store and case.experiment_id else None
         return {
             "status": "ok",
-            "case": case.to_dict(),
+            "case": {**case.to_dict(), "progress": development_progress(case)},
             "experiment": experiment.to_dict() if experiment else {},
             "events": self.case_store.events(case.case_id, 200) if hasattr(self.case_store, "events") else [],
         }

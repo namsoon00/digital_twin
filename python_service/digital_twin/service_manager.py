@@ -978,6 +978,24 @@ def retire_stale_reasoning_candidate(
         }
 
 
+def candidate_reasoning_worker_enabled(settings, registry_factory=None) -> bool:
+    from digital_twin.modules.reasoning.contracts import candidate_consumes_source_events
+
+    if registry_factory is None:
+        from .infrastructure.operational_store import reasoning_engine_registry_store
+        registry_factory = reasoning_engine_registry_store
+    try:
+        registry = registry_factory(settings)
+        control = registry.control()
+        candidate = registry.get(control.candidate_deployment_id) if control.candidate_deployment_id else {}
+        return candidate_consumes_source_events(control, candidate or {}, settings.get("reasoningEngineV2DeploymentId"))
+    except Exception:
+        # A startup outage cannot discover a new experiment. Keep only the
+        # explicitly configured legacy worker; it rechecks DB ownership itself.
+        configured = str(settings.get("reasoningEngineV2DeploymentId") or "")
+        return bool(configured and configured == str(settings.get("reasoningEngineCandidateDeploymentId") or ""))
+
+
 def worker_specs() -> Dict[str, Dict[str, object]]:
     try:
         settings = runtime_settings()
@@ -1007,16 +1025,9 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     single_graph_writer_enabled = truthy(
         (settings or {}).get("ontologyGraphSingleWriterEnabled", "1")
     )
-    configured_v2_id = str(
-        (settings or {}).get("reasoningEngineV2DeploymentId") or ""
-    ).strip()
-    candidate_v2_id = str(
-        (settings or {}).get("reasoningEngineCandidateDeploymentId") or ""
-    ).strip()
     candidate_worker_enabled = bool(
         independent_v2_enabled
-        and configured_v2_id
-        and candidate_v2_id == configured_v2_id
+        and candidate_reasoning_worker_enabled(settings)
     )
     workers.update({
         name: spec

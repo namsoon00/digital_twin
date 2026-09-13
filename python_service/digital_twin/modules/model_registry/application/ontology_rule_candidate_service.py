@@ -2,6 +2,7 @@ import json
 from typing import Callable, Dict, Iterable, List
 
 from digital_twin.modules.model_registry.domain.hypothesis_compilation import ranked_authoring_rules, rule_design_context
+from digital_twin.modules.model_registry.domain.hypothesis_authoring import authoring_catalog
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 
 
@@ -53,6 +54,9 @@ class RuleChangeCandidateProposalService:
         if isinstance(hypothesis_proposal, dict) and hypothesis_proposal:
             context["hypothesisProposal"] = dict(hypothesis_proposal)
             context["modelAssessmentContext"] = self.model_assessment_context(context, account_id)
+            context["authoringContract"] = authoring_catalog(
+                context, cadence_seconds=int_setting(self.settings, "monitorAccountIntervalSeconds", 180, 30, 86400),
+            )
         design = rule_design_context(context) if hypothesis_proposal else {}
         context_summary = {
             "designVersion": design.get("version"),
@@ -63,6 +67,7 @@ class RuleChangeCandidateProposalService:
             "capabilityIndexCoverage": (design.get("capabilityIndex") or {}).get("coverage"),
             "capabilityIndexRuleCount": (design.get("capabilityIndex") or {}).get("includedRuleCount"),
             "modelAssessmentContext": context.get("modelAssessmentContext") or {},
+            "authoringContract": (context.get("authoringContract") or {}).get("contract"),
             "recentEventCount": len(context.get("recentEvents") or []),
             "alertCount": len(context.get("alerts") or []),
             "ruleCount": (context.get("ruleBox") or {}).get("ruleCount", 0),

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from digital_twin import service_manager
@@ -9,6 +10,20 @@ from digital_twin.infrastructure.schedulers import AIInferenceQueueScheduler
 
 
 class AIInferenceWorkerRuntimeTests(unittest.TestCase):
+    def test_evolution_candidate_worker_uses_registry_not_stale_settings(self):
+        registry = Mock()
+        registry.control.return_value = SimpleNamespace(active_deployment_id="active", delivery_deployment_id="active", candidate_deployment_id="evolution")
+        candidate = {"engineVersion": "v2", "status": "provisioning",
+                     "health": {"ontologyEvolution": {"state": "shadow", "planFingerprint": "plan"}}}
+        registry.get.return_value = candidate
+        settings = {"reasoningEngineV2DeploymentId": "active", "reasoningEngineCandidateDeploymentId": ""}
+        self.assertTrue(service_manager.candidate_reasoning_worker_enabled(settings, lambda _: registry))
+        for state in ("adopted", "rolled-back"):
+            candidate["health"]["ontologyEvolution"]["state"] = state
+            self.assertFalse(service_manager.candidate_reasoning_worker_enabled({**settings, "reasoningEngineV2DeploymentId": "evolution"}, lambda _: registry))
+        registry.control.side_effect = RuntimeError("db unavailable")
+        self.assertFalse(service_manager.candidate_reasoning_worker_enabled(settings, lambda _: registry))
+
     def test_service_manager_builds_configured_parallel_ai_workers(self):
         with patch.object(service_manager, "runtime_settings", return_value={
             "notificationAiQueueWorkerCount": "3",
@@ -108,7 +123,7 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             "reasoningEngineV2IndependentEnabled": "1",
             "reasoningEngineV2DeploymentId": "v2-r2",
             "reasoningEngineCandidateDeploymentId": "v2-r2",
-        }):
+        }), patch.object(service_manager, "candidate_reasoning_worker_enabled", return_value=True):
             specs = service_manager.worker_specs()
 
         self.assertNotIn("ontology-reasoning", specs)

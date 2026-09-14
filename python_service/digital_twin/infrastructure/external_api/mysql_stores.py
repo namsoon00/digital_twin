@@ -526,6 +526,39 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             ).fetchone() or {}
         return self._fact_row(row)
 
+    def official_document_fact(self, dataset_id: str, subject_key: str, source_revision: str = "") -> Dict[str, object]:
+        """Read the event's document, retaining recovery provenance across restarts."""
+        if dataset_id not in RETRYABLE_DOCUMENT_DATASETS:
+            return {}
+        with self.connect() as connection:
+            row = None
+            if source_revision:
+                row = connection.execute(
+                    "SELECT * FROM external_fact_revision WHERE dataset_id = %s AND subject_key = %s "
+                    "AND source_revision = %s ORDER BY fetched_at DESC LIMIT 1",
+                    (dataset_id, subject_key, source_revision),
+                ).fetchone()
+            if not row:
+                row = connection.execute(
+                    "SELECT * FROM external_fact_current WHERE dataset_id = %s AND subject_key = %s",
+                    (dataset_id, subject_key),
+                ).fetchone()
+            if not row or (source_revision and row.get("source_revision") != source_revision):
+                return {}
+            fact = self._fact_row(row)
+            if not fact["quality"].get("collectionSource"):
+                # Older immutable revisions predate collectionSource. The exact
+                # completed document partition still records how it was requested.
+                identity = str(fact.get("sourceRevision") or "").split(":", 1)[0]
+                state = connection.execute(
+                    "SELECT subject_json FROM external_dataset_state WHERE dataset_id = %s AND partition_key = %s",
+                    (dataset_id, subject_key + ":" + identity + ":body-v1"),
+                ).fetchone() or {}
+                origin = _json_loads(state.get("subject_json"), {}).get("source")
+                if origin:
+                    fact["quality"]["collectionSource"] = origin
+            return fact
+
     def seed_fact(
         self,
         dataset_id: str,

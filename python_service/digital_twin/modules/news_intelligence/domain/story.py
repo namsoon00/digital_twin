@@ -359,6 +359,30 @@ def story_identity(item: Dict[str, object]) -> str:
                     return str(value).strip()
         return ""
 
+    if first("kind", "sourceKind", "evidenceKind").lower() in {"disclosure", "filing", "sec-filing", "sec_filing"}:
+        # A form title or a legacy title-derived cluster is not a filing identity.
+        symbol = first("symbol", "ticker", "relatedSymbol").upper()
+        evidence_id = first("evidenceId", "evidence_id", "id")
+        identity = first("accessionNumber", "receiptNo", "receipt_no")
+        match = re.fullmatch(r"research:[^:]+:(?:sec|dart):(.+)", evidence_id)
+        if not identity and match:
+            identity = match[1]
+        url = _normalized_url(first("articleCanonicalUrl", "canonicalUrl", "url", "sourceUrl"))
+        if not identity and url:
+            parsed = urlsplit(url)
+            if parsed.hostname in {"sec.gov", "www.sec.gov"}:
+                accession = re.match(r"/Archives/edgar/data/\d+/(\d{18})(?:/|$)", parsed.path)
+                if accession:
+                    value = accession[1]
+                    identity = value[:10] + "-" + value[10:12] + "-" + value[12:]
+            elif parsed.hostname == "dart.fss.or.kr":
+                identity = dict(parse_qsl(parsed.query)).get("rcpNo", "")
+        if re.fullmatch(r"\d{10}-\d{2}-\d{6}", identity) or re.fullmatch(r"\d{14}", identity):
+            return _hash("official-document-v1|" + symbol + "|" + identity)
+        if evidence_id or url:
+            return _hash("official-document-reference-v1|" + symbol + "|" + (evidence_id or url))
+        return ""
+
     explicit = first("storyClusterId", "eventClusterId", "canonicalEventId")
     if explicit:
         return explicit if explicit.startswith("story:") else _hash("explicit|" + explicit)

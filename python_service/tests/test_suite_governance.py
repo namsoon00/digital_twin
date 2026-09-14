@@ -163,7 +163,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eight registered-design, immutable repair, collector and comparator regressions.
         # Three experiment-worker, source-ingress and rollback ownership regressions.
         # Nineteen free-source/follow-up/health boundaries and two transactional storage regressions.
-        self.assertLessEqual(total, 1563)
+        # Nine document-recovery provenance, exact-revision and digest identity regressions.
+        self.assertLessEqual(total, 1572)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

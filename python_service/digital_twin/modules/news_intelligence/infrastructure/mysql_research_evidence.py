@@ -61,6 +61,7 @@ DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "officialDocumentFactRevision",
     "officialDocumentFactPayloadHash",
     "officialDocumentFetchedAt",
+    "officialDocumentCollectionSource",
 }
 
 SOURCE_EVIDENCE_PAYLOAD_KEYS = {
@@ -163,6 +164,7 @@ def merge_derived_evidence_payload(
             "officialDocumentFactRevision",
             "officialDocumentFactPayloadHash",
             "officialDocumentFetchedAt",
+            "officialDocumentCollectionSource",
         ]:
             if key in previous:
                 merged[key] = previous.get(key)

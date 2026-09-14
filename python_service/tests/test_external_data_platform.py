@@ -910,6 +910,22 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(1, len(store.completed))
         self.assertEqual([], store.events, "initial baselines must not fan out reasoning events")
 
+    def test_document_collection_persists_recovery_purpose_in_immutable_observation(self):
+        for dataset in ("sec.document", "opendart.document"):
+            for source in ("document-recovery", "sec-submissions"):
+                with self.subTest(dataset=dataset, source=source):
+                    adapter = StaticAdapter()
+                    adapter.descriptor = replace(adapter.descriptor, dataset_id=dataset)
+                    store = MemoryCollectionStore()
+                    service = ExternalDataCollectionService({}, ExternalDatasetRegistry([adapter]), store)
+                    job = CollectionJob(dataset, "test-doc", "test-provider", 50,
+                                        ExternalSubject("NVDA", symbol="NVDA", source=source))
+                    result = service._process_job(job)
+                    self.assertEqual("success", result["status"])
+                    self.assertEqual(source, store.completed[0][2].quality["collectionSource"])
+
+    def test_collection_failure_retains_usable_previous_fact(self):
+
         store = MemoryCollectionStore()
         store.current = {
             "payload": {"equityQuotes": {"NVDA": {"price": 225.0}}},

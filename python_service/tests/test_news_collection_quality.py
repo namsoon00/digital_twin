@@ -13,6 +13,8 @@ from digital_twin.modules.news_intelligence.application.news_ai_analysis_service
 from digital_twin.modules.news_intelligence.application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
 from digital_twin.modules.news_intelligence.application.news_collection_service import NewsCollectionRunner, parse_news_timestamp
 from digital_twin.modules.news_intelligence.application.news_digest_service import NewsDigestEnqueuer
+from digital_twin.modules.accounts.contracts import AccountConfig
+from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.platform.domain.data_pipeline_health import evaluate_news_collection_health
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import article_claim_sentences
@@ -36,6 +38,26 @@ from digital_twin.modules.news_intelligence.application.normalize_sources import
 
 
 class NewsCollectionQualityTests(unittest.TestCase):
+    def test_recovered_disclosure_cannot_reenter_digest_from_legacy_event(self):
+        enqueuer = NewsDigestEnqueuer(None, None, None)
+        event = DomainEvent("research_evidence.collected", "NVDA", payload={"alertEligibleItems": [{
+            "kind": "filing", "symbol": "NVDA", "title": "4", "payload": {"officialDocumentCollectionSource": "document-recovery"},
+        }]})
+        self.assertEqual(0, enqueuer.handle(event))
+        self.assertEqual("historical-document-recovery", enqueuer.last_audit["reason"])
+
+    def test_form4_message_distinguishes_receipt_without_invented_publication_clock(self):
+        enqueuer = NewsDigestEnqueuer(None, None, None)
+        item = {"kind": "filing", "symbol": "NVDA", "title": "4", "source": "SEC EDGAR", "publishedAt": "2026-09-11",
+                "payload": {"accessionNumber": "0000000001-26-000005"}}
+        text = enqueuer.message_text(AccountConfig.from_dict({"id": "test", "label": "test"}, {}), [item],
+                                    DomainEvent("research_evidence.collected", "NVDA", payload={}, occurred_at="2026-09-14T00:00:00Z"))
+        self.assertIn("Form 4 · 내부자 보유·거래 보고", text)
+        self.assertIn("접수번호: 0000000001-26-000005", text)
+        self.assertIn("2026-09-11 · 발표 시각 미제공", text)
+        self.assertNotIn("09/11 09:00", text)
+        self.assertNotIn("새 기사", text)
+
     def target(self):
         return NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology")
 
@@ -290,6 +312,19 @@ class NewsCollectionQualityTests(unittest.TestCase):
         }
 
         self.assertTrue(article_identity_keys(first).intersection(article_identity_keys(second)))
+
+    def test_official_identity_uses_accession_not_common_form_or_legacy_cluster(self):
+        first = {"kind": "filing", "symbol": "NVDA", "title": "4", "publishedAt": "2026-09-14",
+                 "storyClusterId": "story:legacy-title-cluster", "payload": {"accessionNumber": "0000000001-26-000001"}}
+        second = {**first, "payload": {"accessionNumber": "0000000001-26-000002"}}
+        self.assertFalse(article_identity_keys(first).intersection(article_identity_keys(second)))
+        duplicate = {"kind": "filing", "symbol": "NVDA", "title": "Amended rendering",
+                     "url": "https://www.sec.gov/Archives/edgar/data/1/000000000126000001/xslF345X06/report.xml"}
+        self.assertTrue(article_identity_keys(first).intersection(article_identity_keys(duplicate)))
+        dart = {"kind": "disclosure", "symbol": "005930", "title": "Disclosure", "payload": {"receiptNo": "20260914000001"}}
+        dart_copy = {"kind": "disclosure", "symbol": "005930", "title": "Other rendering", "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260914000001"}
+        self.assertTrue(article_identity_keys(dart).intersection(article_identity_keys(dart_copy)))
+        self.assertFalse(article_identity_keys({"kind": "filing", "symbol": "NVDA", "title": "4"}))
 
     def test_canonical_publisher_does_not_inherit_yahoo_search_identity(self):
         provenance = resolve_source_provenance(

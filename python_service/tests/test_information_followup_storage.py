@@ -8,11 +8,42 @@ from digital_twin.infrastructure.external_api.mysql_stores import MySQLExternalD
 from digital_twin.modules.market_data.application.information_followup_service import stamp
 from digital_twin.modules.market_data.infrastructure.mysql_information_followups import MySQLInformationFollowups
 from digital_twin.modules.market_data.public import DatasetDescriptor
+from digital_twin.modules.market_data.application.external_data.contracts import CollectionJob, ExternalSubject, FollowupCollectionRequest, SourceObservation
 from digital_twin.shared_kernel.events import DomainEvent
 
 
 @unittest.skipUnless(os.environ.get('MYSQL_DATABASE') == 'orbit_alpha_test', 'requires isolated test database')
 class InformationStorageTests(unittest.TestCase):
+    def test_document_revision_reader_restores_legacy_recovery_origin_without_using_current_body(self):
+        store = MySQLExternalDataStore(runtime_settings())
+        symbol = 'test-document-' + uuid.uuid4().hex
+        now = stamp(datetime.now(timezone.utc))
+        descriptor = DatasetDescriptor(dataset_id='sec.document', provider_id='sec-edgar', capability='official-document-body',
+                                       cadence_seconds=86400, freshness_seconds=86400, completion_mode='once', revision_mode='immutable')
+        try:
+            for index, origin in ((1, 'document-recovery'), (2, 'sec-submissions')):
+                accession = '0000000001-26-00000' + str(index)
+                subject = ExternalSubject(symbol, symbol=symbol, source=origin)
+                partition = symbol + ':' + accession + ':body-v1'
+                request = FollowupCollectionRequest(descriptor.dataset_id, partition, subject, {'accessionNumber': accession})
+                store.enqueue_followups([(descriptor, request)])
+                job = CollectionJob(descriptor.dataset_id, partition, descriptor.provider_id, 50, subject)
+                observation = SourceObservation(descriptor.dataset_id, descriptor.provider_id, symbol, accession + ':hash', now, now,
+                                                {'document': index}, quality={'dataUsable': True})
+                store.complete_observation(job, descriptor, observation, now)
+            older = store.official_document_fact('sec.document', symbol, '0000000001-26-000001:hash')
+            newer = store.official_document_fact('sec.document', symbol, '0000000001-26-000002:hash')
+            self.assertEqual({'document': 1}, older['payload'])
+            self.assertEqual('document-recovery', older['quality']['collectionSource'])
+            self.assertEqual('sec-submissions', newer['quality']['collectionSource'])
+            self.assertEqual({}, store.official_document_fact('sec.document', symbol, 'missing-revision'))
+            self.assertNotIn('collectionSource', store.current_fact('sec.document', symbol)['quality'], 'legacy provenance read must not rewrite immutable facts')
+        finally:
+            with store.transaction() as c:
+                c.execute('DELETE FROM external_fact_revision WHERE dataset_id=%s AND subject_key=%s', ('sec.document', symbol))
+                c.execute('DELETE FROM external_fact_current WHERE dataset_id=%s AND subject_key=%s', ('sec.document', symbol))
+                c.execute('DELETE FROM external_dataset_state WHERE dataset_id=%s AND partition_key LIKE %s', ('sec.document', symbol + ':%'))
+
     def test_provider_reservations_are_shared_across_store_instances(self):
         settings = runtime_settings()
         first, second = MySQLExternalDataStore(settings), MySQLExternalDataStore(settings)
@@ -38,7 +69,7 @@ class InformationStorageTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         row = {'trackingId': identity, 'sourceKind': 'test', 'sourceId': identity, 'sourceHash': 'v1',
             'status': 'active', 'nextCheckAt': stamp(now), 'createdAt': stamp(now), 'updatedAt': stamp(now)}
-        event = DomainEvent('information.observation.updated', identity, {'trackingId': identity, 'decisionAuthority': False})
+        event = DomainEvent('information.observation.updated', identity, payload={'trackingId': identity, 'decisionAuthority': False})
         try:
             self.assertTrue(store.register(row))
             self.assertFalse(store.register(row))

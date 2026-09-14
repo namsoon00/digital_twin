@@ -121,6 +121,10 @@
     }
   },
   "storage": {
+    "modules/news_intelligence/infrastructure/mysql_research_evidence.py::merge_derived_evidence_payload": {
+      "hash": "51b7c8acb6061af12bdce049ddc250014f6d740a714006eaa5796732375f39e0",
+      "reason": "Preserve document-recovery collection purpose across metadata refreshes so old bodies cannot become new alerts; test_external_official_evidence_projection.test_metadata_refresh_preserves_verified_document_provenance."
+    },
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.target_deployments_with_connection": {
       "hash": "321ef2f154b3bffca77fdaa78184f4ae3651289cb978d85d149acd62c6f41394",
       "reason": "Route isolated experiments from authoritative candidate control and their shadow ownership receipt, not a stale configured release ID; retain active/delivery routing and exclude retired or rollback-only releases. test_reasoning_ingress_router, test_ai_inference_worker_runtime and test_ontology_evolution."

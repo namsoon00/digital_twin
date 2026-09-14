@@ -226,6 +226,43 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertEqual(1, first["writtenCount"])
         self.assertEqual(0, second["writtenCount"])
 
+    def test_recovery_document_stays_silent_after_durable_event_replay(self):
+        for factory in (dart_fact, sec_fact):
+            with self.subTest(factory=factory.__name__):
+                row = factory()
+                row["quality"] = {"dataUsable": True, "collectionSource": "document-recovery"}
+                publisher = MemoryPublisher()
+                evidence = MemoryEvidenceStore()
+                projector = ExternalOfficialEvidenceProjectionService(MemoryFactStore(row), evidence, publisher, {}, now_provider=lambda: self.now)
+                event = DomainEvent(EXTERNAL_FACT_CHANGED, "test", payload={"datasetId": row["datasetId"], "subjectKey": row["subjectKey"], "sourceRevision": row["sourceRevision"]})
+                result = projector.project_event(event)
+                self.assertEqual(1, result["writtenCount"])
+                self.assertFalse(result["alertReplayAllowed"])
+                collected = next(e for e in publisher.events if e.name == RESEARCH_EVIDENCE_COLLECTED)
+                self.assertEqual([], collected.payload["alertEligibleItems"])
+                self.assertEqual(0, collected.payload["alertEligibleCount"])
+                self.assertEqual(1, collected.payload["savedCount"])
+                self.assertTrue(next(iter(evidence.items.values())).raw_payload["documentVerified"])
+                self.assertEqual("document-recovery", next(iter(evidence.items.values())).raw_payload["officialDocumentCollectionSource"])
+
+    def test_event_reads_exact_document_revision_not_latest_symbol_document(self):
+        row = dart_fact()
+        calls = []
+        self.fact_store.row = {**row, "sourceRevision": "different-document"}
+        self.fact_store.official_document_fact = lambda *args: calls.append(args) or row
+        event = self.event()
+        event.payload["sourceRevision"] = row["sourceRevision"]
+        self.assertEqual(1, self.projector.project_event(event)["writtenCount"])
+        self.assertEqual([(row["datasetId"], row["subjectKey"], row["sourceRevision"])], calls)
+
+    def test_missing_exact_document_revision_never_uses_newer_body(self):
+        event = self.event()
+        event.payload["sourceRevision"] = "missing-version"
+        with self.assertRaisesRegex(RuntimeError, "revision does not match"):
+            self.projector.project_event(event)
+        self.assertEqual({}, self.evidence_store.items)
+        self.assertEqual([], self.publisher.events)
+
     def test_metadata_refresh_preserves_verified_document_provenance(self):
         previous = {
             "officialDocumentText": "verified official filing body",
@@ -234,6 +271,7 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
             "documentHash": "document-hash",
             "officialDocumentDatasetId": "opendart.document",
             "officialDocumentFactRevision": "receipt:document-hash",
+            "officialDocumentCollectionSource": "document-recovery",
             "promptEvidenceAdmission": {"promptEligible": True, "alertEligible": True},
             "disclosureDocumentQuality": {"documentVerified": True},
         }
@@ -251,6 +289,7 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertTrue(merged["documentVerified"])
         self.assertEqual("document-hash", merged["documentHash"])
         self.assertEqual("opendart.document", merged["officialDocumentDatasetId"])
+        self.assertEqual("document-recovery", merged["officialDocumentCollectionSource"])
         self.assertTrue(merged["promptEvidenceAdmission"]["promptEligible"])
 
     def test_metadata_only_disclosure_is_stored_but_cannot_alert_or_enter_prompt(self):

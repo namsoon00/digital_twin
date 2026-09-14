@@ -184,6 +184,8 @@ def freshness_text(value: object, reference: object = "") -> str:
     published = parse_datetime(value)
     if not published:
         return "시각 확인 중"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", clean_text(value)):
+        return published.strftime("%Y-%m-%d") + " · 발표 시각 미제공"
     compared_at = parse_datetime(reference) or datetime.now(timezone.utc)
     minutes = max(0, int((compared_at - published).total_seconds() // 60))
     if minutes < 1:
@@ -662,6 +664,7 @@ def alert_reason_lines(items: List[Dict[str, object]]) -> List[str]:
     if not items:
         return ["• 새 뉴스/피드 근거가 들어와 확인 알림을 보냈습니다."]
     primary = alert_reason_context_item(items[0])
+    noun = "공시" if item_event_kind(items[0]) == "disclosure" else "기사"
     name = str(primary.get("name") or "종목")
     symbol = str(primary.get("symbol") or "")
     target = name + ((" / " + symbol) if symbol and symbol != name else "")
@@ -672,12 +675,12 @@ def alert_reason_lines(items: List[Dict[str, object]]) -> List[str]:
     if condition_text:
         lines.append(
             "• " + html_text(target) + " " + html_text(bucket)
-            + " 종목의 새 기사이며 " + html_text(condition_text)
+            + " 종목의 새 " + noun + "이며 " + html_text(condition_text)
             + " 조건을 통과했습니다."
         )
     else:
-        lines.append("• " + html_text(target) + "의 새 기사가 보유/관심 종목 기준을 통과했습니다.")
-    lines.append("• 기사 한 건만으로 매수·매도를 결정하지 않고, 시장 확인 항목과 함께 판단합니다.")
+        lines.append("• " + html_text(target) + "의 새 " + noun + "가 보유/관심 종목 기준을 통과했습니다.")
+    lines.append("• " + noun + " 한 건만으로 매수·매도를 결정하지 않고, 시장 확인 항목과 함께 판단합니다.")
     if len(items) > 1:
         lines.append("• 함께 들어온 새 뉴스가 " + str(len(items)) + "건이라 기사 상세에서 각각 확인할 수 있습니다.")
     return lines
@@ -1140,6 +1143,8 @@ class NewsDigestEnqueuer:
         candidate_count = len(items)
         items = self.hydrate_canonical_items(items)
         items = [item for item in items if item_event_kind(item) in {"news", "disclosure"}]
+        recovered_count = sum(item_payload(item).get("officialDocumentCollectionSource") == "document-recovery" for item in items)
+        items = [item for item in items if item_payload(item).get("officialDocumentCollectionSource") != "document-recovery"]
         items = [self.refresh_item_analysis(item) for item in items]
         items = [item for item in items if relation_scope_is_investable(self.item_relation_scope(item))]
         investable_count = len(items)
@@ -1160,12 +1165,14 @@ class NewsDigestEnqueuer:
             items = [item for item in items if self.item_passes_quality_gate(item)]
         self.last_filter_audit = {
             "candidateCount": candidate_count,
+            "recoveredDocumentCount": recovered_count,
             "investableCount": investable_count,
             "analysisCurrentCount": current_count,
             "freshCount": fresh_count,
             "qualityEligibleCount": len(items),
             "reason": (
-                "news-analysis-not-current" if investable_count and not current_count
+                "historical-document-recovery" if recovered_count and not investable_count
+                else "news-analysis-not-current" if investable_count and not current_count
                 else "news-notification-stale" if current_count and not fresh_count
                 else "news-quality-gate-rejected" if fresh_count and not items
                 else "eligible"
@@ -1413,6 +1420,11 @@ class NewsDigestEnqueuer:
         sources = source_names(items)
         source = sources[0] if sources else "출처 미확인"
         original_title = item_original_title(primary) or clean_text(primary.get("title"))
+        official = item_event_kind(primary) == "disclosure"
+        payload = item_payload(primary)
+        receipt = clean_text(payload.get("accessionNumber") or primary.get("receiptNo") or payload.get("receiptNo")) if official else ""
+        if official and original_title in {"4", "4/A"}:
+            original_title = "Form " + original_title + " · 내부자 보유·거래 보고" + (" (정정)" if original_title.endswith("/A") else "")
         translated_title = item_translated_title(primary)
         summary = item_summary(primary)
         brief = primary.get("informationBrief")
@@ -1446,9 +1458,11 @@ class NewsDigestEnqueuer:
             html_text(freshness_text(primary.get("publishedAt") or primary.get("observedAt"), reference))
             + " · " + html_text(source),
             "",
-            "원문 제목",
+            "공시 종류" if official else "원문 제목",
             "• " + html_text(original_title or "제목 확인 중"),
         ]
+        if receipt:
+            parts.append("• 접수번호: " + html_text(receipt))
         if translated_title:
             parts.extend(["한국어 제목", "• " + html_text(translated_title)])
         elif title_needs_korean_translation(primary):

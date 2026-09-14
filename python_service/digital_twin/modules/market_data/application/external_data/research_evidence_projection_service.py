@@ -93,7 +93,14 @@ class ExternalOfficialEvidenceProjectionService:
         subject_key = _text(payload.get("subjectKey"))
         if dataset_id not in OFFICIAL_DATASET_IDS:
             return {"status": "ignored", "reason": "non-official-dataset", "writtenCount": 0}
-        row = self.fact_store.current_fact(dataset_id, subject_key)
+        source_revision = _text(payload.get("sourceRevision"))
+        document_reader = getattr(self.fact_store, "official_document_fact", None)
+        if dataset_id in {"opendart.document", "sec.document"} and callable(document_reader):
+            row = document_reader(dataset_id, subject_key, source_revision)
+        else:
+            row = self.fact_store.current_fact(dataset_id, subject_key)
+        if dataset_id in {"opendart.document", "sec.document"} and source_revision and row and row.get("sourceRevision") != source_revision:
+            raise RuntimeError("official document revision does not match source event: " + source_revision)
         if not row:
             raise RuntimeError("official external fact is missing: " + dataset_id + "/" + subject_key)
         return self.project_fact(row, source_event=event, allow_alert=allow_alert)
@@ -111,6 +118,9 @@ class ExternalOfficialEvidenceProjectionService:
         if dataset_id not in OFFICIAL_DATASET_IDS or not symbol:
             return {"status": "ignored", "reason": "unsupported-fact", "writtenCount": 0}
         source_payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+        collection_source = _text(quality.get("collectionSource"))
+        allow_alert = bool(allow_alert and collection_source != "document-recovery")
         items = [
             item for item in research_evidence_from_external_signals(symbol, source_payload)
             if isinstance(item, ResearchEvidence) and _text(item.kind).lower() in OFFICIAL_EVIDENCE_KINDS
@@ -154,6 +164,7 @@ class ExternalOfficialEvidenceProjectionService:
                     "officialDocumentFactRevision": source_revision,
                     "officialDocumentFactPayloadHash": _text(row.get("payloadHash")),
                     "officialDocumentFetchedAt": _text(row.get("fetchedAt")),
+                    "officialDocumentCollectionSource": collection_source,
                 })
             item.raw_payload = payload
             self.enrich_disclosure_analysis(item)

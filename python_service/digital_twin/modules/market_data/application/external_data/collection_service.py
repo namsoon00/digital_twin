@@ -2,6 +2,7 @@ import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
@@ -274,6 +275,9 @@ class ExternalDataCollectionService:
             }
         try:
             observation = adapter.fetch(job, self.settings)
+            if job.dataset_id in {"opendart.document", "sec.document"}:
+                # Recovery is a durable collection purpose, not a local replay flag.
+                observation = replace(observation, quality={**(observation.quality or {}), "collectionSource": job.subject.source})
             quality = observation.quality if isinstance(observation.quality, dict) else {}
             if (
                 descriptor.completion_mode == "once"

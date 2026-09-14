@@ -329,7 +329,9 @@ def operational_large_domain_event_names(settings: Mapping[str, object] = None) 
 def market_time_series_retention_days(settings: Mapping[str, object] = None) -> Dict[str, int]:
     configured = settings or {}
     return {
+        "1m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 7, 1, 3650),
         "3m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 7, 1, 3650),
+        "10m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 7, 1, 3650),
         "15m": _int_setting(configured, "marketTimeSeries15mRetentionDays", 30, 1, 36500),
         "1h": _int_setting(configured, "marketTimeSeries1hRetentionDays", 365, 1, 36500),
         "1d": _int_setting(configured, "marketTimeSeriesDailyRetentionDays", 1825, 1, 36500),

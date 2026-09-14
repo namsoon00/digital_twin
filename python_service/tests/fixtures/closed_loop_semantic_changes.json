@@ -1,5 +1,8 @@
 {
   "domain": {
+    "modules/market_data/domain/market_time_series.py::GRANULARITY_SECONDS": {"hash": "c020127da4913010098adadfc74077b9c107ff167106fc7ca8acf08cea67e1ce", "reason": "Represent bounded 1-minute and 10-minute index history without collapsing all past bars into the current collection bucket; test_outcome_benchmark_collection."},
+    "modules/market_data/domain/market_time_series.py::MarketTimeSeriesObservation": {"hash": "77b6b65b0cb49f221c5e92783a23c479d0c3bfad5321fc70d1b98d50673d98d0", "reason": "Validate finite historical index prices, completed source intervals, explicit availability clocks and actual-data provenance; test_outcome_benchmark_collection."},
+    "platform/domain/mysql_minimal_retention.py::mysql_minimal_retention_policy": {"hash": "049fff43a6c07b92cf94fa725ea637803186618ab59aa083f2fceea6aaa3c343", "reason": "Apply existing raw-history retention to newly collected index granularities so benchmark data cannot accumulate indefinitely; test_outcome_benchmark_collection."},
     "platform/domain/data_pipeline_health.py::evaluate_news_collection_health": {"hash": "1412223c92b0f19bca037bdf9db73e6cbca50472af5dc7ab0256fb504d48ea05", "reason": "Fetched but rejected candidates must not reset admitted-news freshness or report successful quality admission."},
     "modules/notifications/domain/message_types.py::MONITORING_MESSAGE_TYPES": {"hash": "5eaf0c8a38a82a95aa211353b67c261bec8b5498bd8f0b64050af96a5952e6c4", "reason": "Register informational result/price follow-ups separately from investment judgments."},
     "modules/notifications/domain/message_types.py::USER_MANAGED_NOTIFICATION_TYPES": {"hash": "7e77a83b4788897765ef5eec488085ce09953963ef8a8af789bf1d7bf740fceb", "reason": "Allow users to configure the new informational follow-up notification type."},
@@ -124,6 +127,9 @@
       "reason": "Do not convert data gaps into success or price outcomes into trading returns; test_ai_inference_queue."
     }
   },
+  "ports": {
+    "modules/market_data/domain/repositories.py::MarketTimeSeriesRepository": {"hash": "f068bc22fc998962bfcf62ea20e588f44915d9a56ffae8b25d8fe7154fa6f2d8", "reason": "Add explicit historical-price ingestion through the versioned time-series port, keeping atomic storage and replica projection outside the collector; test_outcome_benchmark_collection."}
+  },
   "projection": {
     "ontology_projection.PortfolioOntologyProjectionRecorder.record_snapshot": {
       "hash": "67c4877c75fc15f5d2f29a67ecb1659f2832838a1edf7e354dbdf876ff7e62af",
@@ -135,6 +141,7 @@
     }
   },
   "storage": {
+    "modules/market_data/infrastructure/mysql_market_time_series.py::MySQLMarketTimeSeriesStore": {"hash": "04961c63fd19942f8a6804093f1ea8238faadb31210825c185b6611cd646fa2b", "reason": "Persist immutable source-time index points, retain point-in-time read cutoffs, and prefer finer matching benchmark observations; test_outcome_benchmark_collection."},
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::merge_derived_evidence_payload": {
       "hash": "51b7c8acb6061af12bdce049ddc250014f6d740a714006eaa5796732375f39e0",
       "reason": "Preserve document-recovery collection purpose across metadata refreshes so old bodies cannot become new alerts; test_external_official_evidence_projection.test_metadata_refresh_preserves_verified_document_provenance."

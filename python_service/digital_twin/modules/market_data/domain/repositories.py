@@ -30,6 +30,9 @@ class MarketQuoteRepository(Protocol):
 
 
 class MarketTimeSeriesRepository(Protocol):
+    def record_price_history(self, observations: Iterable[object]) -> Dict[str, object]:
+        ...
+
     def record_snapshots_with_connection(
         self,
         connection,
@@ -91,6 +94,11 @@ class MarketTimeSeriesRepository(Protocol):
         ...
 
     def summary(self, account_id: str = "") -> Dict[str, object]:
+        ...
+
+
+class MarketIndexHistoryProvider(Protocol):
+    def fetch_history(self, symbols: Iterable[str]) -> Dict[str, object]:
         ...
 
 

@@ -159,6 +159,7 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.infrastructure.toss_snapshots import TossProvider
     from digital_twin.modules.market_data.public import MarketDataCollectionRunner
+    from digital_twin.modules.market_data.infrastructure.kis_index_history import KISIndexHistoryProvider
 
     configured_settings = settings or runtime_settings()
     return MarketDataCollectionRunner(
@@ -174,6 +175,7 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
             configured_settings,
         ),
         decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+        index_history_provider=KISIndexHistoryProvider(configured_settings),
         external_signal_refresher=lambda positions: ExternalSignalProvider(
             settings=configured_settings,
         ).signals_for_positions(positions, cache_scope="account-snapshot"),

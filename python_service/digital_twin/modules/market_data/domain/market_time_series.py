@@ -1,6 +1,7 @@
 import json
+import math
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Mapping, Optional
 from zoneinfo import ZoneInfo
 
@@ -8,7 +9,9 @@ from digital_twin.modules.portfolio.contracts import Position
 
 
 GRANULARITY_SECONDS = {
+    "1m": 60,
     "3m": 3 * 60,
+    "10m": 10 * 60,
     "15m": 15 * 60,
     "1h": 60 * 60,
 }
@@ -347,6 +350,22 @@ class MarketTimeSeriesObservation:
 
     def valid(self) -> bool:
         return bool(self.account_id and self.symbol and self.bucket_at and self.observed_at and self.current_price > 0)
+
+    def valid_price_history(self) -> bool:
+        """Historical prices keep the event clock separate from first availability."""
+        try:
+            if not self.valid() or not self.provider or self.granularity not in {"1m", "10m"}:
+                return False
+            source = datetime.fromisoformat(self.source_as_of.replace("Z", "+00:00"))
+            received = datetime.fromisoformat(self.observed_at.replace("Z", "+00:00"))
+            return bool(
+                source.tzinfo and received.tzinfo and source + timedelta(seconds=1) <= received
+                and self.bucket_at == bucket_start(self.source_as_of, self.granularity)
+                and not isinstance(self.current_price, bool) and math.isfinite(self.current_price)
+                and self.data_quality == "actual"
+            )
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     def to_row(self) -> Dict[str, object]:
         return asdict(self)

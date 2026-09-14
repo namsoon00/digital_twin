@@ -298,6 +298,8 @@ class SchemaQuestDB(QuestDBTimeSeriesAdapter):
         self.missing_tables = set(missing_tables or [])
         self.ttl_days = {
             "market_observations_3m": 2,
+            "market_observations_1m": 2,
+            "market_observations_10m": 2,
             "market_observations_15m": 10,
             "market_observations_1h": 90,
             "market_observations_1d": 180,
@@ -308,6 +310,8 @@ class SchemaQuestDB(QuestDBTimeSeriesAdapter):
         self.ttl_units = {**{table_name: "DAY" for table_name in self.ttl_days}, **dict(ttl_units or {})}
         self.upsert_keys = {
             "market_observations_3m": ("event_at", "account_id", "symbol", "granularity"),
+            "market_observations_1m": ("event_at", "account_id", "symbol", "granularity"),
+            "market_observations_10m": ("event_at", "account_id", "symbol", "granularity"),
             "market_observations_15m": ("event_at", "account_id", "symbol", "granularity"),
             "market_observations_1h": ("event_at", "account_id", "symbol", "granularity"),
             "market_observations_1d": ("event_at", "account_id", "symbol", "granularity"),
@@ -469,8 +473,8 @@ class TimeSeriesPlatformTests(unittest.TestCase):
 
     def test_questdb_schema_accepts_equivalent_week_ttl(self):
         adapter = SchemaQuestDB(
-            {"market_observations_3m": 1, "portfolio_marks": 1},
-            ttl_units={"market_observations_3m": "WEEK", "portfolio_marks": "WEEK"},
+            {"market_observations_3m": 1, "market_observations_1m": 1, "market_observations_10m": 1, "portfolio_marks": 1},
+            ttl_units={name: "WEEK" for name in ("market_observations_3m", "market_observations_1m", "market_observations_10m", "portfolio_marks")},
         )
         adapter.settings["marketTimeSeriesRawRetentionDays"] = "7"
 
@@ -512,7 +516,7 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         result = PartialSummaryQuestDB().summary()
 
         self.assertEqual("degraded", result["status"])
-        self.assertEqual(4, len(result["granularities"]))
+        self.assertEqual(6, len(result["granularities"]))
         self.assertEqual("unavailable", result["granularities"][0]["status"])
         self.assertEqual("ready", result["granularities"][1]["status"])
 

@@ -241,6 +241,29 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             "_capitalFlowRows": capital_flow_rows,
         }
 
+    def record_price_history_with_connection(self, connection, observations) -> Dict[str, object]:
+        rows = []
+        skipped = 0
+        if not self.enabled():
+            return {"enabled": False, "savedCount": 0, "symbolCount": 0, "_projectedRows": []}
+        for observation in observations or []:
+            if not isinstance(observation, MarketTimeSeriesObservation) or not observation.valid_price_history():
+                skipped += 1
+                continue
+            # A later fetch cannot rewrite an earlier point or its availability clock.
+            if self.insert_observation_with_connection(connection, observation, replace=False):
+                rows.append(observation.to_row())
+        return {
+            "enabled": True, "savedCount": len(rows), "symbolCount": len({row["symbol"] for row in rows}),
+            "skippedCount": skipped, "_projectedRows": rows,
+        }
+
+    def record_price_history(self, observations) -> Dict[str, object]:
+        with self.transaction() as connection:
+            result = self.record_price_history_with_connection(connection, observations)
+        result.pop("_projectedRows", None)
+        return result
+
     def record_daily_candles(
         self,
         candles_by_symbol: Dict[str, List[Dict[str, object]]],
@@ -443,7 +466,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
 
         clean_symbol = str(symbol or "").upper().strip()
         clean_granularity = str(granularity or "1d").lower().strip()
-        if clean_granularity not in {"3m", "15m", "1h", "1d"}:
+        if clean_granularity not in {"1m", "3m", "10m", "15m", "1h", "1d"}:
             clean_granularity = "1d"
         if not self.enabled() or not clean_symbol:
             return []
@@ -965,11 +988,13 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                                PARTITION BY target_requests.request_key, observations.account_id
                                ORDER BY COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) ASC,
                                         CASE observations.granularity
+                                            WHEN '1m' THEN 0
                                             WHEN '3m' THEN 1
-                                            WHEN '15m' THEN 2
-                                            WHEN '1h' THEN 3
-                                            WHEN '1d' THEN 4
-                                            ELSE 5
+                                            WHEN '10m' THEN 2
+                                            WHEN '15m' THEN 3
+                                            WHEN '1h' THEN 4
+                                            WHEN '1d' THEN 5
+                                            ELSE 6
                                         END ASC,
                                         observations.bucket_at ASC
                            ) AS row_number_value
@@ -1074,11 +1099,13 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                                PARTITION BY target_requests.request_key, observations.account_id
                                ORDER BY COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) DESC,
                                         CASE observations.granularity
+                                            WHEN '1m' THEN 0
                                             WHEN '3m' THEN 1
-                                            WHEN '15m' THEN 2
-                                            WHEN '1h' THEN 3
-                                            WHEN '1d' THEN 4
-                                            ELSE 5
+                                            WHEN '10m' THEN 2
+                                            WHEN '15m' THEN 3
+                                            WHEN '1h' THEN 4
+                                            WHEN '1d' THEN 5
+                                            ELSE 6
                                         END ASC,
                                         observations.bucket_at DESC
                            ) AS row_number_value

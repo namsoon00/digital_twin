@@ -287,6 +287,8 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(set(changes), checked_changes)
 
     def test_integrated_repository_contracts_have_one_owner(self):
+        changes = json.loads((FIXTURES / "closed_loop_semantic_changes.json").read_text()).get("ports", {})
+        checked_changes = set()
         for name, entry in STORAGE["ports"].items():
             path = Path(entry["path"])
             owner = path.parts[1]
@@ -301,13 +303,22 @@ class BackendIntegrationTests(unittest.TestCase):
                 if getattr(n, "name", None) == name
                 or (isinstance(n, ast.AnnAssign) and n.target.id == name)
             )
+            key = entry["path"] + "::" + name
+            expected = entry["astHash"]
+            if key in changes:
+                reviewed = changes[key]
+                self.assertTrue(reviewed["reason"])
+                self.assertNotEqual(expected, reviewed["hash"])
+                expected = reviewed["hash"]
+                checked_changes.add(key)
             self.assertEqual(
-                entry["astHash"],
+                expected,
                 hashlib.sha256(
                     ast.dump(node, include_attributes=False).encode()
                 ).hexdigest(),
                 name,
             )
+        self.assertEqual(set(changes), checked_changes)
         self.assertTrue(callable(importlib.import_module(
             "digital_twin.modules.market_data.contracts"
         ).MarketDataProviderFactory))

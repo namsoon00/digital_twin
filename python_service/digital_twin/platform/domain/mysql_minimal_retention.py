@@ -247,7 +247,9 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
             1000,
         ),
         market_time_series_retention_days={
+            "1m": _int_setting(configured, "mysqlMinimalTimeSeries3mRetentionDays", 7, 1, 30),
             "3m": _int_setting(configured, "mysqlMinimalTimeSeries3mRetentionDays", 7, 1, 30),
+            "10m": _int_setting(configured, "mysqlMinimalTimeSeries3mRetentionDays", 7, 1, 30),
             "15m": _int_setting(configured, "mysqlMinimalTimeSeries15mRetentionDays", 30, 1, 90),
             "1h": _int_setting(configured, "mysqlMinimalTimeSeries1hRetentionDays", 365, 7, 730),
             "1d": _int_setting(configured, "mysqlMinimalTimeSeries1dRetentionDays", 1825, 60, 3650),

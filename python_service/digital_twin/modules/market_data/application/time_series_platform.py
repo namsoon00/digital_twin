@@ -550,6 +550,14 @@ class VersionedMarketTimeSeriesStore:
         result["activeBackendId"] = self.active_backend_id()
         return result
 
+    def record_price_history(self, observations) -> Dict[str, object]:
+        with self.baseline.transaction() as connection:
+            result = dict(self.baseline.record_price_history_with_connection(connection, observations))
+            rows = result.pop("_projectedRows", [])
+            result["projectionQueuedCount"] = self.enqueue_rows_with_connection(connection, rows)
+        result["activeBackendId"] = self.active_backend_id()
+        return result
+
     def record_daily_candles(self, candles_by_symbol, metadata_by_symbol=None, provider="toss-candles") -> Dict[str, object]:
         result = dict(self.baseline.record_daily_candles(candles_by_symbol, metadata_by_symbol, provider) or {})
         rows = [dict(row or {}) for row in result.pop("_projectedRows", []) or []]

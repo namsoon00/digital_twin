@@ -169,7 +169,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven KIS wire-layout, stream-fragmentation and stage-provenance regressions.
         # Six outcome-repair isolation, immutable experiment restart/rotation
         # and lossless bounded input-storage regressions.
-        self.assertLessEqual(total, 1607)
+        # Fourteen index-outcome collection, source-clock, replica, retention and atomic history regressions.
+        self.assertLessEqual(total, 1621)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

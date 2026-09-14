@@ -23,6 +23,8 @@ GRANULARITY_TABLES = {
     "15m": "market_observations_15m",
     "1h": "market_observations_1h",
     "1d": "market_observations_1d",
+    "1m": "market_observations_1m",
+    "10m": "market_observations_10m",
 }
 
 MARKET_COLUMNS = [
@@ -413,7 +415,9 @@ class QuestDBTimeSeriesAdapter:
 
     def expected_ttl_days(self) -> Dict[str, int]:
         retention_days = {
+            "1m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 7))),
             "3m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 7))),
+            "10m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 7))),
             "15m": max(1, int(float(self.settings.get("marketTimeSeries15mRetentionDays") or 30))),
             "1h": max(1, int(float(self.settings.get("marketTimeSeries1hRetentionDays") or 365))),
             "1d": max(1, int(float(self.settings.get("marketTimeSeriesDailyRetentionDays") or 1825))),

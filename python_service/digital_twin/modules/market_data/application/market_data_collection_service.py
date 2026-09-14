@@ -3,6 +3,8 @@ from typing import Callable, Dict, Iterable, List, Tuple
 
 from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.modules.market_data.domain.data_freshness import age_minutes
+from digital_twin.modules.market_data.domain.benchmark import INDEX_BENCHMARKS, OUTCOME_COLLECTION_ROLES
+from digital_twin.modules.market_data.domain.repositories import MarketIndexHistoryProvider
 from digital_twin.modules.market_data.domain.events import market_data_collected_event
 from digital_twin.modules.reasoning.contracts import market_fact_change
 from digital_twin.modules.instruments.contracts import market_signal_symbols
@@ -145,6 +147,7 @@ class MarketDataCollectionRunner:
         health_service=None,
         decision_episode_store=None,
         external_signal_refresher: Callable[[Iterable[Position]], Dict[str, object]] = None,
+        index_history_provider: MarketIndexHistoryProvider = None,
     ):
         self.account_repository = account_repository
         self.symbol_service = symbol_service
@@ -157,6 +160,7 @@ class MarketDataCollectionRunner:
         self.health_service = health_service
         self.decision_episode_store = decision_episode_store
         self.external_signal_refresher = external_signal_refresher
+        self.index_history_provider = index_history_provider
 
     def attach_pipeline_health(self, result: Dict[str, object]) -> Dict[str, object]:
         if not self.health_service or not hasattr(self.health_service, "record_market_data_collection"):
@@ -345,7 +349,7 @@ class MarketDataCollectionRunner:
         tagged as background collection so only the feedback loop consumes
         them.
         """
-        if not self.decision_episode_store or not hasattr(self.decision_episode_store, "pending_outcome_targets"):
+        if not any(callable(getattr(self.decision_episode_store, name, None)) for name in ("outcome_collection_targets", "pending_outcome_targets")):
             return []
         excluded = {str(symbol or "").upper().strip() for symbol in excluded_symbols or [] if str(symbol or "").strip()}
         selected_markets = set(self.markets())
@@ -388,8 +392,8 @@ class MarketDataCollectionRunner:
                         seen.add(symbol)
                 benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
                 if benchmark_symbol and benchmark_symbol not in seen and len(result) < limit:
-                    benchmark_identity = {}
-                    if hasattr(self.symbol_service, "enrich"):
+                    benchmark_identity = dict(INDEX_BENCHMARKS.get(benchmark_symbol) or {})
+                    if not benchmark_identity and hasattr(self.symbol_service, "enrich"):
                         try:
                             benchmark_identity = self.symbol_service.enrich(benchmark_symbol) or {}
                         except Exception:
@@ -412,6 +416,29 @@ class MarketDataCollectionRunner:
                     return result
         return result
 
+    def collect_index_benchmark_history(self, targets) -> Dict[str, object]:
+        symbols = sorted({position.symbol for position, _base in targets if position.symbol in INDEX_BENCHMARKS})
+        if not symbols:
+            return {"status": "skipped", "symbols": [], "savedCount": 0}
+        if not self.index_history_provider or not callable(getattr(self.time_series_store, "record_price_history", None)):
+            return {"status": "unavailable", "symbols": symbols, "savedCount": 0, "reason": "index-history-provider-or-store-unavailable"}
+        try:
+            result = dict(self.index_history_provider.fetch_history(symbols))
+            observations = result.pop("observations", [])
+            stored = self.time_series_store.record_price_history(observations) if observations else {}
+            result.update(
+                receivedCount=len(observations), savedCount=int(stored.get("savedCount") or 0),
+                projectionQueuedCount=int(stored.get("projectionQueuedCount") or 0),
+            )
+            if observations and stored.get("enabled") is False:
+                result.update(status="unavailable", reason="index-history-storage-disabled")
+            return result
+        except Exception as error:  # noqa: BLE001 - history is retried without losing live stock quotes.
+            return {
+                "status": "error", "symbols": symbols, "savedCount": 0,
+                "reason": "index-history-collection-or-persistence-failed", "errorType": type(error).__name__,
+            }
+
     def merge_focus_market_data(
         self,
         provider: MarketDataProvider,
@@ -420,6 +447,8 @@ class MarketDataCollectionRunner:
         market_signal_targets: List[Tuple[Position, Dict[str, object]]] = None,
     ) -> Tuple[List[Dict[str, object]], List[Tuple[Position, Dict[str, object]]], Dict[str, object]]:
         market_signal_targets = list(market_signal_targets or [])
+        index_history = self.collect_index_benchmark_history(market_signal_targets)
+        market_signal_targets = [item for item in market_signal_targets if item[0].symbol not in INDEX_BENCHMARKS]
         symbol_order: List[str] = []
         for entry in focused_by_account:
             for position in entry.get("positions") or []:
@@ -431,7 +460,7 @@ class MarketDataCollectionRunner:
             if symbol and symbol not in symbol_order:
                 symbol_order.append(symbol)
         if not symbol_order:
-            return focused_by_account, [], {"symbols": [], "priceCount": 0, "candleCount": 0}
+            return focused_by_account, [], {"symbols": [], "priceCount": 0, "candleCount": 0, "indexBenchmarkHistory": index_history}
         if not token:
             token = provider.fetch_access_token()
         try:
@@ -483,6 +512,7 @@ class MarketDataCollectionRunner:
             "dailyHistorySavedCount": int(time_series.get("savedCount") or 0),
             "dailyHistorySymbolCount": int(time_series.get("symbolCount") or 0),
             "timeSeries": time_series,
+            "indexBenchmarkHistory": index_history,
         }
 
     def collect_candles(self, provider: MarketDataProvider, token: str, symbols: Iterable[str]):
@@ -547,7 +577,7 @@ class MarketDataCollectionRunner:
             return {"enabled": bool(self.time_series_store), "savedCount": 0, "symbolCount": 0}
         positions = [
             position for position, _base in targets or []
-            if str(getattr(position, "source", "") or "") == "decision-outcome"
+            if str(getattr(position, "source", "") or "") in OUTCOME_COLLECTION_ROLES
         ]
         if not positions:
             return {"enabled": True, "savedCount": 0, "symbolCount": 0}
@@ -671,6 +701,7 @@ class MarketDataCollectionRunner:
         if not merge_summary.get("symbols"):
             return self.attach_pipeline_health({
                 "status": "fresh",
+                "indexBenchmarkHistory": dict(merge_summary.get("indexBenchmarkHistory") or {}),
                 "markets": markets,
                 "collectionScope": "account-focus",
                 "accountCount": len(accounts),
@@ -732,7 +763,7 @@ class MarketDataCollectionRunner:
             symbol = str(position.symbol or "").upper()
             if not symbol or symbol in global_saved_symbols:
                 continue
-            is_outcome_target = str(getattr(position, "source", "") or "") == "decision-outcome"
+            is_outcome_target = str(getattr(position, "source", "") or "") in OUTCOME_COLLECTION_ROLES
             payload = position_payload(position, base, "decision-outcome" if is_outcome_target else "market-signal")
             payload["collectionTarget"] = "decision-outcome" if is_outcome_target else "market-proxy"
             if not number(payload.get("currentPrice")) and not any(number(payload.get(key)) for key in ["ma20", "ma60", "volume"]):
@@ -776,13 +807,15 @@ class MarketDataCollectionRunner:
             "symbols": symbols,
             "selectedCount": len(symbols),
             "accountSelectedCount": sum(account_symbol_counts.values()),
-            "marketSignalSelectedCount": len([item for item in auxiliary_targets if str(getattr(item[0], "source", "") or "") != "decision-outcome"]),
+            "marketSignalSelectedCount": len([item for item in auxiliary_targets if str(getattr(item[0], "source", "") or "") not in OUTCOME_COLLECTION_ROLES]),
             "marketSignalSavedCount": market_signal_saved,
             "marketSignalSymbols": market_signal_symbols,
             "decisionOutcomeSelectedCount": len(outcome_targets),
             "decisionOutcomeSavedCount": outcome_saved,
             "decisionOutcomeSymbols": outcome_symbols,
             "decisionOutcomeTimeSeriesSavedCount": int(outcome_time_series.get("savedCount") or 0),
+            "decisionOutcomeTimeSeries": outcome_time_series,
+            "indexBenchmarkHistory": dict(merge_summary.get("indexBenchmarkHistory") or {}),
             "priceCount": int(merge_summary.get("priceCount") or 0),
             "candleCount": int(merge_summary.get("candleCount") or 0),
             "dailyHistorySavedCount": int(merge_summary.get("dailyHistorySavedCount") or 0),

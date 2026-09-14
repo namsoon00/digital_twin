@@ -177,6 +177,8 @@ class PythonServiceTests(unittest.TestCase):
 
     def kis_realtime_text(self, tr_id: str, columns: list, values: dict) -> str:
         row = ["" for _item in columns]
+        clock_field = "STCK_CNTG_HOUR" if tr_id == KIS_TR_CCN_PRICE else "BSOP_HOUR"
+        row[columns.index(clock_field)] = "090000"
         for key, value in values.items():
             row[columns.index(key)] = str(value)
         return "0|" + tr_id + "|1|" + "^".join(row)
@@ -405,41 +407,18 @@ class PythonServiceTests(unittest.TestCase):
     def test_kis_market_signal_provider_preserves_fresh_websocket_ccnl_and_orderbook(self):
         cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
         fetched_at = utc_now_iso()
-        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
-            "symbol": "005930",
-            "name": "삼성전자",
-            "market": "KR",
-            "currency": "KRW",
-            "currentPrice": 72500,
-            "tradeStrength": 150,
-            "buyVolume": 10000,
-            "sellVolume": 4000,
-            "orderbookBidVolume": 9000,
-            "orderbookAskVolume": 3000,
-            "bidAskImbalance": 50,
-            "quoteSource": "KIS WebSocket",
-            "updatedAt": fetched_at,
-            "marketSignalCoverage": {
-                "ccnl": {
-                    "stage": "ccnl",
-                    "status": "available",
-                    "fields": ["currentPrice", "tradeStrength", "buyVolume", "sellVolume"],
-                    "fetchedAt": fetched_at,
-                    "realTime": True,
-                    "cadence": "websocket",
-                    "transport": "websocket",
-                },
-                "orderbook": {
-                    "stage": "orderbook",
-                    "status": "available",
-                    "fields": ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
-                    "fetchedAt": fetched_at,
-                    "realTime": True,
-                    "cadence": "websocket",
-                    "transport": "websocket",
-                },
-            },
-        })
+        client = KISRealtimeWebSocketClient(
+            {"kisAppKey": "test", "kisAppSecret": "test"},
+            quote_cache=cache,
+            now_provider=lambda: fetched_at,
+        )
+        client.apply_message(self.kis_realtime_text(KIS_TR_CCN_PRICE, CCNL_COLUMNS, {
+            "MKSC_SHRN_ISCD": "005930", "STCK_PRPR": "72500",
+            "CTTR": "150", "SHNU_CNTG_SMTN": "10000", "SELN_CNTG_SMTN": "4000",
+        }))
+        client.apply_message(self.kis_realtime_text(KIS_TR_ORDERBOOK, ORDERBOOK_COLUMNS, {
+            "MKSC_SHRN_ISCD": "005930", "TOTAL_BIDP_RSQN": "9000", "TOTAL_ASKP_RSQN": "3000",
+        }))
 
         def fake_fetch_json(_method, url, _headers, body=None, query=None, timeout=12):
             path = urllib.parse.urlparse(url).path
@@ -449,6 +428,8 @@ class PythonServiceTests(unittest.TestCase):
                 return {"rt_cd": "0", "output": {"stck_prpr": "72000", "prdy_ctrt": "1.25", "acml_vol": "1000000"}}
             if path.endswith("/inquire-ccnl"):
                 return {"rt_cd": "0", "output": [{"stck_prpr": "72000", "tday_rltv": "90", "cntg_vol": "100"}]}
+            if path.endswith("/investor-trend-estimate"):
+                return {"rt_cd": "0", "output": [{"bsop_hour_gb": "4", "frgn_fake_ntby_qty": "700", "orgn_fake_ntby_qty": "300"}]}
             if path.endswith("/inquire-investor"):
                 return {"rt_cd": "0", "output": [{"frgn_ntby_qty": "700", "orgn_ntby_qty": "300", "prsn_ntby_qty": "-1000"}]}
             if path.endswith("/inquire-asking-price-exp-ccn"):
@@ -461,9 +442,11 @@ class PythonServiceTests(unittest.TestCase):
                 "kisAppKey": "app",
                 "kisAppSecret": "secret",
                 "kisMarketSignalLiveRefreshSeconds": "60",
+                "kisFundamentalEstimatesEnabled": "0",
             },
             quote_cache=cache,
             fetch_json=fake_fetch_json,
+            now_provider=lambda: datetime(2026, 7, 14, 5, 0, tzinfo=timezone.utc),
         )
 
         signal = provider.fetch_symbol_signal("005930")

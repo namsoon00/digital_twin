@@ -15,6 +15,7 @@ from digital_twin.modules.news_intelligence.domain.company_knowledge import merg
 from digital_twin.modules.portfolio.domain.position_identity import preferred_instrument_name
 from .external_signal_utils import ExternalCircuitOpen, root_api_error
 from .operational_store import market_quote_cache
+from .kis_realtime_validation import has_unvalidated_websocket_stage, validated_websocket_stage
 from .settings import runtime_settings
 
 
@@ -643,6 +644,8 @@ def keep_fresh_position_quote(position: Position, signal: Dict[str, object]) -> 
 
 
 def fresh_websocket_stage(payload: Dict[str, object], stage: str, max_age_seconds: int) -> bool:
+    if not validated_websocket_stage(payload, stage):
+        return False
     coverage = payload.get("marketSignalCoverage") if isinstance(payload.get("marketSignalCoverage"), dict) else {}
     item = coverage.get(stage) if isinstance(coverage, dict) and isinstance(coverage.get(stage), dict) else {}
     if not item or str(item.get("status") or "") != "available":
@@ -674,7 +677,7 @@ def merge_fresh_websocket_stages(
         if not fresh_websocket_stage(cached, stage, max_age_seconds):
             continue
         for key in keys:
-            value = cached.get(key)
+            value = (cached_coverage[stage].get("values") or {}).get(key)
             if value not in (None, ""):
                 merged[key] = value
         if isinstance(cached_coverage.get(stage), dict):
@@ -1122,7 +1125,8 @@ class KISMarketSignalProvider:
 
     def cached_signal(self, symbol: str) -> Dict[str, object]:
         try:
-            return self.quote_cache.load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, symbol)
+            payload = self.quote_cache.load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, symbol)
+            return {} if has_unvalidated_websocket_stage(payload or {}) else payload
         except Exception:
             return {}
 
@@ -1921,7 +1925,7 @@ class KISMarketSignalProvider:
         return external_signals
 
     def merge_position(self, position: Position, signal: Dict[str, object] = None) -> Position:
-        if not signal:
+        if not signal or has_unvalidated_websocket_stage(signal):
             return position
 
         current_price = optional_number(signal, ["currentPrice", "lastPrice", "price"])

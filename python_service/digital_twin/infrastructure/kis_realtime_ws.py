@@ -1,11 +1,6 @@
-import base64
 import json
-import os
 import socket
-import ssl
-import struct
 import time
-import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
@@ -15,6 +10,10 @@ from digital_twin.modules.market_data.domain.market_data import known_stock, num
 from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from .external_signal_utils import guarded_external_call
 from .kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, clean_symbol
+from .kis_realtime_validation import (
+    KIS_REALTIME_STAGE_FIELDS, KIS_REALTIME_VALIDATION_VERSION,
+    has_unvalidated_websocket_stage, valid_kis_wire_row,
+)
 from .operational_store import market_quote_cache
 from .settings import runtime_settings
 
@@ -56,6 +55,11 @@ ORDERBOOK_COLUMNS = [
     "OVTM_TOTAL_ASKP_ICDC", "OVTM_TOTAL_BIDP_ICDC", "STCK_DEAL_CLS_CODE",
 ]
 
+# The live 2026-09-14 feed appends one trade field and four orderbook fields.
+# Their meaning isn't used here; the verified prefix stays unchanged. Never
+# stride a batched live message with the older prefix width.
+KIS_RECORD_WIDTHS = {KIS_TR_CCN_PRICE: {46, 47}, KIS_TR_ORDERBOOK: {59, 63}}
+
 
 def bool_setting(settings: Dict[str, str], key: str, fallback: bool = True) -> bool:
     value = settings.get(key)
@@ -96,29 +100,32 @@ def websocket_url_from_settings(settings: Dict[str, str]) -> str:
 
 def parse_kis_realtime_text(text: str) -> Optional[Tuple[str, List[Dict[str, object]]]]:
     raw = str(text or "")
-    if not raw or raw[0] not in {"0", "1"}:
+    if not raw.startswith("0|"):
         return None
     parts = raw.split("|", 3)
     if len(parts) < 4:
         return None
     tr_id = parts[1]
     try:
-        item_count = max(1, int(parts[2] or 1))
+        item_count = int(parts[2])
     except ValueError:
-        item_count = 1
+        return None
     columns = CCNL_COLUMNS if tr_id == KIS_TR_CCN_PRICE else ORDERBOOK_COLUMNS if tr_id == KIS_TR_ORDERBOOK else []
     if not columns:
         return None
     values = parts[3].split("^")
-    width = len(columns)
+    if item_count <= 0 or len(values) % item_count:
+        return None
+    width = len(values) // item_count
+    if width not in KIS_RECORD_WIDTHS[tr_id]:
+        return None
     rows = []
     for index in range(item_count):
         chunk = values[index * width:(index + 1) * width]
-        if not chunk:
-            continue
-        row = {}
-        for column_index, column in enumerate(columns):
-            row[column.lower()] = chunk[column_index] if column_index < len(chunk) else ""
+        row = dict(zip((column.lower() for column in columns), chunk))
+        if not valid_kis_wire_row(row, "ccnl" if tr_id == KIS_TR_CCN_PRICE else "orderbook"):
+            return None
+        row["_wire_field_count"] = width
         rows.append(row)
     return tr_id, rows
 
@@ -136,6 +143,7 @@ def normalize_ws_ccnl(row: Dict[str, object]) -> Dict[str, object]:
         "name": info["name"],
         "market": "KR",
         "currency": "KRW",
+        "wireFieldCount": row.get("_wire_field_count"),
         "currentPrice": current_price,
         "changeRate": number(row.get("prdy_ctrt")),
         "volume": volume,
@@ -161,6 +169,7 @@ def normalize_ws_orderbook(row: Dict[str, object]) -> Dict[str, object]:
         "name": info["name"],
         "market": "KR",
         "currency": "KRW",
+        "wireFieldCount": row.get("_wire_field_count"),
         "volume": number(row.get("acml_vol")),
         "orderbookBidVolume": bid_volume,
         "orderbookAskVolume": ask_volume,
@@ -194,7 +203,7 @@ def websocket_stage_coverage(stage: str, fields: Iterable[str], fetched_at: str,
 
 
 def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object], stage: str, tr_id: str, fetched_at: str) -> Dict[str, object]:
-    merged = dict(previous or {})
+    merged = {} if has_unvalidated_websocket_stage(previous or {}) else dict(previous or {})
     for key, value in (update or {}).items():
         if value not in (None, ""):
             merged[key] = value
@@ -222,127 +231,40 @@ def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object]
     merged["marketSession"] = "regular"
     merged["marketSessionLabel"] = "정규장"
     coverage = dict(merged.get("marketSignalCoverage") or {}) if isinstance(merged.get("marketSignalCoverage"), dict) else {}
-    if stage == "ccnl":
-        fields = [key for key in ["currentPrice", "changeRate", "volume", "volumeRatio", "tradingValue", "tradeStrength", "buyVolume", "sellVolume"] if merged.get(key) not in (None, "")]
-    else:
-        fields = [key for key in ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance", "volume"] if merged.get(key) not in (None, "")]
+    fields = [key for key in KIS_REALTIME_STAGE_FIELDS[stage] if update.get(key) not in (None, "")]
     coverage[stage] = websocket_stage_coverage(stage, fields, fetched_at, tr_id)
+    coverage[stage]["validationVersion"] = KIS_REALTIME_VALIDATION_VERSION
+    coverage[stage]["wireFieldCount"] = update.get("wireFieldCount")
+    coverage[stage]["values"] = {"symbol": symbol, **{key: update[key] for key in fields}}
     merged["marketSignalCoverage"] = coverage
     return merged
 
 
 class MinimalWebSocket:
+    """Compatibility port backed by a complete, timeout-safe RFC 6455 client."""
+
     def __init__(self, url: str, timeout: int = 10):
         self.url = url
         self.timeout = timeout
-        self.socket: Optional[socket.socket] = None
+        self.socket = None
 
     def connect(self) -> None:
-        parsed = urllib.parse.urlparse(self.url)
-        if parsed.scheme not in {"ws", "wss"}:
-            raise ValueError("WebSocket URL은 ws:// 또는 wss:// 이어야 합니다.")
-        host = parsed.hostname or ""
-        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
-        path = parsed.path or "/"
-        if parsed.query:
-            path += "?" + parsed.query
-        raw = socket.create_connection((host, port), timeout=self.timeout)
-        if parsed.scheme == "wss":
-            raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
-        raw.settimeout(self.timeout)
-        key = base64.b64encode(os.urandom(16)).decode("ascii")
-        host_header = host if parsed.port in (None, 80, 443) else host + ":" + str(port)
-        request = (
-            "GET " + path + " HTTP/1.1\r\n"
-            "Host: " + host_header + "\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            "Sec-WebSocket-Key: " + key + "\r\n"
-            "Sec-WebSocket-Version: 13\r\n"
-            "\r\n"
-        )
-        raw.sendall(request.encode("ascii"))
-        response = b""
-        while b"\r\n\r\n" not in response:
-            chunk = raw.recv(4096)
-            if not chunk:
-                break
-            response += chunk
-            if len(response) > 65536:
-                break
-        if b" 101 " not in response.split(b"\r\n", 1)[0]:
-            raise RuntimeError("KIS WebSocket handshake 실패: " + response[:160].decode("utf-8", "ignore"))
-        self.socket = raw
+        from websockets.sync.client import connect
 
-    def _read_exact(self, size: int) -> bytes:
-        if not self.socket:
-            raise RuntimeError("WebSocket is not connected.")
-        chunks = b""
-        while len(chunks) < size:
-            chunk = self.socket.recv(size - len(chunks))
-            if not chunk:
-                raise ConnectionError("WebSocket connection closed.")
-            chunks += chunk
-        return chunks
+        self.socket = connect(
+            self.url, open_timeout=self.timeout, close_timeout=2,
+            compression=None, proxy=None, max_size=1024 * 1024,
+        )
 
     def send_text(self, text: str) -> None:
         if not self.socket:
             raise RuntimeError("WebSocket is not connected.")
-        payload = str(text or "").encode("utf-8")
-        header = bytearray([0x81])
-        length = len(payload)
-        if length < 126:
-            header.append(0x80 | length)
-        elif length <= 65535:
-            header.append(0x80 | 126)
-            header.extend(struct.pack("!H", length))
-        else:
-            header.append(0x80 | 127)
-            header.extend(struct.pack("!Q", length))
-        mask = os.urandom(4)
-        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
-        self.socket.sendall(bytes(header) + mask + masked)
-
-    def send_pong(self, payload: bytes = b"") -> None:
-        if not self.socket:
-            return
-        header = bytearray([0x8A])
-        length = len(payload)
-        header.append(0x80 | length)
-        mask = os.urandom(4)
-        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
-        self.socket.sendall(bytes(header) + mask + masked)
+        self.socket.send(str(text or ""))
 
     def recv_text(self, timeout: Optional[float] = None) -> str:
         if not self.socket:
             raise RuntimeError("WebSocket is not connected.")
-        previous_timeout = self.socket.gettimeout()
-        if timeout is not None:
-            self.socket.settimeout(timeout)
-        try:
-            while True:
-                first, second = self._read_exact(2)
-                opcode = first & 0x0F
-                masked = bool(second & 0x80)
-                length = second & 0x7F
-                if length == 126:
-                    length = struct.unpack("!H", self._read_exact(2))[0]
-                elif length == 127:
-                    length = struct.unpack("!Q", self._read_exact(8))[0]
-                mask = self._read_exact(4) if masked else b""
-                payload = self._read_exact(length) if length else b""
-                if masked:
-                    payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
-                if opcode == 0x8:
-                    raise ConnectionError("WebSocket close frame received.")
-                if opcode == 0x9:
-                    self.send_pong(payload)
-                    continue
-                if opcode in {0x1, 0x2, 0x0}:
-                    return payload.decode("utf-8", "ignore")
-        finally:
-            if timeout is not None:
-                self.socket.settimeout(previous_timeout)
+        return self.socket.recv(timeout=timeout, decode=True)
 
     def close(self) -> None:
         if not self.socket:
@@ -372,6 +294,7 @@ class KISRealtimeWebSocketClient:
         self.app_key = str(self.settings.get("kisAppKey") or "").strip()
         self.app_secret = str(self.settings.get("kisAppSecret") or "").strip()
         self.approval_key = ""
+        self.rejected_frame_count = 0
 
     def enabled(self) -> bool:
         return bool_setting(self.settings, "kisRealtimeWebSocketEnabled", True)
@@ -440,6 +363,8 @@ class KISRealtimeWebSocketClient:
     def apply_message(self, text: str) -> List[Dict[str, object]]:
         parsed = parse_kis_realtime_text(text)
         if not parsed:
+            if str(text or "").startswith(("0|H0STCNT0|", "0|H0STASP0|")):
+                self.rejected_frame_count += 1
             return []
         tr_id, rows = parsed
         results = []
@@ -460,6 +385,7 @@ class KISRealtimeWebSocketClient:
         return results
 
     def collect(self, symbols: Iterable[str], duration_seconds: int, on_update: Callable[[List[Dict[str, object]]], None] = None) -> Dict[str, object]:
+        self.rejected_frame_count = 0
         clean_symbols = [clean_symbol(symbol) for symbol in symbols or [] if clean_symbol(symbol)]
         if not self.enabled():
             return {"status": "disabled", "symbols": [], "savedCount": 0}
@@ -491,6 +417,11 @@ class KISRealtimeWebSocketClient:
                 except socket.timeout:
                     continue
                 last_received_at = str(self.now_provider() or "")
+                if str(text).startswith("{"):
+                    control = json.loads(text)
+                    if (control.get("header") or {}).get("tr_id") == "PINGPONG":
+                        ws.send_text(text)
+                        continue
                 updates = self.apply_message(text)
                 if not updates:
                     continue
@@ -511,6 +442,8 @@ class KISRealtimeWebSocketClient:
                 "subscribedSymbols": subscribed_symbols,
                 "subscribedCount": len(subscribed_symbols),
                 "savedCount": saved_count,
+                "rejectedFrameCount": self.rejected_frame_count,
+                "wireValidationVersion": KIS_REALTIME_VALIDATION_VERSION,
                 "stageCounts": stage_counts,
                 "dataQuality": "partial" if saved_count else "unavailable",
                 "freshnessStatus": "realtime" if saved_count else "unavailable",
@@ -531,16 +464,20 @@ class KISRealtimeWebSocketClient:
                 except Exception:
                     pass
         has_tick = bool(saved_count)
+        rejected_only = bool(self.rejected_frame_count and not has_tick)
         return {
-            "status": "ok" if has_tick else "no-tick",
+            "status": "partial" if has_tick and self.rejected_frame_count else "ok" if has_tick else "invalid-data" if rejected_only else "no-tick",
             "provider": "kis-websocket",
             "symbols": clean_symbols,
             "selectedCount": len(clean_symbols),
             "subscribedSymbols": subscribed_symbols,
             "subscribedCount": len(subscribed_symbols),
             "savedCount": saved_count,
+            "rejectedFrameCount": self.rejected_frame_count,
+            "wireValidationVersion": KIS_REALTIME_VALIDATION_VERSION,
             "stageCounts": stage_counts,
-            "dataQuality": "actual" if has_tick else "reference",
+            "dataQuality": "partial" if has_tick and self.rejected_frame_count else "actual" if has_tick else "invalid" if rejected_only else "reference",
+            "reason": "KIS 수신 레코드 형식 또는 값 검증 실패: " + str(self.rejected_frame_count) + "건" if self.rejected_frame_count else "",
             "freshnessStatus": "realtime" if has_tick else "no-tick",
             "sourceTimestampState": "websocket-received" if has_tick else "no-observation",
             "lastReceivedAt": last_received_at,

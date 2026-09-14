@@ -119,6 +119,8 @@ class KISRealtimeWebSocketRunner:
                 "selectedCount",
                 "subscribedCount",
                 "savedCount",
+                "rejectedFrameCount",
+                "wireValidationVersion",
                 "stageCounts",
                 "lastReceivedAt",
                 "lastTickAt",

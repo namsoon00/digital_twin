@@ -59,7 +59,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Install Python dependencies
-        run: python3 -m pip install --user pymysql
+        run: python3 -m pip install --user pymysql websockets==15.0.1
 
       - name: Mark issue as started
         run: node scripts/issue-workflow.js claim "$ISSUE_NUMBER"

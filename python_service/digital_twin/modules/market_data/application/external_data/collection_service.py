@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.market_data.domain.events import external_fact_changed_event
 from digital_twin.modules.market_data.application.external_data.contracts import DatasetDescriptor, ExternalSubject, setting_enabled
 from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService, FactTransition
+from digital_twin.modules.market_data.domain.external_call import ExternalCallDeferred
 
 
 def utc_now() -> datetime:
@@ -166,15 +167,17 @@ class ExternalDataCollectionService:
                                 "error": str(error)[:500],
                             })
         failures = [item for item in results if item.get("status") == "error"]
+        attention = [item for item in results if item.get("requiresAttention")]
         deferred = [item for item in results if item.get("status") == "deferred"]
         no_data = [item for item in results if item.get("status") == "no-data"]
         projection_after = self.reconcile_official_evidence()
         return {
-            "status": "partial" if failures else "ok",
+            "status": "partial" if failures or attention else "ok",
             "processedCount": len(results),
             "successCount": len(results) - len(failures) - len(deferred),
             "failureCount": len(failures),
             "deferredCount": len(deferred),
+            "attentionCount": len(attention),
             "noDataCount": len(no_data),
             "results": results,
             "partitionSync": sync,
@@ -356,6 +359,13 @@ class ExternalDataCollectionService:
                 "followupCount": followup_count,
                 "retainedPreviousFact": bool(committed.get("retainedPreviousFact")),
             }
+        except ExternalCallDeferred as error:
+            due_at = error.retry_at or iso(self.now_provider() + timedelta(seconds=60))
+            self.store.defer_job(job, due_at, str(error)[:500])
+            self.store.record_run(job, "deferred", started_at, iso(self.now_provider()), 0, error_message=str(error)[:500])
+            return {"datasetId": job.dataset_id, "partitionKey": job.partition_key,
+                    "status": "deferred", "reason": error.reason, "nextDueAt": due_at,
+                    "requiresAttention": error.reason in {"access-denied", "configuration-required"}, "error": str(error)[:500]}
         except Exception as error:  # noqa: BLE001 - provider failures are durable operational state.
             completed = self.now_provider()
             previous_fact = self.store.current_fact(

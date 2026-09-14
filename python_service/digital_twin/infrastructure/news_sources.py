@@ -221,17 +221,18 @@ def article_block_is_useful(text: object) -> bool:
         return False
     lowered = value.lower()
     if any(term in lowered for term in [
-        "cookie",
-        "advertisement",
-        "subscribe",
+        "cookie settings",
+        "cookie policy",
         "sign up",
         "all rights reserved",
         *GOOGLE_NEWS_BODY_NOISE,
-        "개인정보",
-        "구독",
-        "광고",
-        "저작권",
+        "개인정보처리방침",
+        "개인정보 처리방침",
+        "구독 신청",
+        "구독신청",
         "무단전재",
+        "재판매 및 DB 금지",
+        "구글 검색에서 연합뉴스 기사를 우선적으로",
     ]):
         return False
     return True
@@ -274,9 +275,33 @@ class ArticleTextParser(HTMLParser):
         self.buffer: List[str] = []
         self.blocks: List[str] = []
         self.meta_description = ""
+        self.elements = []
+        self.scoped_blocks = []
+        self.scoped_buffer = []
+        self.has_article_scope = False
+
+    def flush_scoped(self):
+        text = clean_article_block(" ".join(self.scoped_buffer), ARTICLE_TEXT_LIMIT)
+        if article_block_is_useful(text):
+            self.scoped_blocks.append(text)
+        self.scoped_buffer = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         normalized = str(tag or "").lower()
+        attr_map = {str(key or "").lower(): str(value or "") for key, value in attrs or []}
+        identity = (attr_map.get("id", "") + " " + attr_map.get("class", "")).lower()
+        scoped = normalized == "article" or "articlebody" in attr_map.get("itemprop", "").lower() or bool(
+            re.search(r"(?:^|\s)(?:article-body|story-body|caas-body|story-news|newsct_article|article-view-content-div)(?:\s|$)", identity)
+        )
+        self.has_article_scope = self.has_article_scope or scoped
+        excluded = normalized in {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form", "aside", "button", "figcaption", "time"} or attr_map.get("aria-hidden") == "true" or bool(
+            re.search(r"(?:^|[\s_-])(?:related|recommend|advertisement|social|share|caption|copyright)(?:[\s_-]|$)", identity)
+            or re.search(r"(?:^|\s)(?:story-summary|tlp-summary\d*|summary-yna\d*)(?:\s|$)", identity)
+        )
+        if normalized in {"p", "div", "br", "h1", "h2", "h3"}:
+            self.flush_scoped()
+        if normalized not in {"meta", "link", "img", "br", "hr", "input", "source", "wbr"}:
+            self.elements.append((normalized, scoped, excluded))
         if normalized in {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form"}:
             self.skip_depth += 1
             return
@@ -291,17 +316,27 @@ class ArticleTextParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         normalized = str(tag or "").lower()
+        if normalized in {"p", "div", "article", "h1", "h2", "h3"}:
+            self.flush_scoped()
+        for index in range(len(self.elements) - 1, -1, -1):
+            if self.elements[index][0] == normalized:
+                del self.elements[index:]
+                break
         if normalized in {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form"}:
             self.skip_depth = max(0, self.skip_depth - 1)
             return
         if self.capture_stack and normalized == self.capture_stack[-1]:
-            text = clean_article_block(" ".join(self.buffer))
+            text = clean_article_block(" ".join(self.buffer), ARTICLE_TEXT_LIMIT)
             if article_block_is_useful(text):
                 self.blocks.append(text)
             self.capture_stack.pop()
             self.buffer = []
 
     def handle_data(self, data: str) -> None:
+        if any(item[1] for item in self.elements) and not any(item[2] for item in self.elements):
+            self.scoped_buffer.append(str(data or ""))
+        if any(item[2] for item in self.elements):
+            return
         if self.skip_depth or not self.capture_stack:
             return
         text = str(data or "").strip()
@@ -415,13 +450,15 @@ def extract_article_text(raw_html: object) -> str:
     parser = ArticleTextParser()
     try:
         parser.feed(text)
+        parser.flush_scoped()
     except Exception:  # noqa: BLE001 - malformed news HTML should fall back to feed summaries.
         return ""
-    blocks = json_ld_article_blocks(text)
-    if not blocks and article_block_is_useful(parser.meta_description):
-        blocks.append(compact_text(parser.meta_description, 420))
-    seen = {item.casefold() for item in blocks}
-    html_blocks = parser.blocks if len(" ".join(blocks)) < 1200 else []
+    structured = json_ld_article_blocks(text)
+    # Choose one representation. Appending a teaser, JSON-LD and DOM body
+    # together used to manufacture repeated facts and include page furniture.
+    blocks = []
+    seen = set()
+    html_blocks = parser.scoped_blocks if parser.has_article_scope else parser.blocks
     for block in html_blocks:
         key = block.casefold()
         if key in seen:
@@ -430,7 +467,10 @@ def extract_article_text(raw_html: object) -> str:
         blocks.append(block)
         if len(" ".join(blocks)) >= ARTICLE_TEXT_LIMIT:
             break
-    return compact_text(" ".join(blocks), ARTICLE_TEXT_LIMIT)
+    body = compact_text(" ".join(blocks), ARTICLE_TEXT_LIMIT)
+    if len(structured) == 1 and len(structured[0]) > len(body):
+        body = structured[0]
+    return compact_text(body, ARTICLE_TEXT_LIMIT)
 
 
 def parse_news_datetime(value: object):
@@ -494,8 +534,10 @@ class NewsSourceGateway:
         fetch_text: TextFetcher = None,
         fetch_post_text: PostTextFetcher = None,
         now_provider: Callable[[], datetime] = None,
+        request_budget=None,
     ):
         self.settings = dict(settings or {})
+        self.request_budget = request_budget
         timeout = number(self.settings.get("newsCollectionTimeoutSeconds") or self.settings.get("externalApiTimeoutSeconds")) or 8.0
         self.fetch_json = fetch_json or self.guarded_json_fetcher(timeout)
         self.fetch_text = fetch_text or self.guarded_text_fetcher(timeout)
@@ -580,15 +622,17 @@ class NewsSourceGateway:
             # would therefore never accumulate failures and could fan out a
             # provider outage across the complete collection rotation.
             guard_target = "api.gdeltproject.org/provider" if source == "GDELT News" else external_call_target(url)
-            return guarded_external_call(
-                self.settings,
-                source,
-                guard_target,
-                lambda: default_json_fetcher(url, headers, timeout=timeout),
-                state=NEWS_API_GUARD_STATE,
-                attempts=1 if source == "GDELT News" else 2,
-                rate_limit_seconds=0,
-            )
+            if source == "GDELT News" and self.request_budget:
+                return self.request_budget.call(lambda: default_json_fetcher(url, headers, timeout=timeout))
+            def request():
+                return guarded_external_call(
+                    self.settings, source, guard_target,
+                    lambda: default_json_fetcher(url, headers, timeout=timeout),
+                    state=NEWS_API_GUARD_STATE,
+                    attempts=1 if source == "GDELT News" else 2,
+                    rate_limit_seconds=0,
+                )
+            return request()
 
         return fetch
 
@@ -898,11 +942,8 @@ class NewsSourceGateway:
                 }
             except Exception:  # noqa: BLE001 - article-body fetch must not block headline collection.
                 pass
-            cache_seconds = (
-                self.article_body_cache_seconds()
-                if content.get("text")
-                else self.article_body_failure_cache_seconds()
-            )
+            usable = news_domain.article_body_quality(content.get("text", ""), self.article_body_minimum_chars()).get("passed")
+            cache_seconds = self.article_body_cache_seconds() if usable else self.article_body_failure_cache_seconds()
             if cache_seconds > 0:
                 with self._article_body_cache_lock:
                     if len(self._article_body_cache) >= self.article_body_cache_max_entries():

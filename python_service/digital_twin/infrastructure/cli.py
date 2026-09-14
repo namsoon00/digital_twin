@@ -8,6 +8,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Mapping
+from digital_twin.infrastructure.reloading_collection_runner import ReloadingCollectionRunner
 
 from digital_twin.modules.accounts.public import AccountApplicationService
 from digital_twin.modules.market_data.public import ExternalDataConfigurationRecoveryService
@@ -2088,6 +2089,7 @@ def external_data_command(args) -> int:
         print(json.dumps(runner.run_once(force=args.force), ensure_ascii=False))
         return 0
     if args.external_data_action == "watch":
+        runner = ReloadingCollectionRunner(runner, build_external_data_collection_runner, runtime_settings, settings)
         ExternalDataCollectionScheduler(runner, runner.interval_seconds()).run_forever()
         return 0
     return 1
@@ -2127,6 +2129,7 @@ def news_command(args) -> int:
         return 0
     if args.news_action == "watch":
         interval = int(os.environ.get("NEWS_COLLECTION_INTERVAL_SECONDS") or settings.get("newsCollectionIntervalSeconds") or 60)
+        runner = ReloadingCollectionRunner(runner, build_news_collection_runner, runtime_settings, settings)
         NewsCollectionScheduler(runner, interval).run_forever()
         return 0
     return 1
@@ -2252,6 +2255,7 @@ def investment_calendar_command(args) -> int:
         return 0
     if args.investment_calendar_action == "watch":
         interval = int(os.environ.get("INVESTMENT_CALENDAR_INTERVAL_SECONDS") or settings.get("investmentCalendarIntervalSeconds") or 60)
+        runner = ReloadingCollectionRunner(runner, build_investment_calendar_runner, runtime_settings, settings)
         InvestmentCalendarScheduler(runner, interval).run_forever()
         return 0
     return 1

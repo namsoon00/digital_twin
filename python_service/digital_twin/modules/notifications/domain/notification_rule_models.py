@@ -75,7 +75,7 @@ def default_similarity_enabled(message_type: str) -> bool:
     # Investment insights already use semantic state cooldown with material
     # change bypasses. A second text-similarity gate duplicates that policy
     # and can hide a genuinely changed graph decision.
-    return key not in SYSTEM_MESSAGE_TYPES and key not in {MARKET_OBSERVATION, INVESTMENT_INSIGHT}
+    return key not in SYSTEM_MESSAGE_TYPES and key not in {MARKET_OBSERVATION, INVESTMENT_INSIGHT, "informationUpdate"}
 
 
 def default_similarity_window_minutes(message_type: str) -> int:

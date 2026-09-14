@@ -678,6 +678,12 @@ function renderSettingsExternalDataPanel() {
       renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
       renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
       renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
+      renderSettingField("newsCollectionGdeltRateLimitSeconds", "GDELT 최소 요청 간격(초, 최소 6)", "number", "6"),
+      renderSettingField("newsCollectionGdeltDailyRequestBudget", "GDELT 하루 요청 예산", "number", "240"),
+      renderSettingSelect("informationFollowupEnabled", "뉴스·공시·발표 결과 후속 관찰", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
       renderSettingSelect("newsCollectionQualityGateEnabled", "저장 전 뉴스 품질 검증", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }

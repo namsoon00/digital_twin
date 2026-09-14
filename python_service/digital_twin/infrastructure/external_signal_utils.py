@@ -12,6 +12,7 @@ from html.parser import HTMLParser
 from typing import Callable, Dict, List, Optional
 
 from digital_twin.modules.market_data.domain.market_data import number
+from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 
 
 
@@ -223,11 +224,11 @@ def next_utc_day(value: datetime) -> datetime:
     return (current.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
 
 
-class ExternalCircuitOpen(RuntimeError):
+class ExternalCircuitOpen(ExternalCallDeferred):
     pass
 
 
-class ExternalRateLimited(RuntimeError):
+class ExternalRateLimited(ExternalCallDeferred):
     pass
 
 
@@ -271,7 +272,8 @@ class ExternalApiGuard:
         now = self.now()
         opened_until = parse_iso(str(entry.get("openedUntil") or ""))
         if opened_until and opened_until > now:
-            raise ExternalCircuitOpen("circuit open until " + opened_until.isoformat().replace("+00:00", "Z"))
+            retry_at = opened_until.isoformat().replace("+00:00", "Z")
+            raise ExternalCircuitOpen("circuit open until " + retry_at, retry_at, "circuit-open")
         last_request_at = parse_iso(str(entry.get("lastRequestAt") or ""))
         if rate_limit_seconds and last_request_at and now - last_request_at < timedelta(seconds=rate_limit_seconds):
             raise ExternalRateLimited("local rate limit active")
@@ -319,6 +321,29 @@ class ExternalApiGuard:
                     shared_entry["lastLabel"] = label
                 return result
             except Exception as error:  # noqa: BLE001 - external adapters normalize vendor failures.
+                if isinstance(error, ExternalCallDeferred):
+                    raise
+                root = root_api_error(error)
+                if isinstance(root, urllib.error.HTTPError) and root.code == 429:
+                    from email.utils import parsedate_to_datetime
+                    retry_after = str(root.headers.get("Retry-After", "") if root.headers else "")
+                    retry_now = self.now()
+                    try:
+                        delay = float(retry_after)
+                        until = retry_now + timedelta(seconds=max(1, delay))
+                    except (ValueError, OverflowError):
+                        try:
+                            until = parsedate_to_datetime(retry_after)
+                            if until.tzinfo is None:
+                                until = until.replace(tzinfo=timezone.utc)
+                            until = max(until, retry_now + timedelta(seconds=1))
+                        except (TypeError, ValueError, OverflowError):
+                            until = retry_now + timedelta(minutes=max(1, int(shared_quota_cooldown_minutes or 1)))
+                    retry_at = until.isoformat().replace("+00:00", "Z")
+                    entry.update(openedUntil=retry_at, lastError=api_error_text(root))
+                    if shared_entry is not None:
+                        shared_entry.update(openedUntil=retry_at, quotaState="provider-rate-limit")
+                    raise ExternalRateLimited("HTTP 429; deferred until " + retry_at, retry_at) from error
                 last_error = error
                 if shared_entry is not None and shared_quota_cooldown_minutes and provider_quota_error(error):
                     until = now + timedelta(minutes=max(1, int(shared_quota_cooldown_minutes)))

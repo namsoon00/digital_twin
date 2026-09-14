@@ -17,6 +17,8 @@ function informationTime(value) {
 function renderInformationReaction(reaction) {
   if (!reaction || reaction.version !== "information-price-observation-v1") return '';
   var rows = reaction.observations || [];
+  var trackingLabel = reaction.monitoringMode === "background" ?
+    ({ active: "시스템 자동 관찰 중", completed: "관찰 종료 · 확보된 기록 표시", paused: "자동 관찰 일시 중지", stalled: "자동 관찰 확인 지연", expired: "관찰 기한 종료 · 기록 조회 오류", canceled: "원문 상태 변경으로 관찰 중단" }[reaction.trackingStatus] || "자동 관찰 등록됨") : "조회 시 재확인 · 후속 자동 알림 미등록";
   return '<section class="inline-detail-block"><strong>' + escapeHtml(reaction.label) + '</strong>' +
     rows.map(function (row) {
       var label = row.symbol + " · " + (row.horizonMinutes === 1440 ? "24시간" : row.horizonMinutes + "분") + " 후";
@@ -25,7 +27,12 @@ function renderInformationReaction(reaction) {
       return '<p><b>' + escapeHtml(label + " " + (change > 0 ? "+" : "") + change.toFixed(2) + "%") + '</b><br>' +
         escapeHtml(row.baseline.price + " → " + row.outcome.price + " " + row.outcome.currency) + '<br><span class="subtle">' +
         escapeHtml(informationTime(row.baseline.sourceAsOf) + " → " + informationTime(row.outcome.sourceAsOf) + " · " + row.outcome.provider) + '</span></p>';
-    }).join("") + '<p class="subtle">' + escapeHtml(reaction.note || "") + '</p><p class="subtle">조회 시 재확인 · 후속 자동 알림 미등록</p></section>';
+    }).join("") + '<p class="subtle">' + escapeHtml(reaction.note || "") + '</p><p class="subtle">' + escapeHtml(trackingLabel) +
+    (reaction.nextCheckAt && reaction.trackingStatus === "active" ? '<br>다음 확인 ' + escapeHtml(informationTime(reaction.nextCheckAt)) : '') + '</p>' +
+    (reaction.delivery || []).map(function (entry) {
+      var deliveryLabel = { queued: "발송 대기", pending: "발송 대기", processing: "발송 처리 중", sent: "발송 완료", failed: "발송 실패", suppressed: "발송 제외" }[entry.state] || "발송 상태 미확인";
+      return '<p class="subtle">후속 알림 ' + escapeHtml(entry.phase === "release" ? "발표 결과" : entry.phase + "분 관측") + ': ' + escapeHtml(deliveryLabel) + '</p>';
+    }).join("") + '</section>';
 }
 
 function renderInformationLink(url, label) {

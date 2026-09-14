@@ -576,12 +576,19 @@ class InvestmentCalendarService:
 
 
 class InvestmentCalendarRunner:
-    def __init__(self, service: InvestmentCalendarService, official_sync_service=None, discovery_service=None):
+    def __init__(self, service: InvestmentCalendarService, official_sync_service=None, discovery_service=None, information_followups=None):
         self.service = service
         self.official_sync_service = official_sync_service
         self.discovery_service = discovery_service
+        self.information_followups = information_followups
 
     def run_once(self) -> Dict[str, object]:
+        followups = {}
+        if self.information_followups:
+            try:
+                followups = self.information_followups.run_once()
+            except Exception as error:
+                followups = {"status": "error", "reason": str(error)[:240]}
         sync_result = {}
         if self.official_sync_service:
             sync_result = self.official_sync_service.run_due()
@@ -589,6 +596,8 @@ class InvestmentCalendarRunner:
         if self.discovery_service:
             discovery_result = self.discovery_service.run_due()
         result = self.service.enqueue_due_reminders()
+        if followups:
+            result["informationFollowups"] = followups
         if sync_result and sync_result.get("status") != "not-due":
             result["officialCalendarSync"] = sync_result
         if discovery_result and discovery_result.get("status") != "not-due":
@@ -597,6 +606,8 @@ class InvestmentCalendarRunner:
 
     def status(self) -> Dict[str, object]:
         result = self.service.status()
+        if self.information_followups:
+            result["informationFollowups"] = self.information_followups.status()
         if self.official_sync_service:
             result["officialCalendarSync"] = self.official_sync_service.status()
         if self.discovery_service:

@@ -1,10 +1,12 @@
 import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest, SourceObservation, bounded_int
 from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
 from ...external_signal_provider_sec import DEFAULT_SEC_COMPANY_CIKS, sec_document_text
 from ...external_signal_utils import symbol_assignments
+from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of
 
 
@@ -158,8 +160,11 @@ class SecDocumentAdapter:
         metadata = dict(job.watermark.get("metadata") or {})
         accession = str(job.watermark.get("accessionNumber") or metadata.get("accessionNumber") or "").strip()
         url = str(metadata.get("url") or "").strip()
-        if not provider.sec_document_access_configured() or not accession or not url:
-            raise RuntimeError("SEC document job requires a contact email, accession number, and URL")
+        if not provider.sec_document_access_configured():
+            retry_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+            raise ExternalCallDeferred("SEC contact email is not configured", retry_at, "configuration-required")
+        if not accession or not url:
+            raise ValueError("SEC document identity is incomplete: accession number or URL missing")
         raw = provider.guarded_call(
             "SEC EDGAR",
             "filing-document:" + job.subject.symbol + ":" + accession,

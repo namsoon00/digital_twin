@@ -24,6 +24,7 @@ def build_investment_research_orchestrator(settings=None, research_store=None) -
     )
     from digital_twin.infrastructure.news_ai_analyzer import news_ai_analyzer_from_settings
     from digital_twin.infrastructure.news_sources import NewsSourceGateway
+    from digital_twin.infrastructure.provider_http_budget import news_http_budget
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.news_intelligence.public import (
         InvestmentResearchOrchestrationService,
@@ -36,7 +37,7 @@ def build_investment_research_orchestrator(settings=None, research_store=None) -
         evidence_repository=evidence_store,
         research_gateway=CompositeInvestmentResearchGateway([
             ExistingApiResearchGateway(configured_settings),
-            NewsSourceGateway(configured_settings),
+            NewsSourceGateway(configured_settings, request_budget=news_http_budget(configured_settings)),
         ]),
         research_store=research_store or stores.investment_research_store(configured_settings),
         event_publisher=default_event_bus(),
@@ -86,6 +87,7 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
     from digital_twin.infrastructure.composition.events import news_event_bus
     from digital_twin.infrastructure.news_ai_analyzer import news_ai_analyzer_from_settings
     from digital_twin.infrastructure.news_sources import NewsSourceGateway
+    from digital_twin.infrastructure.provider_http_budget import news_http_budget
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.news_intelligence.public import NewsAiAnalysisService, NewsCollectionRunner
 
@@ -95,7 +97,7 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
         monitor_store=stores.monitor_store(configured_settings),
         symbol_store=stores.symbol_universe_store(configured_settings),
         evidence_store=stores.research_evidence_store(configured_settings),
-        gateway=NewsSourceGateway(configured_settings),
+        gateway=NewsSourceGateway(configured_settings, request_budget=news_http_budget(configured_settings)),
         settings=configured_settings,
         event_publisher=event_publisher or news_event_bus(configured_settings),
         article_analysis_service=NewsAiAnalysisService(

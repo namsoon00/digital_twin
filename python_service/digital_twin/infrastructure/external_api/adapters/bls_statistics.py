@@ -37,7 +37,7 @@ class BlsStatisticsAdapter:
         now = self.now()
         request = {"seriesid": list(BLS_SERIES), "startyear": str(now.year - 2), "endyear": str(now.year)}
         response = guarded_external_call(settings, "bls-public-api", "monthly-series-batch",
-            lambda: self.fetch_payload(request), state=self.guard_state, rate_limit_seconds=60)
+            lambda: self.fetch_payload(request), state=self.guard_state, rate_limit_seconds=60, attempts=1)
         result = parse_bls_statistics(response, now)
         fetched = self.now().isoformat().replace("+00:00", "Z")
         return SourceObservation(dataset_id=self.descriptor.dataset_id, provider_id=self.descriptor.provider_id,

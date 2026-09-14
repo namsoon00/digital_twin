@@ -148,7 +148,7 @@ class LegacyNotificationContractTests(unittest.TestCase):
         visible = {rule["messageType"] for rule in public["rules"]}
         self.assertEqual({
             "investmentInsight", "marketObservation", "portfolioHoldingsSnapshot",
-            "portfolioActivityObservation", "investmentCalendarReminder", "newsDigest",
+            "portfolioActivityObservation", "investmentCalendarReminder", "newsDigest", "informationUpdate",
             "ontologyInferenceMissing", "monitorConnection", "externalDataConnection",
         }, visible)
         self.assertEqual(public["rules"], internal["rules"])

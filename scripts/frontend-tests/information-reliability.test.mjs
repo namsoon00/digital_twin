@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { informationSourceUrl, informationTime, renderInformationReaction, renderResearchInformation } from "../../public/modules/research/information.mjs";
+
+test("background observations show real delivery states separately from registration", () => {
+  const html = renderInformationReaction({version:"information-price-observation-v1",label:"공개 전후 가격 관측", monitoringMode:"background",trackingStatus:"active", delivery:[{phase:"60",state:"pending"},{phase:"1440",state:"sent"}],observations:[]});
+  assert.match(html, /시스템 자동 관찰 중/);
+  assert.match(html, /발송 대기/);
+  assert.match(html, /발송 완료/);
+  assert.doesNotMatch(html, /후속 자동 알림 미등록/);
+});
 import { releaseValue, renderCalendarReleaseInformation } from "../../public/modules/calendar/results.mjs";
 
 test("facts, opinions and unregistered follow-ups have distinct labels", () => {

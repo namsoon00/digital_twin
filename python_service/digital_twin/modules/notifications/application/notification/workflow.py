@@ -62,6 +62,8 @@ class NotificationAIOpinionEnricher:
         self.settings = settings or {}
 
     def __call__(self, job: NotificationJob) -> None:
+        if job.message_type == "informationUpdate":
+            return
         context = dict(job.context or {})
         if is_typedb_context_observation_notification(context):
             return

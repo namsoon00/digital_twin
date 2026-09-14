@@ -1,5 +1,7 @@
 {
   "tests": [
+    {"file": "test_information_followups.py", "tier": "unit", "core": true},
+    {"file": "test_information_followup_storage.py", "tier": "integration", "core": true},
     {"file": "test_information_reliability.py", "tier": "unit", "core": true},
     {"file": "test_information_recovery.py", "tier": "unit", "core": true},
     {"file": "test_experiment_observations.py", "tier": "unit", "core": true},

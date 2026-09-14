@@ -53,6 +53,7 @@ class ExternalSignalProvider(
         company_cache=None,
         crypto_cache=None,
         crypto_time_series_store=None,
+        news_request_budget=None,
     ):
         self.settings = settings or runtime_settings()
         uses_default_cache = cache is None
@@ -75,6 +76,7 @@ class ExternalSignalProvider(
         # Provider-specific timeouts use the standard transport only. Test
         # and vendor adapters keep their existing two-argument contract.
         self._uses_default_json_fetcher = fetch_json is None
+        self.news_request_budget = news_request_budget
         self.fetch_json = fetch_json or self.default_fetch_json
         self.fetch_text = fetch_text or self.default_fetch_text
         self.fetch_bytes = fetch_bytes or self.default_fetch_bytes

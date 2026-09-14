@@ -25,7 +25,7 @@ const calendar = {
       metrics: [{label: "소비자물가 전월 대비", actual: 0, previous: 0.1, unit: "%", excerpt: "Synthetic official source excerpt."}]}}
 };
 evidence.informationBrief.marketReaction = {version:"information-price-observation-v1",label:"공개 전후 가격 관측",note:"시간상 전후 비교이며 사건의 인과관계를 의미하지 않습니다.",observations:[{symbol:"TEST01",horizonMinutes:60,status:"observed",priceChangePercent:2,baseline:{price:100,sourceAsOf:stamp,provider:"fixture"},outcome:{price:102,sourceAsOf:stamp,provider:"fixture",currency:"USD"}}]};
-calendar.releaseInformation.marketReaction = {...evidence.informationBrief.marketReaction, observations:[]};
+calendar.releaseInformation.marketReaction = {...evidence.informationBrief.marketReaction, observations:[], monitoringMode:"background",trackingStatus:"active",nextCheckAt:stamp,delivery:[{phase:"release",state:"sent"},{phase:"60",state:"pending"}]};
 calendar.releaseInformation.latestStatistics = {label:"최근 공표 통계 · 보관된 조회본",referencePeriod:"2026-08",source:"BLS Public Data API",sourceUrl:"https://api.bls.gov/",fetchedAt:stamp,ageHours:24,freshnessState:"stale",note:"최초 발표값이나 발표 전 예상치가 아닙니다.",metrics:[{label:"소비자물가 전월 대비",actual:0.4,unit:"%",formula:"(current / previous - 1) * 100",inputs:[{seriesId:"CUSR0000SA0",period:"2026-08",value:100.4},{seriesId:"CUSR0000SA0",period:"2026-07",value:100}]}]};
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, "http://localhost");
@@ -75,7 +75,8 @@ async function run() {
       await page.goto(origin + "/?tab=calendar&detail=investment-calendar-event&detailKey=fixture-result&token=fixture-readonly");
       const result = page.locator('[data-work-detail-dialog] .calendar-release-information');
       await result.waitFor();
-      await result.getByText("조회 시 재확인 · 후속 자동 알림 미등록", {exact:true}).waitFor();
+      await result.getByText(/시스템 자동 관찰 중/).waitFor();
+      assert.match(await result.textContent(), /발표 결과: 발송 완료.*60분 관측: 발송 대기/s);
       assert(requests.includes("/api/investment-calendar/events/fixture-result"));
       assert.match(await result.textContent(), /공식 발표 결과 확보.*0%.*직전 기간 0.1%/s);
       assert.match(await result.textContent(), /최근 공표 통계.*최초 발표값이나 발표 전 예상치가 아닙니다/s);

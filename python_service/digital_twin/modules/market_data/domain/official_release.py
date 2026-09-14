@@ -100,7 +100,7 @@ def parse_official_release(indicator, markup, source_url, now=None):
     released_at = ""
     period = ""
     if indicator in {"cpi", "employment"}:
-        embargo = re.search(r"Transmission of material.*?embargoed until\s*(\d{1,2}):(\d{2})\s*a\.m\.\s*\(ET\).*?" + DATE_PATTERN, text, re.I)
+        embargo = re.search(r"Transmission of material.*?embargoed until.{0,120}?(\d{1,2}):(\d{2})\s*a\.m\.\s*\(ET\).*?" + DATE_PATTERN, text, re.I)
         if not embargo:
             raise ValueError("Official release publication time not found")
         released = datetime(int(embargo[5]), MONTHS[embargo[3].lower()], int(embargo[4]), int(embargo[1]), int(embargo[2]), tzinfo=EASTERN)

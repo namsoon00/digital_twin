@@ -67,6 +67,11 @@ def external_data_store(settings: Dict[str, str] = None):
     return MySQLExternalDataStore(configured)
 
 
+def information_followup_store(settings=None, notification_writer=None):
+    from digital_twin.modules.market_data.infrastructure.mysql_information_followups import MySQLInformationFollowups
+    return MySQLInformationFollowups(configured_settings(settings), notification_writer)
+
+
 def external_evidence_projection_state_store(settings: Dict[str, str] = None):
     from digital_twin.infrastructure.mysql_operational_core_stores import MySQLExternalEvidenceProjectionStateStore
 

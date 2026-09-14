@@ -490,6 +490,17 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 ),
             )
 
+    def release_sec_configuration_block(self):
+        """Clear local preflight failures only, never a vendor 403/429 circuit."""
+        stamp = iso(utc_now())
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE external_provider_state SET consecutive_failures = 0, circuit_open_until = '', last_error = '', health_state = 'healthy', updated_at = %s WHERE provider_id = 'sec-edgar' AND bucket_id = 'sec.document' AND last_error IN (%s, %s)",
+                (stamp, "SEC document job requires a contact email, accession number, and URL", "SEC contact email is not configured"))
+            if cursor.rowcount:
+                connection.execute("UPDATE external_dataset_state SET next_due_at = %s, updated_at = %s WHERE dataset_id = 'sec.document' AND job_status = 'pending' AND last_error IN (%s, %s, %s)",
+                    (stamp, stamp, "circuit-open", "SEC document job requires a contact email, accession number, and URL", "SEC contact email is not configured"))
+
     def make_due(self, dataset_ids: Iterable[str] = None) -> int:
         datasets = sorted({str(item or "") for item in dataset_ids or [] if str(item or "")})
         stamp = iso(utc_now())
@@ -809,6 +820,25 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             return {"state": current_state, "healthChanged": health_changed, "circuitOpenUntil": circuit_until}
 
         return dict(self.transaction_with_deadlock_retry("external-data-fail-job", mutation) or {})
+
+    def record_http_failure(self, descriptor, message, retry_at="", now=None):
+        current = now or utc_now()
+        stamp = iso(current)
+        def mutation(connection):
+            row = connection.execute(
+                "SELECT consecutive_failures FROM external_provider_state WHERE provider_id = %s AND bucket_id = %s FOR UPDATE",
+                (descriptor.provider_id, descriptor.dataset_id),
+            ).fetchone() or {}
+            failures = int(row.get("consecutive_failures") or 0) + 1
+            delay = min(21600, descriptor.circuit_cooldown_seconds * 2 ** min(7, failures - 1))
+            until = retry_at or iso(current + timedelta(seconds=delay))
+            connection.execute(
+                "UPDATE external_provider_state SET consecutive_failures = %s, health_state = 'circuit_open', "
+                "circuit_open_until = %s, last_error = %s, updated_at = %s WHERE provider_id = %s AND bucket_id = %s",
+                (failures, until, str(message)[:500], stamp, descriptor.provider_id, descriptor.dataset_id),
+            )
+            return until
+        return self.transaction_with_deadlock_retry("http-budget-failure", mutation)
 
     def mark_provider_success(self, descriptor: DatasetDescriptor) -> Dict[str, object]:
         stamp = iso(utc_now())

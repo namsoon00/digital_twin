@@ -162,7 +162,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # immutable saved-candidate revalidation regressions.
         # Eight registered-design, immutable repair, collector and comparator regressions.
         # Three experiment-worker, source-ingress and rollback ownership regressions.
-        self.assertLessEqual(total, 1542)
+        # Nineteen free-source/follow-up/health boundaries and two transactional storage regressions.
+        self.assertLessEqual(total, 1563)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

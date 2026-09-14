@@ -199,6 +199,8 @@ def build_external_data_collection_runner(settings=None) -> ExternalDataCollecti
 
     configured_settings = dict(settings or runtime_settings())
     store = stores.external_data_store(configured_settings)
+    if legacy_provider(configured_settings).sec_document_access_configured():
+        store.release_sec_configuration_block()
     registry = default_external_dataset_registry(
         configured_settings,
         opendart_corp_code_lookup=store.opendart_corp_code_assignments,

@@ -49,6 +49,7 @@ SEVERITY_LABELS = {
 }
 
 REASONING_EXPLANATION_SKIP_TYPES = {
+    "informationUpdate",
     "newsDigest",
     "marketObservation",
     "workHandoff",
@@ -60,6 +61,7 @@ REASONING_EXPLANATION_SKIP_TYPES = {
 }
 
 CUSTOMER_FACING_MESSAGE_TYPES = {
+    "informationUpdate",
     "investmentInsight",
     "marketObservation",
     "investmentCalendarReminder",
@@ -85,6 +87,7 @@ CUSTOMER_FACING_MESSAGE_TYPES = {
 
 
 DEFAULT_NOTIFICATION_TEMPLATES = {
+    "informationUpdate": {"template": BODY_TEMPLATE, "description": "공식 발표 결과와 공개 이후 가격의 사실 확인 알림"},
     "default": {
         "template": DEFAULT_TEMPLATE,
         "description": "기본 알림 템플릿. title, lines, body 변수를 사용할 수 있습니다.",

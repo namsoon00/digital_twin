@@ -53,6 +53,8 @@ _EXPORTS = {'ActiveDeploymentWorldProjectionSink': ('digital_twin.infrastructure
                                                 'build_investment_calendar_research_service'),
  'build_investment_calendar_runner': ('digital_twin.infrastructure.composition.investment_calendar',
                                       'build_investment_calendar_runner'),
+ 'build_information_followup_service': ('digital_twin.infrastructure.composition.information_followups',
+                                        'build_information_followup_service'),
  'build_investment_calendar_service': ('digital_twin.infrastructure.composition.investment_calendar',
                                        'build_investment_calendar_service'),
  'build_investment_domain_service': ('digital_twin.infrastructure.composition.portfolio',

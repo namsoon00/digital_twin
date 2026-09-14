@@ -131,6 +131,7 @@ def build_investment_calendar_discovery_service(settings=None, event_publisher=N
 
 
 def build_investment_calendar_runner(settings=None, event_publisher=None) -> InvestmentCalendarRunner:
+    from .information_followups import build_information_followup_service
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.investment_calendar.public import InvestmentCalendarRunner
 
@@ -139,4 +140,5 @@ def build_investment_calendar_runner(settings=None, event_publisher=None) -> Inv
         build_investment_calendar_service(configured_settings, event_publisher),
         official_sync_service=build_official_calendar_sync_service(configured_settings, event_publisher),
         discovery_service=build_investment_calendar_discovery_service(configured_settings, event_publisher),
+        information_followups=build_information_followup_service(configured_settings),
     )

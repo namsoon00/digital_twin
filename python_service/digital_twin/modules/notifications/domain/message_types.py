@@ -18,6 +18,7 @@ PORTFOLIO_HOLDINGS_SNAPSHOT = "portfolioHoldingsSnapshot"
 PORTFOLIO_ACTIVITY_OBSERVATION = "portfolioActivityObservation"
 INVESTMENT_CALENDAR_REMINDER = "investmentCalendarReminder"
 NEWS_DIGEST = "newsDigest"
+INFORMATION_UPDATE = "informationUpdate"
 ONTOLOGY_INFERENCE_MISSING = "ontologyInferenceMissing"
 ONTOLOGY_REASONING_QUEUE = "ontologyReasoningQueue"
 INVESTMENT_ALERT_COVERAGE = "investmentAlertCoverage"
@@ -43,6 +44,7 @@ GENERIC_NOTIFICATION = "notification"
 DEFAULT_MESSAGE = "default"
 
 MONITORING_MESSAGE_TYPES = [
+    INFORMATION_UPDATE,
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
@@ -75,6 +77,7 @@ SYSTEM_MESSAGE_TYPES = {
 }
 
 USER_MANAGED_NOTIFICATION_TYPES = [
+    INFORMATION_UPDATE,
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
@@ -123,6 +126,7 @@ VISIBLE_NOTIFICATION_TEMPLATE_TYPES = [
 MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
+    INFORMATION_UPDATE: 1,
     INVESTMENT_INSIGHT: 1,
     MARKET_OBSERVATION: 1,
     PORTFOLIO_HOLDINGS_SNAPSHOT: 1,
@@ -228,6 +232,7 @@ DEFAULT_CADENCE = {
 }
 
 MESSAGE_TYPE_LABELS = {
+    INFORMATION_UPDATE: "뉴스·공시·발표 후속 확인",
     DEFAULT_MESSAGE: "기본 알림",
     INVESTMENT_INSIGHT: "투자 인사이트",
     MARKET_OBSERVATION: "시세 변동",
@@ -278,6 +283,7 @@ MESSAGE_TYPE_EMOJIS = {
     PORTFOLIO_ACTIVITY_OBSERVATION: "↔️",
     INVESTMENT_CALENDAR_REMINDER: "🗓️",
     NEWS_DIGEST: "🗞️",
+    INFORMATION_UPDATE: "📰",
     MODEL_BUY: "🟢",
     MODEL_SELL: "🔴",
     WATCHLIST_BUY_CANDIDATE: "🎯",
@@ -313,6 +319,7 @@ MESSAGE_TYPE_EMOJIS = {
 }
 
 TRIGGER_SUMMARIES = {
+    INFORMATION_UPDATE: "등록된 정보의 발표 결과나 이후 가격 관측이 새로 확보됐을 때 보냅니다. 투자 판단을 만들지 않습니다.",
     INVESTMENT_INSIGHT: "온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 보냅니다.",
     MARKET_OBSERVATION: "마지막 알림 기준 시세와 비교해 설정한 폭 이상 누적 변동하면 가격 변동 사실을 즉시 알립니다. 매수·매도 판단은 TypeDB 추론 완료 후 별도로 보냅니다.",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "사용자가 명시적으로 요청한 경우에만 투자 판단 없이 모든 보유 종목의 현재 상태를 한 번에 보여줍니다.",

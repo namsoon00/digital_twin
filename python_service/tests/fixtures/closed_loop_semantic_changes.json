@@ -1,5 +1,16 @@
 {
   "domain": {
+    "platform/domain/data_pipeline_health.py::evaluate_news_collection_health": {"hash": "1412223c92b0f19bca037bdf9db73e6cbca50472af5dc7ab0256fb504d48ea05", "reason": "Fetched but rejected candidates must not reset admitted-news freshness or report successful quality admission."},
+    "modules/notifications/domain/message_types.py::MONITORING_MESSAGE_TYPES": {"hash": "5eaf0c8a38a82a95aa211353b67c261bec8b5498bd8f0b64050af96a5952e6c4", "reason": "Register informational result/price follow-ups separately from investment judgments."},
+    "modules/notifications/domain/message_types.py::USER_MANAGED_NOTIFICATION_TYPES": {"hash": "7e77a83b4788897765ef5eec488085ce09953963ef8a8af789bf1d7bf740fceb", "reason": "Allow users to configure the new informational follow-up notification type."},
+    "modules/notifications/domain/message_types.py::DEFAULT_ALERT_RULES": {"hash": "48bbd4cf5b7ab33a791cae39d09be8b7dbe56fb1651517004c17fe7d1112e040", "reason": "Enable informational follow-ups through the existing notification admission policy."},
+    "modules/notifications/domain/message_types.py::MESSAGE_TYPE_LABELS": {"hash": "0bcf1ee41663233c4cd89798894d7177dde78b67ff6ca2caf14204df73a5af1a", "reason": "Label source-result and measured-price follow-ups explicitly."},
+    "modules/notifications/domain/message_types.py::MESSAGE_TYPE_EMOJIS": {"hash": "e4f688ef3158bf1359ee1ae7e0b65d4dcbfc1d69b71e7ac1a892064657910d93", "reason": "Use a news icon for factual informational follow-ups, not a trade signal icon."},
+    "modules/notifications/domain/message_types.py::TRIGGER_SUMMARIES": {"hash": "e621458b250c48fcd7e728455554b03c0ac7ff9941b21a9fb05c18a671436586", "reason": "Document the source-result and price-observation trigger."},
+    "modules/notifications/domain/notification_rule_models.py::default_similarity_enabled": {"hash": "992b711ebdf51ad108eeb70a1821817c93d6976e856b3fe6e223adea0fa7f838", "reason": "Informational observations use exact source/phase/account dedupe, not fuzzy prose similarity."},
+    "modules/notifications/domain/notification_templates.py::REASONING_EXPLANATION_SKIP_TYPES": {"hash": "44b87589e4d58aacaddec9442caa881f0a61e5cc6e825d621c593c4293535bbc", "reason": "Do not attach generic investment reasoning to measured information updates."},
+    "modules/notifications/domain/notification_templates.py::CUSTOMER_FACING_MESSAGE_TYPES": {"hash": "b516561e14e4dc61814641cbe7bf2cfe39b500141be2b7f99798f21dcc9d69e6", "reason": "Information follow-ups are customer-visible source and measurement messages."},
+    "modules/notifications/domain/notification_templates.py::DEFAULT_NOTIFICATION_TEMPLATES": {"hash": "3608acdcab6adb754d08e3127d6339b9554b54695a6e92496d21e922f52136f9", "reason": "Render the source-bound information update body without generic AI filler."},
     "modules/reasoning/domain/abox_lifecycle/invariants.py::validate_manifest_patch_plan": {
       "hash": "8381c391f1a266597b33d559a0bc61fd684fe0302a58198d5f46058b55cba57c",
       "reason": "Limit derived-assertion ownership to semantic replacement roots while retaining final endpoint validation; test_abox_lifecycle."

@@ -63,6 +63,10 @@ def investment_calendar_observation_payload(event):
     if not symbols:
         symbols = ["^KS11", "USDKRW=X"] if (event.get("payload") or {}).get("country") == "KR" else ["^GSPC", "^IXIC"]
     information["marketReaction"] = InformationObservationService(stores.market_time_series_store()).observe(release.get("releasedAt") or "", symbols)
+    from digital_twin.infrastructure.composition.information_followups import information_tracking_payload
+    tracking = information_tracking_payload("calendar", event.get("eventId"), release.get("sourceHash"))
+    if tracking:
+        information["marketReaction"] = tracking
     event["releaseInformation"] = information
     return event
 

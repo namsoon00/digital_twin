@@ -33,6 +33,7 @@ NOTIFICATION_KINDS = {
 LEGACY_KINDS = {
     "marketObservation": "price-change",
     "newsDigest": "news",
+    "informationUpdate": "news",
     "externalDartDisclosure": "news",
     "portfolioActivityObservation": "account-change",
     "portfolioHoldingsSnapshot": "holdings",

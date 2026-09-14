@@ -2155,6 +2155,21 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS information_followups (
+        tracking_id VARCHAR(191) PRIMARY KEY,
+        source_kind VARCHAR(32) NOT NULL,
+        source_id VARCHAR(191) NOT NULL,
+        source_hash VARCHAR(191) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        next_check_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_information_followup_source (source_kind, source_id, created_at),
+        KEY idx_information_followup_due (status, next_check_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_calendar_events (
         event_id VARCHAR(191) PRIMARY KEY,
         title VARCHAR(255) NOT NULL DEFAULT '',

@@ -1,9 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError
 
 from digital_twin.modules.market_data.public import CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
 from digital_twin.modules.market_data.domain.official_release import RELEASE_URLS, latest_fomc_statement_url, parse_official_release
 from digital_twin.modules.market_data.domain.bok_release import BOK_HOME, latest_bok_statement_url, parse_bok_statement
-from ...external_signal_utils import default_text_fetcher, external_call_target, guarded_external_call
+from ...external_signal_utils import default_text_fetcher, external_call_target, guarded_external_call, root_api_error
+from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 
 
 class OfficialReleaseAdapter:
@@ -40,8 +42,15 @@ class OfficialReleaseAdapter:
             timeout = 12
         url = BOK_HOME if indicator == "bok" else RELEASE_URLS[indicator]
         def fetch(url):
-            return guarded_external_call(settings, self.descriptor.provider_id, external_call_target(url),
-                lambda: self.fetch_text(url, headers, timeout), state=self.guard_state, rate_limit_seconds=5)
+            try:
+                return guarded_external_call(settings, self.descriptor.provider_id, external_call_target(url),
+                    lambda: self.fetch_text(url, headers, timeout), state=self.guard_state, rate_limit_seconds=5, attempts=1)
+            except Exception as error:
+                root = root_api_error(error)
+                if self.source == "bls" and isinstance(root, HTTPError) and root.code in {401, 403}:
+                    retry_at = (self.now() + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+                    raise ExternalCallDeferred("BLS 발표문 접근 거부 (HTTP " + str(root.code) + "). 공식 통계 API는 별도로 수집하며 6시간 후 발표문을 재확인합니다.", retry_at, "access-denied") from error
+                raise
 
         markup = fetch(url)
         if indicator == "fomc":

@@ -271,10 +271,11 @@ def evaluate_news_collection_health(
     previous_state = str(previous.get("state") or "")
     first_observed_at = str(previous.get("firstObservedAt") or checked_at)
     fetched_count = integer(result.get("fetchedCount"))
+    admitted_count = integer(result.get("admittedCount")) if "admittedCount" in result else fetched_count
     saved_count = integer(result.get("savedCount"))
     target_count = integer(result.get("targetCount"))
-    zero_runs = 0 if fetched_count else integer(previous.get("consecutiveZeroRuns")) + 1
-    last_non_zero_at = checked_at if fetched_count else str(previous.get("lastNonZeroAt") or "")
+    zero_runs = 0 if admitted_count else integer(previous.get("consecutiveZeroRuns")) + 1
+    last_non_zero_at = checked_at if admitted_count else str(previous.get("lastNonZeroAt") or "")
     providers = provider_health_rows(result.get("statuses") or [])
     provider_rows = [
         row for row in providers
@@ -355,7 +356,7 @@ def evaluate_news_collection_health(
         and body_quality_failure_count >= max(1, fetched_count // 2)
     ):
         state, reason_code, reason = "degraded", "article-extraction-quality-limited", "수집된 뉴스 본문의 상당수가 너무 짧거나 반복돼 투자 근거로 보류했습니다."
-    elif fetched_count:
+    elif admitted_count:
         state, reason_code, reason = "healthy", "fresh-evidence-collected", "신선도와 품질 기준을 통과한 뉴스 근거를 수집했습니다."
     elif (
         provider_candidates
@@ -373,6 +374,8 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "degraded", "article-body-unavailable", "뉴스 후보의 절반 이상에서 원문 본문을 확보하지 못하는 상태가 반복되고 있습니다."
     elif zero_age_minutes >= max(1, int(stale_after_minutes or 1)):
         state, reason_code, reason = "stale", "coverage-stale", "품질 기준을 통과한 최신 뉴스가 허용된 공백 시간 동안 수집되지 않았습니다."
+    elif fetched_count:
+        state, reason_code, reason = "idle", "collected-items-not-admitted", "기사 후보는 확인했지만 저장 품질 기준을 통과한 근거는 없습니다."
     elif provider_candidates:
         state, reason_code, reason = "idle", "candidates-filtered", "공급자는 정상이며 후보가 종목 관련성·본문·신선도 품질 기준에서 제외되었습니다."
     else:

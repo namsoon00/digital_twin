@@ -10,7 +10,17 @@ class InformationObservationService:
         self.reader = reader
         self.now = now or (lambda: datetime.now(timezone.utc))
 
-    def observe(self, event_at, symbols):
+    def capture_baselines(self, event_at, symbols):
+        event = exact_time(event_at)
+        if not event:
+            return {}
+        symbols = sorted(set(symbols))[:3]
+        rows = self.reader.load_baseline_observations("__market_data__",
+            [{"requestId": symbol, "symbol": symbol, "targetAt": event.isoformat()} for symbol in symbols], max_age_minutes=1440)
+        fields = {"symbol", "currentPrice", "sourceAsOf", "generatedAt", "currency", "provider", "observationGranularity", "dataQuality"}
+        return {key: {field: value for field, value in row.items() if field in fields} for key, row in rows.items() if isinstance(row, dict)}
+
+    def observe(self, event_at, symbols, baselines=None):
         event = exact_time(event_at)
         now = self.now()
         result = {"version": "information-price-observation-v1", "eventAt": event_at, "checkedAt": now.isoformat(),
@@ -26,7 +36,7 @@ class InformationObservationService:
         if not symbols:
             return {**result, "label": "등록된 관측 종목 없음"}
         try:
-            baseline = self.reader.load_baseline_observations("__market_data__", bases, max_age_minutes=1440)
+            baseline = baselines if baselines is not None else self.reader.load_baseline_observations("__market_data__", bases, max_age_minutes=1440)
             outcomes = self.reader.load_outcome_observations("__market_data__", targets, max_delay_minutes=180) if targets else {}
         except Exception:
             return {**result, "status": "error", "label": "가격 관측 기록 조회 오류"}

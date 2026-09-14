@@ -1516,6 +1516,8 @@ class ExternalDataCollectionScheduler:
                     flush=True,
                 )
                 for item in result.get("results") or []:
+                    if item.get("requiresAttention"):
+                        report_runtime_error(self.error_reporter, "Python external data collector", RuntimeError(str(item.get("error") or "External data access unavailable")), str(item.get("datasetId") or "external dataset"))
                     if str(item.get("status") or "") != "error":
                         continue
                     if not external_data_failure_requires_alert(item):
@@ -1722,6 +1724,11 @@ class InvestmentCalendarScheduler:
             try:
                 result = self.runner.run_once()
                 discovery = result.get("calendarDiscovery") if isinstance(result.get("calendarDiscovery"), dict) else {}
+                followups = result.get("informationFollowups") or {}
+                if followups.get("registeredCount") or followups.get("updatedCount") or followups.get("status") in {"error", "degraded"}:
+                    print("Information follow-ups " + str(followups.get("status")) + " registered=" + str(followups.get("registeredCount", 0)) + " updated=" + str(followups.get("updatedCount", 0)), flush=True)
+                if followups.get("status") in {"error", "degraded"}:
+                    report_runtime_error(self.error_reporter, "Information follow-ups", RuntimeError("원문·가격 관측 기록 확인 실패. 다음 수집 주기에 재확인합니다."), "information observation cycle")
                 if result.get("dueCount") or result.get("queuedCount") or discovery:
                     print(
                         "Investment calendar "

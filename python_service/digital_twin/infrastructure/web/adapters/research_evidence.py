@@ -501,6 +501,10 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
         payload["informationBrief"]["marketReaction"] = InformationObservationService(stores.market_time_series_store()).observe(
             projected.published_at, [projected.symbol],
         )
+        from digital_twin.infrastructure.composition.information_followups import information_tracking_payload
+        tracking = information_tracking_payload("research", projected.evidence_id, payload["informationBrief"].get("sourceHash"))
+        if tracking:
+            payload["informationBrief"]["marketReaction"] = tracking
     if hasattr(repository, "story_history"):
         payload["storyTimeline"] = [
             {

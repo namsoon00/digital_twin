@@ -180,6 +180,8 @@ class OfficialReleaseTests(unittest.TestCase):
     def test_employment_counts_and_rate(self):
         result = parse_official_release("employment", JOBS, RELEASE_URLS["employment"], NOW)
         self.assertEqual([metric["actual"] for metric in result["metrics"]], [162000, 4.1])
+        embedded_id = JOBS.replace('until\n8:30', 'until USDL-26-1435\n8:30')
+        self.assertEqual(parse_official_release('employment', embedded_id, RELEASE_URLS['employment'], NOW)['releasedAt'], '2026-09-04T12:30:00Z')
 
     def test_fomc_fractional_target_range(self):
         result = parse_official_release("fomc", FED, "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260729a.htm", NOW)

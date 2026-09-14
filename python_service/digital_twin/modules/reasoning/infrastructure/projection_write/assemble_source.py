@@ -9,6 +9,7 @@ import time
 
 from .stage_results import CompletedProjection, AssembleSourceResult
 from .assemble_source_ports import AssembleSourcePort
+from .scope_policy import manifest_input_readiness
 from digital_twin.modules.reasoning.domain.ontology_worlds import OntologyWorld
 from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
 
@@ -17,6 +18,7 @@ def assemble_source(
     _store: AssembleSourcePort,
     compact_reasoning_context: Dict[str, object],
     emit_progress: Callable[..., None],
+    fresh_candidate_rebuild: bool,
     market_world_context: OntologyWorld,
     portfolio_world_context: OntologyWorld,
     projection_run: Optional[OntologyProjectionRun],
@@ -50,14 +52,37 @@ def assemble_source(
         _store.store_projection_result(snapshot, result, projection_run)
         emit_progress("blocked", status=result["status"])
         return CompletedProjection(result)
-    emit_progress("graph_assembly.start")
+    emit_progress("active_abox_read.start")
+    active_abox_started = time.perf_counter()
+    active_abox = (
+        {} if fresh_candidate_rebuild
+        else _store.active_abox_metadata(portfolio_world_context.world_id)
+    )
+    runtime_stages["activeAboxReadMs"] = int((time.perf_counter() - active_abox_started) * 1000)
+    emit_progress(
+        "active_abox_read.done", status=str(active_abox.get("status") or ""),
+        runtimeMs=runtime_stages["activeAboxReadMs"],
+    )
+    readiness = manifest_input_readiness(active_abox, _store.world_partitioned_reasoning_enabled())
+    available = set(_store.snapshot_symbols(snapshot))
+    requested = {
+        str(item or "").strip().upper() for item in target_symbols or []
+    }.intersection(available)
+    # The manifest is already known before assembly. Never build a partial
+    # graph merely to discover that cold bootstrap needs the complete source.
+    use_target_input = bool(
+        requested and requested != available and readiness["ready"]
+        and not readiness["overlayMigrationRequired"]
+    )
+    runtime_stages["fullInputPreflightSelected"] = int(bool(target_symbols) and not use_target_input)
+    emit_progress("graph_assembly.start", targetScopedInput=use_target_input)
     projection_graph = _store.build_projection_graph(
         snapshot,
         rulebox_bootstrap,
         portfolio_world_context,
         market_world_context=market_world_context,
         target_symbols=target_symbols,
-        target_scoped_input=bool(target_symbols),
+        target_scoped_input=use_target_input,
         progress_callback=emit_progress,
         shared_premise_proof=shared_premise_proof,
         reasoning_context=compact_reasoning_context,
@@ -137,6 +162,7 @@ def assemble_source(
     )
 
     return AssembleSourceResult(
+        active_abox=active_abox,
         graph=graph,
         graph_input=graph_input,
         material_fingerprint=material_fingerprint,

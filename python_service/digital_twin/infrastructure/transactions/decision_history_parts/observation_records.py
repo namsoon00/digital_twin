@@ -33,6 +33,7 @@ from .outcome_policy import (
     selected_hypothesis_payload,
 )
 from .ports import ConnectionFactory
+from digital_twin.modules.outcomes.infrastructure.transaction_writes import upsert_decision_calibration_input
 
 
 def record_observation(
@@ -329,16 +330,18 @@ def save_outcome(
                 utc_now_iso(),
             ),
         )
+        episode_stamp = utc_now_iso()
         connection.execute(
             "UPDATE investment_decision_episodes SET status = %s, decided_at = %s, payload_json = %s, updated_at = %s WHERE episode_id = %s",
             (
                 "observed",
                 episode.decided_at,
                 json_dumps(episode_payload),
-                utc_now_iso(),
+                episode_stamp,
                 episode.episode_id,
             ),
         )
+        upsert_decision_calibration_input(connection, episode.episode_id, episode_payload, episode_stamp)
         horizon_minutes = int((outcome.payload or {}).get("horizonMinutes") or 0)
         fingerprint = str((outcome.payload or {}).get("contractFingerprint") or "")
         connection.execute(

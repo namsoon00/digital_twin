@@ -9,6 +9,11 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Protocol, Set, 
 
 
 class RecordPort(Protocol):
+
+    def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]: ...
+
+    def world_partitioned_reasoning_enabled(self) -> bool: ...
+
     def acquire_projection_coordinator_lease(
         self, owner: str, world_id: str
     ) -> Dict[str, object]: ...

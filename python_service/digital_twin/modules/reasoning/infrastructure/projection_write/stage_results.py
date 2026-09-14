@@ -32,6 +32,7 @@ class PrepareAttemptResult:
 
 @dataclass(frozen=True)
 class AssembleSourceResult:
+    active_abox: Dict[str, object]
     graph: PortfolioOntology
     graph_input: Dict[str, object]
     material_fingerprint: str

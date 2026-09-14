@@ -7,6 +7,7 @@ from digital_twin.modules.read_models.domain.investment_flow import investment_f
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from .ports import ConnectionFactory
+from digital_twin.modules.outcomes.infrastructure.transaction_writes import upsert_decision_calibration_input
 
 
 def supersede_noncurrent_follow_ups(
@@ -108,6 +109,7 @@ def quarantine_invalid_legacy_outcomes(
                 "WHERE episode_id = %s",
                 (quarantine_status, json_dumps(payload), stamp, episode_id),
             )
+            upsert_decision_calibration_input(connection, episode_id, payload, stamp)
             episode_ids.append(episode_id)
         if not episode_ids:
             return {

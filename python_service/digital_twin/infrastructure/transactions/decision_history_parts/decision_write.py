@@ -118,6 +118,9 @@ def write_decision(
         payload=payload,
         stamp=stamp,
     )
+    outcomes_writes.upsert_decision_calibration_input(
+        connection, episode.episode_id, payload, stamp,
+    )
     decisions_writes.advance_current_decision_flow(
         connection=connection,
         episode=episode,

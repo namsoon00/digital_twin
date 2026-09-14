@@ -204,7 +204,7 @@ class InternalDecisionHistoryTests(unittest.TestCase):
 
     def test_outcome_partial_writes_keep_the_previous_committed_history(self):
         for shadow in (False, True):
-            for index in range(1, 4):
+            for index in range(1, 4 if shadow else 5):
                 for after in (False, True):
                     with self.subTest(shadow=shadow, write=index, after=after):
                         ledger = AtomicLedger(index, after)
@@ -227,7 +227,7 @@ class InternalDecisionHistoryTests(unittest.TestCase):
         ledger = AtomicLedger()
         store_for(ledger).save_outcome(episode(), outcome())
         self.assertEqual(1, ledger.begins)
-        self.assertEqual(3, len(ledger.committed))
+        self.assertEqual(4, len(ledger.committed))
         sql, params = ledger.committed[-1]
         self.assertIn("AND contract_fingerprint = %s", sql)
         self.assertEqual(
@@ -236,7 +236,7 @@ class InternalDecisionHistoryTests(unittest.TestCase):
         self.assertEqual(DECIDED, ledger.committed[1][1][1])
 
     def test_batch_failure_does_not_undo_earlier_per_outcome_commit_or_run_learning(self):
-        ledger = AtomicLedger(fail_write=4, after_write=True)
+        ledger = AtomicLedger(fail_write=5, after_write=True)
         store = store_for(ledger)
         first, second = episode("episode:first"), episode("episode:second")
         store.episodes_by_ids = lambda _ids: {v.episode_id: v for v in (first, second)}
@@ -259,7 +259,7 @@ class InternalDecisionHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "injected write"):
             store.record_outcome_observations("fixture", observations)
         self.assertEqual(2, ledger.begins)
-        self.assertEqual(3, len(ledger.committed))
+        self.assertEqual(4, len(ledger.committed))
         self.assertEqual("episode:first", ledger.committed[-1][1][4])
         store.propose_learning_from_outcomes.assert_not_called()
 

@@ -1592,6 +1592,9 @@ def run_mysql_operational_cleanup(
                         connection,
                         protected_databases=[str(settings.get("mysqlDatabase") or "")],
                     )
+            from digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs import MySQLDecisionCalibrationInputStore
+
+            result["decisionCalibrationInputs"] = MySQLDecisionCalibrationInputStore(settings).repair()
             if connection_retries:
                 result["transientConnectionRetryCount"] = connection_retries
             if deadlock_retries:

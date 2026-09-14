@@ -2763,6 +2763,14 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_decision_calibration_inputs (
+        episode_id VARCHAR(191) PRIMARY KEY,
+        format_version VARCHAR(64) NOT NULL,
+        source_updated_at VARCHAR(40) NOT NULL,
+        hypotheses_json LONGTEXT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_decision_outcomes (
         outcome_id VARCHAR(191) PRIMARY KEY,
         episode_id VARCHAR(191) NOT NULL,

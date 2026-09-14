@@ -120,6 +120,16 @@
       "reason": "Do not convert data gaps into success or price outcomes into trading returns; test_ai_inference_queue."
     }
   },
+  "projection": {
+    "ontology_projection.PortfolioOntologyProjectionRecorder.record_snapshot": {
+      "hash": "67c4877c75fc15f5d2f29a67ecb1659f2832838a1edf7e354dbdf876ff7e62af",
+      "reason": "Read the active manifest once before assembly and select full input immediately for cold or incompatible manifests; retain final partial-source rejection and full fallback. No action, source identity or publication gate changes. test_projection_input_preflight and test_backend_stabilization."
+    },
+    "ontology_projection.PortfolioOntologyProjectionRecorder.target_scoped_patch_targets": {
+      "hash": "4003fa2224d2c93cd839dec5fbca83615366eed3c3da99b89cf2d315af10d761",
+      "reason": "Share the existing manifest-version and overlay-migration predicate with source preflight; retain all subsequent patch eligibility checks. test_projection_input_preflight and test_ontology_projection."
+    }
+  },
   "storage": {
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::merge_derived_evidence_payload": {
       "hash": "51b7c8acb6061af12bdce049ddc250014f6d740a714006eaa5796732375f39e0",
@@ -142,8 +152,8 @@
       "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
-      "hash": "0672b95bcadce2ca7e69f64b92e6d24715ca4f42ba50fe8654000d0204ce9d0d",
-      "reason": "Capture finite experimental inputs and final outcomes atomically with the original ledger; exact plan-scoped readers do not change investment authority. test_experiment_observations, test_ontology_evolution and test_stabilization_transactions."
+      "hash": "da74475533013791b423dfb931d61d984d3dc4a487c3c4a4fba2418e1d298a29",
+      "reason": "Capture finite experimental inputs and final outcomes atomically with the original ledger. Maintain compact claim inputs in the same transaction; use them only when source timestamp and format match, otherwise read the original. Preserve outcome-led selection, as-of cutoff and exact qualification metrics. test_decision_calibration_inputs, test_internal_decision_history, test_experiment_observations, test_ontology_evolution and test_stabilization_transactions."
     }
   }
 }

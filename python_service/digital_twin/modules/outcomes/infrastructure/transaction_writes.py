@@ -7,6 +7,28 @@ from digital_twin.modules.outcomes.domain.investment_outcomes import DecisionRev
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.modules.decisions.contracts import DecisionEpisode, canonical_investment_timestamp, stable_id, utc_now_iso
+from digital_twin.modules.outcomes.domain.decision_calibration_input import (
+    DECISION_CALIBRATION_INPUT_VERSION,
+    calibration_hypotheses,
+)
+
+
+def upsert_decision_calibration_input(
+    connection: BoundWriteConnection,
+    episode_id: str,
+    payload: Dict[str, object],
+    stamp: str,
+) -> None:
+    connection.execute(
+        "INSERT INTO investment_decision_calibration_inputs "
+        "(episode_id, format_version, source_updated_at, hypotheses_json) "
+        "VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE "
+        "format_version = VALUES(format_version), "
+        "source_updated_at = VALUES(source_updated_at), "
+        "hypotheses_json = VALUES(hypotheses_json)",
+        (episode_id, DECISION_CALIBRATION_INPUT_VERSION, stamp,
+         json_dumps(calibration_hypotheses(payload))),
+    )
 
 
 def save_decision_review(

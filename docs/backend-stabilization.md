@@ -1,5 +1,9 @@
 # Backend Stabilization
 
+The subsequent measured history-read and cold-input optimization is documented
+in [Reasoning Input Latency](reasoning-input-latency.md). Results below describe
+the original stabilization batch, not the latest runtime latency.
+
 This batch follows ownership integration. It changes execution boundaries, not
 investment rules, frozen releases, user notification policy or web navigation.
 

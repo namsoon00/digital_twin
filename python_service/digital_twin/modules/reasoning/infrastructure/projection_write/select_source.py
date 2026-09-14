@@ -17,9 +17,9 @@ from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOn
 
 def select_source(
     _store: SelectSourcePort,
+    active_abox: Dict[str, object],
     compact_reasoning_context: Dict[str, object],
     emit_progress: Callable[..., None],
-    fresh_candidate_rebuild: bool,
     graph: PortfolioOntology,
     graph_input: Dict[str, object],
     market_world_context: OntologyWorld,
@@ -36,21 +36,6 @@ def select_source(
     snapshot: AccountSnapshot,
     target_symbols: List[str],
 ) -> Union[SelectSourceResult, CompletedProjection]:
-    emit_progress("active_abox_read.start")
-    active_abox_started = time.perf_counter()
-    active_abox = (
-        {}
-        if fresh_candidate_rebuild
-        else _store.active_abox_metadata(portfolio_world_context.world_id)
-    )
-    runtime_stages["activeAboxReadMs"] = int(
-        (time.perf_counter() - active_abox_started) * 1000
-    )
-    emit_progress(
-        "active_abox_read.done",
-        status=str(active_abox.get("status") or ""),
-        runtimeMs=runtime_stages["activeAboxReadMs"],
-    )
     evidence_index_upgrade = {}
     active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
     active_abox_is_scoped_manifest = (

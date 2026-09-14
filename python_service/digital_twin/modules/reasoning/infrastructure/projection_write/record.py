@@ -81,6 +81,7 @@ def record_snapshot(
             _store=_store,
             compact_reasoning_context=compact_reasoning_context,
             emit_progress=emit_progress,
+            fresh_candidate_rebuild=fresh_candidate_rebuild,
             market_world_context=market_world_context,
             portfolio_world_context=portfolio_world_context,
             projection_run=projection_run,
@@ -91,6 +92,7 @@ def record_snapshot(
         )
         if isinstance(stage_result, CompletedProjection):
             return stage_result.result
+        active_abox = stage_result.active_abox
         graph = stage_result.graph
         graph_input = stage_result.graph_input
         material_fingerprint = stage_result.material_fingerprint
@@ -103,9 +105,9 @@ def record_snapshot(
         scoped_identity = stage_result.scoped_identity
         stage_result = select_source(
             _store=_store,
+            active_abox=active_abox,
             compact_reasoning_context=compact_reasoning_context,
             emit_progress=emit_progress,
-            fresh_candidate_rebuild=fresh_candidate_rebuild,
             graph=graph,
             graph_input=graph_input,
             market_world_context=market_world_context,

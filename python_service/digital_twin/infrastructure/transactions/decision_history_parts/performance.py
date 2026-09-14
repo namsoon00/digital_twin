@@ -6,6 +6,7 @@ from typing import Callable, Dict, Iterable, List, Mapping
 from digital_twin.modules.decisions.domain.investment_brain import canonical_investment_timestamp
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from .ports import ConnectionFactory
+from digital_twin.modules.outcomes.domain.decision_calibration_input import DECISION_CALIBRATION_INPUT_VERSION
 
 
 def performance(
@@ -239,7 +240,8 @@ def performance_episodes(
             "SELECT outcomes.episode_id, outcomes.observed_at, outcomes.payload_json AS outcome_json, "
             "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
             "episodes.selected_hypothesis_id, episodes.decided_at, "
-            "JSON_EXTRACT(episodes.payload_json, '$.hypothesisSet.hypotheses') AS hypotheses_json "
+            "COALESCE(calibration.hypotheses_json, "
+            "JSON_EXTRACT(episodes.payload_json, '$.hypothesisSet.hypotheses')) AS hypotheses_json "
             "FROM investment_decision_outcomes AS outcomes JOIN ("
             "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
             "FROM investment_decision_outcomes"
@@ -247,6 +249,10 @@ def performance_episodes(
             + " GROUP BY episode_id ORDER BY latest_observed_at DESC LIMIT %s"
             ") AS selected ON selected.episode_id = outcomes.episode_id "
             "JOIN investment_decision_episodes AS episodes ON episodes.episode_id = outcomes.episode_id "
+            "LEFT JOIN investment_decision_calibration_inputs AS calibration "
+            "ON calibration.episode_id = episodes.episode_id "
+            "AND calibration.source_updated_at = episodes.updated_at "
+            "AND calibration.format_version = '" + DECISION_CALIBRATION_INPUT_VERSION + "' "
             + outer_where
             + " "
             "ORDER BY selected.latest_observed_at DESC, outcomes.observed_at ASC, outcomes.outcome_id ASC",

@@ -8,6 +8,12 @@ from typing import Callable, Dict, List, Protocol
 
 class AssembleSourcePort(Protocol):
 
+    def active_abox_metadata(self, world_id: str = "") -> Dict[str, object]: ...
+
+    def world_partitioned_reasoning_enabled(self) -> bool: ...
+
+    def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]: ...
+
     def build_projection_graph(
         self,
         snapshot: AccountSnapshot,

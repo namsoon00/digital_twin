@@ -7,8 +7,6 @@ from typing import Callable, Dict, List, Protocol
 
 class SelectSourcePort(Protocol):
 
-    def active_abox_metadata(self, world_id: str = "") -> Dict[str, object]: ...
-
     def build_projection_graph(
         self,
         snapshot: AccountSnapshot,

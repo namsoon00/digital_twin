@@ -95,6 +95,24 @@ def reasoning_queue_pressure(
     }
 
 
+def manifest_input_readiness(active_metadata: Dict[str, object], partitioned: bool) -> dict:
+    active_metadata = active_metadata or {}
+    ready = bool(
+        str(active_metadata.get("status") or "").lower() == "ok"
+        and active_metadata.get("scopePlan")
+        and active_metadata.get("scopeGenerationIds")
+        and str(active_metadata.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+        and str(active_metadata.get("scopeTopologyVersion") or "") == SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION
+    )
+    migration = bool(
+        partitioned
+        and str(active_metadata.get("status") or "").lower() == "ok"
+        and str(active_metadata.get("accountOverlayProjectionContractVersion") or "")
+        != ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION
+    )
+    return {"ready": ready, "overlayMigrationRequired": migration}
+
+
 def target_scoped_patch_targets(
     _store: ScopePolicyPort,
     snapshot: AccountSnapshot,
@@ -144,23 +162,9 @@ def target_scoped_patch_targets(
         integrity_age_minutes is None
         or integrity_age_minutes >= _store.scope_integrity_audit_interval_minutes()
     )
-    active_manifest_ready = bool(
-        str((active_metadata or {}).get("status") or "").lower() == "ok"
-        and (active_metadata or {}).get("scopePlan")
-        and (active_metadata or {}).get("scopeGenerationIds")
-        and str((active_metadata or {}).get("scopedAboxManifestVersion") or "")
-        == SCOPED_ABOX_MANIFEST_VERSION
-        and str((active_metadata or {}).get("scopeTopologyVersion") or "")
-        == SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION
-    )
-    overlay_contract_migration_required = bool(
-        _store.world_partitioned_reasoning_enabled()
-        and str((active_metadata or {}).get("status") or "").lower() == "ok"
-        and str(
-            (active_metadata or {}).get("accountOverlayProjectionContractVersion") or ""
-        )
-        != ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION
-    )
+    readiness = manifest_input_readiness(active_metadata, _store.world_partitioned_reasoning_enabled())
+    active_manifest_ready = readiness["ready"]
+    overlay_contract_migration_required = readiness["overlayMigrationRequired"]
     base = {
         "preliminaryImpactPlan": compact_inference_impact_plan(preliminary),
         "targetSymbols": list(inferred),

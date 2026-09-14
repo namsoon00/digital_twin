@@ -30,6 +30,7 @@
         "_store",
         "compact_reasoning_context",
         "emit_progress",
+        "fresh_candidate_rebuild",
         "market_world_context",
         "portfolio_world_context",
         "projection_run",
@@ -39,6 +40,7 @@
         "target_symbols"
       ],
       "outputs": [
+        "active_abox",
         "graph",
         "graph_input",
         "material_fingerprint",
@@ -57,9 +59,9 @@
     "select_source": {
       "inputs": [
         "_store",
+        "active_abox",
         "compact_reasoning_context",
         "emit_progress",
-        "fresh_candidate_rebuild",
         "graph",
         "graph_input",
         "market_world_context",

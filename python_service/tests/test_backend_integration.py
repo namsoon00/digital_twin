@@ -92,6 +92,8 @@ class BackendIntegrationTests(unittest.TestCase):
     ):
         trees = {}
         changed = set()
+        reviewed = json.loads((FIXTURES / "closed_loop_semantic_changes.json").read_text())["projection"]
+        checked_reviews = set()
         for name, entry in OWNERSHIP["methods"].items():
             with self.subTest(method=name):
                 path = entry["path"]
@@ -104,12 +106,17 @@ class BackendIntegrationTests(unittest.TestCase):
                 method = trees[path][name.split(".")[-1]]
                 if method.name == "record_snapshot":
                     method = expand_projection(method)
-                if method.name in INTENTIONAL_CHANGES:
+                if name in reviewed:
+                    checked_reviews.add(name)
+                    self.assertTrue(reviewed[name]["reason"])
+                    self.assertEqual(reviewed[name]["hash"], body_hash(method))
+                elif method.name in INTENTIONAL_CHANGES:
                     changed.add(method.name)
                     self.assertNotEqual(entry["bodyHash"], body_hash(method))
                 else:
                     self.assertEqual(entry["bodyHash"], body_hash(method))
         self.assertEqual(set(INTENTIONAL_CHANGES), changed)
+        self.assertEqual(set(reviewed), checked_reviews)
         self.assertEqual(144, len(OWNERSHIP["methods"]))
 
     def test_integrated_facades_retain_signatures_guards_and_explicit_bindings(self):

@@ -88,6 +88,26 @@ def _outcome_rows(values: Iterable[object]) -> Tuple[Dict[str, object], ...]:
     ), 6)
 
 
+def _outcome_schedule_summary(value: object, *, has_outcomes: bool = False) -> Tuple[str, str]:
+    schedule = _mapping(value)
+    if schedule.get("readStatus") != "available":
+        return "unavailable", "관측 예약을 조회하지 못해 대기 중인지 확인할 수 없습니다."
+    states = {key for key, count in _mapping(schedule.get("states")).items() if count}
+    if not states and schedule.get("targetCount") == 0:
+        return "not-scheduled", "이전 판단에 연결된 사후 관측 예약이 없습니다."
+    if states == {"excluded"}:
+        return "excluded", "이전 판단의 관측 예약은 평가 대상에서 제외됐습니다. 새 관측을 기다리는 상태가 아닙니다."
+    if states == {"pending"}:
+        return "pending", "예약된 시점의 관측 결과를 기다리고 있습니다."
+    if states == {"needs-data"}:
+        return "data-gap", "예약된 관측에 필요한 자료가 부족해 평가를 보류했습니다."
+    if states == {"observed"} and has_outcomes:
+        return "observed", "예약된 관측은 완료됐습니다. 성과 평가 가능 여부는 아래 결과별로 확인합니다."
+    if states and states <= {"pending", "needs-data", "excluded", "observed"} and len(states) > 1:
+        return "partial", "관측 예약별 상태가 다릅니다. 대기·자료 부족·평가 제외와 완료 결과를 나누어 확인합니다."
+    return "unavailable", "관측 예약 상태와 연결된 평가 결과를 함께 확인하지 못했습니다."
+
+
 def decision_review_summary(packet: Mapping[str, object]) -> Dict[str, object]:
     """Explain recorded checks, never infer an investment action or missing result."""
     previous = _mapping(packet.get("previousDecision"))
@@ -130,9 +150,16 @@ def decision_review_summary(packet: Mapping[str, object]) -> Dict[str, object]:
             "state": state, "explanation": explanation,
         })
     states = {row["state"] for row in outcomes}
-    state = ("partial" if len(states) > 1 else next(iter(states))) if states else "pending" if previous else "not-recorded"
+    schedule = _mapping(packet.get("outcomeSchedule"))
+    schedule_state, schedule_explanation = _outcome_schedule_summary(schedule, has_outcomes=bool(outcomes))
+    if outcomes and schedule.get("readStatus") == "available":
+        if any(_mapping(schedule.get("states")).get(key) for key in ("pending", "needs-data")):
+            states.add(schedule_state)
+    state = ("partial" if len(states) > 1 else next(iter(states))) if states else schedule_state if previous else "not-recorded"
     return {
         "state": state,
+        "scheduleExplanation": schedule_explanation if previous else "",
+        "nextObservationAt": schedule.get("nextTargetAt") or "",
         "previousSummary": _text(previous.get("decisionSummary")),
         "previousAction": previous.get("action") or "",
         "previousDecidedAt": previous.get("decidedAt") or "",
@@ -154,6 +181,7 @@ class DecisionContinuityPacket:
     follow_up_conditions: Tuple[Mapping[str, object], ...] = field(default_factory=tuple)
     unsupported_follow_ups: Tuple[Mapping[str, object], ...] = field(default_factory=tuple)
     observed_outcomes: Tuple[Mapping[str, object], ...] = field(default_factory=tuple)
+    outcome_schedule: Mapping[str, object] = field(default_factory=dict)
     action_observations: Tuple[Mapping[str, object], ...] = field(default_factory=tuple)
     current_position: Mapping[str, object] = field(default_factory=dict)
     execution_feedback: Mapping[str, object] = field(default_factory=dict)
@@ -188,6 +216,7 @@ class DecisionContinuityPacket:
             "followUpConditions": follow_up_rows,
             "unsupportedFollowUps": [dict(item) for item in self.unsupported_follow_ups],
             "observedOutcomes": outcome_rows,
+            "outcomeSchedule": dict(self.outcome_schedule or {}),
             "actionObservations": action_rows,
             "currentPosition": dict(self.current_position or {}),
             "executionFeedback": execution_feedback,
@@ -236,6 +265,7 @@ def build_decision_continuity_packet(
     follow_up_conditions: Iterable[object] = None,
     unsupported_follow_ups: Iterable[object] = None,
     observed_outcomes: Iterable[object] = None,
+    outcome_schedule: object = None,
     action_observations: Iterable[object] = None,
     current_position: object = None,
     execution_feedback: object = None,
@@ -261,6 +291,10 @@ def build_decision_continuity_packet(
             "status", "observable", "reason",
         ), 4),
         observed_outcomes=_outcome_rows(observed_outcomes or []),
+        outcome_schedule={
+            key: value for key, value in _mapping(outcome_schedule).items()
+            if key in {"readStatus", "targetCount", "states", "nextTargetAt"}
+        },
         action_observations=_rows(action_observations or [], (
             "observationId", "observedAt", "activityEpisodeId", "priorDecisionEpisodeId",
             "priorAction", "observedDirection", "correspondence", "elapsedMinutes",
@@ -292,6 +326,7 @@ def compact_decision_continuity_packet(value: object) -> Dict[str, object]:
             "contractVersion", "packetId", "materialFingerprint", "accountId", "symbol",
             "capturedAt", "status", "previousDecision", "selectedHypothesis",
             "followUpConditions", "unsupportedFollowUps", "observedOutcomes",
+            "outcomeSchedule",
             "actionObservations", "currentPosition", "executionFeedback",
             "lifecycleFeedback", "observationState", "summary", "sourceStatus", "sourceErrors", "reviewSummary",
         )

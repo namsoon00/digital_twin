@@ -165,7 +165,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Nineteen free-source/follow-up/health boundaries and two transactional storage regressions.
         # Nine document-recovery provenance, exact-revision and digest identity regressions.
         # Twelve compact-calibration parity/rollback and cold-input planning regressions.
-        self.assertLessEqual(total, 1584)
+        # Ten decision/insight scope, immutable memory and exact outcome-schedule regressions.
+        self.assertLessEqual(total, 1594)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

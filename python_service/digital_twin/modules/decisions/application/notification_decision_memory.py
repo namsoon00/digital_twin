@@ -6,7 +6,9 @@ from typing import Dict, Mapping
 
 from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_subject
 from digital_twin.modules.decisions.domain.decision_continuity import compact_decision_continuity_packet
-from digital_twin.modules.decisions.domain.investment_decision_history import compact_decision_episode_memory
+from digital_twin.modules.decisions.domain.investment_decision_history import (
+    compact_decision_episode_memory, decision_memory_matches_scope,
+)
 from digital_twin.modules.decisions.domain.investment_insight_assessment import compact_previous_investment_insight_episode
 
 
@@ -25,18 +27,30 @@ def context_with_previous_investment_decision(
     """Attach one immutable prior-decision continuity packet."""
 
     enriched = _mapping(context)
-    existing = compact_decision_episode_memory(enriched.get("previousInvestmentDecisionEpisode"))
     subject = notification_ai_subject(enriched)
     resolved_account = str(account_id or enriched.get("accountId") or "").strip()
     resolved_symbol = str(symbol or subject.get("symbol") or "").strip().upper()
+    current_episode_id = str(enriched.get("investmentDecisionEpisodeId") or "").strip()
+
+    def in_scope(value):
+        return decision_memory_matches_scope(
+            value, resolved_account, resolved_symbol, exclude_episode_id=current_episode_id,
+        )
+
+    existing = compact_decision_episode_memory(enriched.pop("previousInvestmentDecisionEpisode", None))
+    if not in_scope(existing):
+        existing = {}
+    enriched.pop("investmentDecisionHistory", None)
     captured_packet = compact_decision_continuity_packet(enriched.get("decisionContinuityPacket"))
+    # This is a frozen historical summary, not an executable opinion to reauthorize.
+    packet_previous = _mapping(captured_packet.get("previousDecision"))
     if (
         captured_packet
         and str(captured_packet.get("accountId") or "") == resolved_account
         and str(captured_packet.get("symbol") or "").upper() == resolved_symbol
+        and (not captured_packet.get("previousDecision") or in_scope(captured_packet["previousDecision"]))
     ):
         enriched["decisionContinuityPacket"] = captured_packet
-        packet_previous = compact_decision_episode_memory(captured_packet.get("previousDecision"))
         if packet_previous:
             enriched["previousInvestmentDecisionEpisode"] = packet_previous
         enriched.setdefault("investmentDecisionHistory", {
@@ -49,6 +63,7 @@ def context_with_previous_investment_decision(
             "continuityPacketId": captured_packet.get("packetId") or "",
         })
         return enriched
+    enriched.pop("decisionContinuityPacket", None)
 
     if continuity_service and resolved_account and resolved_symbol:
         try:
@@ -66,7 +81,7 @@ def context_with_previous_investment_decision(
             continuity_error = ""
         if packet:
             enriched["decisionContinuityPacket"] = packet
-            packet_previous = compact_decision_episode_memory(packet.get("previousDecision"))
+            packet_previous = _mapping(packet.get("previousDecision"))
             if packet_previous:
                 existing = packet_previous
                 enriched["previousInvestmentDecisionEpisode"] = packet_previous
@@ -116,7 +131,6 @@ def context_with_previous_investment_decision(
         enriched["investmentDecisionHistory"] = audit
         return enriched
 
-    current_episode_id = str(enriched.get("investmentDecisionEpisodeId") or "").strip()
     try:
         if hasattr(decision_episode_store, "latest_decision_memory"):
             previous = decision_episode_store.latest_decision_memory(
@@ -132,8 +146,7 @@ def context_with_previous_investment_decision(
             )
             previous = next((
                 item for item in rows or []
-                if str(getattr(item, "episode_id", "") or _mapping(item).get("episodeId") or "").strip()
-                != current_episode_id
+                if in_scope(item) and compact_decision_episode_memory(item)
             ), None)
         else:
             previous = None
@@ -143,7 +156,7 @@ def context_with_previous_investment_decision(
         return enriched
 
     memory = compact_decision_episode_memory(previous)
-    if not memory:
+    if not memory or not in_scope(memory):
         audit["status"] = "not-found"
         enriched["investmentDecisionHistory"] = audit
         return enriched
@@ -170,13 +183,6 @@ def context_with_previous_investment_insight(
     enriched = context_with_previous_delivered_investment_insight(
         context, insight_episode_store, account_id=account_id, symbol=symbol,
     )
-    existing = compact_previous_investment_insight_episode(
-        enriched.get("previousInvestmentAIInsightEpisode")
-    )
-    if existing:
-        enriched["previousInvestmentAIInsightEpisode"] = existing
-        return enriched
-
     subject = notification_ai_subject(enriched)
     resolved_account = str(account_id or enriched.get("accountId") or "").strip()
     resolved_symbol = str(symbol or subject.get("symbol") or "").strip().upper()
@@ -185,6 +191,18 @@ def context_with_previous_investment_insight(
         or _mapping(enriched.get("investmentSubjectDecisionCase")).get("subjectCaseId")
         or ""
     ).strip()
+    def in_scope(candidate):
+        return decision_memory_matches_scope(candidate, resolved_account, resolved_symbol) and not (
+            current_subject_case_id and candidate.get("subjectCaseId") == current_subject_case_id
+        )
+
+    existing = compact_previous_investment_insight_episode(
+        enriched.pop("previousInvestmentAIInsightEpisode", None)
+    )
+    if existing and in_scope(existing):
+        enriched["previousInvestmentAIInsightEpisode"] = existing
+        return enriched
+    enriched.pop("investmentInsightHistory", None)
     audit = {
         "version": "investment-insight-history-v1",
         "status": "unavailable",
@@ -209,9 +227,7 @@ def context_with_previous_investment_insight(
     previous = {}
     for episode in episodes or []:
         candidate = compact_previous_investment_insight_episode(episode)
-        if not candidate:
-            continue
-        if current_subject_case_id and str(candidate.get("subjectCaseId") or "") == current_subject_case_id:
+        if not candidate or not in_scope(candidate):
             continue
         previous = candidate
         break
@@ -246,12 +262,20 @@ def context_with_previous_delivered_investment_insight(
     resolved_account = str(account_id or enriched.get("accountId") or "").strip()
     resolved_symbol = str(symbol or subject.get("symbol") or "").strip().upper()
     captured = _mapping(enriched.get("investmentInsightDeliveryHistory"))
+    existing = compact_previous_investment_insight_episode(
+        enriched.pop("previousDeliveredInvestmentAIInsightEpisode", None)
+    )
     if (
         captured.get("status") in {"found", "not-found"}
         and captured.get("accountId") == resolved_account
         and captured.get("symbol") == resolved_symbol
     ):
-        return enriched
+        if captured["status"] == "not-found":
+            return enriched
+        if (decision_memory_matches_scope(existing, resolved_account, resolved_symbol)
+                and existing.get("episodeId") == captured.get("previousEpisodeId")):
+            enriched["previousDeliveredInvestmentAIInsightEpisode"] = existing
+            return enriched
     audit = {
         "version": "investment-insight-delivery-history-v1",
         "status": "unavailable",

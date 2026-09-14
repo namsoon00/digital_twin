@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from typing import Dict, Mapping
 
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
-from digital_twin.modules.decisions.domain.investment_decision_history import compact_decision_episode_memory
+from digital_twin.modules.decisions.domain.investment_decision_history import (
+    compact_decision_episode_memory, decision_memory_matches_scope,
+)
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -47,10 +49,14 @@ class DecisionContinuityService:
         account_key = str(account_id or "").strip()
         symbol_key = str(symbol or "").upper().strip()
         excluded = str(exclude_episode_id or "").strip()
-        previous_memory = compact_decision_episode_memory(existing_previous)
+        def in_scope(value):
+            return decision_memory_matches_scope(value, account_key, symbol_key, exclude_episode_id=excluded)
+
+        previous_memory = compact_decision_episode_memory(existing_previous) if in_scope(existing_previous) else {}
         source_status = {
             "decisionEpisode": "unavailable",
             "followUpAndOutcome": "unavailable",
+            "outcomeSchedule": "unavailable",
             "accountObservation": "unavailable",
             "executionFeedback": "unavailable",
             "lifecycleFeedback": "unavailable",
@@ -71,9 +77,13 @@ class DecisionContinuityService:
                             exclude_episode_id=excluded,
                         )
                     )
+                    if not in_scope(previous_memory):
+                        previous_memory = {}
                     previous_id = str(previous_memory.get("episodeId") or "")
                 if previous_id and hasattr(self.decision_episode_store, "get"):
                     episode = self.decision_episode_store.get(previous_id)
+                    if not in_scope(episode):
+                        episode = None
                 if (
                     episode is None
                     and not previous_memory
@@ -86,8 +96,7 @@ class DecisionContinuityService:
                     )
                     episode = next((
                         item for item in rows or []
-                        if str(_mapping(item).get("episodeId") or getattr(item, "episode_id", "") or "").strip()
-                        != excluded
+                        if in_scope(item) and compact_decision_episode_memory(item)
                     ), None)
                 source_status["decisionEpisode"] = "available" if episode or previous_memory else "not-found"
             except Exception:  # noqa: BLE001 - continuity is advisory and must not block a live alert.
@@ -105,6 +114,17 @@ class DecisionContinuityService:
             or previous_memory.get("episodeId")
             or ""
         ).strip()
+        outcome_schedule = {"readStatus": "unavailable"}
+        schedule_reader = getattr(self.decision_episode_store, "decision_outcome_schedule", None)
+        if episode_id and callable(schedule_reader):
+            try:
+                outcome_schedule = _mapping(schedule_reader(
+                    account_id=account_key, symbol=symbol_key, episode_id=episode_id,
+                ))
+                source_status["outcomeSchedule"] = outcome_schedule.get("readStatus") or "unavailable"
+            except Exception:  # noqa: BLE001 - a failed read is not a pending observation.
+                outcome_schedule = {"readStatus": "error"}
+                source_status["outcomeSchedule"] = "error"
         portfolio_id = str(episode_payload.get("portfolioId") or "portfolio:" + account_key).strip()
         selected_hypothesis = {}
         selected_id = str(
@@ -167,6 +187,7 @@ class DecisionContinuityService:
             follow_up_conditions=episode_payload.get("followUpConditions") or [],
             unsupported_follow_ups=episode_payload.get("unsupportedFollowUps") or [],
             observed_outcomes=list(episode_payload.get("outcomes") or [])[-6:],
+            outcome_schedule=outcome_schedule,
             action_observations=_mapping(account_context).get("actionObservations") or [],
             current_position=_mapping(account_context).get("currentPosition") or {},
             execution_feedback=_latest_feedback(

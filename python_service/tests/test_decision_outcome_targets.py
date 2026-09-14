@@ -171,6 +171,29 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         store.runtime_settings = {}
         return store
 
+    def test_continuity_schedule_reads_only_one_scoped_episode_without_side_effects(self):
+        connection = QueryRowsConnection([
+            {"status": "excluded", "count": 2, "next_target_at": "2026-09-14T00:00:00Z"},
+            {"status": "pending", "count": 1, "next_target_at": "2026-09-15T00:00:00Z"},
+        ])
+        @contextmanager
+        def connect():
+            yield connection
+        store = self.store()
+        store.connect = connect
+        result = store.decision_outcome_schedule(account_id="main", symbol="mstr", episode_id="decision:previous")
+        self.assertEqual(3, result["targetCount"])
+        self.assertEqual({"excluded": 2, "pending": 1}, result["states"])
+        self.assertEqual("2026-09-15T00:00:00Z", result["nextTargetAt"])
+        self.assertEqual(1, len(connection.statements))
+        sql, params = connection.statements[0]
+        self.assertTrue(sql.startswith("SELECT"))
+        self.assertIn("episode_id = %s AND account_id = %s AND symbol = %s", sql)
+        self.assertNotIn("payload_json", sql)
+        self.assertEqual(("decision:previous", "main", "MSTR"), params)
+        store.decision_outcome_schedule(account_id="", symbol="MSTR", episode_id="decision:previous")
+        self.assertEqual(1, len(connection.statements))
+
     def test_schema_tuning_widens_legacy_contract_fingerprint_column(self):
         class Cursor:
             def __init__(self, row=None):

@@ -12,6 +12,29 @@ from .outcome_policy import number
 from .ports import ConnectionFactory
 
 
+def decision_outcome_schedule(
+    *, account_id: str, symbol: str, episode_id: str, _connect: ConnectionFactory,
+) -> Dict[str, object]:
+    """Read the exact prior decision's schedule without repairing or rescheduling it."""
+    if not account_id or not symbol or not episode_id:
+        return {"readStatus": "unavailable"}
+    with _connect() as connection:
+        rows = connection.execute(
+            "SELECT status, COUNT(*) AS count, MIN(target_at) AS next_target_at "
+            "FROM investment_decision_outcome_targets "
+            "WHERE episode_id = %s AND account_id = %s AND symbol = %s GROUP BY status",
+            (episode_id, account_id, str(symbol).upper()),
+        ).fetchall()
+    states = {str(row["status"]): int(row["count"]) for row in rows or []}
+    return {
+        "readStatus": "available", "targetCount": sum(states.values()), "states": states,
+        "nextTargetAt": min((
+            str(row["next_target_at"]) for row in rows or []
+            if row["status"] == "pending" and row.get("next_target_at")
+        ), default=""),
+    }
+
+
 def outcome_target_summary(
     account_id: str = "",
     symbol: str = "",

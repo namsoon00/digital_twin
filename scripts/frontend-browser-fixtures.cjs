@@ -96,7 +96,11 @@ function payload(url, options = {}) {
     freshness: {decisionAsOf: stamp, sourceAsOf: stamp},
     explanation: {primaryCause: {summary: "매출과 수요 변화의 연결을 확인했습니다."},
       constraints: [{summary: "검증용 경고: 다음 실적은 아직 발표되지 않았습니다."}], changeConditions: ["다음 실적의 수요 변화"]},
-    decisionReview: {state: "data-gap", previousSummary: "검증용 가설: 수요 증가가 다음 분기 매출에 반영되는지 확인합니다.",
+    decisionReview: pathname.endsWith("/fixture-excluded") ? {
+      state: "excluded", previousSummary: "검증용 이전 판단", capturedAt: stamp, packetId: "synthetic-excluded-review",
+      scheduleExplanation: "이전 판단의 관측 예약은 평가 대상에서 제외됐습니다. 새 관측을 기다리는 상태가 아닙니다.",
+      outcomes: [], nextChecks: [],
+    } : {state: "data-gap", previousSummary: "검증용 가설: 수요 증가가 다음 분기 매출에 반영되는지 확인합니다.",
       capturedAt: stamp, packetId: "synthetic-review", interpretation: "자료 부족은 가설 실패가 아니며, 관측 수익률은 실제 매매 수익을 뜻하지 않습니다.",
       verifiedChanges: [{label: "20일 평균 가격 회복", status: "satisfied"}], nextChecks: ["다음 분기 매출 발표"],
       outcomes: [{state: "data-gap", explanation: "비교 지수 자료가 부족해 성공·실패 판정을 보류했습니다.",

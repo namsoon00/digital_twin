@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 import sys
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.modules.decisions.application.decision_continuity_service import DecisionContinuityService
 from digital_twin.modules.decisions.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
-from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight
+from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight, context_with_previous_delivered_investment_insight
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
 from digital_twin.modules.decisions.domain.investment_decision_actionability import (
     investment_decision_actionability,
@@ -164,6 +165,149 @@ def prior_episode():
 
 
 class DecisionContinuityTests(unittest.TestCase):
+    def test_excluded_observation_targets_are_not_presented_as_waiting(self):
+        previous = prior_episode()
+        previous["outcomes"] = []
+        episodes = EpisodeStore(previous)
+        episodes.decision_outcome_schedule = lambda **kwargs: {
+            "readStatus": "available", "targetCount": 2,
+            "states": {"excluded": 2}, "nextTargetAt": "",
+        }
+        packet = DecisionContinuityService(episodes).build(
+            account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+        )
+        self.assertEqual("excluded", packet["reviewSummary"]["state"])
+        self.assertIn("제외", packet["reviewSummary"]["scheduleExplanation"])
+        self.assertEqual(2, packet["outcomeSchedule"]["targetCount"])
+
+    def test_missing_schedule_and_unavailable_reader_do_not_claim_pending(self):
+        for schedule, expected in ((
+            {"readStatus": "available", "targetCount": 0, "states": {}}, "not-scheduled",
+        ), ({"readStatus": "error"}, "unavailable"), (
+            {"readStatus": "unavailable"}, "unavailable",
+        ), ({"readStatus": "available", "targetCount": 1, "states": {"needs-data": 1}}, "data-gap"), (
+            {"readStatus": "available", "targetCount": 2, "states": {"excluded": 1, "pending": 1}}, "partial",
+        ), ({"readStatus": "available", "targetCount": 1, "states": {"observed": 1}}, "unavailable"), (
+            {"readStatus": "available", "targetCount": 1, "states": {"pending": 1},
+             "nextTargetAt": "2026-09-15T00:00:00Z"}, "pending",
+        )):
+            with self.subTest(expected=expected):
+                previous = prior_episode()
+                previous["outcomes"] = []
+                episodes = EpisodeStore(previous)
+                episodes.decision_outcome_schedule = lambda **kwargs: schedule
+                packet = DecisionContinuityService(episodes).build(account_id="main", symbol="005930")
+                self.assertEqual(expected, packet["reviewSummary"]["state"])
+        for eligibility, expected in (("eligible", "evaluated"), ("excluded-contract-data-gap", "data-gap")):
+            with self.subTest(eligibility=eligibility):
+                previous = prior_episode()
+                previous["outcomes"][0]["calibrationEligibility"] = eligibility
+                episodes = EpisodeStore(previous)
+                episodes.decision_outcome_schedule = lambda **kwargs: {
+                    "readStatus": "available", "targetCount": 1, "states": {"observed": 1},
+                }
+                packet = DecisionContinuityService(episodes).build(account_id="main", symbol="005930")
+                self.assertEqual(expected, packet["reviewSummary"]["state"])
+                self.assertIn("관측은 완료", packet["reviewSummary"]["scheduleExplanation"])
+                self.assertNotIn("확인하지 못", packet["reviewSummary"]["scheduleExplanation"])
+
+    def test_foreign_previous_decision_cannot_enter_continuity_or_ai_context(self):
+        for field, value in (("accountId", "other"), ("symbol", "MSTR")):
+            with self.subTest(field=field):
+                foreign = prior_episode()
+                foreign[field] = value
+                store = EpisodeStore(foreign)
+                domain = DomainStore()
+                packet = DecisionContinuityService(store, domain).build(
+                    account_id="main", symbol="005930", existing_previous=foreign,
+                )
+                self.assertFalse(packet["previousDecision"])
+                self.assertFalse(packet["observedOutcomes"])
+                self.assertEqual(0, domain.continuity_calls)
+                context = context_with_previous_investment_decision({
+                    "accountId": "main", "symbol": "005930",
+                    "previousInvestmentDecisionEpisode": foreign,
+                }, store)
+                self.assertFalse(context.get("previousInvestmentDecisionEpisode"))
+
+    def test_empty_captured_packet_removes_detached_previous_decision(self):
+        packet = build_decision_continuity_packet(
+            account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+        )
+        context = context_with_previous_investment_decision({
+            "accountId": "main", "symbol": "005930", "decisionContinuityPacket": packet,
+            "previousInvestmentDecisionEpisode": prior_episode(),
+        })
+        self.assertNotIn("previousInvestmentDecisionEpisode", context)
+
+    def test_captured_action_and_packet_survive_without_reloading_or_reauthorizing_history(self):
+        packet = DecisionContinuityService(EpisodeStore(prior_episode())).build(account_id="main", symbol="005930")
+        original = deepcopy(packet)
+        context = context_with_previous_investment_decision({
+            "accountId": "main", "symbol": "005930", "decisionContinuityPacket": packet,
+        })
+        self.assertEqual("ADD", context["previousInvestmentDecisionEpisode"]["action"])
+        self.assertEqual(original, packet)
+        self.assertEqual(original["packetId"], context["decisionContinuityPacket"]["packetId"])
+        self.assertEqual(original["previousDecision"], context["decisionContinuityPacket"]["previousDecision"])
+        self.assertEqual(context, context_with_previous_investment_decision(context))
+
+    def test_scope_and_current_episode_are_checked_on_index_and_hydration_reads(self):
+        class IndexedStore:
+            def latest_decision_memory(self, *_args, **_kwargs):
+                return {**prior_episode(), "accountId": "other"}
+
+        packet = DecisionContinuityService(IndexedStore()).build(account_id="main", symbol="005930")
+        self.assertFalse(packet["previousDecision"])
+        class HydrationStore:
+            def get(self, _episode_id):
+                return {**prior_episode(), "symbol": "MSTR"}
+        packet = DecisionContinuityService(HydrationStore()).build(
+            account_id="main", symbol="005930", existing_previous=prior_episode(),
+        )
+        self.assertFalse(packet["observedOutcomes"])
+        self.assertFalse(packet["selectedHypothesis"])
+        packet = DecisionContinuityService(EpisodeStore(prior_episode())).build(
+            account_id="main", symbol="005930", exclude_episode_id="decision:previous",
+        )
+        self.assertFalse(packet["previousDecision"])
+
+    def test_schedule_reader_failure_is_visible_without_losing_valid_previous_decision(self):
+        class FailingStore(EpisodeStore):
+            def decision_outcome_schedule(self, **_kwargs):
+                raise TimeoutError("unavailable")
+        previous = prior_episode()
+        previous["outcomes"] = []
+        packet = DecisionContinuityService(FailingStore(previous)).build(account_id="main", symbol="005930")
+        self.assertTrue(packet["previousDecision"])
+        self.assertEqual("unavailable", packet["reviewSummary"]["state"])
+        self.assertIn("outcomeSchedule", packet["sourceErrors"])
+
+    def test_foreign_insights_are_removed_even_when_readers_are_unavailable(self):
+        for field, value in (("accountId", "other"), ("symbol", "MSTR"), ("accountId", "")):
+            with self.subTest(field=field, value=value):
+                previous = {"episodeId": "insight:previous", "accountId": "main", "symbol": "005930",
+                            "insightAssessment": {"publishable": True, "direction": "positive"}, field: value}
+                context = context_with_previous_investment_insight({
+                    "accountId": "main", "symbol": "005930",
+                    "previousInvestmentAIInsightEpisode": previous,
+                    "previousDeliveredInvestmentAIInsightEpisode": previous,
+                    "investmentInsightDeliveryHistory": {"status": "found", "accountId": "main", "symbol": "005930",
+                                                         "previousEpisodeId": "insight:previous"},
+                })
+                self.assertNotIn("previousInvestmentAIInsightEpisode", context)
+                self.assertNotIn("previousDeliveredInvestmentAIInsightEpisode", context)
+                self.assertEqual("unavailable", context["investmentInsightDeliveryHistory"]["status"])
+
+    def test_empty_captured_delivery_history_removes_loose_prior_receipt(self):
+        context = context_with_previous_delivered_investment_insight({
+            "accountId": "main", "symbol": "005930",
+            "investmentInsightDeliveryHistory": {"status": "not-found", "accountId": "main", "symbol": "005930"},
+            "previousDeliveredInvestmentAIInsightEpisode": {"episodeId": "old", "accountId": "main", "symbol": "005930",
+                                                            "insightAssessment": {"publishable": True}},
+        })
+        self.assertNotIn("previousDeliveredInvestmentAIInsightEpisode", context)
+
     def test_packet_identity_ignores_capture_time_but_preserves_observation_semantics(self):
         inputs = {
             "account_id": "main",
@@ -243,6 +387,7 @@ class DecisionContinuityTests(unittest.TestCase):
                 return [
                     {
                         "episodeId": "insight:current",
+                        "accountId": account_id, "symbol": symbol,
                         "subjectCaseId": "subject:current",
                         "insight": {"insightAssessment": {
                             "publishable": True,
@@ -251,6 +396,7 @@ class DecisionContinuityTests(unittest.TestCase):
                     },
                     {
                         "episodeId": "insight:rejected",
+                        "accountId": account_id, "symbol": symbol,
                         "subjectCaseId": "subject:rejected",
                         "insight": {"insightAssessment": {
                             "publishable": False,
@@ -259,6 +405,7 @@ class DecisionContinuityTests(unittest.TestCase):
                     },
                     {
                         "episodeId": "insight:previous",
+                        "accountId": account_id, "symbol": symbol,
                         "subjectCaseId": "subject:previous",
                         "inferenceGenerationId": "generation:previous",
                         "createdAt": "2026-08-16T00:30:00Z",
@@ -361,6 +508,7 @@ class DecisionContinuityTests(unittest.TestCase):
                 captured_at="2026-08-16T01:05:00Z",
                 previous_decision=prior_episode(),
                 follow_up_conditions=prior_episode()["followUpConditions"],
+                outcome_schedule={"readStatus": "available", "targetCount": 2, "states": {"excluded": 2}},
             ),
             "ontologyRelationContext": {
                 "subject": {"symbol": "005930", "name": "삼성전자"},
@@ -374,6 +522,8 @@ class DecisionContinuityTests(unittest.TestCase):
 
         self.assertEqual("decision-continuity-packet-v2", brief["decisionContinuity"]["contractVersion"])
         self.assertEqual("ADD", prompt_payload["continuityDelta"]["previousDecision"]["action"])
+        self.assertEqual("excluded", prompt_payload["continuityDelta"]["reviewSummary"]["state"])
+        self.assertIn("평가 대상에서 제외", prompt_payload["continuityDelta"]["reviewSummary"]["scheduleExplanation"])
         self.assertIn("continuityDelta", prompt)
 
         settings = {

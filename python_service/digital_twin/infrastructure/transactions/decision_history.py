@@ -581,6 +581,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             utc_now_iso=utc_now_iso,
         )
 
+    def decision_outcome_schedule(
+        self, *, account_id: str, symbol: str, episode_id: str,
+    ) -> Dict[str, object]:
+        return target_queries.decision_outcome_schedule(
+            account_id=account_id, symbol=symbol, episode_id=episode_id, _connect=self.connect,
+        )
+
     def record_observation(
         self,
         account_id: str,

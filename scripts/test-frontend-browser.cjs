@@ -107,6 +107,23 @@ async function caseInteractions(page, label) {
   assert.equal(new URL(page.url()).searchParams.get("tab"), "portfolio");
   assert.equal(new URL(page.url()).searchParams.get("detailKey"), null);
   delays.delete("/api/decisions/fixture-legacy");
+  const excludedResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/decisions/fixture-excluded");
+  await routeTo(page, "feed", "investment-case", "fixture-excluded");
+  await excludedResponse;
+  await settle(page);
+  await page.locator('[data-investment-case-tab="history"]').click();
+  const excludedReview = page.locator('.oa-decision-review[data-review-state="excluded"]');
+  await excludedReview.waitFor();
+  await settle(page);
+  await excludedReview.evaluate(node => node.scrollIntoView({block: "center"}));
+  await settle(page);
+  assert.match(await excludedReview.textContent(), /평가 대상에서 제외/);
+  assert.doesNotMatch(await excludedReview.textContent(), /관측 대기|결과를 기다립니다/);
+  const excludedBounds = await excludedReview.evaluate(node => ({width: node.clientWidth, content: node.scrollWidth}));
+  assert(excludedBounds.content <= excludedBounds.width + 1, label + ' excluded review overflows');
+  await excludedReview.screenshot({path: path.join(screenshots, label + '-excluded-review.png')});
+  await page.locator('button[data-work-detail-close]').first().click();
+  await page.waitForSelector('[data-work-detail-dialog]', {state: "detached"});
   results.push({test: label + " case tabs / delayed close", before, after});
 }
 

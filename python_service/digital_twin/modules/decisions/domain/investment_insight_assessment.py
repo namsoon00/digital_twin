@@ -585,6 +585,8 @@ def compact_previous_investment_insight_episode(value: object) -> Dict[str, obje
         return {}
     return {
         "episodeId": _text(payload.get("episodeId"), 200),
+        "accountId": _text(payload.get("accountId"), 120),
+        "symbol": _text(payload.get("symbol"), 64).upper(),
         "subjectCaseId": _text(payload.get("subjectCaseId"), 200),
         "inferenceGenerationId": _text(payload.get("inferenceGenerationId"), 200),
         "createdAt": _text(payload.get("createdAt"), 100),

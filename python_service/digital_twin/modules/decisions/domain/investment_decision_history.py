@@ -27,6 +27,20 @@ def _value(payload: Mapping[str, object], *keys: str) -> object:
     return ""
 
 
+def decision_memory_matches_scope(
+    value: object, account_id: str, symbol: str, *, exclude_episode_id: str = "",
+) -> bool:
+    """A prior decision must identify the same account and instrument."""
+    payload = _mapping(value.to_dict() if hasattr(value, "to_dict") else value)
+    episode_id = _text(_value(payload, "episodeId", "episode_id"))
+    return bool(
+        _text(account_id) and _text(symbol) and episode_id
+        and episode_id != _text(exclude_episode_id)
+        and _text(_value(payload, "accountId", "account_id")) == _text(account_id)
+        and _text(payload.get("symbol")).upper() == _text(symbol).upper()
+    )
+
+
 def compact_decision_episode_memory(value: object) -> Dict[str, object]:
     """Keep only the prior final-decision fields required by the next review."""
 

@@ -1219,10 +1219,12 @@ def _review_memory(value: object) -> Dict[str, object]:
         [_mapping(item) for item in review.get("outcomes") or []],
         key=lambda item: str(item.get("observedAt") or ""), reverse=True,
     )
-    if not outcomes:
+    if not review:
         return {}
     return {
         "state": review.get("state"),
+        "scheduleExplanation": _sentence_text(review.get("scheduleExplanation"), 160),
+        "nextObservationAt": review.get("nextObservationAt") or "",
         "outcomes": [_selected(item, (
             "outcomeId", "observedAt", "horizonMinutes", "state", "calibrationEligibility",
             "explanation",

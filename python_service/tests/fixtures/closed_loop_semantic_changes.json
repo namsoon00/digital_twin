@@ -111,6 +111,10 @@
       "hash": "a050d48211c16bfb08cb9f8cd56cabc96f8fde0eca0e2725b6ef30b3d0b4c074",
       "reason": "Retain outcome eligibility under compact contracts; test_hypothesis_closed_loop."
     },
+    "modules/decisions/domain/investment_insight_assessment.py::compact_previous_investment_insight_episode": {
+      "hash": "6f451ac8ce252d69985da86458b1203b908f8ed323ca776aeaa695a26762a59a",
+      "reason": "Keep account and symbol identity in compact analysis and receipt-backed delivery memory so cross-account, cross-symbol and scope-less records cannot become prior insight baselines. test_decision_continuity and test_ai_insight_delivery_boundary."
+    },
     "modules/decisions/domain/notification_ai_prompt_release.py::AI_DECISION_PROMPT_VERSION": {
       "hash": "0fd81ecf7d926fddc2021a9a1be7048e59a0471bf4d62755a332a9c38650bab5",
       "reason": "Release observation-aware continuity instructions; test_ai_inference_queue."
@@ -152,8 +156,8 @@
       "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
-      "hash": "da74475533013791b423dfb931d61d984d3dc4a487c3c4a4fba2418e1d298a29",
-      "reason": "Capture finite experimental inputs and final outcomes atomically with the original ledger. Maintain compact claim inputs in the same transaction; use them only when source timestamp and format match, otherwise read the original. Preserve outcome-led selection, as-of cutoff and exact qualification metrics. test_decision_calibration_inputs, test_internal_decision_history, test_experiment_observations, test_ontology_evolution and test_stabilization_transactions."
+      "hash": "5715543629f105ca468c3023a334500e7850a1cf41aa9f7ecd36a4767b18f3cc",
+      "reason": "Preserve the experimental ledger, compact calibration and as-of selection. Add one indexed, exact episode/account/symbol outcome-schedule read without repair or rescheduling so excluded and missing targets cannot be presented as pending. test_decision_outcome_targets, test_decision_continuity, test_decision_calibration_inputs, test_internal_decision_history, test_experiment_observations and test_stabilization_transactions."
     }
   }
 }

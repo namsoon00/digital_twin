@@ -25,3 +25,14 @@ test("decision review renders only stored changes and escapes external text", ()
   assert.doesNotMatch(html, /<script>/);
   assert.match(renderDecisionReview(), /이 판단에 연결된 이전 기록이 없습니다/);
 });
+
+test("unscheduled and excluded outcomes never appear as pending observations", () => {
+  for (const [state, label] of [["excluded", "평가 제외"], ["not-scheduled", "관측 예약 없음"], ["unavailable", "관측 상태 확인 불가"]]) {
+    const html = renderDecisionReview({state, scheduleExplanation: "<b>예약 상태 확인</b>"});
+    assert.match(html, new RegExp(label));
+    assert.doesNotMatch(html, /관측 대기|결과를 기다립니다|<b>/);
+    assert.match(html, /&lt;b&gt;/);
+  }
+  const html = renderDecisionReview({state: "pending", nextObservationAt: "2026-09-15T00:00:00Z"});
+  assert.match(html, /다음 관측 2026-09-15T00:00:00Z/);
+});

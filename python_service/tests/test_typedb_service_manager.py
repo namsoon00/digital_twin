@@ -358,6 +358,55 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("release-fingerprint-mismatch", result["status"])
         self.assertEqual("new-rulebox", result["candidateRuleboxFingerprint"])
 
+    def test_rotation_validates_experiment_against_saved_artifact_not_source_catalog(self):
+        from unittest.mock import Mock
+        bundle = {"tbox_release_id": "tbox@frozen-tbox"}
+        registry = Mock()
+        registry.control.return_value = SimpleNamespace(active_deployment_id="active", delivery_deployment_id="active",
+                                                        candidate_deployment_id="evolution-test")
+        registry.get.side_effect = lambda ident: ({"status": "shadow", "graphStoreBinding": "experiment",
+            "releaseBundle": bundle, "health": {"ruleboxFingerprint": "runtime-rulebox", "tboxFingerprint": "frozen-tbox",
+                "ontologyEvolution": {"state": "shadow", "planFingerprint": "plan"}}} if ident == "evolution-test"
+            else {"status": "active", "graphStoreBinding": "production"})
+        artifact = {"valid": True, "artifactFingerprint": "authored-artifact",
+                    "artifact": {"releaseBundle": bundle, "evolutionPlanFingerprint": "plan"}}
+        registry.release_artifact.return_value = artifact
+        repository = SimpleNamespace(rulebox_snapshot=lambda: {"status": "ok", "rules": [{"rule_id": "experimental"}],
+            "sourceRulesHash": "runtime-rulebox"}, active_tbox_metadata=lambda: {"fingerprint": "frozen-tbox"})
+        spec = {"typedbDatabase": "experiment", "_typedbSeedContract": {"ready": True,
+            "seedMode": "immutable-release-artifact", "artifactFingerprint": "authored-artifact",
+            "activeRuleboxFingerprint": "runtime-rulebox", "activeTboxFingerprint": "frozen-tbox", "ruleCount": 1}}
+        from digital_twin.modules.reasoning.public import ReasoningEnginePlatformService
+        with patch.object(ReasoningEnginePlatformService, "descriptors", side_effect=AssertionError("current source is not the experiment")):
+            result = service_manager.validate_typedb_candidate_release_contract(spec, settings_provider=lambda **kw: {},
+                registry_factory=lambda _: registry, repository_factory=lambda _: repository)
+        self.assertTrue(result["ready"], result)
+        artifact["artifact"]["evolutionPlanFingerprint"] = "different-plan"
+        self.assertFalse(service_manager.validate_typedb_candidate_release_contract(spec, settings_provider=lambda **kw: {},
+            registry_factory=lambda _: registry, repository_factory=lambda _: repository)["ready"])
+        artifact["artifact"]["evolutionPlanFingerprint"] = "plan"
+        repository.rulebox_snapshot = lambda: {"status": "ok", "rules": [{}], "sourceRulesHash": "tampered"}
+        self.assertEqual("registered-candidate-fingerprint-mismatch",
+            service_manager.validate_typedb_candidate_release_contract(spec, settings_provider=lambda **kw: {},
+                registry_factory=lambda _: registry, repository_factory=lambda _: repository)["status"])
+        artifact["valid"] = False
+        self.assertFalse(service_manager.validate_typedb_candidate_release_contract(spec, settings_provider=lambda **kw: {},
+            registry_factory=lambda _: registry, repository_factory=lambda _: repository)["ready"])
+
+    def test_physical_rotation_failure_does_not_retire_logical_experiment(self):
+        from unittest.mock import Mock
+        registry = Mock()
+        registry.control.return_value = SimpleNamespace(active_deployment_id="active", delivery_deployment_id="active",
+                                                        candidate_deployment_id="experiment")
+        registry.get.return_value = {"graphStoreBinding": "experiment-db", "health": {"ontologyEvolution": {"state": "shadow"}}}
+        saver = Mock()
+        result = service_manager.retire_failed_typedb_reasoning_candidate("experiment-db",
+            settings_provider=lambda **kw: {}, registry_factory=lambda _: registry, settings_saver=saver)
+        self.assertEqual("experiment-preserved", result["status"])
+        registry.set_control.assert_not_called()
+        registry.retire_unselected.assert_not_called()
+        saver.assert_not_called()
+
     def test_candidate_seed_contract_accepts_fresh_and_unchanged_verified_paths(self):
         from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
         from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash

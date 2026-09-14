@@ -1,5 +1,7 @@
 """Observation repair never substitutes a later quote for the original outcome."""
 
+from datetime import datetime
+from math import isfinite
 from typing import Mapping
 
 
@@ -34,9 +36,25 @@ def validate_outcome_repair(previous: Mapping, incoming: Mapping) -> None:
     before = dict(previous.get("payload") or {})
     after = dict(incoming.get("payload") or {})
     if any(previous.get(key) != incoming.get(key) for key in ("episodeId", "observedAt", "price")) or any(
-        before.get(key) != after.get(key) for key in ("contractFingerprint", "horizonMinutes", "decisionPrice")
+        before.get(key) != after.get(key) for key in ("contractFingerprint", "horizonMinutes")
     ):
         raise ValueError("Outcome repair must preserve the original observation and evaluation contract.")
+    if before.get("decisionPrice") != after.get("decisionPrice"):
+        # Legacy gaps may acquire their first baseline, never replace a known
+        # price. The source clock must precede the original frozen decision.
+        contract = dict(before.get("hypothesisOutcomeContract") or {})
+        try:
+            price = float(after.get("decisionPrice"))
+            source_at = datetime.fromisoformat(str(after.get("decisionPriceSourceAsOf") or "").replace("Z", "+00:00"))
+            effective_at = datetime.fromisoformat(str(contract.get("effectiveAt") or "").replace("Z", "+00:00"))
+            recoverable = (before.get("decisionPrice") is None and not isinstance(after.get("decisionPrice"), bool)
+                           and isfinite(price) and price > 0
+                           and source_at.tzinfo is not None and effective_at.tzinfo is not None
+                           and source_at <= effective_at)
+        except (TypeError, ValueError):
+            recoverable = False
+        if not recoverable:
+            raise ValueError("Outcome repair requires the original point-in-time baseline.")
 
 
 def outcome_evaluation_history(previous: Mapping, stamp: str) -> list:

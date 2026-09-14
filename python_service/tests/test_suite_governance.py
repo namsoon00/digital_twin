@@ -167,7 +167,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Twelve compact-calibration parity/rollback and cold-input planning regressions.
         # Ten decision/insight scope, immutable memory and exact outcome-schedule regressions.
         # Seven KIS wire-layout, stream-fragmentation and stage-provenance regressions.
-        self.assertLessEqual(total, 1601)
+        # Six outcome-repair isolation, immutable experiment restart/rotation
+        # and lossless bounded input-storage regressions.
+        self.assertLessEqual(total, 1607)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -7,6 +7,7 @@ import json
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.modules.model_registry.domain.experiment_observations import assess_requirement, freeze_dataset
 from digital_twin.modules.model_registry.domain.ontology_evolution import timestamp
+from .experiment_dataset_codec import encode_dataset
 
 
 METRICS = {
@@ -15,12 +16,8 @@ METRICS = {
     "volume": ("거래량", "shares", "volume"),
     "profitLossRate": ("보유 손익률", "percent", "profit_loss_rate"),
 }
-MAX_DATASET_BYTES = 2_000_000
-
-
 def validate_dataset_size(dataset):
-    if len(json.dumps(dataset, ensure_ascii=False).encode()) > MAX_DATASET_BYTES:
-        raise ValueError("experiment-packet-size-limit")
+    encode_dataset(dataset)
     return dataset
 
 

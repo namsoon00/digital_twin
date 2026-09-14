@@ -3632,23 +3632,27 @@ def validate_typedb_candidate_release_contract(
             if not isinstance(release_settings.get("_runtimeIdentity"), dict):
                 release_settings["_runtimeIdentity"] = runtime_identity()
 
-            expected_descriptor = next(
-                (
-                    descriptor
-                    for descriptor in ReasoningEnginePlatformService(
-                        registry,
-                        release_settings,
-                    ).descriptors()
-                    if descriptor.deployment_id == candidate_deployment_id
-                ),
-                None,
-            )
             registered_bundle = dict(registered_candidate.get("releaseBundle") or {})
-            expected_bundle = (
-                expected_descriptor.release_bundle.to_dict()
-                if expected_descriptor is not None
-                else {}
-            )
+            artifact_reader = getattr(registry, "release_artifact", None)
+            saved = dict(artifact_reader(candidate_deployment_id) or {}) if callable(artifact_reader) else {}
+            seed_contract = dict(spec.get("_typedbSeedContract") or {})
+            ownership = (registered_candidate.get("health") or {}).get("ontologyEvolution") or {}
+            if saved or ownership or seed_contract.get("seedMode") == "immutable-release-artifact":
+                artifact = dict(saved.get("artifact") or {})
+                # Storage rotation restores an immutable deployment, including
+                # experimental rules absent from today's source descriptors.
+                expected_bundle = dict(artifact.get("releaseBundle") or {}) if saved.get("valid") else {}
+                if (not saved.get("valid") or not expected_bundle
+                        or (ownership and artifact.get("evolutionPlanFingerprint") != ownership.get("planFingerprint"))
+                        or (seed_contract.get("seedMode") == "immutable-release-artifact"
+                            and seed_contract.get("artifactFingerprint") != saved.get("artifactFingerprint"))):
+                    return {"status": "registered-candidate-artifact-mismatch", "ready": False,
+                            "database": database_name, "candidateDeploymentId": candidate_deployment_id}
+            else:
+                expected_descriptor = next((descriptor for descriptor in ReasoningEnginePlatformService(
+                    registry, release_settings,
+                ).descriptors() if descriptor.deployment_id == candidate_deployment_id), None)
+                expected_bundle = expected_descriptor.release_bundle.to_dict() if expected_descriptor else {}
             if not expected_bundle or registered_bundle != expected_bundle:
                 return {
                     "status": "registered-candidate-source-contract-mismatch",
@@ -3675,7 +3679,6 @@ def validate_typedb_candidate_release_contract(
                 rule.to_dict()
                 for rule in default_graph_inference_rules()
             ])
-            seed_contract = dict(spec.get("_typedbSeedContract") or {})
             if not seed_contract:
                 seed_contract = validate_typedb_candidate_seed_contract(
                     spec,
@@ -5587,6 +5590,13 @@ def retire_failed_typedb_reasoning_candidate(
                 "failedDatabase": clean_failed_database,
                 "retiredDeploymentIds": [],
             }
+
+        if (candidate.get("health") or {}).get("ontologyEvolution"):
+            # A failed physical copy does not invalidate the still-running
+            # logical experiment in the preserved active store.
+            return {"status": "experiment-preserved", "candidateDeploymentId": candidate_id,
+                    "candidateDatabase": candidate_database, "retiredDeploymentIds": [],
+                    "reason": "storage-maintenance-is-not-experiment-retirement"}
 
         restored_control = registry.set_control(
             active_id,

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from copy import deepcopy
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
@@ -277,6 +278,53 @@ class HypothesisDevelopmentService:
             case.transition("compiled", "compilation")
             self.persist(case, "candidate-revalidation-scheduled", previous_reason)
         return self.process(case_id, force=False)
+
+    def restart_superseded_experiment(self, case_id: str) -> Dict[str, object]:
+        """Start a new audited experiment after operational interruption.
+
+        Reuse authored semantics only against the identical immutable baseline.
+        A changed baseline needs a new design/validation request, not a reset.
+        """
+        if not self.evolution_service:
+            return {"status": "evolution-unavailable"}
+        with self.case_store.processing_lock(case_id) as acquired:
+            if not acquired:
+                return {"status": "already-processing", "caseId": case_id}
+            previous = self.case_store.get(case_id)
+            if (not previous or previous.status != "superseded"
+                    or previous.evolution.get("reason") != "baseline-or-candidate-replaced"):
+                return {"status": "restart-not-applicable", "caseId": case_id}
+            baseline = self.evolution_service.runtime.baseline(previous.candidate_rule, self.evolution_service.policy)
+            if baseline != (previous.evolution.get("plan") or {}).get("baseline"):
+                return {"status": "new-baseline-revalidation-required", "caseId": case_id}
+            fingerprint = compilation_fingerprint({"restartOf": case_id, "baseline": baseline})
+            new_id = "hypothesis-case:" + fingerprint[:24]
+            with self.case_store.processing_lock(new_id) as new_acquired:
+                if not new_acquired:
+                    return {"status": "already-processing", "caseId": new_id}
+                existing = self.case_store.get(new_id)
+                if existing:
+                    return {"status": existing.status, "case": existing.to_dict(), "reused": True}
+                case = HypothesisDevelopmentCase.from_dict(deepcopy(previous.to_dict()))
+                case.case_id, case.fingerprint = new_id, fingerprint
+                case.evolution, case.deployment = {}, {}
+                case.experiment_id = ""
+                case.created_at = case.updated_at = utc_now_iso()
+                case.validation_attempted_at = case.validation_input_fingerprint = ""
+                case.retry = {"restartOf": case_id, "restartReason": previous.evolution["reason"],
+                              "previousPlanFingerprint": previous.evolution["plan"]["fingerprint"],
+                              "authoringAttempts": previous.retry.get("authoringAttempts", 0)}
+                case.transition("compiled", "compilation")
+                self.persist(case, "superseded-experiment-restarted", previous.evolution["reason"])
+                violations = self.validate_rule_structure(case.candidate_rule)
+                conflict = self.existing_rule_id_conflict(case.candidate_rule)
+                if violations or conflict:
+                    case.transition("blocked", "validation", "; ".join(violations + ([conflict] if conflict else [])))
+                    self.persist(case, "restart-validation-blocked", case.blocked_reason)
+                    return {"status": case.status, "case": case.to_dict()}
+                experiment = self.create_experiment(case, {"proposedRule": case.candidate_rule})
+                case.experiment_id = experiment.experiment_id
+                return self.validate(case, experiment)
 
     def _process_case(self, case_id: str) -> Dict[str, object]:
         case = self.case_store.get(case_id) if self.case_store else None

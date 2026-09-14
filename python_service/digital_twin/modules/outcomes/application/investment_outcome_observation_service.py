@@ -245,7 +245,15 @@ class InvestmentOutcomeObservationService:
                 contract.get("observationBaseline") or {},
                 {**record["facts"], **dict(evidence.get(request_id) or {})},
             ))
-        outcomes = self.decision_episode_store.record_outcome_observations(snapshot.account_id, records)
+        outcomes = []
+        failures = []
+        # Each target owns its transaction. An invalid legacy repair must not
+        # prevent unrelated scheduled observations from being persisted.
+        for record in records:
+            try:
+                outcomes.extend(self.decision_episode_store.record_outcome_observations(snapshot.account_id, [record]))
+            except Exception as error:
+                failures.append({"requestId": record["requestId"], "reason": str(error)[:220]})
         review_result = self.review_outcomes(outcomes)
         contract_data_gap_count = sum(
             1
@@ -253,13 +261,16 @@ class InvestmentOutcomeObservationService:
             if str((getattr(item, "payload", {}) or {}).get("calibrationEligibility") or "") == "excluded-contract-data-gap"
         )
         return {
-            "status": "observed" if outcomes else ("waiting-market-observation" if missing_count else "no-new-outcomes"),
+            "status": ("partially-observed" if outcomes else "error") if failures else (
+                "observed" if outcomes else ("waiting-market-observation" if missing_count else "no-new-outcomes")),
             "observedAt": observed_at,
             "targetCount": len(targets),
             "historicalObservationCount": historical_count,
             "snapshotFallbackCount": snapshot_fallback_count,
             "missingObservationCount": missing_count,
             "savedOutcomeCount": len(outcomes),
+            "failedObservationCount": len(failures),
+            "failedObservations": failures,
             "contractDataGapCount": contract_data_gap_count,
             "baselineCaptureState": baseline_capture_state,
             "outcomeIds": [item.outcome_id for item in outcomes],

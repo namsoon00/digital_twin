@@ -6,7 +6,8 @@ from digital_twin.infrastructure.mysql_operational_connection import MySQLOperat
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.modules.model_registry.domain.ontology_evolution import validate_plan, timestamp
-from digital_twin.modules.model_registry.domain.experiment_observations import validate_dataset, validate_requirements
+from digital_twin.modules.model_registry.domain.experiment_observations import validate_requirements
+from .experiment_dataset_codec import decode_dataset
 from digital_twin.modules.portfolio.contracts import utc_now_iso
 from .experiment_inputs import capabilities, read_dataset, validate_dataset_size
 
@@ -140,7 +141,7 @@ class MySQLExperimentObservationStore(MySQLOperationalConnection):
                     "independenceKey": episode.get("marketIndependenceKey") or bucket,
                     "inputState": candidate["input_status"], "inputReason": candidate["input_reason"]}
             try:
-                dataset = validate_dataset(_json_loads(candidate.get("dataset_json"), {}))
+                dataset = decode_dataset(candidate.get("dataset_json"))
                 summary["capturedInputs"] += 1
                 pair["datasetFingerprint"] = dataset["fingerprint"]
             except ValueError:

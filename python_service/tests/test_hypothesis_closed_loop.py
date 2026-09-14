@@ -69,6 +69,33 @@ def previous_outcome(eligibility="excluded-criterion-data-gap"):
 
 
 class HypothesisClosedLoopTests(unittest.TestCase):
+    def test_restarting_interrupted_experiment_preserves_history_and_revalidates(self):
+        previous = hypothesis(status="superseded")
+        previous.candidate_rule = {"rule_id": "graph.saved.v1"}
+        previous.validation_requirements = [{"check": "review", "requirement": "causal review"}]
+        baseline = {"deploymentId": "active", "artifactFingerprint": "frozen"}
+        previous.evolution = {"reason": "baseline-or-candidate-replaced", "plan": {"baseline": baseline, "fingerprint": "old-plan"},
+                              "assessment": {"independentPairCount": 7}}
+        store = CaseStore([previous])
+        get = store.get
+        store.get = lambda key: get(key) if key in store.rows else None
+        service = HypothesisDevelopmentService(store, None, None, None, None,
+            evolution_service=SimpleNamespace(policy={}, runtime=SimpleNamespace(baseline=lambda *a: baseline)))
+        service.validate_rule_structure = lambda rule: []
+        service.existing_rule_id_conflict = lambda rule: ""
+        service.create_experiment = lambda *a: SimpleNamespace(experiment_id="new-validation")
+        service.validate = Mock(side_effect=lambda case, experiment: {"status": "validating", "case": case.to_dict()})
+        result = service.restart_superseded_experiment(previous.case_id)
+        self.assertNotEqual(previous.case_id, result["case"]["caseId"])
+        self.assertEqual({}, result["case"]["evolution"])
+        self.assertEqual(previous.validation_requirements, result["case"]["validationRequirements"])
+        self.assertEqual(previous.case_id, result["case"]["retry"]["restartOf"])
+        self.assertEqual(previous.to_dict(), store.get(previous.case_id).to_dict())
+        self.assertTrue(service.restart_superseded_experiment(previous.case_id)["reused"])
+        service.validate.assert_called_once()
+        baseline["artifactFingerprint"] = "replaced"
+        self.assertEqual("new-baseline-revalidation-required", service.restart_superseded_experiment(previous.case_id)["status"])
+
     def test_authoring_response_cannot_silently_drop_an_empty_or_invalid_rule(self):
         context = {"hypothesisProposal": {"caseId": "case:1"}}
         for raw in ({"title": "empty"}, {"title": "invalid", "proposedRule": {"conditions": "invalid"}}):
@@ -565,6 +592,42 @@ class HypothesisClosedLoopTests(unittest.TestCase):
             invalid["payload"][key] = "changed"
             with self.assertRaises(ValueError):
                 validate_outcome_repair(previous, invalid)
+
+    def test_missing_baseline_can_be_recovered_only_before_original_decision(self):
+        previous = previous_outcome()
+        previous["payload"].pop("decisionPrice", None)
+        previous["payload"]["hypothesisOutcomeContract"] = {"effectiveAt": "2026-09-03T14:32:45Z"}
+        repaired = copy.deepcopy(previous)
+        repaired["payload"].update({"decisionPrice": 100, "decisionPriceSourceAsOf": "2026-09-03T14:32:01Z"})
+        validate_outcome_repair(previous, repaired)
+        for stamp in ("", "2026-09-03T14:33:00Z", "2026-09-03T14:32:01", "invalid"):
+            invalid = copy.deepcopy(repaired)
+            invalid["payload"]["decisionPriceSourceAsOf"] = stamp
+            with self.assertRaises(ValueError):
+                validate_outcome_repair(previous, invalid)
+        for price in (True, 0, -1, float("nan"), float("inf")):
+            invalid = copy.deepcopy(repaired)
+            invalid["payload"]["decisionPrice"] = price
+            with self.assertRaises(ValueError):
+                validate_outcome_repair(previous, invalid)
+
+    def test_one_failed_repair_does_not_block_other_due_observations(self):
+        targets = [{"requestId": name, "episodeId": name, "symbol": "MSTR", "horizonMinutes": 60}
+                   for name in ("legacy", "due")]
+        outcome = SimpleNamespace(outcome_id="outcome:due", payload={})
+        writer = Mock(side_effect=[ValueError("immutable baseline mismatch"), [outcome]])
+        store = SimpleNamespace(pending_outcome_targets=lambda *a, **kw: targets, record_outcome_observations=writer)
+        timeseries = SimpleNamespace(load_outcome_observations=lambda *a, **kw: {
+            name: {"currentPrice": 110, "sourceAsOf": "2026-09-14T00:00:25Z", "dataQuality": "actual"}
+            for name in ("legacy", "due")})
+        service = InvestmentOutcomeObservationService(store, timeseries)
+        result = service.observe_snapshot(SimpleNamespace(account_id="test", generated_at="2026-09-14T01:00:00Z",
+            positions=[], watchlist=[], has_live_account_data=lambda: True))
+        self.assertEqual("partially-observed", result["status"])
+        self.assertEqual(1, result["savedOutcomeCount"])
+        self.assertEqual(1, result["failedObservationCount"])
+        self.assertEqual("legacy", result["failedObservations"][0]["requestId"])
+        self.assertEqual("due", writer.call_args_list[1].args[1][0]["requestId"])
 
     def test_repair_uses_frozen_quote_and_retained_baseline_not_latest_price(self):
         target = {"requestId": "r", "episodeId": "episode:1", "symbol": "MSTR", "horizonMinutes": 60,

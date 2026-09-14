@@ -15,6 +15,7 @@ from digital_twin.modules.model_registry.domain.experiment_observations import (
 from digital_twin.modules.model_registry.domain.ontology_evolution import create_plan, fingerprint
 from digital_twin.modules.model_registry.infrastructure.evolution_policy import evolution_policy
 from digital_twin.modules.model_registry.infrastructure.experiment_inputs import source_packet, metric_sample, read_dataset, capabilities
+from digital_twin.modules.model_registry.infrastructure.experiment_dataset_codec import encode_dataset, decode_dataset
 from digital_twin.modules.model_registry.infrastructure.experiment_observation_writes import capture_prediction, capture_outcome
 from digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations import MySQLExperimentObservationStore, active_observation_plans
 from digital_twin.modules.model_registry.contracts import GraphInferenceRule, default_graph_inference_rules
@@ -194,6 +195,33 @@ class ExperimentObservationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_dataset(dataset)
 
+    def test_large_exact_inputs_are_compressed_without_losing_source_fingerprint(self):
+        row = source_row()
+        payload = json.loads(row["payload_json"])
+        payload["externalSignals"] = {"verifiedText": "original article text " * 100_000}
+        row["payload_json"] = json.dumps(payload)
+        row["fingerprint"] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        dataset = freeze_dataset(self.plan, source_packet(row), [], captured_at=NOW)
+        self.assertGreater(len(json.dumps(dataset)), 2_000_000)
+        encoded = encode_dataset(dataset)
+        self.assertLess(len(encoded), 2_000_000)
+        self.assertEqual(dataset, decode_dataset(encoded))
+        self.assertEqual(dataset, decode_dataset(json.dumps(dataset)))
+        tampered = json.loads(encoded)
+        tampered["sha256"] = "wrong"
+        with self.assertRaises(ValueError):
+            decode_dataset(tampered)
+        with patch("digital_twin.modules.model_registry.infrastructure.experiment_dataset_codec.MAX_EXPANDED_BYTES", 100):
+            with self.assertRaises(ValueError):
+                decode_dataset(encoded)
+            with self.assertRaises(ValueError):
+                encode_dataset(dataset)
+        with patch("digital_twin.modules.model_registry.infrastructure.experiment_dataset_codec.MAX_STORED_BYTES", 100):
+            with self.assertRaisesRegex(ValueError, "experiment-packet-size-limit"):
+                encode_dataset(dataset)
+            with self.assertRaises(ValueError):
+                decode_dataset(encoded)
+
     def test_two_claims_share_one_input_and_survive_source_cleanup(self):
         for side in ("candidate", "baseline"):
             capture_prediction(self.connection, self.episode(side), NOW)
@@ -269,10 +297,12 @@ class ExperimentObservationTests(unittest.TestCase):
         result = self.store.prepare(plan)
         self.assertEqual("unsupported", result["state"])
         self.assertFalse(result["automaticCollection"])
-        with patch("digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations.read_dataset", return_value={"source": "x" * 2_000_001}):
+        with patch("digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations.read_dataset", return_value={"source": "x" * 2_000_001}), patch(
+            "digital_twin.modules.model_registry.infrastructure.experiment_dataset_codec.MAX_EXPANDED_BYTES", 2_000_000,
+        ):
             oversized = self.store.prepare(self.plan)
         self.assertEqual("unsupported", oversized["state"])
-        self.assertEqual("experiment-packet-size-limit", oversized["reason"])
+        self.assertEqual("experiment-packet-expanded-size-limit", oversized["reason"])
 
     def test_dataset_failure_does_not_enable_legacy_comparison(self):
         runtime = OntologyEvolutionRuntime(SimpleNamespace(registry=Mock(release_artifact=Mock(return_value={

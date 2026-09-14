@@ -2,10 +2,10 @@
 
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
-from digital_twin.modules.model_registry.domain.experiment_observations import validate_dataset
 from digital_twin.modules.model_registry.domain.ontology_evolution import timestamp, validate_plan
 from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint
 from .experiment_inputs import read_dataset, validate_dataset_size
+from .experiment_dataset_codec import encode_dataset, decode_dataset
 
 
 def capture_prediction(connection, episode, stamp):
@@ -61,7 +61,7 @@ def capture_prediction(connection, episode, stamp):
                 "WHERE plan_fingerprint = %s AND source_snapshot_id = %s",
                 (plan_id, boundaries[0]["snapshotId"]),
             ).fetchone()
-            dataset = validate_dataset(_json_loads(saved["payload_json"], {})) if saved else read_dataset(connection, plan, boundaries[0], stamp)
+            dataset = decode_dataset(saved["payload_json"]) if saved else read_dataset(connection, plan, boundaries[0], stamp)
             if timestamp(dataset["asOf"]) != timestamp(episode.observed_from_at):
                 raise ValueError("prediction-source-time-mismatch")
             validate_dataset_size(dataset)
@@ -72,7 +72,7 @@ def capture_prediction(connection, episode, stamp):
                 "INSERT IGNORE INTO ontology_experiment_datasets "
                 "(plan_fingerprint, dataset_id, source_snapshot_id, payload_json, created_at, expires_at) "
                 "VALUES (%s, %s, %s, %s, %s, %s)",
-                (plan_id, dataset_id, boundaries[0]["snapshotId"], json_dumps(dataset), stamp, row["expires_at"]),
+                (plan_id, dataset_id, boundaries[0]["snapshotId"], encode_dataset(dataset), stamp, row["expires_at"]),
             )
         except ValueError as error:
             reason = str(error)[:240]

@@ -814,6 +814,8 @@ class MonitorRunner:
                     status=result.get("status") or "ready",
                     targetCount=int(result.get("targetCount") or 0),
                     savedOutcomeCount=int(result.get("savedOutcomeCount") or 0),
+                    failedObservationCount=int(result.get("failedObservationCount") or 0),
+                    failedObservations=list(result.get("failedObservations") or []),
                 )
             except Exception as error:  # noqa: BLE001 - retry on the next source snapshot.
                 self.last_investment_outcome_results[snapshot.account_id] = {

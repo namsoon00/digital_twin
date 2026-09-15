@@ -625,6 +625,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             utc_now_iso=utc_now_iso,
         )
 
+    def acknowledge_follow_up_reasoning(self, account_id, condition_id, transition_id):
+        return follow_ups.acknowledge_follow_up_reasoning(
+            account_id, condition_id, transition_id, _connect=self.connect,
+        )
+
     def quarantine_unverified_legacy_follow_up_transitions(
         self,
         limit: int = 5000,

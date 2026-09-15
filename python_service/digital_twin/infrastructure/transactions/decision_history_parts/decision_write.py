@@ -20,6 +20,7 @@ from digital_twin.modules.decisions.domain.events import (
 )
 from digital_twin.modules.decisions.infrastructure import transaction_writes as decisions_writes
 from digital_twin.modules.outcomes.infrastructure import transaction_writes as outcomes_writes
+from digital_twin.modules.outcomes.domain.follow_up_tracking import registered_follow_up
 from digital_twin.modules.portfolio.infrastructure import transaction_writes as portfolio_writes
 from digital_twin.modules.portfolio.domain.trade_execution import ActionPlan
 from digital_twin.modules.read_models.domain.investment_flow import investment_flow_id
@@ -99,6 +100,13 @@ def write_decision(
     stamp = prepared.stamp
     payload = prepared.payload
     flow_id = prepared.flow_id
+    episode.follow_up_conditions = [
+        registered_follow_up(item, episode_id=episode.episode_id, account_id=episode.account_id,
+                             symbol=episode.symbol, registered_at=stamp)
+        if item.get("observable") is not False and item.get("status", "pending") == "pending" else item
+        for item in episode.follow_up_conditions or [] if isinstance(item, dict)
+    ]
+    payload["followUpConditions"] = episode.follow_up_conditions
     current_row = connection.execute(
         "SELECT payload_json FROM investment_decision_episodes WHERE episode_id = %s",
         (episode.episode_id,),

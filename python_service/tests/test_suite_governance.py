@@ -172,7 +172,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Fourteen index-outcome collection, source-clock, replica, retention and atomic history regressions.
         # Eight focused regressions cover policy binding, schema loss and outcome recovery.
         # Fifteen primary-news-source, numeric provenance, repair budget and storage regressions.
-        self.assertLessEqual(total, 1644)
+        # Four registered AI follow-up, retention memory and atomic observation regressions.
+        self.assertLessEqual(total, 1648)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

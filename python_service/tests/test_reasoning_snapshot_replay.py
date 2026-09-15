@@ -479,6 +479,15 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
             "reasoning-requested",
             runner.last_investment_outcome_results["acct"]["followUpReasoning"]["status"],
         )
+        original_ids = [event.event_id for event in event_bus.published]
+        original_barrier = request.payload["verifiedSourceSnapshot"]
+        observation = OutcomeObserver().observe_snapshot(snapshot)
+        original_at = snapshot.generated_at
+        observation["followUpObservation"]["transitions"][0]["sourceSnapshotObservedAt"] = original_at
+        snapshot.generated_at = "2026-09-16T00:00:00Z"
+        runner.publish_follow_up_transition_reasoning(snapshot, observation)
+        self.assertEqual(original_ids, [event.event_id for event in event_bus.published[-2:]])
+        self.assertEqual(original_barrier, event_bus.published[-1].payload["verifiedSourceSnapshot"])
 
 
 if __name__ == "__main__":

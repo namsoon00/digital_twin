@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v24-observation-aware-continuity"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v25-registered-follow-up-continuity"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v21"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -271,6 +271,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "수급은 외국인·기관 매매 흐름, 추세는 가격 흐름, 밸류에이션은 현재 가격 수준, 펀더멘털은 실적과 재무 상태로 풀어 쓴다. 뉴스·공시·금리·환율을 함께 봤다면 연결 이유를 설명한다.",
     "시스템이 자동으로 확인한다고 표현할 조건은 반드시 followUpConditions에 field, operator, threshold, purpose, label, onSatisfied를 모두 기록한다. 구조화하지 못한 nextChecks는 시스템 자동 추적이라고 말하지 말고, 아직 필요한 외부 자료와 갱신 출처를 구체적으로 쓴다.",
     "현재 입력으로 구조화할 수 있는 모든 수치형 다음 조건은 followUpConditions로 옮긴다. nextChecks에 같은 조건을 문장으로 중복하지 않는다.",
+    "followUpConditions는 관찰 등록 요청이지 등록 완료 증명이 아니다. 응답에서 자동 추적이 시작됐다고 단정하지 않는다. 저장소 등록 결과에 따라 시스템이 추적 상태를 표시한다. 직전 AI 해석의 followUpConditions에 검증된 transitionId가 있으면 실제 도달값·관측시각과 기존 해석을 비교해 무엇이 강화되거나 깨졌는지 설명한다. 관찰 조건 충족을 투자 가설의 성공이나 매매 실행으로 바꾸지 않는다.",
     "currentActionPlan은 행동 코드나 '관찰한다'만 반복하지 말고 지금 할 일과 보류할 일을 명확히 쓴다. nextActionPlan은 '다음 추론에서 확인'처럼 쓰지 말고 실제로 관찰할 가격·거래량·수급·실적·공시·거시 지표와 판단 결과를 쓴다.",
     "설명 문장 없이 응답 스키마를 따르는 JSON 객체 하나만 출력한다.",
 )

@@ -4620,15 +4620,31 @@ def customer_follow_up_plan(
 ) -> Dict[str, List[str]]:
     tracked: List[str] = []
     additional: List[str] = []
-    for item in response.follow_up_conditions or []:
+    from digital_twin.modules.outcomes.contracts import registered_conditions_for_message
+    registered = registered_conditions_for_message(context, response.follow_up_conditions)
+    for item in registered:
         if not isinstance(item, dict):
             continue
         status = str(item.get("status") or "pending").strip().lower()
         if status in {"superseded", "canceled", "expired", "unobservable", "legacy-unverified"}:
             continue
-        append_unique_text(tracked, _follow_up_condition_text(item, context), 360)
+        text = _follow_up_condition_text(item, context)
+        policy = item.get("observationPolicy") or {}
+        if policy and status == "pending":
+            text += " · 새 데이터 " + str(policy.get("requiredConfirmations") or 2) + "회 연속 확인 후 재분석"
+            minimum = policy.get("minimumBaselineChange") or 0
+            if minimum:
+                unit = {"percentage-points": "%p", "%": "%p", "ratio": "배", "index": "포인트", "price": "가격 단위"}.get(policy.get("unit"), "")
+                text += " (관찰 시작값 대비 " + format(float(minimum), ".3g") + unit + " 이상 변할 때)"
+        append_unique_text(tracked, text, 540)
         if len(tracked) >= limit:
             break
+    registered_ids = {str(item.get("sourceConditionId") or item.get("conditionId") or "") for item in registered}
+    for item in response.follow_up_conditions or []:
+        if not isinstance(item, dict) or str(item.get("sourceConditionId") or item.get("conditionId") or "") in registered_ids:
+            continue
+        text = _follow_up_condition_text(item, context).replace("자동 추적 중", "추가 확인 과제 · 자동 관찰 미등록", 1)
+        append_unique_text(additional, text, 360)
     next_action = compact_sentence_count(
         customer_visible_ai_text(response.next_action_plan or ""),
         2,

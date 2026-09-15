@@ -384,8 +384,9 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         self.assertNotIn(stale_topline, message)
         self.assertNotIn("무엇이 바뀌었나", message)
         self.assertIn("219,090원 이상", message)
-        self.assertIn("시스템이 추적 중", message)
-        self.assertIn("자동 추적 중", message)
+        self.assertNotIn("시스템이 추적 중", message)
+        self.assertNotIn("자동 추적 중", message)
+        self.assertIn("자동 관찰 미등록", message)
 
         values = context("shadow")
         values.update({
@@ -452,6 +453,13 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
             ],
         })
 
+        from digital_twin.modules.outcomes.domain.follow_up_tracking import registered_follow_up
+        values["rawSymbol"] = "000660"
+        response.follow_up_conditions[0]["conditionId"] = "watch:ma20"
+        values["followUpRegistration"] = {"conditions": [registered_follow_up(
+            response.follow_up_conditions[0], episode_id="ai:fixture", account_id="account:main",
+            symbol="000660", registered_at="2026-09-15T00:00:00Z", owner_kind="ai-insight",
+        )]}
         message = execution_telegram_message(values, response)
 
         self.assertIn("📌 SK하이닉스 · 규칙 기반 종합 판단", message)

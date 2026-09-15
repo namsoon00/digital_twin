@@ -4,6 +4,8 @@ from digital_twin.modules.decisions.infrastructure import (
 from digital_twin.modules.notifications.infrastructure import (
     transaction_writes as notifications_writes,
 )
+from digital_twin.modules.outcomes.infrastructure import transaction_writes as outcomes_writes
+from digital_twin.modules.outcomes.infrastructure.follow_up_read_model import hydrate_insight_followups
 
 """MySQL-backed, per-subject single-flight queue for notification AI inference."""
 
@@ -1236,6 +1238,22 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     result,
                     completed_context,
                 )
+                if bool(delivery_outcome.get("queued")):
+                    registered = outcomes_writes.register_ai_insight_followups(
+                        connection, insight_episode, stamp, self.runtime_settings,
+                        decision_episode_id=str(completed_context.get("investmentDecisionEpisodeId") or ""),
+                    )
+                    packet = {"episodeId": insight_episode.episode_id, "ownerKind": "ai-insight",
+                              "registeredAt": stamp, "conditions": registered}
+                    # The draft is not registration evidence. Attach receipts only
+                    # after the owner rows and outbox have joined this transaction.
+                    insight_episode.insight["proposedFollowUpConditions"] = insight_episode.insight.get("followUpConditions") or []
+                    insight_episode.insight["followUpConditions"] = registered
+                    completed_context["followUpRegistration"] = packet
+                    notification_context["followUpRegistration"] = packet
+                    if isinstance(delivery_job, NotificationJob):
+                        delivery_job.context["followUpRegistration"] = packet
+                        self.notification_store.upsert_job_with_connection(connection, delivery_job)
                 completed_context["investmentAIInsightEpisode"] = insight_episode.to_dict()
                 notification_context["investmentAIInsightEpisode"] = insight_episode.to_dict()
                 decisions_writes.insert_ai_insight_episode(
@@ -1414,14 +1432,18 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             params.append(normalized_symbol)
         receipt_query = (
             "SELECT MAX(attempt.completed_at) FROM notification_delivery_attempts AS attempt "
-            "WHERE attempt.job_id = notification.job_id AND attempt.status = 'delivered' "
-            "AND attempt.completed_at <> ''"
+            "WHERE attempt.job_id = episode.notification_job_id AND attempt.status = 'delivered' "
+            "AND attempt.completed_at <> '' AND (notification.job_id IS NULL OR "
+            "(notification.account_id = episode.account_id AND notification.message_type = 'investmentInsight'))"
         )
+        authored = "COALESCE(result.ai_authored, JSON_UNQUOTE(JSON_EXTRACT(episode.payload_json, '$.aiAuthored')) = 'true', 0)"
+        passed = "COALESCE(result.publication_contract_passed, JSON_UNQUOTE(JSON_EXTRACT(episode.payload_json, '$.publicationContractPassed')) = 'true', 0)"
+        failure = "COALESCE(result.contract_failure_code, JSON_UNQUOTE(JSON_EXTRACT(episode.payload_json, '$.contractFailureCode')), '')"
         if delivered_only:
             clauses.extend([
-                "result.ai_authored = 1",
-                "result.publication_contract_passed = 1",
-                "COALESCE(result.contract_failure_code, '') = ''",
+                authored + " = 1",
+                passed + " = 1",
+                failure + " = ''",
                 "(" + receipt_query + ") IS NOT NULL",
             ])
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
@@ -1432,8 +1454,9 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         params.append(bounded_limit)
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT episode.payload_json, result.publication_mode, result.ai_authored, "
-                "result.publication_contract_passed, result.contract_failure_code, "
+                "SELECT episode.payload_json, result.publication_mode, "
+                + authored + " AS ai_authored, " + passed + " AS publication_contract_passed, "
+                + failure + " AS contract_failure_code, "
                 "notification.status AS notification_status, "
                 "notification.last_error AS notification_error, "
                 "(" + receipt_query + ") AS delivered_at "
@@ -1441,10 +1464,9 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "LEFT JOIN ai_inference_results AS result ON result.result_id = episode.result_id"
                 " LEFT JOIN notification_jobs AS notification "
                 "ON notification.job_id = episode.notification_job_id "
-                "AND notification.account_id = episode.account_id "
-                "AND notification.message_type = 'investmentInsight'"
                 + where
-                + " ORDER BY episode.created_at DESC, episode.episode_id DESC LIMIT %s",
+                + (" ORDER BY delivered_at DESC, episode.created_at DESC, episode.episode_id DESC LIMIT %s"
+                   if delivered_only else " ORDER BY episode.created_at DESC, episode.episode_id DESC LIMIT %s"),
                 tuple(params),
             ).fetchall()
         result = []
@@ -1484,6 +1506,9 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "reason": _clean(row.get("notification_error")),
             }
             result.append(payload)
+        if result:
+            with self.connect() as connection:
+                hydrate_insight_followups(connection, result)
         return result
 
     def latest_delivered_insight_episodes(

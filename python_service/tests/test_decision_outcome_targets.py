@@ -273,7 +273,8 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
             params for sql, params in connection.statements
             if sql.startswith("UPDATE investment_decision_follow_ups")
         )
-        self.assertEqual(6, len(follow_up_update))
+        self.assertEqual(7, len(follow_up_update))
+        self.assertEqual(payload, json.loads(follow_up_update[-1]))
 
         supersede_connection = SupersedeConnection()
         changed = store.supersede_prior_follow_ups_for_current(

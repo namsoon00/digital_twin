@@ -216,6 +216,16 @@ class AIInferenceQueueTests(unittest.TestCase):
         saved.account_id = "other"
         self.notifications.update(saved)
         self.assertEqual([], self.queue.latest_delivered_insight_episodes("main", "005930"))
+        saved.account_id = "main"
+        self.notifications.update(saved)
+        mysql_execute(self.seed, "DELETE FROM notification_jobs WHERE job_id = %s", (job.job_id,))
+        mysql_execute(self.seed, "DELETE FROM ai_inference_results WHERE result_id = %s", (result.result_id,))
+        retained = self.queue.latest_delivered_insight_episodes("main", "005930")
+        self.assertEqual(1, len(retained))
+        self.assertTrue(retained[0]["notificationDelivery"]["delivered"])
+        self.assertTrue(retained[0]["publicationContractPassed"])
+        mysql_execute(self.seed, "UPDATE investment_ai_insight_episodes SET payload_json = JSON_REMOVE(payload_json, '$.publicationContractPassed') WHERE episode_id = %s", (retained[0]["episodeId"],))
+        self.assertEqual([], self.queue.latest_delivered_insight_episodes("main", "005930"))
 
     def assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist(self):
         diagnostic = ai_failure_diagnostic(
@@ -229,6 +239,62 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("prompt-contract-budget", diagnostic["category"])
         self.assertFalse(diagnostic["retryable"])
         self.assertIn("6145 bytes", diagnostic["safeDetail"])
+
+    def test_ai_watch_registration_is_atomic_durable_and_independent_of_trade_decisions(self):
+        from digital_twin.infrastructure.transactions.decision_history_parts.follow_ups import evaluate_follow_up_observation, acknowledge_follow_up_reasoning
+        from digital_twin.modules.outcomes.infrastructure import transaction_writes as writes
+        from digital_twin.modules.outcomes.domain.follow_up_tracking import follow_up_is_registered
+        from test_ai_follow_up_tracking import condition, facts
+
+        job, request = self.create_detached_request("subject:watch-registration")
+        self.queue.enqueue_subject_decision(job, request)
+        claimed = self.queue.claim("worker-watch", 1, 60)[0]
+        result = AIInferenceResult.create(
+            claimed, {"action": "NO_ACTION", "insightAssessment": {"publishable": True}, "followUpConditions": [condition(-1)]},
+            source="test AI", validation_state="ready", latency_ms=10, prompt_bytes=100,
+        )
+        context = {**claimed.context, "notificationAiValidatedResponse": result.response,
+                   "notificationAiExecutionAudit": {"status": "completed", "adoptionState": "narrative-adopted-action-not-applicable"},
+                   "notificationWriterProvenance": {"aiAuthored": True},
+                   "decisionReconciliation": {"status": "reconciled", "notificationDecision": "send", "reason": "new insight"}}
+        original_writer = writes.register_ai_insight_followups
+        def fail_after_registration(*args, **kwargs):
+            original_writer(*args, **kwargs)
+            raise RuntimeError("registration transaction rehearsal")
+        with patch.object(writes, "register_ai_insight_followups", side_effect=fail_after_registration):
+            with self.assertRaisesRegex(RuntimeError, "transaction rehearsal"):
+                self.complete_detached(claimed, "worker-watch", result, dict(context))
+        for table in ("investment_decision_follow_ups", "investment_ai_insight_episodes", "notification_jobs"):
+            self.assertEqual(0, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM " + table)[0])
+        self.assertTrue(self.complete_detached(claimed, "worker-watch", result, context))
+        self.assertEqual(0, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM investment_decision_episodes")[0])
+        saved = self.queue.latest_insight_episodes("main", "005930", 1)[0]
+        watch = saved["insight"]["followUpConditions"][0]
+        self.assertTrue(follow_up_is_registered(watch))
+        self.assertEqual("ai-insight", watch["ownerKind"])
+        self.assertEqual(watch, self.notifications.get(job.job_id).context["followUpRegistration"]["conditions"][0])
+        registered_at = datetime.fromisoformat(watch["registration"]["registeredAt"].replace("Z", "+00:00"))
+        def observe(value, minute, account="main", symbol="005930"):
+            at = (registered_at + timedelta(minutes=minute)).isoformat().replace("+00:00", "Z")
+            return evaluate_follow_up_observation(account, symbol, facts(value, at), at,
+                                                  _connect=self.queue.connect, utc_now_iso=lambda: at)
+        self.assertEqual([], observe(-1, 1))
+        self.assertEqual([], observe(1, 2, account="foreign"))
+        self.assertEqual([], observe(1, 2, symbol="MSTR"))
+        self.assertEqual([], observe(1, 2))
+        self.assertEqual([], observe(1, 2))
+        transitions = observe(1, 3)
+        self.assertEqual(1, len(transitions))
+        self.assertEqual("pending", transitions[0]["reasoningDispatchStatus"])
+        replay = observe(2, 4)
+        self.assertEqual(transitions[0]["transitionId"], replay[0]["transitionId"])
+        self.assertEqual(transitions[0]["sourceSnapshotObservedAt"], replay[0]["sourceSnapshotObservedAt"])
+        self.assertEqual("satisfied", self.queue.latest_insight_episodes("main", "005930", 1)[0]["insight"]["followUpConditions"][0]["status"])
+        acknowledge_follow_up_reasoning("main", watch["conditionId"], transitions[0]["transitionId"], _connect=self.queue.connect)
+        self.assertEqual([], observe(2, 5))
+        mysql_execute(self.seed, "DELETE FROM notification_jobs WHERE job_id = %s", (job.job_id,))
+        mysql_execute(self.seed, "DELETE FROM ai_inference_results WHERE result_id = %s", (result.result_id,))
+        self.assertEqual("satisfied", self.queue.latest_insight_episodes("main", "005930", 1)[0]["insight"]["followUpConditions"][0]["status"])
 
     def test_subject_decision_ai_is_independent_idempotent_and_delivery_gated(self):
         self.assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist()
@@ -487,13 +553,14 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(0, int(request_count[0]))
 
     def assert_subject_decision_ai_web_only_result_never_creates_notification(self):
+        from test_ai_follow_up_tracking import condition
         self.setUp()
         job, request = self.create_detached_request("subject:detached:web-only")
         self.queue.enqueue_subject_decision(job, request)
         claimed = self.queue.claim("worker-web-only", 1, 60)[0]
         result = AIInferenceResult.create(
             claimed,
-            {"action": "HOLD", "summary": "판단 변화가 없습니다."},
+            {"action": "NO_ACTION", "summary": "판단 변화가 없습니다.", "followUpConditions": [condition(-1)]},
             source="fake max AI",
             validation_state="ready",
             latency_ms=10,
@@ -501,6 +568,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         )
         completed_context = {
             **claimed.context,
+            "notificationAiExecutionAudit": {"status": "completed", "adoptionState": "narrative-adopted-action-not-applicable"},
+            "notificationWriterProvenance": {"aiAuthored": True},
             "decisionReconciliation": {
                 "version": "investment-decision-reconciliation-v1",
                 "status": "reconciled",
@@ -529,6 +598,7 @@ class AIInferenceQueueTests(unittest.TestCase):
             (request.request_id,),
         )
         self.assertEqual("", row[0])
+        self.assertEqual(0, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM investment_decision_follow_ups")[0])
 
     def assert_subject_decision_notification_admission_is_reflected_in_episode(self):
         self.setUp()
@@ -821,6 +891,7 @@ class AIInferenceQueueTests(unittest.TestCase):
 
     def setUp(self):
         for table in (
+            "investment_decision_follow_ups",
             "investment_ai_insight_episodes",
             "domain_events",
             "ai_inference_execution_audits",
@@ -985,7 +1056,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v6", prompt_audit["contextRouting"]["version"])
         self.assertEqual(
-            "investment-ai-judge-v24-observation-aware-continuity",
+            "investment-ai-judge-v25-registered-follow-up-continuity",
             prompt_audit["promptRelease"]["version"],
         )
         self.assertIn(

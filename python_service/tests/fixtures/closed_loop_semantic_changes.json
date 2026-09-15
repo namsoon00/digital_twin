@@ -1,5 +1,10 @@
 {
   "domain": {
+    "modules/outcomes/domain/decision_follow_up.py::condition_matches": {"hash": "dffb7e8e4d96f59d4cd2efcac90c834a202b17d8b9d7960ba91b4042d54178f1", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
+    "modules/outcomes/domain/decision_follow_up.py::normalize_follow_up_conditions": {"hash": "d19ca03fed94a1c94dbd1bc5e2b668a030749e992ca68aa7167f3310d18f6a4c", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
+    "modules/outcomes/domain/decision_follow_up.py::evaluate_follow_up_conditions": {"hash": "1de6882dbb8b64d8a5892e3d8d6d2aef111c5468bbe5d15abebfe182d01ce0d0", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
+    "modules/outcomes/domain/events.py::investment_follow_up_transitioned_event": {"hash": "ca5991a472bfbc8f104ca43d98b17d6bc5755ae14d7db5d9a4367ecb8eb59eeb", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
+    "modules/notifications/domain/notification_ai_delivery.py::_verified_follow_up_transitions": {"hash": "70cc1047734939b4f7ea6497f5c64393e479df84a43664ef99f8e659853d07ee", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
     "modules/news_intelligence/domain/news_ai_analysis.py::normalized_numeric_values": {"hash": "d1be7ff96a6074fbb22a006448230f0b475215a92643c3dd7139b2631153aa9a", "reason": "Preserve the primary article event, source-bound summary citations and numeric validation with bounded repair; test_news_analysis_domain and test_news_collection_quality. See docs/news-source-contract.md."},
     "modules/news_intelligence/domain/news_ai_analysis.py::NEWS_AI_ANALYSIS_VERSION": {"hash": "6304372b11a4e86cc90fbc64899e936b49cc226ef49876e8a1a0b12d98e63e6a", "reason": "Preserve the primary article event, source-bound summary citations and numeric validation with bounded repair; test_news_analysis_domain and test_news_collection_quality. See docs/news-source-contract.md."},
     "modules/news_intelligence/domain/news_ai_analysis.py::NEWS_AI_PROMPT_VERSION": {"hash": "99567e13ae4a344e78792d6e73fdcab125f88e05a3ee71bb490003c8d2ab1dc2", "reason": "Preserve the primary article event, source-bound summary citations and numeric validation with bounded repair; test_news_analysis_domain and test_news_collection_quality. See docs/news-source-contract.md."},
@@ -140,18 +145,9 @@
       "hash": "a050d48211c16bfb08cb9f8cd56cabc96f8fde0eca0e2725b6ef30b3d0b4c074",
       "reason": "Retain outcome eligibility under compact contracts; test_hypothesis_closed_loop."
     },
-    "modules/decisions/domain/investment_insight_assessment.py::compact_previous_investment_insight_episode": {
-      "hash": "6f451ac8ce252d69985da86458b1203b908f8ed323ca776aeaa695a26762a59a",
-      "reason": "Keep account and symbol identity in compact analysis and receipt-backed delivery memory so cross-account, cross-symbol and scope-less records cannot become prior insight baselines. test_decision_continuity and test_ai_insight_delivery_boundary."
-    },
-    "modules/decisions/domain/notification_ai_prompt_release.py::AI_DECISION_PROMPT_VERSION": {
-      "hash": "0fd81ecf7d926fddc2021a9a1be7048e59a0471bf4d62755a332a9c38650bab5",
-      "reason": "Release observation-aware continuity instructions; test_ai_inference_queue."
-    },
-    "modules/decisions/domain/notification_ai_prompt_release.py::BASE_AI_DECISION_INSTRUCTIONS": {
-      "hash": "b410f61d6a533df3c50ba66952aed5abb2929ed73e4fcac610cd25fe3e44ba23",
-      "reason": "Do not convert data gaps into success or price outcomes into trading returns; test_ai_inference_queue."
-    }
+    "modules/decisions/domain/investment_insight_assessment.py::compact_previous_investment_insight_episode": {"hash": "1dd13c31ec813a8bc15e93c8d8ccf2315a00b36a217c950cf904d6ce3ffc467b", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
+    "modules/decisions/domain/notification_ai_prompt_release.py::AI_DECISION_PROMPT_VERSION": {"hash": "e76e77551e96114f28d79bdf92810f875f66e299ef7266fe2e996174633af380", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
+    "modules/decisions/domain/notification_ai_prompt_release.py::BASE_AI_DECISION_INSTRUCTIONS": {"hash": "30cf871e588d76609f9d5bf55d441543fe03f2a9d951f9e94663e45e90a2bd7c", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."}
   },
   "ports": {
     "modules/market_data/domain/repositories.py::MarketTimeSeriesRepository": {"hash": "f068bc22fc998962bfcf62ea20e588f44915d9a56ffae8b25d8fe7154fa6f2d8", "reason": "Add explicit historical-price ingestion through the versioned time-series port, keeping atomic storage and replica projection outside the collector; test_outcome_benchmark_collection."}
@@ -167,6 +163,8 @@
     }
   },
   "storage": {
+    "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.complete": {"hash": "93088c9e887fed1875d2b1bc0bfad5539f938e0e0b5f3e157e150014bde83608", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
+    "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.latest_insight_episodes": {"hash": "5b030f0ef5a6879f8ca5960778234ff23584d9a9beaa008a11c014de64a57422", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},
     "modules/market_data/infrastructure/mysql_market_time_series.py::MySQLMarketTimeSeriesStore": {"hash": "12be05a777d9652566171228e511622c337ce1f4fc1a85e9a311e59bab4aaaab", "reason": "Persist immutable source-time index points and cap repair queries at the original outcome time, rejecting invalid cutoff clocks; test_outcome_benchmark_collection."},
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::merge_derived_evidence_payload": {
       "hash": "881928f94a75ce5356d08e4a52be0af19951be5afed91be06099c5718901c936",
@@ -188,9 +186,6 @@
       "hash": "3b44f3e909503b35c73a9447db7ccb1f9e698bb4851531beb2a717e8654f3a85",
       "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
-    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
-      "hash": "73b24d1c98f2bc4d46d4f48bb65ad07fb1ce27cd476d43464457d2b9c163cab6",
-      "reason": "Preserve the experimental ledger, compact calibration and as-of selection. Add one indexed, exact episode/account/symbol outcome-schedule read without repair or rescheduling so excluded and missing targets cannot be presented as pending. test_decision_outcome_targets, test_decision_continuity, test_decision_calibration_inputs, test_internal_decision_history, test_experiment_observations and test_stabilization_transactions."
-    }
+    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {"hash": "88d6f46f419f4e035125ba7e25bd57f3943bb503e133d1763a4504bd63d91c85", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."}
   }
 }

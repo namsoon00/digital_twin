@@ -1,6 +1,8 @@
 import inspect
+import hashlib
 import uuid
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
@@ -849,15 +851,23 @@ class MonitorRunner:
         ]
         if not transitions:
             return {}
+        results = [self._publish_follow_up_transition_reasoning(snapshot, item) for item in transitions]
+        return {**results[-1], "transitionCount": len(transitions),
+                "symbols": sorted({str(item.get("symbol")) for item in transitions}),
+                "reasoningEventIds": [item["reasoningEventId"] for item in results]}
+
+    def _publish_follow_up_transition_reasoning(self, snapshot, transition):
+        # One stable event per edge makes retries independent of batch grouping.
+        transitions = [transition]
         observed_at = str(
-            follow_up.get("observedAt")
-            or observation_result.get("observedAt")
+            transition.get("sourceSnapshotObservedAt")
+            or transition.get("transitionAt")
             or snapshot.generated_at
             or ""
         )
         snapshot_id = reasoning_source_snapshot_id(
             snapshot.account_id,
-            snapshot.generated_at,
+            observed_at,
         )
         transition_event = investment_follow_up_transitioned_event(
             snapshot.account_id,
@@ -898,21 +908,28 @@ class MonitorRunner:
             fact_types_by_symbol=transition_event.payload.get("factTypesBySymbol") or {},
             changed_fields_by_symbol=transition_event.payload.get("changedFieldsBySymbol") or {},
             reason=(
-                "현재 투자 판단의 자동 관찰 조건이 처음 충족되어 최신 ABox와 "
+                "투자 판단 또는 AI 해석의 자동 관찰 조건이 충족되어 관측 시점 ABox와 "
                 "TypeDB 직접 규칙으로 판단을 다시 계산합니다."
             ),
             snapshot_barrier={
                 "version": VERIFIED_MONITOR_SNAPSHOT_VERSION,
                 "snapshotId": snapshot_id,
-                "generatedAt": str(snapshot.generated_at or ""),
+                "generatedAt": observed_at,
                 "accountId": str(snapshot.account_id or ""),
                 "expectedSourceFactCount": len(source_facts),
                 "followUpTransitionCount": len(persisted_transitions),
             },
             source_facts=source_facts,
         )
+        reasoning_event = replace(
+            reasoning_event,
+            event_id="follow-up-reasoning:" + hashlib.sha256(transition_event.event_id.encode()).hexdigest(),
+        )
         self.publish(transition_event)
         self.publish(reasoning_event)
+        acknowledge = getattr(self.investment_outcome_observer, "acknowledge_follow_up_reasoning", None)
+        if callable(acknowledge):
+            acknowledge(snapshot.account_id, transition.get("conditionId"), transition.get("transitionId"))
         self.progress(
             "investment_follow_up.reasoning_requested",
             accountId=snapshot.account_id,

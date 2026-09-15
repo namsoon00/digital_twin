@@ -654,9 +654,10 @@ def _threshold_text(field: str, value: object, context: Dict[str, object]) -> st
 
 
 def _follow_up_rows(context: Dict[str, object]) -> List[str]:
+    from digital_twin.modules.outcomes.contracts import registered_conditions_for_message
     continuity = _mapping(context.get("decisionContinuityPacket"))
     rows = []
-    for item in continuity.get("followUpConditions") or []:
+    for item in registered_conditions_for_message(context, continuity.get("followUpConditions")):
         condition = _mapping(item)
         status = str(condition.get("status") or "pending").strip().lower()
         if status in {"superseded", "canceled", "expired", "unobservable", "legacy-unverified"}:

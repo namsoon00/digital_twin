@@ -11,6 +11,61 @@ from digital_twin.modules.outcomes.domain.decision_calibration_input import (
     DECISION_CALIBRATION_INPUT_VERSION,
     calibration_hypotheses,
 )
+from digital_twin.modules.outcomes.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION, FOLLOW_UP_OPERATORS
+from digital_twin.modules.outcomes.domain.follow_up_tracking import LIVE_FOLLOW_UP_FIELDS, finite_number, observation_time, registered_follow_up
+
+
+def register_ai_insight_followups(connection: BoundWriteConnection, episode, stamp, settings=None, decision_episode_id=""):
+    """Called only inside accepted AI publication; never creates a trade decision."""
+    if not episode.ai_authored or not episode.publication_contract_passed or episode.contract_failure_code:
+        return []
+    rows = connection.execute(
+        "SELECT condition_id, episode_id, payload_json FROM investment_decision_follow_ups "
+        "WHERE account_id = %s AND symbol = %s AND "
+        "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.ownerKind')) = 'ai-insight' "
+        "AND (status = 'pending' OR episode_id = %s) FOR UPDATE",
+        (episode.account_id, episode.symbol, episode.episode_id),
+    ).fetchall()
+    existing = {}
+    for saved in rows or []:
+        payload = _json_loads(saved.get("payload_json"), {})
+        if saved.get("episode_id") == episode.episode_id:
+            existing[str(payload.get("sourceConditionId") or "")] = payload
+            continue
+        payload.update({"status": "superseded", "trackingStatus": "stopped-newer-insight",
+                        "supersededByEpisodeId": episode.episode_id, "supersededAt": stamp})
+        connection.execute(
+            "UPDATE investment_decision_follow_ups SET status = 'superseded', payload_json = %s, updated_at = %s "
+            "WHERE condition_id = %s AND status = 'pending'",
+            (json_dumps(payload), stamp, saved["condition_id"]),
+        )
+    registered = []
+    if decision_episode_id:
+        rows = connection.execute(
+            "SELECT payload_json FROM investment_decision_follow_ups "
+            "WHERE account_id = %s AND symbol = %s AND episode_id = %s AND observable = 1 LIMIT 8",
+            (episode.account_id, episode.symbol, decision_episode_id),
+        ).fetchall()
+        return [_json_loads(row.get("payload_json"), {}) for row in rows or []]
+    for raw in list(episode.insight.get("followUpConditions") or [])[:8]:
+        if not isinstance(raw, dict):
+            continue
+        source_id = str(raw.get("sourceConditionId") or raw.get("conditionId") or "")
+        expiry = observation_time(raw.get("expiresAt"))
+        if (not source_id or raw.get("version") != FOLLOW_UP_CONDITION_VERSION
+                or raw.get("observable") is not True or raw.get("status") != "pending"
+                or raw.get("field") not in LIVE_FOLLOW_UP_FIELDS
+                or raw.get("operator") not in FOLLOW_UP_OPERATORS or finite_number(raw.get("threshold")) is None
+                or (expiry and expiry <= observation_time(stamp))):
+            continue
+        if source_id in existing:
+            registered.append(existing[source_id])
+            continue
+        row = registered_follow_up(raw, episode_id=episode.episode_id, account_id=episode.account_id,
+                                   symbol=episode.symbol, registered_at=stamp, owner_kind="ai-insight", settings=settings)
+        upsert_decision_followup(connection, row, episode, stamp, _bound_number=finite_number)
+        registered.append(row)
+    return registered
 
 
 def upsert_decision_calibration_input(
@@ -163,7 +218,8 @@ def supersede_prior_followups(
     rows = connection.execute(
         "SELECT condition_id, payload_json FROM investment_decision_follow_ups "
         "WHERE account_id = %s AND symbol = %s AND episode_id <> %s "
-        "AND status = 'pending' ORDER BY updated_at, condition_id LIMIT 500",
+        "AND status = 'pending' AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.ownerKind')), 'decision') <> 'ai-insight' "
+        "ORDER BY updated_at, condition_id LIMIT 500",
         (str(account_id or ""), str(symbol or "").upper(), str(episode_id or "")),
     ).fetchall()
     changed = 0

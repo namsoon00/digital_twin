@@ -29,6 +29,7 @@ def supersede_noncurrent_follow_ups(
             "ON current_flow.account_id = follow_up.account_id "
             "AND current_flow.symbol = follow_up.symbol "
             "WHERE follow_up.status = 'pending' "
+            "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(follow_up.payload_json, '$.ownerKind')), 'decision') <> 'ai-insight' "
             "AND follow_up.episode_id <> current_flow.decision_episode_id "
             "ORDER BY follow_up.updated_at, follow_up.condition_id LIMIT %s",
             (maximum,),

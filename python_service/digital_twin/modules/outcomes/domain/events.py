@@ -38,6 +38,11 @@ def investment_follow_up_transitioned_event(
             "conditionId": condition_id[:191],
             "sourceConditionId": str(item.get("sourceConditionId") or "")[:191],
             "episodeId": str(item.get("episodeId") or "")[:191],
+            "ownerKind": str(item.get("ownerKind") or "decision")[:32],
+            "accountId": str(account_id or "")[:191],
+            "lastSourceAsOf": str(item.get("lastSourceAsOf") or "")[:40],
+            "confirmationCount": int(item.get("confirmationCount") or 0),
+            "registration": dict(item.get("registration") or {}),
             "symbol": symbol[:64],
             "field": str(item.get("field") or "")[:96],
             "operator": str(item.get("operator") or "")[:8],
@@ -78,6 +83,7 @@ def investment_follow_up_transitioned_event(
     identity = hashlib.sha256("|".join(transition_ids).encode("utf-8")).hexdigest()[:24]
     return DomainEvent(
         name=INVESTMENT_FOLLOW_UP_TRANSITIONED,
+        event_id="follow-up-event:" + hashlib.sha256((str(account_id) + "|" + identity).encode()).hexdigest(),
         aggregate_id=("investment-follow-up:" + str(account_id or "default") + ":" + identity)[:191],
         payload={
             "accountId": str(account_id or "default")[:191],

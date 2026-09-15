@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.market_data.contracts import observable_follow_up_fields
+from digital_twin.modules.outcomes.domain.follow_up_tracking import finite_number, observation_time, confirm_follow_up_observation
 
 
 FOLLOW_UP_CONDITION_VERSION = "decision-follow-up-condition-v2"
@@ -38,8 +39,10 @@ def _fact_value(facts: Dict[str, object], field: str):
 def condition_matches(value: object, operator: str, threshold: object) -> bool:
     if value in (None, "") or threshold in (None, ""):
         return False
-    left = number(value)
-    right = number(threshold)
+    left = finite_number(value)
+    right = finite_number(threshold)
+    if left is None or right is None:
+        return False
     return {
         ">": left > right,
         ">=": left >= right,
@@ -68,6 +71,7 @@ def normalize_follow_up_conditions(
     tracked: List[Dict[str, object]] = []
     unsupported: List[Dict[str, object]] = []
     seen = set()
+    condition_ids = set()
     for raw in raw_conditions or []:
         if not isinstance(raw, dict):
             continue
@@ -75,7 +79,7 @@ def normalize_follow_up_conditions(
         operator = str(raw.get("operator") or "").strip()
         purpose = str(raw.get("purpose") or "switch").strip().lower()
         threshold = raw.get("threshold")
-        if not field or operator not in FOLLOW_UP_OPERATORS or threshold in (None, ""):
+        if not field or operator not in FOLLOW_UP_OPERATORS or finite_number(threshold) is None:
             continue
         if purpose not in FOLLOW_UP_PURPOSES:
             purpose = "switch"
@@ -92,6 +96,9 @@ def normalize_follow_up_conditions(
             threshold,
             purpose,
         )
+        if condition_id in condition_ids:
+            condition_id = _stable_id(symbol, field, operator, threshold, purpose)
+        condition_ids.add(condition_id)
         row = {
             "version": FOLLOW_UP_CONDITION_VERSION,
             "conditionId": condition_id,
@@ -109,13 +116,13 @@ def normalize_follow_up_conditions(
             "observable": is_observable,
             "observedAt": str(facts.get("updatedAt") or facts.get("sourceAsOf") or ""),
             "expiresAt": str(raw.get("expiresAt") or ""),
-            "trackingOwner": "system" if is_observable else "none",
+            "trackingOwner": "none",
             "trackingCadence": "each-live-snapshot" if is_observable else "unsupported",
-            "trackingStatus": "active" if is_observable else "unavailable",
-            "notificationOnTransition": bool(is_observable),
+            "trackingStatus": "unregistered" if is_observable else "unavailable",
+            "notificationOnTransition": False,
         }
         if is_observable:
-            baseline_observed = current_value not in (None, "")
+            baseline_observed = finite_number(current_value) is not None
             matched = condition_matches(current_value, operator, threshold)
             row.update({
                 "baselineObserved": baseline_observed,
@@ -144,7 +151,7 @@ def evaluate_follow_up_conditions(
     updated: List[Dict[str, object]] = []
     material = False
     stamp = str(observed_at or facts.get("updatedAt") or facts.get("sourceAsOf") or "")
-    now = datetime.now(timezone.utc)
+    now = observation_time(stamp) or datetime.now(timezone.utc)
     for raw in conditions or []:
         row = dict(raw or {})
         previous = str(row.get("status") or "pending")
@@ -164,8 +171,10 @@ def evaluate_follow_up_conditions(
             row["transitionVerified"] = True
             row["transitionKind"] = "pending-to-expired"
         else:
-            value = _fact_value(facts, str(row.get("field") or ""))
-            if value in (None, ""):
+            value = finite_number(_fact_value(facts, str(row.get("field") or "")))
+            if value is None:
+                if row.get("ownerKind") == "ai-insight":
+                    row.update({"confirmationCount": 0, "observationStatus": "waiting-valid-value"})
                 updated.append(row)
                 continue
             matched = condition_matches(
@@ -173,6 +182,17 @@ def evaluate_follow_up_conditions(
                 str(row.get("operator") or ""),
                 row.get("threshold"),
             )
+            if row.get("ownerKind") == "ai-insight" and row.get("observationPolicy"):
+                if confirm_follow_up_observation(row, facts, value, matched, stamp):
+                    row.update({
+                        "status": "invalidated" if row.get("purpose") == "invalidate" else "satisfied",
+                        "transitionVerified": True, "transitionKind": "confirmed-false-to-true",
+                        "transitionId": _stable_id(row.get("conditionId"), row.get("lastSourceAsOf"), value),
+                        "previousStatus": previous, "transitionAt": stamp, "trackingStatus": "condition-reached",
+                    })
+                    material = True
+                updated.append(row)
+                continue
             if row.get("version") != FOLLOW_UP_CONDITION_VERSION or "previousMatched" not in row:
                 # Legacy rows did not retain a false -> true edge. Capture a
                 # fresh baseline and fail closed instead of inventing one.

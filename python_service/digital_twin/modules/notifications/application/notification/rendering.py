@@ -2,6 +2,7 @@
 
 import html
 import hashlib
+import json
 import re
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -177,6 +178,15 @@ class NotificationRenderingService:
         if narrative_only:
             context.setdefault("notificationDecisionMode", narrative_only.get("decisionMode") or "typedb-review-observation")
         document = customer_investment_document_from_dict(context.get("customerInvestmentDocument"))
+        registration = context.get("followUpRegistration") or {
+            "conditions": (context.get("investmentDecisionEpisode") or {}).get("followUpConditions") or []
+        }
+        registration_revision = (
+            hashlib.sha256(json.dumps(registration, sort_keys=True, default=str).encode()).hexdigest()
+            if context.get("followUpRegistration") is not None or registration.get("conditions") else ""
+        )
+        if registration_revision and registration_revision != context.get("customerInvestmentDocumentRegistrationRevision"):
+            document = None
         if observation and presentation_metadata(job.message_type, context)["kind"] == "price-change":
             document = None
         if not document:
@@ -209,6 +219,7 @@ class NotificationRenderingService:
                 notification_number=str(context.get("notificationNumber") or document.notification_number or ""),
             ))
             context["customerInvestmentDocument"] = document.to_dict()
+            context["customerInvestmentDocumentRegistrationRevision"] = registration_revision
             context["customerInvestmentDocumentQuality"] = customer_investment_document_quality(document)
             rendered = render_customer_investment_document(document)
         context.update({

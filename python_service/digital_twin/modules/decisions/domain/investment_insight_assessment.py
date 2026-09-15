@@ -590,6 +590,16 @@ def compact_previous_investment_insight_episode(value: object) -> Dict[str, obje
         "subjectCaseId": _text(payload.get("subjectCaseId"), 200),
         "inferenceGenerationId": _text(payload.get("inferenceGenerationId"), 200),
         "createdAt": _text(payload.get("createdAt"), 100),
+        "followUpConditions": [
+            {key: row.get(key) for key in (
+                "conditionId", "sourceConditionId", "episodeId", "accountId", "symbol", "ownerKind", "registration", "field", "operator", "threshold",
+                "purpose", "label", "onSatisfied", "status", "trackingStatus", "currentValue", "lastSourceAsOf",
+                "transitionVerified", "transitionId", "transitionAt", "transitionKind", "confirmationCount", "observationPolicy",
+                "previousMatched", "currentMatched",
+            ) if row.get(key) not in (None, "")}
+            for row in insight.get("followUpConditions") or payload.get("followUpConditions") or []
+            if isinstance(row, Mapping)
+        ][:8],
         "insightAssessment": {
             key: assessment.get(key)
             for key in (

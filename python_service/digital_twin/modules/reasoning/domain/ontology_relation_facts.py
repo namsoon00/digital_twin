@@ -20,6 +20,7 @@ from digital_twin.modules.portfolio.contracts import position_account_value_in_b
 from digital_twin.modules.portfolio.contracts import evaluate_valuation_models
 from digital_twin.modules.market_data.contracts import trading_value_snapshot, volume_pace_snapshot
 from digital_twin.modules.news_intelligence.contracts import assess_news_eligibility
+from digital_twin.modules.reasoning.domain.ontology_schema_capabilities import RULE_DERIVED_SCHEMA_CONTRACT_VERSION
 
 
 def _sector_ratio(position: Position, portfolio: PortfolioSummary) -> float:
@@ -817,6 +818,7 @@ def _investment_strategy_facts(
     )
     profile = investment_strategy_profile(profile_key)
     return {
+        "strategyFactContractVersion": RULE_DERIVED_SCHEMA_CONTRACT_VERSION,
         "investmentStrategyProfile": profile.get("profile"),
         "investmentStrategyProfileLabel": profile.get("label"),
         "investmentRiskTolerance": profile.get("riskTolerance"),

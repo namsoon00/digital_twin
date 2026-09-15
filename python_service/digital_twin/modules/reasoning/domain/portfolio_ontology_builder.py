@@ -28,6 +28,7 @@ from digital_twin.modules.reasoning.domain.reasoning_source_facts import reasoni
 from digital_twin.modules.reasoning.domain.portfolio_ontology_state import add_fact_change_concepts
 from digital_twin.modules.reasoning.domain.portfolio_ontology_structure import add_instrument_identity_concepts, instrument_tbox_classes, observable_position
 from digital_twin.modules.market_data.contracts import trading_value_snapshot
+from digital_twin.modules.reasoning.domain.ontology_schema_capabilities import RULE_DERIVED_SCHEMA_CONTRACT_VERSION
 
 
 def build_portfolio_ontology(
@@ -112,6 +113,8 @@ def build_portfolio_ontology(
     strategy_context = add_account_investment_strategy_concepts(graph, account_id_value, portfolio_node_id, account_context)
     strategy_profile = strategy_context.get("profile") if isinstance(strategy_context.get("profile"), dict) else {}
     strategy_fact_props = {
+        # Changed direct-query capabilities require a new immutable subject generation.
+        "strategyFactContractVersion": RULE_DERIVED_SCHEMA_CONTRACT_VERSION,
         "investmentStrategyProfile": strategy_profile.get("profile"),
         "investmentStrategyProfileLabel": strategy_profile.get("label"),
         "strategyLossTolerancePct": number(strategy_profile.get("lossTolerancePct")),

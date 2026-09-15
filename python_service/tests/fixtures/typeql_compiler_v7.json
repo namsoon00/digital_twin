@@ -1,0 +1,70 @@
+{
+  "sourceRevision": "d6c80ec85 + native account-policy reference fix",
+  "engineVersion": "typedb-direct-typeql-rule-engine-v7",
+  "semanticChange": "Compare account strategy fields in TypeDB; default only when absent. Promote RHS fields; invalidate v6 caches.",
+  "changedCases": [
+    "condition",
+    "governed",
+    "indexed",
+    "match",
+    "profiles",
+    "schema"
+  ],
+  "groups": {
+    "any-group": {
+      "count": 58,
+      "bytes": 139371,
+      "sha256": "8c1a5c3e9e4c5b35a8fb6e1faf6eada4f60afa7b13380940c5ad3fc6e2c6be79"
+    },
+    "bridge": {
+      "count": 10,
+      "bytes": 38589,
+      "sha256": "bbd1d21c8d66b30dd382c8b55cd8af0fa6f615b03252d982cfd20d6cd86bde61"
+    },
+    "catalog": {
+      "count": 1,
+      "bytes": 2534194,
+      "sha256": "2e07b33214ca87e4d4a73836c0547edfa5cf6d184d18c80791d3e468d1b51bdb"
+    },
+    "condition": {
+      "count": 281,
+      "bytes": 543643,
+      "sha256": "33bf5c2ad6a70327fb4f59793f816a857d75b9f6f4e8db2b512cc5877234a9aa"
+    },
+    "governed": {
+      "count": 29,
+      "bytes": 300862,
+      "sha256": "a63f3196171032ba3b5d14639436268a71230a1f221faf8cfa7ee673fdb77d45"
+    },
+    "indexed": {
+      "count": 244,
+      "bytes": 646158,
+      "sha256": "5180699ccc32740547071ff16849e78a2c0f8492460a67735b9056e9a9f5112a"
+    },
+    "literals": {
+      "count": 30,
+      "bytes": 1033,
+      "sha256": "6767b7f1c7d34d9bf06cf6b684f7d7c2528d7ed79aaebc4bf6e899e0566b3f31"
+    },
+    "match": {
+      "count": 366,
+      "bytes": 1339869,
+      "sha256": "4478563882464a38a053de6e82ab3780595a758bdb6bc07132962fc6af0f84f3"
+    },
+    "planning": {
+      "count": 2,
+      "bytes": 42342,
+      "sha256": "9358bec8547578ae40718c770be57462104bd50fe50863a45daa162d5f8b9e31"
+    },
+    "profiles": {
+      "count": 1,
+      "bytes": 293596,
+      "sha256": "3e1f28cf923ac3cabb74eb9493bd1bcab1e0c017e9140fbe3cedaa77a9a8a051"
+    },
+    "schema": {
+      "count": 1,
+      "bytes": 25433,
+      "sha256": "3fa39b14dfe3f928947a98536cc27fe5b88d0b455adbbe0cbc344ef673265167"
+    }
+  }
+}

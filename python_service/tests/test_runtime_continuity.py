@@ -119,9 +119,12 @@ class RuntimeContinuityTests(unittest.TestCase):
         self.assertFalse(value["storedPublication"])
         row.update(publication_id="pub", publication_outcome="FINAL_DECISION", decision_id="decision", decision_match=1, attempt_id="attempt",
                    notification_id="notification", notification_match=1, is_mock=0, data_quality="actual",
-                   delivery_status="delivered", channel="telegram", delivery_at=verify.iso(NOW - timedelta(seconds=30)))
+                   delivery_status="delivered", channel="accountNotification", provider="Telegram", audience="account",
+                   receipt_verified=1, delivery_at=verify.iso(NOW - timedelta(seconds=30)))
         self.assertTrue(verify.lineage_evidence(row, NOW, START, verify.Redactor())["recordedTelegramDelivery"])
-        for key, replacement in (("delivery_status", "done"), ("channel", "console"), ("is_mock", 1), ("decision_match", 0), ("attempt_id", None)):
+        for key, replacement in (("delivery_status", "done"), ("channel", "console"), ("channel", "operationsTelegram"),
+                                 ("provider", "Console"), ("audience", "operations"), ("receipt_verified", 0),
+                                 ("is_mock", 1), ("decision_match", 0), ("attempt_id", None)):
             changed = dict(row, **{key: replacement})
             self.assertFalse(verify.lineage_evidence(changed, NOW, START, verify.Redactor())["recordedTelegramDelivery"])
 
@@ -142,7 +145,8 @@ class RuntimeContinuityTests(unittest.TestCase):
         for key in ("decision_match", "notification_match"):
             row = dict(linked_row(), publication_id="pub", publication_outcome="FINAL_DECISION", decision_id="decision",
                        decision_match=1, notification_id="notification", notification_match=1, is_mock=0, attempt_id="attempt",
-                       data_quality="actual", delivery_status="delivered", channel="telegram", delivery_at=verify.iso(NOW))
+                       data_quality="actual", delivery_status="delivered", channel="accountNotification", provider="Telegram",
+                       audience="account", receipt_verified=1, delivery_at=verify.iso(NOW))
             row[key] = 0
             evidence = verify.lineage_evidence(row, NOW, START, verify.Redactor())
             self.assertTrue(evidence["storedLinkedAi"])

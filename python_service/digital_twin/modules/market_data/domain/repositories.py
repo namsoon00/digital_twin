@@ -102,6 +102,11 @@ class MarketIndexHistoryProvider(Protocol):
         ...
 
 
+class MarketBenchmarkHistoryProvider(Protocol):
+    def fetch_history(self, targets: Iterable[Dict[str, object]]) -> Dict[str, object]:
+        ...
+
+
 class MarketDataProvider(Protocol):
     def fetch_access_token(self) -> str:
         ...

@@ -184,10 +184,12 @@ def pending_outcome_targets(
     time_clause = "" if request.include_future else " AND targets.target_at <= %s"
     state_clause = """ AND (targets.status = 'pending' OR (
         targets.status IN ('needs-data', 'observed') AND targets.updated_at <= %s
+        AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, '$.payload.evaluationRecovery.automaticRetryStopped')), 'false') <> 'true'
+        AND COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, '$.payload.evaluationRecovery.nextRetryAt')), ''), targets.updated_at) <= %s
         AND JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, '$.payload.calibrationEligibility'))
           IN ('excluded-contract-data-gap', 'excluded-criterion-data-gap')
     ))"""
-    params = (normalized_account_id, cutoff, *(() if request.include_future else (observed_stamp,)), target_limit)
+    params = (normalized_account_id, cutoff, observed_stamp, *(() if request.include_future else (observed_stamp,)), target_limit)
     with _connect() as connection:
         decision_rows = connection.execute(
             """

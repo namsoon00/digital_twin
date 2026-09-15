@@ -67,12 +67,19 @@ def typedb_condition_pattern(
         attr = typedb_subject_attribute(str(condition.get("field") or ""))
         if not attr:
             return {"conditionId": condition_id, "clauses": [], "columns": [], "reason": "unsupported subject field"}
+        expected = condition.get("value")
+        expected_attribute = ""
+        if isinstance(expected, dict) and expected.get("field"):
+            expected_attribute = typedb_subject_attribute(str(expected["field"]))
+            if not expected_attribute:
+                return {"conditionId": condition_id, "clauses": [], "columns": [], "reason": "unsupported referenced subject field"}
         clause = typedb_value_match(
             source_var,
             attr,
             condition.get("value"),
             str(condition.get("operator") or "=="),
             value_variable("subjectValue", 0),
+            expected_attribute=expected_attribute,
         )
         if clause:
             clauses.append(clause)

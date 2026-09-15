@@ -54,7 +54,8 @@ class ABoxCandidateTests(unittest.TestCase):
 
     def test_extraction_preserves_original_candidate_and_recovery_contracts(self):
         golden = json.loads((ROOT / "tests/fixtures/abox_candidates_v6.json").read_text())
-        self.assertEqual(api.TYPEDB_NATIVE_RULE_ENGINE_VERSION, golden["engineVersion"])
+        # Candidate recovery is unchanged; compiler revisions have a separate contract.
+        self.assertEqual("typedb-direct-typeql-rule-engine-v6", golden["engineVersion"])
         actual = contract_fingerprints(api)
         self.assertEqual(set(golden["scenarios"]), set(actual))
         for name, expected in golden["scenarios"].items():

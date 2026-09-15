@@ -19,7 +19,7 @@ from digital_twin.modules.model_registry.contracts import GraphInferenceRule
 from digital_twin.modules.model_registry.contracts import tbox_relation_def
 
 
-RULE_DERIVED_SCHEMA_CONTRACT_VERSION = "rule-derived-schema-capabilities-v1"
+RULE_DERIVED_SCHEMA_CONTRACT_VERSION = "rule-derived-schema-capabilities-v2"
 
 
 def _text(value: object) -> str:
@@ -81,6 +81,9 @@ def rule_schema_capability_manifest(
             field = _text(_condition_value(condition, "field", "field", ""))
             if kind == "subject_property" and field:
                 subject_fields.add(field)
+                expected = _condition_value(condition, "value", "value")
+                if isinstance(expected, Mapping) and _text(expected.get("field")):
+                    subject_fields.add(_text(expected["field"]))
             if kind != "relation":
                 continue
             relation_type = _text(

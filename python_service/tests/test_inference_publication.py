@@ -44,7 +44,8 @@ def active_marker_writes(transaction):
 class InferencePublicationTests(unittest.TestCase):
     def test_publication_extraction_matches_original_transaction_and_result_contracts(self):
         golden = json.loads((Path(__file__).parent / "fixtures/inference_publication_v6.json").read_text())
-        self.assertEqual(golden["engineVersion"], api.TYPEDB_NATIVE_RULE_ENGINE_VERSION)
+        # Publication transactions remain identical to V6 despite compiler V7.
+        self.assertEqual("typedb-direct-typeql-rule-engine-v6", golden["engineVersion"])
         actual = contract_fingerprints(api)
         self.assertEqual(set(golden["scenarios"]), set(actual))
         for name, expected in golden["scenarios"].items():

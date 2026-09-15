@@ -6,6 +6,8 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,12 +27,67 @@ from digital_twin.infrastructure.local_ai_process_guard import (  # noqa: E402
 from digital_twin.infrastructure.notification_ai_reviewer import (  # noqa: E402
     CommandNotificationAIReviewer,
     notification_ai_reviewer_from_settings,
+    materialize_notification_ai_output_schema,
 )
 from digital_twin.infrastructure.rule_change_candidate_ai import rule_change_candidate_advisor_from_settings  # noqa: E402
 from digital_twin.infrastructure.codex_execution_output import codex_execution_output  # noqa: E402
 
 
 class AiModelPolicyTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.runtime_directory = Path(directory.name) / "runtime"
+        runtime = patch("digital_twin.infrastructure.notification_ai_reviewer.notification_ai_runtime_dir",
+                        return_value=self.runtime_directory)
+        runtime.start()
+        self.addCleanup(runtime.stop)
+
+    def test_worker_recreates_removed_or_corrupt_schema_before_every_launch(self):
+        script = "import sys; sys.stdin.read(); print('{}')"
+        with patch("digital_twin.infrastructure.notification_ai_reviewer.codex_process_arguments",
+                   return_value=[sys.executable, "-c", script]):
+            reviewer = notification_ai_reviewer_from_settings({"notificationAiUseCodex": "1"}, allow_local_fallback=False)
+            reviewer.capacity_lock_dir = None
+            reviewer.json_events = False
+            schema = next(self.runtime_directory.glob("*.schema.json"))
+            original = schema.read_text()
+            for corrupt in (False, True):
+                if corrupt:
+                    schema.write_text("broken")
+                else:
+                    schema.unlink()
+                    self.runtime_directory.rmdir()
+                with patch("digital_twin.infrastructure.notification_ai_reviewer.validated_response_from_text"):
+                    reviewer.review({"messageType": "investmentInsight", "_notificationAiPreparedPrompt": "test"})
+                self.assertEqual(original, schema.read_text())
+
+            @contextmanager
+            def cleanup_while_waiting(*args, **kwargs):
+                schema.unlink()
+                self.runtime_directory.rmdir()
+                yield
+
+            reviewer.capacity_lock_dir = self.runtime_directory.parent / "capacity"
+            with patch("digital_twin.infrastructure.notification_ai_reviewer.local_ai_capacity_lease", cleanup_while_waiting), \
+                 patch("digital_twin.infrastructure.notification_ai_reviewer.validated_response_from_text"):
+                reviewer.review({"messageType": "investmentInsight", "_notificationAiPreparedPrompt": "test"})
+            self.assertEqual(original, schema.read_text())
+            schema.write_bytes(b"\xff\xfe")
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                rebuilt = list(pool.map(lambda _: materialize_notification_ai_output_schema(self.runtime_directory), range(8)))
+            self.assertTrue(all(path == schema for path in rebuilt))
+            self.assertEqual(original, schema.read_text())
+            self.assertEqual([], list(self.runtime_directory.glob("*.tmp")))
+
+    def test_process_startup_error_is_not_hidden_by_missing_json_turn(self):
+        script = "import sys; sys.stdin.read(); print('output schema file missing', file=sys.stderr); sys.exit(1)"
+        reviewer = CommandNotificationAIReviewer([sys.executable, "-c", script], json_events=True)
+        with self.assertRaisesRegex(RuntimeError, "output schema file missing"):
+            reviewer.review({"messageType": "investmentInsight", "_notificationAiPreparedPrompt": "test"})
+        self.assertEqual("process-failed", reviewer.last_execution_spans["terminationReason"])
+        self.assertEqual("process-failed", reviewer.execution_history[-1]["terminationReason"])
+
     def test_model_events_retain_final_output_and_safe_diagnostics(self):
         events = [
             {"type": "thread.started", "thread_id": "private-thread"},

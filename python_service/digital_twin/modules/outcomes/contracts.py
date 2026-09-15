@@ -10,6 +10,8 @@ _EXPORTS = {'evaluate_hypothesis_outcome': ('digital_twin.modules.outcomes.domai
 
 
 _EXPORTS.update({
+    'benchmark_observation_window': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'benchmark_observation_window'),
+    'outcome_recovery_state': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'outcome_recovery_state'),
     'frozen_outcome_facts': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'frozen_outcome_facts'),
     'observation_facts': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'observation_facts'),
     'outcome_evaluation_history': ('digital_twin.modules.outcomes.domain.outcome_recovery', 'outcome_evaluation_history'),

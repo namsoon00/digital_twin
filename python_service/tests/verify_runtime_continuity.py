@@ -223,7 +223,9 @@ def lineage_evidence(row, now, started_at, redactor):
     delivery = bool(publication and row.get("notification_id") and row.get("attempt_id")
                     and row.get("notification_match") == 1 and row.get("is_mock") == 0
                     and row.get("data_quality") == "actual" and row.get("delivery_status") == "delivered"
-                    and row.get("channel") == "telegram" and timestamp(row.get("delivery_at"))
+                    and row.get("channel") == "accountNotification"
+                    and row.get("provider") == "Telegram" and row.get("audience") == "account"
+                    and row.get("receipt_verified") == 1 and timestamp(row.get("delivery_at"))
                     and ai_at <= timestamp(row["delivery_at"]) <= now)
     in_window = bool(complete and ai_at >= started_at)
     states = {"queued", "pending", "retry", "processing", "completed", "failed", "superseded", "suppressed"}

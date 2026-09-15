@@ -1,5 +1,12 @@
 {
   "domain": {
+    "modules/model_registry/domain/statistical_signals/graph_scoring.py::MODEL_HYPOTHESIS_SCORER_VERSION": {"hash": "d0007d9bdd86f7e9d98d6e13766a03bd240feff7beb9d335cf5ef4d0e22fd868", "reason": "Invalidate statistical assessments from before fail-closed field-reference handling; account policy stays in TypeDB. test_typeql_compiler."},
+    "modules/reasoning/domain/ontology_schema_capabilities.py::RULE_DERIVED_SCHEMA_CONTRACT_VERSION": {"hash":"23ce0d2d8c8528280bc806743da7f94cb8e3c16f57ec9a5bd4c127953ae49dda","reason":"Promote referenced account strategy fields as direct query capabilities, with an explicit V2 schema contract. test_typeql_compiler."},
+    "modules/reasoning/domain/ontology_schema_capabilities.py::rule_schema_capability_manifest": {"hash":"352cb01a75c071f7de5913e9187c9d53bbdbf57e19d18054035f66d4a8fb8ee8","reason":"Promote referenced account strategy fields as direct query capabilities, with an explicit V2 schema contract. test_typeql_compiler."},
+    "modules/model_registry/domain/statistical_signals/graph_scoring.py::_expected": {"hash":"c988c7b235ae4a85bd7f2233e777b2d32c8b99c1d3c60390b241feab9af8b52f","reason":"Keep account field comparisons in native TypeDB; never fold RHS references to defaults in Python. test_typeql_compiler."},
+    "modules/model_registry/domain/statistical_signals/graph_scoring.py::_value_matches": {"hash":"d753bbd80a8a699663862cccb80bfebfbcae305cbac49fad5f909cdbfc3b1833","reason":"Keep account field comparisons in native TypeDB; never fold RHS references to defaults in Python. test_typeql_compiler."},
+    "modules/reasoning/domain/portfolio_ontology_builder.py::build_portfolio_ontology": {"hash":"c0492220151f70f4a71bd1f62f68aa3115c9bfb21c64fba8cc27d3bb42f56fa5","reason":"Version subject policy facts so older JSON-only scopes are rebuilt immutably with native attributes. test_typeql_compiler and test_ontology_rulebox."},
+    "modules/reasoning/domain/ontology_relation_facts.py::_investment_strategy_facts": {"hash":"6e140803766dcd4b8d826660a774cdbf94d374a9256e13c59e6a1043b73477d6","reason":"Version subject policy facts so older JSON-only scopes are rebuilt immutably with native attributes. test_typeql_compiler and test_ontology_rulebox."},
     "modules/market_data/domain/market_time_series.py::GRANULARITY_SECONDS": {"hash": "c020127da4913010098adadfc74077b9c107ff167106fc7ca8acf08cea67e1ce", "reason": "Represent bounded 1-minute and 10-minute index history without collapsing all past bars into the current collection bucket; test_outcome_benchmark_collection."},
     "modules/market_data/domain/market_time_series.py::MarketTimeSeriesObservation": {"hash": "77b6b65b0cb49f221c5e92783a23c479d0c3bfad5321fc70d1b98d50673d98d0", "reason": "Validate finite historical index prices, completed source intervals, explicit availability clocks and actual-data provenance; test_outcome_benchmark_collection."},
     "platform/domain/mysql_minimal_retention.py::mysql_minimal_retention_policy": {"hash": "049fff43a6c07b92cf94fa725ea637803186618ab59aa083f2fceea6aaa3c343", "reason": "Apply existing raw-history retention to newly collected index granularities so benchmark data cannot accumulate indefinitely; test_outcome_benchmark_collection."},
@@ -141,7 +148,7 @@
     }
   },
   "storage": {
-    "modules/market_data/infrastructure/mysql_market_time_series.py::MySQLMarketTimeSeriesStore": {"hash": "04961c63fd19942f8a6804093f1ea8238faadb31210825c185b6611cd646fa2b", "reason": "Persist immutable source-time index points, retain point-in-time read cutoffs, and prefer finer matching benchmark observations; test_outcome_benchmark_collection."},
+    "modules/market_data/infrastructure/mysql_market_time_series.py::MySQLMarketTimeSeriesStore": {"hash": "12be05a777d9652566171228e511622c337ce1f4fc1a85e9a311e59bab4aaaab", "reason": "Persist immutable source-time index points and cap repair queries at the original outcome time, rejecting invalid cutoff clocks; test_outcome_benchmark_collection."},
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::merge_derived_evidence_payload": {
       "hash": "51b7c8acb6061af12bdce049ddc250014f6d740a714006eaa5796732375f39e0",
       "reason": "Preserve document-recovery collection purpose across metadata refreshes so old bodies cannot become new alerts; test_external_official_evidence_projection.test_metadata_refresh_preserves_verified_document_provenance."
@@ -163,7 +170,7 @@
       "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
     "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {
-      "hash": "5715543629f105ca468c3023a334500e7850a1cf41aa9f7ecd36a4767b18f3cc",
+      "hash": "73b24d1c98f2bc4d46d4f48bb65ad07fb1ce27cd476d43464457d2b9c163cab6",
       "reason": "Preserve the experimental ledger, compact calibration and as-of selection. Add one indexed, exact episode/account/symbol outcome-schedule read without repair or rescheduling so excluded and missing targets cannot be presented as pending. test_decision_outcome_targets, test_decision_continuity, test_decision_calibration_inputs, test_internal_decision_history, test_experiment_observations and test_stabilization_transactions."
     }
   }

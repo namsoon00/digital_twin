@@ -46,8 +46,26 @@ def typedb_number_literal(value: object) -> str:
     return literal
 
 
-def typedb_value_match(owner_var: str, attribute: str, expected: object, operator: str, value_var: str) -> str:
+def typedb_value_match(owner_var: str, attribute: str, expected: object, operator: str, value_var: str,
+                      expected_attribute: str = "") -> str:
     op = str(operator or "==").strip().lower()
+    if isinstance(expected, dict) and expected.get("field"):
+        if not expected_attribute:
+            raise ValueError("unresolved TypeQL field reference: " + str(expected["field"]))
+        typeql_op = {"eq": "==", "in": "==", "ne": "!=", "lte": "<=", "gte": ">=", "lt": "<", "gt": ">"}.get(op, op)
+        if typeql_op not in {"==", "!=", "<=", ">=", "<", ">"}:
+            raise ValueError("unsupported TypeQL field comparison: " + op)
+        actual = "$" + value_var
+        reference = actual + "Expected"
+        bound = owner_var + " has " + attribute + " " + actual + "; "
+        comparison = owner_var + " has " + expected_attribute + " " + reference + "; " + actual + " " + typeql_op + " " + reference + ";"
+        default = expected.get("default")
+        if default in (None, "", [], {}):
+            return bound + comparison
+        # Absence, not a failed comparison, is the only default branch.
+        absent = "not { " + owner_var + " has " + expected_attribute + " " + reference + "Absent; }; "
+        return (bound + "{ " + comparison + " } or { " + absent
+                + actual + " " + typeql_op + " " + typedb_literal_for_attribute(attribute, default) + "; };")
     expected = typedb_expected_value(expected)
     if op in {"exists", "present"}:
         return owner_var + " has " + attribute + " $" + value_var + ";"
@@ -87,6 +105,8 @@ def typedb_literal(value: object) -> str:
 
 def typedb_expected_value(value: object) -> object:
     if isinstance(value, dict):
+        if value.get("field"):
+            raise ValueError("unresolved TypeQL field reference: " + str(value["field"]))
         if value.get("default") not in (None, "", [], {}):
             return value.get("default")
         if value.get("value") not in (None, "", [], {}):

@@ -21,7 +21,7 @@ from digital_twin.modules.model_registry.domain.statistical_signals.registry imp
 from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract
 
 
-MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v3"
+MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v4"
 
 
 def _number(value: object):
@@ -34,6 +34,8 @@ def _number(value: object):
 
 def _expected(value: object) -> object:
     if isinstance(value, Mapping):
+        if value.get("field"):
+            raise ValueError("field-relative policy belongs in TypeDB")
         if value.get("default") not in (None, "", [], {}):
             return value.get("default")
         if value.get("value") not in (None, "", [], {}):
@@ -63,6 +65,8 @@ def _value_matches(actual: object, operator: object, expected: object):
     op = str(operator or "==").strip().lower()
     if op in {"exists", "present"}:
         return True
+    if isinstance(expected, Mapping) and expected.get("field"):
+        return None
     expected = _expected(expected)
     if expected in (None, "", [], {}):
         return True

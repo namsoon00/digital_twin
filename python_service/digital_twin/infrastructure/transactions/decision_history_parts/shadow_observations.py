@@ -20,6 +20,7 @@ from digital_twin.modules.outcomes.contracts import (
     observation_facts,
     outcome_evaluation_history,
     outcome_needs_data,
+    outcome_recovery_state,
     validate_outcome_repair,
 )
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
@@ -396,6 +397,8 @@ def save_shadow_hypothesis_outcome(
             outcome.payload["evaluationHistory"] = outcome_evaluation_history(previous, stamp)
             outcome.payload["evaluationAttemptCount"] = int((previous.get("payload") or {}).get("evaluationAttemptCount") or 1) + 1
             payload = outcome.to_dict()
+        outcome.payload["evaluationRecovery"] = outcome_recovery_state(previous, payload, stamp)
+        payload = outcome.to_dict()
         connection.execute(
             """
                 INSERT INTO investment_hypothesis_observation_outcomes (

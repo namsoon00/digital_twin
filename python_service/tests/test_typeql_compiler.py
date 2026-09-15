@@ -15,12 +15,36 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v6.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v7.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
-    def test_typeql_extraction_preserves_original_catalog_query_and_plan_bytes(self):
-        # Captured from the original adapter, not regenerated from this compiler.
+    def test_all_account_thresholds_compare_native_fields_not_default_literals(self):
+        from digital_twin.modules.reasoning.infrastructure.typeql.preflight import typedb_preflight_value_matches
+        from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_value_match, typedb_expected_value
+        from digital_twin.modules.model_registry.domain.statistical_signals.graph_scoring import _value_matches
+        dynamic = [(rule.rule_id, condition) for rule in enabled_rules()
+                   for condition in rule.to_dict()["conditions"]
+                   if isinstance(condition.get("value"), dict) and condition["value"].get("field")]
+        self.assertEqual(9, len(dynamic))
+        for rule_id, condition in dynamic:
+            expected = condition["value"]
+            with self.subTest(rule=rule_id):
+                attribute = typeql.typedb_subject_attribute(expected["field"])
+                self.assertTrue(attribute)
+                result = typeql.typedb_native_condition_check_query(condition, "stock:000660", 0, world_id=WORLD)
+                self.assertIn("has " + attribute, result["query"])
+                self.assertIn("not {", result["query"])
+                self.assertIn("Expected", result["query"])
+                self.assertIsNone(typedb_preflight_value_matches(-8.2, "<=", expected))
+                self.assertIsNone(_value_matches(-8.2, "<=", expected))
+        with self.assertRaisesRegex(ValueError, "referenc"):
+            typedb_expected_value({"field": "strategyLossTolerancePct", "default": -8})
+        with self.assertRaises(ValueError):
+            typedb_value_match("$s", "ontology-profit-loss-rate", {"field": "typo", "default": -8}, "<=", "$v")
+
+    def test_compiler_matches_versioned_account_policy_contract(self):
+        # V6 remains frozen; V7 records the deliberate native field comparison fix.
         expected = json.loads(GOLDEN.read_text())
         actual = contract_fingerprints(typeql)
         self.assertEqual(expected["engineVersion"], typeql.TYPEDB_NATIVE_RULE_ENGINE_VERSION)

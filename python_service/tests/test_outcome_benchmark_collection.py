@@ -1,7 +1,7 @@
 import unittest
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -15,6 +15,8 @@ from digital_twin.modules.market_data.infrastructure.kis_index_history import (
 )
 from digital_twin.modules.market_data.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
 from digital_twin.modules.portfolio.contracts import Position
+from digital_twin.modules.market_data.infrastructure.benchmark_history import BenchmarkHistoryProvider, benchmark_observations, benchmark_history_windows
+from digital_twin.modules.outcomes.contracts import benchmark_observation_window, outcome_recovery_state
 
 
 NOW = datetime(2026, 9, 14, 6, 50, tzinfo=timezone.utc)
@@ -76,6 +78,77 @@ class HistoryStore(MySQLMarketTimeSeriesStore):
 
 
 class OutcomeBenchmarkCollectionTests(unittest.TestCase):
+    def test_benchmark_repair_preserves_original_window_and_stops_at_original_outcome(self):
+        target = {"benchmarkSymbol": "SPY", "baselineAt": "2026-09-11T13:00:00Z", "targetAt": "2026-09-14T05:00:00Z",
+                  "previousOutcome": {"observedAt": "2026-09-11T14:02:00Z", "payload": {"targetAt": "2026-09-11T14:00:00Z"}}}
+        window = benchmark_observation_window(target)
+        windows = benchmark_history_windows([window], NOW)
+        rows = [{"Datetime": "2026-09-11T14:00:00Z", "Close": 700},
+                {"Datetime": "2026-09-11T14:02:00Z", "Close": 800},
+                {"Datetime": "2026-09-14T05:00:00Z", "Close": 900},
+                {"Datetime": "2026-09-11T14:01:00Z", "Close": float("nan")}]
+        points = benchmark_observations("SPY", rows, windows["SPY"], NOW)
+        self.assertEqual([700], [point.current_price for point in points])
+        self.assertEqual("2026-09-11T14:00:59Z", points[0].source_as_of)
+        self.assertTrue(points[0].valid_price_history())
+        self.assertEqual({}, benchmark_history_windows([{**window, "targetAt": "2026-08-01T14:00:00Z", "baselineAt": "" , "observedAt": "2026-08-01T14:02:00Z"}], NOW))
+
+    def test_benchmark_provider_bounds_fetch_and_throttles_missing_history(self):
+        ticker = Mock()
+        ticker.history.return_value.reset_index.return_value.to_dict.return_value = []
+        clock = [NOW]
+        provider = BenchmarkHistoryProvider({}, ticker_factory=lambda _: ticker, now_provider=lambda: clock[0])
+        windows = [{"symbol": "SPY", "targetAt": "2026-09-11T14:00:00Z"}]
+        self.assertEqual("unavailable", provider.fetch_history(windows)["status"])
+        self.assertEqual("skipped", provider.fetch_history(windows)["status"])
+        ticker.history.assert_called_once_with(period="7d", interval="1m", auto_adjust=False, actions=False, prepost=True, timeout=15)
+        clock[0] += timedelta(minutes=15)
+        self.assertEqual("unavailable", provider.fetch_history(windows)["status"])
+
+    def test_benchmark_windows_for_multiple_targets_survive_symbol_deduplication(self):
+        reader = SimpleNamespace(outcome_collection_targets=lambda *a, **kw: [
+            {"symbol": "NVDA", "benchmarkSymbol": "SPY", "targetAt": stamp}
+            for stamp in ["2026-09-11T14:00:00Z", "2026-09-11T15:00:00Z"]])
+        runner = self.runner(decision_episode_store=reader)
+        targets = runner.outcome_observation_targets([{"account": SimpleNamespace(account_id="main")}], ["NVDA", "SPY"])
+        self.assertEqual(1, len(targets))
+        self.assertEqual(2, len(targets[0][1]["outcomeHistoryWindows"]))
+        provider = SimpleNamespace(fetch_history=Mock(side_effect=RuntimeError("private")))
+        runner.benchmark_history_provider = provider
+        runner.time_series_store = SimpleNamespace(record_price_history=Mock())
+        self.assertEqual("error", runner.collect_benchmark_history(targets)["status"])
+        self.assertEqual(2, len(provider.fetch_history.call_args.args[0]))
+
+    def test_unrecoverable_data_gaps_back_off_and_never_become_calibration_successes(self):
+        current = {"payload": {"calibrationEligibility": "excluded-criterion-data-gap"}}
+        previous = {}
+        waits = []
+        for attempt in range(1, 9):
+            state = outcome_recovery_state(previous, current, NOW.isoformat())
+            self.assertEqual(attempt, state["attemptCount"])
+            self.assertEqual(attempt == 8, state["automaticRetryStopped"])
+            if state["nextRetryAt"]:
+                waits.append((datetime.fromisoformat(state["nextRetryAt"].replace("Z", "+00:00")) - NOW).total_seconds() / 60)
+            previous = {"payload": {**current["payload"], "evaluationRecovery": state}}
+        self.assertEqual([15, 30, 60, 120, 240, 360, 360], waits)
+        self.assertEqual("unavailable", state["state"])
+        self.assertEqual("excluded-criterion-data-gap", current["payload"]["calibrationEligibility"])
+        self.assertEqual("complete", outcome_recovery_state(previous, {"payload": {"calibrationEligibility": "eligible"}}, NOW.isoformat())["state"])
+
+    def test_sql_benchmark_query_caps_at_original_observation_not_later_data(self):
+        store = HistoryStore()
+        read = Mock(return_value=SimpleNamespace(fetchall=lambda: []))
+        @contextmanager
+        def connect():
+            yield SimpleNamespace(execute=read)
+        store.connect = connect
+        target = {"requestId": "original", "symbol": "SPY", "targetAt": "2026-09-11T14:00:00Z", "maximumObservationAt": "2026-09-11T14:02:00Z"}
+        self.assertEqual({}, store.load_outcome_observations("main", [target]))
+        self.assertIn("2026-09-11T14:02:00Z", read.call_args.args[1])
+        read.reset_mock()
+        self.assertEqual({}, store.load_outcome_observations("main", [{**target, "maximumObservationAt": "invalid"}]))
+        read.assert_not_called()
+
     def runner(self, **kwargs):
         return MarketDataCollectionRunner(
             None, SimpleNamespace(enrich=lambda symbol: {"market": "NASDAQ", "currency": "USD"}),

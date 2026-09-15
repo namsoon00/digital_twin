@@ -15,7 +15,7 @@ NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS = NATIVE_RULE_EVIDENCE_READ_INDEX_BATC
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
 
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v6"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v7"
 
 TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 
@@ -33,6 +33,9 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "limitValuePct": "ontology-limit-value-pct",
     "minCashWeightPct": "ontology-min-cash-weight-pct",
     "strategyMinCashWeightPct": "ontology-strategy-min-cash-weight-pct",
+    "strategyLossTolerancePct": "ontology-strategy-loss-tolerance-pct",
+    "strategyProfitProtectionPct": "ontology-strategy-profit-protection-pct",
+    "strategyMaxPositionWeightPct": "ontology-strategy-max-position-weight-pct",
     "positionCount": "ontology-position-count",
     "changeRate": "ontology-change-rate",
     "priceChangeRate": "ontology-price-change-rate",

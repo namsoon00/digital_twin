@@ -108,9 +108,9 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
                 ).hexdigest()
                 self.assertEqual(entry["bodyHash"], digest)
 
-    def test_projection_input_execution_and_progress_match_original(self):
+    def test_projection_input_execution_and_progress_match_policy_fact_contract(self):
         expected = json.loads(
-            (ROOT / "tests/fixtures/projection_input_execution_v1.json").read_text()
+            (ROOT / "tests/fixtures/projection_input_execution_v2.json").read_text()
         )["scenarios"]
         self.assertEqual(expected, contract_scenarios(api))
 

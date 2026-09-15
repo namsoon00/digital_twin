@@ -149,7 +149,7 @@ class StaticSeedOwnershipTests(unittest.TestCase):
 
     def test_original_schema_fingerprints_queries_and_restore_results_match(self):
         golden = json.loads(
-            (ROOT / "tests/fixtures/static_seed_execution_v1.json").read_text()
+            (ROOT / "tests/fixtures/static_seed_execution_v2.json").read_text()
         )
         self.assertEqual(golden["scenarios"], execution_contracts(api))
 

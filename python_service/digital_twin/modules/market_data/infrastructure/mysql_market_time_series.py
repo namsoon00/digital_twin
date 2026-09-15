@@ -960,11 +960,19 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             except (TypeError, ValueError):
                 target_delay_minutes = delay_minutes
             target_delay_minutes = max(1, min(60 * 24 * 14, target_delay_minutes))
+            deadline = parsed_target + timedelta(minutes=target_delay_minutes)
+            maximum = parse_timestamp(target.get("maximumObservationAt"))
+            if target.get("maximumObservationAt") and not maximum:
+                continue
+            if maximum:
+                deadline = min(deadline, maximum)
+            if deadline < parsed_target:
+                continue
             clean_targets.append({
                 "requestId": request_id,
                 "symbol": symbol,
                 "targetAt": target_at,
-                "deadlineAt": (parsed_target + timedelta(minutes=target_delay_minutes)).isoformat().replace("+00:00", "Z"),
+                "deadlineAt": deadline.isoformat().replace("+00:00", "Z"),
             })
             if len(clean_targets) >= 1000:
                 break

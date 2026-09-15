@@ -4,7 +4,8 @@ from typing import Callable, Dict, Iterable, List, Tuple
 from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.modules.market_data.domain.data_freshness import age_minutes
 from digital_twin.modules.market_data.domain.benchmark import INDEX_BENCHMARKS, OUTCOME_COLLECTION_ROLES
-from digital_twin.modules.market_data.domain.repositories import MarketIndexHistoryProvider
+from digital_twin.modules.market_data.domain.repositories import MarketIndexHistoryProvider, MarketBenchmarkHistoryProvider
+from digital_twin.modules.outcomes.contracts import benchmark_observation_window
 from digital_twin.modules.market_data.domain.events import market_data_collected_event
 from digital_twin.modules.reasoning.contracts import market_fact_change
 from digital_twin.modules.instruments.contracts import market_signal_symbols
@@ -148,6 +149,7 @@ class MarketDataCollectionRunner:
         decision_episode_store=None,
         external_signal_refresher: Callable[[Iterable[Position]], Dict[str, object]] = None,
         index_history_provider: MarketIndexHistoryProvider = None,
+        benchmark_history_provider: MarketBenchmarkHistoryProvider = None,
     ):
         self.account_repository = account_repository
         self.symbol_service = symbol_service
@@ -161,6 +163,7 @@ class MarketDataCollectionRunner:
         self.decision_episode_store = decision_episode_store
         self.external_signal_refresher = external_signal_refresher
         self.index_history_provider = index_history_provider
+        self.benchmark_history_provider = benchmark_history_provider
 
     def attach_pipeline_health(self, result: Dict[str, object]) -> Dict[str, object]:
         if not self.health_service or not hasattr(self.health_service, "record_market_data_collection"):
@@ -355,6 +358,7 @@ class MarketDataCollectionRunner:
         selected_markets = set(self.markets())
         result: List[Tuple[Position, Dict[str, object]]] = []
         seen = set(excluded)
+        benchmark_bases = {}
         limit = max(1, min(self.price_batch_size(), int_setting(self.settings, "investmentBrainOutcomeEpisodeBatchSize", 200, 10, 1000)))
         for entry in account_entries or []:
             account = entry.get("account")
@@ -391,7 +395,9 @@ class MarketDataCollectionRunner:
                         result.append((position, base))
                         seen.add(symbol)
                 benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
-                if benchmark_symbol and benchmark_symbol not in seen and len(result) < limit:
+                if benchmark_symbol in benchmark_bases:
+                    benchmark_bases[benchmark_symbol]["outcomeHistoryWindows"].append(benchmark_observation_window(target))
+                elif benchmark_symbol and len(result) < limit:
                     benchmark_identity = dict(INDEX_BENCHMARKS.get(benchmark_symbol) or {})
                     if not benchmark_identity and hasattr(self.symbol_service, "enrich"):
                         try:
@@ -406,15 +412,36 @@ class MarketDataCollectionRunner:
                         "market": str((benchmark_identity or {}).get("market") or target.get("market") or ""),
                         "currency": str((benchmark_identity or {}).get("currency") or target.get("currency") or ""),
                         "outcomeBenchmarkFor": symbol,
+                        "outcomeHistoryWindows": [benchmark_observation_window(target)],
                     }
                     if normalize_market(str(benchmark_base.get("market") or "")) in selected_markets:
                         benchmark_position = self.base_position(benchmark_base)
                         benchmark_position.source = "decision-outcome-benchmark"
                         result.append((benchmark_position, benchmark_base))
+                        benchmark_bases[benchmark_symbol] = benchmark_base
                         seen.add(benchmark_symbol)
                 if len(result) >= limit:
                     return result
         return result
+
+    def collect_benchmark_history(self, targets) -> Dict[str, object]:
+        windows = [window for position, base in targets if position.symbol not in INDEX_BENCHMARKS
+                   for window in base.get("outcomeHistoryWindows", [])]
+        if not windows or not self.benchmark_history_provider:
+            return {"status": "skipped", "savedCount": 0}
+        writer = getattr(self.time_series_store, "record_price_history", None)
+        if not callable(writer):
+            return {"status": "unavailable", "reason": "benchmark-history-store-unavailable", "savedCount": 0}
+        try:
+            result = dict(self.benchmark_history_provider.fetch_history(windows))
+            observations = result.pop("observations", [])
+            stored = writer(observations) if observations else {}
+            result.update(receivedCount=len(observations), savedCount=int(stored.get("savedCount") or 0))
+            if observations and stored.get("enabled") is False:
+                result.update(status="unavailable", reason="benchmark-history-storage-disabled")
+            return result
+        except Exception as error:
+            return {"status": "error", "reason": "benchmark-history-collection-failed", "errorType": type(error).__name__, "savedCount": 0}
 
     def collect_index_benchmark_history(self, targets) -> Dict[str, object]:
         symbols = sorted({position.symbol for position, _base in targets if position.symbol in INDEX_BENCHMARKS})
@@ -448,6 +475,7 @@ class MarketDataCollectionRunner:
     ) -> Tuple[List[Dict[str, object]], List[Tuple[Position, Dict[str, object]]], Dict[str, object]]:
         market_signal_targets = list(market_signal_targets or [])
         index_history = self.collect_index_benchmark_history(market_signal_targets)
+        benchmark_history = self.collect_benchmark_history(market_signal_targets)
         market_signal_targets = [item for item in market_signal_targets if item[0].symbol not in INDEX_BENCHMARKS]
         symbol_order: List[str] = []
         for entry in focused_by_account:
@@ -460,7 +488,7 @@ class MarketDataCollectionRunner:
             if symbol and symbol not in symbol_order:
                 symbol_order.append(symbol)
         if not symbol_order:
-            return focused_by_account, [], {"symbols": [], "priceCount": 0, "candleCount": 0, "indexBenchmarkHistory": index_history}
+            return focused_by_account, [], {"symbols": [], "priceCount": 0, "candleCount": 0, "indexBenchmarkHistory": index_history, "benchmarkHistory": benchmark_history}
         if not token:
             token = provider.fetch_access_token()
         try:
@@ -513,6 +541,7 @@ class MarketDataCollectionRunner:
             "dailyHistorySymbolCount": int(time_series.get("symbolCount") or 0),
             "timeSeries": time_series,
             "indexBenchmarkHistory": index_history,
+            "benchmarkHistory": benchmark_history,
         }
 
     def collect_candles(self, provider: MarketDataProvider, token: str, symbols: Iterable[str]):

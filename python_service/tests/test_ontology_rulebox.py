@@ -1058,6 +1058,19 @@ class OntologyRuleBoxTests(unittest.TestCase):
     def test_typedb_projection_promotes_rulebox_query_keys(self):
         graph = ontology_seed_graph(default_graph_inference_rules()[:1])
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
+        from digital_twin.modules.reasoning.domain.ontology_schema_capabilities import RULE_DERIVED_SCHEMA_CONTRACT_VERSION
+        from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import material_graph_fingerprint
+        policy_graph = self.strategy_threshold_loss_graph("aggressive", -8.2)
+        policy_row = next(row for row in repository.rows_for_entities(policy_graph) if row.get("kind") == "stock")
+        self.assertEqual(-15, policy_row["strategyLossTolerancePct"])
+        self.assertIn(RULE_DERIVED_SCHEMA_CONTRACT_VERSION, policy_row["propertiesJson"])
+        statement = repository.node_insert_clause(policy_row, "2026-09-15T00:00:00Z", "$stock")
+        for attribute in ["ontology-strategy-loss-tolerance-pct", "ontology-strategy-profit-protection-pct", "ontology-strategy-max-position-weight-pct"]:
+            self.assertIn("has " + attribute, statement)
+        upgraded = material_graph_fingerprint(policy_graph)
+        for entity in policy_graph.entities:
+            entity.properties.pop("strategyFactContractVersion", None)
+        self.assertNotEqual(upgraded, material_graph_fingerprint(policy_graph))
 
         rule_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule:graph.loss_guard.breakdown.v1")
         stock_class_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "tbox-class:Stock")

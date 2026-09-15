@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "d6c80ec85",
+  "contractVersion": "projection-input-execution-v2",
+  "reason": "Native account-policy schema contract v2 adds a subject fact version and changes semantic identities. Restoring only the two previous fact builders reproduces all nine V1 scenarios exactly. Projection input orchestration and progress contracts remain unchanged.",
+  "scenarios": {
+    "full": "bad14c7aeb9ea76facfd65614015d5b258e14667eafc2d86359b7196c62cd70a",
+    "target": "7bb5b8bcf77c06e3babb9c2d63ff4f951f2a66fcdd7e043766e7895fbd1efcee",
+    "source-facts": "21e0d63c0d63884e58df25f43428efa2ead8966b9ba5d25181899e01896851c8",
+    "live-context": "0637a419bff9e41623ce75600c0be8514e7dbda33dd6f050a34fb15f0b8f5e9d",
+    "memory-hit": "91bc99eb21784b97700dcc01324ddf8f4368ec2be9b9dd795dcd76fdcc6c21ad",
+    "persistent-hit": "1f619dccd472cf829407032d3a311f90d273e253faa3b9519a82ec1ae805122a",
+    "cache-errors": "3803ad108493c91d0b77f0a7a5803f0a6a95c0139ff848675373ed755e6d261d",
+    "scoring-failure": "0fe6b337780c7e8cee8a6b37149c4c69fdb81310622d8e2c3e5d94bd5025d3bb",
+    "world-identity": "af577c909a65b89ae730ad477846d9e8affa87747c3dc153f982ee9b82cc3023"
+  }
+}

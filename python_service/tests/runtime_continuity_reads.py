@@ -127,7 +127,9 @@ a.publication_mode, a.validation_state,
 i.episode_id AS insight_id, p.publication_id, p.outcome_kind AS publication_outcome,
 d.episode_id AS decision_id,
 n.job_id AS notification_id, n.status AS notification_status, n.is_mock, n.data_quality,
-t.attempt_id, t.status AS delivery_status, t.channel, t.completed_at AS delivery_at,
+t.attempt_id, t.status AS delivery_status, t.channel, t.provider, t.audience,
+JSON_UNQUOTE(JSON_EXTRACT(t.metadata_json, '$.receiptVerified')) = 'true' AS receipt_verified,
+t.completed_at AS delivery_at,
 (v.account_id = s.account_id AND s.account_id <> '' AND r.account_id = s.account_id
  AND r.symbol = s.symbol AND s.symbol <> '') AS account_symbol_match,
 (i.account_id = s.account_id AND i.symbol = s.symbol

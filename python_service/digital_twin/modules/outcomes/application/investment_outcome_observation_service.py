@@ -6,7 +6,7 @@ from digital_twin.modules.outcomes.domain.investment_outcomes import DecisionRev
 from digital_twin.modules.market_data.contracts import market_evidence_profile
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.outcomes.domain.hypothesis_outcome_facts import premise_observation_facts
-from digital_twin.modules.outcomes.domain.outcome_recovery import frozen_outcome_facts
+from digital_twin.modules.outcomes.domain.outcome_recovery import benchmark_observation_window, frozen_outcome_facts, DATA_GAP_ELIGIBILITIES
 
 
 def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int, upper: int) -> int:
@@ -152,7 +152,12 @@ class InvestmentOutcomeObservationService:
             benchmark_end_requests.append({
                 **common,
                 "requestId": request_id + ":benchmark-end",
-                "targetAt": target.get("targetAt"),
+                "targetAt": benchmark_observation_window(target).get("targetAt"),
+                "maximumObservationAt": (
+                    (target.get("previousOutcome") or {}).get("observedAt")
+                    or (historical.get(request_id) or snapshot_observations.get(str(target.get("symbol") or "").upper()) or {}).get("sourceAsOf")
+                    or observed_at
+                ),
             })
         benchmark_start_observations = baseline_loader(
             snapshot.account_id,
@@ -216,9 +221,20 @@ class InvestmentOutcomeObservationService:
                 start = benchmark_start_observations.get(request_id + ":benchmark-start") or {}
                 start = dict((target.get("baselineObservations") or {}).get("benchmark") or start)
                 end = benchmark_end_observations.get(request_id + ":benchmark-end") or {}
+                if facts.get("benchmarkStartPrice"):
+                    start = {"currentPrice": facts["benchmarkStartPrice"], "sourceAsOf": facts.get("benchmarkStartAsOf")}
+                if facts.get("benchmarkEndPrice"):
+                    end = {"currentPrice": facts["benchmarkEndPrice"], "sourceAsOf": facts.get("benchmarkEndAsOf")}
                 start_price = self.optional_number(start.get("currentPrice"))
                 end_price = self.optional_number(end.get("currentPrice"))
                 facts["benchmarkSymbol"] = benchmark_symbol
+                # Retain either available endpoint across raw-series retention.
+                if start_price:
+                    facts["benchmarkStartPrice"] = start_price
+                    facts["benchmarkStartAsOf"] = start.get("sourceAsOf") or start.get("generatedAt") or ""
+                if end_price:
+                    facts["benchmarkEndPrice"] = end_price
+                    facts["benchmarkEndAsOf"] = end.get("sourceAsOf") or end.get("generatedAt") or ""
                 if start_price and end_price:
                     facts["benchmarkReturnPct"] = round(((end_price / start_price) - 1) * 100, 6)
                     facts["benchmarkObservationSource"] = "mysql-market-time-series"
@@ -258,7 +274,7 @@ class InvestmentOutcomeObservationService:
         contract_data_gap_count = sum(
             1
             for item in outcomes
-            if str((getattr(item, "payload", {}) or {}).get("calibrationEligibility") or "") == "excluded-contract-data-gap"
+            if str((getattr(item, "payload", {}) or {}).get("calibrationEligibility") or "") in DATA_GAP_ELIGIBILITIES
         )
         return {
             "status": ("partially-observed" if outcomes else "error") if failures else (

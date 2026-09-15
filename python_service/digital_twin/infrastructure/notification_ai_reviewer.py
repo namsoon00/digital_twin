@@ -2,8 +2,10 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Dict
 
 from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
@@ -42,14 +44,21 @@ def materialize_notification_ai_output_schema(runtime_directory=None):
     target = runtime_dir / (
         "investment-decision-" + release.output_schema_fingerprint[:20] + ".schema.json"
     )
-    if target.exists() and target.read_text(encoding="utf-8") == serialized:
-        return target
-    temporary = runtime_dir / (target.name + "." + str(os.getpid()) + ".tmp")
     try:
-        temporary.write_text(serialized, encoding="utf-8")
+        if target.read_text(encoding="utf-8") == serialized:
+            return target
+    except (FileNotFoundError, UnicodeError):
+        pass
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=runtime_dir,
+                                         prefix=target.name + ".", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(serialized)
         os.replace(temporary, target)
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary:
+            temporary.unlink(missing_ok=True)
     return target
 
 
@@ -114,12 +123,8 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
             context.get("_notificationAiTimeoutSecondsOverride") if override_present else None,
             self.timeout_seconds,
         )
-        command = (
-            self.command_factory(reasoning_effort=reasoning_effort)
-            if self.command_factory and reasoning_effort
-            else self.command
-        )
-        if not command:
+        command = self.command
+        if not command and not self.command_factory:
             raise RuntimeError("notification AI command is not configured")
         prompt = str(context.get("_notificationAiPreparedPrompt") or "")
         if str(context.get("messageType") or "") == "investmentInsight" and not prompt:
@@ -174,6 +179,11 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
                 if self.cancel_event.is_set():
                     raise RuntimeError("notification AI execution was cancelled before process start")
                 launch_started = time.monotonic()
+                if self.command_factory:
+                    command = self.command_factory(reasoning_effort=reasoning_effort)
+                if not command:
+                    raise RuntimeError("notification AI command is not configured")
+                process_kwargs["shell"] = isinstance(command, str)
                 process = subprocess.Popen(command, **process_kwargs)
                 process_started = time.monotonic()
                 launch_ms = int((process_started - launch_started) * 1000)
@@ -225,13 +235,15 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
             if self.process is process:
                 self.process = None
         output = str(stdout or "").strip()
+        if process.returncode != 0:
+            self.last_execution_spans["terminationReason"] = "process-failed"
+            self.execution_history[-1]["terminationReason"] = "process-failed"
+            raise RuntimeError((stderr or output or "notification AI command failed").strip())
         if self.json_events:
             output, output_diagnostics = codex_execution_output(stdout)
             if not output_diagnostics["turnCompleted"] or output_diagnostics["turnFailed"]:
                 codes = ", ".join(output_diagnostics["errorCodes"])
                 raise RuntimeError("Codex model turn did not complete" + (": " + codes if codes else ""))
-        if process.returncode != 0:
-            raise RuntimeError((stderr or output or "notification AI command failed").strip())
         if not output:
             raise RuntimeError("notification AI command returned empty output")
         source = self.source
@@ -336,13 +348,18 @@ def notification_ai_reviewer_from_settings(
         max_prompt_bytes = 48 * 1024
     if use_codex:
         runtime_dir = notification_ai_runtime_dir()
-        output_schema_path = materialize_notification_ai_output_schema(runtime_dir)
-        command = codex_process_arguments(
-            reasoning_effort=reasoning_effort,
-            working_directory=runtime_dir,
-            output_schema_path=output_schema_path,
-            json_events=True,
-        )
+        default_effort = reasoning_effort
+
+        def command_factory(reasoning_effort=""):
+            # Temporary runtime files can disappear while this worker stays alive.
+            return codex_process_arguments(
+                reasoning_effort=reasoning_effort or default_effort,
+                working_directory=runtime_dir,
+                output_schema_path=materialize_notification_ai_output_schema(runtime_dir),
+                json_events=True,
+            )
+
+        command = command_factory()
         if command:
             try:
                 maximum = max(1, min(8, int(settings.get("localAiMaxConcurrentProcesses") or os.environ.get("ORBIT_LOCAL_AI_MAX_CONCURRENT") or 2)))
@@ -361,12 +378,7 @@ def notification_ai_reviewer_from_settings(
                 timeout,
                 "Codex AI (" + codex_model_label(reasoning_effort) + ")",
                 max_prompt_bytes=max_prompt_bytes,
-                command_factory=lambda reasoning_effort="": codex_process_arguments(
-                    reasoning_effort=reasoning_effort,
-                    working_directory=runtime_dir,
-                    output_schema_path=output_schema_path,
-                    json_events=True,
-                ),
+                command_factory=command_factory,
                 settings=settings,
                 capacity_lock_dir=data_dir() / "local-ai-capacity",
                 capacity_max_concurrent=maximum,

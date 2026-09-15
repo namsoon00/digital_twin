@@ -170,7 +170,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six outcome-repair isolation, immutable experiment restart/rotation
         # and lossless bounded input-storage regressions.
         # Fourteen index-outcome collection, source-clock, replica, retention and atomic history regressions.
-        self.assertLessEqual(total, 1621)
+        # Eight focused regressions cover policy binding, schema loss and outcome recovery.
+        self.assertLessEqual(total, 1629)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -88,6 +88,9 @@ def typedb_preflight_value_matches(actual: object, operator: object, expected: o
     op = str(operator or "==").strip().lower()
     if op in {"exists", "present"}:
         return True
+    if isinstance(expected, dict) and expected.get("field"):
+        # A source-relative comparison must be decided against the native ABox.
+        return None
     expected = typedb_expected_value(expected)
     if expected in (None, "", [], {}):
         # TypeQL emits no predicate for an empty expected value.

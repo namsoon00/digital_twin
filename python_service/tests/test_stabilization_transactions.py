@@ -154,7 +154,8 @@ class TransactionStabilizationTests(StabilizationDatabaseCase):
                                   observed_at="2026-09-10T02:00:00Z", price=110,
                                   payload={"calibrationEligibility": "excluded-criterion-data-gap", "decisionPrice": 100,
                                            "contractFingerprint": "contract:fixture", "horizonMinutes": 60})
-        self.decisions.save_outcome(episode, outcome)
+        with patch("digital_twin.infrastructure.transactions.decision_history.utc_now_iso", return_value="2026-09-10T02:01:00Z"):
+            self.decisions.save_outcome(episode, outcome)
         self.sql("UPDATE investment_decision_outcome_targets SET updated_at = %s WHERE target_id = %s", ("2026-09-10T02:01:00Z", target_id))
         target = self.decisions.pending_outcome_targets(episode.account_id, "2026-09-12T00:00:00Z")[0]
         self.assertEqual(110, target["previousOutcome"]["price"])

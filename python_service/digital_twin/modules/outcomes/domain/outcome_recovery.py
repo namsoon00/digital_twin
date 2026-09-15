@@ -1,11 +1,38 @@
 """Observation repair never substitutes a later quote for the original outcome."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import isfinite
 from typing import Mapping
 
 
 DATA_GAP_ELIGIBILITIES = frozenset({"excluded-contract-data-gap", "excluded-criterion-data-gap"})
+
+
+def benchmark_observation_window(target: Mapping) -> dict:
+    previous = dict(target.get("previousOutcome") or {})
+    payload = dict(previous.get("payload") or {})
+    return {
+        "symbol": str(target.get("benchmarkSymbol") or "").upper(),
+        "baselineAt": target.get("baselineAt") or target.get("decidedAt"),
+        "targetAt": payload.get("targetAt") or target.get("targetAt"),
+        "observedAt": previous.get("observedAt"),
+        "maximumObservationDelayMinutes": target.get("maximumObservationDelayMinutes"),
+    }
+
+
+def outcome_recovery_state(previous: Mapping, incoming: Mapping, stamp: str) -> dict:
+    if not outcome_needs_data(incoming):
+        return {"state": "complete", "attemptCount": 0, "automaticRetryStopped": False}
+    prior = dict((previous.get("payload") or {}).get("evaluationRecovery") or {})
+    attempt = min(8, int(prior.get("attemptCount") or 0) + 1)
+    stopped = attempt >= 8
+    retry_at = datetime.fromisoformat(stamp.replace("Z", "+00:00")) + timedelta(minutes=min(360, 15 * 2 ** (attempt - 1)))
+    return {
+        "state": "unavailable" if stopped else "waiting-data",
+        "reason": "automatic-data-recovery-exhausted" if stopped else "original-observation-data-missing",
+        "attemptCount": attempt, "automaticRetryStopped": stopped,
+        "nextRetryAt": "" if stopped else retry_at.isoformat().replace("+00:00", "Z"),
+    }
 
 
 def outcome_needs_data(value: Mapping) -> bool:

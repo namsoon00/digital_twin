@@ -18,6 +18,7 @@ from digital_twin.modules.outcomes.contracts import (
     observation_facts,
     outcome_evaluation_history,
     outcome_needs_data,
+    outcome_recovery_state,
     validate_outcome_repair,
 )
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
@@ -299,6 +300,8 @@ def save_outcome(
             validate_outcome_repair(previous, payload)
             outcome.payload["evaluationHistory"] = outcome_evaluation_history(previous, utc_now_iso())
             payload = outcome.to_dict()
+        outcome.payload["evaluationRecovery"] = outcome_recovery_state(previous, payload, utc_now_iso())
+        payload = outcome.to_dict()
         episode.status = "observed"
         episode.outcomes = [
             item for item in episode.outcomes if item.outcome_id != outcome.outcome_id

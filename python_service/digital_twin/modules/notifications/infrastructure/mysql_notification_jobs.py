@@ -2007,9 +2007,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         NotificationIngressService.prepare_job(job)
         if not job.text.strip():
             job.last_error = "empty notification content"
+            job.context["deliverySuppressionReason"] = "empty_body"
             return False
         existing = connection.execute("SELECT job_id FROM notification_jobs WHERE job_id = %s", (job.job_id,)).fetchone()
         if existing:
+            job.last_error = "동일한 알림 작업이 이미 등록되어 중복 발송하지 않습니다."
+            job.context["deliverySuppressionReason"] = "duplicate_notification_job"
             return False
         dedupe_value = str(job.dedupe_key or "").strip()[:191]
         if dedupe_value:
@@ -2018,6 +2021,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 (dedupe_value,),
             ).fetchone()
             if existing:
+                job.last_error = "동일한 발송 기준의 알림이 이미 등록되어 중복 발송하지 않습니다."
+                job.context["deliverySuppressionReason"] = "duplicate_notification_key"
                 return False
 
         if self.apply_sent_article_filter_with_connection(connection, job):
@@ -2043,6 +2048,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             self.upsert_job_with_connection(connection, job)
         except Exception as error:
             if _is_duplicate_key_error(error):
+                job.last_error = "동일한 알림이 먼저 등록되어 중복 발송하지 않습니다."
+                job.context["deliverySuppressionReason"] = "duplicate_notification_key"
                 return False
             raise
         self.record_lifecycle_with_connection(connection, job, "received", "accepted")

@@ -74,6 +74,12 @@ def _mark_subject_delivery(
         subject_case.delivery_reason_code = str(reason_code or "")
     if value_class:
         subject_case.delivery_value_class = str(value_class or "")
+    if state == "suppressed":
+        subject_case.delivery_eligible = False
+        subject_case.delivery_value_class = "web-history"
+        actual_code = str(values.get("deliverySuppressionReason") or "")
+        if actual_code:
+            subject_case.delivery_reason_code = actual_code
 
 
 class _EphemeralSubjectDecisionCaseStore:
@@ -805,6 +811,11 @@ class InvestmentReasoningOrchestrator:
         outcome = _mapping(delivery_outcome)
         queued = bool(outcome.get("queued"))
         notification_job_id = str(outcome.get("notificationJobId") or "")
+        reconciliation = _mapping(context.get("decisionReconciliation"))
+        policy = _mapping(reconciliation.get("deliveryPolicy"))
+        reason_code = str(outcome.get("reasonCode") or reconciliation.get("reasonCode") or "")
+        if not queued and reconciliation.get("notificationDecision") == "send" and not outcome.get("reasonCode"):
+            reason_code = "notification_admission_rejected"
         subject_case.notification_job_id = notification_job_id if queued else ""
         _mark_subject_delivery(
             subject_case,
@@ -814,6 +825,9 @@ class InvestmentReasoningOrchestrator:
                 **dict(context or {}),
                 "notificationJobId": notification_job_id if queued else "",
             },
+            eligible=queued,
+            reason_code=reason_code or ("notification_queued" if queued else "notification_admission_rejected"),
+            value_class=str(policy.get("pushValueClass") or "") if queued else "web-history",
         )
         self._persist_subject(subject_case, connection=connection)
         return subject_case
@@ -1025,8 +1039,8 @@ class InvestmentReasoningOrchestrator:
                     SUPPRESSED,
                     explanation_snapshot={"reason": str(reason or "")},
                 )
-                _mark_subject_delivery(subject_case, "suppressed", reason, context)
-                self._persist_subject(subject_case)
+            _mark_subject_delivery(subject_case, "suppressed", reason, context)
+            self._persist_subject(subject_case)
             return subject_case
         if not case_id:
             return None

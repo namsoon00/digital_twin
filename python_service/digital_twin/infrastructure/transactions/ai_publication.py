@@ -1194,11 +1194,17 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                         "reason": str(
                             delivery_job.last_error or projection.get("reason") or ""
                         ),
+                        "reasonCode": str(
+                            (projection.get("reasonCode") or "notification_queued") if accepted else
+                            (delivery_job.context or {}).get("deliverySuppressionReason")
+                            or "notification_admission_rejected"
+                        ),
                     }
                 elif projection:
                     delivery_outcome.update({
                         "status": str(projection.get("status") or "web-only"),
                         "reason": str(projection.get("reason") or ""),
+                        "reasonCode": str(projection.get("reasonCode") or ""),
                     })
                 updated = True
             else:

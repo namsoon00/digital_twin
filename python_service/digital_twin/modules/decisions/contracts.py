@@ -82,6 +82,7 @@ _EXPORTS.update({
     'active_rule_items': ('digital_twin.modules.decisions.domain.notification_ai_context', 'active_rule_items'),
     'ai_gate_enabled_for_message_type': ('digital_twin.modules.decisions.domain.notification_ai_gate_contracts', 'ai_gate_enabled_for_message_type'),
     'ai_insight_handoff': ('digital_twin.modules.decisions.domain.investment_reasoning.ai_insight', 'ai_insight_handoff'),
+    'DECISION_RECONCILIATION_VERSION': ('digital_twin.modules.decisions.domain.investment_reasoning.ai_insight', 'DECISION_RECONCILIATION_VERSION'),
     'all_source_urls_for_context': ('digital_twin.modules.decisions.domain.notification_ai_gate_sources', 'all_source_urls_for_context'),
     'append_unique_text': ('digital_twin.modules.decisions.domain.notification_ai_gate_text', 'append_unique_text'),
     'assess_prompt_evidence': ('digital_twin.modules.decisions.domain.prompt_evidence_admission', 'assess_prompt_evidence'),

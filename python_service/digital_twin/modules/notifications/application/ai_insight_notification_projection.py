@@ -35,6 +35,7 @@ class AIInsightNotificationProjectionService:
                 "version": AI_INSIGHT_NOTIFICATION_PROJECTION_VERSION,
                 "status": "web-only",
                 "reason": _text(reconciliation.get("reason")),
+                "reasonCode": _text(reconciliation.get("reasonCode")),
                 "notificationJob": None,
             }
 
@@ -60,6 +61,7 @@ class AIInsightNotificationProjectionService:
             "version": AI_INSIGHT_NOTIFICATION_PROJECTION_VERSION,
             "status": "notification-requested",
             "reason": _text(reconciliation.get("reason")),
+            "reasonCode": _text(reconciliation.get("reasonCode")),
             "notificationJob": job,
         }
 
@@ -81,6 +83,7 @@ class AIInsightNotificationProjectionService:
                 "queued": bool(outcome.get("queued")),
                 "notificationJobId": _text(outcome.get("notificationJobId")),
                 "reason": _text(outcome.get("reason")),
+                "reasonCode": _text(outcome.get("reasonCode")),
                 "decisionOwner": "application",
                 "persistenceOwner": "infrastructure",
             },

@@ -11,7 +11,7 @@ from digital_twin.modules.decisions.contracts import PUBLISH_TYPEDB
 from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT
 from digital_twin.modules.market_data.contracts import RealtimeMonitor
 from digital_twin.modules.decisions.contracts import enrich_notification_ai_context
-from digital_twin.modules.notifications.domain.notification_ai_delivery import final_ai_delivery_decision
+from digital_twin.modules.notifications.domain.notification_ai_delivery import final_ai_delivery_decision, reconciled_ai_delivery_decision
 from digital_twin.modules.notifications.domain.notification_delivery_explanation import build_customer_delivery_explanation
 from digital_twin.modules.decisions.contracts import NotificationAIValidatedResponse, ai_gate_enabled_for_message_type
 from digital_twin.modules.decisions.contracts import local_validated_ai_response
@@ -550,7 +550,9 @@ class NotificationQueueRunner:
         if str(job.message_type or "") != INVESTMENT_INSIGHT:
             return True
         context = dict(job.context or {})
-        decision = final_ai_delivery_decision(context)
+        decision = reconciled_ai_delivery_decision(
+            context, notification_job_id=job.job_id, account_id=job.account_id,
+        ) or final_ai_delivery_decision(context)
         context["finalAiDeliveryGate"] = decision
         job.context = context
         if decision.get("decision") != "suppress":

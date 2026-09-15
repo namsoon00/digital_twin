@@ -9,6 +9,7 @@ from digital_twin.modules.model_registry.contracts import has_material_delta, re
 from digital_twin.modules.decisions.contracts import investment_decision_actionability
 from digital_twin.modules.decisions.contracts import DecisionDelta
 from digital_twin.modules.decisions.contracts import reasoning_disposition_delivery
+from digital_twin.modules.decisions.contracts import ai_insight_handoff, DECISION_RECONCILIATION_VERSION
 from digital_twin.modules.notifications.contracts import DeliveryPolicyContext, FINAL_AI_DELIVERY_POLICY_VERSION, evaluate_final_decision_delivery
 from digital_twin.modules.reasoning.contracts import REVIEW_LEVEL_RANK
 from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
@@ -49,6 +50,103 @@ def _items(value: object):
     if isinstance(value, (list, tuple, set)):
         return [item for item in value if _text(item)]
     return [_text(value)] if _text(value) else []
+
+
+def reconciled_ai_delivery_decision(
+    context: Mapping[str, object], *, notification_job_id: str, account_id: str,
+) -> Dict[str, object]:
+    """Consume the scoped post-AI policy; never promote a pre-AI send flag.
+
+    The immutable handoff and completed publication bind this policy to one
+    account, subject, candidate generation and outbox reservation. Transport
+    preferences and duplicate/cooldown admission still run independently.
+    Legacy jobs without this contract keep their existing validation path.
+    """
+    payload = _mapping(context)
+    receipt = _mapping(payload.get("decisionReconciliation"))
+    if receipt.get("version") != DECISION_RECONCILIATION_VERSION:
+        return {}
+    handoff = ai_insight_handoff(payload)
+    subject = _mapping(payload.get("investmentSubjectDecisionCase"))
+    candidate = _mapping(subject.get("candidateSet"))
+    subject = {
+        **subject,
+        "candidateSetId": subject.get("candidateSetId") or candidate.get("candidateSetId"),
+        "candidateFingerprint": subject.get("candidateFingerprint") or candidate.get("fingerprint"),
+    }
+    queue = _mapping(payload.get("notificationAiQueue"))
+    provenance = _mapping(payload.get("notificationAIInsightProvenance"))
+    execution = _mapping(payload.get("notificationAiExecutionAudit"))
+    writer = _mapping(payload.get("notificationWriterProvenance"))
+    policy = _mapping(receipt.get("deliveryPolicy"))
+    outcome = _text(_mapping(payload.get("decisionPublication")).get("outcomeKind")).upper()
+    action = _text(_mapping(payload.get("notificationAiValidatedResponse")).get("action")).upper()
+    errors = []
+    if handoff is None or not handoff.valid:
+        errors.append("handoff")
+    else:
+        expected = handoff.to_dict()
+        for key in (
+            "handoffId", "accountId", "symbol", "subjectCaseId", "sourceAboxSnapshotId",
+            "candidateSetId", "candidateFingerprint", "inferenceGenerationId", "reservedNotificationJobId",
+        ):
+            if not _text(receipt.get(key)) or receipt.get(key) != expected.get(key):
+                errors.append(key)
+        for key in (
+            "accountId", "symbol", "subjectCaseId", "sourceAboxSnapshotId",
+            "candidateSetId", "candidateFingerprint", "inferenceGenerationId",
+        ):
+            if subject.get(key) != expected.get(key):
+                errors.append("subject." + key)
+        for key in ("accountId", "symbol", "candidateSetId", "fingerprint", "sourceAboxSnapshotId", "inferenceGenerationId"):
+            expected_key = "candidateFingerprint" if key == "fingerprint" else key
+            if key in candidate and candidate[key] != expected[expected_key]:
+                errors.append("candidate." + key)
+        if (
+            _text(account_id) != handoff.account_id
+            or _text(payload.get("accountId")) != handoff.account_id
+            or _text(payload.get("rawSymbol")).upper() != handoff.symbol
+            or _text(notification_job_id) != handoff.reserved_notification_job_id
+            or _text(queue.get("inferenceGenerationId")) != handoff.inference_generation_id
+        ):
+            errors.append("publication-scope")
+    if not (
+        receipt.get("status") == "reconciled"
+        and policy.get("decision") in {"send", "suppress"}
+        and queue.get("status") == "completed"
+        and _text(queue.get("requestId")) and _text(queue.get("resultId"))
+        and provenance.get("aiAuthored") is True
+        and provenance.get("publicationContractPassed") is True
+        and not _text(provenance.get("contractFailureCode"))
+        and writer.get("aiAuthored") is True
+        and execution.get("status") == "completed"
+        and _mapping(execution.get("fallback")).get("used") is not True
+    ):
+        errors.append("ai-publication")
+    if outcome in {"REVIEW_ONLY", "OBSERVATION"}:
+        contract = (typedb_review_observation_contract(payload) if outcome == "REVIEW_ONLY"
+                    else typedb_context_observation_contract(payload))
+        if not contract or action != "NO_ACTION" or policy.get("publicationOutcome") != outcome:
+            errors.append("actionless-publication")
+    elif (
+        outcome != "FINAL_DECISION"
+        or not action or action == "NO_ACTION"
+        or policy.get("finalAction") != action
+        or execution.get("adoptionState") != "decision-and-narrative-adopted"
+        or reasoning_disposition_delivery(payload).get("decision") == "suppress"
+    ):
+        errors.append("decision-publication")
+    if errors:
+        return {
+            "decision": "suppress", "suppressionReason": "ai_delivery_reconciliation_invalid",
+            "reason": "AI 발행 결과와 발송 대상의 검증 정보가 일치하지 않아 보내지 않습니다.",
+            "validationErrors": sorted(set(errors)),
+        }
+    if receipt.get("notificationDecision") != "send":
+        return {**policy, "decision": "suppress",
+                "suppressionReason": receipt.get("reasonCode") or "notification_admission_rejected",
+                "reason": receipt.get("reason")}
+    return {**policy, "policySource": "decision-reconciliation", "handoffId": receipt["handoffId"]}
 
 
 def explicit_delivery_authorization(context: Mapping[str, object]) -> Dict[str, str]:
@@ -246,6 +344,12 @@ def final_ai_insight_delivery_is_authorized(context: Mapping[str, object]) -> bo
 
     context = _mapping(context)
     reconciliation = _mapping(context.get("decisionReconciliation"))
+    if reconciliation.get("version") == DECISION_RECONCILIATION_VERSION:
+        return reconciled_ai_delivery_decision(
+            context,
+            notification_job_id=_text(reconciliation.get("reservedNotificationJobId")),
+            account_id=_text(context.get("accountId")),
+        ).get("decision") == "send"
     delivery_policy = _mapping(reconciliation.get("deliveryPolicy"))
     execution = _mapping(context.get("notificationAiExecutionAudit"))
     fallback = _mapping(execution.get("fallback"))

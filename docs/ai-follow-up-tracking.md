@@ -1,5 +1,42 @@
 # AI Insight Follow-Up Tracking
 
+## Admission After Reanalysis
+
+A confirmed watch authorizes reanalysis, not a trade. If the resulting
+`REVIEW_ONLY` AI publication passes the narrative/evidence contract and final
+novelty policy, it may enter the outbox as `AI 해석` with `NO_ACTION`. Empirical
+hypothesis qualification remains unchanged; BUY/SELL authority is not granted.
+
+The v2 `decisionReconciliation` binds the policy to the immutable handoff,
+account, symbol, candidate, source ABox, inference generation and reserved job.
+Outbox admission and the final AI dispatch gate reuse that policy after checking
+the completed AI provenance. Generic hypothesis qualification cannot contradict
+an admitted actionless publication. Unchanged/already-analysed transitions,
+failed AI, cross-scope contracts, account preferences and duplicate jobs retain
+their blocking behavior.
+
+`semanticNotificationDecision` / `semanticReasonCode` preserve the AI decision;
+`notificationDecision` / `reasonCode` record actual outbox acceptance. Subject
+delivery records keep the same final reason, separately from hypothesis readiness.
+Only a verified transport receipt proves delivery. Historical blocked insights
+are not automatically resent when the policy is corrected.
+
+### Regression Evidence (2026-09-15)
+
+- The 07:09 UTC Kakao and 07:12 UTC Samsung C&T AI insights had a verified
+  order-book follow-up and a semantic send decision, but generic admission
+  rejected both as `HYPOTHESIS_QUALIFICATION_PENDING`.
+- Read-only admission replay reconstructed the new delivery contract from
+  their stored candidate, AI result and execution audit, preserving the exact
+  original handoff identity. Both passed the corrected admission as
+  `NO_ACTION`; no production rows were changed and no historical messages sent.
+- `test_notification_ai_delivery`, `test_ai_inference_queue` and
+  `test_subject_decision_recovery` cover scope mismatches, action escalation,
+  already-analysed conditions, duplicate insertion, actual suppression reasons,
+  and the notification worker through an in-memory transport receipt. This
+  proves the software path, not a new live investment delivery or investment
+  performance.
+
 ## Ownership
 
 An AI-authored numeric follow-up is a proposal, not a registration receipt.

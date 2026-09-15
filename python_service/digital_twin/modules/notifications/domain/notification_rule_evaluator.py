@@ -6,7 +6,7 @@ from digital_twin.modules.notifications.domain.message_types import INVESTMENT_I
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
 from digital_twin.modules.decisions.contracts import disposition_code_from_context, reasoning_disposition_delivery, reasoning_disposition_requires_ai
-from digital_twin.modules.notifications.domain.notification_ai_delivery import VERIFIED_MARKET_TRANSITION_TRIGGER_IDS, final_ai_insight_delivery_is_authorized, holding_review_baseline_is_deliverable, verified_typedb_direct_delivery_authorization
+from digital_twin.modules.notifications.domain.notification_ai_delivery import VERIFIED_MARKET_TRANSITION_TRIGGER_IDS, final_ai_insight_delivery_is_authorized, holding_review_baseline_is_deliverable, verified_typedb_direct_delivery_authorization, reconciled_ai_delivery_decision
 from digital_twin.modules.notifications.domain.ontology_relation_delivery import relation_delivery_diff, relation_delivery_metadata
 from digital_twin.modules.reasoning.contracts import CHANGE_STATES, CONFLICT_STATES, DATA_STATES, REVIEW_LEVEL_RANK, REVIEW_LEVELS, VALIDATION_STATES
 from digital_twin.modules.notifications.domain.notification_rule_models import DATA_QUALITY_REPEAT_BYPASS_IDS, DEFAULT_SIMILARITY_FIELDS, VOLATILE_VALUE_SUFFIX, NotificationRuleCondition, NotificationRuleConfig, NotificationRuleDecision, SimilarityBypassCondition, clamp_int, default_state_cooldown_minutes
@@ -1015,6 +1015,16 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
     if message_type in INVESTMENT_STATE_GATED_MESSAGE_TYPES:
         if not graph_backed_notification(job.context or {}):
             decision.mark_suppressed("missing_graph_inference", "TypeDB 추론 근거가 없어 투자 판단 알림을 보내지 않습니다.")
+            return decision
+        ai_policy = reconciled_ai_delivery_decision(
+            job.context or {}, notification_job_id=job.job_id, account_id=job.account_id,
+        )
+        if ai_policy:
+            if ai_policy.get("decision") != "send":
+                decision.mark_suppressed(str(ai_policy.get("suppressionReason")), str(ai_policy.get("reason")))
+            else:
+                decision.gate_state = "conditional" if ai_policy.get("publicationOutcome") in {"REVIEW_ONLY", "OBSERVATION"} else "eligible"
+                decision.gate_reason = str(ai_policy.get("reason") or "검증된 AI 발행 정책을 적용합니다.")
             return decision
         context_observation = typedb_context_observation_contract(job.context or {})
         if context_observation:

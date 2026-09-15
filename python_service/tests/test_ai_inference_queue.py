@@ -92,6 +92,55 @@ class RecordingDecisionStore:
 
 
 class AIInferenceQueueTests(unittest.TestCase):
+    def assert_review_followups_reach_outbox_once_with_the_final_reason_preserved(self):
+        self.setUp()
+        from copy import deepcopy
+        from test_notification_ai_delivery import reconciled_review_job
+        from digital_twin.modules.notifications.domain.notification_ai_delivery import final_ai_delivery_decision
+        from digital_twin.modules.notifications.domain.notification.presentation import notification_kind
+        for symbol in ("035720", "028260"):
+            with self.subTest(symbol=symbol):
+                job = reconciled_review_job(symbol)
+                handoff = AIInsightHandoff.create(job.context, job.to_dict())
+                request = AIInferenceRequest.create_for_subject_decision(
+                    job, job.context, handoff, model="test-model", reasoning_effort="max",
+                )
+                self.queue.enqueue_subject_decision(job, request)
+                claimed = self.queue.claim("review-replay", 1, 60)[0]
+                context = dict(claimed.context)
+                context["decisionReconciliation"] = decision_reconciliation(handoff, final_ai_delivery_decision(context))
+                result = AIInferenceResult.create(
+                    claimed, context["notificationAiValidatedResponse"], source="test AI",
+                    validation_state="ready", latency_ms=10, prompt_bytes=100,
+                )
+                self.assertTrue(self.complete_detached(claimed, "review-replay", result, context))
+                saved = self.notifications.get(job.job_id)
+                self.assertIsNotNone(saved, context["decisionReconciliation"])
+                self.assertEqual("pending", saved.status)
+                self.assertEqual("NO_ACTION", saved.context["notificationAiValidatedResponse"]["action"])
+                self.assertEqual("ai-interpretation", notification_kind(saved.message_type, saved.context).key)
+                episode = self.queue.latest_insight_episodes("test-account", symbol, 1)[0]
+                self.assertEqual("verified-investment-insight-condition", episode["reconciliation"]["reasonCode"])
+                self.assertEqual("send", episode["reconciliation"]["notificationDecision"])
+                duplicate = deepcopy(saved)
+                self.assertFalse(self.notifications.enqueue(duplicate))
+                self.assertEqual("duplicate_notification_job", duplicate.context["deliverySuppressionReason"])
+                self.assertEqual("pending", self.notifications.get(job.job_id).status)
+        self.assertEqual(2, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM notification_jobs")[0])
+        delivered = []
+        account = SimpleNamespace(account_id="test-account", quiet_hours_active=lambda *_args: False)
+        notifier = SimpleNamespace(send=lambda message: delivered.append(message) or SimpleNamespace(
+            delivered=True, label="in-memory test transport", metadata={"receiptVerified": True},
+        ))
+        runner = NotificationQueueRunner(
+            self.notifications, SimpleNamespace(load_all=lambda: [account]), lambda _account: notifier,
+        )
+        self.assertEqual(2, runner.run_once(limit=2), runner.last_run_details)
+        self.assertEqual(2, len(delivered), runner.last_run_details)
+        self.assertEqual(0, runner.run_once(limit=2))
+        for symbol in ("035720", "028260"):
+            self.assertEqual(1, len(self.queue.latest_delivered_insight_episodes("test-account", symbol)))
+
     def test_max_reasoning_model_gets_a_long_enough_execution_watchdog(self):
         runner = AIInferenceQueueRunner(
             None,
@@ -297,6 +346,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("satisfied", self.queue.latest_insight_episodes("main", "005930", 1)[0]["insight"]["followUpConditions"][0]["status"])
 
     def test_subject_decision_ai_is_independent_idempotent_and_delivery_gated(self):
+        self.assert_review_followups_reach_outbox_once_with_the_final_reason_preserved()
         self.assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist()
         self.assert_review_only_subject_queues_narrative_without_action_transition()
         self.assert_subject_decision_ai_exists_before_notification_and_promotes_after_completion()
@@ -749,6 +799,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         def reject_delivery(delivery_job, _decision, _settings=None):
             delivery_job.status = "suppressed"
             delivery_job.last_error = "final admission rejected"
+            delivery_job.context["deliverySuppressionReason"] = "duplicate_notification_key"
             return NotificationAdmissionOutcome(
                 accepted=False,
                 persisted=True,
@@ -785,6 +836,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("", reconciliation["notificationJobId"])
         self.assertFalse(reconciliation["deliveryOutcome"]["queued"])
         self.assertEqual("final admission rejected", reconciliation["deliveryOutcome"]["reason"])
+        self.assertEqual("duplicate_notification_key", reconciliation["reasonCode"])
+        self.assertEqual("duplicate_notification_key", reconciliation["deliveryOutcome"]["reasonCode"])
 
     def assert_subject_decision_ai_failure_never_creates_notification(self):
         self.setUp()

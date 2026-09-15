@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 from datetime import datetime, timezone
 
 from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
@@ -7,7 +8,11 @@ from digital_twin.modules.notifications.application.notification.admission impor
 from digital_twin.modules.notifications.domain.notification_ai_delivery import (
     final_ai_delivery_decision,
     pre_ai_deferred_delivery_decision,
+    reconciled_ai_delivery_decision,
+    final_ai_insight_delivery_is_authorized,
 )
+from digital_twin.modules.decisions.contracts import ai_insight_handoff
+from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight import AIInsightHandoff, decision_reconciliation
 from digital_twin.modules.notifications.domain.notification_delivery_explanation import (
     build_customer_delivery_explanation,
 )
@@ -89,6 +94,54 @@ def initial_holding_review_context(ai_status="completed"):
         ),
     }
     return context
+
+
+def reconciled_review_job(symbol="035720"):
+    """Sanitized replay of the two 2026-09-15 order-book follow-up admissions."""
+    from digital_twin.modules.outcomes.domain.follow_up_tracking import registered_follow_up
+    context = initial_holding_review_context()
+    relation = context["ontologyRelationContext"]
+    context.update({"accountId": "test-account", "symbol": symbol, "rawSymbol": symbol,
+                    "investmentSubjectDecisionCaseId": "subject:" + symbol,
+                    "investmentInsightTransition": {"kind": "unchanged-insight", "material": False},
+                    "notificationWriterProvenance": {"aiAuthored": True}})
+    subject = {"subjectCaseId": "subject:" + symbol, "batchCaseId": "batch:replay",
+               "accountId": "test-account", "symbol": symbol, "stage": "REVIEW_ONLY",
+               "sourceAboxSnapshotId": "abox:" + symbol, "inferenceGenerationId": "generation:" + symbol,
+               "candidateSetId": "candidates:" + symbol, "candidateFingerprint": "a" * 64}
+    context["investmentSubjectDecisionCase"] = subject
+    subject["candidateSet"] = {"candidateSetId": subject.pop("candidateSetId"), "fingerprint": subject.pop("candidateFingerprint"),
+                               **{key: subject[key] for key in ("accountId", "symbol", "sourceAboxSnapshotId", "inferenceGenerationId")}}
+    relation.update({key: subject[key] for key in ("sourceAboxSnapshotId", "inferenceGenerationId")})
+    relation["graphStoreInference"].update({key: subject[key] for key in ("sourceAboxSnapshotId", "inferenceGenerationId")})
+    relation["subject"] = {"symbol": symbol, "market": "KR"}
+    previous, current = (15.3359, 63.3049) if symbol == "035720" else (33.2198, 20.9401)
+    registered_at = "2026-09-15T06:50:00Z"
+    watch = registered_follow_up(
+        {"conditionId": "watch:" + symbol, "field": "bidAskImbalance", "threshold": 25,
+         "operator": ">=" if symbol == "035720" else "<=", "purpose": "switch",
+         "baselineValue": previous, "label": "매수·매도 대기 물량 변화"},
+        episode_id="previous-ai:" + symbol, account_id="test-account", symbol=symbol,
+        registered_at=registered_at, owner_kind="ai-insight",
+    )
+    watch.update({"transitionVerified": True, "transitionAt": "2026-09-15T07:03:46Z",
+                  "status": "satisfied", "transitionKind": "confirmed-false-to-true",
+                  "previousMatched": False, "currentMatched": True, "confirmationCount": 2,
+                  "previousValue": previous, "currentValue": current})
+    context["previousInvestmentAIInsightEpisode"] = {
+        "episodeId": "previous-ai:" + symbol, "accountId": "test-account", "symbol": symbol,
+        "createdAt": registered_at, "followUpConditions": [watch],
+    }
+    job = NotificationJob.create("검증용 AI 해석. 매매 지시가 아닙니다.", account_id="test-account",
+                                 message_type="investmentInsight", context=context)
+    handoff = AIInsightHandoff.create(context, job.to_dict())
+    context["investmentAIInsightHandoff"] = handoff.to_dict()
+    context["decisionReconciliation"] = decision_reconciliation(handoff, final_ai_delivery_decision(context))
+    context["notificationAiQueue"] = {"status": "completed", "requestId": "request:" + symbol,
+                                      "resultId": "result:" + symbol, "inferenceGenerationId": subject["inferenceGenerationId"]}
+    context["notificationAIInsightProvenance"] = {"aiAuthored": True, "publicationContractPassed": True}
+    job.context = context
+    return job
 
 
 def watchlist_context(ai_kind="unchanged", material_sources=None):
@@ -291,6 +344,72 @@ def lifecycle_observation_context(outcome="OBSERVATION"):
 
 
 class FinalAIDeliveryTests(unittest.TestCase):
+    def assert_scoped_ai_review_uses_one_policy_without_granting_action_authority(self):
+        from digital_twin.modules.notifications.domain.notification.presentation import notification_kind
+        from digital_twin.modules.notifications.application.notification.eligibility import NotificationDispatchEligibilityService
+        for symbol in ("035720", "028260"):
+            with self.subTest(symbol=symbol):
+                job = reconciled_review_job(symbol)
+                decision = evaluate_notification_rule(job, default_notification_rule("investmentInsight"))
+                self.assertTrue(decision.should_send, decision.gate_reason)
+                self.assertEqual("conditional", decision.gate_state)
+                self.assertEqual("verified-investment-insight-condition", job.context["decisionReconciliation"]["reasonCode"])
+                self.assertTrue(final_ai_insight_delivery_is_authorized(job.context))
+                self.assertEqual("ai-interpretation", notification_kind(job.message_type, job.context).key)
+                runner = NotificationQueueRunner(SuppressionQueue(), {}, lambda _settings: None)
+                self.assertTrue(runner.apply_final_ai_delivery_gate(job))
+                self.assertTrue(NotificationDispatchEligibilityService(SuppressionQueue()).apply_inference_change_gate(job))
+                self.assertEqual("NO_ACTION", job.context["notificationAiValidatedResponse"]["action"])
+                self.assertEqual([], job.context["v2DecisionSynthesis"]["execution_eligible_hypothesis_ids"])
+                for mutate in (
+                    lambda c: c.update(accountId="another-account"),
+                    lambda c: c.update(rawSymbol="another-symbol"),
+                    lambda c: c["investmentSubjectDecisionCase"].update(sourceAboxSnapshotId="another-abox"),
+                    lambda c: c["investmentSubjectDecisionCase"].update(candidateFingerprint="another-candidate"),
+                    lambda c: c["investmentSubjectDecisionCase"]["candidateSet"].update(fingerprint="another-candidate"),
+                    lambda c: c["notificationAiQueue"].update(inferenceGenerationId="another-generation"),
+                    lambda c: c["notificationAIInsightProvenance"].update(publicationContractPassed=False),
+                    lambda c: c["notificationWriterProvenance"].update(aiAuthored=False),
+                    lambda c: c["notificationAiValidatedResponse"].update(action="BUY"),
+                    lambda c: c["notificationAiValidatedResponse"].update(action="HOLD"),
+                    lambda c: c["notificationAiValidatedResponse"].update(action="SELL"),
+                ):
+                    changed = deepcopy(job.context)
+                    mutate(changed)
+                    rejected = reconciled_ai_delivery_decision(changed, notification_job_id=job.job_id, account_id=job.account_id)
+                    self.assertEqual("suppress", rejected["decision"])
+                self.assertEqual("suppress", reconciled_ai_delivery_decision(
+                    job.context, notification_job_id="another-job", account_id=job.account_id,
+                )["decision"])
+                changed = deepcopy(job.context)
+                changed["decisionPublication"]["outcomeKind"] = "FINAL_DECISION"
+                changed["notificationAiExecutionAudit"]["adoptionState"] = "decision-and-narrative-adopted"
+                changed["notificationAiValidatedResponse"]["action"] = "BUY"
+                changed["decisionReconciliation"]["deliveryPolicy"].update(finalAction="BUY", publicationOutcome="FINAL_DECISION")
+                self.assertEqual("suppress", reconciled_ai_delivery_decision(
+                    changed, notification_job_id=job.job_id, account_id=job.account_id,
+                )["decision"])
+
+    def assert_reconciled_review_keeps_unchanged_and_cooldown_results_closed(self):
+        from digital_twin.modules.decisions.contracts import reconciliation_after_delivery
+        job = reconciled_review_job()
+        context = job.context
+        context["previousInvestmentAIInsightEpisode"]["createdAt"] = "2026-09-15T07:12:00Z"
+        policy = final_ai_delivery_decision(context)
+        self.assertEqual("unchanged_investment_insight", policy["suppressionReason"])
+        context["decisionReconciliation"] = decision_reconciliation(ai_insight_handoff(context), policy)
+        decision = evaluate_notification_rule(job, default_notification_rule("investmentInsight"))
+        self.assertFalse(decision.should_send)
+        self.assertEqual("unchanged_investment_insight", decision.to_context()["deliverySuppressionReason"])
+        accepted = reconciled_review_job().context["decisionReconciliation"]
+        for code in ("state_cooldown", "duplicate_notification_job", "ai_failure_web_history"):
+            outcome = {"status": "notification-suppressed", "queued": False, "reasonCode": code, "reason": code}
+            reconciled = reconciliation_after_delivery(accepted, outcome)
+            self.assertEqual(code, reconciled["reasonCode"])
+            self.assertEqual("verified-investment-insight-condition", reconciled["semanticReasonCode"])
+            self.assertEqual(reconciled["reasonCode"], reconciled["deliveryOutcome"]["reasonCode"])
+            self.assertEqual(reconciled, reconciliation_after_delivery(reconciled, outcome) | {"reconciledAt": reconciled["reconciledAt"]})
+
     def _assert_relation_lifecycle_observation_is_web_only_without_user_evidence(self):
         decision = final_ai_delivery_decision(lifecycle_observation_context())
 
@@ -567,6 +686,8 @@ class FinalAIDeliveryTests(unittest.TestCase):
         )
 
     def test_final_ai_watchlist_insight_is_not_revoked_by_initial_baseline_rule(self):
+        self.assert_scoped_ai_review_uses_one_policy_without_granting_action_authority()
+        self.assert_reconciled_review_keeps_unchanged_and_cooldown_results_closed()
         rule = default_notification_rule("investmentInsight")
         context = watchlist_context()
         context["ontologyRelationDiff"] = {

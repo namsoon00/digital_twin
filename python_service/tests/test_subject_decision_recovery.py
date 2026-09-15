@@ -71,7 +71,42 @@ class SubjectStore:
 
 
 class SubjectDecisionRecoveryTests(unittest.TestCase):
+    def assert_subject_delivery_keeps_actual_outbox_reason_separate_from_hypothesis_readiness(self):
+        subject = StaleCase()
+        store = SubjectStore(subject)
+        orchestrator = InvestmentReasoningOrchestrator(Repository(), subject_case_repository=store)
+        context = {
+            "investmentSubjectDecisionCaseId": subject.subject_case_id,
+            "v2DecisionSynthesis": {"disposition_code": "HYPOTHESIS_QUALIFICATION_PENDING"},
+            "decisionReconciliation": {"notificationDecision": "send", "reasonCode": "verified-investment-insight-condition",
+                                       "deliveryPolicy": {"pushValueClass": "verified-investment-insight-condition"}},
+        }
+        for code in ("unchanged_investment_insight", "ai_failure_web_history", "duplicate_notification_key"):
+            result = orchestrator.decision_delivery_reconciled(context, {
+                "queued": False, "notificationJobId": "attempted-job", "reason": code, "reasonCode": code,
+            })
+            self.assertEqual(code, result.delivery_reason_code)
+            self.assertFalse(result.delivery_eligible)
+            self.assertEqual("", result.notification_job_id)
+            self.assertEqual("web-history", result.delivery_value_class)
+        result = orchestrator.decision_delivery_reconciled(context, {
+            "queued": True, "notificationJobId": "queued-job", "reasonCode": "verified-investment-insight-condition",
+        })
+        self.assertTrue(result.delivery_eligible)
+        self.assertEqual("queued-job", result.notification_job_id)
+        self.assertEqual("verified-investment-insight-condition", result.delivery_reason_code)
+        subject.stage = SUBJECT_REVIEW_ONLY
+        subject.publication = SimpleNamespace(outcome_kind=REVIEW_ONLY)
+        context["deliverySuppressionReason"] = "account_delivery_disabled"
+        orchestrator.notification_suppressed(context, "account delivery disabled")
+        self.assertEqual("suppressed", subject.delivery_state)
+        self.assertFalse(subject.delivery_eligible)
+        self.assertEqual("account_delivery_disabled", subject.delivery_reason_code)
+        self.assertEqual(REVIEW_ONLY, subject.publication.outcome_kind)
+        self.assertEqual(SUBJECT_REVIEW_ONLY, subject.stage)
+
     def test_batch_context_suppression_resolves_and_closes_the_scoped_subject(self):
+        self.assert_subject_delivery_keeps_actual_outbox_reason_separate_from_hypothesis_readiness()
         subject = StaleCase()
         subject.subject_case_id = "subject:scoped"
         subject.batch_case_id = "case:batch"

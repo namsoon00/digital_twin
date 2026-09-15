@@ -13,7 +13,7 @@ from digital_twin.modules.decisions.domain.decision_continuity import compact_de
 
 AI_INSIGHT_HANDOFF_VERSION = "investment-ai-insight-handoff-v1"
 AI_INSIGHT_EPISODE_VERSION = "investment-ai-insight-episode-v4"
-DECISION_RECONCILIATION_VERSION = "investment-decision-reconciliation-v1"
+DECISION_RECONCILIATION_VERSION = "investment-decision-reconciliation-v2"
 SUBJECT_DECISION_ORIGIN = "subject-decision"
 
 
@@ -235,9 +235,15 @@ def decision_reconciliation(
     return {
         "version": DECISION_RECONCILIATION_VERSION,
         "status": "reconciled",
+        "handoffId": handoff.handoff_id,
+        "accountId": handoff.account_id,
+        "symbol": handoff.symbol,
         "subjectCaseId": handoff.subject_case_id,
+        "sourceAboxSnapshotId": handoff.source_abox_snapshot_id,
+        "candidateSetId": handoff.candidate_set_id,
         "candidateFingerprint": handoff.candidate_fingerprint,
         "inferenceGenerationId": handoff.inference_generation_id,
+        "reservedNotificationJobId": handoff.reserved_notification_job_id,
         "notificationDecision": "send" if notify else "suppress",
         "notificationJobId": handoff.reserved_notification_job_id if notify else "",
         "reasonCode": _text(
@@ -260,14 +266,22 @@ def reconciliation_after_delivery(
     current = _mapping(reconciliation)
     outcome = _mapping(delivery_outcome)
     queued = bool(outcome.get("queued"))
-    semantic_decision = _text(current.get("notificationDecision")).lower() or "suppress"
+    semantic_decision = _text(current.get("semanticNotificationDecision") or current.get("notificationDecision")).lower() or "suppress"
+    semantic_reason = _text(current.get("semanticReason") or current.get("reason"))
+    semantic_code = _text(current.get("semanticReasonCode") or current.get("reasonCode"))
     actual_job_id = _text(outcome.get("notificationJobId")) if queued else ""
     actual_reason = _text(outcome.get("reason")) or _text(current.get("reason"))
+    actual_code = _text(outcome.get("reasonCode")) or (
+        semantic_code if queued or semantic_decision == "suppress" else "notification_admission_rejected"
+    )
     return {
         **current,
         "semanticNotificationDecision": semantic_decision,
+        "semanticReasonCode": semantic_code,
+        "semanticReason": semantic_reason,
         "notificationDecision": "send" if queued else "suppress",
         "notificationJobId": actual_job_id,
+        "reasonCode": actual_code,
         "reason": actual_reason,
         "deliveryOutcome": {
             "status": _text(outcome.get("status")),
@@ -275,6 +289,7 @@ def reconciliation_after_delivery(
             "notificationJobId": actual_job_id,
             "attemptedNotificationJobId": _text(outcome.get("notificationJobId")),
             "reason": _text(outcome.get("reason")),
+            "reasonCode": actual_code,
         },
         "reconciledAt": utc_now_iso(),
     }

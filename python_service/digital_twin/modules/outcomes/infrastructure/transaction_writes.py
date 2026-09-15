@@ -12,42 +12,65 @@ from digital_twin.modules.outcomes.domain.decision_calibration_input import (
     calibration_hypotheses,
 )
 from digital_twin.modules.outcomes.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION, FOLLOW_UP_OPERATORS
-from digital_twin.modules.outcomes.domain.follow_up_tracking import LIVE_FOLLOW_UP_FIELDS, finite_number, observation_time, registered_follow_up
+from digital_twin.modules.outcomes.domain.follow_up_tracking import (
+    LIVE_FOLLOW_UP_FIELDS, ai_follow_up_registration_admission, finite_number,
+    follow_up_is_registered, follow_up_semantic_key, follow_up_thesis_key,
+    observation_time, registered_follow_up,
+)
 
 
 def register_ai_insight_followups(connection: BoundWriteConnection, episode, stamp, settings=None, decision_episode_id=""):
-    """Called only inside accepted AI publication; never creates a trade decision."""
-    if not episode.ai_authored or not episode.publication_contract_passed or episode.contract_failure_code:
+    """Reconcile validated observation plans independently of duplicate delivery."""
+    admission = ai_follow_up_registration_admission(episode)
+    if not admission["eligible"]:
         return []
+    previous = connection.execute(
+        "SELECT payload_json FROM investment_ai_insight_episodes WHERE account_id = %s AND symbol = %s "
+        "AND JSON_EXTRACT(payload_json, '$.aiAuthored') = true "
+        "AND JSON_EXTRACT(payload_json, '$.publicationContractPassed') = true "
+        "AND (JSON_EXTRACT(payload_json, '$.insight.followUpRegistration.admission.eligible') = true "
+        "OR JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.insight.followUpConditions[0].registration.version')) = 'follow-up-registration-v1') "
+        "ORDER BY created_at DESC, episode_id DESC LIMIT 1",
+        (episode.account_id, episode.symbol),
+    ).fetchone()
+    prior_insight = _json_loads((previous or {}).get("payload_json"), {}).get("insight") or {}
+    prior_ids = [row["conditionId"] for row in prior_insight.get("followUpConditions") or []
+                 if isinstance(row, dict) and follow_up_is_registered(row)][:8]
+    prior_clause = " OR follow_up.condition_id IN (" + ",".join(["%s"] * len(prior_ids)) + ")" if prior_ids else ""
     rows = connection.execute(
-        "SELECT condition_id, episode_id, payload_json FROM investment_decision_follow_ups "
-        "WHERE account_id = %s AND symbol = %s AND "
-        "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.ownerKind')) = 'ai-insight' "
-        "AND (status = 'pending' OR episode_id = %s) FOR UPDATE",
-        (episode.account_id, episode.symbol, episode.episode_id),
+        "SELECT follow_up.condition_id, follow_up.episode_id, follow_up.payload_json, owner.payload_json AS owner_json "
+        "FROM investment_decision_follow_ups follow_up LEFT JOIN investment_ai_insight_episodes owner "
+        "ON owner.episode_id = follow_up.episode_id AND owner.account_id = follow_up.account_id AND owner.symbol = follow_up.symbol "
+        "WHERE follow_up.account_id = %s AND follow_up.symbol = %s AND "
+        "JSON_UNQUOTE(JSON_EXTRACT(follow_up.payload_json, '$.ownerKind')) = 'ai-insight' "
+        "AND (follow_up.status = 'pending' OR follow_up.episode_id = %s" + prior_clause + ") "
+        "ORDER BY follow_up.created_at DESC, follow_up.condition_id FOR UPDATE",
+        (episode.account_id, episode.symbol, episode.episode_id, *prior_ids),
     ).fetchall()
+    now = observation_time(stamp)
+    thesis_key = follow_up_thesis_key(episode.insight)
     existing = {}
     for saved in rows or []:
         payload = _json_loads(saved.get("payload_json"), {})
-        if saved.get("episode_id") == episode.episode_id:
-            existing[str(payload.get("sourceConditionId") or "")] = payload
-            continue
-        payload.update({"status": "superseded", "trackingStatus": "stopped-newer-insight",
-                        "supersededByEpisodeId": episode.episode_id, "supersededAt": stamp})
-        connection.execute(
-            "UPDATE investment_decision_follow_ups SET status = 'superseded', payload_json = %s, updated_at = %s "
-            "WHERE condition_id = %s AND status = 'pending'",
-            (json_dumps(payload), stamp, saved["condition_id"]),
-        )
+        owner_insight = _json_loads(saved.get("owner_json"), {}).get("insight") or {}
+        expiry = observation_time(payload.get("expiresAt"))
+        if (follow_up_is_registered(payload) and payload.get("accountId") == episode.account_id
+                and payload.get("symbol") == episode.symbol
+                and payload.get("status") in {"pending", "satisfied", "invalidated"}
+                and expiry and now and expiry > now
+                and str(payload.get("thesisKey", follow_up_thesis_key(owner_insight))) == thesis_key):
+            existing.setdefault(follow_up_semantic_key(payload), payload)
     registered = []
     if decision_episode_id:
-        rows = connection.execute(
+        decision_rows = connection.execute(
             "SELECT payload_json FROM investment_decision_follow_ups "
             "WHERE account_id = %s AND symbol = %s AND episode_id = %s AND observable = 1 LIMIT 8",
             (episode.account_id, episode.symbol, decision_episode_id),
         ).fetchall()
-        return [_json_loads(row.get("payload_json"), {}) for row in rows or []]
-    for raw in list(episode.insight.get("followUpConditions") or [])[:8]:
+        registered = [_json_loads(row.get("payload_json"), {}) for row in decision_rows or []]
+    proposed_slots = set()
+    seen = set()
+    for raw in [] if decision_episode_id else list(episode.insight.get("followUpConditions") or [])[:8]:
         if not isinstance(raw, dict):
             continue
         source_id = str(raw.get("sourceConditionId") or raw.get("conditionId") or "")
@@ -56,15 +79,45 @@ def register_ai_insight_followups(connection: BoundWriteConnection, episode, sta
                 or raw.get("observable") is not True or raw.get("status") != "pending"
                 or raw.get("field") not in LIVE_FOLLOW_UP_FIELDS
                 or raw.get("operator") not in FOLLOW_UP_OPERATORS or finite_number(raw.get("threshold")) is None
-                or (expiry and expiry <= observation_time(stamp))):
+                or str(raw.get("symbol") or episode.symbol).upper() != episode.symbol
+                or (raw.get("expiresAt") and not expiry) or (expiry and (not now or expiry <= now))):
             continue
-        if source_id in existing:
-            registered.append(existing[source_id])
+        key = follow_up_semantic_key(raw)
+        if key in seen:
             continue
-        row = registered_follow_up(raw, episode_id=episode.episode_id, account_id=episode.account_id,
-                                   symbol=episode.symbol, registered_at=stamp, owner_kind="ai-insight", settings=settings)
-        upsert_decision_followup(connection, row, episode, stamp, _bound_number=finite_number)
+        seen.add(key)
+        proposed_slots.add((key[0], key[3]))
+        row = existing.get(key)
+        if row is None:
+            row = registered_follow_up(raw, episode_id=episode.episode_id, account_id=episode.account_id,
+                                       symbol=episode.symbol, registered_at=stamp, owner_kind="ai-insight", settings=settings)
+            row["thesisKey"] = thesis_key
+            upsert_decision_followup(connection, row, episode, stamp, _bound_number=finite_number)
+        elif expiry and expiry < observation_time(row.get("expiresAt")) and row.get("status") == "pending":
+            row = {**row, "expiresAt": raw["expiresAt"]}
+            connection.execute(
+                "UPDATE investment_decision_follow_ups SET payload_json = %s, updated_at = %s "
+                "WHERE condition_id = %s AND status = 'pending'",
+                (json_dumps(row), stamp, row["conditionId"]),
+            )
         registered.append(row)
+    if admission["preserveExisting"] and not decision_episode_id:
+        for key, row in existing.items():
+            if len(registered) < 8 and key not in seen and (key[0], key[3]) not in proposed_slots:
+                registered.append(row)
+                seen.add(key)
+    retained_ids = {row.get("conditionId") for row in registered}
+    for saved in rows or []:
+        payload = _json_loads(saved.get("payload_json"), {})
+        if saved["condition_id"] in retained_ids or payload.get("status") != "pending":
+            continue
+        payload.update({"status": "superseded", "trackingStatus": "stopped-newer-insight",
+                        "supersededByEpisodeId": episode.episode_id, "supersededAt": stamp})
+        connection.execute(
+            "UPDATE investment_decision_follow_ups SET status = 'superseded', payload_json = %s, updated_at = %s "
+            "WHERE condition_id = %s AND status = 'pending'",
+            (json_dumps(payload), stamp, saved["condition_id"]),
+        )
     return registered
 
 

@@ -594,6 +594,7 @@ def compact_previous_investment_insight_episode(value: object) -> Dict[str, obje
             {key: row.get(key) for key in (
                 "conditionId", "sourceConditionId", "episodeId", "accountId", "symbol", "ownerKind", "registration", "field", "operator", "threshold",
                 "purpose", "label", "onSatisfied", "status", "trackingStatus", "currentValue", "lastSourceAsOf",
+                "trackingBaselineValue", "previousValue",
                 "transitionVerified", "transitionId", "transitionAt", "transitionKind", "confirmationCount", "observationPolicy",
                 "previousMatched", "currentMatched",
             ) if row.get(key) not in (None, "")}

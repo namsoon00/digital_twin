@@ -1238,20 +1238,23 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     result,
                     completed_context,
                 )
-                if bool(delivery_outcome.get("queued")):
+                from digital_twin.modules.outcomes.contracts import ai_follow_up_registration_admission
+                observation_admission = ai_follow_up_registration_admission(insight_episode)
+                if observation_admission["eligible"]:
                     registered = outcomes_writes.register_ai_insight_followups(
                         connection, insight_episode, stamp, self.runtime_settings,
                         decision_episode_id=str(completed_context.get("investmentDecisionEpisodeId") or ""),
                     )
                     packet = {"episodeId": insight_episode.episode_id, "ownerKind": "ai-insight",
-                              "registeredAt": stamp, "conditions": registered}
-                    # The draft is not registration evidence. Attach receipts only
-                    # after the owner rows and outbox have joined this transaction.
+                              "reconciledAt": stamp, "admission": observation_admission, "conditions": registered}
+                    # Observation and delivery have independent admission. The
+                    # validated insight and actual watches still commit together.
                     insight_episode.insight["proposedFollowUpConditions"] = insight_episode.insight.get("followUpConditions") or []
                     insight_episode.insight["followUpConditions"] = registered
+                    insight_episode.insight["followUpRegistration"] = packet
                     completed_context["followUpRegistration"] = packet
                     notification_context["followUpRegistration"] = packet
-                    if isinstance(delivery_job, NotificationJob):
+                    if isinstance(delivery_job, NotificationJob) and bool(delivery_outcome.get("queued")):
                         delivery_job.context["followUpRegistration"] = packet
                         self.notification_store.upsert_job_with_connection(connection, delivery_job)
                 completed_context["investmentAIInsightEpisode"] = insight_episode.to_dict()

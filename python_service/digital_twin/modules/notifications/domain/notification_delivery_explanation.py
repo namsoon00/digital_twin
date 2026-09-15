@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Mapping
 from digital_twin.modules.notifications.domain.context_observation_notifications import context_observation_delivery_decision, review_observation_delivery_decision
 from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT
 from digital_twin.modules.notifications.domain.notification_ai_delivery import first_holding_review_delivery_is_authorized, verified_market_transition_triggers
+from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
 
 
 CUSTOMER_DELIVERY_EXPLANATION_VERSION = "customer-delivery-explanation-v2"
@@ -286,16 +287,7 @@ def _review_observation_cause(context: Mapping[str, object]) -> CustomerDelivery
     insight_transition = _mapping(decision.get("investmentInsightTransition"))
     value_class = _text(decision.get("pushValueClass")).lower()
     trigger = _mapping(decision.get("reasoningDeliveryTrigger"))
-    continuity = _mapping(context.get("decisionContinuityPacket"))
-    follow_ups = [
-        _mapping(item)
-        for item in _items(continuity.get("followUpConditions"))
-        if isinstance(item, Mapping)
-        and item.get("transitionVerified") is True
-        and _text(item.get("transitionAt"))
-        and _text(item.get("status")).lower()
-        in {"satisfied", "invalidated", "expired"}
-    ]
+    follow_ups = follow_up_transition_evidence(context)
     insight = _mapping(context.get("ontologyInsight"))
     semantic = _mapping(insight.get("semanticComponents"))
     material_source_keys = _unique(
@@ -343,12 +335,15 @@ def _review_observation_cause(context: Mapping[str, object]) -> CustomerDelivery
             basis="investment-insight-transition",
         )
     if "verified-follow-up-transition" in authorizations and follow_ups:
+        condition = follow_ups[0]
+        label = _text(condition.get("label")) or "자동 관찰"
         return _cause(
             "verified-review-follow-up-transition",
             "threshold-crossing",
-            "직전 판단에서 확인하기로 한 시장 조건이 새로 바뀌어 보유 근거와 반대 근거를 다시 비교했습니다.",
+            label + " 조건이 실제로 확인돼 이전 투자 관점을 다시 평가했습니다.",
             label="확인 조건 변화",
-            current_value=follow_ups[0].get("status"),
+            previous_value=condition.get("trackingBaselineValue", condition.get("previousValue")),
+            current_value=condition.get("currentValue"),
             observed_at=observed_at,
             source_references=references,
             basis="review-observation-delivery",

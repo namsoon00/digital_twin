@@ -6,14 +6,15 @@ from typing import Dict, Iterable, List, Mapping
 
 from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
+from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
 
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
-CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v4"
+CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v5"
 REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v2"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
-REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v6"
+REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v7"
 
 DELIVERY_POLICY_BLOCKING_DECISIONS = {
     "baseline",
@@ -487,16 +488,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         )
         if _text(item)
     })
-    continuity = _mapping(payload.get("decisionContinuityPacket"))
-    verified_follow_ups = [
-        _mapping(item)
-        for item in continuity.get("followUpConditions") or []
-        if isinstance(item, Mapping)
-        and item.get("transitionVerified") is True
-        and _text(item.get("transitionAt"))
-        and _text(item.get("status")).lower()
-        in {"satisfied", "invalidated", "expired"}
-    ]
+    verified_follow_ups = follow_up_transition_evidence(payload)
     relation = _relation_context(payload)
     notification_intent_rule_ids = sorted({
         _text(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId"))
@@ -600,16 +592,7 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         )
         if _text(item)
     })
-    continuity = _mapping(payload.get("decisionContinuityPacket"))
-    verified_follow_ups = [
-        _mapping(item)
-        for item in continuity.get("followUpConditions") or []
-        if isinstance(item, Mapping)
-        and item.get("transitionVerified") is True
-        and _text(item.get("transitionAt"))
-        and _text(item.get("status")).lower()
-        in {"satisfied", "invalidated", "expired"}
-    ]
+    verified_follow_ups = follow_up_transition_evidence(payload)
     validated = _mapping(payload.get("notificationAiValidatedResponse"))
     assessment = _mapping(validated.get("insightAssessment"))
     insight_transition = _mapping(payload.get("investmentInsightTransition"))

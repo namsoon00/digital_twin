@@ -1,15 +1,16 @@
 import unittest
 from copy import deepcopy
+from types import SimpleNamespace
 
 from digital_twin.modules.outcomes.domain.decision_follow_up import normalize_follow_up_conditions, evaluate_follow_up_conditions
-from digital_twin.modules.outcomes.domain.follow_up_tracking import registered_follow_up, follow_up_is_registered
+from digital_twin.modules.outcomes.domain.follow_up_tracking import registered_follow_up, follow_up_is_registered, ai_follow_up_registration_admission
 from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.modules.decisions.domain.investment_insight_assessment import compact_previous_investment_insight_episode
 from digital_twin.modules.notifications.application.notification_ai_gate_message import customer_follow_up_plan
 from digital_twin.modules.notifications.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
-from digital_twin.modules.notifications.domain.notification_ai_delivery import verified_follow_up_transitions, pre_ai_deferred_delivery_decision
+from digital_twin.modules.notifications.domain.notification_ai_delivery import verified_follow_up_transitions, pre_ai_deferred_delivery_decision, final_ai_delivery_decision
 
 
 START = "2026-09-15T00:00:00Z"
@@ -32,6 +33,26 @@ def condition(baseline=-0.1, threshold=0, field="ma20Distance"):
 
 
 class AIFollowUpTrackingTests(unittest.TestCase):
+    def test_only_valid_novelty_suppression_can_register_without_delivery(self):
+        episode = SimpleNamespace(ai_authored=True, publication_contract_passed=True, contract_failure_code="",
+                                  reconciliation={"status": "reconciled", "notificationDecision": "suppress",
+                                                  "reasonCode": "unchanged_investment_insight",
+                                                  "deliveryOutcome": {"status": "web-only", "queued": False}})
+        self.assertTrue(ai_follow_up_registration_admission(episode)["eligible"])
+        self.assertTrue(ai_follow_up_registration_admission(episode)["preserveExisting"])
+        for key, value in (("ai_authored", False), ("publication_contract_passed", False),
+                           ("contract_failure_code", "invalid-candidate")):
+            bad = deepcopy(episode)
+            setattr(bad, key, value)
+            self.assertFalse(ai_follow_up_registration_admission(bad)["eligible"])
+        for reason in ("", "stale-candidate", "disabled", "failed", "source-not-delivery-authorized"):
+            bad = deepcopy(episode)
+            bad.reconciliation["reasonCode"] = reason
+            self.assertFalse(ai_follow_up_registration_admission(bad)["eligible"])
+        episode.reconciliation["notificationDecision"] = "send"
+        self.assertTrue(ai_follow_up_registration_admission(episode)["eligible"])
+        self.assertFalse(ai_follow_up_registration_admission(episode)["preserveExisting"])
+
     def test_confirmed_observations_ignore_jitter_duplicate_clocks_and_already_true_baseline(self):
         proposal = condition()
         self.assertEqual("unregistered", proposal["trackingStatus"])
@@ -84,6 +105,13 @@ class AIFollowUpTrackingTests(unittest.TestCase):
         plan = customer_follow_up_plan(context, response)
         self.assertIn("새 데이터 2회 연속 확인", plan["tracked"][0])
         self.assertNotIn("자동 관찰 미등록", " ".join(plan["additional"]))
+        response.follow_up_conditions[0]["conditionId"] = "reworded-condition-id"
+        response.follow_up_conditions[0]["label"] = "동일한 가격 회복 조건"
+        plan = customer_follow_up_plan(context, response)
+        self.assertEqual(1, len(plan["tracked"]))
+        self.assertNotIn("자동 관찰 미등록", " ".join(plan["additional"]))
+        omitted = NotificationAIValidatedResponse(action="NO_ACTION", follow_up_conditions=[])
+        self.assertEqual(1, len(customer_follow_up_plan(context, omitted)["tracked"]))
         job = NotificationJob.create("draft", account_id="main", message_type="investmentInsight", context=context)
         NotificationRenderingService.apply_investment_presentation_contract(job)
         self.assertIn("자동 추적 중", job.context["telegramMessage"])
@@ -118,6 +146,29 @@ class AIFollowUpTrackingTests(unittest.TestCase):
                    "preDecisionDeliveryGate": {"reasonCode": "unchanged_graph_inference"}}
         self.assertEqual(1, len(verified_follow_up_transitions(context)))
         self.assertEqual("proceed", pre_ai_deferred_delivery_decision(context)["decision"])
+        from test_notification_ai_delivery import initial_holding_review_context
+        delivery = initial_holding_review_context()
+        delivery.update({"accountId": "main", "rawSymbol": "005930", "previousInvestmentAIInsightEpisode": deepcopy(memory),
+                         "investmentInsightTransition": {"kind": "unchanged-insight", "material": False}})
+        final = final_ai_delivery_decision(delivery)
+        self.assertEqual("send", final["decision"])
+        self.assertEqual("verified-investment-insight-condition", final["pushValueClass"])
+        self.assertEqual(1, final["verifiedFollowUpTransitionCount"])
+        self.assertEqual(1, final["decisionDelta"]["verifiedFollowUpTransitionCount"])
+        from digital_twin.modules.notifications.domain.notification_delivery_explanation import build_customer_delivery_explanation
+        explanation = build_customer_delivery_explanation(message_type="investmentInsight", context=delivery,
+                                                          source_event_name="investment.inference_episode_completed",
+                                                          source_event_id="test:follow-up")
+        self.assertEqual("verified-review-follow-up-transition", explanation["primaryCause"]["code"])
+        self.assertIn(row["conditionId"], explanation["primaryCause"]["sourceReferences"])
+        self.assertEqual(-1, explanation["primaryCause"]["previousValue"])
+        self.assertEqual(1, explanation["primaryCause"]["currentValue"])
+        self.assertIn("20일 평균 가격 회복", explanation["primaryCause"]["summary"])
+        delivery["previousInvestmentAIInsightEpisode"]["createdAt"] = "2026-09-15T00:04:00Z"
+        self.assertEqual("suppress", final_ai_delivery_decision(delivery)["decision"])
+        delivery["previousInvestmentAIInsightEpisode"]["createdAt"] = START
+        delivery["accountId"] = "foreign"
+        self.assertEqual("suppress", final_ai_delivery_decision(delivery)["decision"])
         context["previousInvestmentAIInsightEpisode"]["createdAt"] = "2026-09-15T00:04:00Z"
         self.assertEqual([], verified_follow_up_transitions(context))
         context["accountId"] = "foreign"

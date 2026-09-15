@@ -173,7 +173,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eight focused regressions cover policy binding, schema loss and outcome recovery.
         # Fifteen primary-news-source, numeric provenance, repair budget and storage regressions.
         # Four registered AI follow-up, retention memory and atomic observation regressions.
-        self.assertLessEqual(total, 1648)
+        self.assertLessEqual(total, 1650)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

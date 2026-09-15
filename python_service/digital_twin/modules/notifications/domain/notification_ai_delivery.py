@@ -11,6 +11,7 @@ from digital_twin.modules.decisions.contracts import DecisionDelta
 from digital_twin.modules.decisions.contracts import reasoning_disposition_delivery
 from digital_twin.modules.notifications.contracts import DeliveryPolicyContext, FINAL_AI_DELIVERY_POLICY_VERSION, evaluate_final_decision_delivery
 from digital_twin.modules.reasoning.contracts import REVIEW_LEVEL_RANK
+from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
 
 
 PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v2"
@@ -286,38 +287,7 @@ def final_ai_insight_delivery_is_authorized(context: Mapping[str, object]) -> bo
 
 
 def _verified_follow_up_transitions(context: Mapping[str, object]):
-    from digital_twin.modules.outcomes.contracts import follow_up_is_registered
-    from digital_twin.modules.decisions.contracts import canonical_investment_timestamp
-    packet = _mapping(_mapping(context).get("decisionContinuityPacket"))
-    conditions = list(packet.get("followUpConditions") or [])
-    previous_analysis = _mapping(context.get("previousInvestmentAIInsightEpisode"))
-    analyzed_at = canonical_investment_timestamp(previous_analysis.get("createdAt"))
-    for previous in (previous_analysis, _mapping(context.get("previousDeliveredInvestmentAIInsightEpisode"))):
-        if (previous.get("accountId") != context.get("accountId")
-                or previous.get("symbol") != (context.get("rawSymbol") or context.get("symbol"))):
-            continue
-        for row in previous.get("followUpConditions") or []:
-            transition_at = canonical_investment_timestamp(row.get("transitionAt"))
-            if (follow_up_is_registered(row) and row.get("accountId") == previous.get("accountId")
-                    and row.get("symbol") == previous.get("symbol")
-                    and transition_at and (not analyzed_at or transition_at > analyzed_at)):
-                conditions.append(row)
-    verified = [
-        dict(item)
-        for item in conditions
-        if isinstance(item, Mapping)
-        and bool(item.get("transitionVerified"))
-        and _text(item.get("transitionAt"))
-        and _text(item.get("status")).lower() in {"satisfied", "invalidated", "expired"}
-        and (
-            _text(item.get("status")).lower() == "expired"
-            or (item.get("previousMatched") is False and item.get("currentMatched") is True)
-            or (item.get("transitionKind") == "confirmed-false-to-true"
-                and follow_up_is_registered(item)
-                and int(item.get("confirmationCount") or 0) >= max(2, int(_mapping(item.get("observationPolicy")).get("requiredConfirmations") or 2)))
-        )
-    ]
-    return list({str(item.get("conditionId") or ""): item for item in verified}.values())
+    return follow_up_transition_evidence(context)
 
 
 def verified_follow_up_transitions(context: Mapping[str, object]):

@@ -306,6 +306,115 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assert_subject_decision_queue_coalesces_same_material_meaning()
         self.assert_material_source_and_lifecycle_changes_replace_ai_work()
 
+    def test_duplicate_insight_keeps_watches_without_notifications_or_confirmation_resets(self):
+        from copy import deepcopy
+        from digital_twin.infrastructure.transactions.decision_history_parts.follow_ups import evaluate_follow_up_observation, acknowledge_follow_up_reasoning
+        from digital_twin.infrastructure.event_bus import EventBus
+        from digital_twin.modules.market_data.application.monitoring_service import MonitorRunner
+        from mysql_fixtures import TestEventLog
+        from digital_twin.modules.outcomes.infrastructure import transaction_writes as writes
+        from digital_twin.modules.outcomes.domain.follow_up_tracking import follow_up_is_registered
+        from digital_twin.modules.decisions.domain.investment_insight_assessment import compact_previous_investment_insight_episode
+        from digital_twin.modules.notifications.domain.notification_ai_delivery import verified_follow_up_transitions
+        from test_ai_follow_up_tracking import condition, facts
+
+        def complete(index, proposals, *, valid=True, reason="unchanged_investment_insight", thesis="recovery"):
+            job, _ = self.create_detached_request("subject:duplicate:" + str(index))
+            job.context["reasoningDeliveryTrigger"] = {
+                "material": True, "userObservable": True, "changedFields": ["marketObservationFollowup"],
+                "materialRevisionKeys": ["revision:" + str(index)],
+            }
+            handoff = AIInsightHandoff.from_dict(job.context["investmentAIInsightHandoff"])
+            request = AIInferenceRequest.create_for_subject_decision(
+                job, job.context, handoff, model="gpt-5.6-sol", reasoning_effort="max")
+            self.assertEqual("awaiting-ai-insight", self.queue.enqueue_subject_decision(job, request)["status"])
+            claimed = self.queue.claim("worker-duplicate", 1, 60)[0]
+            result = AIInferenceResult.create(
+                claimed, {"action": "NO_ACTION", "insightAssessment": {"publishable": True, "thesisKey": thesis},
+                          "followUpConditions": deepcopy(proposals)},
+                source="test AI", validation_state="ready", latency_ms=10, prompt_bytes=100)
+            context = {**claimed.context, "notificationAiValidatedResponse": result.response,
+                       "notificationAiExecutionAudit": {"status": "completed", "adoptionState": "narrative-adopted-action-not-applicable" if valid else "executed-not-adopted"},
+                       "notificationWriterProvenance": {"aiAuthored": valid},
+                       "decisionReconciliation": {"status": "reconciled", "notificationDecision": "suppress", "reasonCode": reason}}
+            if index == 1:
+                original = writes.register_ai_insight_followups
+                def fail(*args, **kwargs):
+                    original(*args, **kwargs)
+                    raise RuntimeError("web-only registration rollback")
+                with patch.object(writes, "register_ai_insight_followups", side_effect=fail):
+                    with self.assertRaisesRegex(RuntimeError, "registration rollback"):
+                        self.complete_detached(claimed, "worker-duplicate", result, dict(context))
+                self.assertEqual(0, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM investment_decision_follow_ups")[0])
+                self.assertEqual(0, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM investment_ai_insight_episodes")[0])
+            self.assertTrue(self.complete_detached(claimed, "worker-duplicate", result, context))
+            self.assertIsNone(self.notifications.get(job.job_id))
+            return self.queue.latest_insight_episodes("main", "005930", 1)[0]
+
+        first = complete(1, [condition(-1)])
+        watch = first["insight"]["followUpConditions"][0]
+        self.assertTrue(follow_up_is_registered(watch))
+        self.assertEqual("unchanged-valid-insight", first["insight"]["followUpRegistration"]["admission"]["reason"])
+        start = datetime.fromisoformat(watch["registration"]["registeredAt"].replace("Z", "+00:00"))
+        def observe(value, minute):
+            at = (start + timedelta(minutes=minute)).isoformat().replace("+00:00", "Z")
+            return evaluate_follow_up_observation("main", "005930", facts(value, at), at,
+                                                 _connect=self.queue.connect, utc_now_iso=lambda: at)
+        def persisted():
+            return json.loads(mysql_fetchone(self.seed, "SELECT payload_json FROM investment_decision_follow_ups WHERE condition_id=%s", (watch["conditionId"],))[0])
+        self.assertEqual([], observe(-1, 1))
+        self.assertEqual([], observe(1, 2))
+        confirmed_once = persisted()
+        self.assertEqual(1, confirmed_once["confirmationCount"])
+        reworded = {**condition(1), "conditionId": "new-ai-wording", "label": "회복 여부 확인",
+                    "expiresAt": (start + timedelta(days=30)).isoformat()}
+        second = complete(2, [reworded])
+        self.assertEqual(confirmed_once, persisted())
+        self.assertEqual(confirmed_once, second["insight"]["followUpConditions"][0])
+        self.assertEqual(first["episodeId"], second["insight"]["followUpConditions"][0]["episodeId"])
+        complete(3, [], valid=False)
+        self.assertEqual(confirmed_once, persisted())
+        complete(4, [], reason="disabled")
+        self.assertEqual(confirmed_once, persisted())
+        omitted = complete(5, [])
+        self.assertEqual(confirmed_once, omitted["insight"]["followUpConditions"][0])
+        transitions = observe(1.1, 3)
+        self.assertEqual(1, len(transitions))
+        memory = compact_previous_investment_insight_episode(self.queue.latest_insight_episodes("main", "005930", 1)[0])
+        self.assertEqual(1, len(verified_follow_up_transitions({
+            "accountId": "main", "rawSymbol": "005930", "previousInvestmentAIInsightEpisode": memory})))
+        event_bus = EventBus(recorder=TestEventLog(self.seed).handle)
+        observer = SimpleNamespace(acknowledge_follow_up_reasoning=lambda account, condition_id, transition_id:
+                                   acknowledge_follow_up_reasoning(account, condition_id, transition_id, _connect=self.queue.connect))
+        runner = MonitorRunner([], None, None, None, None, event_publisher=event_bus, investment_outcome_observer=observer)
+        snapshot = SimpleNamespace(account_id="main", generated_at=transitions[0]["transitionAt"])
+        observation = {"followUpObservation": {"transitions": transitions}}
+        runner.publish_follow_up_transition_reasoning(snapshot, observation)
+        runner.publish_follow_up_transition_reasoning(snapshot, observation)
+        self.assertEqual(2, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM domain_events WHERE name IN (%s,%s)",
+                                           ("investment.follow_up_transitioned", "ontology.reasoning_requested"))[0])
+        self.assertEqual(watch["conditionId"], event_bus.published[-1].payload["sourceFacts"][0]["payload"]["conditionId"])
+        self.assertEqual([], observe(2, 4))
+        reached = persisted()
+        complete("6-unadopted", [], valid=False)
+        complete("6-disabled", [], reason="disabled")
+        continued = complete(6, [reworded])
+        self.assertEqual(reached, continued["insight"]["followUpConditions"][0])
+        self.assertEqual(1, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM investment_decision_follow_ups")[0])
+
+        changed = complete(7, [{**condition(1, threshold=2), "conditionId": "threshold-revised"}])
+        replacement = changed["insight"]["followUpConditions"][0]
+        self.assertNotEqual(watch["conditionId"], replacement["conditionId"])
+        self.assertEqual("pending", replacement["status"])
+        self.assertFalse(replacement["trackingBaselineCaptured"])
+        latest = complete(8, [{**condition(1, threshold=3), "conditionId": "threshold-revised"}])
+        self.assertEqual(1, len(latest["insight"]["followUpConditions"]))
+        self.assertEqual("superseded", mysql_fetchone(self.seed, "SELECT status FROM investment_decision_follow_ups WHERE condition_id=%s", (replacement["conditionId"],))[0])
+        changed_thesis = complete(9, [{**condition(1, threshold=3)}], thesis="new-thesis")
+        self.assertNotEqual(latest["insight"]["followUpConditions"][0]["conditionId"], changed_thesis["insight"]["followUpConditions"][0]["conditionId"])
+        for table in ("notification_jobs", "investment_decision_episodes", "notification_delivery_attempts"):
+            self.assertEqual(0, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM " + table)[0])
+
     def assert_material_source_and_lifecycle_changes_replace_ai_work(self):
         job, _request = self.create_detached_request("subject:detached:fingerprint")
         baseline = json.loads(json.dumps(job.context))
@@ -578,6 +687,7 @@ class AIInferenceQueueTests(unittest.TestCase):
                 "inferenceGenerationId": "generation:detached",
                 "notificationDecision": "suppress",
                 "notificationJobId": "",
+                "reasonCode": "unchanged_investment_insight",
                 "reason": "직전 판단과 동일합니다.",
             },
         }
@@ -598,7 +708,7 @@ class AIInferenceQueueTests(unittest.TestCase):
             (request.request_id,),
         )
         self.assertEqual("", row[0])
-        self.assertEqual(0, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM investment_decision_follow_ups")[0])
+        self.assertEqual(1, mysql_fetchone(self.seed, "SELECT COUNT(*) FROM investment_decision_follow_ups")[0])
 
     def assert_subject_decision_notification_admission_is_reflected_in_episode(self):
         self.setUp()

@@ -9,6 +9,7 @@ from digital_twin.modules.market_data.contracts import market_signal_transition_
 
 FOLLOW_UP_REGISTRATION_VERSION = "follow-up-registration-v1"
 FOLLOW_UP_OBSERVATION_POLICY_VERSION = "follow-up-observation-policy-v1"
+FOLLOW_UP_ADMISSION_VERSION = "ai-follow-up-admission-v1"
 LIVE_FOLLOW_UP_FIELDS = frozenset({
     "currentPrice", "priceChangeRate", "ma5Distance", "ma20Distance", "ma60Distance",
     "volume", "volumeRatio", "timeAdjustedVolumeRatio", "tradeStrength", "buyVolume", "sellVolume",
@@ -33,6 +34,33 @@ def observation_time(value):
     except ValueError:
         return None
     return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def ai_follow_up_registration_admission(episode):
+    reconciliation = episode.reconciliation or {}
+    valid = bool(episode.ai_authored and episode.publication_contract_passed
+                 and not episode.contract_failure_code and reconciliation.get("status") == "reconciled")
+    duplicate = bool(
+        reconciliation.get("reasonCode") == "unchanged_investment_insight"
+        and reconciliation.get("notificationDecision") == "suppress"
+        and (reconciliation.get("deliveryOutcome") or {}).get("status") == "web-only"
+    )
+    accepted = reconciliation.get("notificationDecision") == "send"
+    eligible = valid and (accepted or duplicate)
+    return {"version": FOLLOW_UP_ADMISSION_VERSION, "eligible": eligible,
+            "reason": "unchanged-valid-insight" if eligible and duplicate else
+                      "accepted-insight" if eligible else "unaccepted-insight",
+            "preserveExisting": bool(eligible and duplicate)}
+
+
+def follow_up_semantic_key(condition):
+    return (str(condition.get("field") or ""), str(condition.get("operator") or ""),
+            finite_number(condition.get("threshold")), str(condition.get("purpose") or "switch"))
+
+
+def follow_up_thesis_key(insight):
+    return str((insight.get("insightAssessment") or {}).get("thesisKey")
+               or (insight.get("insightTransition") or {}).get("currentThesisKey") or "")
 
 
 def follow_up_is_registered(condition):
@@ -175,16 +203,23 @@ def registered_conditions_for_message(context, conditions):
     context = context or {}
     packet = context.get("followUpRegistration") or {}
     persisted = packet.get("conditions") or (context.get("investmentDecisionEpisode") or {}).get("followUpConditions") or []
-    by_source = {str(row.get("sourceConditionId") or row.get("conditionId")): row
-                 for row in persisted if isinstance(row, dict) and follow_up_is_registered(row)}
+    by_meaning = {follow_up_semantic_key(row): row
+                  for row in persisted if isinstance(row, dict) and follow_up_is_registered(row)}
     result = []
     account_id = str(context.get("accountId") or "")
     symbol = str(context.get("rawSymbol") or context.get("symbol") or "").upper()
     for raw in conditions or []:
         if not isinstance(raw, dict):
             continue
-        source_id = str(raw.get("sourceConditionId") or raw.get("conditionId") or "")
-        row = dict(by_source.get(source_id) or raw)
+        row = dict(by_meaning.get(follow_up_semantic_key(raw)) or raw)
         if follow_up_is_registered(row) and (not account_id or row.get("accountId") == account_id) and (not symbol or row.get("symbol") == symbol):
+            row["sourceConditionId"] = str(raw.get("sourceConditionId") or raw.get("conditionId") or "")
             result.append(row)
+    seen = {row["conditionId"] for row in result}
+    for row in persisted:
+        if (isinstance(row, dict) and follow_up_is_registered(row) and row["conditionId"] not in seen
+                and (not account_id or row.get("accountId") == account_id)
+                and (not symbol or row.get("symbol") == symbol)):
+            result.append(dict(row))
+            seen.add(row["conditionId"])
     return result

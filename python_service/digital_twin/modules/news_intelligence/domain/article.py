@@ -166,6 +166,12 @@ def authoritative_enrichment(payload: Dict[str, object]) -> bool:
     return status in AUTHORITATIVE_ANALYSIS_STATUSES and translation_ready
 
 
+def has_article_source_validation(payload: Dict[str, object]) -> bool:
+    quality = _mapping((payload or {}).get("articleSummaryQuality"))
+    validation = _mapping(quality.get("sourceGrounding"))
+    return bool(validation.get("version") and validation.get("sourceFingerprint") and isinstance(validation.get("passed"), bool))
+
+
 def authoritative_event_takeaway(payload: Dict[str, object]) -> str:
     values = dict(payload or {})
     if not authoritative_enrichment(values):

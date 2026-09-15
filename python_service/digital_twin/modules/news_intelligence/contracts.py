@@ -62,6 +62,7 @@ _EXPORTS.update({
     'claim_policy': ('digital_twin.modules.news_intelligence.domain.investment_evidence_governance', 'claim_policy'),
     'clean_article_summary_noise': ('digital_twin.modules.news_intelligence.domain.news_analysis', 'clean_article_summary_noise'),
     'clean_summary_text': ('digital_twin.modules.news_intelligence.domain.news_ai_analysis', 'clean_summary_text'),
+    'has_article_source_validation': ('digital_twin.modules.news_intelligence.domain.article', 'has_article_source_validation'),
     'compact_evidence_delta_event_payloads': ('digital_twin.modules.news_intelligence.domain.event_payloads', 'compact_evidence_delta_event_payloads'),
     'compact_materiality_assessment_event_payloads': ('digital_twin.modules.news_intelligence.domain.event_payloads', 'compact_materiality_assessment_event_payloads'),
     'compact_research_item_for_event_storage': ('digital_twin.modules.news_intelligence.domain.event_payloads', 'compact_research_item_for_event_storage'),

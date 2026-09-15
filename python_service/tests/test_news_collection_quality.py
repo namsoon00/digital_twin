@@ -19,7 +19,7 @@ from digital_twin.platform.domain.data_pipeline_health import evaluate_news_coll
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import article_claim_sentences
 from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
-from digital_twin.modules.news_intelligence.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_text_parts, local_news_ai_analysis
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_text_parts, local_news_ai_analysis, news_source_contract, apply_news_ai_analysis
 from digital_twin.modules.news_intelligence.domain.news_analysis import article_analysis_facts, article_quality_gate
 from digital_twin.modules.news_intelligence.domain.news_collection_quality import assess_news_collection_admission
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
@@ -38,6 +38,61 @@ from digital_twin.modules.news_intelligence.application.normalize_sources import
 
 
 class NewsCollectionQualityTests(unittest.TestCase):
+    def test_source_repair_worker_respects_cooldown_then_publishes_corrected_analysis(self):
+        evidence = self.evidence({
+            "name": "Apple", "relationScope": "direct", "articleReadStatus": "body",
+            "articleText": "Apple raised annual services revenue guidance after subscription sales improved. "
+                           "Apple expects the new revenue guidance to include growth in subscriptions. "
+                           "Apple will release audited revenue figures with the next quarterly results.",
+            "articleFacts": {"bodyAvailable": True},
+        })
+        evidence.title = "Apple raises annual services revenue guidance"
+        stored = [evidence]
+        calls = []
+
+        def analyze(_target, item):
+            calls.append(item.evidence_id)
+            ids = news_source_contract(item)["primaryEventCandidateIds"]
+            return {
+                "status": "ok", "readScope": "body", "sourceLanguage": "en",
+                "translatedTitleKo": "애플, 연간 서비스 매출 전망 상향", "translationStatus": "complete",
+                "summary": {"oneLineKo": "애플은 구독 판매 개선에 따라 연간 서비스 매출 전망을 상향했다.",
+                            "briefKo": "애플은 구독 판매가 개선되면서 연간 서비스 매출 전망을 상향했다고 밝혔다."},
+                "sourceGrounding": {"headlineStatus": "confirmed", "primaryEventSourceIds": ids,
+                                    "summarySourceIds": ["wrong-article"] if len(calls) == 1 else ids},
+            }
+
+        def save(items):
+            stored[:] = items
+            return len(items)
+
+        runner = NewsAnalysisEnrichmentRunner(
+            SimpleNamespace(latest=lambda **_kwargs: stored, upsert_many=save),
+            NewsAiAnalysisService(analyzer=SimpleNamespace(analyze=analyze)),
+            {"newsAiAnalysisRetryMinutes": "30"},
+        )
+        runner.item_is_fresh = lambda _item: True
+        runner.timeout_seconds = lambda: 0
+        self.assertEqual(1, runner.run_once()["processedCount"])
+        self.assertEqual("source-review", stored[0].raw_payload["aiAnalysis"]["status"])
+        self.assertEqual(0, runner.run_once()["processedCount"])
+        stored[0].raw_payload["aiAnalysis"]["lastExternalAttemptAt"] = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
+        self.assertEqual(1, runner.run_once()["processedCount"])
+        self.assertEqual(2, len(calls))
+        self.assertEqual("ready", stored[0].raw_payload["summaryQualityState"])
+        self.assertEqual("ok", stored[0].raw_payload["aiAnalysis"]["status"])
+
+    def test_exhausted_source_repair_waits_for_changed_source(self):
+        evidence = self.evidence({"articleText": "Apple raised annual services revenue guidance.", "articleFacts": {"bodyAvailable": True}})
+        for _ in range(3):
+            evidence = apply_news_ai_analysis(evidence, {"status": "ok"})
+        runner = NewsAnalysisEnrichmentRunner(None, object(), {})
+        runner.item_is_fresh = lambda _item: True
+        self.assertEqual("source-invalid", evidence.raw_payload["aiAnalysis"]["status"])
+        self.assertFalse(runner.should_retry(evidence))
+        evidence.raw_payload["articleText"] += " Apple also published a revised subscription outlook."
+        self.assertTrue(runner.should_retry(evidence))
+
     def test_recovered_disclosure_cannot_reenter_digest_from_legacy_event(self):
         enqueuer = NewsDigestEnqueuer(None, None, None)
         event = DomainEvent("research_evidence.collected", "NVDA", payload={"alertEligibleItems": [{

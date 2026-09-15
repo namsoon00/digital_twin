@@ -23,6 +23,7 @@ from digital_twin.modules.news_intelligence.domain.news_analysis import (
     relation_scope_is_investable,
     source_trust_state_for_source,
     stock_impact_analysis,
+    target_relevant_article_text,
 )
 from digital_twin.modules.news_intelligence.domain.news_ai_analysis import (
     NewsAiAnalysis,
@@ -33,7 +34,11 @@ from digital_twin.modules.news_intelligence.domain.news_ai_analysis import (
     normalize_ai_analysis,
     summary_quality_payload,
     summary_texts_similar,
+    news_ai_analysis_is_current,
+    news_source_contract,
+    refreshed_article_summary_quality,
 )
+from digital_twin.modules.news_intelligence.domain.article_source_contract import assess_article_source_grounding
 from digital_twin.modules.news_intelligence.domain.article import article_enrichment_revision
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
@@ -44,6 +49,149 @@ from digital_twin.infrastructure.news_ai_analyzer import FallbackNewsAiAnalyzer,
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):
+    def source_contract_evidence(self):
+        return ResearchEvidence(
+            "research:005380:news:source-contract", "005380", "news", "연합뉴스",
+            "현대차 하이브리드 수출 증가", "현대차의 하이브리드 수출이 증가했다.",
+            "https://example.test/export", "2026-09-15T00:00:00Z", "context",
+            raw_payload={
+                "name": "현대차", "relationScope": "direct", "articleReadStatus": "body",
+                "articleText": (
+                    "현대차는 하이브리드 수출이 작년 같은 기간보다 70% 증가했다고 밝혔다. "
+                    "현대차 재무책임자는 과거 실적 발표에서 유럽 전기차 제품군이 부족하다고 설명했다."
+                ),
+                "articleFacts": {"bodyAvailable": True},
+            },
+        )
+
+    def source_contract_answer(self, evidence):
+        contract = news_source_contract(evidence)
+        ids = contract["primaryEventCandidateIds"]
+        return {
+            "status": "ok", "needsReview": False, "readScope": "body",
+            "summary": {
+                "oneLineKo": "현대차의 하이브리드 수출이 전년 같은 기간보다 70% 증가했다.",
+                "briefKo": "현대차의 하이브리드 수출이 전년 같은 기간보다 70% 증가했다고 회사가 밝혔다.",
+            },
+            "sourceGrounding": {"headlineStatus": "confirmed", "primaryEventSourceIds": ids, "summarySourceIds": ids},
+        }
+
+    def test_source_contract_retains_main_event_and_accepts_grounded_summary(self):
+        evidence = self.source_contract_evidence()
+        result = apply_news_ai_analysis(evidence, self.source_contract_answer(evidence))
+        self.assertEqual("ready", result.raw_payload["articleSummaryQuality"]["state"])
+        self.assertTrue(news_ai_analysis_is_current(result))
+        self.assertEqual("ready", refreshed_article_summary_quality(result)["state"])
+        prompt = json.loads(build_news_ai_analysis_prompt(NewsCollectionTarget("005380", "현대차", "", "", ""), evidence))
+        self.assertTrue(prompt["article"]["sourceContract"]["primaryEventCandidateIds"])
+        self.assertIn("70%", prompt["article"]["targetRelevantBodyPreview"])
+
+    def test_background_only_citations_do_not_verify_primary_summary(self):
+        evidence = self.source_contract_evidence()
+        answer = self.source_contract_answer(evidence)
+        contract = news_source_contract(evidence)
+        background = [row["id"] for row in contract["passages"] if "재무책임자" in row["text"]]
+        self.assertTrue(background)
+        answer["sourceGrounding"]["summarySourceIds"] = background
+        self.assertIn("summary-primary-event-omitted", assess_article_source_grounding(answer, contract)["issues"])
+
+    def test_unknown_and_cross_article_passages_cannot_validate_summary(self):
+        for references in (["article-passage:another-article"], 42, "not-a-list", [{"id": "invalid"}]):
+            with self.subTest(references=references):
+                evidence = self.source_contract_evidence()
+                answer = self.source_contract_answer(evidence)
+                answer["sourceGrounding"]["summarySourceIds"] = references
+                result = apply_news_ai_analysis(evidence, answer)
+                self.assertEqual("blocked", result.raw_payload["summaryQualityState"])
+                self.assertFalse(result.raw_payload["newsEligibility"]["alertEligible"])
+                self.assertEqual("source-review", result.raw_payload["aiAnalysis"]["status"])
+
+    def test_number_from_uncited_background_cannot_leak_into_one_line_summary(self):
+        evidence = self.source_contract_evidence()
+        evidence.raw_payload["articleText"] += " 현대차는 과거 투자 계획의 금액을 90억원으로 제시했다."
+        answer = self.source_contract_answer(evidence)
+        answer["summary"]["oneLineKo"] = "현대차의 하이브리드 수출 금액은 90억원으로 집계됐다고 밝혔다."
+        result = apply_news_ai_analysis(evidence, answer)
+        self.assertIn("summary-number-not-grounded", result.raw_payload["articleSummaryQuality"]["issues"])
+        self.assertFalse(result.raw_payload["newsEligibility"]["alertEligible"])
+
+    def test_source_repair_is_bounded_and_reset_by_new_source(self):
+        evidence = self.source_contract_evidence()
+        answer = self.source_contract_answer(evidence)
+        answer["sourceGrounding"]["headlineStatus"] = "mismatch"
+        for attempt in range(1, 4):
+            evidence = apply_news_ai_analysis(evidence, answer)
+            self.assertEqual(attempt, evidence.raw_payload["aiAnalysis"]["sourceRepairAttempts"])
+        self.assertEqual("source-invalid", evidence.raw_payload["aiAnalysis"]["status"])
+        prompt = json.loads(build_news_ai_analysis_prompt(NewsCollectionTarget("005380", "현대차", "", "", ""), evidence))
+        self.assertIn("headline-body-event-mismatch", prompt["repairFeedback"]["issues"])
+        evidence.raw_payload["articleText"] += " 현대차는 다음 달에 지역별 판매 수치를 공개한다고 밝혔다."
+        evidence = apply_news_ai_analysis(evidence, answer)
+        self.assertEqual(1, evidence.raw_payload["aiAnalysis"]["sourceRepairAttempts"])
+
+    def test_generated_summary_is_never_reused_as_source_body(self):
+        evidence = self.source_contract_evidence()
+        evidence.raw_payload.pop("articleText")
+        evidence.raw_payload["aiAnalysis"] = {"status": "ok"}
+        evidence.raw_payload["articleSummaryKo"] = "현대차가 상장을 추진한다는 잘못된 요약"
+        self.assertEqual([], news_source_contract(evidence)["passages"])
+
+    def test_explicit_headline_refutation_is_not_automatically_blocked(self):
+        evidence = self.source_contract_evidence()
+        answer = self.source_contract_answer(evidence)
+        answer["sourceGrounding"]["headlineStatus"] = "contradicted"
+        self.assertTrue(assess_article_source_grounding(answer, news_source_contract(evidence))["passed"])
+
+    def test_primary_export_facts_survive_target_action_ranking(self):
+        target = NewsCollectionTarget("005380", "현대차", "KOSPI", "KRW", "자동차")
+        title = "현대차 하이브리드 대미수출 증가…기아는 유럽 전기차 수출 증가"
+        body = (
+            "현대차 하이브리드 대미수출 증가…기아는 전기차 증가... "
+            "현대차와 기아의 하이브리드 및 전기차 수출이 올해 들어 증가했다. "
+            "특히 현대차가 미국에 보낸 하이브리드차는 작년 동기 대비 70.1％ 급증했다. "
+            "현대차·기아의 친환경차 수출은 올해 1~7월 59만대로 22.3% 증가했다. "
+            "현대차 재무책임자는 과거 실적 발표에서 유럽 소형 전기차 제품이 없다고 말했다. "
+            "그는 해당 제품에 대한 투자 계획을 설명했다."
+            " 다른 기사의 추천 제목... 또 다른 추천 기사… 목록입니다."
+        )
+        selected = target_relevant_article_text(target, title, body)
+        self.assertIn("70.1％ 급증", selected)
+        self.assertIn("22.3% 증가", selected)
+        self.assertLess(selected.index("수출"), selected.index("재무책임자"))
+
+    def test_short_headline_is_not_a_verified_body_passage(self):
+        evidence = self.source_contract_evidence()
+        evidence.raw_payload["articleText"] = evidence.title + " 연합뉴스"
+        self.assertEqual([], news_source_contract(evidence)["passages"])
+
+    def test_source_scope_keeps_adjacent_sales_counterpoint_but_not_market_widgets(self):
+        target = NewsCollectionTarget("TSLA", "Tesla", "NASDAQ", "USD", "")
+        body = ("Tesla China sales at home continue to slide. It's offering new cash incentives through Sept. 30. "
+                "But exports remain strong. U.S. markets close in 4h 53m Other News About Tesla")
+        scoped = target_relevant_article_text(target, "Tesla China sales fall; exports remain strong", body)
+        self.assertIn("exports remain strong", scoped)
+        self.assertIn("Sept. 30", scoped)
+        self.assertNotIn("markets close", scoped)
+
+    def test_publisher_navigation_without_body_cannot_supply_another_story(self):
+        for prefix in ("", "LG전자 교육환경 개선. "):
+            with self.subTest(prefix=prefix):
+                cleaned = clean_article_body_text(
+                    prefix + "Google 검색에서 한국경제 기사를 더 자주 볼 수 있습니다. "
+                    "LG전자 자회사가 나스닥 상장을 추진하며 자금을 조달한다."
+                )
+                self.assertNotIn("상장", cleaned)
+                self.assertNotIn("Google", cleaned)
+
+    def test_sales_incentive_is_not_share_offering(self):
+        self.assertEqual("product", classify_news_event_type(
+            "Tesla Sales In China Continue Negative Streak; Exports Reach Key Level",
+            "Tesla is offering cash incentives to vehicle buyers. China sales fell while exports rose.",
+        ))
+        self.assertEqual("capital_policy", classify_news_event_type(
+            "Company announces a public offering of common stock", "New shares will be issued.",
+        ))
+
     def test_enrichment_revision_ignores_operational_timestamps(self):
         base = {
             "articleSourceRevision": "news-source:stable",
@@ -212,6 +360,11 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertFalse(summary_texts_similar(analysis["briefKo"], analysis["whyItMatters"]))
 
     def test_summary_numeric_grounding_accepts_equivalent_korean_magnitudes_and_ranges(self):
+        fullwidth = summary_quality_payload(
+            "회사의 미국행 하이브리드차 수출은 전년 대비 70.1% 증가했다고 밝혔다.",
+            "미국행 하이브리드차 수출은 작년 동기 대비 70.1％ 증가했다.",
+        )
+        self.assertEqual("ready", fullwidth["state"])
         quality = summary_quality_payload(
             "회사는 전망을 1,080억 달러로 제시했고 총마진은 71~72%, 오차 범위는 50bp라고 밝혔다.",
             "The company gave a $108B outlook and expects gross margin of 71% to 72%, plus or minus 50 basis points.",
@@ -332,6 +485,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             raw_payload={
                 "stockImpactPolarity": "risk",
                 "stockImpactLabel": "악재",
+                "articleText": "Samsung announced a routine operating update without a change to its outlook.",
                 "articleFacts": {
                     "bodyAvailable": True,
                     "stockImpact": "negative",
@@ -345,8 +499,15 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             "status": "ok",
             "impactPolarity": "neutral",
             "impactLabelKo": "중립",
+            "translatedTitleKo": "삼성전자, 정기 운영 업데이트 발표",
+            "translationStatus": "complete",
             "confidence": 0.76,
             "materialityScore": 55,
+            "sourceGrounding": {
+                "headlineStatus": "confirmed",
+                "primaryEventSourceIds": news_source_contract(evidence)["primaryEventCandidateIds"],
+                "summarySourceIds": news_source_contract(evidence)["primaryEventCandidateIds"],
+            },
             "summary": {
                 "oneLineKo": "삼성전자가 정기 운영 업데이트를 발표했습니다.",
                 "briefKo": "주가 방향을 정할 근거가 부족합니다.",

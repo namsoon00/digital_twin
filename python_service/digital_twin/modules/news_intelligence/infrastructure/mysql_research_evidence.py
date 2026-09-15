@@ -10,7 +10,7 @@ from digital_twin.modules.market_data.contracts import parse_datetime
 from digital_twin.modules.news_intelligence.domain.evidence_delta import EvidenceMutation, clean_lifecycle_state, clean_symbol, evidence_content_signature, evidence_delta, evidence_inference_signature, eligible_evidence_set_revision, inference_eligible
 from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
-from digital_twin.modules.news_intelligence.contracts import apply_enrichment_snapshot, article_enrichment_revision, article_source_revision, authoritative_enrichment, authoritative_event_takeaway, clear_resolved_analysis_conflict, enrichment_payload_snapshot
+from digital_twin.modules.news_intelligence.contracts import apply_enrichment_snapshot, article_enrichment_revision, article_source_revision, authoritative_enrichment, authoritative_event_takeaway, clear_resolved_analysis_conflict, enrichment_payload_snapshot, has_article_source_validation
 from digital_twin.modules.news_intelligence.contracts import annotate_news_eligibility
 from digital_twin.modules.news_intelligence.contracts import event_episode_identity, news_event_fingerprint
 from digital_twin.infrastructure.operational_common import json_dumps, research_evidence_from_row
@@ -111,8 +111,11 @@ def merge_derived_evidence_payload(
     )
     if previous_text and incoming_text and previous_text != incoming_text and not same_analysis_source:
         return incoming
+    if has_article_source_validation(incoming):
+        # A new source audit can revoke an older "ok" result or repair a rejection.
+        return incoming
     preserve_authoritative_enrichment = bool(
-        authoritative_enrichment(previous)
+        (authoritative_enrichment(previous) or has_article_source_validation(previous))
         and not authoritative_enrichment(incoming)
         and (
             not str(previous.get("articleSourceRevision") or "").strip()
@@ -986,7 +989,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             if source_revision:
                 payload["articleSourceRevision"] = source_revision
                 analyzer_release = self._news_analysis_release(payload)
-                if not authoritative_enrichment(payload):
+                if not authoritative_enrichment(payload) and not has_article_source_validation(payload):
                     authoritative = self._news_enrichment_snapshot_with_connection(
                         connection,
                         evidence_id,

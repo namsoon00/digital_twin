@@ -193,9 +193,9 @@ EVENT_TYPE_KEYWORDS = {
     "earnings": ["실적", "earnings", "revenue", "profit", "매출", "영업이익", "순이익"],
     "guidance": ["guidance", "전망", "가이던스", "목표주가", "estimate", "forecast"],
     "supply_chain": ["공급", "supply", "supplier", "생산", "생산능력", "증설", "착공", "capex", "fab", "foundry", "라인", "공장"],
-    "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI"],
+    "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI", "판매량", "인도량", "수출", "vehicle sales", "deliveries", "exports"],
     "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "accuse", "accuses", "accused", "stealing", "stolen", "trade secret", "trade secrets", "legal", "litigation", "antitrust", "probe", "investigation", "당국 조사", "금감원 조사", "공정위 조사", "검찰 조사", "조사 착수", "조사에 착수", "조사 대상", "조사받", "조사 받", "세무조사", "압수수색", "수사", "제재"],
-    "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "신주", "신주발행", "new shares", "newly issued", "share issuance", "offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
+    "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "신주", "신주발행", "new shares", "newly issued shares", "share issuance", "stock offering", "share offering", "public offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
     "listing": ["listing", "상장", "ADR", "나스닥", "IPO"],
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
     "crypto_linked": ["bitcoin", "비트코인", "crypto", "암호화폐", "digital asset"],
@@ -203,7 +203,7 @@ EVENT_TYPE_KEYWORDS = {
     "labor": ["임단협", "단체교섭", "임금", "성과급", "상여", "노조", "파업", "collective bargaining", "wage", "salary", "bonus", "union", "strike"],
     "reorganization": ["조직개편", "인사개편", "구조조정", "reorganization", "restructuring"],
 }
-EVENT_CLASSIFICATION_VERSION = "news-event-type-v4-title-weighted"
+EVENT_CLASSIFICATION_VERSION = "news-event-type-v5-primary-event"
 PRICE_COMMENTARY_EDITORIAL_MARKERS = (
     "price target", "analyst rating", "analyst says", "wall street says",
     "목표주가", "투자의견", "증권사 전망", "주식 초고수", "특징주",
@@ -798,6 +798,9 @@ def clean_article_body_text(value: object, limit: int = 5000) -> str:
     if not text:
         return ""
     text = YAHOO_FINANCE_INTRO_RE.sub("", text)
+    widget = re.search(r"\b(?:U\.S\.\s+)?markets?\s+(?:close|open)\s+in\s+\d+[hm]\b", text, re.IGNORECASE)
+    if widget:
+        text = text[:widget.start()].rstrip()
     byline = REUTERS_BYLINE_RE.search(text)
     if byline:
         return compact_text(text[:byline.end()], limit)
@@ -822,7 +825,7 @@ def clean_article_body_text(value: object, limit: int = 5000) -> str:
         "고충처리인",
     ):
         boundary = text.casefold().find(marker.casefold())
-        if boundary >= 80:
+        if boundary >= 0:
             text = text[:boundary]
             break
     return compact_text(strip_korean_news_wire_noise(text), limit)
@@ -1061,6 +1064,8 @@ def is_news_boilerplate_sentence(value: object) -> bool:
     lowered = _lower_text(value)
     if not lowered:
         return False
+    if re.search(r"(?:google|구글)\s*검색에서", lowered) and any(marker in lowered for marker in ("우선적으로 보여", "더 자주 볼 수")):
+        return True
     if re.search(r"(?:재판매\s*(?:및|·|/)?\s*db\s*금지|무단전재\s*(?:및|·|/)?\s*재배포\s*금지)", lowered):
         return True
     if re.match(r"^\s*(?:\([^)]{1,48}=(?:연합뉴스|뉴스1|뉴시스|연합인포맥스)\)\s*)?[가-힣]{2,5}\s*기자\s*=", str(value or "")):
@@ -1166,6 +1171,35 @@ def target_specific_action_sentence(value: object, target: object) -> bool:
     return any(_keyword_in_lowered_text(marker, lowered) for marker in TARGET_SPECIFIC_ACTION_MARKERS)
 
 
+def article_headline_terms(target: object, headline: object) -> List[str]:
+    text = _lower_text(text_without_aliases(clean_article_title(headline), target_aliases(target)))
+    terms = re.findall(r"[가-힣]{2,}|[a-z]{3,}", text)
+    terms.extend(keyword for keywords in EVENT_TYPE_KEYWORDS.values() for keyword in keywords
+                 if article_headline_term_hit(keyword, text))
+    ignored = {"the", "and", "for", "with", "from", "that", "this", "says", "said", "its", "종합", "기자", "관련", "밝혔다"}
+    return _unique_texts(term for term in terms if term not in ignored)
+
+
+def article_headline_term_hit(term: str, text: str) -> bool:
+    # Topic stems are not company aliases: "수출" also occurs in "대미수출".
+    return term.casefold() in text.casefold() if contains_hangul(term) else _keyword_in_lowered_text(term, text.casefold())
+
+
+def article_source_sentences(text: str) -> List[str]:
+    rows = []
+    start = 0
+    for boundary in re.finditer(r"(?<=[.!?。！？])\s+|\n+", text):
+        part = text[start:boundary.start()].strip()
+        if re.search(r"\b(?:(?:[A-Z]\.){2,}|(?:Mr|Ms|Dr|Prof|Inc|Ltd|Corp|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.)$", part):
+            continue
+        if part:
+            rows.append(part)
+        start = boundary.end()
+    if text[start:].strip():
+        rows.append(text[start:].strip())
+    return rows
+
+
 def article_sentence_candidates(
     text: object,
     target: object,
@@ -1173,13 +1207,15 @@ def article_sentence_candidates(
     limit: int = 3,
     headline: object = "",
     require_target: bool = False,
+    sentence_limit: int = 180,
+    preserve_order: bool = False,
 ) -> List[str]:
     analysis = analysis if isinstance(analysis, dict) else {}
     source_text = clean_article_summary_noise(text, 5000)
     if not source_text.strip():
         return []
     source_navigation_heavy = source_text.count("…") + source_text.count("...") >= 2
-    raw_parts = re.split(r"(?<=[.!?。！？])\s+|\n+", source_text)
+    raw_parts = article_source_sentences(source_text)
     terms = [
         *target_aliases(target),
         *sector_topic_keywords(target),
@@ -1191,13 +1227,19 @@ def article_sentence_candidates(
         alias for alias in target_aliases(target)
         if len(str(alias or "").strip()) >= 2 and not str(alias or "").strip().isdigit()
     ]
+    direct_aliases.extend(alias for alias in global_company_aliases(target_symbol(target))
+                          if _keyword_in_lowered_text(alias, _lower_text(headline)))
+    headline_terms = article_headline_terms(target, headline)
+    primary_indices = set()
     ranked: List[Tuple[float, int, str, bool, bool, bool, bool]] = []
     for index, raw in enumerate(raw_parts[:80]):
-        raw_sentence = compact_text(raw, 420)
+        raw_sentence = compact_text(raw, max(420, sentence_limit))
         navigation_headline_run = raw_sentence.count("…") + raw_sentence.count("...") >= 2
         sentence = trim_repeated_headline_tail(raw_sentence, headline)
-        sentence = compact_text(sentence, 180)
+        sentence = compact_text(sentence, sentence_limit)
         if len(sentence) < 24:
+            continue
+        if sentence.endswith(("...", "…")):
             continue
         if is_news_boilerplate_sentence(sentence):
             continue
@@ -1207,6 +1249,9 @@ def article_sentence_candidates(
         direct_target_hit = any(_keyword_in_lowered_text(alias, lowered) for alias in direct_aliases)
         contextual_reference = target_context_reference_sentence(sentence, target)
         target_action = target_specific_action_sentence(sentence, target)
+        headline_hits = sum(1 for term in headline_terms if article_headline_term_hit(term, lowered))
+        if direct_target_hit and headline_hits >= 2 and not contextual_reference and not navigation_headline_run:
+            primary_indices.add(index)
         priority = max(0.0, 12.0 - index * 0.25)
         if direct_target_hit:
             priority += 12.0
@@ -1214,6 +1259,7 @@ def article_sentence_candidates(
             priority += 16.0
         if contextual_reference:
             priority -= 18.0
+        priority += min(36.0, headline_hits * 12.0)
         if navigation_headline_run:
             priority -= 14.0
         priority += sum(4.0 for term in terms if _keyword_in_lowered_text(term, lowered))
@@ -1223,13 +1269,20 @@ def article_sentence_candidates(
     ranked.sort(key=lambda item: (-item[0], item[1]))
     target_action_rows = [item for item in ranked if item[3] and item[6] and not item[4]]
     direct_subject_rows = [item for item in ranked if item[3] and not item[4] and not item[5]]
-    if target_action_rows:
+    if primary_indices:
+        # Generic action words in a background quote must not evict the lead event.
+        context_rows = [item for item in ranked if not item[3] and not item[4] and not item[5]
+                        and any(0 < item[1] - index <= 2 for index in primary_indices)
+                        and (re.match(r"^(?:it\b|its\b|the company\b|but\b|however\b|회사는|특히|반면|이에 따라)", item[2], re.IGNORECASE)
+                             or sum(1 for term in headline_terms if article_headline_term_hit(term, item[2])) >= 2)]
+        ranked = [item for item in ranked if item in direct_subject_rows or item in context_rows]
+    elif target_action_rows:
         ranked = target_action_rows
     elif direct_subject_rows:
         ranked = direct_subject_rows
     elif require_target:
         ranked = []
-    if source_navigation_heavy:
+    if source_navigation_heavy and not primary_indices:
         direct_body_rows = [item for item in ranked if item[3] and item[6] and not item[4]]
         if not direct_body_rows:
             direct_body_rows = [item for item in ranked if item[3] and not item[4] and not item[5]]
@@ -1238,7 +1291,10 @@ def article_sentence_candidates(
         if direct_body_rows:
             ranked = direct_body_rows
     result: List[str] = []
-    for _priority, _index, sentence, _direct_target_hit, _navigation_headline_run, _contextual_reference, _target_action in ranked:
+    selected = ranked[:limit]
+    if preserve_order:
+        selected.sort(key=lambda item: item[1])
+    for _priority, _index, sentence, _direct_target_hit, _navigation_headline_run, _contextual_reference, _target_action in selected:
         if sentence not in result:
             result.append(sentence)
         if len(result) >= limit:
@@ -1270,9 +1326,11 @@ def target_relevant_article_text(
         source,
         target,
         analysis,
-        4,
+        16,
         headline=title,
         require_target=True,
+        sentence_limit=700,
+        preserve_order=True,
     )
     if candidates:
         return compact_text(" ".join(candidates), max(1, int(limit or 1200)))
@@ -1979,6 +2037,7 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
         ("partnership", (r"\bpartners?\s+with\b", r"\bpartnership\b", r"\bstrategic\s+alliance\b", r"파트너십", r"업무협약")),
         ("contract", (r"\bcontract\s+award\b", r"\bsupply\s+agreement\b", r"공급계약", r"수주")),
         ("management_change", (r"\bappoints?\s+(?:a\s+)?(?:new\s+)?ceo\b", r"\bceo\s+(?:resigns?|departure)\b", r"대표이사\s*(?:선임|사임)")),
+        ("product", (r"\b(?:vehicle\s+sales|sales\s+in|deliveries|exports)\b", r"판매량", r"인도량", r"수출")),
     )
     for event_type, patterns in strong_title_actions:
         if any(re.search(pattern, title_text, re.IGNORECASE) for pattern in patterns):

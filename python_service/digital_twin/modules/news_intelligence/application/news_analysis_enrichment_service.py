@@ -19,7 +19,7 @@ from digital_twin.modules.reasoning.contracts import ontology_reasoning_requeste
 from digital_twin.modules.news_intelligence.domain.evidence_delta import evidence_story_key
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
-from digital_twin.modules.news_intelligence.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_body_quality_needs_refresh, article_summary_quality_needs_refresh, article_text_parts, news_ai_analysis_is_current, news_ai_analysis_retryable, refreshed_article_summary_quality, source_language, summary_quality_payload
+from digital_twin.modules.news_intelligence.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_body_quality_needs_refresh, article_summary_quality_needs_refresh, news_ai_analysis_is_current, news_ai_analysis_retryable, refreshed_article_summary_quality, source_language
 from digital_twin.modules.news_intelligence.domain.article import article_source_revision
 from digital_twin.modules.decisions.contracts import assess_prompt_evidence
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
@@ -128,15 +128,12 @@ class NewsAnalysisEnrichmentRunner:
         if str(quality_gate.get("decision") or "") == "exclude":
             return False
         analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
+        if str(analysis.get("status") or "") == "source-invalid" and news_ai_analysis_is_current(item):
+            return False
         language = str(payload.get("sourceLanguage") or source_language(item.title)).lower()
         translation_status = str(payload.get("translationStatus") or "").lower()
         needs_translation = language == "en" and translation_status != "complete"
-        title, body, feed_summary, _read_scope = article_text_parts(item)
-        refreshed_quality = summary_quality_payload(
-            payload.get("articleSummaryKo") or item.summary,
-            " ".join(part for part in [title, body or feed_summary] if part),
-            str(payload.get("name") or payload.get("companyName") or item.symbol),
-        )
+        refreshed_quality = refreshed_article_summary_quality(item)
         needs_summary_review = str(refreshed_quality.get("state") or "") in {"blocked", "needs-review"}
         summary_quality_refresh = article_summary_quality_needs_refresh(item)
         analysis_status = str(analysis.get("status") or "").lower()
@@ -532,7 +529,7 @@ class NewsAnalysisEnrichmentRunner:
                     analysis["lastLocalRepairAt"] = now
                 else:
                     analysis["lastExternalAttemptAt"] = now
-                    if str(analysis.get("status") or "").lower() in {"fallback", "error", "deferred"}:
+                    if str(analysis.get("status") or "").lower() in {"fallback", "error", "deferred", "source-review"}:
                         analysis["nextRetryAfterMinutes"] = self.retry_minutes()
                         retry_job_ids.add(item.evidence_id)
                     else:

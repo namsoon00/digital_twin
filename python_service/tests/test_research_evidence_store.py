@@ -213,6 +213,47 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         self.assertEqual("애플의 가이던스 상향이 핵심", merged["articleFacts"]["eventTakeaway"])
         self.assertEqual("deferred", changed["aiAnalysis"]["status"])
 
+    def test_source_validation_revokes_old_ok_and_survives_collector_replay(self):
+        previous = {
+            "articleText": "Apple reported revenue and raised guidance.",
+            "aiAnalysis": {"status": "ok", "sourceTextHash": "same"},
+            "articleSummaryQuality": {"state": "ready"},
+        }
+        rejected = {
+            **previous,
+            "aiAnalysis": {"status": "source-review", "sourceTextHash": "same", "sourceRepairAttempts": 1},
+            "articleSummaryQuality": {
+                "state": "blocked", "issues": ["headline-body-event-mismatch"],
+                "sourceGrounding": {"version": "article-source-contract-v1", "sourceFingerprint": "same", "passed": False},
+            },
+        }
+        revoked = merge_derived_evidence_payload(previous, rejected)
+        self.assertEqual("source-review", revoked["aiAnalysis"]["status"])
+        replay = {"articleText": previous["articleText"], "aiAnalysis": {"status": "local", "sourceTextHash": "same"}}
+        preserved = merge_derived_evidence_payload(revoked, replay)
+        self.assertEqual("blocked", preserved["articleSummaryQuality"]["state"])
+        self.assertEqual(1, preserved["aiAnalysis"]["sourceRepairAttempts"])
+        corrected = {**rejected, "aiAnalysis": {"status": "ok", "sourceTextHash": "same"},
+                     "articleSummaryQuality": {"state": "ready", "sourceGrounding": {
+                         "version": "article-source-contract-v1", "sourceFingerprint": "same", "passed": True,
+                     }}}
+        self.assertEqual("ready", merge_derived_evidence_payload(revoked, corrected)["articleSummaryQuality"]["state"])
+
+        store = TestResearchEvidenceStore(self.seed)
+        evidence_id = "research:005930:news:source-validation-repair"
+        for payload, expected_status in ((previous, "ok"), (rejected, "source-review"),
+                                         (replay, "source-review"), (corrected, "ok")):
+            with self.subTest(stored_status=expected_status, incoming_status=payload["aiAnalysis"]["status"]):
+                item = self.news_evidence(evidence_id)
+                item.raw_payload = copy.deepcopy(payload)
+                store.upsert_many([item])
+                saved = store.get(evidence_id).raw_payload
+                self.assertEqual(expected_status, saved["aiAnalysis"]["status"])
+                if expected_status == "source-review":
+                    self.assertEqual("blocked", saved["articleSummaryQuality"]["state"])
+                    self.assertEqual(1, saved["aiAnalysis"]["sourceRepairAttempts"])
+        self.assertEqual("ready", store.get(evidence_id).raw_payload["articleSummaryQuality"]["state"])
+
     @staticmethod
     def news_evidence(evidence_id: str, published_at: str = "2026-07-08T01:00:00Z") -> ResearchEvidence:
         return ResearchEvidence(

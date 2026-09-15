@@ -123,6 +123,11 @@ def review_classification(payload: Dict[str, object]) -> tuple:
     reasons: List[str] = []
     if issues.intersection(HARD_BODY_ISSUES):
         reasons.append("content-quality-hard-failure")
+    if any(code.startswith("source-grounding-") or code in {
+        "headline-body-event-mismatch", "headline-event-unconfirmed",
+        "summary-primary-event-omitted", "source-passages-unavailable",
+    } for code in issues):
+        reasons.append("article-source-contract-failed")
     review_text = " ".join(_review_text_values([
         analysis.get("reasoningLimitations"),
         analysis.get("contrastSignals"),

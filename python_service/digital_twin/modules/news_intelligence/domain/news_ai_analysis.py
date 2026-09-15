@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import re
+import unicodedata
 from typing import Dict, Iterable, List, Tuple
 
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
@@ -9,10 +10,11 @@ from digital_twin.modules.decisions.contracts import attach_prompt_evidence_admi
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
 from digital_twin.modules.news_intelligence.public import annotate_evidence_eligibility
 from digital_twin.modules.news_intelligence.contracts import authoritative_event_takeaway
+from digital_twin.modules.news_intelligence.domain.article_source_contract import build_article_source_contract, assess_article_source_grounding
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v16-grounded-event-summary"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v16-grounded-event-summary"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v17-primary-source-contract"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v17-primary-source-contract"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -290,7 +292,7 @@ class NormalizedNumber:
 
 def normalized_numeric_values(value: object) -> List[NormalizedNumber]:
     """Normalize English and Korean magnitude words for summary grounding."""
-    text = str(value or "")
+    text = unicodedata.normalize("NFKC", str(value or ""))
     values: List[NormalizedNumber] = []
     multipliers = {
         "trillion": 1_000_000_000_000.0,
@@ -448,9 +450,9 @@ def has_mojibake(value: object) -> bool:
     return "\ufffd" in text or bool(re.search(r"(?:Ã.|Â.|â..){2,}", text))
 
 
-def summary_quality_payload(summary: object, source_text: object, target_name: object = "") -> Dict[str, object]:
+def summary_quality_payload(summary: object, source_text: object, target_name: object = "", source_grounding: Dict[str, object] = None) -> Dict[str, object]:
     """Keep display-quality checks separate from investment claim verification."""
-    text = clean_summary_text(summary, 520)
+    text = clean_summary_text(summary, 2400)
     source = str(source_text or "")
     issues: List[str] = []
     advisories: List[str] = []
@@ -484,6 +486,9 @@ def summary_quality_payload(summary: object, source_text: object, target_name: o
         # The check is advisory because company aliases can differ across markets.
         advisories.append("summary-target-name-omitted")
     blocking = {"summary-missing", "text-encoding-corrupt", "summary-boilerplate", "summary-number-not-grounded"}
+    if source_grounding is not None and source_grounding.get("passed") is not True:
+        issues.extend(source_grounding.get("issues") or ["source-grounding-missing"])
+        blocking.update(source_grounding.get("issues") or ["source-grounding-missing"])
     return {
         "state": "ready" if not issues else ("blocked" if blocking.intersection(issues) else "needs-review"),
         "passed": not bool(blocking.intersection(issues)),
@@ -500,6 +505,7 @@ def summary_quality_payload(summary: object, source_text: object, target_name: o
             "documentMetadata": [number.to_dict() for number in document_metadata_numbers[:4]],
         },
         "checkedAtVersion": NEWS_AI_ANALYSIS_VERSION,
+        **({"sourceGrounding": source_grounding} if source_grounding is not None else {}),
     }
 
 
@@ -733,8 +739,7 @@ def article_text_parts(evidence: ResearchEvidence) -> Tuple[str, str, str, str]:
         payload.get("articleSourceSummary")
         or facts.get("feedSummaryPreview")
         or payload.get("normalizedSummary")
-        or evidence.summary
-        or payload.get("articleSummaryKo")
+        or (evidence.summary if not payload.get("aiAnalysis") and not payload.get("articleSummaryKo") else "")
         or "",
         1600,
     )
@@ -764,7 +769,7 @@ def target_scoped_article_text(
         primary_text,
         "",
         {"eventType": str(event_type or "")},
-        1200,
+        3200,
     )
     return scoped_text or primary_text
 
@@ -804,6 +809,7 @@ class NewsAiAnalysis:
     validation_reason_ko: str = ""
     needs_review: bool = False
     reasoning_limitations: List[str] = field(default_factory=list)
+    source_grounding: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -840,6 +846,7 @@ class NewsAiAnalysis:
             "validationReasonKo": compact_text(self.validation_reason_ko, 360),
             "needsReview": bool(self.needs_review),
             "reasoningLimitations": list(self.reasoning_limitations or []),
+            "sourceGrounding": dict(self.source_grounding or {}),
         }
 
 
@@ -977,6 +984,7 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         ),
         needs_review=needs_review,
         reasoning_limitations=unique_texts(payload.get("reasoningLimitations") or payload.get("reasoning_limitations") or fallback.reasoning_limitations, 5),
+        source_grounding=dict(payload.get("sourceGrounding") or {}) if isinstance(payload.get("sourceGrounding"), dict) else {},
     )
 
 
@@ -1426,17 +1434,41 @@ def news_ai_analysis_retryable(evidence: ResearchEvidence) -> bool:
     analysis = payload.get("aiAnalysis") if isinstance(payload, dict) else {}
     if not isinstance(analysis, dict):
         return False
-    return str(analysis.get("status") or "").strip().lower() in {"fallback", "deferred", "error", "local"}
+    return str(analysis.get("status") or "").strip().lower() in {"fallback", "deferred", "error", "local", "source-review"}
 
 
 def refreshed_article_summary_quality(evidence: ResearchEvidence) -> Dict[str, object]:
     payload = analysis_payload_from_evidence(evidence)
-    title, body, feed_summary, _read_scope = article_text_parts(evidence)
-    return summary_quality_payload(
-        payload.get("articleSummaryKo") or evidence.summary,
-        " ".join(part for part in [title, body or feed_summary] if part),
-        payload.get("name") or payload.get("companyName") or evidence.symbol,
-    )
+    return news_summary_quality(evidence, payload.get("aiAnalysis") or {}, payload.get("articleSummaryKo") or evidence.summary)
+
+
+def news_summary_quality(evidence: ResearchEvidence, analysis: Dict[str, object], fallback_summary: str = "") -> Dict[str, object]:
+    payload = analysis_payload_from_evidence(evidence)
+    title, body, feed_summary, _scope = article_text_parts(evidence)
+    grounding = news_source_grounding_quality(evidence, analysis)
+    source = " ".join(part for part in [title, body or feed_summary] if part)
+    if grounding is not None:
+        references = (analysis.get("sourceGrounding") or {}).get("summarySourceIds") or []
+        references = references if isinstance(references, list) else []
+        source = " ".join(row["text"] for row in news_source_contract(evidence)["passages"] if row["id"] in references)
+    summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+    # Both rendered summary fields and the supporting facts need numeric grounding.
+    text = " ".join(str(value) for value in [summary.get("oneLineKo"), summary.get("briefKo"), *(summary.get("keyTakeaways") or [])] if value)
+    return summary_quality_payload(text or fallback_summary, source, payload.get("name") or evidence.symbol, grounding)
+
+
+def news_source_grounding_quality(evidence: ResearchEvidence, analysis: Dict[str, object]):
+    # Deterministic/local drafts are not externally verified summaries.
+    if str(analysis.get("status") or "").lower() not in {"ok", "complete", "completed", "success", "verified", "source-review", "source-invalid"}:
+        return None
+    return assess_article_source_grounding(analysis, news_source_contract(evidence))
+
+
+def news_source_contract(evidence: ResearchEvidence) -> Dict[str, object]:
+    payload = analysis_payload_from_evidence(evidence)
+    target = NewsCollectionTarget(evidence.symbol, str(payload.get("name") or payload.get("companyName") or evidence.symbol), "", "", "")
+    title, body, feed_summary, _scope = article_text_parts(evidence)
+    return build_article_source_contract(target, title, body, feed_summary)
 
 
 def article_summary_quality_needs_refresh(evidence: ResearchEvidence) -> bool:
@@ -1468,6 +1500,7 @@ def refresh_article_summary_quality(evidence: ResearchEvidence) -> ResearchEvide
 
 def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[str, object]) -> ResearchEvidence:
     payload = dict(evidence.raw_payload or {})
+    previous_analysis = dict(payload.get("aiAnalysis") or {})
     # Re-enrichment also repairs legacy rows collected before the article
     # boundary filter existed, so stale publisher chrome cannot reappear in a
     # later notification source snapshot.
@@ -1488,7 +1521,7 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         payload.get("articleSourceSummary")
         or original_facts.get("feedSummaryPreview")
         or payload.get("normalizedSummary")
-        or evidence.summary,
+        or (evidence.summary if not payload.get("aiAnalysis") and not payload.get("articleSummaryKo") else ""),
         1600,
     )
     target_name = str(
@@ -1508,6 +1541,9 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     analysis = normalize_ai_analysis(analysis_payload, fallback)
     analysis_dict = analysis.to_dict()
     title, body, feed_summary, _read_scope = article_text_parts(evidence)
+    analysis_dict["version"] = NEWS_AI_ANALYSIS_VERSION
+    analysis_dict["promptVersion"] = NEWS_AI_PROMPT_VERSION
+    analysis_dict["sourceTextHash"] = source_text_hash(title, body, feed_summary)
     classified_event_type = news_domain.classify_news_event_type(title, body or feed_summary)
     payload["eventType"] = classified_event_type
     payload["eventClassificationVersion"] = news_domain.EVENT_CLASSIFICATION_VERSION
@@ -1605,12 +1641,18 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     # body read from a title/RSS interpretation.
     payload["articleReadStatus"] = "body" if str(analysis_dict.get("readScope") or "") == "body" else "feed-summary"
     payload["articleSummaryKo"] = summary.get("briefKo") or summary.get("oneLineKo") or payload.get("articleSummaryKo") or evidence.summary
-    payload["articleSummaryQuality"] = summary_quality_payload(
-        payload["articleSummaryKo"],
-        " ".join(part for part in [title, scoped_article_text or body or feed_summary] if part),
-        payload.get("name") or evidence.symbol,
-    )
+    payload["articleSummaryQuality"] = news_summary_quality(evidence, analysis_dict, payload["articleSummaryKo"])
     payload["summaryQualityState"] = payload["articleSummaryQuality"].get("state") or "needs-review"
+    grounding = payload["articleSummaryQuality"].get("sourceGrounding") or {}
+    if grounding and payload["articleSummaryQuality"].get("issues"):
+        previous = previous_analysis
+        fingerprint = str(grounding.get("sourceFingerprint") or "") + ":" + NEWS_AI_ANALYSIS_VERSION
+        attempts = int(previous.get("sourceRepairAttempts") or 0) if previous.get("sourceRepairFingerprint") == fingerprint else 0
+        analysis_dict["sourceRepairAttempts"] = attempts + 1
+        analysis_dict["sourceRepairFingerprint"] = fingerprint
+        analysis_dict["sourceRepairIssues"] = list(payload["articleSummaryQuality"].get("issues") or [])
+        analysis_dict["sourceRepairDetails"] = payload["articleSummaryQuality"].get("numericGrounding", {}).get("unmatched") or []
+        analysis_dict["status"] = "source-invalid" if attempts >= 2 else "source-review"
     if (
         str(analysis_dict.get("status") or "").lower() == "deferred"
         and str(payload.get("translationStatus") or "").lower() in {"complete", "not-required", "unavailable"}
@@ -1734,10 +1776,11 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     return result
 
 
-def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: ResearchEvidence) -> str:
+def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: ResearchEvidence, repair_feedback: Dict[str, object] = None) -> str:
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
     title, body, feed_summary, read_scope = article_text_parts(evidence)
+    source_contract = news_source_contract(evidence)
     scoped_article_text = target_scoped_article_text(
         target,
         title,
@@ -1810,6 +1853,12 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "validationReasonKo": "which source or data condition limits use of this analysis",
             "needsReview": True,
             "reasoningLimitations": ["missing data"],
+            "sourceGrounding": {
+                "headlineStatus": "confirmed|contradicted|unconfirmed|mismatch",
+                "primaryEventSourceIds": ["exact passage ID supporting the main event, not a background quote"],
+                "summarySourceIds": ["all exact passage IDs supporting oneLineKo, briefKo AND every keyTakeaway"],
+                "reasonKo": "제목의 중심 사건과 요약의 관계 및 반증 여부",
+            },
         },
         "guardrails": [
             "Do not create buy, sell, add, trim, or hold decisions.",
@@ -1818,6 +1867,11 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "Use targetRelevantBodyPreview as the factual boundary for target-specific claims, keyNumbers, and stock impact. Ignore an unrelated company, amount, or policy quote elsewhere in a syndicated article.",
             "Preserve article.originalTitle exactly. For English titles, produce translatedTitleKo as a faithful Korean headline, not a stock recommendation.",
             "summary.oneLineKo and summary.briefKo must summarize article facts first; keep stock impact reasoning in rationaleKo.",
+            "Identify the headline's main event using article.sourceContract passages. Cite their exact IDs in sourceGrounding. A title is not a body passage. Never invent a passage ID.",
+            "The primaryEventCandidateIds are lexical candidates, not proof. Read them in context. Preserve the lead event, its period and important figures; place older quotes and counterpoints after it instead of replacing it with them.",
+            "Cite the source for every factual number across oneLineKo, briefKo and keyTakeaways in summarySourceIds, including auxiliary totals and previous-period comparisons. Numbers elsewhere in an uncited passage do not validate those fields.",
+            "If the body describes another event, set headlineStatus=mismatch. If it cannot establish the headline event, set unconfirmed. If the article explicitly disproves its headline premise, set contradicted and summarize that refutation with its source IDs.",
+            "A mismatch, unconfirmed main event, or missing source citation must set needsReview=true and decisionInlineEligible=false. Do not mark the summary verified just because the company name matches.",
             "summary.briefKo must state who did what, the material number or condition when present, and why the event matters; do not merely name an event category.",
             "Do not repeat the same fact across oneLineKo, briefKo, keyTakeaways, whyItMatters, and watchPoints. Each field has a distinct role: core fact, supporting facts, investment impact, and verification condition.",
             "whyItMatters must explain the causal path to revenue, cost, valuation, regulation, liquidity, or investor sentiment. Do not restate the headline.",
@@ -1855,6 +1909,7 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "url": evidence.url,
             "publishedAt": evidence.published_at,
             "articleFacts": prompt_facts,
+            "sourceContract": source_contract,
             "existingAnalysis": {
                 "relationScope": payload.get("relationScope"),
                 "eventType": payload.get("eventType"),
@@ -1866,4 +1921,11 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             },
         },
     }
+    if repair_feedback is None:
+        previous = payload.get("aiAnalysis") or {}
+        if previous.get("sourceRepairIssues"):
+            repair_feedback = {"issues": list(previous["sourceRepairIssues"]), "unmatchedNumbers": previous.get("sourceRepairDetails") or [], "previousSummary": previous.get("summary") or {}}
+    if repair_feedback:
+        prompt_payload["repairFeedback"] = repair_feedback
+        prompt_payload["guardrails"].append("The previous answer failed source validation. Re-read the same source passages and correct the listed issues; never change evidence or fabricate missing facts to pass validation.")
     return json.dumps(prompt_payload, ensure_ascii=False, indent=2)

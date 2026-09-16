@@ -198,7 +198,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "v16-frozen-rule-subjects",
+            "v17-comparable-financial-ratios",
             PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
         )
         self.assertEqual(

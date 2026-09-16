@@ -15,7 +15,7 @@ from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOn
 from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
 
 
-COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v3-financial-lineage"
+COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v4-paired-financial-ratios"
 FINANCIAL_PERIOD_LIMITS = {"annual": 3, "interim": 2, "quarterly": 3}
 MAX_EXECUTIVE_ROLES = 8
 MAX_COMPANY_RELATIONSHIPS = 12
@@ -64,6 +64,7 @@ def _financial_properties(row: Mapping[str, object], **extra) -> Dict[str, objec
         "financialReportingVersion": row.get("financialReportingVersion") or "legacy-unverified",
         "metricProvenance": dict(row.get("metricProvenance") or {}),
         "comparisonEvidence": dict(row.get("comparisonEvidence") or {}),
+        "derivedMetricEvidence": dict(row.get("derivedMetricEvidence") or {}),
         "qualityIssues": list(row.get("qualityIssues") or []),
         **{
             field: number(row.get(field))

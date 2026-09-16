@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 
 PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = (
-    "portfolio-graph-assembly-cache-v16-frozen-rule-subjects"
+    "portfolio-graph-assembly-cache-v17-comparable-financial-ratios"
 )
 
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = (

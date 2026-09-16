@@ -33,9 +33,16 @@ authorization or empirically qualify an untested hypothesis.
   Each metric/comparison retains its provider, reporting period, basis,
   source URL, receipt and exclusions. Official coverage of a company does not
   make its secondary-vendor valuation multiples official.
+- Preserve a valid same-period ratio computed from one provider when an
+  official observation replaces only its numerator or denominator. Retain
+  both original inputs and the formula; never compute a cross-provider ratio
+  or discard valid positive evidence merely because an official field arrived.
 - The stock's current financial ABox state and AI `financialEvidence` packet
   share this contract. Compression must retain the comparison packet; numeric
   evidence IDs allow AI to cite it instead of citing only a rule title.
+- Keep historical comparison-quality issues in storage for audit. The current
+  AI context includes current-period exclusions and provider parsing errors,
+  not historical anomalies mislabeled as current financial weakness.
 - A financial evidence revision can trigger one fresh insight, even when its
   directional label is unchanged. Reused evidence is background, not a newly
   published filing. Invalid AI output cannot use this novelty path to publish.

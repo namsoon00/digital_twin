@@ -721,7 +721,7 @@ def build_company_knowledge(
             for item in executives
             if isinstance(item, Mapping)
         ),
-        "capital": bool(capital) and all(bool((latest.get("metricProvenance") or {}).get(field, {}).get("official"))
+        "capital": any(value is not None for value in capital.values()) and all(bool((latest.get("metricProvenance") or {}).get(field, {}).get("official"))
                                          for field, value in capital.items() if value is not None),
         # Market multiples still come from market-data vendors even when an
         # official filing is present elsewhere in the same company packet.
@@ -1057,7 +1057,7 @@ def company_prompt_context(
     financial_fields = (
         "period",
         "periodEnd", "frequency", "comparisonBasis", "provider", "officialSource",
-        "metricProvenance", "comparisonEvidence", "qualityIssues", "financialReportingVersion",
+        "metricProvenance", "comparisonEvidence", "derivedMetricEvidence", "qualityIssues", "financialReportingVersion",
         "revenue",
         "revenueGrowthPct",
         "grossProfit",
@@ -1122,6 +1122,15 @@ def company_prompt_context(
         for item in provenance_rows[:8]
     ]
 
+    current_financials = current_financial_state(financials)
+    financial_integrity = dict(payload.get("financialIntegrity") or {})
+    history_issues = list(financial_integrity.get("issues") or [])
+    financial_integrity["issues"] = list(current_financials.get("qualityIssues") or []) + [
+        issue for issue in history_issues if isinstance(issue, str)
+    ]
+    financial_integrity["historyIssueCount"] = len(history_issues)
+    financial_integrity["issueScope"] = "current-reporting-period-and-provider-errors"
+
     result = {
         "schemaVersion": payload.get("schemaVersion") or COMPANY_KNOWLEDGE_VERSION,
         "symbol": normalized_symbol,
@@ -1129,8 +1138,8 @@ def company_prompt_context(
         "factRevision": payload.get("factRevision"),
         "materialRevision": payload.get("materialRevision"),
         "materialSectionRevisions": dict(payload.get("materialSectionRevisions") or {}),
-        "financialIntegrity": dict(payload.get("financialIntegrity") or {}),
-        "currentFinancialState": current_financial_state(financials),
+        "financialIntegrity": financial_integrity,
+        "currentFinancialState": current_financials,
         "financialEvidence": compact_financial_evidence({"financials": financials}),
         "judgmentUse": "active-company-rule-only",
         "profile": section("profile", (

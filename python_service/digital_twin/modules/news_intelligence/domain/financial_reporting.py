@@ -112,6 +112,21 @@ def financial_comparison(current: Mapping, previous: Mapping, field: str):
     }
 
 
+def _ratio_evidence(row, ratio, numerator, denominator):
+    sources = row.get("metricProvenance") or {}
+    left_source, right_source = sources.get(numerator, {}), sources.get(denominator, {})
+    left, right = _finite(row.get(numerator)), _finite(row.get(denominator))
+    if (left is None or right in (None, 0) or not left_source.get("provider") or not right_source.get("provider")
+            or not compatible_metric_sources(left_source, right_source)):
+        return None
+    return {"metric": ratio, "value": round(left / right * 100.0, 4), "period": row.get("period"),
+            "provider": left_source["provider"], "official": bool(left_source.get("official") and right_source.get("official")),
+            "currency": left_source.get("currency") or "", "scope": left_source.get("scope") or "",
+            "durationBasis": left_source.get("durationBasis") or "", "status": "verified-comparable",
+            "sourceUrl": left_source.get("sourceUrl") or "", "formula": numerator + " / " + denominator + " * 100",
+            "numerator": {"metric": numerator, "value": left}, "denominator": {"metric": denominator, "value": right}}
+
+
 def current_financial_state(financials: Mapping):
     """Merge only same-period facts; each metric keeps its own time basis."""
     candidates = []
@@ -125,11 +140,15 @@ def current_financial_state(financials: Mapping):
     newest = max(reporting_period_end(row["period"]) for row in candidates)
     candidates = [row for row in candidates if reporting_period_end(row["period"]) == newest]
     candidates.sort(key=lambda r: (bool(r.get("officialSource")), {"annual": 1, "interim": 2, "quarterly": 3}.get(r.get("frequency"), 0)))
-    result, provenance, comparisons = {}, {}, {}
+    result, provenance, comparisons, paired_ratios = {}, {}, {}, {}
     for row in candidates:
+        for ratio, (numerator, denominator) in RATIO_FIELDS.items():
+            evidence = _ratio_evidence(row, ratio, numerator, denominator)
+            if evidence:
+                paired_ratios[ratio] = evidence
         row_sources = row.get("metricProvenance") or {}
         for field, value in row.items():
-            if value is None or field in {"metricProvenance", "comparisonEvidence", "qualityIssues"} or field in RATIO_FIELDS:
+            if value is None or field in {"metricProvenance", "comparisonEvidence", "qualityIssues", "derivedMetricEvidence"} or field in RATIO_FIELDS:
                 continue
             if field in GROWTH_FIELDS:
                 comparison = (row.get("comparisonEvidence") or {}).get(field) or {}
@@ -155,12 +174,17 @@ def current_financial_state(financials: Mapping):
             comparisons.pop(growth, None)
         elif comparison.get("status") != "verified-comparable":
             result.pop(growth, None)
+    ratios = {}
     for ratio, (numerator, denominator) in RATIO_FIELDS.items():
-        left, right = _finite(result.get(numerator)), _finite(result.get(denominator))
-        if (left is not None and right not in (None, 0)
-                and compatible_metric_sources(provenance.get(numerator, {}), provenance.get(denominator, {}))):
-            result[ratio] = round(left / right * 100.0, 4)
+        # An official numerator must not erase an independently valid, same-
+        # period vendor ratio. Keep its paired inputs rather than mixing sources.
+        evidence = _ratio_evidence({**result, "metricProvenance": provenance}, ratio, numerator, denominator) or paired_ratios.get(ratio)
+        if evidence:
+            result[ratio] = evidence["value"]
+            ratios[ratio] = evidence
+            provenance[ratio] = {key: evidence[key] for key in ("provider", "official", "period", "scope", "durationBasis", "sourceUrl")}
     result.update({"metricProvenance": provenance, "comparisonEvidence": comparisons,
+                   "derivedMetricEvidence": ratios,
                    "qualityIssues": [issue for row in candidates for issue in row.get("qualityIssues", [])],
                    "financialReportingVersion": (FINANCIAL_REPORTING_VERSION if all(
                        row.get("financialReportingVersion") == FINANCIAL_REPORTING_VERSION for row in candidates
@@ -196,6 +220,8 @@ def compact_financial_evidence(company: Mapping):
     material = {"version": current.get("financialReportingVersion") or "legacy-unverified",
                 "period": current.get("period"), "comparisons": comparisons,
                 "issues": list(current.get("qualityIssues") or [])[:6]}
+    ratios = current.get("derivedMetricEvidence") or {}
+    material["ratios"] = [dict(ratios[key]) for key in ("freeCashFlowMarginPct", "cashConversionPct", "operatingMarginPct") if key in ratios]
     material["fingerprint"] = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:24]
     material["eventSemantics"] = "reporting-period-evidence-not-new-filing"
     return material

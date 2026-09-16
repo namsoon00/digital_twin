@@ -11,6 +11,26 @@ from digital_twin.modules.reasoning.domain.portfolio_ontology_company_concepts i
 
 
 class FinancialReportingIntegrityTests(unittest.TestCase):
+    def test_valid_paired_vendor_ratio_survives_partial_official_override(self):
+        vendor = {"period": "2026-06-30", "frequency": "quarterly", "revenue": 100, "freeCashFlow": 20,
+                  "metricProvenance": {field: {"provider": "yfinance", "durationBasis": "quarterly", "currency": "KRW"}
+                                       for field in ("revenue", "freeCashFlow")}}
+        official = {"period": "2026-06-30", "frequency": "interim", "officialSource": True, "revenue": 101,
+                    "metricProvenance": {"revenue": {"provider": "OpenDART", "durationBasis": "quarterly", "currency": "KRW"}}}
+        state = current_financial_state({"quarterly": [vendor], "interim": [official]})
+        self.assertEqual(101, state["revenue"])
+        self.assertEqual(20, state["freeCashFlowMarginPct"])
+        evidence = state["derivedMetricEvidence"]["freeCashFlowMarginPct"]
+        self.assertEqual("yfinance", evidence["provider"])
+        self.assertEqual(100, evidence["denominator"]["value"])
+        self.assertIn(evidence, compact_financial_evidence({"currentFinancialState": state})["ratios"])
+
+    def test_ratio_without_a_compatible_paired_source_is_not_invented(self):
+        rows = {"quarterly": [{"period": "2026-06-30", "revenue": 100, "freeCashFlow": 20,
+            "metricProvenance": {"revenue": {"provider": "OpenDART", "durationBasis": "quarterly"},
+                                 "freeCashFlow": {"provider": "yfinance", "durationBasis": "year-to-date"}}}]}
+        self.assertNotIn("freeCashFlowMarginPct", current_financial_state(rows))
+
     def test_dart_collector_retains_comparative_columns_and_rows_after_180(self):
         from datetime import datetime, timezone
         from digital_twin.infrastructure.external_api.adapters.base import legacy_provider, empty_signals
@@ -91,6 +111,7 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual("error", row["financialIntegrity"]["status"])
         self.assertEqual(1, row["financialIntegrity"]["officialInputRows"])
         self.assertFalse(row["coverage"]["officialCoverage"]["financials"])
+        self.assertFalse(row["coverage"]["officialCoverage"]["capital"])
 
     def test_current_financial_state_keeps_source_of_each_metric(self):
         secondary = {"period": "2026-06-30", "frequency": "quarterly", "revenue": 100,
@@ -140,6 +161,20 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
 
 
 class FinancialNarrativeContractTests(unittest.TestCase):
+    def test_historical_source_anomaly_is_not_a_current_financial_warning(self):
+        from digital_twin.modules.news_intelligence.domain.company_knowledge import company_prompt_context
+        row = build_company_knowledge("TEST", yfinance={"provider": "yfinance", "info": {"financialCurrency": "KRW"},
+            "quarterlyBalanceSheet": [{"metric": "Ordinary Shares Number", "values": {
+                "2026-06-30": 4401, "2026-03-31": 4400, "2025-12-31": 2800}}]})
+        self.assertTrue(row["financialIntegrity"]["issues"])
+        context = company_prompt_context({"companyKnowledge": {"TEST": row}}, "TEST")
+        self.assertEqual([], context["financialIntegrity"]["issues"])
+        self.assertGreater(context["financialIntegrity"]["historyIssueCount"], 0)
+        self.assertTrue(row["financialIntegrity"]["issues"])
+        row["financialIntegrity"]["issues"].append("official-financial-statements-unparsed")
+        context = company_prompt_context({"companyKnowledge": {"TEST": row}}, "TEST")
+        self.assertIn("official-financial-statements-unparsed", context["financialIntegrity"]["issues"])
+
     def company(self):
         from digital_twin.modules.news_intelligence.domain.company_knowledge import company_prompt_context
         row = build_company_knowledge("TEST", yfinance={"provider": "yfinance", "info": {"financialCurrency": "KRW"},

@@ -91,6 +91,7 @@ class ExternalSignalCoreMixin:
             platform_state = platform_signals.get("externalDataPlatform") if isinstance(platform_signals, dict) else {}
             if int((platform_state or {}).get("factCount") or 0) > 0:
                 shared_company_knowledge = self.load_shared_company_knowledge({}, persist_backfill=False)
+                platform_signals["companyKnowledge"] = self.company_knowledge_from_signals(platform_signals)
                 self.provider_state = {}
                 self._crypto_market_snapshot = {}
                 self._crypto_market_cache_state = "normalized-facts"
@@ -240,13 +241,15 @@ class ExternalSignalCoreMixin:
         persist_backfill: bool = False,
     ) -> Dict[str, Dict[str, object]]:
         dedicated = {}
+        cache_current = False
         if getattr(self, "company_knowledge_cache", None):
             try:
                 payload = self.company_knowledge_cache.load()
                 dedicated = payload.get("symbols") if isinstance(payload, dict) and isinstance(payload.get("symbols"), dict) else {}
+                cache_current = isinstance(payload, dict) and payload.get("schemaVersion") == COMPANY_KNOWLEDGE_CACHE_VERSION
             except Exception:
                 dedicated = {}
-        if dedicated:
+        if dedicated and cache_current:
             normalized = self.merge_company_knowledge_maps(dedicated)
             if persist_backfill and normalized != dedicated:
                 self.persist_shared_company_knowledge(normalized)

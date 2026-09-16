@@ -155,6 +155,16 @@ class ExternalSignalsReadModelService:
             if dataset_id == "coingecko.market":
                 result["cryptoFetchedAt"] = str(row.get("fetchedAt") or "")
                 result["cryptoLastAttemptAt"] = str(row.get("updatedAt") or row.get("fetchedAt") or "")
+        # Document extraction may refer to an older filing. It does not own
+        # the current full-statement response or its reporting basis.
+        for row in rows:
+            if row.get("datasetId") != "opendart.company_facts":
+                continue
+            for symbol, source in (row.get("payload", {}).get("dartDisclosures") or {}).items():
+                target = result["dartDisclosures"].setdefault(symbol, {})
+                for field in ("financialStatements", "financialStatementBasis"):
+                    if field in source:
+                        target[field] = source[field]
         for status in self.fact_store.provider_statuses():
             if status.get("datasetId") in CALENDAR_REFERENCE_DATASETS:
                 continue

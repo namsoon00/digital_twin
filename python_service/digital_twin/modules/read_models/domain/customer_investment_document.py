@@ -679,8 +679,12 @@ def customer_investment_text(value: object, level: str = "beginner") -> str:
     if normalized_level in {"absoluteBeginner", "beginner"}:
         text = text.replace("후행 PER", "지난 실적 기준 주가 수준(PER)")
         text = text.replace("선행 PER", "예상 실적 기준 주가 수준(PER)")
-        text = re.sub(r"(?<![A-Za-z])PBR(?![A-Za-z])", "순자산 대비 주가(PBR)", text)
-        text = re.sub(r"(?<![A-Za-z])ROE(?![A-Za-z])", "자기자본이익률(ROE)", text)
+        # Rendering and preview may both normalize a document. Already
+        # explained abbreviations must be stable under repeated normalization.
+        for acronym, label in (("PBR", "순자산 대비 주가"), ("ROE", "자기자본이익률")):
+            while label + "(" + label + "(" + acronym + "))" in text:
+                text = text.replace(label + "(" + label + "(" + acronym + "))", label + "(" + acronym + ")")
+            text = re.sub(r"(?<![A-Za-z(])" + acronym + r"(?![A-Za-z])", label + "(" + acronym + ")", text)
     for pattern, replacement in _CUSTOMER_GRAMMAR_REPAIRS:
         text = pattern.sub(replacement, text)
     return _clean_spaces(text)

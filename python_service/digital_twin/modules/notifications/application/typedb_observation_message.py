@@ -16,6 +16,7 @@ from digital_twin.modules.decisions.contracts import NotificationAIValidatedResp
 from digital_twin.modules.decisions.contracts import reference_date
 from digital_twin.modules.notifications.domain.notification_delivery_explanation import customer_delivery_explanation_lines
 from digital_twin.modules.notifications.application.customer_investment_message import render_customer_investment_document
+from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows, financial_evidence_links
 
 
 FIELD_LABELS = {
@@ -771,6 +772,7 @@ def typedb_observation_telegram_message(
             for key, title, rows in (
                 ("change", "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
                 ("importance", "왜 중요한가요", [*notification_condition_rows, *evidence_rows]),
+                ("financial-evidence", "판단에 사용한 재무 수치", financial_evidence_rows(context)),
                 ("tracking", "시스템이 추적 중", follow_up_rows),
                 (
                     "next-update",
@@ -787,6 +789,7 @@ def typedb_observation_telegram_message(
             if rows
         ),
         detail_url=detail_url,
+        links=financial_evidence_links(context),
         reference_at=str(reference or ""),
         sent_at=sent,
         notification_number=str(context.get("notificationNumber") or ""),

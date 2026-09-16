@@ -66,5 +66,9 @@
   {
     "reason": "Separate investment opinions from unfinished analysis and operational tasks; question-oriented detail labels preserve the same routes and full evidence.",
     "functions": ["decisionActionMeta", "selectConsoleTodayTasks", "todayQueueWorkDetailPayload", "decisionQueueWorkDetailPayload", "renderInvestmentCaseDetailTabs"]
+  },
+  {
+    "reason": "Show sourced financial comparison rows in compact notification details as well as the full customer document.",
+    "functions": ["renderNotificationCustomerDocument"]
   }
 ]

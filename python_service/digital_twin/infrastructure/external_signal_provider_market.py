@@ -747,13 +747,15 @@ class ExternalSignalMarketMixin:
                                 "rcept_no", "reprt_code", "bsns_year", "corp_code",
                                 "sj_div", "sj_nm", "account_id", "account_nm",
                                 "account_detail", "thstrm_nm", "thstrm_dt", "thstrm_amount",
+                                "thstrm_add_amount",
                                 "frmtrm_nm", "frmtrm_dt", "frmtrm_amount",
+                                "frmtrm_q_nm", "frmtrm_q_amount", "frmtrm_add_amount",
                                 "bfefrmtrm_nm", "bfefrmtrm_dt", "bfefrmtrm_amount",
                                 "ord", "currency",
                             )
                             if row.get(key) not in (None, "")
                         }
-                        for row in rows[:180]
+                        for row in rows
                         if isinstance(row, dict)
                     ]
                     disclosure["financialStatementBasis"] = {

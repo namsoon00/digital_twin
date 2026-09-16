@@ -78,6 +78,15 @@ def normalize_follow_up_conditions(
         field = str(raw.get("field") or "").strip()
         operator = str(raw.get("operator") or "").strip()
         purpose = str(raw.get("purpose") or "switch").strip().lower()
+        authored_purpose = purpose
+        condition_scope = str(raw.get("conditionScope") or "investment-thesis")
+        explanation = str(raw.get("onSatisfied") or "")
+        if any(marker in explanation for marker in ("재분석을 촉발", "이번 재분석", "알림을 촉발")):
+            condition_scope = "analysis-trigger"
+        if condition_scope == "analysis-trigger":
+            # A trigger's disappearance says nothing about the investment
+            # thesis. Keep the observation, but request a direction-neutral review.
+            purpose = "switch"
         threshold = raw.get("threshold")
         if not field or operator not in FOLLOW_UP_OPERATORS or finite_number(threshold) is None:
             continue
@@ -107,8 +116,11 @@ def normalize_follow_up_conditions(
             "operator": operator,
             "threshold": number(threshold),
             "purpose": purpose,
+            "conditionScope": condition_scope,
+            "authoredPurpose": authored_purpose,
             "label": " ".join(str(raw.get("label") or "").split())[:240],
-            "onSatisfied": " ".join(str(raw.get("onSatisfied") or "").split())[:240],
+            "onSatisfied": ("재분석을 시작한 시장 변화가 달라져 최신 근거로 다시 평가합니다. 투자 관점의 강화·약화로 단정하지 않습니다."
+                            if condition_scope == "analysis-trigger" else " ".join(explanation.split())[:240]),
             "baselineValue": current_value,
             "previousValue": current_value,
             "currentValue": current_value,

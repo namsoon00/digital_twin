@@ -338,6 +338,7 @@ def build_decision_core_evidence_ledger(
     external_evidence: Iterable[Mapping[str, object]] = (),
     data_limits: Iterable[Mapping[str, object]] = (),
     reference_date: object = "",
+    company_evidence: Mapping[str, object] = None,
 ) -> List[Dict[str, object]]:
     """Build compact evidence IDs shared by the prompt and claim verifier."""
 
@@ -367,6 +368,25 @@ def build_decision_core_evidence_ledger(
             source_as_of=source_as_of,
             freshness=freshness,
         )
+
+    from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
+    financial = compact_financial_evidence(company_evidence or facts.get("companyContext") or {})
+    for comparison in financial.get("comparisons") or []:
+        if comparison.get("status") != "verified-comparable":
+            continue
+        metric = str(comparison.get("metric") or "")
+        for suffix, value_key, period_key in (("current", "currentValue", "currentPeriod"),
+                                               ("previous", "previousValue", "previousPeriod"),
+                                               ("change", "changePct", "currentPeriod")):
+            evidence_id = "financial:" + metric + ":" + suffix
+            rows[evidence_id] = NarrativeEvidence(
+                evidence_id=evidence_id, role="context", kind="financial-comparison",
+                label=metric + " " + suffix, value=comparison.get(value_key),
+                source=str(comparison.get("provider") or ""),
+                source_as_of=str(comparison.get(period_key) or ""),
+                detail=str(comparison.get("comparisonBasis") or "") + " / " + str(comparison.get("sourceUrl") or ""),
+                feature_summary=dict(comparison),
+            )
 
     for item in evidence_assertions or []:
         if not isinstance(item, Mapping):

@@ -175,7 +175,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Four registered AI follow-up, retention memory and atomic observation regressions.
         # Twenty-five websocket, actionless narrative, dated-memory, queue timing,
         # experiment lifecycle and durable delivery-trace regressions.
-        self.assertLessEqual(total, 1675)
+        # Thirty reporting-date, financial comparability, prompt/ABox lineage,
+        # source ownership, correction and customer-document regressions.
+        self.assertLessEqual(total, 1710)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.modules.news_intelligence.contracts import COMPANY_VALUATION_CONTEXT_VERSION, latest_source_as_of
+from digital_twin.modules.news_intelligence.contracts import COMPANY_VALUATION_CONTEXT_VERSION, latest_source_as_of, financial_period_sort_key, current_financial_state
 from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology, entity_id
 from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
 
 
-COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v2"
+COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v3-financial-lineage"
 FINANCIAL_PERIOD_LIMITS = {"annual": 3, "interim": 2, "quarterly": 3}
 MAX_EXECUTIVE_ROLES = 8
 MAX_COMPANY_RELATIONSHIPS = 12
@@ -42,10 +42,7 @@ def _period_rows(financials: Mapping[str, object], frequency: str) -> Iterable[D
 
 
 def _period_rank(value: object, frequency: str) -> tuple:
-    digits = "".join(character for character in _text(value) if character.isdigit())
-    # DART interim labels may be a date range. The final eight digits are the
-    # reporting-period end and therefore the relevant recency boundary.
-    period_end = int(digits[-8:] or 0)
+    period_end = financial_period_sort_key(value)[0]
     frequency_priority = {"annual": 1, "interim": 2, "quarterly": 3}.get(frequency, 0)
     return period_end, frequency_priority
 
@@ -64,6 +61,10 @@ def _financial_properties(row: Mapping[str, object], **extra) -> Dict[str, objec
         "tboxClass": "FinancialState",
         "tboxClasses": ["Observation", "FundamentalObservation", "FinancialFact", "FinancialState"],
         "period": _text(row.get("period")),
+        "financialReportingVersion": row.get("financialReportingVersion") or "legacy-unverified",
+        "metricProvenance": dict(row.get("metricProvenance") or {}),
+        "comparisonEvidence": dict(row.get("comparisonEvidence") or {}),
+        "qualityIssues": list(row.get("qualityIssues") or []),
         **{
             field: number(row.get(field))
             for field in numeric_fields
@@ -243,11 +244,11 @@ def add_company_knowledge_concepts(
                     isLatestPeriod=index == 0,
                     companyFactRevision=revision,
                     dataState=_text(coverage.get("dataState") or "partial"),
-                    source=primary_source,
+                    source=_text(row.get("provider") or primary_source),
                 ),
             )
             props = _relation_properties(
-                primary_source,
+                _text(row.get("provider") or primary_source),
                 ("최신 " if index == 0 else "과거 ") + frequency_label + " 재무 사실",
                 reportingFrequency=frequency,
                 period=period,
@@ -261,6 +262,17 @@ def add_company_knowledge_concepts(
     current_state_props: Dict[str, object] = {}
     if current_state_candidates:
         _rank, latest_state_id, current_state_props = max(current_state_candidates, key=lambda item: item[0])
+        current = current_financial_state(financials)
+        if current:
+            period = _text(current.get("period"))
+            latest_state_id = add_entity(graph, "company-financial-state", symbol + ":current:" + period,
+                company_name + " " + period + " 현재 재무 근거",
+                _financial_properties(current, symbol=symbol, reportingFrequency=current.get("frequency") or "current",
+                                      isLatestPeriod=True, companyFactRevision=revision,
+                                      dataState=_text(coverage.get("dataState") or "partial"),
+                                      source=_text(current.get("provider") or primary_source)))
+            current_state_props = _relation_properties(_text(current.get("provider") or primary_source),
+                "현재 재무 사실", period=period, reportingFrequency=current.get("frequency") or "current", isLatestPeriod=True)
         add_relation(
             graph,
             stock_id,
@@ -303,7 +315,7 @@ def add_company_knowledge_concepts(
             "valuationMetricCount": len(valuation),
             "valuationSourceAsOf": latest_source_as_of(source_as_of_values),
             "valuationSourceProviders": source_providers,
-            "valuationOfficialSource": bool(coverage.get("officialSource")),
+            "valuationOfficialSource": bool((coverage.get("officialCoverage") or {}).get("valuation")),
             "valuationPerStatus": per_status,
             "reportingPeriod": _text(current_state_props.get("period")),
             "reportingFrequency": _text(current_state_props.get("reportingFrequency")),
@@ -331,7 +343,7 @@ def add_company_knowledge_concepts(
             "symbol": symbol,
             "dataState": _text(coverage.get("dataState") or "partial"),
             "valuationMetricCount": len(valuation),
-            "valuationOfficialSource": bool(coverage.get("officialSource")),
+            "valuationOfficialSource": bool((coverage.get("officialCoverage") or {}).get("valuation")),
             "missingFields": [str(item) for item in (coverage.get("missing") or [])[:8]],
             "valuationSourceAsOf": latest_source_as_of(source_as_of_values),
             "companyFactRevision": revision,

@@ -812,6 +812,7 @@ def _compact_dict_rows(value: object, fields: Iterable[str], limit: int) -> List
 
 
 def _compact_company_context(value: object) -> Dict[str, object]:
+    from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
     company = _mapping(value)
     financials = _mapping(company.get("latestFinancials"))
     financial_fields = (
@@ -822,6 +823,8 @@ def _compact_company_context(value: object) -> Dict[str, object]:
         "cash", "totalDebt", "equity", "debtToEquityPct",
     )
     return {
+        "financialEvidence": compact_financial_evidence(company),
+        "financialIntegrity": _selected_fields(company.get("financialIntegrity"), ("version", "status", "officialInputRows", "officialParsedPeriods", "issues")),
         **_selected_fields(
             company,
             (
@@ -858,6 +861,7 @@ def _compact_company_context(value: object) -> Dict[str, object]:
         ),
         "latestFinancials": {
             "annual": _compact_dict_rows(financials.get("annual"), financial_fields, 1),
+            "interim": _compact_dict_rows(financials.get("interim"), financial_fields, 1),
             "quarterly": _compact_dict_rows(financials.get("quarterly"), financial_fields, 1),
         },
         "provenance": _compact_dict_rows(
@@ -1521,6 +1525,7 @@ def _minimum_temporal_windows(value: object, *, emergency: bool = False) -> List
 
 
 def _minimum_company_context(value: object, *, emergency: bool = False) -> Dict[str, object]:
+    from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
     company = _mapping(value)
     financials = _mapping(company.get("latestFinancials"))
     financial_fields = (
@@ -1530,6 +1535,7 @@ def _minimum_company_context(value: object, *, emergency: bool = False) -> Dict[
     annual = _compact_dict_rows(financials.get("annual"), financial_fields, 1)
     quarterly = _compact_dict_rows(financials.get("quarterly"), financial_fields, 1)
     payload = {
+        "financialEvidence": compact_financial_evidence(company),
         **_selected_fields(
             company,
             ("symbol", "companyName", "factRevision", "materialRevision", "judgmentUse"),
@@ -1559,12 +1565,10 @@ def _minimum_company_context(value: object, *, emergency: bool = False) -> Dict[
         )
         payload["latestFinancials"] = {"latest": (quarterly or annual)[:1]}
         payload["coverage"] = _selected_fields(company.get("coverage"), ("dataState",))
-    return _bounded_value(
-        payload,
-        string_limit=72 if emergency else 100,
-        list_limit=1 if emergency else 2,
-        dict_limit=12,
-    )
+    bounded = _bounded_value(payload, string_limit=72 if emergency else 100,
+                             list_limit=1 if emergency else 2, dict_limit=12)
+    bounded["financialEvidence"] = compact_financial_evidence(company)
+    return bounded
 
 
 def _minimum_rule_rows(value: object, *, emergency: bool = False) -> List[Dict[str, object]]:

@@ -9,6 +9,7 @@ import { escapeHtml } from "../shared/text.mjs";
 import { cardFormatAttrs, cardTypeAttrs, renderEmptyState } from "../shell/layout.mjs";
 import { app } from "../shell/root.mjs";
 import { notificationsState } from "../state/notifications.mjs";
+import { notificationCustomerDocument, renderNotificationCustomerDocument } from "./customer-document.mjs";
 
 function renderNotificationDetailTabs(jobId, active) {
   var tabs = [
@@ -226,48 +227,6 @@ function renderNotificationDeliveryDecisionOverview(job, decisionFactors, compac
     decisionFactors.length ? '<div class="notification-detail-tags notification-delivery-tags">' + (compact ? decisionFactors.slice(0, 3) : decisionFactors).map(function (factor) {
       return '<span class="' + escapeHtml(factor.tone || "hold") + '">' + escapeHtml(textWithKnownDisplaySymbols(factor.label, payload.resolvedSymbol, job)) + '</span>';
     }).join("") + '</div>' : '<p>발송 판단 근거가 아직 기록되지 않았습니다.</p>',
-    '</section>'
-  ].join("");
-}
-
-function notificationCustomerDocument(job) {
-  return job && job.customerInvestmentDocument && typeof job.customerInvestmentDocument === "object"
-    ? job.customerInvestmentDocument
-    : {};
-}
-
-function renderNotificationCustomerDocument(job, compact) {
-  var customerDocument = notificationCustomerDocument(job);
-  if (!Object.keys(customerDocument).length) return "";
-  var customerSections = Array.isArray(customerDocument.sections) ? customerDocument.sections : [];
-  var customerLinks = Array.isArray(customerDocument.links) ? customerDocument.links : [];
-  if (compact) {
-    var compactKeys = customerDocument.role === "typedb-observation"
-      ? ["change", "importance", "tracking", "next-update"]
-      : ["change", "action", "reasons", "counter", "tracking", "next-update"];
-    customerSections = customerSections.filter(function (section) {
-      return compactKeys.indexOf(String((section || {}).key || "")) >= 0;
-    }).slice(0, compactKeys.length);
-  }
-  return [
-    '<section class="notification-detail-section primary notification-customer-document">',
-    '<div class="notification-reasoning-head"><div><strong>' + escapeHtml(customerDocument.headline || "투자 인사이트") + '</strong><span>' + escapeHtml(customerDocument.roleLabel || "") + '</span></div></div>',
-    customerDocument.lead ? '<div class="notification-detail-reasons"><p><b>한눈에 보기</b> ' + escapeHtml(customerDocument.lead) + '</p></div>' : '',
-    customerSections.map(function (section) {
-      var rows = Array.isArray(section.rows) ? section.rows : [];
-      if (!rows.length) return "";
-      if (compact) rows = rows.slice(0, 2);
-      return '<div class="notification-detail-reasons"><strong>' + escapeHtml(section.title || "상세") + '</strong>'
-        + rows.map(function (row) { return '<p>' + escapeHtml(row) + '</p>'; }).join("")
-        + '</div>';
-    }).join(""),
-    customerLinks.length ? '<div class="notification-detail-reasons"><strong>원문</strong>'
-      + customerLinks.map(function (link) {
-        var url = String((link || {}).url || "");
-        if (!/^https?:\/\//i.test(url)) return "";
-        return '<p><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml((link || {}).label || "원문 보기") + '</a></p>';
-      }).join("")
-      + '</div>' : '',
     '</section>'
   ].join("");
 }

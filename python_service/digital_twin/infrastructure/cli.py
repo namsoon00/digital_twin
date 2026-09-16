@@ -1908,6 +1908,11 @@ def run_mysql_temporal_snapshot_compaction(
 def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
     settings = dict(runtime_settings())
+    if args.maintenance_action == "financial-evidence":
+        from digital_twin.infrastructure.financial_evidence_maintenance import run_financial_evidence_maintenance
+        result = run_financial_evidence_maintenance(settings, apply=args.apply, limit=args.limit)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.maintenance_action == "mysql-minimal-retention":
         result = run_mysql_minimal_retention(
             settings,
@@ -2686,6 +2691,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     maintenance = subparsers.add_parser("maintenance", help="Run explicit local storage maintenance")
     maintenance_actions = maintenance.add_subparsers(dest="maintenance_action", required=True)
+    financial_evidence = maintenance_actions.add_parser("financial-evidence")
+    financial_evidence.add_argument("--apply", action="store_true")
+    financial_evidence.add_argument("--limit", type=int, default=2000)
     mysql_cleanup = maintenance_actions.add_parser("mysql-cleanup")
     mysql_cleanup.add_argument("--optimize", action="store_true")
     mysql_cleanup.add_argument("--drop-ephemeral-databases", action="store_true")

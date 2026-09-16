@@ -1,5 +1,7 @@
 {
   "tests": [
+    {"file": "test_financial_evidence_repair.py", "tier": "unit", "core": true},
+    {"file": "test_financial_reporting_integrity.py", "tier": "unit", "core": true},
     {"file": "test_ai_follow_up_tracking.py", "tier": "unit", "core": true},
     {"file": "test_projection_input_preflight.py", "tier": "unit", "core": true},
     {"file": "test_decision_calibration_inputs.py", "tier": "integration", "core": true},

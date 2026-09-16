@@ -3,7 +3,11 @@
 from digital_twin.modules._exports import resolve_export
 
 
-_EXPORTS = {'COMPANY_ALIASES': ('digital_twin.modules.news_intelligence.domain.entity', 'COMPANY_ALIASES'),
+_EXPORTS = {
+ 'compact_financial_evidence': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'compact_financial_evidence'),
+ 'current_financial_state': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'current_financial_state'),
+ 'financial_period_sort_key': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'financial_period_sort_key'),
+ 'COMPANY_ALIASES': ('digital_twin.modules.news_intelligence.domain.entity', 'COMPANY_ALIASES'),
  'NEWS_INTELLIGENCE_VERSION': ('digital_twin.modules.news_intelligence.domain.version',
                                'NEWS_INTELLIGENCE_VERSION'),
  'alias_pattern': ('digital_twin.modules.news_intelligence.domain.entity_resolution', 'alias_pattern'),

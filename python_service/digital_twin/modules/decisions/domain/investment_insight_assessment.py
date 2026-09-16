@@ -590,6 +590,7 @@ def compact_previous_investment_insight_episode(value: object) -> Dict[str, obje
         "subjectCaseId": _text(payload.get("subjectCaseId"), 200),
         "inferenceGenerationId": _text(payload.get("inferenceGenerationId"), 200),
         "createdAt": _text(payload.get("createdAt"), 100),
+        "financialEvidence": _mapping(insight.get("financialEvidence") or payload.get("financialEvidence")),
         "followUpConditions": [
             {key: row.get(key) for key in (
                 "conditionId", "sourceConditionId", "episodeId", "accountId", "symbol", "ownerKind", "registration", "field", "operator", "threshold",
@@ -687,7 +688,19 @@ def investment_insight_delivery_transition(
         "previousDeliveredInvestmentAIInsightEpisode"
         if captured else "previousInvestmentAIInsightEpisode"
     )
+    transition = investment_insight_transition(previous, current_assessment)
+    relation = _mapping(values.get("ontologyRelationContext"))
+    if previous and "graph.company." in str(relation.get("activeRules") or []):
+        from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
+        current_packet = compact_financial_evidence(_mapping(relation.get("facts")).get("companyContext") or {})
+        prior = _mapping(previous)
+        old_packet = _mapping(prior.get("financialEvidence") or _mapping(prior.get("insight")).get("financialEvidence"))
+        if (current_packet.get("comparisons") and current_packet.get("fingerprint") != old_packet.get("fingerprint")
+                and _mapping(current_assessment).get("publishable") is True):
+            transition.update({"kind": "material-insight-change", "material": True,
+                "changes": [*transition.get("changes", []), "financial-evidence-changed"],
+                "reason": "재무 비교 기간·수치·출처를 다시 확인해 판단 근거를 갱신했습니다. 새 공시 발생과는 구분합니다."})
     return {
-        **investment_insight_transition(previous, current_assessment),
+        **transition,
         "comparisonBasis": "delivered-insight" if captured else "analysis-history-fallback",
     }

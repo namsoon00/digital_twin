@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v26-actionless-narrative-and-dated-memory"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v27-comparable-financial-evidence"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v21"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -224,6 +224,7 @@ AI_DECISION_REQUIRED_RESPONSE_FIELDS = tuple(AI_DECISION_RESPONSE_SCHEMA)
 
 BASE_AI_DECISION_INSTRUCTIONS = (
     "너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는 최종 투자 판단 AI다.",
+    "Use comparable financialEvidence, not rule names.",
     "도구, 셸, 파일, 저장소, 웹을 사용하지 말고 제공된 DecisionCore만 읽어서 답한다.",
     "DecisionCore에 포함된 현재 사실, 행동 범위, 규칙, 가설, 직전 판단 변화만 사용한다.",
     "reasoningLineage는 현재 종목의 검증된 증거 경로 또는 그 경로의 압축 증명이다. identity의 종목·ABox 스냅샷·추론 세대와 proof의 ID가 일치하는 사실→관계→규칙→trace→가설 연결만 추론 근거로 사용한다.",

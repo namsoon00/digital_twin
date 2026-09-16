@@ -18,6 +18,8 @@ _EXPORTS = {'HistoricalDecisionReplayService': ('digital_twin.modules.outcomes.a
  'InvestmentOutcomeObservationService': ('digital_twin.modules.outcomes.application.investment_outcome_observation_service',
                                          'InvestmentOutcomeObservationService')}
 
+_EXPORTS['quarantine_financial_input'] = ('digital_twin.modules.outcomes.infrastructure.financial_input_correction', 'quarantine_financial_input')
+
 __all__ = list(_EXPORTS)
 
 

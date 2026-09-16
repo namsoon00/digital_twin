@@ -326,6 +326,7 @@ def compact_ai_insight(value: Mapping[str, object]) -> Dict[str, object]:
             "insightAssessment",
             "causalChain",
             "followUpConditions",
+            "financialEvidence",
             "source",
         )
         if payload.get(key) not in (None, "", [], {})
@@ -367,6 +368,11 @@ class AIInsightEpisode:
         reconciliation = _mapping(values.get("decisionReconciliation"))
         provenance = _mapping(values.get("notificationAIInsightProvenance"))
         insight = compact_ai_insight(getattr(result, "response", {}) or {})
+        from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
+        company = _mapping(_mapping(_mapping(values.get("ontologyRelationContext")).get("facts")).get("companyContext"))
+        financial_evidence = compact_financial_evidence(company)
+        if financial_evidence:
+            insight["financialEvidence"] = financial_evidence
         continuity = compact_decision_continuity_packet(values.get("decisionContinuityPacket"))
         if continuity:
             if continuity.get("accountId") != handoff.account_id or continuity.get("symbol") != handoff.symbol:

@@ -1238,7 +1238,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v6", prompt_audit["contextRouting"]["version"])
         self.assertEqual(
-            "investment-ai-judge-v26-actionless-narrative-and-dated-memory",
+            "investment-ai-judge-v27-comparable-financial-evidence",
             prompt_audit["promptRelease"]["version"],
         )
         self.assertIn(

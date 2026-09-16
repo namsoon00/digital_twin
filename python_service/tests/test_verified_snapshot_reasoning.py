@@ -543,14 +543,14 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
                     "capital": "capital-a",
                     "coverage": "coverage-a",
                 },
-                "financials": {"annual": [{"period": "2025-09-30", "revenueGrowthPct": 5.0}]},
+                "financials": {"annual": [{"period": "2025-09-30", "revenue": 105.0}]},
             },
         }
         changed_company = copy.deepcopy(base_company)
         changed_company["AAPL"]["factRevision"] = "revision-b"
         changed_company["AAPL"]["materialRevision"] = "material-b"
         changed_company["AAPL"]["materialSectionRevisions"]["financials"] = "financials-b"
-        changed_company["AAPL"]["financials"]["annual"][0]["revenueGrowthPct"] = 8.0
+        changed_company["AAPL"]["financials"]["annual"][0]["revenue"] = 108.0
 
         event = verified_monitor_snapshot_reasoning_event(
             snapshot(external_signals={"companyKnowledge": changed_company}),

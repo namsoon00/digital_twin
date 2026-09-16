@@ -37,6 +37,7 @@ from digital_twin.modules.notifications.domain.notification_ontology_sections im
 from digital_twin.modules.notifications.public import _profit_loss_change_summary
 from digital_twin.modules.notifications.public import render_customer_investment_document
 from digital_twin.modules.notifications.public import typedb_observation_telegram_message
+from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows
 
 
 MESSAGE_CONTEXT_ROW_LIMIT = 5
@@ -4050,10 +4051,10 @@ def _price_confirmation_check(context: Dict[str, object]) -> str:
     labels = []
     for key, label in [("ma5Distance", "5일선"), ("ma20Distance", "20일선"), ("ma60Distance", "60일선")]:
         if facts.get(key) not in (None, ""):
-            labels.append(label)
+            labels.append(label + (" 위를 유지하는지" if _number(facts.get(key)) >= 0 else " 위로 회복하는지"))
     target = target_name_for_headline(context.get("displayTarget") or context.get("target") or "") or "이 종목"
     if labels:
-        return target + " 가격이 " + "·".join(labels) + " 위를 유지하는지"
+        return target + " 가격이 " + ", ".join(labels)
     return target + " 가격 흐름이 유지되는지"
 
 
@@ -4080,7 +4081,8 @@ def _friendly_next_check_text(context: Dict[str, object], value: object) -> str:
     if len(text) >= 120 and field_mentions >= 4:
         checks = []
         if any(token in text for token in ("현재가", "20일선 차이", "20일선 기울기")):
-            checks.append("현재가가 20일선 위 흐름을 유지하는지")
+            distance = relation_facts(context or {}).get("ma20Distance")
+            checks.append("현재가가 20일선 위로 회복하는지" if distance is not None and _number(distance) < 0 else "현재가가 20일선 위 흐름을 유지하는지" if distance is not None else "현재가와 20일선의 위치를 확인하는지")
         if any(
             token in text
             for token in (
@@ -5073,6 +5075,10 @@ def _customer_document_links(context: Dict[str, object]) -> tuple:
     candidates = [
         ("관련 기사 원문", impact.get("url") or impact.get("sourceUrl")),
     ]
+    company = relation_facts(context or {}).get("companyContext") or {}
+    for item in (company.get("financialEvidence") or {}).get("comparisons") or []:
+        if item.get("sourceUrl"):
+            candidates.append(("재무 비교 원문 · " + str(item.get("currentPeriod") or "")[:10], item["sourceUrl"]))
     links = []
     seen = set()
     for label, raw_url in candidates:
@@ -5239,7 +5245,8 @@ def research_narrative_telegram_message(
                 ("change", "이번에 달라진 점", [transition_line] if transition_line else []),
                 ("action", "지금 할 일", [action_plan]),
                 ("reasons", "왜 이렇게 봤나요", [*judgment_detail_rows, *mechanism_rows]),
-                ("positive-checks", "현재 판단을 강화할 조건", catalysts),
+                ("financial-evidence", "판단에 사용한 재무 수치", financial_evidence_rows(context)),
+                ("positive-checks", "판단이 달라질 조건", catalysts),
                 ("counter", "다른 방향의 신호", risks),
                 ("tracking", "시스템이 추적 중", tracked_follow_up_rows),
                 ("additional", "추가로 볼 자료", additional_follow_up_rows),
@@ -5532,6 +5539,7 @@ def execution_telegram_message_decision_first(
                 ("change", "이번에 달라진 점", [*([transition_line] if transition_line else []), *action_transition_rows]),
                 ("action", "지금 할 일", [action_line]),
                 ("reasons", "왜 이렇게 봤나요", reason_rows),
+                ("financial-evidence", "판단에 사용한 재무 수치", financial_evidence_rows(context)),
                 ("counter", "다른 방향의 신호", counter_rows),
                 ("event", "관련 사건", [news_line] if news_line else []),
                 ("tracking", "시스템이 추적 중", tracked_follow_up_rows),
@@ -5547,7 +5555,7 @@ def execution_telegram_message_decision_first(
             )
             if rows
         ),
-        links=_customer_document_links(context) if news_line else (),
+        links=_customer_document_links(context),
         detail_url=str(context.get("notificationDetailUrl") or "").strip(),
         reference_at=str(reference or ""),
         sent_at=sent,

@@ -6,6 +6,19 @@ import { opinionRecency, decisionInView } from "../../public/modules/decisions/r
 import { evidenceSummary, evidenceResolutionLabel } from "../../public/modules/decisions/evidence-summary.mjs";
 import { notificationEventSummary } from "../../public/modules/notifications/summary.mjs";
 import { renderSecondaryDisclosure } from "../../public/modules/shared/disclosure.mjs";
+import { renderNotificationCustomerDocument } from "../../public/modules/notifications/customer-document.mjs";
+
+test("both notification lanes show financial dates, comparisons and sources in compact web details", () => {
+  for (const role of ["typedb-observation", "ai-research-insight"]) {
+    const html = renderNotificationCustomerDocument({customerInvestmentDocument: {role, sections: [
+      {key: "financial-evidence", title: "재무 비교", rows: ["2026-06-30 · 영업이익 100 → 130 · yfinance"]}
+    ], links: [{label: "공식 공시", url: "https://dart.fss.or.kr/test"}]}}, true);
+    assert.match(html, /2026-06-30/);
+    assert.match(html, /100 → 130/);
+    assert.match(html, /yfinance/);
+    assert.match(html, /https:\/\/dart.fss.or.kr\/test/);
+  }
+});
 
 test("old opinions remain in history and recheck, never current tasks or recent changes forever", () => {
   const item = {updatedAt: "2026-08-18T10:00:00Z", changeState: "changed", userReviewable: true};

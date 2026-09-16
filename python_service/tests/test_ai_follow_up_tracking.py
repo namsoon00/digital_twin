@@ -33,6 +33,14 @@ def condition(baseline=-0.1, threshold=0, field="ma20Distance"):
 
 
 class AIFollowUpTrackingTests(unittest.TestCase):
+    def test_analysis_trigger_is_not_presented_as_thesis_weakening(self):
+        rows, _ = normalize_follow_up_conditions([{"field": "bidAskImbalance", "operator": "<=", "threshold": 25,
+            "purpose": "weaken", "onSatisfied": "이번 재분석을 촉발한 매수 우위 변화가 완화됩니다."}],
+            facts(72.61, field="bidAskImbalance"), "035720")
+        self.assertEqual("switch", rows[0]["purpose"])
+        self.assertEqual("weaken", rows[0]["authoredPurpose"])
+        self.assertEqual("analysis-trigger", rows[0]["conditionScope"])
+
     def test_only_valid_novelty_suppression_can_register_without_delivery(self):
         episode = SimpleNamespace(ai_authored=True, publication_contract_passed=True, contract_failure_code="",
                                   reconciliation={"status": "reconciled", "notificationDecision": "suppress",

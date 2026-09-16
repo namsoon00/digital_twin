@@ -1176,10 +1176,12 @@ def _marker_relevant(rules: List[Dict[str, object]], hypotheses: List[Dict[str, 
 
 
 def _company_context(current: Dict[str, object], rules: List[Dict[str, object]], hypotheses: List[Dict[str, object]], facts: Dict[str, object]) -> Tuple[Dict[str, object], Dict[str, object]]:
+    from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
     company = _mapping(current.get("companyContext"))
     if not company:
         return {}, {}
-    relevant = bool(facts.get("valuationDecisionEligible")) or _marker_relevant(rules, hypotheses, VALUATION_MARKERS)
+    relevant = (bool(facts.get("valuationDecisionEligible")) or _marker_relevant(rules, hypotheses, VALUATION_MARKERS)
+                or any(str(rule.get("ruleId") or "").startswith("graph.company.") for rule in rules))
     profile = _selected(company.get("profile"), ("sector", "industry", "country", "exchange"))
     coverage = _selected(company.get("coverage"), ("dataState", "officialSource", "financialPeriods", "valuationFields"))
     if not relevant:
@@ -1197,6 +1199,9 @@ def _company_context(current: Dict[str, object], rules: List[Dict[str, object]],
     )
     return {
         **_selected(company, ("symbol", "companyName", "factRevision", "materialRevision", "judgmentUse")),
+        "financialEvidence": compact_financial_evidence(company),
+        "financialInterpretationPolicy": "Cite current/prior values, periods and provider. Excluded comparisons are not evidence; reused financials are not new filings. Compare allowed BUY/ADD fairly; execution limits alone are not bearish facts. Triggers and thesis confirmation are distinct.",
+        "financialIntegrity": _selected(company.get("financialIntegrity"), ("version", "status", "officialInputRows", "officialParsedPeriods", "issues")),
         "profile": profile,
         "valuation": _selected(
             company.get("valuation"),
@@ -1207,6 +1212,7 @@ def _company_context(current: Dict[str, object], rules: List[Dict[str, object]],
         ),
         "latestFinancials": {
             "annual": [_selected(item, financial_fields) for item in list(financials.get("annual") or [])[:1] if isinstance(item, dict)],
+            "interim": [_selected(item, financial_fields) for item in list(financials.get("interim") or [])[:1] if isinstance(item, dict)],
             "quarterly": [_selected(item, financial_fields) for item in list(financials.get("quarterly") or [])[:1] if isinstance(item, dict)],
         },
         "coverage": coverage,
@@ -1530,6 +1536,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     }
     core["evidenceLedger"] = build_decision_core_evidence_ledger(
         facts=facts,
+        company_evidence=company,
         rules=rules,
         hypotheses=hypotheses,
         evidence_assertions=evidence_assertions,
@@ -1841,7 +1848,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     fitted["companyEvidence"] = {
         **_selected(
             company,
-            ("symbol", "companyName", "profile", "valuation", "coverage"),
+            ("symbol", "companyName", "profile", "valuation", "coverage", "financialEvidence", "financialIntegrity"),
         ),
     }
     hypothesis_set = _mapping(fitted.get("hypothesisSet"))

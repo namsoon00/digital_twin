@@ -1848,7 +1848,7 @@ def compact_company_context_for_ai(payload: object) -> Dict[str, object]:
         key: payload.get(key)
         for key in (
             "schemaVersion", "symbol", "companyName", "factRevision", "judgmentUse",
-            "profile", "valuation", "ownership", "capital", "coverage",
+            "profile", "valuation", "ownership", "capital", "coverage", "financialEvidence", "financialIntegrity",
         )
         if payload.get(key) not in (None, "", [], {})
     }

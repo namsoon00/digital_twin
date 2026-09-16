@@ -737,6 +737,7 @@ def ai_contract_repair_prompt(
         "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
         "reviewMode가 context-narrative이거나 notificationIntent가 context-observation/review-observation 또는 비교가 research-only이면 action=NO_ACTION을 유지한다. 보유 권고, 추가매수 보류 같은 매매 지시도 문장에 쓰지 않는다. 확인된 투자 영향과 다음 관찰 조건을 설명한다.",
         "고객 문장은 내부 규칙명과 영문 식별자 없이 쉬운 한국어 완전한 문장으로 쓴다. 같은 의미를 여러 섹션에 반복하지 않는다.",
+        "재무 문장 오류는 기존 보고 기간의 전제, 이번 시장 변화, 판단 연결로 나눠 고친다. 재무와 가격의 동시 관찰을 가격 변동 원인으로 단정하지 않는다. reused 자료는 새 공시가 아니며 항목별 출처·비교 기준을 유지한다. 긍정·부정 해석을 없애지 말고 근거가 지지하는 범위로 설명한다.",
         "설명 전용은 NO_ACTION을 쓰고 그 외 action은 actionEnvelope 안에서 선택한다. 모든 입력 가설을 한 번씩 검토한다.",
         "각 가설의 입력 근거와 반대 근거를 모두 확인한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 근거 ID 배열을 응답에 복사하지 않는다.",
         "반대 근거 검사를 마쳤으면 counterEvidenceStatus를 쓴다. confirmed에는 근거 ID가 연결된 counter 문장이 필요하고, 모든 입력을 검토했지만 반대 사실이 없을 때만 none-found를 쓴다. not-checked와 unavailable은 허용되지 않는다.",

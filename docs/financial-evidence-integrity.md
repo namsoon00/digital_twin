@@ -61,6 +61,20 @@ rendering, with an equality check at the fitting boundary.
   published filing. Invalid AI output cannot use this novelty path to publish.
 - Both TypeDB and AI customer documents show the reporting period, comparison,
   source and available original links. Compact web details retain these rows.
+- The v29 prompt carries `financialEvidenceUse` through final compression:
+  reused, first-observed, revised and new-period are evidence-continuity
+  states, never proof of a newly published filing. The captured delivered
+  insight supplies the baseline, with prior analysis as an explicit fallback.
+  Reused financials retain a short comparison and provider instead of hiding
+  every number. Customer documents separate the financial premise, verified
+  market change and AI interpretation; web and Telegram use the same rows.
+- Financial improvements and price recovery are co-observations, not proof
+  that financial results caused a price move. Prompt instructions and bounded
+  claim-repair checks reject unsupported factual attribution without turning
+  a supported positive interpretation into a bearish or missing-data claim.
+  The price/financial guard covers known wording regressions, not arbitrary
+  natural-language causality proof. Source-backed event interpretation remains
+  subject to the existing evidence/claim contract.
 - An analysis-trigger watch cannot claim to strengthen or weaken the entire
   investment thesis. Such a watch requests neutral reassessment and retains
   the AI-authored purpose for audit. Registration receipts still govern every

@@ -178,7 +178,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Thirty reporting-date, financial comparability, prompt/ABox lineage,
         # source ownership, correction and customer-document regressions.
         # Seven final-prompt retention, crowded-ledger, exclusion and budget regressions.
-        self.assertLessEqual(total, 1717)
+        # Five financial continuity, delivered-baseline, causality and shared-document regressions.
+        self.assertLessEqual(total, 1722)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

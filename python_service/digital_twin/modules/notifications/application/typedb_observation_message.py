@@ -16,7 +16,7 @@ from digital_twin.modules.decisions.contracts import NotificationAIValidatedResp
 from digital_twin.modules.decisions.contracts import reference_date
 from digital_twin.modules.notifications.domain.notification_delivery_explanation import customer_delivery_explanation_lines
 from digital_twin.modules.notifications.application.customer_investment_message import render_customer_investment_document
-from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows, financial_evidence_links
+from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows, financial_evidence_links, financial_evidence_title
 
 
 FIELD_LABELS = {
@@ -312,7 +312,7 @@ def _trigger_reason_text(value: object) -> str:
     return TRIGGER_REASON_LABELS.get(code, TRIGGER_REASON_LABELS.get(text.lower(), text))
 
 
-def _trigger_rows(context: Dict[str, object]) -> List[str]:
+def reasoning_trigger_rows(context: Dict[str, object], *, include_delivery_explanation: bool = True) -> List[str]:
     trigger = _mapping(context.get("reasoningDeliveryTrigger")) or _mapping(
         _mapping(context.get("metadata")).get("reasoningDeliveryTrigger")
     )
@@ -354,7 +354,7 @@ def _trigger_rows(context: Dict[str, object]) -> List[str]:
         rows.extend(signal_rows)
     if not rows:
         rows.extend(_trigger_reason_text(item) for item in trigger.get("reasons") or [])
-    if not has_structured_crypto_transition and not signal_rows:
+    if include_delivery_explanation and not has_structured_crypto_transition and not signal_rows:
         rows.extend(
             _trigger_reason_text(item)
             for item in customer_delivery_explanation_lines(context)
@@ -737,7 +737,7 @@ def typedb_observation_telegram_message(
         if notification_intent_rule_ids
         else []
     )
-    trigger_rows = _trigger_rows(context)
+    trigger_rows = reasoning_trigger_rows(context)
     flow_rows = _flow_rows(context, 3 if detail_level == "concise" else 5)
     follow_up_rows = _follow_up_rows(context)
     relation_rows = (
@@ -772,7 +772,7 @@ def typedb_observation_telegram_message(
             for key, title, rows in (
                 ("change", "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
                 ("importance", "왜 중요한가요", [*notification_condition_rows, *evidence_rows]),
-                ("financial-evidence", "판단에 사용한 재무 수치", financial_evidence_rows(context)),
+                ("financial-evidence", financial_evidence_title(context), financial_evidence_rows(context)),
                 ("tracking", "시스템이 추적 중", follow_up_rows),
                 (
                     "next-update",

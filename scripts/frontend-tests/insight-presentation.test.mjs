@@ -20,6 +20,22 @@ test("both notification lanes show financial dates, comparisons and sources in c
   }
 });
 
+test("compact financial reviews keep all source-labelled facts separate from the new market change", () => {
+  const html = renderNotificationCustomerDocument({customerInvestmentDocument: {
+    role: "ai-research-insight", sections: [
+      {key: "financial-evidence", title: "기존 판단 근거 · 재무", rows: [
+        "2026-06-30 보고 기간 · 직전 알림과 같은 자료",
+        "영업이익 +30% · OpenDART 공시", "매출 +20% · OpenDART 공시", "잉여현금흐름 +10% · yfinance 집계"
+      ]},
+      {key: "change", title: "이번에 달라진 점", rows: ["매수·매도 대기 물량 차이가 줄었습니다."]},
+      {key: "reasons", title: "판단 연결", rows: ["기존 실적과 이번 거래 흐름을 함께 비교했습니다."]}
+    ]
+  }}, true);
+  assert.match(html, /잉여현금흐름 \+10% · yfinance 집계/);
+  assert.ok(html.indexOf("기존 판단 근거") < html.indexOf("이번에 달라진 점"));
+  assert.ok(html.indexOf("이번에 달라진 점") < html.indexOf("판단 연결"));
+});
+
 test("old opinions remain in history and recheck, never current tasks or recent changes forever", () => {
   const item = {updatedAt: "2026-08-18T10:00:00Z", changeState: "changed", userReviewable: true};
   const now = Date.parse("2026-09-12T00:00:00Z");

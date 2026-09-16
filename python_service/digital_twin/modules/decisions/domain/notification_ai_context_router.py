@@ -14,7 +14,7 @@ from digital_twin.modules.notifications.contracts import build_decision_core_evi
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v7-financial-retention"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v8-financial-continuity"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v5"
 
 RESEARCH_INSIGHT_FACT_LABELS = (
@@ -507,7 +507,7 @@ def _minimum_company_evidence(value: object) -> Dict[str, object]:
     return _selected(value, (
         "symbol", "companyName", "factRevision", "materialRevision",
         "valuation", "coverage", "financialEvidence", "financialIntegrity",
-        "financialInterpretationPolicy",
+        "financialInterpretationPolicy", "financialEvidenceUse",
     ))
 
 
@@ -516,6 +516,9 @@ def _validate_financial_evidence_retention(source: Dict[str, object], fitted: Di
     actual = _mapping(fitted.get("companyEvidence")).get("financialEvidence")
     if expected and expected != actual:
         raise ValueError("AI prompt financial evidence contract lost or changed the comparison packet")
+    expected_use = _mapping(source.get("companyEvidence")).get("financialEvidenceUse")
+    if expected_use and expected_use != _mapping(fitted.get("companyEvidence")).get("financialEvidenceUse"):
+        raise ValueError("AI prompt financial evidence contract lost its continuity semantics")
     fitted_rows = {
         item.get("evidenceId"): item
         for item in fitted.get("evidenceLedger") or [] if isinstance(item, dict)
@@ -1240,7 +1243,19 @@ def _company_context(current: Dict[str, object], rules: List[Dict[str, object]],
     return {
         **_selected(company, ("symbol", "companyName", "factRevision", "materialRevision", "judgmentUse")),
         "financialEvidence": compact_financial_evidence(company),
-        "financialInterpretationPolicy": "Cite current/prior values, periods and provider. Excluded comparisons are not evidence; reused financials are not new filings. Compare allowed BUY/ADD fairly; execution limits alone are not bearish facts. Triggers and thesis confirmation are distinct.",
+        "financialEvidenceUse": _mapping(company.get("financialEvidenceUse")),
+        "financialInterpretationPolicy": (
+            "Cite current/prior values, periods and provider; excluded comparisons are not evidence. "
+            "financialEvidenceUse: reused=prior premise; revised=corrected data; new-period=reporting-period change; "
+            "first-observed=no baseline. None proves a new filing. Separate reporting, publication and retrieval dates. "
+            "Separate financial premise (view), verified current trigger (change with transition IDs), and their "
+            "investment meaning (mechanism). Reused financials are not today's catalyst. "
+            "Co-observed financial improvement and price recovery do not prove earnings caused or were priced into "
+            "the move. Give the supported interpretation, not price causation, unless separate event evidence supports it. "
+            "Preserve each metric's provider and YoY/QoQ basis; yfinance cash flow is not an OpenDART/SEC filing value. "
+            "Compare allowed BUY/ADD fairly; execution limits alone are not bearish facts. "
+            "Triggers and thesis confirmation are distinct."
+        ),
         "financialIntegrity": _selected(company.get("financialIntegrity"), ("version", "status", "officialInputRows", "officialParsedPeriods", "issues")),
         "profile": profile,
         "valuation": _selected(
@@ -1512,6 +1527,11 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     facts = _relation_facts(current, rules, drivers)
     linked_fact_keys = _rule_linked_fact_keys(rules, drivers)
     company, company_reference = _company_context(current, rules, hypotheses, _mapping(current.get("relationFacts")))
+    if company and not company.get("financialEvidenceUse"):
+        from digital_twin.modules.news_intelligence.contracts import financial_evidence_use
+        prior = _mapping(decision_state.get("previousInvestmentInsight"))
+        previous_packet = _mapping(prior.get("financialEvidence") or _mapping(prior.get("insight")).get("financialEvidence"))
+        company["financialEvidenceUse"] = financial_evidence_use(company.get("financialEvidence") or {}, previous_packet)
     external_evidence, evidence_admission_audit = _external_evidence(brief, rules, hypotheses)
     temporal = _temporal_evidence(current)
     data_coverage = _mapping(brief.get("dataCoverage"))

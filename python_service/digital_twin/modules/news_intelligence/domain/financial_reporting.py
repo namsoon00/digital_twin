@@ -225,3 +225,29 @@ def compact_financial_evidence(company: Mapping):
     material["fingerprint"] = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:24]
     material["eventSemantics"] = "reporting-period-evidence-not-new-filing"
     return material
+
+
+def financial_evidence_use(packet: Mapping, previous: Mapping = None):
+    """Describe evidence continuity, not investment merit or filing publication."""
+    if not packet:
+        return {}
+    previous = previous or {}
+    period = reporting_period_end(packet.get("period"))
+    prior_period = reporting_period_end(previous.get("period"))
+    fingerprint = packet.get("fingerprint")
+    prior_fingerprint = previous.get("fingerprint")
+    if fingerprint and prior_fingerprint and fingerprint == prior_fingerprint:
+        state = "reused"
+    elif not prior_fingerprint:
+        state = "first-observed"
+    elif period and prior_period and period > prior_period:
+        state = "new-period"
+    else:
+        state = "revised"
+    return {
+        "state": state,
+        "reportingPeriod": period.isoformat() if period else str(packet.get("period") or "")[:10],
+        "previousReportingPeriod": prior_period.isoformat() if prior_period else str(previous.get("period") or "")[:10],
+        "filingPublication": "not-established-by-financial-packet",
+        "priceAttribution": "co-observation-not-proven-causation",
+    }

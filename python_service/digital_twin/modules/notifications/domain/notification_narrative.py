@@ -22,7 +22,7 @@ from digital_twin.modules.decisions.contracts import ungrounded_narrative_number
 
 
 NOTIFICATION_NARRATIVE_VERSION = "investment-notification-narrative-v1"
-NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v3"
+NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v4-financial-context"
 NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v2"
 ROLE_INDEXED_CLAIM_CONTRACT_ENCODING = "role-indexed-v1"
 
@@ -860,6 +860,29 @@ def resolved_narrative_claim_evidence_contract(
     return resolved
 
 
+def _financial_claim_reasons(text, section, known_rows, financial_use):
+    financial = [row for row in known_rows if row.get("kind") in {"financial-comparison", "financial-ratio"}]
+    if not financial or section in {"next-condition", "catalyst", "limitation"}:
+        return []
+    # Numeric comparisons and moving averages prove co-observation, not the
+    # cause of a price move. Leave event-backed attribution to its own evidence.
+    event_backed = any(row.get("kind") == "external-evidence" and row.get("judgementEligible") for row in known_rows)
+    reasons = []
+    if not event_backed:
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            attributed = re.search(
+                r"(?:주가|가격).{0,35}(?:반영됐|반영되었|올렸|끌어올렸|상승시켰|하락시켰|이끌었)", sentence
+            )
+            if attributed and not re.search(r"(?:가능성|추정|단정.{0,8}(?:없|않)|확정.{0,8}(?:없|않))", sentence):
+                reasons.append("financial-price-causation-unproven")
+                break
+        if financial_use.get("state") == "reused" and re.search(
+            r"(?:새|신규|이번에 발표된)\s*(?:재무\s*)?(?:실적|공시).{0,20}(?:발표됐|발표되었|확인됐|호재)", text
+        ):
+            reasons.append("reused-financials-presented-as-new-filing")
+    return reasons
+
+
 def normalize_narrative_claims(
     context: Mapping[str, object],
     payload: Mapping[str, object],
@@ -969,6 +992,11 @@ def normalize_narrative_claims(
         ungrounded_numbers = ungrounded_narrative_numbers(text, known_rows)
         if ungrounded_numbers:
             reasons.append("ungrounded-number")
+        if writer_kind == "ai":
+            reasons.extend(_financial_claim_reasons(
+                text, section, known_rows,
+                _mapping(_mapping(prepared.get("companyEvidence")).get("financialEvidenceUse")),
+            ))
         status = "verified" if not reasons else "rejected"
         validation = NarrativeClaimValidation(
             claim_id=claim_id,

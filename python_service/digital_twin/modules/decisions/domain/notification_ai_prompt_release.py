@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v28-financial-evidence-retention"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v29-financial-context-separation"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v21"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"

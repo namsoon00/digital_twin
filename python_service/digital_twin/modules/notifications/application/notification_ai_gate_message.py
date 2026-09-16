@@ -37,7 +37,8 @@ from digital_twin.modules.notifications.domain.notification_ontology_sections im
 from digital_twin.modules.notifications.public import _profit_loss_change_summary
 from digital_twin.modules.notifications.public import render_customer_investment_document
 from digital_twin.modules.notifications.public import typedb_observation_telegram_message
-from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows
+from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows, financial_evidence_title
+from digital_twin.modules.notifications.application.typedb_observation_message import reasoning_trigger_rows
 
 
 MESSAGE_CONTEXT_ROW_LIMIT = 5
@@ -4972,6 +4973,18 @@ def _insight_transition_line(
     return " ".join(rows)
 
 
+def _financial_review_change_rows(context, response, transition_line=""):
+    rows = [
+        str(claim.get("text") or "")
+        for claim in response.narrative_claims or []
+        if claim.get("section") == "change"
+    ]
+    trigger = context.get("reasoningDeliveryTrigger") or {}
+    if not rows and (trigger.get("material") is True or str(trigger.get("status") or "").startswith("verified")):
+        rows = reasoning_trigger_rows(context, include_delivery_explanation=False)
+    return _distinct_message_rows([*rows, transition_line], 2)
+
+
 def _customer_market_structure_lead(context: Dict[str, object]) -> str:
     """Summarize moving-average structure from facts, not model vocabulary."""
 
@@ -5230,6 +5243,9 @@ def research_narrative_telegram_message(
     ]
     reference = response.reference_date or reference_date(context)
     sent = str(context.get("sentTime") or "").strip()
+    financial_rows = financial_evidence_rows(context)
+    change_rows = (_financial_review_change_rows(context, response, transition_line)
+                   if financial_rows else [transition_line] if transition_line else [])
     document = CustomerInvestmentDocument(
         role=identity["role"],
         headline=headline,
@@ -5242,10 +5258,10 @@ def research_narrative_telegram_message(
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
             for key, title, rows in (
-                ("change", "이번에 달라진 점", [transition_line] if transition_line else []),
+                ("financial-evidence", financial_evidence_title(context), financial_rows),
+                ("change", "이번에 달라진 점", change_rows),
                 ("action", "지금 할 일", [action_plan]),
-                ("reasons", "왜 이렇게 봤나요", [*judgment_detail_rows, *mechanism_rows]),
-                ("financial-evidence", "판단에 사용한 재무 수치", financial_evidence_rows(context)),
+                ("reasons", "판단 연결" if financial_rows else "왜 이렇게 봤나요", [*judgment_detail_rows, *mechanism_rows]),
                 ("positive-checks", "판단이 달라질 조건", catalysts),
                 ("counter", "다른 방향의 신호", risks),
                 ("tracking", "시스템이 추적 중", tracked_follow_up_rows),
@@ -5524,6 +5540,9 @@ def execution_telegram_message_decision_first(
     ]
     reference = response.reference_date or reference_date(context)
     sent = str(context.get("sentTime") or "").strip()
+    financial_rows = financial_evidence_rows(context)
+    change_rows = (_financial_review_change_rows(context, response, transition_line)
+                   if financial_rows else [transition_line] if transition_line else [])
     document = CustomerInvestmentDocument(
         role=identity["role"],
         headline=headline,
@@ -5536,10 +5555,10 @@ def execution_telegram_message_decision_first(
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
             for key, title, rows in (
-                ("change", "이번에 달라진 점", [*([transition_line] if transition_line else []), *action_transition_rows]),
+                ("financial-evidence", financial_evidence_title(context), financial_rows),
+                ("change", "이번에 달라진 점", [*change_rows, *action_transition_rows]),
                 ("action", "지금 할 일", [action_line]),
-                ("reasons", "왜 이렇게 봤나요", reason_rows),
-                ("financial-evidence", "판단에 사용한 재무 수치", financial_evidence_rows(context)),
+                ("reasons", "판단 연결" if financial_rows else "왜 이렇게 봤나요", reason_rows),
                 ("counter", "다른 방향의 신호", counter_rows),
                 ("event", "관련 사건", [news_line] if news_line else []),
                 ("tracking", "시스템이 추적 중", tracked_follow_up_rows),

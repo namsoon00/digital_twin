@@ -5,6 +5,7 @@ from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {
  'compact_financial_evidence': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'compact_financial_evidence'),
+ 'financial_evidence_use': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'financial_evidence_use'),
  'current_financial_state': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'current_financial_state'),
  'financial_period_sort_key': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'financial_period_sort_key'),
  'COMPANY_ALIASES': ('digital_twin.modules.news_intelligence.domain.entity', 'COMPANY_ALIASES'),

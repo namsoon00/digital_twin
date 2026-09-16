@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.application.notification.intake import N
 from digital_twin.modules.notifications.application.notification.presentation import content_body, present_notification
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.application.notification.workflow import NotificationHoldingSnapshotEnricher, NotificationQueueRunner
-from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, _trigger_rows
+from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, reasoning_trigger_rows
 from digital_twin.modules.read_models.domain.customer_investment_document import CustomerInvestmentDocument, CustomerInvestmentSection
 from digital_twin.modules.notifications.domain.notification.presentation import LEGACY_KINDS, NOTIFICATION_KINDS, notification_kind
 from digital_twin.modules.notifications.domain.notification.request import NotificationRequest
@@ -286,7 +286,7 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
             "symbol": "ETH", "horizon": "24h", "changePct": -3.4, "thresholdPct": 3,
             "direction": "down", "transition": "threshold-crossed",
         }]}}}
-        self.assertIn("하락 알림 기준 -3.0%", " ".join(_trigger_rows(context)))
+        self.assertIn("하락 알림 기준 -3.0%", " ".join(reasoning_trigger_rows(context)))
 
     def test_missing_optional_reason_is_not_a_delivery_veto(self):
         queue = Mock()

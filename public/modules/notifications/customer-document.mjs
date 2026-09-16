@@ -26,7 +26,7 @@ function renderNotificationCustomerDocument(job, compact) {
     customerSections.map(function (section) {
       var rows = Array.isArray(section.rows) ? section.rows : [];
       if (!rows.length) return "";
-      if (compact) rows = rows.slice(0, section.key === "financial-evidence" ? 3 : 2);
+      if (compact) rows = rows.slice(0, section.key === "financial-evidence" ? 4 : 2);
       return '<div class="notification-detail-reasons"><strong>' + escapeHtml(section.title || "상세") + '</strong>'
         + rows.map(function (row) { return '<p>' + escapeHtml(row) + '</p>'; }).join("")
         + '</div>';

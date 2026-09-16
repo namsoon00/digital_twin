@@ -209,6 +209,8 @@ class FinancialNarrativeContractTests(unittest.TestCase):
         self.assertIn("전분기 대비 +30.00%", " ".join(first))
         context["previousDeliveredInvestmentAIInsightEpisode"] = {"financialEvidence": self.company()["financialEvidence"]}
         self.assertIn("기존 재무 근거", financial_evidence_rows(context)[0])
+        self.assertIn("전분기 대비 +30.00%", " ".join(financial_evidence_rows(context)))
+        self.assertIn("yfinance 집계", " ".join(financial_evidence_rows(context)))
 
     def test_source_correction_can_notify_once_but_cannot_publish_invalid_insight(self):
         from digital_twin.modules.decisions.domain.investment_insight_assessment import investment_insight_delivery_transition

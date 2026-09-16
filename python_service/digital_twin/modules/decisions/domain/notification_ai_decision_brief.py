@@ -451,6 +451,14 @@ def notification_ai_decision_brief(
     )
     research_cycle = _mapping(relation.get("researchCycle"))
     research_plan = _mapping(canonical_brain.get("researchPlan")) or _mapping(relation.get("researchPlan"))
+    from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence, financial_evidence_use
+    company = _mapping(relation.get("companyContext"))
+    previous_insight = _mapping(merged.get("previousDeliveredInvestmentAIInsightEpisode")
+                                or merged.get("previousInvestmentAIInsightEpisode"))
+    previous_financial = _mapping(previous_insight.get("financialEvidence")
+                                  or _mapping(previous_insight.get("insight")).get("financialEvidence"))
+    if company:
+        company["financialEvidenceUse"] = financial_evidence_use(compact_financial_evidence(company), previous_financial)
     return {
         "schemaVersion": AI_DECISION_BRIEF_VERSION,
         "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
@@ -504,7 +512,7 @@ def notification_ai_decision_brief(
             "hypothesisLifecycle": hypothesis_lifecycle,
             "temporalWindows": internal.get("temporalWindows") or [],
             "temporalEvidenceSummary": temporal_summary,
-            "companyContext": relation.get("companyContext") or {},
+            "companyContext": company,
             "companyValuationContext": relation.get("companyValuationContext") or {},
         },
         "inference": {
@@ -824,6 +832,7 @@ def _compact_company_context(value: object) -> Dict[str, object]:
     )
     return {
         "financialEvidence": compact_financial_evidence(company),
+        "financialEvidenceUse": _mapping(company.get("financialEvidenceUse")),
         "financialIntegrity": _selected_fields(company.get("financialIntegrity"), ("version", "status", "officialInputRows", "officialParsedPeriods", "issues")),
         **_selected_fields(
             company,
@@ -1536,6 +1545,7 @@ def _minimum_company_context(value: object, *, emergency: bool = False) -> Dict[
     quarterly = _compact_dict_rows(financials.get("quarterly"), financial_fields, 1)
     payload = {
         "financialEvidence": compact_financial_evidence(company),
+        "financialEvidenceUse": _mapping(company.get("financialEvidenceUse")),
         **_selected_fields(
             company,
             ("symbol", "companyName", "factRevision", "materialRevision", "judgmentUse"),
@@ -1568,6 +1578,7 @@ def _minimum_company_context(value: object, *, emergency: bool = False) -> Dict[
     bounded = _bounded_value(payload, string_limit=72 if emergency else 100,
                              list_limit=1 if emergency else 2, dict_limit=12)
     bounded["financialEvidence"] = compact_financial_evidence(company)
+    bounded["financialEvidenceUse"] = _mapping(company.get("financialEvidenceUse"))
     return bounded
 
 

@@ -388,6 +388,20 @@ def build_decision_core_evidence_ledger(
                 feature_summary=dict(comparison),
             )
 
+    for ratio in financial.get("ratios") or []:
+        if ratio.get("status") != "verified-comparable":
+            continue
+        metric = str(ratio.get("metric") or "")
+        evidence_id = "financial:" + metric + ":ratio"
+        rows[evidence_id] = NarrativeEvidence(
+            evidence_id=evidence_id, role="context", kind="financial-ratio",
+            label=metric, value=ratio.get("value"),
+            source=str(ratio.get("provider") or ""),
+            source_as_of=str(ratio.get("period") or ""),
+            detail=str(ratio.get("formula") or ""),
+            feature_summary=dict(ratio),
+        )
+
     for item in evidence_assertions or []:
         if not isinstance(item, Mapping):
             continue
@@ -612,7 +626,13 @@ def build_decision_core_evidence_ledger(
             row.evidence_id,
         ),
     )
-    return [row.to_dict() for row in prioritized[:64]]
+    financial_rows = [row for row in prioritized if row.kind in {"financial-comparison", "financial-ratio"}]
+    financial_ids = {row.evidence_id for row in financial_rows}
+    other_rows = [row for row in prioritized if row.evidence_id not in financial_ids]
+    retained_ids = financial_ids | {
+        row.evidence_id for row in other_rows[:max(0, 64 - len(financial_rows))]
+    }
+    return [row.to_dict() for row in prioritized if row.evidence_id in retained_ids]
 
 
 def context_evidence_ledger(context: Mapping[str, object], response: object = None) -> List[Dict[str, object]]:

@@ -177,7 +177,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # experiment lifecycle and durable delivery-trace regressions.
         # Thirty reporting-date, financial comparability, prompt/ABox lineage,
         # source ownership, correction and customer-document regressions.
-        self.assertLessEqual(total, 1710)
+        # Seven final-prompt retention, crowded-ledger, exclusion and budget regressions.
+        self.assertLessEqual(total, 1717)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

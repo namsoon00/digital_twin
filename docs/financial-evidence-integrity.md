@@ -12,6 +12,13 @@ the values underlying some financial rule labels.
 These are input and evidence-lineage defects, not a reason to loosen action
 authorization or empirically qualify an untested hypothesis.
 
+A subsequent production audit found another compression path: research-only
+reviews omitted `companyEvidence` and kept just four contextual citations.
+The stored brief and rendered financial table were complete while the model's
+actual prompt was not. Helper-only tests did not detect that mismatch. The
+v28 prompt path retains financial packets and citation rows through final
+rendering, with an equality check at the fitting boundary.
+
 ## Contracts
 
 - Parse reporting dates before timestamp offsets; select the latest actual
@@ -40,6 +47,12 @@ authorization or empirically qualify an untested hypothesis.
 - The stock's current financial ABox state and AI `financialEvidence` packet
   share this contract. Compression must retain the comparison packet; numeric
   evidence IDs allow AI to cite it instead of citing only a rule title.
+- Research-only, normal and minimum-budget prompts retain the same complete
+  financial packet, including excluded comparisons and paired-ratio inputs.
+  Reserve the comparison/ratio citation IDs before limiting the evidence
+  ledger. Final fitting checks packet equality and citation value, period and
+  source equality; insufficient space is a budget error, never missing data.
+  The queue can then use its existing larger-budget retry path.
 - Keep historical comparison-quality issues in storage for audit. The current
   AI context includes current-period exclusions and provider parsing errors,
   not historical anomalies mislabeled as current financial weakness.
@@ -97,6 +110,11 @@ threshold, active engine release, or action permission is silently promoted.
 - Old document extraction cannot overwrite newer company-statement ownership.
 - Excluded financial comparisons remain auditable without becoming rule values.
 - Current ABox facts, prompt compression and financial evidence IDs agree.
+- Test the rendered `DecisionCore`, not just intermediate company helpers.
+  Exercise crowded ledgers, research-only compression, minimum-budget
+  compression, excluded comparisons, missing company data and failed retention.
+  Replay retained execution briefs without rewriting old decisions or sending
+  historical investment messages as new alerts.
 - Evidence corrections notify once; repeated identical evidence does not.
 - Financial wording remains idempotent and respects above/below-average facts.
 - Repair preview is read-only; repeated current-state rebuilds are idempotent.

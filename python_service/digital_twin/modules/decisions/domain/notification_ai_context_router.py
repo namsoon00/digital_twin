@@ -14,7 +14,7 @@ from digital_twin.modules.notifications.contracts import build_decision_core_evi
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v6"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v7-financial-retention"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v5"
 
 RESEARCH_INSIGHT_FACT_LABELS = (
@@ -491,6 +491,45 @@ def _minimum_research_reasoning_lineage(
     }
 
 
+def _financial_evidence_ids(core: Dict[str, object]) -> set:
+    return {
+        str(item.get("evidenceId") or "")
+        for item in core.get("evidenceLedger") or []
+        if isinstance(item, dict)
+        and item.get("kind") in {"financial-comparison", "financial-ratio"}
+        and item.get("evidenceId")
+    }
+
+
+def _minimum_company_evidence(value: object) -> Dict[str, object]:
+    # The source owner already bounded the packet. Never truncate its paired
+    # values, periods, exclusions or provenance as if they were audit prose.
+    return _selected(value, (
+        "symbol", "companyName", "factRevision", "materialRevision",
+        "valuation", "coverage", "financialEvidence", "financialIntegrity",
+        "financialInterpretationPolicy",
+    ))
+
+
+def _validate_financial_evidence_retention(source: Dict[str, object], fitted: Dict[str, object]) -> None:
+    expected = _mapping(source.get("companyEvidence")).get("financialEvidence")
+    actual = _mapping(fitted.get("companyEvidence")).get("financialEvidence")
+    if expected and expected != actual:
+        raise ValueError("AI prompt financial evidence contract lost or changed the comparison packet")
+    fitted_rows = {
+        item.get("evidenceId"): item
+        for item in fitted.get("evidenceLedger") or [] if isinstance(item, dict)
+    }
+    financial_ids = _financial_evidence_ids(source)
+    for row in source.get("evidenceLedger") or []:
+        if not isinstance(row, dict) or row.get("evidenceId") not in financial_ids:
+            continue
+        retained = fitted_rows.get(row["evidenceId"], {})
+        for field in ("kind", "value", "source", "sourceAsOf", "judgementEligible"):
+            if row.get(field) != retained.get(field):
+                raise ValueError("AI prompt financial evidence contract lost a citation: " + row["evidenceId"])
+
+
 def _minimum_research_review_core(value: object) -> Dict[str, object]:
     """Remove execution-only duplication while preserving research provenance."""
 
@@ -564,7 +603,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         for related_id in item.get("relatedEvidenceIds") or []
         if str(related_id or "").strip() in available_evidence_ids
     }
-    retained_evidence_ids = required_evidence_ids | related_evidence_ids
+    retained_evidence_ids = required_evidence_ids | related_evidence_ids | _financial_evidence_ids(core)
     ledger = []
     contextual_count = 0
     for item in source_ledger:
@@ -655,6 +694,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             core.get("relationLifecycle") or {}
         ),
         "facts": _selected(core.get("facts"), CORE_FACT_KEYS),
+        "companyEvidence": _minimum_company_evidence(core.get("companyEvidence")),
         "hypothesisSet": {
             **_selected(
                 hypothesis_set,
@@ -1656,6 +1696,12 @@ def _is_research_review_core(value: object) -> bool:
 def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     """Reduce reference detail without truncating the hypothesis evidence contract."""
 
+    fitted = _fit_notification_ai_decision_core(core, budget_bytes)
+    _validate_financial_evidence_retention(core, fitted)
+    return fitted
+
+
+def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     budget = max(1, int(budget_bytes or 6 * 1024))
     fitted = json.loads(json.dumps(core, ensure_ascii=False, default=str))
     required_evidence_ids = {
@@ -1664,7 +1710,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         if isinstance(item, dict)
         for key in ("supportingEvidenceIds", "counterEvidenceIds")
         for evidence_id in _unique_all(item.get(key) or [])
-    }
+    } | _financial_evidence_ids(fitted)
 
     def compact_ledger(limit: int) -> List[Dict[str, object]]:
         rows = [
@@ -1844,13 +1890,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         } for item in list(continuity.get("followUpConditions") or [])[:1]
           if isinstance(item, dict)],
     }
-    company = _mapping(fitted.get("companyEvidence"))
-    fitted["companyEvidence"] = {
-        **_selected(
-            company,
-            ("symbol", "companyName", "profile", "valuation", "coverage", "financialEvidence", "financialIntegrity"),
-        ),
-    }
+    fitted["companyEvidence"] = _minimum_company_evidence(fitted.get("companyEvidence"))
     hypothesis_set = _mapping(fitted.get("hypothesisSet"))
     fitted["hypothesisSet"] = {
         **_selected(
@@ -1911,10 +1951,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
             if isinstance(item, dict)
         ],
     }
-    fitted["companyEvidence"] = _bounded_detail_bytes(
-        fitted.get("companyEvidence") or {},
-        1200,
-    )
+    fitted["companyEvidence"] = _minimum_company_evidence(fitted.get("companyEvidence"))
     fitted["externalEvidence"] = [
         _bounded_detail_bytes(item, 1200)
         for item in list(fitted.get("externalEvidence") or [])[:1]

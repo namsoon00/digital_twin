@@ -810,6 +810,15 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "attempts": int(job.attempts or 0),
             **dict(metadata or {}),
         }
+        if stage in {"delivered", "failed", "suppressed"}:
+            context = dict(job.context or {})
+            details["finalDelivery"] = {
+                "state": stage,
+                "reasonCode": str(context.get("deliverySuppressionReason") or "unspecified-policy") if stage == "suppressed" else stage,
+                "subjectCaseId": str(context.get("investmentSubjectDecisionCaseId") or ""),
+                "aiRequestId": str((context.get("notificationAiQueue") or {}).get("requestId") or ""),
+                "deliveryAttemptId": str(context.get("deliveryAttemptId") or ""),
+            }
         event = NotificationLifecycleEvent(
             job_id=str(job.job_id or ""),
             stage=str(stage or ""),

@@ -173,6 +173,16 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         from .decision_history_parts.evolution_comparison import read_comparison
         return read_comparison(plan, connect=self.connect, observed_after=observed_after)
 
+    def experiment_inference_coverage(self, plan, deployment_id, observed_after=""):
+        from .decision_history_parts.evolution_comparison import read_experiment_inference_coverage
+        return read_experiment_inference_coverage(
+            plan, deployment_id, connect=self.connect, observed_after=observed_after,
+        )
+
+    def experiment_outcome_schedule(self, plan, episode_ids):
+        from .decision_history_parts.evolution_comparison import read_experiment_outcome_schedule
+        return read_experiment_outcome_schedule(plan, episode_ids, connect=self.connect, now=utc_now_iso())
+
     def sync_shadow_hypothesis_observation_targets(
         self,
         connection,

@@ -168,6 +168,21 @@ class EvolutionTests(unittest.TestCase):
             service.advance(item, Mock())
             runtime.adopt.assert_not_called()
 
+    def test_external_review_does_not_hide_primary_missing_data_reason(self):
+        item = case()
+        item.validation_requirements = [{"check": "review", "requirement": "Causal research"}]
+        plan = create_plan(item, {"rule_id": "graph.candidate.v1"}, self.plan["baseline"], self.policy, START.isoformat())
+        item.evolution = {"plan": plan, "deployment": {"deploymentId": "candidate"}}
+        item.status = "shadow-observing"
+        runtime = SimpleNamespace(state=lambda *_: {"status": "shadow"}, comparison=lambda *_args, **_kw: {
+            "status": "ok", "pairs": [], "dataSummary": {"blockingReason": "experiment-condition-not-observed-in-sample"}}, adopt=Mock())
+        service = OntologyEvolutionService(runtime, self.policy, lambda: (START + timedelta(days=2)).isoformat())
+        service.advance(item, Mock())
+        self.assertEqual("experiment-condition-not-observed-in-sample", item.evolution["reason"])
+        self.assertTrue(item.evolution["details"]["externalReviewRequired"])
+        self.assertTrue(item.evolution["details"]["observationDeadline"])
+        runtime.adopt.assert_not_called()
+
     def test_expired_candidate_retires_before_result_read_or_promotion(self):
         for mode in ("automatic", "shadow"):
             for status in ("shadow-observing", "adoption-ready"):

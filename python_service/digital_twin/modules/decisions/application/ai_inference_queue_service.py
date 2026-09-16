@@ -63,6 +63,14 @@ def _timestamp(value: object):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def ai_attempt_queue_wait_ms(request):
+    available_at = _timestamp(getattr(request, "available_at", ""))
+    started_at = _timestamp(getattr(request, "started_at", ""))
+    if available_at is None or started_at is None:
+        return None
+    return max(0, int((started_at - available_at).total_seconds() * 1000))
+
+
 def ai_failure_diagnostic(error: object, stage: str = "model-execution") -> Dict[str, object]:
     """Classify failures without persisting provider stderr or credentials."""
 
@@ -812,11 +820,12 @@ class AIInferenceQueueRunner:
     def process_request(self, request: AIInferenceRequest) -> str:
         request_started = time.monotonic()
         created_at = _timestamp(getattr(request, "created_at", ""))
-        queue_wait_ms = (
+        request_elapsed_before_attempt_ms = (
             max(0, int((datetime.now(timezone.utc) - created_at).total_seconds() * 1000))
             if created_at is not None
             else 0
         )
+        queue_wait_ms = ai_attempt_queue_wait_ms(request)
         context = dict(request.context or {})
         narrative_only = request.review_mode == "context-narrative"
         subject_case_id = str(context.get("investmentSubjectDecisionCaseId") or "")
@@ -1138,6 +1147,9 @@ class AIInferenceQueueRunner:
                     ) or self.delivery_deadline_seconds is not None else "wait-until-complete"
                 ),
                 "queueWaitMs": queue_wait_ms,
+                "queueWaitScope": "current-attempt-ready-to-claim",
+                "attemptNumber": request.attempts,
+                "requestElapsedBeforeAttemptMs": request_elapsed_before_attempt_ms,
                 "promptPreparationMs": prompt_preparation_ms,
                 **dict(
                     judgement_outcome.execution_spans

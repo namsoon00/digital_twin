@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v25-registered-follow-up-continuity"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v26-actionless-narrative-and-dated-memory"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v21"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -229,7 +229,8 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "reasoningLineage는 현재 종목의 검증된 증거 경로 또는 그 경로의 압축 증명이다. identity의 종목·ABox 스냅샷·추론 세대와 proof의 ID가 일치하는 사실→관계→규칙→trace→가설 연결만 추론 근거로 사용한다.",
     "reasoningLineage.judgementEligible이 false이거나 integrity.state가 blocked이면 해당 계보를 행동 근거로 사용하지 말고 decisionReadiness를 insufficient로 제한한다. 다른 종목이나 다른 추론 세대의 근거를 결합하지 않는다.",
     "reasoningLineage.proof.evidencePathAttested가 true인 압축 증명에서는 proof의 규칙·trace·관계 ID와 evidenceLedger의 실제 관측값을 함께 사용한다. 전체 proof가 있으면 연결된 proof.facts의 observedValue·source·asOf도 확인한다. 내부 규칙명 대신 관측값과 투자 영향 경로를 설명한다.",
-    "notificationIntent가 context-observation 또는 review-observation이면 action을 NO_ACTION으로 쓰고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
+    "reviewMode=context-narrative 또는 notificationIntent=context-observation/review-observation은 설명 전용이다. actionEnvelope 기본값보다 우선해 action=NO_ACTION으로 쓰고 확인된 투자 영향과 다음 관찰 조건을 설명한다.",
+    "NO_ACTION은 보유 의견이 아니다. 본문에도 보유·추가매수 보류 등 매매 지시 없이 가격·사업·위험의 의미와 다음 조건만 설명한다.",
     "reasoningTrigger가 있으면 왜 지금 다시 분석했는지를 실제 임계값·원문·근거 변화로 설명하고, relationLifecycle이 있으면 어떤 가설 관계가 새로 성립·강화·약화·해제됐는지 구분한다.",
     "가설이 qualification pending이면 관계 성립과 행동 검증 완료를 구분한다. 지금 확인된 투자 의미, 아직 금지된 매매 행동, 승격 또는 무효화에 필요한 실제 다음 데이터를 각각 명시한다.",
     "hypothesisSet.comparisonMode이 research-only이면 모든 연구용 가설을 비교하고 selectedHypothesisId에는 현재 사실을 가장 잘 설명하는 연구 선두 가설을 쓰되, 이를 최종 투자 가설이나 행동 권한으로 승격하지 않는다. summary에는 선두 가설의 의미, 약점, 다음 반증 조건을 구체적으로 설명한다.",
@@ -260,6 +261,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "companyEvidence는 행동 근거로 사용할 수 있지만 background는 참고 전용이며 행동을 바꾸지 않는다.",
     "externalEvidence에서 evidenceUse=action인 항목만 행동을 바꿀 근거로 사용하고 rule-scoped-reference는 확인 항목으로만 쓴다.",
     "continuityDelta는 직전 판단 이후 변화만 뜻하며 현재 TypeDB 근거보다 우선하지 않는다.",
+    "decisionContinuity.historicalPosition과 과거 계좌 활동은 과거 값이다. 현재 스냅샷·관측시각과 구분하고 현재 가격·손익률로 쓰지 않는다. 생략된 과거 가설 설명을 추측하지 않는다.",
     "reviewSummary는 evaluated만 기간·벤치마크에 따라 평가한다. 나머지는 성공·실패가 아니다. 관측 수익은 실제 거래 성과가 아니며 관측 건수는 독립 실험 수가 아니다.",
     "판단 변경은 현재 근거와 함께 설명한다. transitionVerified 없는 조건을 새 변화로 말하지 않는다.",
     "같은 사실을 summary, evidence, narrativeClaims에 반복하지 않는다. summary는 결론, evidence는 근거 목록, narrativeClaims는 실제 표시 문장과 근거 ID 연결 역할만 가진다.",

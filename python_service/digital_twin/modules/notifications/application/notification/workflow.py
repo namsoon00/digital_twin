@@ -907,6 +907,7 @@ class NotificationQueueRunner:
         context = dict(job.context or {})
         context.update({
             "quietHoursSuppressed": True,
+            "deliverySuppressionReason": "account_quiet_hours",
             "quietHoursReason": reason,
             "quietHoursStart": account.quiet_hours_start,
             "quietHoursEnd": account.quiet_hours_end,

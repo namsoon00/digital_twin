@@ -2275,9 +2275,9 @@ def validated_response_from_payload(
     narrative_only = str(
         (context or {}).get("notificationAiReviewMode") or ""
     ).strip().lower() == "context-narrative"
-    action = "HOLD" if narrative_only and submitted_action == "NO_ACTION" else submitted_action
+    action = submitted_action
     action_adjustment_reason = ""
-    if action not in VALID_ACTIONS:
+    if action not in VALID_ACTIONS and not (narrative_only and action == "NO_ACTION"):
         warnings.append("지원하지 않는 action 값이라 로컬 판단으로 대체했습니다.")
         action = fallback.action
         action_adjustment_reason = "invalid-action"
@@ -2429,7 +2429,8 @@ def validated_response_from_payload(
         investment_view_action = requested_investment_view_action
     else:
         investment_view_action = graph_investment_view_action
-    if hypotheses and comparison_state != "completed":
+    comparison_complete = comparison_state == "completed" or (narrative_only and comparison_state == "research-reviewed")
+    if hypotheses and not comparison_complete:
         warnings.append("AI가 모든 경쟁 가설을 유효하게 비교하지 못해 선택 가설 없이 판단을 유보했습니다.")
     invalid_hypothesis_ids = list(hypothesis_comparison.get("invalidHypothesisIds") or [])
     invalid_evidence_ids = list(hypothesis_comparison.get("invalidEvidenceIds") or [])
@@ -2467,10 +2468,10 @@ def validated_response_from_payload(
         warnings.append("AI 응답에서 같은 가설이 중복 평가되어 비교 결과를 사용하지 않았습니다.")
     if unreviewed_hypothesis_ids:
         warnings.append("AI가 검토하지 못한 경쟁 가설 " + str(len(unreviewed_hypothesis_ids)) + "개가 있습니다.")
-    if hypotheses and comparison_state != "completed":
+    if hypotheses and not comparison_complete:
         if action != "HOLD":
             warnings.append("가설 비교가 끝나기 전의 실행 의견은 사용하지 않고 보류로 낮췄습니다.")
-        action = normalized_action_for_rulebox_policy(context, normalized_action_for_target(context, "HOLD"))
+        action = "NO_ACTION" if narrative_only else normalized_action_for_rulebox_policy(context, normalized_action_for_target(context, "HOLD"))
         action_adjustment_reason = "hypothesis-comparison"
         summary = "경쟁 가설 비교가 끝나지 않아 지금은 실행 판단을 유보합니다."
         opinion = "시스템 안전 제한과 비교 실패 사유를 확인하고 모든 규칙 가설을 다시 평가한 뒤 판단합니다."
@@ -2522,7 +2523,8 @@ def validated_response_from_payload(
         )
     transition_contract = material_action_transition_contract(context, action)
     if (
-        bool(transition_contract.get("actionChanged"))
+        not narrative_only
+        and bool(transition_contract.get("actionChanged"))
         and bool(transition_contract.get("evaluated"))
         and not bool(transition_contract.get("allowsActionChange"))
     ):
@@ -2549,7 +2551,7 @@ def validated_response_from_payload(
             "행동 변경에는 이전 값과 현재 값이 모두 있는 사실 변화 또는 실질 소스 이벤트가 필요합니다.",
             180,
         )
-    disagreement = disagreement_reason_text(precomputed_action, action, payload, evidence, counter)
+    disagreement = "" if narrative_only else disagreement_reason_text(precomputed_action, action, payload, evidence, counter)
     if disagreement:
         append_unique_text(counter, disagreement, 180)
         if not (payload.get("disagreementReason") or payload.get("disagreement_reason")):
@@ -2645,7 +2647,8 @@ def validated_response_from_payload(
             "보유 상태와 허용 행동 범위를 적용해 현재 행동을 다시 맞췄습니다.",
         )
     if (
-        bool(transition_contract.get("evaluated"))
+        not narrative_only
+        and bool(transition_contract.get("evaluated"))
         and not bool(transition_contract.get("allowsActionChange"))
     ):
         current_action_plan = deterministic_current_action_plan(context, action)
@@ -2694,8 +2697,8 @@ def validated_response_from_payload(
     )
     response = NotificationAIValidatedResponse(
         action=action,
-        action_label=action_label_for_target(context, action),
-        investment_view_action=investment_view_action,
+        action_label="매매 판단 없음" if action == "NO_ACTION" else action_label_for_target(context, action),
+        investment_view_action="" if narrative_only else investment_view_action,
         execution_action=action,
         execution_disposition=str(envelope.get("executionDisposition") or ""),
         selected_rule_id=str(envelope.get("selectedRuleId") or ""),

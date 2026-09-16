@@ -857,9 +857,9 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertTrue(outcome.repair_succeeded)
         self.assertEqual(2, reviewer.calls)
         self.assertEqual("max", reviewer.profiles[0]["reasoningEffort"])
-        self.assertEqual("max", reviewer.profiles[1]["reasoningEffort"])
+        self.assertEqual("low", reviewer.profiles[1]["reasoningEffort"])
         self.assertEqual([180, 180], reviewer.timeouts)
-        self.assertEqual("max", outcome.execution_spans["repairReasoningEffort"])
+        self.assertEqual("low", outcome.execution_spans["repairReasoningEffort"])
         self.assertEqual(0, outcome.response.rejected_claim_count)
         self.assertIn("unknown-evidence-id", outcome.executed_prompt)
         brief = build_investment_narrative_brief(
@@ -1009,7 +1009,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 payload = {
                     "action": "NO_ACTION",
                     "summary": "단기 하방 위험이 회복 가능성보다 우세합니다.",
-                    "currentActionPlan": "기존 보유만 유지하고 추가 노출은 늘리지 않습니다.",
+                    "currentActionPlan": "가격이 20일선을 회복하는지 확인합니다.",
                     "nextActionPlan": "현재가와 20일선 관계를 다시 확인합니다.",
                     "hypotheses": [{
                         "hypothesisId": hypothesis_id,
@@ -1029,7 +1029,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                         "conviction": "moderate",
                         "dominantThesis": "단기 하방 위험이 회복 가능성보다 우세합니다.",
                         "causalMechanism": "가격 회복 제한이 단기 수급의 추세 전환을 늦춥니다.",
-                        "investmentImplication": "보유자는 회복 확인 전 추가 노출을 늘리지 않는 편이 유리합니다.",
+                        "investmentImplication": "회복 확인이 부족해 현재 상승 기대를 뒷받침할 근거는 약합니다.",
                         "catalysts": ["20일선 회복이 관점을 바꿀 촉매입니다."],
                         "risks": ["약한 흐름이 이어질 수 있습니다."],
                         "invalidationCondition": "현재가가 20일선 위에서 유지되면 하방 관점을 무효화합니다.",
@@ -1061,6 +1061,8 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         outcome = NotificationAIJudgementService(reviewer, {}).judge(context)
 
         self.assertTrue(outcome.publishable)
+        self.assertEqual("NO_ACTION", outcome.response.action)
+        self.assertEqual("NO_ACTION", outcome.response.execution_action)
         self.assertEqual(1, reviewer.calls)
         self.assertFalse(outcome.repair_attempted)
         self.assertIn("mechanism", outcome.response.verified_claim_sections)

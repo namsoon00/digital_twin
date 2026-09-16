@@ -97,6 +97,15 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   A graph-proven `REVIEW_ONLY` or `OBSERVATION` subject may request AI narrative
   interpretation, but that request must retain `context-narrative` mode and may
   never originate an investment action.
+  Preserve an authored `NO_ACTION` through parsing and publication; it is not
+  a `HOLD` recommendation. A completed research comparison is not an execution
+  authorization and does not require another AI call merely for being research.
+  Reject trading directives inside an actionless customer narrative, not only
+  invalid top-level action codes.
+  Continuity packets separate current frozen source facts from dated account
+  history. Never reuse legacy ledger valuations as current quotes, attach an
+  unverified cross-subject hypothesis description, or include observations that
+  occurred after the source cutoff.
 - A reasoning request bound to `verifiedSourceSnapshot.generatedAt` must read
   that exact MySQL snapshot-history row. Never substitute a newer snapshot.
   If the point-in-time row is unavailable, defer or reject the request with an

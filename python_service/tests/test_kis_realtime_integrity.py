@@ -1,7 +1,9 @@
 import unittest
+import socket
 from copy import deepcopy
 from datetime import datetime, timezone
 from threading import Event, Thread
+from unittest.mock import Mock, patch
 
 from digital_twin.infrastructure.kis_market_signals import (
     KISMarketSignalProvider,
@@ -44,6 +46,35 @@ def frame(values, count=1, tr_id=KIS_TR_CCN_PRICE):
 
 
 class KISRealtimeIntegrityTests(unittest.TestCase):
+    def test_idle_receive_keeps_connection_and_accepts_next_tick(self):
+        for timeout in (TimeoutError, socket.timeout):
+            with self.subTest(timeout=timeout):
+                ws = Mock()
+                ws.recv_text.side_effect = [timeout("idle"), frame(tick_values())]
+                client = self.client()
+                client.websocket_factory = lambda *args: ws
+                client.approval_key = "test-only"
+                with patch("digital_twin.infrastructure.kis_realtime_ws.time.monotonic", side_effect=[0, 0, 0, 2, 2]), patch("digital_twin.infrastructure.kis_realtime_ws.time.sleep"):
+                    result = client.collect(["000680"], 1)
+                self.assertEqual("ok", result["status"])
+                self.assertEqual(1, result["savedCount"])
+                self.assertEqual(2, ws.recv_text.call_count)
+                ws.connect.assert_called_once()
+                ws.close.assert_called_once()
+
+    def test_actual_disconnect_remains_a_transport_failure(self):
+        ws = Mock()
+        ws.recv_text.side_effect = ConnectionError("closed")
+        client = self.client()
+        client.websocket_factory = lambda *args: ws
+        client.approval_key = "test-only"
+        with patch("digital_twin.infrastructure.kis_realtime_ws.time.sleep"):
+            result = client.collect(["000680"], 1)
+        self.assertEqual("connection-error", result["status"])
+        self.assertEqual("receive", result["errorStage"])
+        self.assertTrue(result["reconnectRecommended"])
+        ws.close.assert_called_once()
+
     def test_fragmented_socket_message_survives_timeout_and_control_frame(self):
         from websockets.sync.server import serve
 

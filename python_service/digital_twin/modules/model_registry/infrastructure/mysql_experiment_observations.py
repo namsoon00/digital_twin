@@ -127,7 +127,9 @@ class MySQLExperimentObservationStore(MySQLOperationalConnection):
                 "WHERE m.plan_fingerprint = %s AND m.phase_at = %s AND m.expires_at > %s ORDER BY m.bucket_key, m.side LIMIT %s",
                 (plan["fingerprint"], phase, utc_now_iso(), plan["policy"]["minimumIndependentPairs"] * 2),
             ).fetchall()
-        groups, pairs, summary = {}, [], {"capturedInputs": 0, "unavailableInputs": 0, "pendingOutcomes": 0}
+        groups, pairs, summary = {}, [], {"capturedInputs": 0, "unavailableInputs": 0, "pendingOutcomes": 0,
+                                         "missingComparators": 0, "invalidOutcomes": 0}
+        pending_episode_ids = []
         for row in rows:
             groups.setdefault(row["bucket_key"], {})[row["side"]] = row
         for bucket, group in groups.items():
@@ -149,6 +151,10 @@ class MySQLExperimentObservationStore(MySQLOperationalConnection):
                 pairs.append(pair)
                 continue
             other = group.get("baseline") or {}
+            if not other:
+                summary["missingComparators"] += 1
+            if candidate["input_status"] != "ready" or (other and other.get("input_status") != "ready"):
+                summary["unavailableInputs"] += 1
             outcomes = [_json_loads(item.get("outcome_json"), {}) for item in (candidate, other)]
             payloads = [{**(item.get("payload") or {}), **item} for item in outcomes]
             base_episode = _json_loads(other.get("episode_json"), {})
@@ -167,7 +173,19 @@ class MySQLExperimentObservationStore(MySQLOperationalConnection):
                          "baselineOutcome": payloads[1].get("selectedHypothesisStatus"),
                          "observedAt": payloads[0].get("observedAt") or ""})
             if not valid:
-                summary["pendingOutcomes"] += 1
+                if all(item.get("outcomeId") for item in payloads):
+                    summary["invalidOutcomes"] += 1
+                elif other and candidate["input_status"] == "ready" and other.get("input_status") == "ready":
+                    summary["pendingOutcomes"] += 1
+                    pending_episode_ids.extend(item["episode_id"] for item, outcome in zip((candidate, other), payloads)
+                                               if not outcome.get("outcomeId"))
             pairs.append(pair)
+        summary["blockingReason"] = next((reason for key, reason in (
+            ("unavailableInputs", "experiment-inputs-unavailable"),
+            ("missingComparators", "experiment-comparator-not-captured"),
+            ("invalidOutcomes", "experiment-outcome-contract-mismatch"),
+            ("pendingOutcomes", "experiment-outcome-not-recorded"),
+        ) if summary[key]), "")
         return {"status": "ok", "pairs": pairs, "dataSummary": summary,
+                "pendingEpisodeIds": pending_episode_ids,
                 "replayScope": "source-packets-and-observed-claims"}

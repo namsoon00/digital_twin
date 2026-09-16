@@ -414,7 +414,9 @@ class KISRealtimeWebSocketClient:
             while time.monotonic() - started < max(1, int(duration_seconds or 1)):
                 try:
                     text = ws.recv_text(timeout=1.0)
-                except socket.timeout:
+                except (TimeoutError, socket.timeout):
+                    # Python 3.9 keeps socket.timeout distinct from the
+                    # built-in timeout raised by websockets' message buffer.
                     continue
                 last_received_at = str(self.now_provider() or "")
                 if str(text).startswith("{"):

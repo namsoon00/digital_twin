@@ -113,6 +113,8 @@ SOURCE_SCOPE_MATCH_SQL = """CASE
 # Cast boundary operands at joins, leaving indexed lookup columns unwrapped.
 # The proof predicate casts both sides to enforce byte-exact identity even when
 # an explicit operand collation would otherwise override a one-sided cast.
+# Proof reads only the executed boundary. Expanding every represented predecessor
+# multiplies subjects by coalesced events without adding executed-input evidence.
 LINEAGE = """SELECT j.job_id, b.snapshot_id AS executed_snapshot_id,
 j.completed_at AS reasoning_at,
 COALESCE(l.source_event_id, j.source_event_id) AS source_event_id,
@@ -169,6 +171,8 @@ LEFT JOIN JSON_TABLE(j.source_boundary_json, '$[*]' COLUMNS (
  generated_at VARCHAR(40) PATH '$.generatedAt')) b ON s.account_id = CAST(b.account_id AS BINARY)
 LEFT JOIN reasoning_engine_job_sources l ON l.survivor_job_id = j.job_id
  AND l.deployment_id = j.deployment_id
+ AND l.source_snapshot_id = CAST(b.snapshot_id AS BINARY)
+ AND l.source_snapshot_at = CAST(b.generated_at AS BINARY)
  AND (l.account_id = s.account_id OR l.account_id = '')
  AND (l.symbol = s.symbol OR l.symbol = '')
 LEFT JOIN domain_events e ON e.event_id = COALESCE(l.source_event_id, j.source_event_id)

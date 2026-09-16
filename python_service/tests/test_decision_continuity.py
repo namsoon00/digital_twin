@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.modules.decisions.application.decision_continuity_service import DecisionContinuityService
 from digital_twin.modules.decisions.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
-from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight, context_with_previous_delivered_investment_insight
+from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight, context_with_previous_delivered_investment_insight, frozen_current_position
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
 from digital_twin.modules.decisions.domain.investment_decision_actionability import (
     investment_decision_actionability,
@@ -21,6 +21,7 @@ from digital_twin.modules.outcomes.domain.decision_follow_up import (
 )
 from digital_twin.modules.decisions.domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
+    _compact_portfolio_lifecycle,
     build_notification_ai_decision_prompt,
     notification_ai_decision_brief,
     notification_ai_execution_profile,
@@ -343,10 +344,27 @@ class DecisionContinuityTests(unittest.TestCase):
         self.assertEqual("satisfied", packet["followUpConditions"][0]["status"])
         self.assertEqual(2.5, packet["observedOutcomes"][0]["priceChangeFromDecisionPct"])
         self.assertEqual("2", packet["actionObservations"][0]["quantityDelta"])
-        self.assertEqual("10", packet["currentPosition"]["quantity"])
+        self.assertEqual("10", packet["historicalPosition"]["quantity"])
+        self.assertEqual({}, packet["currentPosition"])
         self.assertTrue(packet["summary"]["actionPlanRecorded"])
         self.assertFalse(packet["summary"]["executionRecorded"])
         self.assertTrue(packet["summary"]["lifecycleReviewRecorded"])
+
+    def test_frozen_current_values_are_not_replaced_by_ledger_valuation(self):
+        previous = prior_episode()
+        previous["hypothesisSet"]["hypotheses"][0]["claim"] = "다른 회사의 과거 설명"
+        context = {"accountId": "main", "rawSymbol": "005930", "referenceDate": "2026-09-16T00:00:00Z",
+                   "ontologyRelationContext": {"subject": {"symbol": "005930"}, "sourceAboxSnapshotId": "frozen:1",
+                                               "facts": {"currentPrice": 127.92, "profitLossRate": -6.48, "quantity": 10}}}
+        domain = DomainStore()
+        packet = context_with_previous_investment_decision(
+            context, EpisodeStore(previous), DecisionContinuityService(EpisodeStore(previous), domain),
+        )["decisionContinuityPacket"]
+        self.assertEqual(127.92, packet["currentPosition"]["currentPrice"])
+        self.assertEqual("frozen:1", packet["currentPosition"]["sourceAboxSnapshotId"])
+        self.assertEqual("2026-08-16T01:00:00Z", packet["historicalPosition"]["observedAt"])
+        self.assertNotIn("claim", packet["selectedHypothesis"])
+        self.assertEqual("withheld-unverified-scope", packet["sourceStatus"]["hypothesisDescription"])
 
     def test_captured_packet_is_reused_without_second_database_read(self):
         episodes = EpisodeStore(prior_episode())
@@ -377,6 +395,47 @@ class DecisionContinuityTests(unittest.TestCase):
             first["decisionContinuityPacket"]["packetId"],
             second["decisionContinuityPacket"]["packetId"],
         )
+
+    def test_legacy_packet_cannot_reintroduce_old_values_as_current(self):
+        legacy = {"contractVersion": "decision-continuity-packet-v2", "accountId": "main", "symbol": "005930",
+                  "packetId": "legacy:1", "currentPosition": {"currentPrice": 999}}
+        context = context_with_previous_investment_decision({"accountId": "main", "rawSymbol": "005930",
+                                                            "decisionContinuityPacket": legacy})
+        self.assertNotIn("decisionContinuityPacket", context)
+        self.assertEqual(999, legacy["currentPosition"]["currentPrice"])
+
+    def test_after_source_observations_do_not_leak_into_frozen_memory(self):
+        packet = DecisionContinuityService(EpisodeStore(prior_episode()), DomainStore()).build(
+            account_id="main", symbol="005930", captured_at="2026-08-16T00:30:00Z",
+        )
+        self.assertEqual({}, packet["historicalPosition"])
+        self.assertEqual([], packet["observedOutcomes"])
+        self.assertEqual([], packet["actionObservations"])
+        self.assertEqual([], packet["followUpConditions"])
+        self.assertEqual("withheld-after-source-cutoff", packet["sourceStatus"]["accountObservation"])
+
+    def test_invalid_reference_clock_cannot_admit_historical_facts(self):
+        packet = DecisionContinuityService(EpisodeStore(prior_episode()), DomainStore()).build(
+            account_id="main", symbol="005930", captured_at="unknown-clock",
+        )
+        self.assertEqual({}, packet["previousDecision"])
+        self.assertEqual({}, packet["historicalPosition"])
+
+    def test_unbound_current_facts_are_not_presented_as_frozen(self):
+        context = {"rawSymbol": "005930", "referenceDate": "2026-09-16T00:00:00Z",
+                   "ontologyRelationContext": {"facts": {"currentPrice": 100}}}
+        self.assertEqual({}, frozen_current_position(context, "005930"))
+
+    def test_compacted_account_activity_cannot_supply_a_current_valuation(self):
+        value = {"portfolioState": {"positions": [{"symbol": "005930", "quantity": 10,
+                    "observedAt": "2026-09-15T00:00:00Z", "profitLossRate": 99, "marketValueKrw": 999999}]}}
+        for include_rebalance in (False, True):
+            compact = _compact_portfolio_lifecycle(value, "005930", include_rebalance)
+            row = compact["portfolioState"]["subjectPositions"][0]
+            self.assertEqual(10, row["quantity"])
+            self.assertEqual("2026-09-15T00:00:00Z", row["observedAt"])
+            self.assertNotIn("profitLossRate", row)
+            self.assertNotIn("marketValueKrw", row)
 
     def test_previous_insight_memory_skips_current_and_unpublishable_episodes(self):
         class InsightStore:
@@ -483,7 +542,7 @@ class DecisionContinuityTests(unittest.TestCase):
 
         self.assertEqual("queued", outcome["status"])
         self.assertEqual(
-            "decision-continuity-packet-v2",
+            "decision-continuity-packet-v3",
             queue.request.context["decisionContinuityPacket"]["contractVersion"],
         )
         self.assertEqual(
@@ -520,7 +579,7 @@ class DecisionContinuityTests(unittest.TestCase):
         prompt = build_notification_ai_decision_prompt(context, {}, decision_brief=brief)
         prompt_payload = json.loads(prompt.split("DecisionCore:\n", 1)[1])
 
-        self.assertEqual("decision-continuity-packet-v2", brief["decisionContinuity"]["contractVersion"])
+        self.assertEqual("decision-continuity-packet-v3", brief["decisionContinuity"]["contractVersion"])
         self.assertEqual("ADD", prompt_payload["continuityDelta"]["previousDecision"]["action"])
         self.assertEqual("excluded", prompt_payload["continuityDelta"]["reviewSummary"]["state"])
         self.assertIn("평가 대상에서 제외", prompt_payload["continuityDelta"]["reviewSummary"]["scheduleExplanation"])

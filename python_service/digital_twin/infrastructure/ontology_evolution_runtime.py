@@ -152,7 +152,23 @@ class OntologyEvolutionRuntime:
             return {"status": "unavailable", "reason": "candidate-artifact-mismatch"}
         if not self.observations or not plan.get("observationRequirements"):
             return {"status": "unavailable", "reason": "frozen-experiment-inputs-required"}
-        return self.observations.comparison(plan, observed_after=observed_after)
+        evidence = self.observations.comparison(plan, observed_after=observed_after)
+        pending_ids = evidence.pop("pendingEpisodeIds", [])
+        schedule_reader = getattr(self.outcomes, "experiment_outcome_schedule", None)
+        if pending_ids and callable(schedule_reader):
+            schedule = schedule_reader(plan, pending_ids)
+            summary = evidence["dataSummary"]
+            summary["outcomeSchedule"] = schedule
+            if summary.get("blockingReason") == "experiment-outcome-not-recorded":
+                summary["blockingReason"] = schedule.get("blockingReason") or summary["blockingReason"]
+        if not evidence.get("pairs"):
+            reader = getattr(self.outcomes, "experiment_inference_coverage", None)
+            if callable(reader):
+                coverage = reader(plan, deployment["deploymentId"], observed_after=observed_after)
+                evidence["dataSummary"] = {**(evidence.get("dataSummary") or {}),
+                                           "inferenceCoverage": coverage,
+                                           "blockingReason": coverage["blockingReason"]}
+        return evidence
 
     def adopt(self, plan, deployment, assessment):
         validate_evolution_plan(plan)

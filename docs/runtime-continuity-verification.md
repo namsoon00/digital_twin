@@ -133,6 +133,14 @@ Reports explicitly retain lineage gaps and truncation; absence is not proof of
 no production activity. Counts across polls deduplicate AI results using one-run
 hashes instead of summing overlapping windows.
 
+The lineage join only expands predecessor rows matching the actually executed
+snapshot and generated timestamp. It does not multiply each subject by every
+coalesced source event. This reduces read cost without treating represented but
+unexecuted snapshots as proof. In a bounded local check on 2026-09-16, 5 recent
+jobs returned in 100 ms and 20 jobs in 639 ms without result truncation. These
+are measured samples, not a latency guarantee or a completeness claim for the
+whole source history.
+
 The strong stored chain requires:
 
 1. A persisted source event and live-mode verified snapshot, with the exact

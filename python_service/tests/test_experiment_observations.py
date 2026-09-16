@@ -3,7 +3,8 @@ import hashlib
 import json
 import sqlite3
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -21,6 +22,11 @@ from digital_twin.modules.model_registry.infrastructure.mysql_experiment_observa
 from digital_twin.modules.model_registry.contracts import GraphInferenceRule, default_graph_inference_rules
 from digital_twin.modules.outcomes.contracts import ShadowHypothesisObservationEpisode
 from digital_twin.modules.decisions.contracts import FactDelta
+from digital_twin.modules.model_registry.application.ontology_evolution_service import OntologyEvolutionService
+from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase
+from digital_twin.infrastructure.transactions.decision_history_parts.evolution_comparison import (
+    read_experiment_inference_coverage, read_experiment_outcome_schedule,
+)
 
 
 START = "2026-09-13T00:00:00Z"
@@ -234,6 +240,104 @@ class ExperimentObservationTests(unittest.TestCase):
         self.assertTrue(result["pairs"][0]["eligible"])
         self.assertEqual("corroborated", result["pairs"][0]["candidateOutcome"])
         self.assertEqual(1, result["dataSummary"]["capturedInputs"])
+
+    def test_comparator_input_gap_is_not_reported_as_waiting_for_future_outcome(self):
+        for side in ("candidate", "baseline"):
+            capture_prediction(self.connection, self.episode(side), NOW)
+        self.connection.execute("UPDATE ontology_experiment_dataset_members SET input_status = 'unavailable' WHERE side = 'baseline'")
+        with patch('digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations.utc_now_iso', return_value=NOW):
+            result = self.store.comparison(self.plan)
+        self.assertEqual("experiment-inputs-unavailable", result["dataSummary"]["blockingReason"])
+        self.assertEqual(0, result["dataSummary"]["pendingOutcomes"])
+        self.assertFalse(result["pairs"][0]["eligible"])
+
+    def test_frozen_inputs_outcomes_adoption_and_regression_form_one_loop(self):
+        current = [START]
+        state = ["shadow"]
+        item = HypothesisDevelopmentCase("case:fixture", "fixture", "fixture", "TEST", "Fixture", "Fixture only")
+        item.status = "shadow-observing"
+        item.evolution = {"plan": self.plan, "deployment": {"deploymentId": "candidate"}}
+
+        def adopt(plan, deployment, assessment):
+            self.assertEqual("qualified", assessment["status"])
+            state[0] = "active"
+            self.store.monitoring(plan, current[0])
+            return {"status": "promoted", "adoptedAt": current[0]}
+
+        runtime = SimpleNamespace(
+            state=lambda *_: {"status": state[0]},
+            comparison=lambda plan, deployment, observed_after="": self.store.comparison(plan, observed_after),
+            adopt=Mock(side_effect=adopt), rollback=Mock(return_value={"status": "rolled-back"}),
+        )
+        service = OntologyEvolutionService(runtime, self.plan["policy"], lambda: current[0])
+
+        def cohort(offset, candidate_wins):
+            for day in range(offset, offset + self.plan["policy"]["minimumIndependentPairs"]):
+                at = datetime(2026, 9, 13, 0, 5, tzinfo=timezone.utc) + timedelta(days=day)
+                stamp = at.isoformat().replace("+00:00", "Z")
+                source = source_row(at=stamp, recorded=(at + timedelta(seconds=2)).isoformat())
+                self.connection.insert_source(source)
+                captured = (at + timedelta(minutes=2)).isoformat()
+                observed = (at + timedelta(minutes=60)).isoformat()
+                for side in ("candidate", "baseline"):
+                    prototype = self.episode(side)
+                    episode = replace(prototype, episode_id=f"episode:{day}:{side}", observed_from_at=stamp,
+                                      source_abox_snapshot_id=f"abox:{day}", market_independence_key=f"market:{day}",
+                                      input_provenance={**prototype.input_provenance, "sourceBoundaries": [
+                                          {"accountId": "fixture", "snapshotId": source["snapshot_id"], "fingerprint": source["fingerprint"]}]})
+                    capture_prediction(self.connection, episode, captured)
+                    payload = {**self.outcome(side).payload, "sourceAboxSnapshotId": episode.source_abox_snapshot_id, "targetAt": observed}
+                    outcome = {"outcomeId": f"outcome:{day}:{side}", "observedAt": observed, "payload": payload,
+                               "selectedHypothesisStatus": "corroborated" if (side == "candidate") == candidate_wins else "contradicted"}
+                    capture_outcome(self.connection, episode, SimpleNamespace(payload=payload, to_dict=lambda: outcome), observed)
+                self.connection.execute("DELETE FROM verified_reasoning_source_snapshots WHERE snapshot_id = %s", (source["snapshot_id"],))
+
+        cohort(1, True)
+        current[0] = "2026-10-04T02:00:00Z"
+        with patch('digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations.utc_now_iso', side_effect=lambda: current[0]):
+            service.advance(item, Mock())
+        self.assertEqual("evolution-monitoring", item.status)
+        self.assertEqual(20, item.evolution["assessment"]["independentPairCount"])
+        runtime.adopt.assert_called_once()
+        cohort(22, False)
+        current[0] = "2026-10-25T02:00:00Z"
+        with patch('digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations.utc_now_iso', side_effect=lambda: current[0]):
+            service.advance(item, Mock())
+        self.assertEqual("rolled-back", item.status)
+        self.assertEqual("forward-regression", item.evolution["reason"])
+        runtime.rollback.assert_called_once()
+
+    def test_empty_experiment_explains_condition_absence_and_capture_failure(self):
+        connection = Mock()
+        def coverage(rows):
+            connection.execute.return_value.fetchall.return_value = rows
+            return read_experiment_inference_coverage(self.plan, "candidate", connect=lambda: nullcontext(connection))
+        self.assertEqual("experiment-inference-not-observed", coverage([])["blockingReason"])
+        row = {"created_at": NOW, "candidate_json": json.dumps({"hypotheses": []})}
+        self.assertEqual("experiment-condition-not-observed-in-sample", coverage([row])["blockingReason"])
+        hypothesis = {"hypothesis_id": "h:1", "claim_contract": self.episode().hypothesis["claimContract"]}
+        row["candidate_json"] = json.dumps({"hypotheses": [hypothesis], "eligibleHypothesisIds": []})
+        self.assertEqual("experiment-candidate-not-eligible", coverage([row])["blockingReason"])
+        row["candidate_json"] = json.dumps({"hypotheses": [hypothesis], "eligibleHypothesisIds": ["h:1"]})
+        self.assertEqual("experiment-input-capture-missing", coverage([row])["blockingReason"])
+        sql, args = connection.execute.call_args.args
+        self.assertIn("deployment_id = %s", sql)
+        self.assertEqual(("fixture", "TEST", START, START, "candidate"), args[:5])
+
+    def test_result_diagnosis_uses_market_schedule_not_elapsed_wall_time(self):
+        connection = Mock()
+        row = {"observation_episode_id": "e:1", "target_at": "2026-09-14T00:30:00Z", "status": "pending", "maximum_delay_minutes": 30}
+        connection.execute.return_value.fetchall.return_value = [row]
+        def read(now):
+            return read_experiment_outcome_schedule(self.plan, ["e:1"], connect=lambda: nullcontext(connection), now=now)
+        self.assertEqual("experiment-outcome-not-due", read("2026-09-13T15:00:00Z")["blockingReason"])
+        self.assertEqual("experiment-outcome-capture-pending", read("2026-09-14T00:30:00Z")["blockingReason"])
+        self.assertEqual("experiment-outcome-capture-pending", read("2026-09-14T00:45:00Z")["blockingReason"])
+        self.assertEqual("experiment-outcome-overdue", read("2026-09-14T02:00:00Z")["blockingReason"])
+        row["status"] = "needs-data"
+        self.assertEqual("experiment-outcome-data-gap", read(NOW)["blockingReason"])
+        connection.execute.return_value.fetchall.return_value = []
+        self.assertEqual("experiment-outcome-schedule-missing", read(NOW)["blockingReason"])
 
     def test_later_poll_does_not_replace_first_failed_anchor(self):
         missing = self.episode(input_provenance={**self.episode().input_provenance, "sourceBoundaries": []})

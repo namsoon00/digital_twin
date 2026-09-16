@@ -7,15 +7,13 @@ owns the investment relation context and allowed action envelope; the AI queue
 only schedules the final comparison and explanation of those immutable facts.
 
 ```text
-TypeDB InferenceBox investmentInsight
+TypeDB native inference over a frozen source/ABox
                 |
                 v
-notification_jobs: pending
+SubjectDecisionCase + immutable CandidateSetSnapshot
                 |
-      delivery worker captures context
+       inference-completed event / AIInsightHandoff
                 |
-                v
-notification_jobs: awaiting_ai
 ai_inference_requests: pending
                 |
        SKIP LOCKED + lease/heartbeat
@@ -30,12 +28,16 @@ ai_inference_requests: pending
      ontology/action-envelope validation
                 |
                 v
-ai_inference_results: completed
-notification_jobs: pending
+ai_inference_results + AIInsightEpisode
+                |
+        reconciliation / delivery policy
                 |
                 v
-        final delivery outbox
+notification_jobs: pending -> provider attempt -> verified receipt
 ```
+
+The compatibility notification-first path can still park an existing job in
+`awaiting_ai`; it must use the same immutable packet and publication checks.
 
 ## Correctness Rules
 
@@ -50,8 +52,14 @@ notification_jobs: pending
 - Claim uses `FOR UPDATE SKIP LOCKED`; one request has one lease owner.
 - A heartbeat extends the lease while Codex runs. Expired latest leases retry;
   expired non-latest leases become superseded.
-- The primary queue uses `gpt-5.6-sol` with `max` reasoning. Deterministic local
-  TypeDB-backed wording is used only after the configured MAX attempts fail.
+- The primary queue uses its configured model and reasoning profile. A failed
+  model attempt is not replaced by a fabricated AI-authored investment opinion.
+- Contract repair uses its own configured effort, not an implicit copy of the
+  initial MAX profile. A valid `research-reviewed` explanation with `NO_ACTION`
+  does not require an execution comparison or a redundant repair call.
+- `context-narrative` retains `NO_ACTION` from model response to delivery. It
+  may explain investment direction and causal evidence but cannot advise
+  holding, buying or selling through prose while claiming to be actionless.
 - Operational notifications do not enter this AI queue.
 - Terminal subject decisions are suppressed before queueing. Normal
   supersession races end as `superseded`, not as actionable AI failures.
@@ -84,3 +92,15 @@ the unabridged decision brief remains in the immutable audit store.
 
 Use `npm run python:ai-inference:status` to inspect queue state. The realtime
 status API also exposes `aiInferenceQueue` separately from delivery jobs.
+
+`executionSpans.queueWaitMs` measures the current attempt's available-to-claim
+interval. It is null when either timestamp is unavailable. Previous model
+attempts and retry backoff are not queue waiting. `attemptNumber` and
+`requestElapsedBeforeAttemptMs` retain the broader request context separately.
+
+Continuity v3 separates current ABox-bound facts from dated historical positions.
+Old v2 packets cannot reintroduce account-ledger prices as current valuations.
+Final delivery/suppression reasons are retained in the notification lifecycle,
+so outbox cleanup cannot turn quiet-hours suppression into an invented
+hypothesis-qualification failure. A stored terminal state is still distinct
+from a verified channel receipt.

@@ -207,6 +207,16 @@ class NotificationTraceQueryService:
                     }),
                 })
         timeline.sort(key=lambda item: (item.get("at") or "", item.get("id") or ""))
+        final_event = max(
+            (item for item in lifecycle if item.get("stage") in {"delivered", "failed", "suppressed"}),
+            key=lambda item: str(item.get("createdAt") or ""), default={},
+        )
+        final_delivery = {**_mapping(_mapping(final_event.get("metadata")).get("finalDelivery")),
+                          "state": final_event.get("stage") or "unknown",
+                          "reason": final_event.get("reason") or "",
+                          "at": final_event.get("createdAt") or ""}
+        if final_delivery["state"] == "suppressed" and not final_delivery.get("reasonCode"):
+            final_delivery["reasonCode"] = str(context.get("deliverySuppressionReason") or "historical-reason-unrecorded")
         for sequence, item in enumerate(timeline, start=1):
             item["sequence"] = sequence
 
@@ -465,12 +475,12 @@ class NotificationTraceQueryService:
             _stage(
                 "delivery",
                 "알림 전달",
-                "completed" if any(str(item.get("status") or "") == "delivered" for item in attempts) else "failed" if attempts and delivery_completed else "in-progress" if attempts else "missing",
-                "발송 정책을 통과한 메시지를 채널 공급자에 전달하고 결과를 저장했습니다.",
+                "blocked" if final_delivery["state"] == "suppressed" else "completed" if any(str(item.get("status") or "") == "delivered" for item in attempts) else "failed" if final_delivery["state"] == "failed" or (attempts and delivery_completed) else "in-progress" if attempts else "missing",
+                final_delivery["reason"] if final_delivery["state"] == "suppressed" else "발송 정책을 통과한 메시지를 채널 공급자에 전달하고 결과를 저장했습니다.",
                 started_at=delivery_started,
                 completed_at=delivery_completed,
                 identifiers={"attemptIds": [item.get("attemptId") for item in attempts]},
-                details=stage_details({"lifecycle": lifecycle, "deliveryAttempts": attempts}),
+                details=stage_details({"lifecycle": lifecycle, "deliveryAttempts": attempts, "finalDelivery": final_delivery}),
             ),
         ]
         for sequence, item in enumerate(stages, start=1):
@@ -503,6 +513,7 @@ class NotificationTraceQueryService:
             "jobId": job_id,
             "lifecycle": _safe(lifecycle),
             "deliveryAttempts": _safe(attempts),
+            "finalDelivery": _safe(final_delivery),
             "timeline": timeline,
             "pipeline": pipeline,
         }

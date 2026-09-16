@@ -64,6 +64,16 @@ class ModuleAccountMutationTests(unittest.TestCase):
         self.assertEqual("05:00", self.stored(account.account_id).quiet_hours_end)
         self.assertEqual([], bus.published)
 
+    def test_disabled_quiet_hours_survive_unrelated_edits_and_reload(self):
+        account = self.account("module-quiet-hours")
+        service = AccountApplicationService(self.registry, self.registry.settings, EventBus())
+        service.save_payload({"id": account.account_id, "quietHoursEnabled": False})
+        service.save_payload({"id": account.account_id, "label": "Renamed"})
+        service.save_payload({"id": account.account_id, "investmentStrategyProfile": "aggressive"})
+        self.assertFalse(self.stored(account.account_id).quiet_hours_enabled)
+        self.assertEqual("22:00", self.stored(account.account_id).quiet_hours_start)
+        self.assertEqual("test-only-secret", self.stored(account.account_id).client_secret)
+
     def test_module_watchlist_concurrent_add_remove_is_scoped_and_idempotent(self):
         account = self.account("module-watchlist")
         other = self.account("module-watchlist-other")

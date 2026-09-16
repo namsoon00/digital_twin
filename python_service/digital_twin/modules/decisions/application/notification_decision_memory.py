@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Dict, Mapping
 
 from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_subject
-from digital_twin.modules.decisions.domain.decision_continuity import compact_decision_continuity_packet
+from digital_twin.modules.decisions.domain.decision_continuity import (
+    DECISION_CONTINUITY_PACKET_VERSION, compact_decision_continuity_packet,
+)
 from digital_twin.modules.decisions.domain.investment_decision_history import (
     compact_decision_episode_memory, decision_memory_matches_scope,
 )
@@ -14,6 +16,24 @@ from digital_twin.modules.decisions.domain.investment_insight_assessment import 
 
 def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, Mapping) else {}
+
+
+def frozen_current_position(context, symbol):
+    relation = _mapping(context.get("ontologyRelationContext"))
+    facts = _mapping(relation.get("facts"))
+    subject = _mapping(relation.get("subject"))
+    declared = str(subject.get("symbol") or context.get("rawSymbol") or "").upper()
+    as_of = str(context.get("referenceDate") or relation.get("referenceDate") or "")
+    snapshot_id = str(relation.get("sourceAboxSnapshotId") or "")
+    if declared != symbol or not facts or not as_of or not snapshot_id:
+        return {}
+    return {
+        **{key: facts[key] for key in ("quantity", "sellableQuantity", "averagePrice", "currentPrice", "profitLossRate")
+           if facts.get(key) is not None},
+        "symbol": symbol, "observedAt": as_of, "source": "frozen-reasoning-facts",
+        "sourceAboxSnapshotId": snapshot_id,
+        "observationState": "observed",
+    }
 
 
 def context_with_previous_investment_decision(
@@ -73,6 +93,7 @@ def context_with_previous_investment_decision(
                 exclude_episode_id=str(enriched.get("investmentDecisionEpisodeId") or "").strip(),
                 captured_at=str(enriched.get("referenceDate") or ""),
                 existing_previous=existing,
+                current_position=frozen_current_position(enriched, resolved_symbol),
             )
         except Exception as error:  # noqa: BLE001 - a continuity read cannot block the alert.
             packet = {}
@@ -100,7 +121,7 @@ def context_with_previous_investment_decision(
             return enriched
         if continuity_error:
             enriched["decisionContinuityPacket"] = {
-                "contractVersion": "decision-continuity-packet-v2",
+                "contractVersion": DECISION_CONTINUITY_PACKET_VERSION,
                 "status": "error",
                 "accountId": resolved_account,
                 "symbol": resolved_symbol,

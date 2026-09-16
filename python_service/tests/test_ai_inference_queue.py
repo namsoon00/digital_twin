@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin.modules.decisions.application.ai_inference_queue_service import AIInferenceQueueRunner, NotificationAIRequestEnqueuer, ai_failure_diagnostic, ai_response_contract_error, preserve_verified_ai_narrative, typedb_inference_fallback_response
+from digital_twin.modules.decisions.application.ai_inference_queue_service import ai_attempt_queue_wait_ms
 from digital_twin.modules.notifications.application.ai_insight_notification_projection import AIInsightNotificationProjectionService
 from digital_twin.modules.decisions.application.notification_ai_gate_audit import context_with_validated_ai_response
 from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionOutcome
@@ -31,6 +32,16 @@ from mysql_fixtures import (
     reset_mysql_test_database,
     test_store_seed,
 )
+
+
+class AttemptQueueTimingTest(unittest.TestCase):
+    def test_retry_wait_excludes_prior_model_attempt_and_backoff(self):
+        request = SimpleNamespace(created_at="2026-09-16T00:00:00Z", available_at="2026-09-16T00:15:00Z",
+                                  started_at="2026-09-16T00:15:03Z", attempts=2)
+        self.assertEqual(3000, ai_attempt_queue_wait_ms(request))
+
+    def test_unknown_ready_time_is_not_reported_as_zero_wait(self):
+        self.assertIsNone(ai_attempt_queue_wait_ms(SimpleNamespace(started_at="2026-09-16T00:15:03Z")))
 
 
 class FakeReviewer:
@@ -1219,7 +1230,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v6", prompt_audit["contextRouting"]["version"])
         self.assertEqual(
-            "investment-ai-judge-v25-registered-follow-up-continuity",
+            "investment-ai-judge-v26-actionless-narrative-and-dated-memory",
             prompt_audit["promptRelease"]["version"],
         )
         self.assertIn(

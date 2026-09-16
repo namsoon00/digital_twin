@@ -913,10 +913,7 @@ def _compact_portfolio_lifecycle(
         _selected_fields(
             item,
             (
-                "symbol", "currentWeightPct", "profitLossRate", "marketValueKrw",
-                "accountValueKrw", "accountValueBasis", "brokerGrossValueKrw",
-                "brokerNetValueKrw", "markToMarketValueKrw", "valuationSnapshotId",
-                "valuationFxSource", "valuationFxState", "valuationFxAsOf",
+                "symbol", "quantity", "observedAt",
                 "holdingDays", "openedAt", "lastIncreaseAt", "lastDecreaseAt",
             ),
         )
@@ -928,9 +925,7 @@ def _compact_portfolio_lifecycle(
             _selected_fields(
                 item,
                 (
-                    "symbol", "profitLossRate", "marketValueKrw", "accountValueKrw",
-                    "accountValueBasis", "brokerGrossValueKrw", "brokerNetValueKrw",
-                    "markToMarketValueKrw", "valuationSnapshotId", "holdingDays",
+                    "symbol", "quantity", "observedAt", "holdingDays",
                     "openedAt", "lastIncreaseAt", "lastDecreaseAt",
                 ),
             )
@@ -943,6 +938,7 @@ def _compact_portfolio_lifecycle(
                 ("status", "differenceCount", "source", "sourceSnapshotAt", "createdAt"),
             ),
             "portfolioState": {
+                "usage": "historical-account-activity-not-current-valuation",
                 "subjectPositions": market_position_rows[:1],
             },
         }
@@ -1717,7 +1713,7 @@ def _minimum_decision_continuity(value: object) -> Dict[str, object]:
         packet.get("currentPosition"),
         (
             "symbol", "quantity", "sellableQuantity", "averagePrice", "currentPrice",
-            "profitLossRate", "observationState",
+            "profitLossRate", "observationState", "observedAt", "source", "sourceAboxSnapshotId",
         ),
     )
     if current_position:

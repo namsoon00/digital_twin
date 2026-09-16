@@ -11,6 +11,7 @@ from typing import Callable, Dict, Optional
 from digital_twin.modules.notifications.contracts import typedb_context_observation_contract
 from digital_twin.modules.decisions.domain.investment_decision_actionability import investment_decision_actionability
 from digital_twin.modules.decisions.domain.investment_insight_assessment import investment_insight_assessment
+from digital_twin.modules.decisions.domain.investment_narrative_policy import narrative_presentation_errors
 from digital_twin.modules.notifications.contracts import INVESTMENT_INSIGHT
 from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.modules.decisions.domain.notification_ai_gate_text import parse_ai_response_json
@@ -49,7 +50,9 @@ def hypothesis_comparison_needs_repair(
     return bool(
         str(message_type or "") == INVESTMENT_INSIGHT
         and getattr(response, "hypotheses", None)
-        and str(getattr(response, "hypothesis_comparison_state", "") or "") != "completed"
+        and str(getattr(response, "hypothesis_comparison_state", "") or "") not in (
+            {"completed", "research-reviewed"} if response.action == "NO_ACTION" else {"completed"}
+        )
     )
 
 
@@ -75,6 +78,8 @@ def ai_response_contract_error(
         if hypothesis_ids and selected_id not in hypothesis_ids:
             return "selectedHypothesisId is not present in the routed TypeDB hypothesis set."
         if narrative_only:
+            if response.action != "NO_ACTION":
+                return "context-narrative requires action=NO_ACTION."
             if not hypothesis_ids and selected_id:
                 return "selectedHypothesisId is not present in the empty routed TypeDB hypothesis set."
             return ""
@@ -595,6 +600,19 @@ def narrative_publication_contract_error(
     # response directly. Production model responses always retain raw JSON.
     if not str(response.raw_response or "").strip():
         return ""
+    authored = parse_ai_response_json(response.raw_response) or {}
+    # Compatibility defaults are not AI-authored sentences and are replaced by
+    # verified claims during rendering. Do not re-run the model to edit defaults.
+    presentation_errors = narrative_presentation_errors(response.action, [
+        *[authored.get(key) for key in (
+            "summary", "investmentView", "investment_view", "currentActionPlan", "current_action_plan",
+            "executionDecision", "execution_decision", "nextActionPlan", "next_action_plan",
+            "invalidationCondition", "invalidation_condition", "changeAnalysis", "change_analysis",
+        )],
+        *[item.get("text") for item in response.narrative_claims or [] if isinstance(item, dict)],
+    ])
+    if presentation_errors:
+        return "narrative presentation contract failed: " + ", ".join(presentation_errors)
     validation = dict(response.claim_validation or {})
     if _claim_validation_ledger_ids(response) != set(packet.evidence_ids):
         return "claim validation did not use the inference packet evidence ledger."
@@ -717,14 +735,16 @@ def ai_contract_repair_prompt(
     return "\n".join((
         "너는 TypeDB 투자 판단 JSON의 계약 오류만 수정한다. 도구나 파일을 사용하지 않는다.",
         "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
-        "action은 actionEnvelope 안에서 선택하고 모든 입력 가설을 한 번씩 검토한다.",
+        "reviewMode가 context-narrative이거나 notificationIntent가 context-observation/review-observation 또는 비교가 research-only이면 action=NO_ACTION을 유지한다. 보유 권고, 추가매수 보류 같은 매매 지시도 문장에 쓰지 않는다. 확인된 투자 영향과 다음 관찰 조건을 설명한다.",
+        "고객 문장은 내부 규칙명과 영문 식별자 없이 쉬운 한국어 완전한 문장으로 쓴다. 같은 의미를 여러 섹션에 반복하지 않는다.",
+        "설명 전용은 NO_ACTION을 쓰고 그 외 action은 actionEnvelope 안에서 선택한다. 모든 입력 가설을 한 번씩 검토한다.",
         "각 가설의 입력 근거와 반대 근거를 모두 확인한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 근거 ID 배열을 응답에 복사하지 않는다.",
         "반대 근거 검사를 마쳤으면 counterEvidenceStatus를 쓴다. confirmed에는 근거 ID가 연결된 counter 문장이 필요하고, 모든 입력을 검토했지만 반대 사실이 없을 때만 none-found를 쓴다. not-checked와 unavailable은 허용되지 않는다.",
         "narrativeClaims는 허용된 evidence ID만 연결하며 가설이 있으면 view, mechanism, implication과 next-condition 또는 limitation을 포함한다.",
         "insightAssessment에는 가장 근거가 강한 방향, 기간, 근거 강도, 지배 가설, 인과 경로, 투자 의미, 촉매, 반대 시나리오와 무효화 조건을 채운다.",
         "무효화 조건은 관측 대상과 변화 방향 또는 입력 임계값을 구체적으로 쓰고 검증된 next-condition 근거와 연결한다. 일반적인 '근거가 사라지면 다시 본다' 문장은 쓰지 않는다.",
         "자료 한계는 conviction과 영향 범위를 낮추되, 가장 잘 지지되는 투자 결론 자체를 없애거나 양쪽 가능성 나열로 대체하지 않는다.",
-        "currentActionPlan에는 지금 할 일과 보류할 일을, nextActionPlan에는 실제로 재관측할 가격·거래량·수급·실적·공시·금리·환율과 그 결과에 따른 판단 변화를 쓴다.",
+        "currentActionPlan에는 허용된 대응을 쓰되 NO_ACTION이면 확인할 사실만 쓴다. nextActionPlan에는 실제로 재관측할 가격·거래량·수급·실적·공시·금리·환율과 그 결과에 따른 해석 변화를 쓴다.",
         "BUY·ADD·TRIM·SELL은 decisionReadiness=ready, executionEligibility=eligible, qualification decisionUse=execution, 근거 ID가 있는 supported causalChain을 모두 만족할 때만 선택한다.",
         "필수 응답 골격: " + json.dumps(required_shape, ensure_ascii=False, separators=(",", ":")),
         "검증 오류: " + json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
@@ -932,11 +952,8 @@ class NotificationAIJudgementService:
             requested_profile = dict(
                 profile or context.get("notificationAiExecutionProfile") or {}
             )
-            requested_effort = str(
-                requested_profile.get("reasoningEffort") or ""
-            ).strip().lower()
-            if requested_effort in {"low", "medium", "high", "max"}:
-                repair_reasoning_effort = requested_effort
+            # Repair has its own profile; the initial MAX analysis must not
+            # silently override the configured repair effort.
             repair_context["notificationAiExecutionProfile"] = {
                 **requested_profile,
                 "name": "contractRepair",

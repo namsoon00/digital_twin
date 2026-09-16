@@ -9,6 +9,7 @@ from digital_twin.modules.decisions.domain.decision_continuity import build_deci
 from digital_twin.modules.decisions.domain.investment_decision_history import (
     compact_decision_episode_memory, decision_memory_matches_scope,
 )
+from digital_twin.modules.model_registry.contracts import parse_timestamp
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -45,12 +46,27 @@ class DecisionContinuityService:
         exclude_episode_id: str = "",
         captured_at: str = "",
         existing_previous: object = None,
+        current_position: object = None,
     ) -> Dict[str, object]:
         account_key = str(account_id or "").strip()
         symbol_key = str(symbol or "").upper().strip()
         excluded = str(exclude_episode_id or "").strip()
+        cutoff = parse_timestamp(captured_at or _utc_now())
+
+        def known_by_cutoff(value, *keys):
+            row = _mapping(value)
+            if cutoff is None:
+                return False
+            for key in keys:
+                if row.get(key):
+                    timestamp = parse_timestamp(row[key])
+                    if timestamp is None or timestamp > cutoff:
+                        return False
+            return True
+
         def in_scope(value):
-            return decision_memory_matches_scope(value, account_key, symbol_key, exclude_episode_id=excluded)
+            return (decision_memory_matches_scope(value, account_key, symbol_key, exclude_episode_id=excluded)
+                    and known_by_cutoff(value, "decidedAt"))
 
         previous_memory = compact_decision_episode_memory(existing_previous) if in_scope(existing_previous) else {}
         source_status = {
@@ -144,6 +160,16 @@ class DecisionContinuityService:
                     )
                     if row.get(key) not in (None, "", [], {})
                 }
+                declared_symbol = str(row.get("subjectSymbol") or row.get("subject_symbol") or "").upper()
+                declared_generation = str(row.get("inferenceGenerationId") or row.get("inference_generation_id") or "")
+                episode_generation = str(episode_payload.get("inferenceGenerationId") or "")
+                scope_verified = bool(declared_symbol == symbol_key and declared_generation
+                                      and declared_generation == episode_generation)
+                selected_hypothesis["descriptionScopeVerified"] = scope_verified
+                if not scope_verified:
+                    # Preserve the historical identity, not an unproven legacy description.
+                    selected_hypothesis.pop("claim", None)
+                    source_status["hypothesisDescription"] = "withheld-unverified-scope"
                 break
 
         account_context = {}
@@ -178,24 +204,38 @@ class DecisionContinuityService:
             except Exception:  # noqa: BLE001
                 source_status["lifecycleFeedback"] = "error"
 
+        historical_position = _mapping(_mapping(account_context).get("currentPosition"))
+        if not known_by_cutoff(historical_position, "observedAt"):
+            historical_position = {}
+            source_status["accountObservation"] = "withheld-after-source-cutoff"
         return build_decision_continuity_packet(
             account_id=account_key,
             symbol=symbol_key,
             captured_at=captured_at or _utc_now(),
             previous_decision=episode_payload or previous_memory,
             selected_hypothesis=selected_hypothesis,
-            follow_up_conditions=episode_payload.get("followUpConditions") or [],
+            follow_up_conditions=[row for row in episode_payload.get("followUpConditions") or []
+                                  if known_by_cutoff(row, "observedAt", "transitionAt")],
             unsupported_follow_ups=episode_payload.get("unsupportedFollowUps") or [],
-            observed_outcomes=list(episode_payload.get("outcomes") or [])[-6:],
+            observed_outcomes=[row for row in episode_payload.get("outcomes") or []
+                               if known_by_cutoff(row, "observedAt")][-6:],
             outcome_schedule=outcome_schedule,
-            action_observations=_mapping(account_context).get("actionObservations") or [],
-            current_position=_mapping(account_context).get("currentPosition") or {},
+            action_observations=[row for row in _mapping(account_context).get("actionObservations") or []
+                                 if known_by_cutoff(row, "observedAt")],
+            current_position=_mapping(current_position),
+            historical_position={
+                **historical_position,
+                "observationState": "historical-account-observation",
+                "usage": "quantity-history-not-current-valuation",
+            } if historical_position else {},
             execution_feedback=_latest_feedback(
-                execution_feedback,
+                {key: [row for row in rows if known_by_cutoff(row, "createdAt", "observedAt", "executedAt")]
+                 for key, rows in execution_feedback.items() if isinstance(rows, list)},
                 ("actionPlans", "executionEpisodes", "fills"),
             ),
             lifecycle_feedback=_latest_feedback(
-                lifecycle_feedback,
+                {key: [row for row in rows if known_by_cutoff(row, "createdAt", "observedAt", "reviewedAt")]
+                 for key, rows in lifecycle_feedback.items() if isinstance(rows, list)},
                 ("decisionReviews", "performanceAttributions"),
             ),
             source_status=source_status,

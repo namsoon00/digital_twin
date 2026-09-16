@@ -53,3 +53,15 @@ test("hypothesis progress separates contract repair from experiment observations
   assert.doesNotMatch(retired, /관측 중/);
   assert.equal(renderHypothesisProgress(), "");
 });
+
+test("experiment condition absence is distinct from a broken capture path", () => {
+  const fixture = {dataSummary: {inferenceCoverage: {sampledCases: 72, candidateMatches: 0, sampleTruncated: true}},
+    details: {observationDeadline: "2026-10-14"}, plan: {observationRequirements: {inputs: []}}};
+  const waiting = renderOntologyEvolution({...fixture, reason: "experiment-condition-not-observed-in-sample"});
+  assert.match(waiting, /조건이 성립하지 않았습니다/);
+  assert.match(waiting, /72 \/ 0건 · 최근 표본만 확인/);
+  assert.match(waiting, /관측 종료 예정.*2026-10-14/s);
+  assert.match(renderOntologyEvolution({...fixture, reason: "experiment-input-capture-missing"}), /수집 연결을 점검/);
+  assert.match(renderOntologyEvolution({...fixture, reason: "experiment-outcome-not-due"}), /예약된 결과 관측 시점/);
+  assert.match(renderOntologyEvolution({...fixture, reason: "experiment-outcome-overdue"}), /허용 지연을 지났지만/);
+});

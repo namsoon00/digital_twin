@@ -15,7 +15,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 from digital_twin.modules.decisions.domain.investment_decision_history import compact_decision_episode_memory
 
 
-DECISION_CONTINUITY_PACKET_VERSION = "decision-continuity-packet-v2"
+DECISION_CONTINUITY_PACKET_VERSION = "decision-continuity-packet-v3"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -184,6 +184,7 @@ class DecisionContinuityPacket:
     outcome_schedule: Mapping[str, object] = field(default_factory=dict)
     action_observations: Tuple[Mapping[str, object], ...] = field(default_factory=tuple)
     current_position: Mapping[str, object] = field(default_factory=dict)
+    historical_position: Mapping[str, object] = field(default_factory=dict)
     execution_feedback: Mapping[str, object] = field(default_factory=dict)
     lifecycle_feedback: Mapping[str, object] = field(default_factory=dict)
     source_status: Mapping[str, object] = field(default_factory=dict)
@@ -219,6 +220,7 @@ class DecisionContinuityPacket:
             "outcomeSchedule": dict(self.outcome_schedule or {}),
             "actionObservations": action_rows,
             "currentPosition": dict(self.current_position or {}),
+            "historicalPosition": dict(self.historical_position or {}),
             "executionFeedback": execution_feedback,
             "lifecycleFeedback": lifecycle_feedback,
             "observationState": {
@@ -268,6 +270,7 @@ def build_decision_continuity_packet(
     outcome_schedule: object = None,
     action_observations: Iterable[object] = None,
     current_position: object = None,
+    historical_position: object = None,
     execution_feedback: object = None,
     lifecycle_feedback: object = None,
     selected_hypothesis: object = None,
@@ -304,6 +307,7 @@ def build_decision_continuity_packet(
             "causalityClaimed",
         ), 4),
         current_position=_mapping(current_position),
+        historical_position=_mapping(historical_position),
         execution_feedback=_feedback(
             execution_feedback,
             ("actionPlans", "executionEpisodes", "fills"),
@@ -329,7 +333,7 @@ def compact_decision_continuity_packet(value: object) -> Dict[str, object]:
             "capturedAt", "status", "previousDecision", "selectedHypothesis",
             "followUpConditions", "unsupportedFollowUps", "observedOutcomes",
             "outcomeSchedule",
-            "actionObservations", "currentPosition", "executionFeedback",
+            "actionObservations", "currentPosition", "historicalPosition", "executionFeedback",
             "lifecycleFeedback", "observationState", "summary", "sourceStatus", "sourceErrors", "reviewSummary",
         )
         if packet.get(key) not in (None, "", [], {})

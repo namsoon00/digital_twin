@@ -22,6 +22,20 @@ const reasons = {
   "observation-future-collection": "현재 보관 자료만으로는 부족합니다. 수집 중인 자료로 새 관측 기간을 채운 뒤 시작합니다.",
   "observation-unsupported": "필요한 지표나 관측 기간을 현재 수집·보관 기능이 지원하지 않습니다. 수집 기능을 먼저 보완해야 합니다.",
   "observation-unavailable": "실험 입력 저장소를 사용할 수 없어 비교를 시작하지 않았습니다.",
+  "experiment-inference-not-observed": "실험 버전의 해당 종목 추론 기록이 없습니다. 실험 실행과 데이터 연결을 확인해야 합니다.",
+  "experiment-condition-not-observed-in-sample": "최근 확인한 추론에서는 이 실험의 조건이 성립하지 않았습니다. 아직 성과를 비교할 사례가 없습니다.",
+  "experiment-candidate-not-eligible": "실험 조건은 감지됐지만 예측 검증에 필요한 근거가 부족해 관측 대상으로 등록되지 않았습니다.",
+  "experiment-input-capture-missing": "관측 가능한 실험 조건은 있지만 당시 입력 저장 기록이 없습니다. 수집 연결을 점검해야 합니다.",
+  "experiment-inputs-unavailable": "실험 당시 필수 입력이 없거나 복구되지 않아 비교에서 제외했습니다.",
+  "experiment-comparator-not-captured": "새 가설은 관측됐지만 같은 시점의 비교 가설이 없어 아직 비교할 수 없습니다.",
+  "experiment-outcome-contract-mismatch": "관측 결과의 시점이나 근거가 사전에 정한 검증 기준과 맞지 않습니다.",
+  "experiment-outcome-not-recorded": "입력은 보존됐지만 결과가 아직 저장되지 않았습니다. 관측 예약을 확인합니다.",
+  "experiment-outcome-schedule-missing": "실험 결과를 확인할 관측 예약이 없습니다. 예약 연결을 점검해야 합니다.",
+  "experiment-outcome-excluded": "관측 예약이 평가에서 제외됐습니다. 기다리기만 해서는 결과가 채워지지 않습니다.",
+  "experiment-outcome-data-gap": "관측 시점의 필수 자료가 부족합니다. 해당 시점의 자료 복구가 필요합니다.",
+  "experiment-outcome-overdue": "예약된 관측 시점과 허용 지연을 지났지만 결과가 없습니다. 결과 수집을 점검해야 합니다.",
+  "experiment-outcome-capture-pending": "관측 예약과 실험 결과 저장을 연결하는 단계를 확인하고 있습니다.",
+  "experiment-outcome-not-due": "입력은 보존됐으며 예약된 결과 관측 시점을 기다리고 있습니다.",
 };
 
 const dataStates = { ready: "자료 확보", "future-collection": "새 관측 대기", unsupported: "수집·보관 기능 보완 필요", "historical-unrecoverable": "당시 자료 복구 불가" };
@@ -55,6 +69,9 @@ function renderObservationRequirements(plan, evolution) {
     }).join('') +
     '<div><dt>원본 입력이 보존된 비교 시점</dt><dd>' + escapeHtml(summary.capturedInputs ?? 0) + '건</dd></div>' +
     '<div><dt>입력 복구 불가 / 결과 대기</dt><dd>' + escapeHtml(summary.unavailableInputs ?? 0) + ' / ' + escapeHtml(summary.pendingOutcomes ?? 0) + '건</dd></div>' +
+    (summary.inferenceCoverage ? '<div><dt>최근 추론 / 실험 조건 성립</dt><dd>' +
+      escapeHtml(summary.inferenceCoverage.sampledCases ?? 0) + ' / ' + escapeHtml(summary.inferenceCoverage.candidateMatches ?? 0) +
+      '건' + (summary.inferenceCoverage.sampleTruncated ? ' · 최근 표본만 확인' : '') + '</dd></div>' : '') +
     '<div><dt>실험 종료 후 자료 보관</dt><dd>' + escapeHtml(plan.policy?.experimentEvidenceRetentionDays ?? 7) + '일</dd></div></dl></details>';
 }
 
@@ -78,6 +95,7 @@ export function renderOntologyEvolution(evolution = {}, formatClock = value => S
     '<div><dt>비교에서 제외한 자료</dt><dd>' + escapeHtml(assessment.excludedCount ?? 0) + '건</dd></div>' +
     '<div><dt>후보 고정 시각</dt><dd>' + escapeHtml(formatClock(plan.createdAt)) + '</dd></div>' +
     '<div><dt>운영 반영 시각</dt><dd>' + escapeHtml(evolution.adoptedAt ? formatClock(evolution.adoptedAt) : "반영 전") + '</dd></div>' +
+    (evolution.details?.observationDeadline ? '<div><dt>관측 종료 예정</dt><dd>' + escapeHtml(formatClock(evolution.details.observationDeadline)) + '</dd></div>' : '') +
     '</dl>' +
     renderObservationRequirements(plan, evolution) +
     (pendingReview ? '<p class="form-error">자동 결과 비교로 검증할 수 없는 별도 연구 조건이 남아 있습니다.</p>' : '') +

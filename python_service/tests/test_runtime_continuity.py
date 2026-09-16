@@ -331,7 +331,7 @@ class RuntimeContinuityTests(unittest.TestCase):
         self.assertIn("v.generated_at = CAST(b.generated_at AS BINARY)", reads.LINEAGE)
         self.assertIn("ON s.account_id = CAST(b.account_id AS BINARY)", reads.LINEAGE)
         self.assertIn("ON v.snapshot_id = CAST(b.snapshot_id AS BINARY)", reads.LINEAGE)
-        for field, comparisons in (("account_id", 4), ("snapshot_id", 3), ("generated_at", 3)):
+        for field, comparisons in (("account_id", 4), ("snapshot_id", 4), ("generated_at", 4)):
             self.assertEqual(reads.LINEAGE.count("CAST(b." + field + " AS BINARY)"), comparisons)
         self.assertNotIn("ON CAST(v.snapshot_id", reads.LINEAGE)
         self.assertNotIn("ON CAST(s.account_id", reads.LINEAGE)

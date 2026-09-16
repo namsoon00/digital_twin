@@ -116,7 +116,13 @@ class OntologyEvolutionService:
                     case.transition("retired", "evolution")
                     return self.finish(case, persist, "not-better-than-baseline")
                 return self.wait(case, persist, "candidate-retirement-pending", result)
-            return self.wait(case, persist, "external-validation-required" if external_review else assessment["reason"])
+            reason = "external-validation-required" if external_review and assessment["status"] == "qualified" else (
+                (evidence.get("dataSummary") or {}).get("blockingReason") or assessment["reason"]
+            )
+            return self.wait(case, persist, reason, {
+                "externalReviewRequired": external_review,
+                "observationDeadline": (timestamp(plan["createdAt"]) + timedelta(days=policy["maximumShadowDays"])).isoformat(),
+            })
         except Exception as error:
             # Preserve plan, deployment and queued retry. Never turn an outage into no change.
             return self.wait(case, persist, "evolution-dependency-error", {"error": str(error)[:500]})

@@ -344,6 +344,21 @@ def lifecycle_observation_context(outcome="OBSERVATION"):
 
 
 class FinalAIDeliveryTests(unittest.TestCase):
+    def test_quiet_hours_keep_actual_reason_after_ai_admission(self):
+        from types import SimpleNamespace
+        from digital_twin.modules.reasoning.application.investment_reasoning.orchestrator import _mark_subject_delivery
+        job = reconciled_review_job()
+        runner = NotificationQueueRunner(SuppressionQueue(), {}, lambda _settings: None)
+        account = SimpleNamespace(quiet_hours_start="22:00", quiet_hours_end="08:00",
+                                  quiet_hours_timezone="Asia/Seoul", quiet_hours_reason=lambda: "account quiet hours")
+        runner.mark_quiet_hours_suppressed(job, account)
+        subject = SimpleNamespace(stage="REVIEW_ONLY", publication=SimpleNamespace(outcome_kind="REVIEW_ONLY"),
+                                  mark_delivery=lambda *args: None)
+        _mark_subject_delivery(subject, "suppressed", "account quiet hours", job.context)
+        self.assertEqual("account_quiet_hours", subject.delivery_reason_code)
+        self.assertFalse(subject.delivery_eligible)
+        self.assertEqual("NO_ACTION", job.context["notificationAiValidatedResponse"]["action"])
+
     def assert_scoped_ai_review_uses_one_policy_without_granting_action_authority(self):
         from digital_twin.modules.notifications.domain.notification.presentation import notification_kind
         from digital_twin.modules.notifications.application.notification.eligibility import NotificationDispatchEligibilityService

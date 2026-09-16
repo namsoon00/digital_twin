@@ -1,5 +1,5 @@
 // Synthetic fixtures only. The test server never opens .env or local stores.
-const stamp = "2026-09-12T00:00:00Z";
+const stamp = new Date().toISOString();
 const items = Array.from({ length: 48 }, (_, index) => ({
   symbol: "TEST" + String(index + 1).padStart(2, "0"), name: "Synthetic Instrument " + (index + 1),
   market: "US", currency: "USD", currentPrice: 100 + index, quantity: 2,

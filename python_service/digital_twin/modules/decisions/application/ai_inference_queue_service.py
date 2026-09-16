@@ -64,11 +64,13 @@ def _timestamp(value: object):
 
 
 def ai_attempt_queue_wait_ms(request):
+    # Called on the fresh claim returned by the store, before any heartbeat.
+    # started_at is the first-ever attempt; updated_at is this claim's timestamp.
     available_at = _timestamp(getattr(request, "available_at", ""))
-    started_at = _timestamp(getattr(request, "started_at", ""))
-    if available_at is None or started_at is None:
+    claimed_at = _timestamp(getattr(request, "updated_at", ""))
+    if available_at is None or claimed_at is None:
         return None
-    return max(0, int((started_at - available_at).total_seconds() * 1000))
+    return max(0, int((claimed_at - available_at).total_seconds() * 1000))
 
 
 def ai_failure_diagnostic(error: object, stage: str = "model-execution") -> Dict[str, object]:

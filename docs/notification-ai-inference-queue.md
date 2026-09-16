@@ -97,6 +97,8 @@ status API also exposes `aiInferenceQueue` separately from delivery jobs.
 interval. It is null when either timestamp is unavailable. Previous model
 attempts and retry backoff are not queue waiting. `attemptNumber` and
 `requestElapsedBeforeAttemptMs` retain the broader request context separately.
+The runner captures the freshly claimed request's `updated_at` before heartbeat
+updates; `started_at` intentionally retains the first attempt and cannot time a retry.
 
 Continuity v3 separates current ABox-bound facts from dated historical positions.
 Old v2 packets cannot reintroduce account-ledger prices as current valuations.

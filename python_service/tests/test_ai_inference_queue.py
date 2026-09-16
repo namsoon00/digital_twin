@@ -37,11 +37,13 @@ from mysql_fixtures import (
 class AttemptQueueTimingTest(unittest.TestCase):
     def test_retry_wait_excludes_prior_model_attempt_and_backoff(self):
         request = SimpleNamespace(created_at="2026-09-16T00:00:00Z", available_at="2026-09-16T00:15:00Z",
-                                  started_at="2026-09-16T00:15:03Z", attempts=2)
+                                  started_at="2026-09-16T00:00:01Z", updated_at="2026-09-16T00:15:03Z", attempts=2)
         self.assertEqual(3000, ai_attempt_queue_wait_ms(request))
 
     def test_unknown_ready_time_is_not_reported_as_zero_wait(self):
         self.assertIsNone(ai_attempt_queue_wait_ms(SimpleNamespace(started_at="2026-09-16T00:15:03Z")))
+        self.assertIsNone(ai_attempt_queue_wait_ms(SimpleNamespace(available_at="2026-09-16T00:15:00Z",
+                                                                   started_at="2026-09-16T00:00:01Z")))
 
 
 class FakeReviewer:
@@ -1124,7 +1126,13 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(1, runner.stop_recovery["releasedCount"])
 
         stale_owner = "worker-1:stale-instance"
-        self.assertEqual(first.request_id, self.queue.claim(stale_owner, 1, 60)[0].request_id)
+        reclaimed = self.queue.claim(stale_owner, 1, 60)[0]
+        self.assertEqual(first.request_id, reclaimed.request_id)
+        self.assertLess(reclaimed.started_at, reclaimed.available_at)
+        self.assertEqual(reclaimed.heartbeat_at, reclaimed.updated_at)
+        expected_wait = int((datetime.fromisoformat(reclaimed.updated_at.replace("Z", "+00:00"))
+                             - datetime.fromisoformat(reclaimed.available_at.replace("Z", "+00:00"))).total_seconds() * 1000)
+        self.assertEqual(expected_wait, ai_attempt_queue_wait_ms(reclaimed))
         replacement = AIInferenceQueueRunner(
             self.queue,
             FakeReviewer(),

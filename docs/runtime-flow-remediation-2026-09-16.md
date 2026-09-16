@@ -53,3 +53,23 @@ progress, AI completion and verified account-channel receipts. Do not force a
 trade alert, relax qualification, manufacture an outcome or promote a shadow
 candidate merely to obtain a green health check. Keep the final execution
 report explicit about any stage not observed after restart.
+
+### Observed Run
+
+- On 2026-09-16, the committed `e64fbc1be` runtime was restarted with MySQL and
+  TypeDB preserved. A 300-second passive run took all 11 scheduled observations;
+  infrastructure, source progression, linked AI and Telegram delivery passed.
+- Two real AI results used prompt v26 and continuity v3, preserved `NO_ACTION`,
+  and passed publication validation without a repair call. One account-channel
+  investment insight had a verified Telegram receipt. This is a provider receipt,
+  not evidence that the recipient read the message.
+- The completed AI jobs continued source flows begun before the observation
+  window. No entire source-to-AI flow began and ended within those five minutes.
+  Some other retained rows lacked historical lineage; the two matched results
+  had complete identity links. This is not proof of every historical notification.
+- The live retry inspection exposed that `started_at` preserves the first
+  attempt. Queue timing was corrected to use the fresh claim's `updated_at`
+  before heartbeat updates, and verified with a real test-database reclaim.
+- Native inference and model execution still take time. The two model calls
+  took about 211 and 220 seconds; this run does not establish lower end-to-end
+  latency or empirical superiority of the shadow experiment.

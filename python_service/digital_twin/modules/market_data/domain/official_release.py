@@ -85,6 +85,11 @@ def _signed(verb, value):
     return -number if verb.lower() in {"decreased", "declined", "fell", "falling"} else number
 
 
+def _federal_funds_rate(value):
+    normalized = re.sub(r"[\s\u00a0\u202f\-\u2010-\u2015\u2212]+", " ", str(value or "")).strip()
+    return sum(float(Fraction(piece)) for piece in normalized.split())
+
+
 def parse_official_release(indicator, markup, source_url, now=None):
     if indicator not in RELEASE_URLS:
         raise ValueError("Unsupported official release indicator")
@@ -142,10 +147,17 @@ def parse_official_release(indicator, markup, source_url, now=None):
             released_at = released.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         body = text[date_match.start():]
         body = re.split(r"For media inquiries|Voting for the", body, maxsplit=1, flags=re.I)[0]
-        numeric = r"(\d+(?:\.\d+)?(?:[\s-]+\d/\d)?)"
-        match = re.search(r"target range for the federal funds rate (?:at|to) " + numeric + r" to " + numeric + r" percent", body, re.I)
+        rate_value = r"\d+(?:\.\d+)?(?:[\s\u00a0\u202f\-\u2010-\u2015\u2212]+\d+/\d+)?"
+        change_value = r"\d+(?:\.\d+)?(?:/\d+)?"
+        match = re.search(
+            r"target range for the federal funds rate "
+            r"(?:(?:at|to)|by\s+" + change_value + r"\s+percentage points?\s+to)\s+"
+            r"(" + rate_value + r")\s+to\s+(" + rate_value + r")\s+percent",
+            body,
+            re.I,
+        )
         if match:
-            values = [sum(float(Fraction(piece)) for piece in value.replace("-", " ").split()) for value in (match[1], match[2])]
+            values = [_federal_funds_rate(value) for value in (match[1], match[2])]
             if not 0 <= values[0] <= values[1] <= 100:
                 raise ValueError("Invalid federal funds target range")
             metrics.append(_metric("federal-funds-target", "정책금리 목표 범위", match, values, "%", "target-range"))

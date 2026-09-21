@@ -38,6 +38,9 @@ Household Survey Data 9.9 percent</pre>"""
 FED = """<p>July 29, 2026</p><h1>Federal Reserve issues FOMC statement</h1>
 <p>For release at 2:00 p.m. EDT</p><p>The Committee decided to maintain the target range for the federal funds rate at 3-1/2 to 3-3/4 percent.</p>
 <p>For media inquiries</p>"""
+FED_RATE_CHANGE = """<p>September 16, 2026</p><h1>Federal Reserve issues FOMC statement</h1>
+<p>For release at 2:00 p.m. EDT</p><p>The Committee decided to raise the target range for the federal funds rate by 1/4 percentage point to 3-3/4 to 4 percent.</p>
+<p>For media inquiries</p>"""
 
 
 def evidence(**raw):
@@ -187,6 +190,15 @@ class OfficialReleaseTests(unittest.TestCase):
         result = parse_official_release("fomc", FED, "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260729a.htm", NOW)
         self.assertEqual(result["metrics"][0]["actual"], [3.5, 3.75])
         self.assertEqual(result["releasedAt"], "2026-07-29T18:00:00Z")
+        changed = parse_official_release(
+            "fomc",
+            FED_RATE_CHANGE.replace("3-3/4", "3\u20113/4"),
+            "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260916a.htm",
+            datetime(2026, 9, 22, tzinfo=timezone.utc),
+        )
+        self.assertEqual(changed["metrics"][0]["actual"], [3.75, 4.0])
+        self.assertEqual(changed["releasedAt"], "2026-09-16T18:00:00Z")
+        self.assertIn("by 1/4 percentage point to", changed["metrics"][0]["excerpt"])
 
     def test_changed_format_wrong_source_and_future_are_errors(self):
         for markup, url in [("<html>Access denied 403</html>", RELEASE_URLS["cpi"]), (CPI, "https://fake.example/cpi"), (CPI.replace("September 11", "September 30"), RELEASE_URLS["cpi"])]:

@@ -51,6 +51,33 @@ def payload_hash(payload: Dict[str, object]) -> str:
 
 EMPTY_DOCUMENT_HASH = hashlib.sha256(b"").hexdigest()
 RETRYABLE_DOCUMENT_DATASETS = {"opendart.document", "sec.document"}
+DOMESTIC_LISTING_MARKETS = {"KOSPI", "KOSDAQ", "KONEX"}
+
+
+def external_subject_from_market_quote(
+    row: Dict[str, object],
+    listed_reference: Dict[str, object] = None,
+) -> ExternalSubject:
+    """Build a collection subject without collapsing every Korean listing to KOSPI."""
+    payload = _json_loads(row.get("payload_json"), {})
+    reference = dict(listed_reference or {})
+    symbol = str(payload.get("symbol") or row.get("symbol") or "").upper().strip()
+    market = str(payload.get("market") or payload.get("exchange") or "").upper().strip()
+    listed_market = str(reference.get("market") or "").upper().strip()
+    if symbol.isdigit() and len(symbol) == 6 and listed_market in DOMESTIC_LISTING_MARKETS:
+        market = listed_market
+    name = str(payload.get("name") or "").strip()
+    if not name or name == symbol:
+        name = str(reference.get("name") or symbol).strip()
+    return ExternalSubject(
+        subject_key=symbol,
+        symbol=symbol,
+        name=name or symbol,
+        market=market,
+        currency=str(payload.get("currency") or reference.get("currency") or "").upper().strip(),
+        sector=str(payload.get("sector") or reference.get("sector") or "").strip(),
+        source=str(payload.get("collectionTarget") or payload.get("collectionPurpose") or "market-cache"),
+    )
 
 
 def completed_followup_needs_retry(
@@ -85,6 +112,30 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 ORDER BY updated_at DESC, symbol
                 """
             ).fetchall()
+            symbols = sorted({
+                str(_json_loads(row.get("payload_json"), {}).get("symbol") or row.get("symbol") or "").upper().strip()
+                for row in rows
+                if str(_json_loads(row.get("payload_json"), {}).get("symbol") or row.get("symbol") or "").strip()
+            })
+            listed_rows = []
+            if symbols:
+                placeholders = ", ".join(["%s"] * len(symbols))
+                listed_rows = connection.execute(
+                    """
+                    SELECT symbol, market, name, currency, sector
+                    FROM symbol_universe
+                    WHERE active = 1 AND symbol IN (""" + placeholders + """)
+                      AND market IN ('KOSPI', 'KOSDAQ', 'KONEX')
+                    ORDER BY updated_at DESC
+                    """,
+                    tuple(symbols),
+                ).fetchall()
+        listed_by_symbol: Dict[str, Dict[str, object]] = {}
+        for listed_row in listed_rows:
+            listed_by_symbol.setdefault(
+                str(listed_row.get("symbol") or "").upper().strip(),
+                dict(listed_row),
+            )
         result: List[ExternalSubject] = []
         seen = set()
         fallback: List[ExternalSubject] = []
@@ -93,15 +144,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             symbol = str(payload.get("symbol") or row.get("symbol") or "").upper().strip()
             if not symbol or symbol in seen:
                 continue
-            subject = ExternalSubject(
-                subject_key=symbol,
-                symbol=symbol,
-                name=str(payload.get("name") or symbol),
-                market=str(payload.get("market") or payload.get("exchange") or "").upper().strip(),
-                currency=str(payload.get("currency") or "").upper().strip(),
-                sector=str(payload.get("sector") or "").strip(),
-                source=str(payload.get("collectionTarget") or payload.get("collectionPurpose") or "market-cache"),
-            )
+            subject = external_subject_from_market_quote(row, listed_by_symbol.get(symbol))
             fallback.append(subject)
             if str(payload.get("collectionPurpose") or "") == "account-focus":
                 seen.add(symbol)

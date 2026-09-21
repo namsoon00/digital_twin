@@ -50,7 +50,9 @@ from digital_twin.infrastructure.external_api.adapters.yfinance import (
 from digital_twin.infrastructure.external_api.mysql_stores import (
     EMPTY_DOCUMENT_HASH,
     completed_followup_needs_retry,
+    external_subject_from_market_quote,
 )
+from digital_twin.infrastructure.external_signal_provider_yfinance import ExternalSignalYFinanceMixin
 from digital_twin.infrastructure.external_signal_utils import dart_document_permanently_unavailable
 from digital_twin.infrastructure.schedulers import external_data_failure_requires_alert
 
@@ -321,6 +323,47 @@ class ExternalDataPlatformTest(unittest.TestCase):
                 currency="KRW",
             ),
         )
+
+    def test_kosdaq_reference_corrects_generic_kr_market_for_yfinance_symbol(self):
+        subject = external_subject_from_market_quote(
+            {
+                "symbol": "376900",
+                "payload_json": json.dumps({
+                    "symbol": "376900",
+                    "name": "로킷헬스케어",
+                    "market": "KR",
+                    "currency": "KRW",
+                    "collectionPurpose": "account-focus",
+                }, ensure_ascii=False),
+            },
+            {
+                "symbol": "376900",
+                "name": "로킷헬스케어",
+                "market": "KOSDAQ",
+                "currency": "KRW",
+            },
+        )
+
+        query_symbol = ExternalSignalYFinanceMixin().yfinance_query_symbol(position_for(subject))
+
+        self.assertEqual("KOSDAQ", subject.market)
+        self.assertEqual("376900.KQ", query_symbol)
+
+    def test_domestic_reference_does_not_override_non_numeric_market_subject(self):
+        subject = external_subject_from_market_quote(
+            {
+                "symbol": "NVDA",
+                "payload_json": json.dumps({
+                    "symbol": "NVDA",
+                    "name": "NVIDIA",
+                    "market": "US",
+                    "currency": "USD",
+                }),
+            },
+            {"symbol": "NVDA", "market": "KOSDAQ"},
+        )
+
+        self.assertEqual("US", subject.market)
 
     def test_public_data_stock_adapter_collects_official_daily_reference_without_secret_leak(self):
         requested = {}

@@ -192,10 +192,10 @@ class OntologyLabService:
         try:
             value = self.reasoning_queue_probe()
         except Exception as error:  # noqa: BLE001 - lab work must never block live reasoning on a probe failure.
-            return {"status": "error", "effectivePendingCount": 0, "reason": str(error)[:180]}
+            return {"status": "error", "effectivePendingCount": 1, "reason": str(error)[:180]}
         return dict(value or {}) if isinstance(value, dict) else {
             "status": "invalid",
-            "effectivePendingCount": 0,
+            "effectivePendingCount": 1,
         }
 
     @staticmethod
@@ -214,6 +214,8 @@ class OntologyLabService:
     def reasoning_queue_deferral(self) -> Dict[str, object]:
         queue = self.reasoning_queue_state()
         pending = self.reasoning_pending_count(queue)
+        if queue.get("status") in {"error", "invalid"}:
+            pending = max(1, pending)
         if not self.defer_while_reasoning_pending() or pending <= 0:
             return {}
         return {
@@ -413,7 +415,7 @@ class OntologyLabService:
                 "accountId": target["accountId"],
                 **compact_candidate,
             })
-            if candidate_status in {"disabled", "error"}:
+            if candidate_status in {"disabled", "error"} or candidate_status.startswith("deferred"):
                 account_runs.append({
                     "worldId": target["worldId"],
                     "accountId": target["accountId"],
@@ -422,7 +424,7 @@ class OntologyLabService:
                 })
                 continue
             result = self.suggest_from_rule_candidates(candidate_result, {
-                "symbols": target["symbols"],
+                "symbols": candidate_result.get("symbols") or target["symbols"],
                 "accountId": target["accountId"],
                 "tenantId": target["tenantId"],
                 "worldId": target["worldId"],
@@ -441,6 +443,7 @@ class OntologyLabService:
             })
         status = "created" if created else (
             "error" if account_runs and all(str(item.get("status") or "") in {"disabled", "error"} for item in account_runs)
+            else "deferred-inference" if account_runs and all(str(item.get("status") or "").startswith("deferred") for item in account_runs)
             else "no-candidates"
         )
         return {

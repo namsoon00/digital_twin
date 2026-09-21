@@ -87,6 +87,8 @@ def prune_inferencebox_generations(
     if not records:
         return {"configured": True, "status": "skipped", "reason": "no generation-scoped InferenceBox rows", "activeGenerationId": active_generation_id}
     keep = {active_generation_id}
+    keep.update(str(item.get("generationId") or "") for item in records
+                if item.get("publicationStatus") == "candidate")
     published_records = [item for item in records if str(item.get("publicationStatus") or "active") in {"active", "published"}]
     for item in sorted(published_records, key=lambda row: str(row.get("latestAt") or ""), reverse=True)[: max(1, int(keep_count or 2))]:
         keep.add(str(item.get("generationId") or ""))
@@ -94,7 +96,7 @@ def prune_inferencebox_generations(
         str(item.get("generationId") or "")
         for item in records
         if str(item.get("generationId") or "") and str(item.get("generationId") or "") not in keep
-    ]
+    ][:2]
     if not prune_ids:
         return {
             "configured": True,

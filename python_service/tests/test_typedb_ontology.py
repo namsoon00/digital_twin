@@ -3139,7 +3139,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(generation, relations.call_args_list[0].kwargs["snapshot_id"])
         self.assertEqual(["RuleBoxGovernance"], relations.call_args_list[1].args[0])
 
-    def test_typedb_inferencebox_recovers_one_aligned_generation_when_marker_is_missing(self):
+    def test_typedb_inferencebox_defers_legacy_recovery_when_marker_is_missing(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
         def entity(generation_id, source_abox, updated_at):
@@ -3187,15 +3187,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         with patch.object(repository, "read_inference_generation_records", return_value=[]), patch.object(repository, "read_entity_rows", return_value=[old_entity, active_entity]), patch.object(repository, "read_relation_rows", return_value=[old_relation, active_relation]), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-manifest:active"}), patch.object(repository, "hypothesis_calibration_snapshot", return_value={"status": "empty", "calibrations": [], "calibrationCount": 0}):
             snapshot = repository.inferencebox_snapshot(symbols=["CPNG"])
 
-        self.assertEqual("ok", snapshot["status"])
-        self.assertEqual("inference-generation:active", snapshot["inferenceGenerationId"])
-        self.assertEqual("materialized-row-provenance", snapshot["inferenceGenerationIdentitySource"])
-        self.assertEqual("abox-manifest:active", snapshot["sourceAboxSnapshotId"])
-        self.assertTrue(snapshot["generationAligned"])
-        self.assertEqual(1, snapshot["entityCount"])
-        self.assertEqual(1, snapshot["relationCount"])
-        self.assertEqual(2, snapshot["generationCount"])
-        self.assertEqual(["inference-trace:CPNG:inference-generation:active"], [item["id"] for item in snapshot["entities"]])
+        self.assertEqual("missing-generation", snapshot["status"])
+        self.assertEqual("", snapshot["inferenceGenerationId"])
+        self.assertFalse(snapshot["generationAligned"])
+        self.assertEqual([], snapshot["entities"])
+        self.assertEqual([], snapshot["relations"])
 
     def test_typedb_rulebox_defers_when_native_inference_writer_lease_is_held(self):
         repository = TypeDBOntologyGraphRepository(

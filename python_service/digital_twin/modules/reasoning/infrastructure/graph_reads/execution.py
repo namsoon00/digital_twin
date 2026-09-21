@@ -45,7 +45,20 @@ def read_rows(
         finally:
             _store.close_driver(driver)
 
-    return _store.with_typedb_retries(operation)
+    return _store.with_typedb_retries(operation, retry_if=retryable_read_error)
+
+
+def retryable_read_error(error: Exception) -> bool:
+    # Re-running the same expensive read immediately multiplies its load.
+    # The owning worker supplies backoff; transport failures remain retryable.
+    text = str(error).lower()
+    return not (
+        isinstance(error, TimeoutError)
+        or "timed out" in text
+        or "transaction timeout" in text
+        or "[tsv17]" in text
+        or ("[tsv13]" in text and "execution interrupted" in text)
+    )
 
 
 def read_rows_in_transaction(

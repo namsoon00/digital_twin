@@ -1,4 +1,34 @@
 {
+  "TypeDBOntologyGraphRepository.read_rows": {
+    "baselineHash": "d51fdedacecbb55ddc91da233d192eb6cfe1dcc190a2d8d017d27bfe4666e110",
+    "bodyHash": "bed1b35d085c88a1bd6a9d6990a42242f2929313b1e637d024acafccca2bb18d",
+    "reason": "Do not immediately repeat timed-out reads; retain transport retry and let the owning worker back off.",
+    "regressionTest": "test_ontology_lab_read_path.InferenceReadTests.test_timeout_is_not_immediately_retried_but_connection_error_is"
+  },
+  "TypeDBOntologyGraphRepository.read_inferencebox_entity_rows": {
+    "baselineHash": "0cce8f563bf9c4152cad37795c3f8ea9089df9587750888447c6d7481af789f9",
+    "bodyHash": "730d598381e881527e4d6127731af96a0a0160c27a09d6bf42d1e2d21543b85b",
+    "reason": "Label bounded generation node reads so lab errors retain the exact failing query phase.",
+    "regressionTest": "test_ontology_lab_read_path.InferenceReadTests.test_online_generation_selection_reads_only_publication_markers"
+  },
+  "TypeDBOntologyGraphRepository.read_inferencebox_relation_rows": {
+    "baselineHash": "9047842cf2609714842244834fb7e321bafd4d057becd14a38bb25138658a2e5",
+    "bodyHash": "37fb803ff50f65125c19bb18bb540f4c72016461bd953d096e87298ada90d98d",
+    "reason": "Label bounded generation relation reads without changing their world and subject scope.",
+    "regressionTest": "test_ontology_lab_read_path.InferenceReadTests.test_online_generation_selection_reads_only_publication_markers"
+  },
+  "TypeDBOntologyGraphRepository.read_inference_generation_records": {
+    "baselineHash": "c1a8c42543d7d824fd181a83f1540f78fddcd1b6d6020a03754310c3191b16a9",
+    "bodyHash": "3443b0e257c2ac54a30d64f0f04fd9170968d90e826cb848a04caffc6c9e8cb0",
+    "reason": "Select published generations from markers; inventory aggregates scalar counts and timestamps instead of transferring every proof JSON.",
+    "regressionTest": "test_ontology_lab_read_path.InferenceReadTests.test_inventory_aggregates_large_proof_sets_without_reading_json"
+  },
+  "TypeDBOntologyGraphRepository.inferencebox_snapshot_from_typedb": {
+    "baselineHash": "6ae5c8fa02800cce3f926de7e4bb682dd5300fdb62220b6baed947b3e39aa4c1",
+    "bodyHash": "8a6508703bc60e7b45472c582f7aefefd4a41b6e58125a1d6b039c51712fa807",
+    "reason": "A missing publication pointer defers the online read rather than scanning and reconstructing historic inference; preserve generation and source validation.",
+    "regressionTest": "test_ontology_lab_read_path.InferenceReadTests.test_missing_publication_never_scans_historical_facts"
+  },
   "TypeDBOntologyGraphRepository.validate_rulebox_materialization": {
     "baselineHash": "7b4fd394e021d7314caa1d3cc16c70d070c21b374394eaccf236a0f89a4ba7b4",
     "bodyHash": "27a622416cbf4676cf5fe0aa013a82a6eed0433cef07a02a64fbade62cda22e2",

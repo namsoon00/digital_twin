@@ -1411,6 +1411,8 @@ class OntologyLabScheduler:
         self.interval_seconds = max(5, int(interval_seconds or 300))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.last_auto_suggest_at = 0.0
+        self.next_auto_suggest_at = 0.0
+        self.auto_suggest_failures = 0
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -1441,8 +1443,7 @@ class OntologyLabScheduler:
                         + str(result.get("skippedCount", 0))
                     )
                 if self.auto_suggest_due(started):
-                    auto_result = self.service.auto_suggest()
-                    self.last_auto_suggest_at = time.monotonic()
+                    auto_result = self.run_auto_suggest()
                     print(
                         "Ontology lab auto-suggest "
                         + str(auto_result.get("status"))
@@ -1460,8 +1461,31 @@ class OntologyLabScheduler:
     def auto_suggest_due(self, now: float) -> bool:
         if not self.service.auto_suggest_enabled() or not self.service.auto_suggest_configured():
             return False
-        interval = self.service.auto_suggest_interval_seconds()
-        return not self.last_auto_suggest_at or now - self.last_auto_suggest_at >= interval
+        return now >= self.next_auto_suggest_at
+
+    def run_auto_suggest(self):
+        try:
+            result = self.service.auto_suggest()
+        except Exception:
+            self.schedule_suggestion_retry()
+            raise
+        status = str(result.get("status") or "")
+        if status == "error":
+            self.schedule_suggestion_retry()
+        elif status.startswith("deferred") or status == "world-required":
+            self.next_auto_suggest_at = time.monotonic() + max(60, self.interval_seconds)
+        else:
+            self.auto_suggest_failures = 0
+            self.last_auto_suggest_at = time.monotonic()
+            self.next_auto_suggest_at = self.last_auto_suggest_at + self.service.auto_suggest_interval_seconds()
+        return result
+
+    def schedule_suggestion_retry(self):
+        self.auto_suggest_failures += 1
+        delay = min(3600, 300 * (3 ** min(self.auto_suggest_failures - 1, 3)))
+        self.next_auto_suggest_at = time.monotonic() + delay
+        print("Ontology lab auto-suggest retry failures=" + str(self.auto_suggest_failures)
+              + " nextAttemptInSeconds=" + str(delay))
 
 
 class MarketDataCollectionScheduler:

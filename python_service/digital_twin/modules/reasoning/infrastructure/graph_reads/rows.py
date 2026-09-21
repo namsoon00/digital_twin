@@ -835,6 +835,7 @@ def read_inferencebox_entity_rows(
         _store.read_rows(
             query,
             ["id", "label", "kind", "updatedAt", "json"],
+            label="typedb.inference-generation-nodes",
         ),
         "InferenceBox",
     )
@@ -897,6 +898,7 @@ def read_inferencebox_relation_rows(
                 "json",
                 "weight",
             ],
+            label="typedb.inference-generation-relations",
         ),
         "InferenceBox",
     )

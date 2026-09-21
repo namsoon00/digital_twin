@@ -288,8 +288,6 @@ def inferencebox_snapshot_from_typedb(
         if requested_generation_id and generation_scoped
         else "active-generation-marker" if generation_scoped else ""
     )
-    unresolved_materialized_generation = False
-    fallback_active_abox_metadata: Dict[str, object] = {}
     if requested_generation_id and not generation_scoped:
         return {
             "configured": True,
@@ -334,68 +332,19 @@ def inferencebox_snapshot_from_typedb(
             generation_id, [], min(40, safe_limit), world_id=world_id
         )
     else:
-        all_entity_rows = _store.read_entity_rows(["InferenceBox"], world_id=world_id)
-        all_relation_rows = _store.read_relation_rows(["InferenceBox"], world_id=world_id)
-        # Older TypeDB runs can contain fully materialized native facts
-        # without an active-generation marker. Do not blend those rows
-        # across generations: select only the materialized generation
-        # whose declared source ABox is the currently active world.
-        materialized_records = _bindings.inference_generation_records(
-            all_entity_rows, all_relation_rows
-        )
-        active_abox = _store.active_abox_metadata(world_id)
-        fallback_active_abox_metadata = dict(active_abox or {})
-        active_abox_snapshot_id = (
-            str(active_abox.get("aboxSnapshotId") or "").strip()
-            if str(active_abox.get("status") or "") == "ok"
-            else ""
-        )
-        recovered_generation = _bindings.select_inference_generation_record(
-            materialized_records,
-            active_abox_snapshot_id=active_abox_snapshot_id,
-        )
-        if recovered_generation:
-            active_generation = recovered_generation
-            generation_id = str(recovered_generation.get("generationId") or "")
-            generation_scoped = bool(generation_id)
-            generation_identity_source = "materialized-row-provenance"
-            generation_records = materialized_records
-            all_entity_rows = [
-                row
-                for row in all_entity_rows
-                if _bindings.row_inference_generation_id(row) == generation_id
-            ]
-            all_relation_rows = [
-                row
-                for row in all_relation_rows
-                if _bindings.row_inference_generation_id(row) == generation_id
-            ]
-        elif materialized_records and active_abox_snapshot_id:
-            # The graph has native facts, but none proves that it belongs
-            # to the currently active factual world. Failing closed is
-            # safer than joining rows from several historical runs.
-            unresolved_materialized_generation = True
-            generation_records = materialized_records
-            generation_identity_source = "materialized-row-provenance-unresolved"
-            all_entity_rows = []
-            all_relation_rows = []
-        entity_rows = [
-            row
-            for row in all_entity_rows
-            if not clean_symbols or str(row.get("symbol") or "").upper() in clean_symbols
-        ]
-        relation_rows = [
-            row
-            for row in all_relation_rows
-            if not clean_symbols
-            or any(
-                symbol in str(row.get(key) or "").upper()
-                for symbol in clean_symbols
-                for key in ["source", "target", "symbol"]
-            )
-        ]
-        metadata_entity_rows = all_entity_rows
-        metadata_relation_rows = all_relation_rows
+        # A missing publication pointer is a repair condition, not permission
+        # to scan historical proof payloads on an online read.
+        snapshot = inferencebox_snapshot_from_rows({}, "typedb-typeql", clean_symbols)
+        snapshot.update({
+            "status": "missing-generation", "graphStore": "typedb",
+            "worldId": world_id, "inferenceGenerationId": "",
+            "generationAligned": False, "generationScoped": False,
+            "nativeTypeDbReasoningCompleted": False,
+            "reason": "발행된 추론 세대 표식이 없어 조회를 보류합니다. 다음 추론 또는 표식 복구가 필요합니다.",
+            "reasonCode": "inferencePublicationMissing",
+            "typedbQueryMetrics": _store.query_metrics_snapshot(),
+        })
+        return snapshot
     native_entity_rows = [row for row in entity_rows if bool(row.get("nativeTypeDbReasoned"))]
     native_relation_rows = [row for row in relation_rows if bool(row.get("nativeTypeDbReasoned"))]
     native_trace_rows = [
@@ -570,30 +519,6 @@ def inferencebox_snapshot_from_typedb(
                     "typedbNativeRuleReasoningUsed": False,
                 }
             )
-    if unresolved_materialized_generation:
-        snapshot.update(
-            {
-                "status": "stale-generation",
-                "reason": "활성 ABox와 일치하는 TypeDB InferenceBox 세대를 찾지 못해 이전 추론 결과를 제외했습니다.",
-                "sourceAboxSnapshotId": "",
-                "activeAboxSnapshotId": str(
-                    fallback_active_abox_metadata.get("aboxSnapshotId") or ""
-                ),
-                "activeAboxStatus": str(fallback_active_abox_metadata.get("status") or ""),
-                "generationAligned": False,
-                "entities": [],
-                "relations": [],
-                "traces": [],
-                "entityCount": 0,
-                "relationCount": 0,
-                "traceCount": 0,
-                "nativeEntityCount": 0,
-                "nativeRelationCount": 0,
-                "nativeTraceCount": 0,
-                "nativeTypeDbReasoningUsed": False,
-                "typedbNativeRuleReasoningUsed": False,
-            }
-        )
     _bindings.apply_inference_target_coverage(snapshot, clean_symbols)
     calibration_eligible = bool(
         snapshot.get("generationAligned")

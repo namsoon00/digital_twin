@@ -50,7 +50,22 @@ class RuleChangeCandidateProposalService:
                                      read_inference=not bool(hypothesis_proposal))
         for box in ("ruleBox", "inferenceBox"):
             if str((context.get(box) or {}).get("status") or "") in {"error", "unavailable", "disabled"}:
-                raise RuntimeError(box + " unavailable: " + str((context.get(box) or {}).get("reason") or ""))
+                payload = context.get(box) or {}
+                failed = next((row for row in (payload.get("typedbQueryMetrics") or {}).get("slowQueries", [])
+                               if row.get("status") == "error"), {})
+                diagnostic = (" [query=" + str(failed.get("label"))
+                              + ", rows=" + str(failed.get("rowCount"))
+                              + ", ms=" + str(failed.get("durationMs"))
+                              + ", hash=" + str(failed.get("queryHash")) + "]") if failed else ""
+                raise RuntimeError(box + " unavailable: " + str(payload.get("reason") or "") + diagnostic)
+        inference_status = str((context.get("inferenceBox") or {}).get("status") or "")
+        if not hypothesis_proposal and inference_status not in {"ok", "empty"}:
+            return {
+                "status": "deferred-inference", "candidateCount": 0, "savedCount": 0,
+                "reason": str((context.get("inferenceBox") or {}).get("reason") or "Published inference is not ready."),
+                "symbols": context.get("symbols") or [], "worldId": world_id,
+            }
+        clean_symbols = list(context.get("symbols") or clean_symbols)
         if isinstance(hypothesis_proposal, dict) and hypothesis_proposal:
             context["hypothesisProposal"] = dict(hypothesis_proposal)
             context["modelAssessmentContext"] = self.model_assessment_context(context, account_id)
@@ -198,9 +213,27 @@ class RuleChangeCandidateProposalService:
             "reason": "후보 명세 생성 단계입니다. 원본 제안의 근거 ID는 출처 참조이며 현재 사실 확인은 후보 생성 후 TypeDB 검증에서 수행합니다.",
             "decisionEligibility": "authoring-only",
         }
+        requested_symbols = list(symbols)
+        pinned = {}
+        marker_reader = getattr(self.ontology_repository, "inferencebox_recovery_metadata", None)
+        if read_inference and callable(marker_reader):
+            marker = marker_reader(world_id=world_id)
+            if marker.get("status") == "ok" and marker.get("inferenceGenerationId") and marker.get("sourceAboxSnapshotId"):
+                evaluated = set(marker.get("targetSymbols") or [])
+                symbols = [symbol for symbol in symbols if symbol in evaluated]
+                pinned = {
+                    "inference_generation_id": marker["inferenceGenerationId"],
+                    "source_abox_snapshot_id": marker["sourceAboxSnapshotId"],
+                }
+                if not symbols:
+                    inferencebox = {"status": "not-evaluated", "reason": "요청 종목에 대해 발행된 추론 결과를 기다립니다."}
+                    read_inference = False
+            else:
+                inferencebox = {**marker, "status": "error" if marker.get("status") == "error" else "missing-generation"}
+                read_inference = False
         if read_inference and hasattr(self.ontology_repository, "inferencebox_snapshot"):
             try:
-                inferencebox = self.ontology_repository.inferencebox_snapshot(symbols, limit=80, world_id=world_id)
+                inferencebox = self.ontology_repository.inferencebox_snapshot(symbols, limit=80, world_id=world_id, **pinned)
             except TypeError as error:
                 if "unexpected keyword" not in str(error) and "world_id" not in str(error):
                     raise
@@ -214,6 +247,8 @@ class RuleChangeCandidateProposalService:
         return {
             "trigger": trigger,
             "symbols": symbols,
+            "requestedSymbols": requested_symbols,
+            "notEvaluatedSymbols": [symbol for symbol in requested_symbols if symbol not in symbols],
             "worldId": world_id,
             "ruleBox": rulebox,
             "inferenceBox": inferencebox,

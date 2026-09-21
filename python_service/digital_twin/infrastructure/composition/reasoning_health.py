@@ -81,7 +81,7 @@ def active_versioned_reasoning_queue_state(
         candidate_id = str(
             getattr(control, "candidate_deployment_id", "") or ""
         ).strip()
-        if candidate_id and candidate_id == str(configured_v2_deployment_id or "").strip():
+        if candidate_id and candidate_id not in requested_ids:
             requested_ids.append(candidate_id)
         v2_ids = []
         for deployment_id in requested_ids:
@@ -104,6 +104,19 @@ def active_versioned_reasoning_queue_state(
             deployment_id: dict(job_store.live_queue_state(deployment_id) or {})
             for deployment_id in v2_ids
         }
+        # A retained rollback candidate can have dormant queued work. Its
+        # actually processing work still consumes the shared TypeDB server.
+        if candidate_id in states and candidate_id not in {
+            active_deployment_id,
+            str(getattr(control, "delivery_deployment_id", "") or ""),
+            str(configured_v2_deployment_id or ""),
+        }:
+            candidate_state = states[candidate_id]
+            if not int(candidate_state.get("processingCount") or 0):
+                states.pop(candidate_id)
+                v2_ids.remove(candidate_id)
+        if not v2_ids:
+            return {"status": "idle", "deploymentIds": [], "effectivePendingCount": 0}
         effective_pending = sum(
             max(0, int(state.get("effectivePendingCount") or 0))
             for state in states.values()
@@ -207,7 +220,7 @@ def build_ontology_reasoning_queue_probe(settings=None):
         except Exception as error:  # noqa: BLE001 - the global TypeDB lease remains the final safety boundary.
             return {
                 "status": "error",
-                "effectivePendingCount": 0,
+                "effectivePendingCount": 1,
                 "probeHealth": {"status": "degraded", "reason": str(error)[:180]},
                 "queueHealth": {"status": "degraded", "reason": str(error)[:180], "scope": "probe-connectivity"},
             }

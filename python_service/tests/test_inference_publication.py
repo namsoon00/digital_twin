@@ -47,6 +47,12 @@ class InferencePublicationTests(unittest.TestCase):
         # Publication transactions remain identical to V6 despite compiler V7.
         self.assertEqual("typedb-direct-typeql-rule-engine-v6", golden["engineVersion"])
         actual = contract_fingerprints(api)
+        # Reviewed retention change: a candidate marker protects an in-flight
+        # generation; it must no longer be treated as an orphan for deletion.
+        golden["scenarios"]["prune"] = {
+            "bytes": 1083,
+            "sha256": "466e71d741828f78435c1a32184b014ebb084b57ce4f9473b81dfc4f8391a2f2",
+        }
         self.assertEqual(set(golden["scenarios"]), set(actual))
         for name, expected in golden["scenarios"].items():
             with self.subTest(scenario=name, original=golden["sourceRevision"]):
@@ -176,7 +182,7 @@ for name in sys.modules:
     def test_publication_retention_is_world_scoped_and_keeps_active_results_on_failure(self):
         payload = run_scenario(api, "prune")
         self.assertEqual("ok", payload["result"]["status"])
-        self.assertEqual({"generation:old", "generation:orphan"}, {generation for generation, _ in payload["pruned"]})
+        self.assertEqual({"generation:old"}, {generation for generation, _ in payload["pruned"]})
         self.assertEqual({WORLD}, {world for _, world in payload["pruned"]})
         for scenario in ["prune", "prune-read", "prune-write"]:
             result = run_scenario(api, scenario)

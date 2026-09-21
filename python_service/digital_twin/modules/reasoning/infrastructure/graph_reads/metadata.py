@@ -1192,7 +1192,28 @@ def read_inference_generation_records(
             + "has ontology-json $json;"
         ),
         ["snapshotId", "updatedAt", "json"],
+        label="typedb.inference-published-markers",
     )
+    # Online reads need the published marker, not a reconstruction from every
+    # historical proof JSON. Inventory/retention uses scalar aggregates below.
+    if published_only:
+        records = []
+        for row in published_rows:
+            if not _bindings.inference_marker_is_active(row.get("json")):
+                continue
+            props = json_object(row.get("json"))
+            source = str(props.get("sourceAboxSnapshotId") or "")
+            records.append({
+                "generationId": str(row.get("snapshotId") or ""),
+                "latestAt": str(row.get("updatedAt") or ""),
+                "entityCount": int(number_or_none(props.get("expectedEntityCount")) or 0) + 1,
+                "relationCount": int(number_or_none(props.get("expectedRelationCount")) or 0),
+                "sourceAboxSnapshotId": source,
+                "sourceAboxSnapshotIds": [source] if source else [],
+                "publicationStatus": "active",
+                "countSource": "publication-marker",
+            })
+        return sorted(records, key=lambda item: item["latestAt"], reverse=True)
     candidate_rows = _store.read_rows(
         (
             'match $n isa ontology-node, has ontology-box "InferenceBox", '
@@ -1203,52 +1224,56 @@ def read_inference_generation_records(
             + "has ontology-json $json;"
         ),
         ["snapshotId", "updatedAt", "json"],
+        label="typedb.inference-candidate-markers",
     )
     node_rows = _store.read_rows(
         (
             'match $n isa ontology-node, has ontology-box "InferenceBox", '
             + world_clause
             + "has ontology-snapshot-id $snapshotId, "
-            + "has ontology-updated-at $updatedAt, "
-            + "has ontology-json $json;"
+            + "has ontology-updated-at $updatedAt; "
+            + "reduce $rowCount = count groupby $snapshotId, $updatedAt;"
         ),
-        ["snapshotId", "updatedAt", "json"],
+        ["snapshotId", "updatedAt", "rowCount"],
+        label="typedb.inference-node-inventory",
     )
     relation_rows = _store.read_rows(
         (
             'match $r isa ontology-assertion, has ontology-box "InferenceBox", '
             + world_clause
             + "has ontology-snapshot-id $snapshotId, "
-            + "has ontology-updated-at $updatedAt, "
-            + "has ontology-json $json;"
+            + "has ontology-updated-at $updatedAt; "
+            + "reduce $rowCount = count groupby $snapshotId, $updatedAt;"
         ),
-        ["snapshotId", "updatedAt", "json"],
+        ["snapshotId", "updatedAt", "rowCount"],
+        label="typedb.inference-relation-inventory",
     )
-    indexed_rows = [
-        {
-            "snapshotId": row.get("snapshotId"),
-            "updatedAt": row.get("updatedAt"),
-            "propertiesJson": row.get("json"),
-        }
-        for row in node_rows
-    ] + [
-        {
-            "snapshotId": row.get("snapshotId"),
-            "updatedAt": row.get("updatedAt"),
-            "propertiesJson": row.get("json"),
-            "relationType": "ontology-assertion",
-        }
-        for row in relation_rows
-    ]
-    records = _bindings.inference_generation_records(indexed_rows, [])
+    indexed = {}
+    for rows, count_key in ((node_rows, "entityCount"), (relation_rows, "relationCount")):
+        for row in rows:
+            generation_id = str(row.get("snapshotId") or "")
+            if not generation_id:
+                continue
+            record = indexed.setdefault(generation_id, {
+                "generationId": generation_id, "latestAt": "",
+                "entityCount": 0, "relationCount": 0,
+                "sourceAboxSnapshotId": "", "sourceAboxSnapshotIds": [],
+                "countSource": "scalar-inventory",
+            })
+            record[count_key] += int(number_or_none(row.get("rowCount")) or 0)
+            record["latestAt"] = max(record["latestAt"], str(row.get("updatedAt") or ""))
+    for row in published_rows + candidate_rows:
+        record = indexed.get(str(row.get("snapshotId") or ""))
+        if record is not None:
+            source = str(json_object(row.get("json")).get("sourceAboxSnapshotId") or "")
+            record.update(sourceAboxSnapshotId=source, sourceAboxSnapshotIds=[source] if source else [])
+    records = sorted(indexed.values(), key=lambda item: item["latestAt"], reverse=True)
     candidate_ids = {
         str(row.get("snapshotId") or "")
         for row in candidate_rows
         if str(row.get("snapshotId") or "").strip()
     }
     if not published_rows:
-        if published_only:
-            return []
         return [
             {
                 **record,
@@ -1266,35 +1291,14 @@ def read_inference_generation_records(
         if str(row.get("snapshotId") or "").strip()
         and _bindings.inference_marker_is_active(row.get("json"))
     }
-    if not published_only:
-        return [
-            {
-                **record,
-                "latestAt": published.get(
-                    str(record.get("generationId") or ""), record.get("latestAt")
-                ),
-                "publicationStatus": (
-                    "active"
-                    if str(record.get("generationId") or "") in published
-                    else (
-                        "candidate"
-                        if str(record.get("generationId") or "") in candidate_ids
-                        else "staging"
-                    )
-                ),
-            }
-            for record in records
-        ]
-    result = []
-    for record in records:
-        generation_id = str(record.get("generationId") or "")
-        if generation_id not in published:
-            continue
-        result.append(
-            {
-                **record,
-                "latestAt": published[generation_id] or record.get("latestAt"),
-                "publicationStatus": "active",
-            }
-        )
-    return sorted(result, key=lambda item: str(item.get("latestAt") or ""), reverse=True)
+    return [
+        {
+            **record,
+            "latestAt": published.get(record["generationId"], record["latestAt"]),
+            "publicationStatus": (
+                "active" if record["generationId"] in published
+                else "candidate" if record["generationId"] in candidate_ids else "staging"
+            ),
+        }
+        for record in records
+    ]

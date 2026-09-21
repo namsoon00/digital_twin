@@ -461,6 +461,50 @@ def _notification_intent_label(context: Dict[str, object]) -> str:
     return min(candidates)[2] if candidates else ""
 
 
+def _rule_summary_rows(
+    context: Dict[str, object], observation: Dict[str, object]
+) -> List[str]:
+    """Explain rule diversity without presenting reference-only rows as decisions."""
+
+    relation = relation_context_value(context)
+    selected_rule_id = str(observation.get("selectedRuleId") or "").strip()
+    active_labels: List[str] = []
+    for raw in relation.get("activeRules") or []:
+        item = _mapping(raw)
+        if item.get("reference_only") is True:
+            continue
+        label = _text(item.get("label") or item.get("decisionLabel"))
+        if not label or _rule_id(item) == selected_rule_id:
+            continue
+        if label not in active_labels:
+            active_labels.append(label)
+    reference_labels: List[str] = []
+    for raw in relation.get("referenceRules") or []:
+        item = _mapping(raw)
+        evidence_state = _mapping(item.get("evidenceState"))
+        if not item.get("reference_only") and evidence_state.get("inferenceEligibilityStatus") != "reference-only":
+            continue
+        label = _text(item.get("label") or item.get("decisionLabel"))
+        if label and label not in reference_labels:
+            reference_labels.append(label)
+    rows: List[str] = []
+    selected_label = _text(observation.get("selectedRuleLabel"))
+    if selected_label:
+        rows.append("대표 관계: " + selected_label)
+    if active_labels:
+        shown = active_labels[:3]
+        suffix = " 외 " + str(len(active_labels) - len(shown)) + "개" if len(active_labels) > len(shown) else ""
+        rows.append("함께 성립: " + ", ".join(shown) + suffix)
+    if reference_labels:
+        shown = reference_labels[:2]
+        suffix = " 외 " + str(len(reference_labels) - len(shown)) + "개" if len(reference_labels) > len(shown) else ""
+        rows.append(
+            "판단에서 제외: " + ", ".join(shown) + suffix
+            + "는 자료가 오래됐거나 판단에 사용할 수 없어 참고로만 남겼습니다."
+        )
+    return rows[:3]
+
+
 def _resolved_expected_value(value: object, facts: Dict[str, object]) -> object:
     expected = _mapping(value)
     if not expected:
@@ -718,7 +762,8 @@ def typedb_observation_telegram_message(
     label = _notification_intent_label(context) or relation_label
     symbol = str(observation.get("symbol") or context.get("symbol") or "").strip().upper()
     target_name = CRYPTO_DISPLAY_NAMES.get(symbol) or _target_name(target)
-    headline = "🔎 " + ((target_name + " · ") if target_name else "") + "중요한 변화 감지"
+    kind = notification_kind("investmentInsight", context)
+    headline = kind.icon + " " + ((target_name + " · ") if target_name else "") + kind.label
     presentation = context_observation_evidence_presentation(context)
     projected_rows = customer_evidence_rows(
         context, include_limitations=False, limit=4
@@ -745,8 +790,19 @@ def typedb_observation_telegram_message(
     trigger_rows = reasoning_trigger_rows(context)
     flow_rows = _flow_rows(context, 3 if detail_level == "concise" else 5)
     follow_up_rows = _follow_up_rows(context)
+    relation_diff = _mapping(context.get("ontologyRelationDiff"))
+    relation_unchanged_rows: List[str] = []
+    if kind.key == "price-change" and relation_diff and not relation_diff.get("material"):
+        relation_unchanged_rows = [
+            (
+                "관계 맥락의 일부는 달라졌지만 투자 행동을 바꿀 중요한 관계 변화는 아닙니다."
+                if relation_diff.get("changed")
+                else "이번 재계산에서는 TypeDB 관계 근거와 투자 행동 범위가 이전 확인과 같습니다."
+            )
+        ]
+    rule_summary_rows = _rule_summary_rows(context, observation)
     relation_rows = (
-        [] if notification_kind("investmentInsight", context).key == "price-change"
+        [] if kind.key == "price-change"
         else _relation_rows(context, observation)
     )
     lead = (
@@ -770,12 +826,18 @@ def typedb_observation_telegram_message(
         role="typedb-observation",
         headline=headline,
         target=target,
-        role_label="규칙 기반 변화 감지 · 가격·수급·뉴스의 연결이 달라질 때 보냅니다.",
+        role_label=(
+            "시세 재확인 · 가격 변화는 확인됐지만 관계 변화와 투자 판단은 별도로 구분합니다."
+            if kind.key == "price-change"
+            else "관계 변화 확인 · TypeDB에서 성립·강화·해제된 관계를 구분해 보여드립니다."
+        ),
         lead=lead,
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
             for key, title, rows in (
-                ("change", "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
+                ("change", "가격 변화" if kind.key == "price-change" else "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
+                ("relation-status", "관계 판단", relation_unchanged_rows),
+                ("rules", "사용된 규칙", rule_summary_rows),
                 ("importance", "왜 중요한가요", [*notification_condition_rows, *evidence_rows]),
                 ("financial-evidence", financial_evidence_title(context), financial_evidence_rows(context)),
                 ("tracking", "시스템이 추적 중", follow_up_rows),

@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.application.notification.intake import N
 from digital_twin.modules.notifications.application.notification.presentation import content_body, present_notification
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.application.notification.workflow import NotificationHoldingSnapshotEnricher, NotificationQueueRunner
-from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, reasoning_trigger_rows
+from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, _rule_summary_rows, reasoning_trigger_rows
 from digital_twin.modules.read_models.domain.customer_investment_document import CustomerInvestmentDocument, CustomerInvestmentSection
 from digital_twin.modules.notifications.domain.notification.presentation import LEGACY_KINDS, NOTIFICATION_KINDS, notification_kind
 from digital_twin.modules.notifications.domain.notification.request import NotificationRequest
@@ -208,6 +208,46 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
             "ontologyRelationContext": {"decision": {"selectedRuleId": "graph.materiality.alert_candidate.v1"}},
         }
         self.assertEqual("price-change", notification_kind("investmentInsight", context).key)
+        context = {
+            "notificationDecisionMode": "typedb-context-observation",
+            "reasoningDeliveryTrigger": {"facts": {"confirmedSignalTransitions": [
+                {"signalId": "price", "observedValue": 0.94},
+            ]}},
+            "ontologyRelationDiff": {"changed": False, "material": False, "changeClass": "unchanged"},
+            "ontologyRelationContext": {
+                "decision": {"selectedRuleId": "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1"},
+            },
+        }
+        self.assertEqual("price-change", notification_kind("investmentInsight", context).key)
+        context = {
+            "notificationDecisionMode": "typedb-context-observation",
+            "reasoningDeliveryTrigger": {"facts": {
+                "cryptoTransitions": [{"symbol": "BTC", "changePct": 6.0}],
+                "confirmedSignalTransitions": [{"signalId": "price", "observedValue": 1.2}],
+            }},
+            "ontologyRelationDiff": {
+                "changed": True, "material": True, "changeClass": "material",
+                "materialComponents": ["relationLifecycleTransition"],
+            },
+            "relationLifecycleTransition": {"material": True, "changeKind": "resolved"},
+            "ontologyRelationContext": {"decision": {"selectedRuleId": "graph.context.v1"}},
+        }
+        self.assertEqual("relation-change", notification_kind("investmentInsight", context).key)
+        observation = {"selectedRuleId": "graph.crypto.v1", "selectedRuleLabel": "비트코인 민감 타입 연동"}
+        context = {"ontologyRelationContext": {
+            "activeRules": [
+                {"rule_id": "graph.crypto.v1", "label": "비트코인 민감 타입 연동"},
+                {"rule_id": "graph.concentration.v1", "label": "종목 비중 한도 초과"},
+            ],
+            "referenceRules": [{
+                "rule_id": "graph.earnings.v1", "label": "실적 발표 일정 확인",
+                "reference_only": True, "evidenceState": {"inferenceEligibilityStatus": "reference-only"},
+            }],
+        }}
+        rows = _rule_summary_rows(context, observation)
+        self.assertIn("대표 관계: 비트코인 민감 타입 연동", rows)
+        self.assertIn("함께 성립: 종목 비중 한도 초과", rows)
+        self.assertTrue(any("판단에서 제외" in row and "실적 발표 일정 확인" in row for row in rows))
 
     def test_lightweight_web_list_keeps_upstream_notification_kind(self):
         from digital_twin.infrastructure.web.adapters.notification_presentation import notification_job_list_payload

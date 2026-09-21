@@ -384,8 +384,8 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             typedb_job.context,
             NotificationAIValidatedResponse(action="NO_ACTION"),
         )
-        self.assertIn("🔎 스트래티지 · 중요한 변화 감지", typedb_message)
-        self.assertIn("규칙 기반 변화 감지", typedb_message)
+        self.assertIn("🔗 스트래티지 · 달라진 신호", typedb_message)
+        self.assertIn("달라진 신호 확인", typedb_message)
         self.assertIn("무엇이 달라졌나요", typedb_message)
         self.assertIn("새로 확인된 수치는 주가 등락률 +2.4%입니다.", typedb_message)
         self.assertIn("왜 중요한가요", typedb_message)

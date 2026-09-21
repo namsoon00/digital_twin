@@ -69,6 +69,29 @@ def context_value(context: Mapping, key: str):
     return value if value not in (None, "", {}, []) else mapping(context.get("metadata")).get(key)
 
 
+def material_relation_change(context: Mapping) -> bool:
+    """Return true only for a customer-relevant semantic relation transition."""
+
+    values = mapping(context)
+    diff = mapping(context_value(values, "ontologyRelationDiff"))
+    transition = mapping(context_value(values, "relationLifecycleTransition"))
+    decision_transition = mapping(diff.get("decisionTransition"))
+    nested_lifecycle = mapping(decision_transition.get("relationLifecycleTransition"))
+    return bool(
+        transition.get("material")
+        or nested_lifecycle.get("material")
+        or decision_transition.get("material")
+        or diff.get("material")
+        or (
+            diff.get("changed")
+            and (
+                diff.get("changeClass") == "material"
+                or bool(diff.get("materialComponents"))
+            )
+        )
+    )
+
+
 def notification_kind(message_type: str, context: Mapping = None) -> NotificationKind:
     """Read upstream authority; neither choose an action nor admit delivery."""
 
@@ -104,9 +127,16 @@ def notification_kind(message_type: str, context: Mapping = None) -> Notificatio
         decision = mapping(rules.get("decision"))
         rule_id = str(decision.get("selectedRuleId") or "").lower()
         raw_delta = "raw_delta" in rule_id or "raw-delta" in rule_id or rule_id == "graph.materiality.alert_candidate.v1"
-        if facts.get("cryptoTransitions") or (raw_delta and transitions and all(
-            str(row.get("signalId") or "") in {"price", "price-change", "pnl"} for row in transitions
-        )):
+        relation_changed = material_relation_change(values)
+        price_only = bool(transitions) and all(
+            str(row.get("signalId") or "") in {"price", "price-change", "pnl"}
+            for row in transitions
+        )
+        explicit_relation_comparison = bool(mapping(context_value(values, "ontologyRelationDiff")))
+        if not relation_changed and (
+            facts.get("cryptoTransitions")
+            or price_only and (raw_delta or explicit_relation_comparison)
+        ):
             return NOTIFICATION_KINDS["price-change"]
         if not rules and not mode and requested != "relation-change":
             return NOTIFICATION_KINDS["notice"]

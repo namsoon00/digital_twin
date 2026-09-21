@@ -1246,6 +1246,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "mysqlUnixSocket": value("mysqlUnixSocket", "MYSQL_UNIX_SOCKET", ""),
         "mysqlTablePartitioning": value("mysqlTablePartitioning", "MYSQL_TABLE_PARTITIONING", "auto"),
         "mysqlOperationTimeoutSeconds": value("mysqlOperationTimeoutSeconds", "MYSQL_OPERATION_TIMEOUT_SECONDS", "30"),
+        "reasoningEngineComparisonQueryTimeoutMs": value(
+            "reasoningEngineComparisonQueryTimeoutMs",
+            "REASONING_ENGINE_COMPARISON_QUERY_TIMEOUT_MS",
+            "5000",
+        ),
         "mysqlInnoDbBufferPoolSizeMb": value(
             "mysqlInnoDbBufferPoolSizeMb",
             "MYSQL_INNODB_BUFFER_POOL_SIZE_MB",
@@ -2773,7 +2778,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "externalDataYFinanceFundamentalFreshnessSeconds": value("externalDataYFinanceFundamentalFreshnessSeconds", "EXTERNAL_DATA_YFINANCE_FUNDAMENTAL_FRESHNESS_SECONDS", "172800"),
         "externalDataYFinanceMaxSymbols": value("externalDataYFinanceMaxSymbols", "EXTERNAL_DATA_YFINANCE_MAX_SYMBOLS", "100"),
         "mysqlRuntimeManaged": value("mysqlRuntimeManaged", "MYSQL_RUNTIME_MANAGED", "1"),
-        "mysqlConnectionPoolSize": value("mysqlConnectionPoolSize", "MYSQL_CONNECTION_POOL_SIZE", "4"),
+        "mysqlConnectionPoolSize": value("mysqlConnectionPoolSize", "MYSQL_CONNECTION_POOL_SIZE", "2"),
         "mysqlOperationalSchemaBootstrapAttempts": value(
             "mysqlOperationalSchemaBootstrapAttempts",
             "MYSQL_OPERATIONAL_SCHEMA_BOOTSTRAP_ATTEMPTS",

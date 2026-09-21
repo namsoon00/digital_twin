@@ -16,9 +16,9 @@ from typing import Callable, Dict, Tuple
 
 def mysql_pool_size(settings: Dict[str, object] = None) -> int:
     try:
-        parsed = int(float(str((settings or {}).get("mysqlConnectionPoolSize") or "4").strip()))
+        parsed = int(float(str((settings or {}).get("mysqlConnectionPoolSize") or "2").strip()))
     except (TypeError, ValueError):
-        parsed = 4
+        parsed = 2
     return max(1, min(16, parsed))
 
 

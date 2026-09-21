@@ -16,6 +16,7 @@ from digital_twin.modules.reasoning.domain.reasoning_engine_versions import (
     reasoning_release_identity,
 )
 from digital_twin.infrastructure.mysql_versioned_runtime import (
+    MySQLReasoningEngineComparisonStore,
     MySQLReasoningEngineJobStore,
     merge_reasoning_deployment_health,
 )
@@ -285,6 +286,103 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 result = IndependentReasoningComparisonService(Jobs(), Comparisons(), Registry()).reconcile()
                 self.assertEqual(0, result["recordedCount"])
                 self.assertEqual(1, result["rejectedPairCount"])
+
+        class LockConnection:
+            def __init__(self, acquired=1):
+                self.acquired = acquired
+                self.closed = False
+
+            def cursor(self):
+                owner = self
+
+                class Cursor:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *_args):
+                        return None
+
+                    def execute(self, _sql, _params=()):
+                        return None
+
+                    def fetchone(self):
+                        return {"acquired": owner.acquired}
+
+                return Cursor()
+
+            def close(self):
+                self.closed = True
+
+        class QueryConnection:
+            def __init__(self):
+                self.queries = []
+
+            def execute(self, sql, params=()):
+                self.queries.append((sql, tuple(params)))
+                return SimpleNamespace(fetchall=lambda: [])
+
+        class PairStore(MySQLReasoningEngineJobStore):
+            def __init__(self, acquired=1):
+                self.runtime_settings = {
+                    "reasoningEngineComparisonQueryTimeoutMs": "5000",
+                }
+                self.lock_connection = LockConnection(acquired)
+                self.query_connection = QueryConnection()
+
+            def raw_connection(self, autocommit=True):
+                return self.lock_connection
+
+            @contextmanager
+            def connect(self):
+                yield self.query_connection
+
+        pair_store = PairStore()
+        self.assertEqual([], pair_store.completed_comparison_pairs("active-v2", "candidate-v2"))
+        self.assertTrue(pair_store.lock_connection.closed)
+        pair_sql = pair_store.query_connection.queries[0][0]
+        self.assertIn("MAX_EXECUTION_TIME(5000)", pair_sql)
+        self.assertIn("comparison_row.candidate_job_id", pair_sql)
+        self.assertNotIn("JSON_EXTRACT", pair_sql)
+
+        busy_store = PairStore(acquired=0)
+        self.assertEqual([], busy_store.completed_comparison_pairs("active-v2", "candidate-v2"))
+        self.assertEqual([], busy_store.query_connection.queries)
+        self.assertTrue(busy_store.lock_connection.closed)
+
+        class RecordingConnection:
+            def __init__(self):
+                self.queries = []
+
+            def execute(self, sql, params=()):
+                self.queries.append((sql, tuple(params)))
+                return SimpleNamespace(fetchone=lambda: {
+                    "created_at": "2026-09-10T00:01:02Z",
+                    "updated_at": "2026-09-10T00:01:02Z",
+                })
+
+        class ComparisonStore(MySQLReasoningEngineComparisonStore):
+            def __init__(self):
+                self.connection = RecordingConnection()
+
+            @contextmanager
+            def connect(self):
+                yield self.connection
+
+        recording_store = ComparisonStore()
+        recording_store.record(
+            "active-v2",
+            "candidate-v2",
+            "event:NVDA:1",
+            comparison_store.values[0],
+        )
+        insert_sql, insert_params = recording_store.connection.queries[0]
+        self.assertEqual(insert_sql.count("%s"), len(insert_params))
+        self.assertIn("baseline_job_id", insert_sql)
+        self.assertIn("candidate_job_id", insert_sql)
+        self.assertIn("comparison_contract_version", insert_sql)
+        self.assertIn("job:active", insert_params)
+        self.assertIn("job:candidate", insert_params)
+        self.assertIn("reasoning-comparison-input-v2", insert_params)
 
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock

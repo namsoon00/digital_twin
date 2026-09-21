@@ -1784,6 +1784,9 @@ MYSQL_SCHEMA = [
         comparison_id VARCHAR(191) PRIMARY KEY,
         baseline_deployment_id VARCHAR(191) NOT NULL,
         candidate_deployment_id VARCHAR(191) NOT NULL,
+        baseline_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        comparison_contract_version VARCHAR(96) NOT NULL DEFAULT '',
         baseline_release_id VARCHAR(191) NOT NULL DEFAULT '',
         candidate_release_id VARCHAR(191) NOT NULL DEFAULT '',
         candidate_release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
@@ -1800,6 +1803,7 @@ MYSQL_SCHEMA = [
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_reasoning_comparison_candidate_time (candidate_deployment_id, created_at),
         KEY idx_reasoning_comparison_release_time (candidate_deployment_id, candidate_release_fingerprint, created_at),
+        KEY idx_reasoning_comparison_job_pair (candidate_job_id, baseline_job_id, comparison_contract_version),
         KEY idx_reasoning_comparison_status_time (comparison_status, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,

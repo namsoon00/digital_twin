@@ -147,6 +147,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_reasoning_comparison_release_time",
             "`candidate_deployment_id`, `candidate_release_fingerprint`, `created_at`",
         ),
+        MySQLIndexDefinition(
+            "reasoning_engine_comparisons",
+            "idx_reasoning_comparison_job_pair",
+            "`candidate_job_id`, `baseline_job_id`, `comparison_contract_version`",
+        ),
     ),
     "reasoning_engine_shadow_jobs": (
         MySQLIndexDefinition(
@@ -674,6 +679,9 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         MySQLColumnDefinition("reasoning_engine_jobs", "terminal_reason_code", "VARCHAR(64) NOT NULL DEFAULT ''"),
     ),
     "reasoning_engine_comparisons": (
+        MySQLColumnDefinition("reasoning_engine_comparisons", "baseline_job_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_comparisons", "candidate_job_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_comparisons", "comparison_contract_version", "VARCHAR(96) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_comparisons", "baseline_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_comparisons", "candidate_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_comparisons", "candidate_release_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
@@ -1189,6 +1197,34 @@ def ensure_mysql_column_compatibility(
     return modified
 
 
+def backfill_reasoning_comparison_identity(connection) -> int:
+    """Move the hot comparison identity out of the historical JSON payload.
+
+    This is deliberately idempotent. Existing installations pay the JSON
+    extraction cost once during schema tuning; live reconciliation then uses
+    indexed scalar columns only.
+    """
+
+    cursor = _execute(
+        connection,
+        """
+        UPDATE reasoning_engine_comparisons
+        SET baseline_job_id = LEFT(COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(
+                payload_json, '$.sourceInput.baselineJobId'
+            )), 'null'), ''), 191),
+            candidate_job_id = LEFT(COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(
+                payload_json, '$.sourceInput.candidateJobId'
+            )), 'null'), ''), 191),
+            comparison_contract_version = LEFT(COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(
+                payload_json, '$.sourceInput.contractVersion'
+            )), 'null'), 'legacy'), 96)
+        WHERE comparison_contract_version = ''
+          AND JSON_VALID(payload_json)
+        """,
+    )
+    return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+
 def ensure_mysql_column_widths(
     connection,
     column_map: Mapping[str, Sequence[MySQLColumnWidthDefinition]],
@@ -1365,12 +1401,14 @@ def ensure_mysql_key_partitions(
     return partitioned
 
 
-def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, List[str]]:
+def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, object]:
     columns = ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS)
+    comparison_identity_backfill_count = backfill_reasoning_comparison_identity(connection)
     primary_keys = ensure_reasoning_rule_slot_namespace_primary_key(connection)
     retired_unique_indexes = retire_mysql_unique_indexes(connection, MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS)
     return {
         "columns": columns,
+        "comparisonIdentityBackfillCount": comparison_identity_backfill_count,
         "primaryKeys": primary_keys,
         "compatibleColumns": ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY),
         "widenedColumns": ensure_mysql_column_widths(connection, MYSQL_OPERATIONAL_COLUMN_WIDTHS),

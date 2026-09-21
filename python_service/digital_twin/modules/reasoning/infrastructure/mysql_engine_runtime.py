@@ -2736,7 +2736,42 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         source_event_ids: Iterable[str] = None,
         limit: int = 20,
     ) -> List[Dict[str, object]]:
-        """Return unrecorded completed pairs sharing one durable source event."""
+        """Return unrecorded pairs while serializing the expensive reconciliation read."""
+
+        baseline_id = str(baseline_deployment_id or "").strip()
+        candidate_id = str(candidate_deployment_id or "").strip()
+        if not baseline_id or not candidate_id or baseline_id == candidate_id:
+            return []
+        lock_name = "reasoning-comparison-pairs:" + uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            baseline_id + "|" + candidate_id,
+        ).hex
+        lock_connection = self.raw_connection(autocommit=True)
+        try:
+            with lock_connection.cursor() as cursor:
+                cursor.execute("SELECT GET_LOCK(%s, 0) AS acquired", (lock_name,))
+                row = cursor.fetchone() or {}
+            if int(row.get("acquired") or 0) != 1:
+                return []
+            return self._completed_comparison_pairs_locked(
+                baseline_id,
+                candidate_id,
+                source_event_ids=source_event_ids,
+                limit=limit,
+            )
+        finally:
+            # Closing this dedicated connection releases the named lock even
+            # when MySQL aborts the bounded SELECT. Never return it to the pool.
+            lock_connection.close()
+
+    def _completed_comparison_pairs_locked(
+        self,
+        baseline_deployment_id: str,
+        candidate_deployment_id: str,
+        source_event_ids: Iterable[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, object]]:
+        """Read comparison pairs after the cross-process lock is acquired."""
 
         baseline_id = str(baseline_deployment_id or "").strip()
         candidate_id = str(candidate_deployment_id or "").strip()
@@ -2758,10 +2793,19 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             direct_source_params = tuple(selected_source_ids)
             lineage_source_params = tuple(selected_source_ids)
         bounded = max(1, min(200, int(limit or 20)))
+        try:
+            query_timeout_ms = int(float(str(
+                self.runtime_settings.get("reasoningEngineComparisonQueryTimeoutMs")
+                or "5000"
+            ).strip()))
+        except (TypeError, ValueError):
+            query_timeout_ms = 5000
+        query_timeout_ms = max(1000, min(30000, query_timeout_ms))
         with self.connect() as connection:
             pairs = connection.execute(
                 """
-                SELECT pair.candidate_job_id, pair.baseline_job_id,
+                SELECT /*+ MAX_EXECUTION_TIME(""" + str(query_timeout_ms) + """) */
+                       pair.candidate_job_id, pair.baseline_job_id,
                        COALESCE(
                            MIN(CASE WHEN pair.source_priority = 0
                                     THEN pair.comparison_source_event_id END),
@@ -2830,33 +2874,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ) pair
                 WHERE NOT EXISTS (
                     SELECT 1 FROM reasoning_engine_comparisons comparison_row
-                    WHERE comparison_row.baseline_deployment_id = %s
-                      AND comparison_row.candidate_deployment_id = %s
-                      AND comparison_row.candidate_release_fingerprint = pair.candidate_release_fingerprint
-                      AND JSON_UNQUOTE(JSON_EXTRACT(comparison_row.payload_json, '$.sourceInput.contractVersion')) = 'reasoning-comparison-input-v2'
-                      AND (
-                          (
-                              JSON_UNQUOTE(JSON_EXTRACT(
-                                  comparison_row.payload_json,
-                                  '$.sourceInput.baselineJobId'
-                              )) = pair.baseline_job_id
-                              AND JSON_UNQUOTE(JSON_EXTRACT(
-                                  comparison_row.payload_json,
-                                  '$.sourceInput.candidateJobId'
-                              )) = pair.candidate_job_id
-                          )
-                          OR (
-                              COALESCE(JSON_UNQUOTE(JSON_EXTRACT(
-                                  comparison_row.payload_json,
-                                  '$.sourceInput.baselineJobId'
-                              )), '') = ''
-                              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(
-                                  comparison_row.payload_json,
-                                  '$.sourceInput.candidateJobId'
-                              )), '') = ''
-                              AND comparison_row.source_event_id = pair.comparison_source_event_id
-                          )
-                      )
+                    WHERE comparison_row.candidate_job_id = pair.candidate_job_id
+                      AND comparison_row.baseline_job_id = pair.baseline_job_id
+                      AND comparison_row.comparison_contract_version = 'reasoning-comparison-input-v2'
                 )
                 GROUP BY pair.candidate_job_id, pair.baseline_job_id,
                          pair.candidate_release_fingerprint, pair.candidate_completed_at
@@ -2877,8 +2897,6 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     candidate_id,
                     baseline_id,
                     *lineage_source_params,
-                    baseline_id,
-                    candidate_id,
                     bounded,
                 ),
             ).fetchall()
@@ -3280,14 +3298,18 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
                 """
                 INSERT INTO reasoning_engine_comparisons (
                     comparison_id, baseline_deployment_id, candidate_deployment_id,
+                    baseline_job_id, candidate_job_id, comparison_contract_version,
                     baseline_release_id, candidate_release_id,
                     candidate_release_fingerprint, validation_cohort_id,
                     candidate_runtime_revision, source_event_id,
                     comparison_status, fact_parity_pct,
                     rule_slot_coverage_pct, unexplained_decision_difference_count,
                     shadow_delivery_count, payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
+                    baseline_job_id = VALUES(baseline_job_id),
+                    candidate_job_id = VALUES(candidate_job_id),
+                    comparison_contract_version = VALUES(comparison_contract_version),
                     baseline_release_id = VALUES(baseline_release_id),
                     candidate_release_id = VALUES(candidate_release_id),
                     validation_cohort_id = VALUES(validation_cohort_id),
@@ -3304,6 +3326,9 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
                     comparison_id,
                     str(baseline_deployment_id or "")[:191],
                     str(candidate_deployment_id or "")[:191],
+                    baseline_job_id[:191],
+                    candidate_job_id[:191],
+                    str(source_input.get("contractVersion") or "legacy")[:96],
                     str(values.get("baselineReleaseId") or "")[:191],
                     str(values.get("candidateReleaseId") or "")[:191],
                     str(values.get("candidateReleaseFingerprint") or "")[:64],
@@ -3386,6 +3411,9 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
             "comparisonId": str(values.get("comparison_id") or ""),
             "baselineDeploymentId": str(values.get("baseline_deployment_id") or ""),
             "candidateDeploymentId": str(values.get("candidate_deployment_id") or ""),
+            "baselineJobId": str(values.get("baseline_job_id") or ""),
+            "candidateJobId": str(values.get("candidate_job_id") or ""),
+            "comparisonContractVersion": str(values.get("comparison_contract_version") or ""),
             "baselineReleaseId": str(values.get("baseline_release_id") or ""),
             "candidateReleaseId": str(values.get("candidate_release_id") or ""),
             "candidateReleaseFingerprint": str(values.get("candidate_release_fingerprint") or ""),

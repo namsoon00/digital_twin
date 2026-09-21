@@ -65,7 +65,13 @@ function payload(url, options = {}) {
       nextCursor: offset + limit < selected.length ? String(offset + limit) : "", summary: {}, inboxSummary: { total: selected.length } };
   }
   if (/^\/api\/notification-jobs\/[^/]+$/.test(pathname)) return { job: jobs.find(job => job.id === pathname.split("/").at(-1)) || jobs[0] };
-  if (pathname.endsWith("/ai-review")) return { aiExecution: { executionSpans: { completionPolicy: "wait-until-complete", queueWaitMs: 1200, modelAttempts: [{ capacityWaitMs: 50 }] } } };
+  if (pathname.endsWith("/ai-review")) return { aiExecution: { executionSpans: { completionPolicy: "wait-until-complete", queueWaitMs: 1200, modelAttempts: [{ capacityWaitMs: 50 }] } },
+    narrative: { evidenceLedger: [{evidenceId: "fixture-model", label: "사건 조건 확인", kind: "model-signal", value: "조건 성립", source: "fixture", featureSummary: {measurementBasis: "condition-coverage"}}],
+      validations: [{claimId: "fixture-claim", status: "rejected", text: "악재를 흡수했습니다.", evidenceIds: ["fixture-model"], reasons: ["event-response-observations-required"]}] } };
+  if (/^\/api\/notification-jobs\/[^/]+\/delivery$/.test(pathname)) return {deliveryAttempts: [{status: "delivered", metadata: {
+    renderedMessage: "실제 전송 본문 검증\n관찰 기준 100원에서 103원으로 3% 변했습니다.\n현재 변화는 가격 관찰이며 매매 지시가 아닙니다.",
+    renderedMessageStatus: "complete", deliveryBaseline: {deliveredAt: stamp}
+  }}]};
   if (pathname.endsWith("/timeline")) return {
     symbol: pathname.split("/")[3], query: { range: url.searchParams.get("range"), interval: "1d", accountId: url.searchParams.get("accountId") },
     series: { pointCount: 41, latestAt: stamp, candles: Array.from({ length: 41 }, (_, index) => ({

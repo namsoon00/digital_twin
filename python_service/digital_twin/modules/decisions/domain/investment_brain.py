@@ -1690,6 +1690,13 @@ def primary_inference_rows(rows: Iterable[Dict[str, object]]) -> List[Dict[str, 
 
 
 def hypothesis_stance(rows: Iterable[Dict[str, object]], matches: Iterable[Dict[str, object]]) -> str:
+    authored = {
+        str((item.get("claimContract") or item.get("claim_contract") or {}).get("expectedDirection") or "")
+        for item in [*rows, *matches]
+        if isinstance(item.get("claimContract") or item.get("claim_contract") or {}, dict)
+    } & {"support", "risk"}
+    if len(authored) == 1:
+        return next(iter(authored))
     polarities = {relation_polarity(item) for item in primary_inference_rows(rows)}
     if "risk" in polarities and "support" not in polarities:
         return "risk"
@@ -1779,7 +1786,7 @@ def hypothesis_from_inference_rule(
     candidate_opposite_rows = [
         item for item in all_rows
         if row_rule_id(item) != rule_id
-        and relation_polarity(item) in ({"support"} if stance == "risk" else {"risk"} if stance == "support" else {"risk", "support"})
+        and relation_polarity(item) in ({"support"} if stance == "risk" else {"risk"} if stance == "support" else set())
     ]
     candidate_opposite_rule_ids = unique_texts(
         [row_rule_id(item) for item in candidate_opposite_rows],
@@ -1867,7 +1874,7 @@ def hypothesis_from_inference_rule(
         hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id, rule_id),
         template_id=template_id,
         template_label=label,
-        claim=name + "에서 TypeDB가 확인한 '" + label + "' 인과 경로가 현재 상황을 설명한다.",
+        claim=name + "에서 '" + label + "' 규칙의 조건이 성립했습니다. 이 관계가 이후 가격 흐름을 설명하는지는 별도 검증할 가설입니다.",
         stance=stance,
         horizon=question.horizon,
         evidence_state=evidence_state,

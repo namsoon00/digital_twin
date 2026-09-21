@@ -786,7 +786,9 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             def review(self, prepared):
                 self.calls += 1
                 core = prepared["_notificationAiPreparedDecisionCore"]
-                support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
+                from digital_twin.modules.notifications.domain.notification_narrative import narrative_claim_evidence_contract
+                contract = narrative_claim_evidence_contract(core["evidenceLedger"])
+                support_id = contract["allowedEvidenceIdsBySection"]["support"][0]
                 payload = response_payload("fact:currentPrice", support_id, "fact:ma20Distance")
                 return validated_response_from_payload(
                     prepared,

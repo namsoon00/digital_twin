@@ -53,6 +53,15 @@ class InformationFollowupService:
             source = row["source"]
             try:
                 valid = self.validate_source(source)
+                if valid:
+                    baselines = row.get("baselineSnapshots") or {}
+                    missing = [symbol for symbol in source.get("symbols") or []
+                        if not isinstance(baselines.get(symbol), dict)
+                        or baselines[symbol].get("observationGranularity") not in {"3m", "15m", "1h"}]
+                    if missing:
+                        # Retry only historical, pre-publication observations; never today's quote.
+                        baselines.update(self.observer.capture_baselines(source["eventAt"], missing))
+                        row["baselineSnapshots"] = baselines
                 reaction = self.observer.observe(source["eventAt"], source.get("symbols") or [], baselines=row.get("baselineSnapshots") or {}) if valid else {}
             except Exception:
                 valid = True
@@ -72,6 +81,8 @@ class InformationFollowupService:
             reaction["observations"] = [retained.get((item["symbol"], item["horizonMinutes"]), item) for item in reaction.get("observations", [])]
             changed = []
             completed = set(row.get("completedHorizons") or [])
+            observed_horizons = set(row.get("observedHorizons") or [])
+            expired_horizons = set(row.get("expiredHorizons") or [])
             event_at = exact_time(source["eventAt"])
             if not event_at:
                 completed.update((60, 1440))
@@ -81,8 +92,14 @@ class InformationFollowupService:
                 observations = [item for item in reaction.get("observations") or [] if item.get("horizonMinutes") == minutes]
                 done = all(item.get("status") == "observed" for item in observations) and bool(observations)
                 expired = now >= event_at + timedelta(minutes=minutes + 180)
+                if done:
+                    observed_horizons.add(minutes)
+                    expired_horizons.discard(minutes)
+                elif minutes in completed and minutes not in observed_horizons:
+                    expired_horizons.add(minutes)
                 if minutes not in completed and (done or expired):
                     completed.add(minutes)
+                    (observed_horizons if done else expired_horizons).add(minutes)
                     if any(item.get("status") == "observed" for item in observations) and event_at + timedelta(minutes=minutes) >= exact_time(row["createdAt"]):
                         changed.append(str(minutes))
             released = event_at or exact_time(str(source.get("publicationDate") or "") + "T00:00:00+00:00")
@@ -93,7 +110,10 @@ class InformationFollowupService:
                 changed.insert(0, "release")
             reaction.update(monitoringMode="background", notificationRegistered=True, trackingId=row["trackingId"])
             row.update(marketReaction=reaction, completedHorizons=sorted(completed), updatedAt=stamp(now),
-                       status="completed" if len(completed) == 2 else "active", nextCheckAt=stamp(now + timedelta(minutes=5)))
+                       observedHorizons=sorted(observed_horizons), expiredHorizons=sorted(expired_horizons),
+                       completionBasis="measured" if observed_horizons == {60, 1440} else "insufficient-observations",
+                       status=("completed" if observed_horizons == {60, 1440} else "expired") if len(completed) == 2 else "active",
+                       nextCheckAt=stamp(now + timedelta(minutes=5)))
             row["notifiedPhases"] = sorted(set(row.get("notifiedPhases", [])) | set(changed))
             reaction["trackingStatus"] = row["status"]
             reaction["nextCheckAt"] = row["nextCheckAt"] if row["status"] == "active" else ""

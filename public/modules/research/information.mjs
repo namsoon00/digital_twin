@@ -18,7 +18,7 @@ function renderInformationReaction(reaction) {
   if (!reaction || reaction.version !== "information-price-observation-v1") return '';
   var rows = reaction.observations || [];
   var trackingLabel = reaction.monitoringMode === "background" ?
-    ({ active: "시스템 자동 관찰 중", completed: "관찰 종료 · 확보된 기록 표시", paused: "자동 관찰 일시 중지", stalled: "자동 관찰 확인 지연", expired: "관찰 기한 종료 · 기록 조회 오류", canceled: "원문 상태 변경으로 관찰 중단" }[reaction.trackingStatus] || "자동 관찰 등록됨") : "조회 시 재확인 · 후속 자동 알림 미등록";
+    ({ active: "시스템 자동 관찰 중", completed: "관찰 종료 · 확보된 기록 표시", paused: "자동 관찰 일시 중지", stalled: "자동 관찰 확인 지연", expired: "관찰 기한 종료 · 비교 자료 부족", canceled: "원문 상태 변경으로 관찰 중단" }[reaction.trackingStatus] || "자동 관찰 등록됨") : "조회 시 재확인 · 후속 자동 알림 미등록";
   return '<section class="inline-detail-block"><strong>' + escapeHtml(reaction.label) + '</strong>' +
     rows.map(function (row) {
       var label = row.symbol + " · " + (row.horizonMinutes === 1440 ? "24시간" : row.horizonMinutes + "분") + " 후";

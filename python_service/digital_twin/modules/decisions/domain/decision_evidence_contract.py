@@ -9,6 +9,7 @@ investment action by accident.
 from __future__ import annotations
 
 from typing import Dict, Iterable, List, Mapping, Set
+from datetime import datetime
 
 
 DECISION_EVIDENCE_CONTRACT_VERSION = "decision-evidence-contract-v3"
@@ -368,7 +369,48 @@ def temporal_evidence_summary(
         if bool(item.get("hasSufficientHistory") or item.get("has_sufficient_history"))
     )
     relation = relation_context_from(context_or_relation)
+    referenced_keys, unresolved, source_windows = [], [], []
+    eligible_rules = _eligible_rule_ids(relation)
+    subject_symbol = _text(_mapping(relation.get("subject")).get("symbol")).upper()
+    def valid_cutoff(window, target):
+        cutoff = target.get("knowledgeCutoffAt") or relation.get("referenceDate")
+        source_cutoff = window.get("knowledgeCutoffAt")
+        if not cutoff or not source_cutoff:
+            return False
+        try:
+            return datetime.fromisoformat(str(source_cutoff).replace("Z", "+00:00")) <= datetime.fromisoformat(str(cutoff).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return False
+    for trace in _inference_traces(relation):
+        if eligible_rules and trace.get("ruleId") not in eligible_rules:
+            continue
+        for condition in trace.get("matchedConditions") or []:
+            row = _mapping(condition)
+            if _text(row.get("relationType")).upper() != "HAS_MODEL_SIGNAL":
+                continue
+            target = _mapping(row.get("matchedTargetProperties"))
+            source_id = _text(target.get("sourceFeatureSnapshotId"))
+            embedded = {str(item.get("evidenceId") or ""): dict(item)
+                        for item in target.get("sourceTemporalWindows") or [] if isinstance(item, Mapping)}
+            for evidence_id in target.get("modelEvidenceIds") or []:
+                parts = str(evidence_id).split("|")
+                if len(parts) != 3 or parts[1] != "HAS_TEMPORAL_WINDOW":
+                    continue
+                window_key = parts[2].rsplit(":", 1)[-1].upper()
+                referenced_keys.append(window_key)
+                captured = embedded.get(str(evidence_id), {})
+                if (source_id and captured.get("sourceFeatureSnapshotId") == source_id
+                        and captured.get("windowKey") == window_key
+                        and subject_symbol and str(captured.get("symbol") or "").upper() == subject_symbol
+                        and valid_cutoff(captured, target)):
+                    source_windows.append({**captured, "ruleId": trace.get("ruleId"), "traceId": trace.get("id")})
+                else:
+                    unresolved.append({"evidenceId": evidence_id, "windowKey": window_key,
+                                       "sourceFeatureSnapshotId": source_id, "reason": "source-window-not-captured"})
     matched_evidence = _matched_temporal_windows(relation, loaded_set)
+    matched_evidence.extend({"ruleId": item.get("ruleId"), "traceId": item.get("traceId"),
+                             "windowKey": item["windowKey"], "sourceFeatureSnapshotId": item["sourceFeatureSnapshotId"]}
+                            for item in source_windows)
     matched_keys = _unique_texts(item.get("windowKey") for item in matched_evidence)
     horizon_groups = []
     for group, keys in TEMPORAL_HORIZON_GROUPS:
@@ -388,6 +430,9 @@ def temporal_evidence_summary(
         "sufficientWindowCount": len(sufficient_keys),
         "sufficientWindowKeys": sufficient_keys,
         "matchedWindowCount": len(matched_keys),
+        "referencedWindowKeys": _unique_texts(referenced_keys),
+        "sourceWindows": source_windows,
+        "unresolvedModelWindowReferences": unresolved,
         "matchedWindowKeys": matched_keys,
         "matchedRuleIds": _unique_texts(item.get("ruleId") for item in matched_evidence),
         "matchedEvidence": matched_evidence,

@@ -140,6 +140,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - After commit and push, send a work-complete notification with `npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"` so other local workers can see the task is finished.
 - Notification wording must keep categorical investment judgement separate from notification delivery priority. Follow `docs/notification-terminology.md` when changing alert messages, rule labels, or notification UI.
 - User-facing investment language must follow `docs/investment-ubiquitous-language.md`. Internal TypeDB identifiers stay stable, while alerts, AI final text, and UI use the TBox-backed Korean domain labels.
+- Evidence-to-message changes must also follow `docs/insight-evidence-flow-remediation.md`: preserve measured values and source versions, distinguish condition matching from empirical validation, and compare delivery novelty with successful receipts without rewriting frozen AI inputs.
 
 ## Ontology-First Development Rules
 

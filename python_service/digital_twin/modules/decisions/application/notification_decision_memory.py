@@ -12,6 +12,7 @@ from digital_twin.modules.decisions.domain.investment_decision_history import (
     compact_decision_episode_memory, decision_memory_matches_scope,
 )
 from digital_twin.modules.decisions.domain.investment_insight_assessment import compact_previous_investment_insight_episode
+from digital_twin.modules.decisions.domain.investment_brain import parse_investment_timestamp
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -275,6 +276,7 @@ def context_with_previous_delivered_investment_insight(
     *,
     account_id: str = "",
     symbol: str = "",
+    refresh: bool = False,
 ) -> Dict[str, object]:
     """Freeze receipt-backed delivery memory separately from AI analysis continuity."""
 
@@ -287,7 +289,7 @@ def context_with_previous_delivered_investment_insight(
         enriched.pop("previousDeliveredInvestmentAIInsightEpisode", None)
     )
     if (
-        captured.get("status") in {"found", "not-found"}
+        not refresh and captured.get("status") in {"found", "not-found"}
         and captured.get("accountId") == resolved_account
         and captured.get("symbol") == resolved_symbol
     ):
@@ -335,4 +337,36 @@ def context_with_previous_delivered_investment_insight(
         "previousEpisodeId": previous.get("episodeId") or "",
     })
     enriched["investmentInsightDeliveryHistory"] = audit
+    return enriched
+
+
+def refresh_insight_delivery_comparison(context, insight_episode_store, *, account_id=""):
+    """Refresh delivery novelty without rewriting the frozen AI analysis input."""
+    from digital_twin.modules.decisions.domain.investment_insight_assessment import investment_insight_delivery_transition
+
+    before = _mapping(context.get("investmentInsightDeliveryHistory"))
+    enriched = context_with_previous_delivered_investment_insight(
+        context, insight_episode_store, account_id=account_id, refresh=True,
+    )
+    history = _mapping(enriched.get("investmentInsightDeliveryHistory"))
+    if history.get("status") not in {"found", "not-found"}:
+        raise RuntimeError("마지막 성공 발송 이력을 확인하지 못해 발송 비교를 재시도합니다.")
+    enriched.setdefault("analysisDeliveryBaseline", before)
+    trigger = _mapping(enriched.get("reasoningDeliveryTrigger"))
+    delivered_at = parse_investment_timestamp(history.get("deliveredAt"))
+    observed_at = parse_investment_timestamp(trigger.get("observedAt"))
+    newer_source = bool(
+        delivered_at and observed_at and observed_at > delivered_at
+        and trigger.get("material") is True and trigger.get("userObservable") is True
+        and trigger.get("facts")
+    )
+    enriched["deliveryBaselineRefresh"] = {
+        "status": "verified", "previousEpisodeId": before.get("previousEpisodeId") or "",
+        "currentEpisodeId": history.get("previousEpisodeId") or "",
+        "changed": before.get("previousEpisodeId") != history.get("previousEpisodeId"),
+        "newerObservedSource": newer_source,
+    }
+    assessment = _mapping(_mapping(enriched.get("notificationAiValidatedResponse")).get("insightAssessment"))
+    if assessment:
+        enriched["investmentInsightTransition"] = investment_insight_delivery_transition(enriched, assessment)
     return enriched

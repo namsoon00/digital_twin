@@ -24,6 +24,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         InvestmentAlertCoverageService,
         NotificationAIDecisionContextEnricher,
         NotificationAIRequestEnqueuer,
+        refresh_insight_delivery_comparison,
     )
     from digital_twin.modules.news_intelligence.public import NewsDigestEnqueuer, NewsDigestEventReconciler
     from digital_twin.modules.notifications.infrastructure.notification.transport import (
@@ -110,7 +111,13 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     reasoning_orchestrator = None
     news_digest_reconciler = None
     alert_coverage_reconciler = None
+    delivery_comparison_refresher = None
     if not dry_run:
+        insight_episode_store = stores.ai_inference_queue_store(settings)
+
+        def delivery_comparison_refresher(context, *, account_id):
+            return refresh_insight_delivery_comparison(context, insight_episode_store, account_id=account_id)
+
         reasoning_orchestrator = InvestmentReasoningOrchestrator(
             stores.investment_reasoning_case_store(settings),
             decision_episode_store=decision_episode_store,
@@ -195,4 +202,5 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         alert_coverage_reconciler=alert_coverage_reconciler,
         fresh_data_recheck_requester=request_fresh_data_recheck,
         link_base_resolver=ActiveShareNotificationLinkResolver(),
+        delivery_comparison_refresher=delivery_comparison_refresher,
     )

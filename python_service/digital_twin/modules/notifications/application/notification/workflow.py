@@ -1,4 +1,5 @@
 import time
+from contextlib import ExitStack
 from datetime import datetime
 from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
@@ -236,8 +237,11 @@ class NotificationQueueRunner:
         alert_coverage_reconciler=None,
         fresh_data_recheck_requester=None,
         link_base_resolver: Callable = None,
+        delivery_comparison_refresher: Callable = None,
     ):
         self.queue = queue
+        self.delivery_comparison_refresher = delivery_comparison_refresher
+        self.delivery_scope = ExitStack()
         self.account_repository = account_repository
         self.notifier_factory = notifier_factory
         self.operations_notifier_factory = operations_notifier_factory
@@ -304,6 +308,7 @@ class NotificationQueueRunner:
             self.recover_active_job(error)
             raise
         finally:
+            self.delivery_scope.close()
             self.active_job = None
             self.active_job_stage = ""
             self.claimed_jobs = []
@@ -345,6 +350,7 @@ class NotificationQueueRunner:
         self.claimed_jobs = list(jobs) if use_claim else []
         processed = 0
         for index, job in enumerate(jobs):
+            self.delivery_scope.close()
             self.active_job = job
             self.active_job_index = index
             self.active_job_stage = "claimed"
@@ -409,6 +415,9 @@ class NotificationQueueRunner:
                 processed += 1
                 continue
             self.active_job_stage = "final-ai-gate"
+            if not self.prepare_delivery_comparison(job):
+                processed += 1
+                continue
             if not self.apply_final_ai_delivery_gate(job):
                 processed += 1
                 continue
@@ -460,6 +469,24 @@ class NotificationQueueRunner:
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def prepare_delivery_comparison(self, job):
+        if self.dry_run or job.message_type != INVESTMENT_INSIGHT or self.delivery_comparison_refresher is None:
+            return True
+        context = dict(job.context or {})
+        if not isinstance(context.get("notificationAiValidatedResponse"), dict):
+            return True
+        symbol = notification_instrument_symbol(context)
+        lock = getattr(self.queue, "delivery_subject_lock", None)
+        try:
+            if callable(lock) and not self.delivery_scope.enter_context(lock(job.account_id, symbol)):
+                raise RuntimeError("같은 종목의 다른 알림이 발송 중이므로 성공 이력 확인 후 재시도합니다.")
+            job.context = self.delivery_comparison_refresher(context, account_id=job.account_id)
+        except Exception as error:
+            self.queue.mark_failed(job, str(error))
+            self.last_run_details.append(self.job_detail(job, "failed", str(error)))
+            return False
+        return True
 
     def recover_active_job(self, error: Exception) -> None:
         """Release a claimed job immediately after an unexpected cycle error."""
@@ -553,6 +580,15 @@ class NotificationQueueRunner:
         decision = reconciled_ai_delivery_decision(
             context, notification_job_id=job.job_id, account_id=job.account_id,
         ) or final_ai_delivery_decision(context)
+        refresh = context.get("deliveryBaselineRefresh") or {}
+        transition = context.get("investmentInsightTransition") or {}
+        if (decision.get("decision") == "send" and refresh.get("changed")
+                and transition.get("kind") == "unchanged-insight"
+                and not refresh.get("newerObservedSource")
+                and (context.get("notificationAiValidatedResponse") or {}).get("action") == "NO_ACTION"):
+            decision = {**decision, "decision": "suppress",
+                "suppressionReason": "delivered_insight_baseline_advanced",
+                "reason": "분석 중 같은 투자 의견이 먼저 발송되어 이번 중복 의견은 웹 이력에만 기록합니다."}
         context["finalAiDeliveryGate"] = decision
         job.context = context
         if decision.get("decision") != "suppress":

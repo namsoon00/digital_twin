@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 import hashlib
 from threading import Lock
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -58,6 +59,19 @@ def notification_list_presentation_join() -> str:
 class MySQLNotificationJobStore(MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
+
+    @contextmanager
+    def delivery_subject_lock(self, account_id, symbol):
+        """Serialize final receipt comparison and send across worker processes."""
+        key = "insight-send:" + hashlib.sha256((str(account_id) + ":" + str(symbol).upper()).encode()).hexdigest()[:48]
+        with self.connect() as connection:
+            row = connection.execute("SELECT GET_LOCK(%s, 0) AS acquired", (key,)).fetchone()
+            acquired = bool(row and row.get("acquired") == 1)
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    connection.execute("SELECT RELEASE_LOCK(%s)", (key,)).fetchone()
 
     def __init__(self, settings: Dict[str, str] = None, admission_policy=None):
         super().__init__(settings)

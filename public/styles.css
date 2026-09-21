@@ -38488,6 +38488,25 @@ html[data-theme="dark"] :where(
   overflow-wrap: anywhere;
 }
 
+.notification-evidence-validation {
+  padding: 0 var(--ds-space-3) var(--ds-space-3);
+}
+
+.notification-evidence-validation > div {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-evidence-validation p {
+  margin-top: 6px;
+}
+
+.notification-evidence-validation ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
 @media (max-width: 640px) {
   .notification-detail-tabs {
     grid-template-columns: repeat(4, minmax(76px, 1fr));

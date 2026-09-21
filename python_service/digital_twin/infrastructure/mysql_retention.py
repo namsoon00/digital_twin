@@ -1139,6 +1139,21 @@ def apply_mysql_operational_history_retention(
         )
         deleted_by_table["ai_inference_execution_audits"] = ai_audit_deleted
         deleted_by_policy["time:ai_inference_execution_audits"] = ai_audit_deleted
+        # Keep delivery receipts for continuity, but bound the larger rendered
+        # body separately. Never delete the last-success comparison baseline.
+        message_cutoff = (
+            (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            - timedelta(days=_int_setting(configured, "notificationRenderedMessageRetentionDays", 7, 1, 30))
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for delivery_status in ("delivered", "failed"):
+            connection.execute(
+                "UPDATE notification_delivery_attempts SET metadata_json = JSON_SET("
+                "JSON_REMOVE(metadata_json, '$.renderedMessage'), '$.renderedMessageStatus', 'expired') "
+                "WHERE status = %s AND started_at < %s AND JSON_VALID(metadata_json) "
+                "AND JSON_CONTAINS_PATH(metadata_json, 'one', '$.renderedMessage') "
+                "ORDER BY started_at, attempt_id LIMIT %s",
+                (delivery_status, message_cutoff, min(batch_size, 100)),
+            )
         news_analysis_deleted = _delete_completed_news_analysis_work_rows(
             connection,
             ai_inference_cutoff,

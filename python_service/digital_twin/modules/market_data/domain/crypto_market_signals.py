@@ -458,7 +458,9 @@ def crypto_transition_targets(transitions: Iterable[Mapping[str, object]], posit
         symbol = _clean_symbol((transition or {}).get("symbol"))
         if symbol in CRYPTO_ALERT_SYMBOLS and symbol not in direct:
             direct.append(symbol)
-    return direct + [symbol for symbol in crypto_sensitive_symbols(positions) if symbol not in direct]
+    # The existing profile catalog proves BTC sensitivity, not exposure to every coin.
+    linked = crypto_sensitive_symbols(positions) if "BTC" in direct else []
+    return direct + [symbol for symbol in linked if symbol not in direct]
 
 
 def crypto_transition_materiality_assessment(

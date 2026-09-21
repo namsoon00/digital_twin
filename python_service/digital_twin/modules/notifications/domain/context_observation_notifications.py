@@ -513,6 +513,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     if (
         reasoning_trigger.get("material") is True
         and reasoning_trigger.get("userObservable") is True
+        and bool(reasoning_trigger.get("facts"))
     ):
         authorization_sources.append("verified-reasoning-trigger")
     # Lifecycle changes remain visible in the graph audit, but do not grant a
@@ -625,6 +626,7 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
     if (
         reasoning_trigger.get("material") is True
         and reasoning_trigger.get("userObservable") is True
+        and bool(reasoning_trigger.get("facts"))
     ):
         authorization_sources.append("verified-reasoning-trigger")
     if lifecycle_transition:

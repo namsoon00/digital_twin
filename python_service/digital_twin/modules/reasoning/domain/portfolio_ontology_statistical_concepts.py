@@ -21,6 +21,7 @@ def _number(value: object) -> float:
 
 def _feature_summary(signal: Mapping[str, object]) -> Dict[str, object]:
     features = _mapping(signal.get("inputFeatures"))
+    features = {**features, **_mapping(features.get("familyInputFeatures"))}
     return {
         key: round(_number(features.get(key)), 8)
         for key in (
@@ -296,6 +297,9 @@ def add_position_statistical_signal_concepts(
                 "modelEvidenceIds": list(
                     (_mapping(signal.get("inputFeatures"))).get("evidenceIds") or []
                 )[:64],
+                "sourceTemporalWindows": list(_mapping(signal.get("inputFeatures")).get("sourceTemporalWindows") or [])[:8],
+                "measurementBasis": _mapping(signal.get("inputFeatures")).get("measurementBasis") or "unknown",
+                "empiricalSampleCount": _mapping(signal.get("inputFeatures")).get("empiricalSampleCount", 0),
                 **_feature_summary(signal),
             }
             contract_node_id = add_entity(

@@ -21,7 +21,15 @@ from digital_twin.modules.model_registry.domain.statistical_signals.registry imp
 from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract
 
 
-MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v4"
+MODEL_HYPOTHESIS_EVIDENCE_FIELDS = (
+    "windowKey", "symbol", "observedAt", "startAt", "endAt", "sampleCount",
+    "hasSufficientHistory", "validObservationRatio", "staleObservationCount",
+    "startPrice", "currentPrice", "priceChangePct", "recentPriceChangePct",
+    "drawdownFromPeakPct", "reboundFromTroughPct", "priceVelocityChangePct",
+    "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd", "riskEventCount",
+    "supportEventCount", "currency", "provider",
+)
+MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v5-source-evidence"
 
 
 def _number(value: object):
@@ -487,7 +495,25 @@ def score_graph_hypothesis_contracts(
                 for item in rows[:24]
             ],
             "evidenceIds": evidence_ids,
+            "measurementBasis": "measured-features" if base else "condition-coverage",
+            "empiricalSampleCount": base.sample_count if base else 0,
+            "conditionEvidenceCount": len(evidence_ids),
         }
+        source_windows = []
+        for evidence_id in evidence_ids:
+            parts = evidence_id.split("|")
+            if len(parts) != 3 or parts[1] != "HAS_TEMPORAL_WINDOW":
+                continue
+            entity = match_index["entities"].get(parts[2])
+            if entity is None:
+                continue
+            properties = dict(entity.properties or {})
+            source_windows.append({
+                **{field: properties[field] for field in MODEL_HYPOTHESIS_EVIDENCE_FIELDS if field in properties},
+                "evidenceId": evidence_id, "sourceFeatureSnapshotId": feature_snapshot.snapshot_id,
+                "symbol": symbol, "knowledgeCutoffAt": feature_snapshot.as_of,
+            })
+        contract_features["sourceTemporalWindows"] = source_windows[:8]
         if base:
             contract_features["familyScore"] = base.score
             contract_features["familyConfidence"] = base.confidence
@@ -512,7 +538,7 @@ def score_graph_hypothesis_contracts(
             source_feature_snapshot_id=feature_snapshot.snapshot_id,
             feature_set_version=feature_snapshot.feature_set_version,
             model_release_id=release_id,
-            sample_count=base.sample_count if base else max(1, len(evidence_ids)),
+            sample_count=base.sample_count if base else 0,
             coverage_ratio=min(coverage, base.coverage_ratio) if base else coverage,
             eligibility=eligibility,
             input_features=contract_features,
@@ -527,7 +553,7 @@ def score_graph_hypothesis_contracts(
             hypothesis_contract_ids=contract_ids,
             outcome_metric=family.outcome_metric if family else "",
             knowledge_cutoff_at=feature_snapshot.as_of,
-            uncertainty_status=base.uncertainty_status if base else "score-only",
+            uncertainty_status=base.uncertainty_status if base else "condition-only-not-empirically-validated",
         ))
 
     # Preserve price/flow diagnostics even when no exact hypothesis contract

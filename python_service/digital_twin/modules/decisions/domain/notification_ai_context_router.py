@@ -14,7 +14,7 @@ from digital_twin.modules.notifications.contracts import build_decision_core_evi
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v8-financial-continuity"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v9-evidence-preservation"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v5"
 
 RESEARCH_INSIGHT_FACT_LABELS = (
@@ -195,7 +195,25 @@ def _minimum_transition_detail(value: object) -> Dict[str, object]:
     evidence_delta = _mapping(source.get("evidenceDelta"))
     if evidence_delta:
         row["evidenceDelta"] = _bounded_detail_bytes(evidence_delta, 420)
-    return _bounded_detail_bytes(row, 900)
+    # Transition numbers and their clocks are a contract, not optional prose.
+    # If the protected packet cannot fit, the caller must report a budget error.
+    facts = _mapping(source.get("facts"))
+    protected = {}
+    for key, current in facts.items():
+        if isinstance(current, (dict, list)):
+            if key in {"confirmedSignalTransitions", "cryptoTransitions", "followUpTransitions"}:
+                protected[key] = [dict(item) for item in current[:12] if isinstance(item, dict)] if isinstance(current, list) else dict(current)
+        elif current not in (None, ""):
+            protected[key] = current
+    if protected:
+        row["facts"] = protected
+    for key in ("reasons", "changedFields", "matchedConditions", "kinds", "materialRevisionKeys"):
+        if key in row:
+            row[key] = list(row[key])[:12]
+    for key in ("reason", "summary", "transitionReason"):
+        if key in row:
+            row[key] = _sentence_text(row[key], 200)
+    return row
 
 
 def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, object]]:
@@ -210,7 +228,7 @@ def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, o
                 "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
                 "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
                 "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
-                "featureSummary", "judgementEligible",
+                "featureSummary", "judgementEligible", "hypothesisRoles",
             ),
         )
         for key in (
@@ -220,7 +238,7 @@ def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, o
             if key in row:
                 row[key] = _unique_all(row.get(key) or [])[:8]
         for key in ("value", "featureSummary"):
-            if key in row:
+            if key in row and item.get("kind") not in {"fact", "derived", "decision-transition", "model-signal"}:
                 row[key] = _bounded_detail_bytes(row[key], 420)
         if row:
             rows.append(row)
@@ -504,11 +522,14 @@ def _financial_evidence_ids(core: Dict[str, object]) -> set:
 def _minimum_company_evidence(value: object) -> Dict[str, object]:
     # The source owner already bounded the packet. Never truncate its paired
     # values, periods, exclusions or provenance as if they were audit prose.
-    return _selected(value, (
+    result = _selected(value, (
         "symbol", "companyName", "factRevision", "materialRevision",
         "valuation", "coverage", "financialEvidence", "financialIntegrity",
         "financialInterpretationPolicy", "financialEvidenceUse",
     ))
+    if result.get("financialInterpretationPolicy"):
+        result["financialInterpretationPolicy"] = "Period-bound financial premise, not a new filing or proof of price causation. Keep metric source and comparison basis."
+    return result
 
 
 def _validate_financial_evidence_retention(source: Dict[str, object], fitted: Dict[str, object]) -> None:
@@ -611,7 +632,9 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
     contextual_count = 0
     for item in source_ledger:
         evidence_id = str(item.get("evidenceId") or "").strip()
-        required = evidence_id in retained_evidence_ids
+        required = evidence_id in retained_evidence_ids or (
+            evidence_id.startswith("fact:") and evidence_id[5:] in _mapping(core.get("facts"))
+        ) or item.get("kind") in {"decision-transition", "model-signal"}
         if not required and contextual_count >= 4:
             continue
         if not required:
@@ -621,14 +644,25 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             (
                 "evidenceId", "role", "kind", "source", "sourceAsOf",
                 "freshness", "judgementEligible",
+                "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
+                "sourceFactIds", "featureSummary", "hypothesisRoles",
             ),
         )
         row["label"] = _sentence_text(item.get("label"), 140)
+        if item.get("kind") == "financial-comparison":
+            # Full provenance remains in companyEvidence.financialEvidence;
+            # each numeric citation only repeats its paired measurements.
+            row["featureSummary"] = _selected(item.get("featureSummary"), (
+                "currentPeriod", "previousPeriod", "currentValue", "previousValue",
+                "changePct", "comparisonBasis",
+            ))
         if item.get("value") not in (None, ""):
             row["value"] = (
                 item.get("value")
                 if not isinstance(item.get("value"), (dict, list, tuple))
-                else _bounded_detail_bytes(item.get("value"), 360)
+                else (_minimum_transition_detail(item.get("value"))
+                      if item.get("kind") == "decision-transition"
+                      else _bounded_detail_bytes(item.get("value"), 900))
             )
         related_ids = [
             str(value or "").strip()
@@ -696,7 +730,9 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         "relationLifecycle": _minimum_transition_detail(
             core.get("relationLifecycle") or {}
         ),
-        "facts": _selected(core.get("facts"), CORE_FACT_KEYS),
+        "facts": dict(_mapping(core.get("facts"))),
+        "temporalEvidence": core.get("temporalEvidence") or {},
+        "externalEvidence": core.get("externalEvidence") or [],
         "companyEvidence": _minimum_company_evidence(core.get("companyEvidence")),
         "hypothesisSet": {
             **_selected(
@@ -1163,7 +1199,7 @@ def _relation_facts(current: Dict[str, object], rules: List[Dict[str, object]], 
             requested.append(original)
     payload = {
         key: facts.get(key)
-        for key in _unique(requested, 40)
+        for key in _unique_all(requested)
         if facts.get(key) not in (None, "", [], {})
         and not isinstance(facts.get(key), (dict, list))
     }
@@ -1180,7 +1216,10 @@ def _temporal_evidence(current: Dict[str, object]) -> Dict[str, object]:
         key.upper() for key in matched_keys
     }
     windows = []
-    for item in current.get("temporalWindows") or []:
+    captured_windows = list(summary.get("sourceWindows") or [])
+    captured_keys = {str(item.get("windowKey") or "").upper() for item in captured_windows}
+    for item in captured_windows + [item for item in current.get("temporalWindows") or []
+                                    if str(item.get("windowKey") or "").upper() not in captured_keys]:
         if not isinstance(item, dict):
             continue
         window_key = str(item.get("windowKey") or "").upper().strip()
@@ -1197,6 +1236,8 @@ def _temporal_evidence(current: Dict[str, object]) -> Dict[str, object]:
                 "smartMoneyNetAmountCumulative", "smartMoneyTradingValueRatioPct",
                 "smartMoneyFlowPersistenceRatio", "smartMoneyFlowAcceleration",
                 "smartMoneyFlowDirection", "smartMoneyFlowBasis",
+                "evidenceId", "sourceFeatureSnapshotId", "knowledgeCutoffAt", "symbol",
+                "riskEventCount", "supportEventCount", "observedAt", "startAt", "endAt",
             ),
         ))
     return {
@@ -1204,6 +1245,7 @@ def _temporal_evidence(current: Dict[str, object]) -> Dict[str, object]:
         "matchedWindowCount": len(windows),
         "matchedWindowKeys": matched_keys,
         "windows": windows[:8],
+        "unresolvedModelWindowReferences": summary.get("unresolvedModelWindowReferences") or [],
         "evidenceRole": "rule-matched-only",
     }
 
@@ -1332,8 +1374,8 @@ def _external_evidence(
     rules: List[Dict[str, object]],
     hypotheses: List[Dict[str, object]],
 ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
-    if not _marker_relevant(rules, hypotheses, EXTERNAL_EVIDENCE_MARKERS):
-        return [], {"evaluatedCount": 0, "eligibleCount": 0, "reasonCounts": {}}
+    # Candidate evidence is already subject-scoped; admission assesses each row.
+    # A rule's spelling cannot determine whether its source document is read.
     evidence = _mapping(brief.get("evidence"))
     reference_at = _mapping(brief.get("subject")).get("referenceDate")
     linked_ids = {
@@ -1357,6 +1399,14 @@ def _external_evidence(
             return
         seen.add(identity.casefold())
         evaluated_count += 1
+        subject_symbol = str(_mapping(brief.get("subject")).get("symbol") or "").upper()
+        declared = row.get("symbols") or row.get("symbol") or row.get("targetSymbol") or []
+        declared = [declared] if isinstance(declared, str) else declared
+        scoped_symbols = {str(value).upper() for value in declared if value}
+        if subject_symbol and scoped_symbols and subject_symbol not in scoped_symbols and not directly_linked:
+            excluded_ids.append(identity)
+            reason_counts["different-subject"] = reason_counts.get("different-subject", 0) + 1
+            return
         admission = assess_prompt_evidence(
             row,
             kind=row.get("kind"),
@@ -1371,6 +1421,8 @@ def _external_evidence(
                 reason_counts[str(reason)] = int(reason_counts.get(str(reason)) or 0) + 1
             return
         eligible_count += 1
+        for key in ("aiAnalysis", "articleSummaryQuality", "evidenceGovernance", "newsEligibility"):
+            row.pop(key, None)
         disclosure_analysis = _mapping(row.get("disclosureAnalysis"))
         if disclosure_analysis:
             row["disclosureAnalysis"] = {
@@ -1388,7 +1440,7 @@ def _external_evidence(
         row["promptAdmission"] = admission
         rows.append(row)
 
-    for item in evidence.get("researchEvidence") or []:
+    for item in (evidence.get("researchEvidence") or [])[:50]:
         if not isinstance(item, dict):
             continue
         evidence_id = str(item.get("evidenceId") or "")
@@ -1397,7 +1449,7 @@ def _external_evidence(
             _selected(
                 item,
                 (
-                    "evidenceId", "kind", "title", "summary", "evidenceRole", "polarity",
+                    "evidenceId", "kind", "title", "summary", "evidenceRole", "polarity", "symbol", "symbols", "targetSymbol",
                     "validationState", "dataState", "source", "publishedAt", "observedAt", "url",
                     "sourceTrustState", "investmentJudgmentEligible", "verificationStatus",
                     "entityResolutionStatus", "decisionInlineEligible", "displayEligible",
@@ -1406,40 +1458,48 @@ def _external_evidence(
                     "sourceAsOf", "sourceRevision", "documentHash", "disclosureAnalysis",
                     "documentVerificationState", "documentAnalysisState",
                     "evidenceEligibilityState",
+                    "aiAnalysis", "articleSummaryQuality", "summaryQualityState", "analysisStatus",
+                    "articleAiAnalysisVersion", "evidenceGovernance", "newsEligibility", "evidenceLifecycleState",
                 ),
             ),
             directly_linked,
         )
-        if len(rows) >= 3:
-            break
-    for item in evidence.get("newsHeadlines") or []:
-        if isinstance(item, dict) and len(rows) < 3:
+    for item in (evidence.get("newsHeadlines") or [])[:50]:
+        if isinstance(item, dict):
             legacy_news = _selected(
                 item,
                 (
-                    "evidenceId", "title", "summary", "stockImpactLabel", "domain",
+                    "evidenceId", "title", "summary", "stockImpactLabel", "domain", "symbol", "symbols", "targetSymbol",
                     "seenDate", "publishedAt", "observedAt", "url",
                     "investmentJudgmentEligible", "decisionInlineEligible", "reasoningEligible",
+                    "alertEligible", "validationState", "dataState", "aiAnalysis", "articleSummaryQuality",
+                    "articleAiAnalysisVersion", "evidenceGovernance", "newsEligibility", "evidenceLifecycleState",
                 ),
             )
             legacy_news["kind"] = "news"
             append_row(legacy_news, False)
     disclosure = _mapping(evidence.get("disclosure"))
-    if disclosure and len(rows) < 3:
+    if disclosure:
         legacy_disclosure = _selected(
             disclosure,
             (
-                "evidenceId", "reportName", "receiptDate", "provider", "url",
+                "evidenceId", "reportName", "receiptDate", "provider", "url", "symbol", "symbols", "targetSymbol",
                 "validationState", "dataState", "investmentJudgmentEligible",
                 "officialDocumentState", "documentVerified", "analysisReady",
+                "documentHash", "disclosureAnalysis", "evidenceLifecycleState",
             ),
         )
         legacy_disclosure["kind"] = "disclosure"
         append_row(legacy_disclosure, False)
+    rows.sort(key=lambda row: (
+        str(row.get("evidenceId") or "") not in linked_ids,
+        str(row.get("kind") or "").lower() not in {"disclosure", "filing", "official-statistics"},
+    ))
     return [row for row in rows if row][:3], {
         "evaluatedCount": evaluated_count,
         "eligibleCount": eligible_count,
         "excludedCount": max(0, evaluated_count - eligible_count),
+        "omittedForBudgetCount": max(0, len(rows) - 3),
         "reasonCounts": dict(sorted(reason_counts.items())),
         "excludedEvidenceIds": excluded_ids[:5],
     }
@@ -1718,6 +1778,13 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
 
     fitted = _fit_notification_ai_decision_core(core, budget_bytes)
     _validate_financial_evidence_retention(core, fitted)
+    for field in ("facts", "temporalEvidence"):
+        if core.get(field) and fitted.get(field) != core.get(field):
+            raise ValueError("AI prompt lost protected observed evidence: " + field)
+    for field in ("reasoningTrigger", "relationLifecycle"):
+        expected = _mapping(core.get(field)).get("facts")
+        if expected and _mapping(fitted.get(field)).get("facts") != expected:
+            raise ValueError("AI prompt lost protected transition values: " + field)
     return fitted
 
 
@@ -1730,7 +1797,10 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
         if isinstance(item, dict)
         for key in ("supportingEvidenceIds", "counterEvidenceIds")
         for evidence_id in _unique_all(item.get(key) or [])
-    } | _financial_evidence_ids(fitted)
+    } | _financial_evidence_ids(fitted) | {
+        str(row.get("evidenceId") or "") for row in fitted.get("evidenceLedger") or []
+        if isinstance(row, dict) and row.get("kind") in {"fact", "derived", "decision-transition", "model-signal"}
+    }
 
     def compact_ledger(limit: int) -> List[Dict[str, object]]:
         rows = [
@@ -1776,7 +1846,7 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
                 "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
                 "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
                 "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
-                "featureSummary", "judgementEligible",
+                "featureSummary", "judgementEligible", "hypothesisRoles",
             ),
         )
         for item in compact_ledger(10)
@@ -1852,7 +1922,7 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
     # to the fields required to compare action, evidence, continuity, and
     # valuation. The full decision brief remains in the immutable audit store.
     facts = _mapping(fitted.get("facts"))
-    fitted["facts"] = _selected(facts, CORE_FACT_KEYS)
+    fitted["facts"] = facts
     decision = _mapping(fitted.get("decision"))
     fitted["decision"] = {
         **_selected(
@@ -1956,21 +2026,7 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
     fitted["relationLifecycle"] = _minimum_transition_detail(
         fitted.get("relationLifecycle") or {},
     )
-    temporal = _mapping(fitted.get("temporalEvidence"))
-    fitted["temporalEvidence"] = {
-        **_selected(
-            temporal,
-            (
-                "loadedWindowCount", "matchedWindowCount", "matchedWindowKeys",
-                "evidenceRole",
-            ),
-        ),
-        "windows": [
-            _bounded_detail_bytes(item, 600)
-            for item in list(temporal.get("windows") or [])[:3]
-            if isinstance(item, dict)
-        ],
-    }
+    fitted["temporalEvidence"] = _mapping(fitted.get("temporalEvidence"))
     fitted["companyEvidence"] = _minimum_company_evidence(fitted.get("companyEvidence"))
     fitted["externalEvidence"] = [
         _bounded_detail_bytes(item, 1200)

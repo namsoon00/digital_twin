@@ -1,6 +1,7 @@
 """Channel selection and delivery isolated from workflow orchestration."""
 
 from typing import Callable, Dict
+import hashlib
 
 from digital_twin.modules.notifications.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
@@ -34,24 +35,32 @@ class NotificationDispatchService:
         context["deliveryChannel"] = channel
         job.context = context
         attempt_id = ""
+        message_bytes = str(message or "").encode("utf-8")
+        rendered_audit = {"messageBytes": len(message_bytes),
+            "accountId": job.account_id, "messageType": job.message_type,
+            "messageSha256": hashlib.sha256(message_bytes).hexdigest(),
+            "renderedMessage": str(message or "") if len(message_bytes) <= 65536 else "",
+            "renderedMessageStatus": "complete" if len(message_bytes) <= 65536 else "oversize-hash-only",
+            "inferenceGenerationId": context.get("inferenceGenerationId") or "",
+            "deliveryBaseline": context.get("investmentInsightDeliveryHistory") or {}}
         if hasattr(self.queue, "start_delivery_attempt"):
             attempt_id = self.queue.start_delivery_attempt(
                 job,
                 channel,
                 audience,
-                {"messageBytes": len(str(message or "").encode("utf-8"))},
+                rendered_audit,
             )
         notifier = factory(accounts.get(job.account_id))
         try:
             delivery = notifier.send(message)
         except Exception as error:
             if attempt_id and hasattr(self.queue, "complete_delivery_attempt"):
-                self.queue.complete_delivery_attempt(job, attempt_id, False, reason=str(error))
+                self.queue.complete_delivery_attempt(job, attempt_id, False, reason=str(error), metadata=rendered_audit)
             raise
         provider = str(getattr(delivery, "label", "") or "")
         reason = str(getattr(delivery, "reason", "") or "")
         receipt_metadata = dict(getattr(delivery, "metadata", {}) or {})
-        receipt_metadata["messageBytes"] = len(str(message or "").encode("utf-8"))
+        receipt_metadata.update(rendered_audit)
         context = dict(job.context or {})
         context["deliveryProvider"] = provider
         if reason:

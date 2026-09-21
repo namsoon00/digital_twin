@@ -973,18 +973,19 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 "symbol": symbol,
                 "targetAt": target_at,
                 "deadlineAt": deadline.isoformat().replace("+00:00", "Z"),
+                "granularities": ",".join(value for value in target.get("allowedGranularities", []) if value in {"1m", "3m", "10m", "15m", "1h", "1d"}),
             })
             if len(clean_targets) >= 1000:
                 break
         if not self.enabled() or not clean_targets:
             return {}
         target_sql = " UNION ALL ".join(
-            "SELECT %s AS request_key, %s AS symbol, %s AS target_at, %s AS deadline_at"
+            "SELECT %s AS request_key, %s AS symbol, %s AS target_at, %s AS deadline_at, %s AS granularities"
             for _ in clean_targets
         )
         params: List[object] = []
         for target in clean_targets:
-            params.extend([target["requestId"], target["symbol"], target["targetAt"], target["deadlineAt"]])
+            params.extend([target["requestId"], target["symbol"], target["targetAt"], target["deadlineAt"], target["granularities"]])
         params.extend([str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID])
         with self.connect() as connection:
             rows = connection.execute(
@@ -1013,6 +1014,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                      AND observations.current_price > 0
                      AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) >= target_requests.target_at
                      AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) <= target_requests.deadline_at
+                     AND (target_requests.granularities = '' OR FIND_IN_SET(observations.granularity, target_requests.granularities) > 0)
                 ) ranked
                 WHERE ranked.row_number_value = 1
                 """,
@@ -1079,13 +1081,15 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 "earliestAt": (
                     parsed_target - timedelta(minutes=target_age_minutes)
                 ).isoformat().replace("+00:00", "Z"),
+                "granularities": ",".join(value for value in target.get("allowedGranularities", []) if value in {"1m", "3m", "10m", "15m", "1h", "1d"}),
+                "knownBeforeTarget": bool(target.get("knownBeforeTarget")),
             })
             if len(clean_targets) >= 1000:
                 break
         if not self.enabled() or not clean_targets:
             return {}
         target_sql = " UNION ALL ".join(
-            "SELECT %s AS request_key, %s AS symbol, %s AS target_at, %s AS earliest_at"
+            "SELECT %s AS request_key, %s AS symbol, %s AS target_at, %s AS earliest_at, %s AS granularities, %s AS known_before_target"
             for _ in clean_targets
         )
         params: List[object] = []
@@ -1095,6 +1099,8 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 target["symbol"],
                 target["targetAt"],
                 target["earliestAt"],
+                target["granularities"],
+                int(target["knownBeforeTarget"]),
             ])
         params.extend([str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID])
         with self.connect() as connection:
@@ -1124,6 +1130,8 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                      AND observations.current_price > 0
                      AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) <= target_requests.target_at
                      AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) >= target_requests.earliest_at
+                     AND (target_requests.granularities = '' OR FIND_IN_SET(observations.granularity, target_requests.granularities) > 0)
+                     AND (target_requests.known_before_target = 0 OR observations.observed_at <= target_requests.target_at)
                 ) ranked
                 WHERE ranked.row_number_value = 1
                 """,

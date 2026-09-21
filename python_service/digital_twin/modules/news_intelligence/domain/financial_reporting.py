@@ -222,6 +222,13 @@ def compact_financial_evidence(company: Mapping):
                 "issues": list(current.get("qualityIssues") or [])[:6]}
     ratios = current.get("derivedMetricEvidence") or {}
     material["ratios"] = [dict(ratios[key]) for key in ("freeCashFlowMarginPct", "cashConversionPct", "operatingMarginPct") if key in ratios]
+    material["earningsQuality"] = {
+        "status": "not-assessed",
+        "normalizedEarningsAvailable": False,
+        "reason": "일회성 손익·보조금·환율 효과를 분리한 원문 근거가 없어 지속 가능한 이익으로 단정하지 않습니다.",
+        "cashFlowComparisonAvailable": any(item.get("metric") == "freeCashFlow" and item.get("status") == "verified-comparable" for item in comparisons),
+        "cashConversionAvailable": "cashConversionPct" in ratios,
+    }
     material["fingerprint"] = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:24]
     material["eventSemantics"] = "reporting-period-evidence-not-new-filing"
     return material

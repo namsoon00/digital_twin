@@ -84,6 +84,8 @@ class FollowupTests(unittest.TestCase):
         self.service.run_once()
         self.service.run_once()
         self.assertEqual([entry[0] for entry in self.repo.phases], ['60'])
+        # Legacy rows have terminal horizons but no measured/expired distinction.
+        next(iter(self.repo.rows.values())).pop('observedHorizons', None)
         self.reader.load_baseline_observations.return_value = {}
         self.clock = NOW + timedelta(minutes=1442)
         restarted = InformationFollowupService(self.repo, lambda now: self.items, self.observer, {}, now=lambda: self.clock)
@@ -108,6 +110,26 @@ class FollowupTests(unittest.TestCase):
         self.service.run_once()
         self.assertEqual(self.repo.phases, [])
         self.assertTrue(all(item['status'] == 'missing' for item in next(iter(self.repo.rows.values()))['marketReaction']['observations']))
+        row = next(iter(self.repo.rows.values()))
+        self.assertEqual('expired', row['status'])
+        self.assertEqual([], row['observedHorizons'])
+        self.assertEqual([60, 1440], row['expiredHorizons'])
+
+    def test_baseline_query_filters_granularity_and_publication_cutoff(self):
+        self.observer.capture_baselines(stamp(NOW), ['EXAMPLE'])
+        target = self.reader.load_baseline_observations.call_args.args[1][0]
+        self.assertEqual(['3m', '15m', '1h'], target['allowedGranularities'])
+        self.assertTrue(target['knownBeforeTarget'])
+
+    def test_invalid_daily_baseline_is_repaired_with_pre_event_history(self):
+        self.service.run_once()
+        row = next(iter(self.repo.rows.values()))
+        row['baselineSnapshots']['EXAMPLE']['observationGranularity'] = '1d'
+        self.clock += timedelta(minutes=62)
+        self.service.run_once()
+        repaired = next(iter(self.repo.rows.values()))
+        self.assertEqual('3m', repaired['baselineSnapshots']['EXAMPLE']['observationGranularity'])
+        self.assertEqual(2, repaired['marketReaction']['observations'][0]['priceChangePercent'])
 
     def test_withdrawn_source_cancels_without_stale_followup(self):
         self.service.run_once()

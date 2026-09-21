@@ -214,7 +214,7 @@ def _relation_rows(context: Dict[str, object], observation: Dict[str, object]) -
     if lifecycle_rows:
         rows.extend(lifecycle_rows)
         return _unique(rows, 3)
-    change_label = _text(lifecycle.get("changeLabel") or observation.get("selectedRuleLabel"))
+    change_label = _text(lifecycle.get("changeLabel"))
     if change_label and not title:
         if not re.search(r"(?:습니다|됩니다|됐습니다|확인)$", change_label):
             change_label += " 관계가 새로 확인됐습니다."
@@ -309,7 +309,12 @@ def _signal_transition_rows(trigger: Dict[str, object]) -> List[str]:
 def _trigger_reason_text(value: object) -> str:
     text = _text(value)
     code = text.rsplit(":", 1)[-1].strip().lower()
-    return TRIGGER_REASON_LABELS.get(code, TRIGGER_REASON_LABELS.get(text.lower(), text))
+    if code == "verified-observation-followup":
+        return "이전에 관찰한 자료를 다시 점검했습니다. 새 투자 조건의 성립은 확인되지 않았습니다."
+    translated = TRIGGER_REASON_LABELS.get(code, TRIGGER_REASON_LABELS.get(text.lower()))
+    if translated:
+        return translated
+    return "" if re.fullmatch(r"[A-Za-z0-9_.:-]+", text) else text
 
 
 def reasoning_trigger_rows(context: Dict[str, object], *, include_delivery_explanation: bool = True) -> List[str]:

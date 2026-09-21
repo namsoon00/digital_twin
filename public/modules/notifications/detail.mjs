@@ -10,6 +10,7 @@ import { cardFormatAttrs, cardTypeAttrs, renderEmptyState } from "../shell/layou
 import { app } from "../shell/root.mjs";
 import { notificationsState } from "../state/notifications.mjs";
 import { notificationCustomerDocument, renderNotificationCustomerDocument } from "./customer-document.mjs";
+import { renderEvidenceValidation, renderDeliveredMessage } from "./evidence-audit.mjs";
 
 function renderNotificationDetailTabs(jobId, active) {
   var tabs = [
@@ -174,6 +175,7 @@ function renderNotificationAIReviewSection(jobId) {
       var validation = validationById[claim.claimId] || {};
       return '<div><span class="tone-chip ' + (validation.status === "rejected" ? "caution" : "watch") + '">' + escapeHtml(validation.status === "rejected" ? "제외" : "채택") + '</span><p><strong>' + escapeHtml(claim.section || "문장") + '</strong>' + escapeHtml(claim.text || "") + '</p><em>' + escapeHtml((claim.evidenceIds || []).join(" · ") || "근거 ID 없음") + '</em></div>';
     }).join("") + '</div>' : '<p class="notification-reasoning-empty">발행된 AI 문장 기록이 없습니다.</p>',
+    renderEvidenceValidation(narrative),
     execution.prompt ? '<details class="notification-ai-prompt-audit"><summary>AI 입력 프롬프트</summary><pre>' + escapeHtml(execution.prompt) + '</pre></details>' : '<p class="notification-reasoning-empty">공유 화면에서는 원문 프롬프트를 표시하지 않습니다.</p>',
     '<details class="notification-ai-prompt-audit"><summary>AI 실행·검증 전체 데이터</summary><pre>' + escapeHtml(JSON.stringify({ aiExecution: execution, aiComparison: comparison, finalDecision: finalDecision, narrative: narrative }, null, 2)) + '</pre></details>',
     '</section>'
@@ -215,7 +217,7 @@ function renderNotificationDeliverySection(job, jobId) {
     reasons.length ? '<div class="notification-detail-reasons">' + reasons.map(function (reason) { return '<p>' + escapeHtml(textWithKnownDisplaySymbols(reason, payload.resolvedSymbol, job)) + '</p>'; }).join("") + '</div>' : '',
     '</section>'
   ].join("");
-  return deliveryAudit + renderNotificationUnifiedPipeline(deliveryJob) + renderNotificationLifecycleTrace(deliveryJob);
+  return deliveryAudit + renderDeliveredMessage(section.deliveryAttempts || []) + renderNotificationUnifiedPipeline(deliveryJob) + renderNotificationLifecycleTrace(deliveryJob);
 }
 
 function renderNotificationDeliveryDecisionOverview(job, decisionFactors, compact) {

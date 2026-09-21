@@ -251,7 +251,7 @@ def reasoning_delivery_trigger(
         "version": REASONING_DELIVERY_TRIGGER_VERSION,
         "status": "verified-material-transition",
         "material": True,
-        "userObservable": True,
+        "userObservable": bool(trigger_facts),
         "symbol": clean_symbol,
         "kinds": sorted({_text(item.get("kind")) for item in matched_rows}),
         "reasons": sorted({_text(item.get("reason")) for item in matched_rows}),

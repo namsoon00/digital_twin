@@ -16,7 +16,8 @@ class InformationObservationService:
             return {}
         symbols = sorted(set(symbols))[:3]
         rows = self.reader.load_baseline_observations("__market_data__",
-            [{"requestId": symbol, "symbol": symbol, "targetAt": event.isoformat()} for symbol in symbols], max_age_minutes=1440)
+            [{"requestId": symbol, "symbol": symbol, "targetAt": event.isoformat(),
+              "allowedGranularities": ["3m", "15m", "1h"], "knownBeforeTarget": True} for symbol in symbols], max_age_minutes=1440)
         fields = {"symbol", "currentPrice", "sourceAsOf", "generatedAt", "currency", "provider", "observationGranularity", "dataQuality"}
         return {key: {field: value for field, value in row.items() if field in fields} for key, row in rows.items() if isinstance(row, dict)}
 
@@ -30,8 +31,10 @@ class InformationObservationService:
         if not event or event > now:
             return {**result, "label": "공식 발표·발행 시각 미확인" if not event else "발표 전"}
         symbols = sorted({str(value or "").upper().strip() for value in symbols if str(value or "").strip()})[:3]
-        bases = [{"requestId": symbol, "symbol": symbol, "targetAt": event.isoformat()} for symbol in symbols]
-        targets = [{"requestId": symbol + ":" + str(minutes), "symbol": symbol, "targetAt": (event + timedelta(minutes=minutes)).isoformat()}
+        bases = [{"requestId": symbol, "symbol": symbol, "targetAt": event.isoformat(),
+                  "allowedGranularities": ["3m", "15m", "1h"], "knownBeforeTarget": True} for symbol in symbols]
+        targets = [{"requestId": symbol + ":" + str(minutes), "symbol": symbol, "targetAt": (event + timedelta(minutes=minutes)).isoformat(),
+                    "allowedGranularities": ["3m", "15m", "1h"]}
                    for symbol in symbols for minutes in [60, 1440] if event + timedelta(minutes=minutes) <= now]
         if not symbols:
             return {**result, "label": "등록된 관측 종목 없음"}

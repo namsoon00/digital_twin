@@ -3,7 +3,8 @@
 from digital_twin.modules._exports import resolve_export
 
 
-_EXPORTS = {'AIInferenceQueueRunner': ('digital_twin.modules.decisions.application.ai_inference_queue_service',
+_EXPORTS = {'refresh_insight_delivery_comparison': ('digital_twin.modules.decisions.application.notification_decision_memory', 'refresh_insight_delivery_comparison'),
+ 'AIInferenceQueueRunner': ('digital_twin.modules.decisions.application.ai_inference_queue_service',
                             'AIInferenceQueueRunner'),
  'DecisionContinuityService': ('digital_twin.modules.decisions.application.decision_continuity_service',
                                'DecisionContinuityService'),

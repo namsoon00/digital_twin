@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_insight_evidence_flow.py", "tier": "unit", "core": true},
     {"file": "test_financial_evidence_repair.py", "tier": "unit", "core": true},
     {"file": "test_financial_reporting_integrity.py", "tier": "unit", "core": true},
     {"file": "test_financial_prompt_retention.py", "tier": "unit", "core": true},

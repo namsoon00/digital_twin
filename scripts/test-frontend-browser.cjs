@@ -370,6 +370,22 @@ async function run() {
           return document.querySelector("[data-work-detail-dialog]").getAttribute("data-work-detail-key");
         });
         assert.equal(result, "job-002", "Rapid detail navigation rendered the older record");
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({width, height: 1000});
+          const audit = page.locator('.notification-ai-prompt-audit').filter({has: page.locator('summary', {hasText: '문장별 근거 대조'})});
+          await audit.locator('summary').click();
+          assert.match(await audit.innerText(), /사건 전후 비교 근거 없음/);
+          assert.match(await audit.innerText(), /예측 성과 검증 아님/);
+          await audit.screenshot({path: path.join(screenshots, "evidence-audit-" + width + ".png")});
+          await audit.locator('summary').click();
+        }
+        await page.locator('[data-notification-detail-tab="delivery"]').click();
+        const actual = page.locator('.notification-ai-prompt-audit').filter({has: page.locator('summary', {hasText: '실제 전송 본문'})});
+        await actual.locator('summary').click();
+        assert.match(await actual.innerText(), /100원에서 103원/);
+        await actual.screenshot({path: path.join(screenshots, "delivery-receipt-mobile.png")});
+        assert.equal(await actual.evaluate(el => el.scrollWidth > el.clientWidth + 1), false, "receipt body horizontal overflow");
+        await page.setViewportSize({width: 1440, height: 1000});
         await page.locator('button[data-work-detail-close]').first().click();
         await page.waitForFunction(() => !document.querySelector('[data-work-detail-key="job-002"]'));
       }

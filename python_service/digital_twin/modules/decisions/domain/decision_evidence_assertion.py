@@ -232,6 +232,7 @@ def inference_evidence_assertions(
                     "ma20Distance", "ma60Distance", "latestSmartMoneyVolumeRatio",
                     "meanSmartMoneyVolumeRatio", "flowSignPersistence", "tradeStrength",
                     "bidAskImbalance", "volumeRatio",
+                    "sourceTemporalWindows", "measurementBasis", "empiricalSampleCount",
                 )
                 if target.get(key) not in (None, "")
             }
@@ -239,7 +240,7 @@ def inference_evidence_assertions(
             strength = _text(target.get("strengthBand") or _mapping(value).get("strengthBand"), 40)
             label = trace_label
             if signal_type:
-                label = signal_type + ((" · " + strength) if strength else "") + " · " + trace_label
+                label = signal_type + " · " + trace_label
             assertions[evidence_id] = EvidenceAssertion(
                 evidence_id=evidence_id,
                 rule_id=rule_id,

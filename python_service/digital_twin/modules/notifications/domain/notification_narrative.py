@@ -22,7 +22,7 @@ from digital_twin.modules.decisions.contracts import ungrounded_narrative_number
 
 
 NOTIFICATION_NARRATIVE_VERSION = "investment-notification-narrative-v1"
-NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v4-financial-context"
+NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v5-observed-evidence"
 NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v2"
 ROLE_INDEXED_CLAIM_CONTRACT_ENCODING = "role-indexed-v1"
 
@@ -632,7 +632,19 @@ def build_decision_core_evidence_ledger(
     retained_ids = financial_ids | {
         row.evidence_id for row in other_rows[:max(0, 64 - len(financial_rows))]
     }
-    return [row.to_dict() for row in prioritized if row.evidence_id in retained_ids]
+    output = [row.to_dict() for row in prioritized if row.evidence_id in retained_ids]
+    for row in output:
+        roles = {}
+        for hypothesis in hypotheses:
+            hypothesis_id = str(hypothesis.get("hypothesisId") or "")
+            for role, field in (("support", "supportingEvidenceIds"), ("counter", "counterEvidenceIds")):
+                if hypothesis_id and row["evidenceId"] in (hypothesis.get(field) or []):
+                    roles[hypothesis_id] = role
+        if roles:
+            row["hypothesisRoles"] = roles
+            if len(set(roles.values())) > 1:
+                row["role"] = "context"
+    return output
 
 
 def context_evidence_ledger(context: Mapping[str, object], response: object = None) -> List[Dict[str, object]]:
@@ -745,7 +757,7 @@ def narrative_claim_evidence_contract(
     observed_ids = _unique(
         item.get("evidenceId")
         for item in rows
-        if str(item.get("kind") or "") not in {"inference", "data-limit"}
+        if _has_observed_state(item)
         and str(item.get("evidenceId") or "") in all_decision_ids
     )
     inference_bundles = {
@@ -860,7 +872,7 @@ def resolved_narrative_claim_evidence_contract(
     return resolved
 
 
-def _financial_claim_reasons(text, section, known_rows, financial_use):
+def _financial_claim_reasons(text, section, known_rows, financial_use, earnings_quality=None):
     financial = [row for row in known_rows if row.get("kind") in {"financial-comparison", "financial-ratio"}]
     if not financial or section in {"next-condition", "catalyst", "limitation"}:
         return []
@@ -868,6 +880,10 @@ def _financial_claim_reasons(text, section, known_rows, financial_use):
     # cause of a price move. Leave event-backed attribution to its own evidence.
     event_backed = any(row.get("kind") == "external-evidence" and row.get("judgementEligible") for row in known_rows)
     reasons = []
+    if (not _mapping(earnings_quality).get("normalizedEarningsAvailable")
+            and re.search(r"(?:기초체력|정상\s*이익|지속\s*가능한\s*이익|일회성.{0,8}제외).{0,20}(?:개선|확인|증가|회복)", text)
+            and not re.search(r"(?:미확인|확인.{0,8}필요|단정.{0,8}(?:없|않)|확인.{0,8}(?:못|없))", text)):
+        reasons.append("earnings-quality-not-assessed")
     if not event_backed:
         for sentence in re.split(r"(?<=[.!?])\s+", text):
             attributed = re.search(
@@ -881,6 +897,32 @@ def _financial_claim_reasons(text, section, known_rows, financial_use):
         ):
             reasons.append("reused-financials-presented-as-new-filing")
     return reasons
+
+
+def _has_observed_state(row: Mapping[str, object]) -> bool:
+    kind = str(row.get("kind") or "")
+    if kind in {"inference", "typedb-derived-relation", "graph-evidence", "data-limit"}:
+        return False
+    if kind == "model-signal":
+        features = _mapping(row.get("featureSummary"))
+        return any(isinstance(value, (float, int)) and not isinstance(value, bool)
+                   for key, value in features.items()
+                   if key not in {"empiricalSampleCount", "conditionEvidenceCount", "coverageRatio"}) or bool(features.get("sourceTemporalWindows"))
+    return row.get("value") not in (None, "", {}, []) or kind in {"external-evidence", "financial-comparison", "financial-ratio"}
+
+
+def _event_claim_reasons(text: str, rows: List[Dict[str, object]]) -> List[str]:
+    strong_event_claim = re.search(r"(?:충격|악재).{0,12}흡수|검증된\s*사건\s*반응|사건.{0,12}(?:때문|일으켰|초과수익)", text)
+    qualified = re.search(r"단정.{0,8}(?:없|어렵)|미확인|검증.{0,8}(?:부족|필요|않)|확인.{0,8}(?:못|필요)|가설", text)
+    if not strong_event_claim or qualified:
+        return []
+    supported = any(
+        row.get("kind") == "event-reaction"
+        and all(_mapping(row.get("featureSummary")).get(key) not in (None, "")
+                for key in ("eventId", "eventAt", "baselineAt", "outcomeAt", "relativeReturnPct"))
+        for row in rows
+    )
+    return [] if supported else ["event-response-observations-required"]
 
 
 def normalize_narrative_claims(
@@ -903,6 +945,11 @@ def normalize_narrative_claims(
         ledger,
     )
     allowed_by_section = _mapping(claim_contract.get("allowedEvidenceIdsBySection"))
+    known_hypotheses = {
+        str(row.get("hypothesisId") or "")
+        for row in _mapping(prepared.get("hypothesisSet")).get("hypotheses") or []
+        if isinstance(row, Mapping)
+    } | {str(key) for row in evidence_by_id.values() for key in _mapping(row.get("hypothesisRoles"))}
     requested = payload.get("narrativeClaims") or payload.get("narrative_claims") or []
     narrative_only = bool(typedb_context_observation_contract(context or {}))
     claims: List[Dict[str, object]] = []
@@ -913,11 +960,12 @@ def normalize_narrative_claims(
         section = str(item.get("section") or "").strip().casefold()
         text = _text(item.get("text"), 420)
         claim_id = _text(item.get("claimId") or item.get("claim_id"), 160) or "claim:" + str(index + 1)
+        hypothesis_id = _text(item.get("hypothesisId"), 200)
         evidence_ids = _unique(item.get("evidenceIds") or item.get("evidence_ids") or [], 12)
         closure_added_ids: List[str] = []
         initial_rows = [evidence_by_id[value] for value in evidence_ids if value in evidence_by_id]
         if section in {"view", "mechanism", "implication", "catalyst", "next-condition"} and initial_rows and not any(
-            str(row.get("kind") or "") != "inference" for row in initial_rows
+            _has_observed_state(row) for row in initial_rows
         ):
             allowed_ids_for_closure = {
                 str(value or "")
@@ -927,13 +975,15 @@ def normalize_narrative_claims(
             for row in initial_rows:
                 for related_id in row.get("relatedEvidenceIds") or []:
                     related = evidence_by_id.get(str(related_id or ""))
-                    if not related or str(related.get("kind") or "") == "inference":
+                    if not related or not _has_observed_state(related):
                         continue
                     if allowed_by_section and str(related_id) not in allowed_ids_for_closure:
                         continue
                     closure_added_ids.append(str(related_id))
             evidence_ids = _unique([*evidence_ids, *closure_added_ids], 12)
         reasons: List[str] = []
+        if hypothesis_id and hypothesis_id not in known_hypotheses:
+            reasons.append("unknown-hypothesis-id")
         if section not in CLAIM_SECTIONS:
             reasons.append("unsupported-section")
         if narrative_only and section == "support":
@@ -948,9 +998,14 @@ def normalize_narrative_claims(
             for value in allowed_by_section.get(section) or []
             if str(value or "")
         }
-        if allowed_by_section and any(value not in allowed_ids for value in evidence_ids):
+        scoped_ids = {value for value in evidence_ids
+            if hypothesis_id and section in {"support", "counter"}
+            and _mapping(evidence_by_id.get(value, {}).get("hypothesisRoles")).get(hypothesis_id) == section}
+        if allowed_by_section and any(value not in allowed_ids and value not in scoped_ids for value in evidence_ids):
             reasons.append("evidence-not-allowed-for-section")
-        known_rows = [evidence_by_id[value] for value in evidence_ids if value in evidence_by_id]
+        known_rows = [{**evidence_by_id[value], "role":
+            _mapping(evidence_by_id[value].get("hypothesisRoles")).get(hypothesis_id, evidence_by_id[value].get("role"))}
+            for value in evidence_ids if value in evidence_by_id]
         if section in CLAIM_SECTIONS and not known_rows:
             reasons.append("evidence-required")
         if section in {"support", "counter"} and any(
@@ -976,15 +1031,15 @@ def normalize_narrative_claims(
         if section == "limitation" and known_rows and any(row.get("role") != "limitation" for row in known_rows):
             reasons.append("non-limitation-used-as-limitation")
         if section == "view" and not narrative_only and known_rows and not any(
-            str(row.get("kind") or "") != "inference" for row in known_rows
+            _has_observed_state(row) for row in known_rows
         ):
             reasons.append("view-needs-observed-state")
         if section in {"mechanism", "implication"} and known_rows and not any(
-            str(row.get("kind") or "") != "inference" for row in known_rows
+            _has_observed_state(row) for row in known_rows
         ):
             reasons.append(section + "-needs-observed-state")
         if section == "next-condition" and known_rows and not any(
-            str(row.get("kind") or "") != "inference" for row in known_rows
+            _has_observed_state(row) for row in known_rows
         ):
             reasons.append("next-condition-needs-observable-evidence")
         if section == "support" and is_action_only_text(text):
@@ -993,9 +1048,11 @@ def normalize_narrative_claims(
         if ungrounded_numbers:
             reasons.append("ungrounded-number")
         if writer_kind == "ai":
+            reasons.extend(_event_claim_reasons(text, known_rows))
             reasons.extend(_financial_claim_reasons(
                 text, section, known_rows,
                 _mapping(_mapping(prepared.get("companyEvidence")).get("financialEvidenceUse")),
+                _mapping(_mapping(_mapping(prepared.get("companyEvidence")).get("financialEvidence")).get("earningsQuality")),
             ))
         status = "verified" if not reasons else "rejected"
         validation = NarrativeClaimValidation(
@@ -1008,11 +1065,13 @@ def normalize_narrative_claims(
             writer_kind=writer_kind,
         ).to_dict()
         validation["evidenceClosureAddedIds"] = _unique(closure_added_ids, 12)
+        validation["hypothesisId"] = hypothesis_id
         validation["ungroundedNumbers"] = ungrounded_numbers
         validations.append(validation)
         if status == "verified":
             claims.append({
                 "claimId": claim_id,
+                "hypothesisId": hypothesis_id,
                 "section": section,
                 "text": text,
                 "evidenceIds": evidence_ids,

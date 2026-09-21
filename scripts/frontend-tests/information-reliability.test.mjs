@@ -58,4 +58,8 @@ test("observed price windows do not imply automated alerts or causal proof", () 
   const html = renderInformationReaction({version:"information-price-observation-v1",label:"공개 전후 가격 관측",observations:[{symbol:"EXAMPLE",horizonMinutes:60,status:"observed",priceChangePercent:2,baseline:{price:100},outcome:{price:102,currency:"USD",provider:"sample"}}],note:"시간상 전후 비교"});
   assert.match(html, /\+2.00%/); assert.match(html, /시간상 전후 비교/);
   assert.match(html, /후속 자동 알림 미등록/);
+  const legacy = renderInformationReaction({version:"information-price-observation-v1",monitoringMode:"background",trackingStatus:"completed",observations:[]});
+  assert.doesNotMatch(legacy, /비교 시세 확보/);
+  const expired = renderInformationReaction({version:"information-price-observation-v1",monitoringMode:"background",trackingStatus:"expired",observations:[]});
+  assert.match(expired, /비교 자료 부족/);
 });

@@ -448,6 +448,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "userObservable": True,
             "kinds": ["verified-market-observation-followup"],
             "materialRevisionKeys": ["revision:mstr:price:2"],
+            "facts": {"currentPrice": 102, "baselinePrice": 100, "priceChangePct": 2},
         }
         triggered_decision = final_ai_delivery_decision(triggered)
         self.assertEqual("send", triggered_decision["decision"])
@@ -920,6 +921,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
                 "userObservable": True,
                 "kinds": ["verified-market-observation-followup"],
                 "materialRevisionKeys": ["revision:mstr:price:2"],
+                "facts": {"currentPrice": 102, "baselinePrice": 100, "priceChangePct": 2},
             },
             "preDecisionDeliveryCadence": {
                 "eligible": True,

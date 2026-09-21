@@ -10,10 +10,46 @@ from digital_twin.modules.market_data.infrastructure.mysql_information_followups
 from digital_twin.modules.market_data.public import DatasetDescriptor
 from digital_twin.modules.market_data.application.external_data.contracts import CollectionJob, ExternalSubject, FollowupCollectionRequest, SourceObservation
 from digital_twin.shared_kernel.events import DomainEvent
+from digital_twin.modules.market_data.domain.market_time_series import MarketTimeSeriesObservation
+from digital_twin.modules.market_data.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
+from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
 
 
 @unittest.skipUnless(os.environ.get('MYSQL_DATABASE') == 'orbit_alpha_test', 'requires isolated test database')
 class InformationStorageTests(unittest.TestCase):
+    def test_intraday_baseline_filters_before_ranking_and_excludes_late_known_history(self):
+        store = MySQLMarketTimeSeriesStore(runtime_settings())
+        symbol = 'TEST' + uuid.uuid4().hex[:12].upper()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        try:
+            with store.transaction() as c:
+                for granularity, minutes, known_delay, price in [('3m', -2, 0, 100), ('1d', -1, 0, 999), ('3m', -1, 3, 888), ('3m', 61, 0, 102), ('1d', 60, 0, 777)]:
+                    at = now + timedelta(minutes=minutes)
+                    observation = MarketTimeSeriesObservation(account_id='fixture', symbol=symbol, granularity=granularity,
+                        bucket_at=stamp(at), observed_at=stamp(at + timedelta(minutes=known_delay)), source_as_of=stamp(at),
+                        provider='fixture', currency='USD', current_price=price, data_quality='actual')
+                    store.insert_observation_with_connection(c, observation)
+            target = {'requestId': 'baseline', 'symbol': symbol, 'targetAt': stamp(now),
+                'allowedGranularities': ['3m', '15m', '1h'], 'knownBeforeTarget': True}
+            baseline = store.load_baseline_observations('fixture', [target])['baseline']
+            self.assertEqual(100, baseline['currentPrice'])
+            outcome = store.load_outcome_observations('fixture', [{**target, 'requestId': 'outcome', 'targetAt': stamp(now + timedelta(minutes=60))}])['outcome']
+            self.assertEqual(102, outcome['currentPrice'])
+        finally:
+            with store.transaction() as c:
+                c.execute('DELETE FROM market_time_series_observations WHERE account_id=%s AND symbol=%s', ('fixture', symbol))
+
+    def test_delivery_subject_lock_excludes_other_connection_and_releases(self):
+        settings = {**runtime_settings(), '_skipNotificationRuleDefaultsSeed': '1'}
+        first, second = MySQLNotificationJobStore(settings), MySQLNotificationJobStore(settings)
+        account = 'test-lock-' + uuid.uuid4().hex
+        with first.delivery_subject_lock(account, 'TEST') as acquired:
+            self.assertTrue(acquired)
+            with second.delivery_subject_lock(account, 'TEST') as duplicate:
+                self.assertFalse(duplicate)
+        with second.delivery_subject_lock(account, 'TEST') as reacquired:
+            self.assertTrue(reacquired)
+
     def test_document_revision_reader_restores_legacy_recovery_origin_without_using_current_body(self):
         store = MySQLExternalDataStore(runtime_settings())
         symbol = 'test-document-' + uuid.uuid4().hex

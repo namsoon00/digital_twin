@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v29-financial-context-separation"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v21"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v30-observed-evidence"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v22"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
 
@@ -26,6 +26,7 @@ AI_DECISION_RESPONSE_SCHEMA = {
     "counterEvidenceStatus": "confirmed|none-found|not-checked|unavailable",
     "narrativeClaims": [{
         "claimId": "응답 안에서 고유한 문장 ID",
+        "hypothesisId": "가설별 지지·반대 설명이면 입력 가설 ID, 공통 사실이면 빈 문자열",
         "section": "view|mechanism|implication|catalyst|change|support|counter|next-condition|limitation",
         "text": "사용자에게 보여줄 한 문장",
         "evidenceIds": ["DecisionCore.evidenceLedger의 근거 ID"],
@@ -118,6 +119,7 @@ AI_DECISION_OUTPUT_JSON_SCHEMA = {
             "type": "array",
             "items": _object_schema({
                 "claimId": {"type": "string"},
+                "hypothesisId": {"type": "string"},
                 "section": {
                     "type": "string",
                     "enum": [
@@ -227,9 +229,9 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "Cite financialEvidence and financial:* IDs; available values are not missing.",
     "도구, 셸, 파일, 저장소, 웹을 사용하지 말고 제공된 DecisionCore만 읽어서 답한다.",
     "DecisionCore에 포함된 현재 사실, 행동 범위, 규칙, 가설, 직전 판단 변화만 사용한다.",
-    "reasoningLineage는 현재 종목의 검증된 증거 경로 또는 그 경로의 압축 증명이다. identity의 종목·ABox 스냅샷·추론 세대와 proof의 ID가 일치하는 사실→관계→규칙→trace→가설 연결만 추론 근거로 사용한다.",
-    "reasoningLineage.judgementEligible이 false이거나 integrity.state가 blocked이면 해당 계보를 행동 근거로 사용하지 말고 decisionReadiness를 insufficient로 제한한다. 다른 종목이나 다른 추론 세대의 근거를 결합하지 않는다.",
-    "reasoningLineage.proof.evidencePathAttested가 true인 압축 증명에서는 proof의 규칙·trace·관계 ID와 evidenceLedger의 실제 관측값을 함께 사용한다. 전체 proof가 있으면 연결된 proof.facts의 observedValue·source·asOf도 확인한다. 내부 규칙명 대신 관측값과 투자 영향 경로를 설명한다.",
+    "reasoningLineage must bind facts, relations, rules, traces and hypotheses to the same symbol, ABox snapshot and generation; never mix identities.",
+    "judgementEligible=false or integrity.state=blocked means insufficient readiness, not action evidence.",
+    "An evidencePathAttested proof needs matching rule/trace/relation IDs plus evidenceLedger observations. Full proof.facts require observedValue/source/asOf. Explain observed values and impact, not rule names.",
     "reviewMode=context-narrative 또는 notificationIntent=context-observation/review-observation은 설명 전용이다. actionEnvelope 기본값보다 우선해 action=NO_ACTION으로 쓰고 확인된 투자 영향과 다음 관찰 조건을 설명한다.",
     "NO_ACTION은 보유 의견이 아니다. 본문에도 보유·추가매수 보류 등 매매 지시 없이 가격·사업·위험의 의미와 다음 조건만 설명한다.",
     "reasoningTrigger가 있으면 왜 지금 다시 분석했는지를 실제 임계값·원문·근거 변화로 설명하고, relationLifecycle이 있으면 어떤 가설 관계가 새로 성립·강화·약화·해제됐는지 구분한다.",
@@ -241,13 +243,16 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "direction은 근거의 순효과로 고르고 자료 부족만으로 balanced를 쓰지 않는다. 정말 대등한 상반 근거일 때만 balanced로 쓰고 균형을 깨는 조건을 밝힌다.",
     "dominantThesis·causalMechanism·investmentImplication은 narrativeClaims의 view·mechanism·implication과 같은 의미여야 하며, 사용 가능한 핵심 관측 수치 1~2개와 검증 근거 ID를 연결한다.",
     "dominantThesis는 결론, causalMechanism은 그 결론까지의 원인 경로, investmentImplication은 사용자 대응 의미만 쓴다. 세 필드를 같은 주장의 바꿔쓰기로 채우지 않는다.",
-    "previousInsight가 있으면 문구가 아니라 direction, horizon, conviction, thesisKey의 의미 변화를 비교한다. 의미 변화가 없으면 새 인사이트인 것처럼 과장하지 않는다.",
+    "Compare previousInsight direction/horizon/conviction/thesisKey, not wording. Unchanged meaning is not a new insight.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
     "반대 근거 검사를 마친 뒤 counterEvidenceStatus를 쓴다. confirmed는 근거 ID가 연결된 counter 문장이 있을 때, none-found는 모든 입력을 검토해 반대 사실이 없을 때만 쓴다. 나머지 상태는 발행 불가다.",
     "사용자에게 보여줄 투자 관점, 인과 경로, 투자 의미, 촉매, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
     "가설이 있으면 narrativeClaims에 view, mechanism, implication과 next-condition 또는 limitation을 반드시 넣고 insightAssessment에만 쓰고 생략하지 않는다.",
     "narrativeClaims는 section별 허용 근거만 쓴다. narrativeClaimContract.encoding이 role-indexed-v1이면 sectionEvidenceRoles와 evidenceLedger의 role·kind를 조합하고 preferredObservedEvidenceIds를 우선 함께 인용한다. 전체 ID 목록이 있으면 recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
+    "Use hypothesisRoles for each hypothesisId; condition-coverage is not empirical validation. Rule names/categories are not observations or probabilities.",
+    "Event absorption/reaction needs event ID/time, before/after prices and benchmark. Missing source windows stay unresolved; never replace past model inputs with current windows.",
+    "Unknown earningsQuality cannot prove normalized/recurring profit. A reporting period is not a publication date; reused financials are not a new catalyst. Cite comparisons, periods and sources.",
     "invalidationCondition은 관측 대상과 변화 방향을 명시하고 검증된 next-condition 근거와 연결한다. 수치형 observable 필드가 있으면 followUpConditions로 구조화하되 입력에 없는 임계값은 만들지 않는다. 일반적인 '근거가 사라지면' 문장은 금지한다.",
     "invalidationCondition과 사용자 표시 문장에는 ma20Distance 같은 내부 필드명을 쓰지 말고 '20일선 차이'처럼 쉬운 한국어로 쓴다. 내부 필드와 수치는 followUpConditions에 별도로 구조화한다.",
     "TypeDB 규칙을 인용할 때 inference 근거와 같은 가설에 연결된 관찰 사실 ID도 함께 인용한다. evidenceBundlesByInference가 있으면 그 묶음을 따르고, 압축 계약이면 hypothesisSet의 근거 ID와 evidenceLedger를 따른다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",
@@ -258,10 +263,10 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "가설 qualification의 decisionUse가 execution이 아니면 그 가설은 비교·학습에만 사용하고 BUY, ADD, TRIM, SELL의 근거로 사용하지 않는다.",
     "causalChain이 검증된 근거 ID로 이어지지 않으면 BUY, ADD, TRIM, SELL을 선택하지 않는다.",
     "판단은 사실 신선도 확인, 경쟁 가설 비교, 반대 근거 확인, 행동 범위 적용, 실행 가능성 확인 순서로 수행한다.",
-    "temporalEvidence.windows만 규칙에 일치한 기간이다. 로드 수를 규칙 성립 수로 해석하지 않는다.",
+    "Only temporalEvidence.windows match rules; loaded count is not match count.",
     "companyEvidence는 행동 근거로 사용할 수 있지만 background는 참고 전용이며 행동을 바꾸지 않는다.",
     "externalEvidence에서 evidenceUse=action인 항목만 행동을 바꿀 근거로 사용하고 rule-scoped-reference는 확인 항목으로만 쓴다.",
-    "continuityDelta는 직전 판단 이후 변화만 뜻하며 현재 TypeDB 근거보다 우선하지 않는다.",
+    "continuityDelta describes prior-decision changes, never overrides current TypeDB evidence.",
     "decisionContinuity.historicalPosition과 과거 계좌 활동은 과거 값이다. 현재 스냅샷·관측시각과 구분하고 현재 가격·손익률로 쓰지 않는다. 생략된 과거 가설 설명을 추측하지 않는다.",
     "reviewSummary는 evaluated만 기간·벤치마크에 따라 평가한다. 나머지는 성공·실패가 아니다. 관측 수익은 실제 거래 성과가 아니며 관측 건수는 독립 실험 수가 아니다.",
     "판단 변경은 현재 근거와 함께 설명한다. transitionVerified 없는 조건을 새 변화로 말하지 않는다.",

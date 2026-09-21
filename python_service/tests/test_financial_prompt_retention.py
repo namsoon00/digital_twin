@@ -165,6 +165,14 @@ class FinancialPromptRetentionTests(unittest.TestCase):
             self.assertEqual(text, claims[0]["text"])
         _, audit = review("새 실적이 발표됐고 긍정적 호재입니다.")
         self.assertIn("reused-financials-presented-as-new-filing", audit["validations"][0]["reasons"])
+        claims, audit = review("일회성 손익을 제외한 정상 이익이 개선됐습니다.")
+        self.assertEqual([], claims)
+        self.assertIn("earnings-quality-not-assessed", audit["validations"][0]["reasons"])
+        claims, audit = review("정상 이익의 개선 여부는 추가 확인이 필요합니다.")
+        self.assertEqual("verified", audit["status"])
+        core["companyEvidence"]["financialEvidence"]["earningsQuality"] = {"normalizedEarningsAvailable": True}
+        claims, audit = review("정상 이익이 개선됐습니다.")
+        self.assertNotIn("earnings-quality-not-assessed", audit["validations"][0]["reasons"])
 
     def test_ai_document_separates_financial_baseline_market_change_and_interpretation(self):
         from digital_twin.modules.decisions.contracts import NotificationAIValidatedResponse
@@ -194,7 +202,8 @@ class FinancialPromptRetentionTests(unittest.TestCase):
         self.assertIn("OpenDART 공시", rendered)
         self.assertIn("yfinance 집계", rendered)
         financial = next(s for s in sections if s["key"] == "financial-evidence")
-        self.assertEqual(4, len(financial["rows"]))
+        self.assertEqual(5, len(financial["rows"]))
+        self.assertIn("일회성 손익", financial["rows"][-1])
         self.assertIn("전년 동기 대비", " ".join(financial["rows"]))
         self.assertIn("전분기 대비", " ".join(financial["rows"]))
         change = next(s for s in sections if s["key"] == "change")
@@ -207,10 +216,15 @@ class FinancialPromptRetentionTests(unittest.TestCase):
         core["notificationIntent"] = "investment-decision"
         core["hypothesisSet"]["comparisonMode"] = "decision"
         core["companyEvidence"]["latestFinancials"] = {"audit": "x" * 100000}
-        core["temporalEvidence"] = {"windows": [{"audit": "x" * 50000}]}
+        core["temporalEvidence"] = {"windows": [{"windowKey": "price-1h", "returnPct": 1.3, "sourceFeatureSnapshotId": "fixture-snapshot"}]}
+        core["background"] = {"audit": "x" * 50000}
         fitted = fit_notification_ai_decision_core(core, 16384)
         self.assertEqual("minimum-decision-contract", fitted["routingAudit"]["status"])
         self.assert_financial_packet(fitted)
+        self.assertEqual(core["temporalEvidence"], fitted["temporalEvidence"])
+        core["temporalEvidence"]["windows"] *= 300
+        with self.assertRaises(ValueError):
+            fit_notification_ai_decision_core(core, 16384)
 
     def test_crowded_ledger_does_not_drop_financial_evidence_before_compression(self):
         rows = build_decision_core_evidence_ledger(

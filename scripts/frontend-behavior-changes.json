@@ -1,5 +1,9 @@
 [
   {
+    "reason": "Show receipt-backed actual message text, expired-body state and last successful comparison without regenerating historical messages. notification-evidence-audit.test.mjs and test_insight_evidence_flow cover delivery audit contracts.",
+    "functions": ["renderNotificationDeliverySection"]
+  },
+  {
     "reason": "Calendar details load persisted past events and price observation windows; date-only timestamps do not invent times. Recovery/statistics and browser regressions cover the new contracts.",
     "functions": ["investmentCalendarEventByKey", "initializeCalendarState", "openWorkDetailLayer", "syncTabFromLocation", "startApplication"]
   },

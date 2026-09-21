@@ -40,7 +40,7 @@ def financial_evidence_title(context):
     return "판단 근거 · 재무"
 
 
-def financial_evidence_rows(context, limit=4):
+def financial_evidence_rows(context, limit=5):
     packet, use, rule_text = financial_evidence_context(context)
     if "graph.company." not in rule_text:
         return []
@@ -56,10 +56,11 @@ def financial_evidence_rows(context, limit=4):
         rows = ["비교 보고 기간이 " + use["previousReportingPeriod"] + "에서 " + period + "로 바뀌었습니다. 발표일과는 다릅니다."]
     else:
         rows = [period + " 보고 기간의 재무 비교입니다. 이번에 새로 발표된 실적이라는 뜻은 아닙니다."]
+    quality_note = "일회성 손익을 분리하지 못해 이익 개선의 지속성은 확인되지 않았습니다."
     preferred = ("sharesOutstanding", "freeCashFlow") if "dilution" in rule_text else ("operatingIncome", "revenue", "freeCashFlow")
     comparisons = sorted(packet.get("comparisons") or [], key=lambda r: preferred.index(r["metric"]) if r.get("metric") in preferred else 99)
     for item in comparisons:
-        if len(rows) >= limit:
+        if len(rows) >= max(1, limit - 1):
             break
         field = item.get("metric")
         if field not in preferred or item.get("status") != "verified-comparable":
@@ -86,4 +87,6 @@ def financial_evidence_rows(context, limit=4):
                     + " (" + basis + " " + format(float(item.get("changePct") or 0), "+.2f") + "%) · "
                     + str(item.get("previousPeriod") or "")[:10] + " → " + str(item.get("currentPeriod") or "")[:10]
                     + " · " + provider)
+    if not (packet.get("earningsQuality") or {}).get("normalizedEarningsAvailable") and len(rows) < limit:
+        rows.append(quality_note)
     return rows

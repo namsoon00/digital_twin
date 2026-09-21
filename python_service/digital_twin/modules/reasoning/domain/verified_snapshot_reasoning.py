@@ -913,7 +913,9 @@ def verified_monitor_snapshot_reasoning_event(
         if target:
             transitions_by_symbol.setdefault(target, []).append(dict(transition))
     for symbol in transition_targets:
-        applicable = list(crypto_transitions if symbol not in transitions_by_symbol else transitions_by_symbol[symbol])
+        applicable = list(transitions_by_symbol.get(symbol) or [
+            row for row in crypto_transitions if _clean_symbol(row.get("symbol")) == "BTC"
+        ])
         if not applicable:
             continue
         fields = changed_fields_by_symbol.setdefault(symbol, [])

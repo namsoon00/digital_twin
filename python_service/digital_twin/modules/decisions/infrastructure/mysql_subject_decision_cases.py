@@ -43,11 +43,24 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
     def save_with_connection(connection, subject_case: SubjectDecisionCase) -> None:
         candidate = subject_case.candidate_set
         existing_subject = connection.execute(
-            "SELECT subject_case_id, payload_json FROM investment_subject_decision_cases "
-            "WHERE subject_case_id = %s",
+            "SELECT subject_case_id, case_version, payload_json "
+            "FROM investment_subject_decision_cases "
+            "WHERE subject_case_id = %s FOR UPDATE",
             (subject_case.subject_case_id,),
         ).fetchone()
         existing_payload = _json_loads(existing_subject.get("payload_json"), {}) if existing_subject else {}
+        existing_version = int(
+            (existing_subject or {}).get("case_version")
+            or existing_payload.get("version")
+            or 0
+        )
+        # AI retries can finish close together. The first transaction that
+        # persists a lifecycle version owns that immutable version; a stale or
+        # duplicate writer must not overwrite it or append a second audit row.
+        # Locking the subject row also closes the race between the terminal AI
+        # failure event and a late completion callback.
+        if existing_subject and existing_version >= int(subject_case.version or 0):
+            return
         existing_dispatch = dict(existing_payload.get("inferenceDispatchDecision") or {})
         existing_candidate = connection.execute(
             "SELECT fingerprint FROM decision_candidate_snapshots WHERE candidate_set_id = %s",

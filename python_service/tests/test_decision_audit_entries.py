@@ -14,11 +14,20 @@ class Cursor:
 
 
 class Connection:
-    def __init__(self, existing=None):
+    def __init__(self, existing=None, subject=None):
         self.existing = existing
+        self.subject = subject
         self.inserts = []
+        self.queries = []
 
     def execute(self, query, params=()):
+        self.queries.append((query, params))
+        if "FROM investment_subject_decision_cases" in query:
+            return Cursor(self.subject)
+        if "FROM decision_candidate_snapshots" in query:
+            return Cursor(None)
+        if "FROM decision_publications" in query:
+            return Cursor(None)
         if query.lstrip().startswith("SELECT entry_fingerprint"):
             return Cursor(self.existing)
         if "INSERT INTO investment_decision_audit_entries" in query:
@@ -90,6 +99,33 @@ class DecisionAuditEntryTests(unittest.TestCase):
                 connection,
                 subject_case(),
             )
+
+    def test_same_subject_version_is_first_writer_wins(self):
+        current = subject_case()
+        connection = Connection(subject={
+            "subject_case_id": current.subject_case_id,
+            "case_version": current.version,
+            "payload_json": json.dumps({"version": current.version, "stage": "ABSTAINED"}),
+        })
+
+        MySQLSubjectDecisionCaseStore.save_with_connection(connection, current)
+
+        writes = [query for query, _params in connection.queries if query.lstrip().startswith("INSERT")]
+        self.assertEqual([], writes)
+        self.assertIn("FOR UPDATE", connection.queries[0][0])
+
+    def test_stale_subject_version_cannot_replace_newer_state(self):
+        current = subject_case()
+        connection = Connection(subject={
+            "subject_case_id": current.subject_case_id,
+            "case_version": current.version + 1,
+            "payload_json": json.dumps({"version": current.version + 1, "stage": "PUBLISHED"}),
+        })
+
+        MySQLSubjectDecisionCaseStore.save_with_connection(connection, current)
+
+        writes = [query for query, _params in connection.queries if query.lstrip().startswith("INSERT")]
+        self.assertEqual([], writes)
 
 
 if __name__ == "__main__":

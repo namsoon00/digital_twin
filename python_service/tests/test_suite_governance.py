@@ -179,8 +179,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # source ownership, correction and customer-document regressions.
         # Seven final-prompt retention, crowded-ledger, exclusion and budget regressions.
         # Five financial continuity, delivered-baseline, causality and shared-document regressions.
-        # Nineteen evidence preservation, source admission, outcome and real SQL/lock regressions.
-        self.assertLessEqual(total, 1759)
+        # Twenty-one evidence preservation, source admission, outcome and real SQL/lock regressions.
+        self.assertLessEqual(total, 1761)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

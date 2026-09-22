@@ -221,6 +221,10 @@
     }
   },
   "storage": {
+    "modules/decisions/infrastructure/mysql_subject_decision_cases.py::MySQLSubjectDecisionCaseStore": {
+      "hash": "2609dac339f7e5adebed68c0955ba0187c193f65c75fc540a5430ed5b4f2fdf2",
+      "reason": "Serialize subject decision lifecycle writes and make equal or stale AI retries first-writer-wins before immutable audit insertion; test_decision_audit_entries."
+    },
     "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.complete": {"hash": "682a7c6c3ae1fbdabb8674528dab1f35282c9a3c5a22abe19d5664dd7202dc77", "reason": "Propagate actual admission reason codes atomically into AI insights and subject delivery while preserving independent watch registration and rollback; test_ai_inference_queue and test_subject_decision_recovery; docs/ai-follow-up-tracking.md."},
     "modules/notifications/infrastructure/mysql_notification_jobs.py::MySQLNotificationJobStore": {"hash": "9973499494ad5dcdda35c76d33e563aa1a10633179a1df6cdc5f24337f6a697c", "reason": "Require intraday granularity and pre-event observed clock before ranking follow-up prices; serialize account/subject delivery receipts with a connection-scoped named lock. test_information_followups, test_insight_evidence_flow; docs/insight-evidence-flow-remediation.md."},
     "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.latest_insight_episodes": {"hash": "5b030f0ef5a6879f8ca5960778234ff23584d9a9beaa008a11c014de64a57422", "reason": "Register and observe scoped AI follow-ups atomically without creating trade decisions; preserve supplier-clock confirmation, durable delivery memory and truthful message state. test_ai_follow_up_tracking, test_ai_inference_queue and test_reasoning_snapshot_replay; docs/ai-follow-up-tracking.md."},

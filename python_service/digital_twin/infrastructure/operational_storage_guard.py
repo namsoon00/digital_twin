@@ -284,7 +284,7 @@ def operational_storage_inventory(
     )
     mysql_limit_mb = _integer(
         configured.get("operationalMySqlDataMaxSizeMb"),
-        16384,
+        32768,
         256,
     )
     mysql_usage_percent = round(mysql_size_mb / mysql_limit_mb * 100, 1) if mysql_limit_mb else 0.0

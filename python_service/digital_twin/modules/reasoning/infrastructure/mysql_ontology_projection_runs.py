@@ -12,6 +12,51 @@ from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.infrastructure.settings import utc_now
 
 
+def _bounded_count(value: object) -> int:
+    if isinstance(value, (dict, list, tuple, set)):
+        return len(value)
+    return 0
+
+
+def compact_current_state_transition_detail(
+    detail: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Keep recovery diagnostics without duplicating the manifest patch."""
+
+    payload = dict(detail or {})
+    patch = payload.pop("targetScopedPatch", None)
+    if not isinstance(patch, dict):
+        return payload
+    encoded = json_dumps(patch).encode("utf-8")
+    payload["targetScopedPatchSummary"] = {
+        "fingerprint": hashlib.sha256(encoded).hexdigest(),
+        "payloadBytes": len(encoded),
+        "status": str(patch.get("status") or ""),
+        "mode": str(patch.get("mode") or ""),
+        "eligible": bool(patch.get("eligible")),
+        "semanticNoop": bool(patch.get("semanticNoop")),
+        "fallbackReason": str(patch.get("fallbackReason") or "")[:180],
+        "targetSymbols": [
+            str(value or "").strip()
+            for value in patch.get("targetSymbols") or []
+            if str(value or "").strip()
+        ][:50],
+        "counts": {
+            key: _bounded_count(patch.get(key))
+            for key in (
+                "changedScopeIds",
+                "relationRebindRootScopeIds",
+                "deferredRelationScopeIds",
+                "reusedActiveRelationScopeIds",
+                "factSlotPlan",
+                "scopePlan",
+            )
+            if _bounded_count(patch.get(key))
+        },
+    }
+    return payload
+
+
 class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
     """Durable MySQL audit for the source data behind an active ABox generation."""
 
@@ -159,7 +204,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         """Persist the source-bound checkpoint before TypeDB is mutated."""
 
         stamp = utc_now()
-        payload = dict(detail or {})
+        payload = compact_current_state_transition_detail(detail)
         with self.transaction() as connection:
             connection.execute(
                 """
@@ -249,10 +294,10 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     "resumeStage": current_stage,
                 }
             existing_detail = _json_loads(row.get("detail_json"), {})
-            merged_detail = {
+            merged_detail = compact_current_state_transition_detail({
                 **(existing_detail if isinstance(existing_detail, dict) else {}),
                 **dict(detail or {}),
-            }
+            })
             terminal = clean_stage == "completed" and clean_status == "completed"
             finished = terminal or clean_status in {
                 "failed",

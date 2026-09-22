@@ -1464,7 +1464,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalMySqlDataMaxSizeMb": value(
             "operationalMySqlDataMaxSizeMb",
             "OPERATIONAL_MYSQL_DATA_MAX_SIZE_MB",
-            "16384",
+            "32768",
         ),
         "operationalLogMaxSizeMb": value(
             "operationalLogMaxSizeMb",
@@ -1569,7 +1569,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "mysqlMinimalStatisticalModelSignalSnapshotRetentionHours": value(
             "mysqlMinimalStatisticalModelSignalSnapshotRetentionHours",
             "MYSQL_MINIMAL_STATISTICAL_MODEL_SIGNAL_SNAPSHOT_RETENTION_HOURS",
-            str(24 * 365),
+            str(24 * 30),
         ),
         "mysqlMinimalReasoningShadowJobRetentionHours": value(
             "mysqlMinimalReasoningShadowJobRetentionHours",

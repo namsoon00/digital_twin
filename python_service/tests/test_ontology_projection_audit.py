@@ -958,12 +958,32 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "projection:failed",
             "source-bound",
             status="failed",
-            detail={"reason": "verification failed"},
+            detail={
+                "reason": "verification failed",
+                "targetScopedPatch": {
+                    "status": "applied",
+                    "eligible": True,
+                    "targetSymbols": ["000660"],
+                    "changedScopeIds": ["scope:" + str(index) for index in range(500)],
+                    "manifestPatchContract": {"payload": "x" * 100_000},
+                },
+            },
         )
         self.assertEqual("ok", failed_transition["status"])
         update_params = failed_connection.calls[1][1]
         self.assertEqual("failed", update_params[1])
         self.assertTrue(update_params[4])
+        stored_detail = json.loads(update_params[3])
+        self.assertNotIn("targetScopedPatch", stored_detail)
+        self.assertEqual(
+            500,
+            stored_detail["targetScopedPatchSummary"]["counts"]["changedScopeIds"],
+        )
+        self.assertEqual(
+            ["000660"],
+            stored_detail["targetScopedPatchSummary"]["targetSymbols"],
+        )
+        self.assertLess(len(update_params[3]), 2_000)
         self.assertFalse(any(
             "INSERT INTO ontology_current_state_heads" in sql
             for sql, _params in failed_connection.calls

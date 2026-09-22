@@ -226,16 +226,12 @@ def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, o
         # reverse rule/hypothesis/source index in each ledger row made the
         # minimum prompt larger than the model budget without adding evidence.
         # Keep only links used by claim closure and model-signal provenance.
-        row = _selected(
-            item,
-            (
-                "evidenceId", "role", "kind", "label", "value", "source",
-                "sourceAsOf", "fetchedAt", "freshness", "relatedEvidenceIds",
-                "sourceFactIds", "modelEvidenceIds", "sourceFeatureSnapshotId",
-                "modelReleaseId", "featureSummary", "judgementEligible",
-                "hypothesisRoles",
-            ),
-        )
+        row = _selected(item, (
+            "evidenceId", "role", "kind", "value", "source", "sourceAsOf",
+            "relatedEvidenceIds", "sourceFactIds", "modelEvidenceIds",
+            "sourceFeatureSnapshotId", "modelReleaseId", "judgementEligible",
+            "hypothesisRoles",
+        ))
         for key in ("relatedEvidenceIds", "sourceFactIds", "modelEvidenceIds"):
             if key in row:
                 row[key] = _unique_all(row.get(key) or [])[:4]
@@ -251,12 +247,21 @@ def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, o
             row.pop("modelEvidenceIds", None)
             row["value"] = _minimum_transition_detail(row.get("value"))
         elif kind == "model-signal":
-            if "value" in row:
-                row["value"] = _bounded_detail_bytes(row["value"], 520)
-            if "featureSummary" in row:
-                row["featureSummary"] = _bounded_detail_bytes(
-                    row["featureSummary"], 420
-                )
+            signal_value = row.get("value")
+            if isinstance(signal_value, dict):
+                row["value"] = _selected(signal_value, (
+                    "signalId", "signalType", "direction", "strengthBand",
+                    "validationStatus", "decisionEligibility",
+                    "hypothesisContractId", "familyId", "releaseId",
+                    "action", "score", "confidence",
+                ))
+            elif "value" in row:
+                row["value"] = _bounded_detail_bytes(signal_value, 240)
+            # Exact observed features already exist as fact rows. Keeping the
+            # featureSummary and modelEvidenceIds here repeated several KB per
+            # signal without improving evidence closure.
+            row.pop("featureSummary", None)
+            row.pop("modelEvidenceIds", None)
         elif kind in {"financial-comparison", "financial-ratio"}:
             # The complete paired-period provenance is already retained in
             # companyEvidence.financialEvidence. Citation rows only need the

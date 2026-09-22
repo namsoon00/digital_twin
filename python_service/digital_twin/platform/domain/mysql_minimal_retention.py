@@ -214,7 +214,7 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
         statistical_model_signal_snapshot_retention_hours=_int_setting(
             configured,
             "mysqlMinimalStatisticalModelSignalSnapshotRetentionHours",
-            24 * 365,
+            24 * 30,
             24 * 3,
             24 * 365,
         ),

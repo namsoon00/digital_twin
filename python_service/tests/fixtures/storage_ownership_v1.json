@@ -232,7 +232,9 @@
     "digital_twin.infrastructure.mysql_ontology_projection_runs": {
       "path": "modules/reasoning/infrastructure/mysql_ontology_projection_runs.py",
       "declarations": {
-        "MySQLOntologyProjectionRunStore": "c8b9f6397c2e3ae1bc70d3af8d3b8937662b9481b3101bcdd58863c2fd279214"
+        "_bounded_count": "af4d3a909a9842d0fc994dff02de183db39631589513fd49c8e0ec292a62b28f",
+        "compact_current_state_transition_detail": "a2be4ac7bf07b479e7214b2037287bcb89b023e742b7d50c3827ee83634511f4",
+        "MySQLOntologyProjectionRunStore": "8dbca43a2593673eee57bed6c147c41ad0c18062353168db98e34c720df28c9a"
       },
       "originalSource": "infrastructure/mysql_ontology_projection_runs.py"
     },

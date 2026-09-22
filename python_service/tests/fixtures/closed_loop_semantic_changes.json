@@ -242,8 +242,8 @@
       "reason": "Route isolated experiments from authoritative candidate control and their shadow ownership receipt, not a stale configured release ID; retain active/delivery routing and exclude retired or rollback-only releases. test_reasoning_ingress_router, test_ai_inference_worker_runtime and test_ontology_evolution."
     },
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::MySQLResearchEvidenceStore": {
-      "hash": "e879d74e7ffb14cbf69c5823b94d5cfe735c2fa22a6f8605adb604994c489e4c",
-      "reason": "Add bounded missing-document candidate reads to the exact story-history query without changing existing storage mutations; test_information_recovery and test_information_reliability. Source validation now supersedes old completed enrichment and survives collector replay; test_research_evidence_store."
+      "hash": "566ee121e1109ed31305adeb2540069472df67fd6db83e88685a8582d7e839bd",
+      "reason": "Add bounded missing-document candidate reads to the exact story-history query without changing existing storage mutations; test_information_recovery and test_information_reliability. Source validation now supersedes old completed enrichment and survives collector replay. Report ready news-analysis work by class so adaptive model batching can drain durable retries without treating local repairs as external-model demand; test_research_evidence_store and test_news_collection_quality."
     },
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineRegistryStore": {
       "hash": "670bef0c97f7142c87f98b034e845cf89e1376850dbf78862d96c2450bc570db",

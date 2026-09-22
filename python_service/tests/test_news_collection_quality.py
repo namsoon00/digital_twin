@@ -95,6 +95,10 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertEqual(1, runner.effective_model_batch_size(5))
         self.assertEqual(3, runner.effective_model_batch_size(6))
         self.assertEqual(2, runner.effective_model_batch_size(99, requested_limit=2))
+        self.assertEqual(7, runner.model_backlog_count(1, {"readyCounts": {"model": 7, "local": 20}}))
+        status = runner._status_for_candidates([], {"readyCounts": {"model": 7}})
+        self.assertEqual(7, status["modelBacklogCount"])
+        self.assertEqual(3, status["effectiveBatchSize"])
         self.assertEqual("source-invalid", evidence.raw_payload["aiAnalysis"]["status"])
         self.assertFalse(runner.should_retry(evidence))
         evidence.raw_payload["articleText"] += " Apple also published a revised subscription outlook."

@@ -351,11 +351,13 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertEqual(1, len(claimed))
             self.assertEqual("research:005930:news:queue", claimed[0]["evidenceId"])
             self.assertEqual(1, store.finish_news_analysis_work(claimed, "test-worker"))
+            completed_status = store.news_analysis_work_status()
             completed = [
-                row for row in store.news_analysis_work_status()["states"]
+                row for row in completed_status["states"]
                 if row["state"] == "completed" and row["workClass"] == "model"
             ]
             self.assertEqual(1, completed[0]["count"])
+            self.assertEqual(0, completed_status["readyCounts"].get("model", 0))
 
             self.assertEqual(1, store.enqueue_news_analysis_work([{
                 "evidenceId": "research:005930:news:queue",
@@ -366,6 +368,7 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             reclaimed = store.claim_news_analysis_work("test-worker-2", "model", 1, lease_seconds=60)
             self.assertEqual(1, len(reclaimed))
             self.assertEqual(2, reclaimed[0]["attemptCount"])
+            self.assertEqual(0, store.news_analysis_work_status()["readyCounts"].get("model", 0))
 
     def test_authoritative_news_enrichment_survives_a_collector_replay(self):
         with tempfile.TemporaryDirectory() as temp:

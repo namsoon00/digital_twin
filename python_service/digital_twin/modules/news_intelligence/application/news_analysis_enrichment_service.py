@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import hashlib
 import os
 import socket
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 import uuid
 
 from digital_twin.modules.market_data.contracts import age_minutes, parse_datetime
@@ -97,6 +97,24 @@ class NewsAnalysisEnrichmentRunner:
         if int(pending_count or 0) >= self.backlog_scale_threshold():
             return self.max_batch_size()
         return self.batch_size()
+
+    @staticmethod
+    def model_backlog_count(candidate_count: int, queue_status: Optional[Dict[str, object]] = None) -> int:
+        ready_counts = (
+            queue_status.get("readyCounts")
+            if isinstance(queue_status, dict) and isinstance(queue_status.get("readyCounts"), dict)
+            else {}
+        )
+        return max(int(candidate_count or 0), int(ready_counts.get("model") or 0))
+
+    def durable_queue_status(self) -> Dict[str, object]:
+        status_loader = getattr(self.evidence_store, "news_analysis_work_status", None)
+        if not callable(status_loader):
+            return {}
+        try:
+            return dict(status_loader() or {})
+        except Exception as error:  # noqa: BLE001 - diagnostics must not stop enrichment.
+            return {"durable": True, "status": "error", "reason": str(error)[:180]}
 
     def local_repair_batch_size(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisLocalRepairBatchSize", 25, 1, 100)
@@ -295,18 +313,24 @@ class NewsAnalysisEnrichmentRunner:
             revision_source.encode("utf-8")
         ).hexdigest()[:32]
 
-    def _status_for_candidates(self, candidates) -> Dict[str, object]:
+    def _status_for_candidates(
+        self,
+        candidates,
+        queue_status: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
         pending_translation = 0
         for item in candidates:
             payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
             if str(payload.get("sourceLanguage") or source_language(item.title)).lower() == "en" and str(payload.get("translationStatus") or "").lower() != "complete":
                 pending_translation += 1
+        model_backlog_count = self.model_backlog_count(len(candidates), queue_status)
         return {
             "enabled": self.enabled(),
             "intervalSeconds": self.interval_seconds(),
             "batchSize": self.batch_size(),
             "maxBatchSize": self.max_batch_size(),
-            "effectiveBatchSize": self.effective_model_batch_size(len(candidates)),
+            "effectiveBatchSize": self.effective_model_batch_size(model_backlog_count),
+            "modelBacklogCount": model_backlog_count,
             "backlogScaleThreshold": self.backlog_scale_threshold(),
             "localRepairBatchSize": self.local_repair_batch_size(),
             "retryMinutes": self.retry_minutes(),
@@ -317,13 +341,10 @@ class NewsAnalysisEnrichmentRunner:
 
     def status(self) -> Dict[str, object]:
         candidates = self.candidates() if self.enabled() else []
-        result = self._status_for_candidates(candidates)
-        status_loader = getattr(self.evidence_store, "news_analysis_work_status", None)
-        if callable(status_loader):
-            try:
-                result["durableQueue"] = dict(status_loader() or {})
-            except Exception as error:  # noqa: BLE001 - status remains available from evidence scan.
-                result["durableQueue"] = {"durable": True, "status": "error", "reason": str(error)[:180]}
+        queue_status = self.durable_queue_status()
+        result = self._status_for_candidates(candidates, queue_status)
+        if queue_status:
+            result["durableQueue"] = queue_status
         work_loader = getattr(self.evidence_store, "news_analysis_work_items", None)
         if callable(work_loader):
             try:
@@ -476,9 +497,11 @@ class NewsAnalysisEnrichmentRunner:
                 "storage": storage,
             }
         candidates = self.candidates()
-        model_batch_size = self.effective_model_batch_size(len(candidates), limit)
         durable_queue = self.durable_queue_enabled()
         enqueued_count = self.enqueue_candidates(candidates) if durable_queue else 0
+        queue_status = self.durable_queue_status() if durable_queue else {}
+        model_backlog_count = self.model_backlog_count(len(candidates), queue_status)
+        model_batch_size = self.effective_model_batch_size(model_backlog_count, limit)
         selected_jobs: Dict[str, Dict[str, object]] = {}
         stale_jobs: List[Dict[str, object]] = []
         if durable_queue:
@@ -641,7 +664,7 @@ class NewsAnalysisEnrichmentRunner:
 
         return {
             "status": "ok",
-            **self._status_for_candidates(candidates),
+            **self._status_for_candidates(candidates, queue_status),
             "processedCount": len(selected),
             "localRepairCount": len(repair_selected),
             "modelProcessedCount": len(model_selected),

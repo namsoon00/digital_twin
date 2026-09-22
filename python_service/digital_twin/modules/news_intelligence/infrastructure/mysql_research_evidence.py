@@ -777,6 +777,17 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 """,
                 (stamp, stamp),
             ).fetchone() or {}
+            ready_by_class = connection.execute(
+                """
+                SELECT work_class, COUNT(*) AS count
+                FROM news_analysis_work_items
+                WHERE (work_state = 'pending')
+                   OR (work_state = 'retrying' AND (not_before_at = '' OR not_before_at <= %s))
+                   OR (work_state = 'running' AND (lease_until = '' OR lease_until <= %s))
+                GROUP BY work_class
+                """,
+                (stamp, stamp),
+            ).fetchall()
         oldest_ready = str(ready.get("oldest_updated_at") or "")
         oldest_parsed = parse_datetime(oldest_ready)
         oldest_age_minutes = max(
@@ -797,6 +808,11 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             ],
             "reclaimableLeaseCount": int((reclaimable or {}).get("count") or 0),
             "readyCount": int(ready.get("count") or 0),
+            "readyCounts": {
+                str(row.get("work_class") or ""): int(row.get("count") or 0)
+                for row in ready_by_class or []
+                if str(row.get("work_class") or "")
+            },
             "oldestReadyAt": oldest_ready,
             "oldestReadyAgeMinutes": oldest_age_minutes,
             "highestReadyPriority": int(ready.get("highest_priority") or 0),

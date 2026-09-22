@@ -60,14 +60,17 @@ rendering, with an equality check at the fitting boundary.
   directional label is unchanged. Reused evidence is background, not a newly
   published filing. Invalid AI output cannot use this novelty path to publish.
 - Both TypeDB and AI customer documents show the reporting period, comparison,
-  source and available original links. Compact web details retain these rows.
+  source and available original links when the evidence is first observed,
+  revised or moves to a new period. Compact web details retain these rows.
 - The v29 prompt carries `financialEvidenceUse` through final compression:
   reused, first-observed, revised and new-period are evidence-continuity
   states, never proof of a newly published filing. The captured delivered
   insight supplies the baseline, with prior analysis as an explicit fallback.
-  Reused financials retain a short comparison and provider instead of hiding
-  every number. Customer documents separate the financial premise, verified
-  market change and AI interpretation; web and Telegram use the same rows.
+  Reused financials remain available to reasoning and audit, but customer alerts
+  show one unchanged-premise row without repeating metrics, providers or source
+  links. The verified market change appears before that premise. Full financial
+  detail remains available through the web detail view. Customer documents
+  separate the financial premise, verified market change and AI interpretation.
 - Financial improvements and price recovery are co-observations, not proof
   that financial results caused a price move. Prompt instructions and bounded
   claim-repair checks reject unsupported factual attribution without turning

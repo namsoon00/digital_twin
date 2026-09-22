@@ -203,14 +203,17 @@ class FinancialNarrativeContractTests(unittest.TestCase):
         self.assertEqual("2026-03-31", by_id["financial:operatingIncome:previous"]["sourceAsOf"])
 
     def test_same_financials_are_background_not_a_new_filing(self):
-        from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows
+        from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_links, financial_evidence_rows
         context = self.context()
         first = financial_evidence_rows(context)
         self.assertIn("전분기 대비 +30.00%", " ".join(first))
         context["previousDeliveredInvestmentAIInsightEpisode"] = {"financialEvidence": self.company()["financialEvidence"]}
-        self.assertIn("기존 재무 근거", financial_evidence_rows(context)[0])
-        self.assertIn("전분기 대비 +30.00%", " ".join(financial_evidence_rows(context)))
-        self.assertIn("yfinance 집계", " ".join(financial_evidence_rows(context)))
+        reused = financial_evidence_rows(context)
+        self.assertEqual(1, len(reused))
+        self.assertIn("직전 알림과 같습니다", reused[0])
+        self.assertIn("새로 반영된 재무 변화는 없", reused[0])
+        self.assertNotIn("전분기 대비 +30.00%", reused[0])
+        self.assertEqual((), financial_evidence_links(context))
 
     def test_source_correction_can_notify_once_but_cannot_publish_invalid_insight(self):
         from digital_twin.modules.decisions.domain.investment_insight_assessment import investment_insight_delivery_transition

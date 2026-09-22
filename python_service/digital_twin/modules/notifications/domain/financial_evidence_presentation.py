@@ -10,9 +10,11 @@ LABELS = {"sharesOutstanding": "주식수", "freeCashFlow": "잉여현금흐름"
 
 
 def financial_evidence_links(context):
-    company = (context.get("ontologyRelationContext") or {}).get("facts", {}).get("companyContext") or {}
+    packet, use, _ = financial_evidence_context(context)
+    if use.get("state") == "reused":
+        return ()
     urls = {}
-    for item in compact_financial_evidence(company).get("comparisons") or []:
+    for item in packet.get("comparisons") or []:
         url = str(item.get("sourceUrl") or "")
         if url.startswith("https://"):
             urls[url] = CustomerInvestmentLink(label="재무 비교 원문 · " + str(item.get("currentPeriod") or "")[:10], url=url)
@@ -34,7 +36,7 @@ def financial_evidence_context(context):
 def financial_evidence_title(context):
     _, use, _ = financial_evidence_context(context)
     if use.get("state") == "reused":
-        return "기존 판단 근거 · 재무"
+        return "기존 전제 · 재무"
     if use.get("state") in {"revised", "new-period"}:
         return "갱신된 판단 근거 · 재무"
     return "판단 근거 · 재무"
@@ -49,7 +51,10 @@ def financial_evidence_rows(context, limit=5):
     period = use.get("reportingPeriod") or "보고 기간 미확인"
     reused = use.get("state") == "reused"
     if reused:
-        rows = [period + " 보고 기간의 기존 재무 근거입니다. 직전 알림과 같은 자료입니다."]
+        return [
+            period + " 기준 재무 자료는 직전 알림과 같습니다. "
+            "이번 알림에서 새로 반영된 재무 변화는 없으며 상세 수치는 웹에서 확인할 수 있습니다."
+        ]
     elif use.get("state") == "revised":
         rows = [period + " 보고 기간의 재무 비교 자료가 갱신됐습니다. 새 공시 발표와는 구분합니다."]
     elif use.get("state") == "new-period":
@@ -80,9 +85,6 @@ def financial_evidence_rows(context, limit=5):
             return format(float(value), ",.0f") + (" " + str(item.get("currency")) if item.get("currency") else "")
         basis = {"year-over-year": "전년 동기 대비", "quarter-over-quarter": "전분기 대비"}.get(item.get("comparisonBasis"), "직전 보고 기간 대비")
         provider = {"OpenDART": "OpenDART 공시", "yfinance": "yfinance 집계"}.get(item.get("provider"), str(item.get("provider") or "출처 미확인"))
-        if reused:
-            rows.append(LABELS[field] + ": " + basis + " " + format(float(item["changePct"]), "+.2f") + "% · " + provider)
-            continue
         rows.append(LABELS[field] + ": " + amount(item.get("previousValue")) + " → " + amount(item.get("currentValue"))
                     + " (" + basis + " " + format(float(item.get("changePct") or 0), "+.2f") + "%) · "
                     + str(item.get("previousPeriod") or "")[:10] + " → " + str(item.get("currentPeriod") or "")[:10]

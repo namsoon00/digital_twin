@@ -5258,8 +5258,8 @@ def research_narrative_telegram_message(
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
             for key, title, rows in (
-                ("financial-evidence", financial_evidence_title(context), financial_rows),
                 ("change", "이번에 달라진 점", change_rows),
+                ("financial-evidence", financial_evidence_title(context), financial_rows),
                 ("action", "지금 할 일", [action_plan]),
                 ("reasons", "판단 연결" if financial_rows else "왜 이렇게 봤나요", [*judgment_detail_rows, *mechanism_rows]),
                 ("positive-checks", "판단이 달라질 조건", catalysts),
@@ -5555,8 +5555,8 @@ def execution_telegram_message_decision_first(
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
             for key, title, rows in (
-                ("financial-evidence", financial_evidence_title(context), financial_rows),
                 ("change", "이번에 달라진 점", [*change_rows, *action_transition_rows]),
+                ("financial-evidence", financial_evidence_title(context), financial_rows),
                 ("action", "지금 할 일", [action_line]),
                 ("reasons", "판단 연결" if financial_rows else "왜 이렇게 봤나요", reason_rows),
                 ("counter", "다른 방향의 신호", counter_rows),

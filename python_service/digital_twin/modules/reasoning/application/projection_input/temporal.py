@@ -29,6 +29,7 @@ def temporal_feature_input_from_packet(packet, account_id: str) -> Dict[str, obj
     return {
         "snapshotId": snapshot_id,
         "payloadHash": payload_hash,
+        "windowsHash": str(snapshot.get("windowsHash") or "").strip(),
         "backendId": str(snapshot.get("backendId") or "").strip(),
         "featureSetVersion": str(snapshot.get("featureSetVersion") or "").strip(),
         "asOf": str(snapshot.get("asOf") or "").strip(),

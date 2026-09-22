@@ -344,6 +344,7 @@ class TemporalFeatureSnapshot:
             "symbols": list(self.symbols),
             "watermark": self.watermark.to_dict(),
             "payloadHash": self.payload_hash,
+            "windowsHash": payload_fingerprint(semantic_feature_value(self.windows)),
         }
         if include_windows:
             payload["windows"] = self.windows

@@ -65,6 +65,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "temporalFeatureInput": {
                         "snapshotId": "temporal-feature:shared",
                         "payloadHash": "shared-temporal-payload",
+                        "windowsHash": "shared-temporal-windows",
                         "backendId": "mysql-primary",
                         "featureSetVersion": "temporal-features-v1",
                         "asOf": "2026-09-10T00:00:00Z",
@@ -393,10 +394,10 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertIn("comparison_contract_version", insert_sql)
         self.assertIn("job:active", insert_params)
         self.assertIn("job:candidate", insert_params)
-        self.assertIn("reasoning-comparison-input-v3", insert_params)
+        self.assertIn("reasoning-comparison-input-v4", insert_params)
 
     def test_comparison_rejects_different_temporal_feature_inputs(self):
-        def job(job_id, snapshot_id, payload_hash, backend_id):
+        def job(job_id, snapshot_id, payload_hash, backend_id, windows_hash):
             return {
                 "jobId": job_id,
                 "scopeKey": "scope:MSTR",
@@ -415,6 +416,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                             "temporalFeatureInput": {
                                 "snapshotId": snapshot_id,
                                 "payloadHash": payload_hash,
+                                "windowsHash": windows_hash,
                                 "backendId": backend_id,
                                 "featureSetVersion": "temporal-features-v1",
                                 "asOf": "2026-09-22T00:00:00Z",
@@ -426,13 +428,45 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             }
 
         result = comparison_input_contract(
-            job("baseline", "temporal:quest", "quest-hash", "questdb-shadow"),
-            job("candidate", "temporal:mysql", "mysql-hash", "mysql-primary"),
+            job("baseline", "temporal:quest", "quest-hash", "questdb-shadow", "empty-windows"),
+            job("candidate", "temporal:mysql", "mysql-hash", "mysql-primary", "rich-windows"),
         )
 
         self.assertFalse(result["eligible"])
         self.assertEqual("incomparable-inputs", result["status"])
-        self.assertFalse(result["checks"]["temporalFeatureInputs"])
+        self.assertFalse(result["checks"]["temporalFeatureSemantics"])
+
+    def test_comparison_accepts_equal_temporal_content_from_different_backends(self):
+        def job(job_id, snapshot_id, payload_hash, backend_id):
+            return {
+                "jobId": job_id,
+                "scopeKey": "scope:MSTR",
+                "sourceSnapshotId": "source:1",
+                "sourceSnapshotAt": "2026-09-22T00:00:00Z",
+                "sourcePayloadHash": "same-source-payload",
+                "sourceEvent": {
+                    "payload": {"accountIds": ["default"], "symbols": ["MSTR"]}
+                },
+                "result": {"projection_results": {"default": {
+                    "temporalFeatureInput": {
+                        "snapshotId": snapshot_id,
+                        "payloadHash": payload_hash,
+                        "windowsHash": "same-window-content",
+                        "backendId": backend_id,
+                        "featureSetVersion": "temporal-features-v2",
+                        "asOf": "2026-09-22T00:00:00Z",
+                        "symbols": ["MSTR"],
+                    }
+                }}},
+            }
+
+        result = comparison_input_contract(
+            job("baseline", "temporal:quest", "quest-envelope", "questdb-shadow"),
+            job("candidate", "temporal:mysql", "mysql-envelope", "mysql-primary"),
+        )
+
+        self.assertTrue(result["eligible"])
+        self.assertTrue(result["checks"]["temporalFeatureSemantics"])
 
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock

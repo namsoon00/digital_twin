@@ -31,6 +31,7 @@ class TemporalObservationWindowTests(unittest.TestCase):
                 "temporalFeatureSnapshot": {
                     "snapshotId": "temporal-feature:abc",
                     "payloadHash": "payload-hash",
+                    "windowsHash": "windows-hash",
                     "backendId": "mysql-primary",
                     "featureSetVersion": "features-v1",
                     "asOf": "2026-09-22T00:00:00Z",
@@ -43,6 +44,7 @@ class TemporalObservationWindowTests(unittest.TestCase):
 
         self.assertEqual("temporal-feature:abc", result["snapshotId"])
         self.assertEqual("payload-hash", result["payloadHash"])
+        self.assertEqual("windows-hash", result["windowsHash"])
         self.assertEqual("mysql-primary", result["backendId"])
         self.assertEqual(["MSTR"], result["symbols"])
 

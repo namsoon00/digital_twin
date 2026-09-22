@@ -806,7 +806,12 @@ class TimeSeriesPlatformTests(unittest.TestCase):
             TimeSeriesWatermark("questdb-shadow", "2026-08-15T00:00:00Z"),
         )
 
-        self.assertEqual("equivalent", compare_feature_snapshots(active, candidate)["status"])
+        comparison = compare_feature_snapshots(active, candidate)
+        self.assertEqual("equivalent", comparison["status"])
+        self.assertEqual(
+            active.to_dict(include_windows=False)["windowsHash"],
+            candidate.to_dict(include_windows=False)["windowsHash"],
+        )
 
     def test_empty_snapshot_scope_never_projects_the_full_history(self):
         baseline = FakeBaseline()

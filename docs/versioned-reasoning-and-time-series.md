@@ -466,6 +466,15 @@ only jobs for its current logical release and runtime revision, then verifies
 the full fingerprint before TypeDB execution. Old jobs are never replayed by a
 new code release.
 
+Reasoning comparison input contract v4 also binds each account result to its
+temporal feature semantics. The projection receipt keeps the backend-specific
+snapshot ID, payload hash, and backend ID for audit, plus a backend-neutral
+`windowsHash`. A baseline and candidate are comparable only when the source
+snapshot, subjects, feature-set version, `as_of`, symbols, and `windowsHash`
+match. This rejects an empty or stale history versus a populated history while
+still allowing MySQL and QuestDB to be compared when they return the same
+canonical temporal content.
+
 ## Legacy Parity Evidence
 
 Parity by itself is not sufficient because two empty outputs can be 100%

@@ -5,7 +5,7 @@ import json
 from typing import Mapping
 
 
-COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v3"
+COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v4"
 
 
 def _mapping(value):
@@ -29,20 +29,30 @@ def job_comparison_identity(job: Mapping[str, object]):
     boundaries = [_mapping(item) for item in values.get("sourceBoundaries") or []]
     result = _mapping(values.get("result"))
     temporal_inputs = []
+    temporal_semantics = []
     for account_id, projection in sorted(
         _mapping(result.get("projection_results") or result.get("projectionResults")).items()
     ):
         temporal = _mapping(_mapping(projection).get("temporalFeatureInput"))
         if not temporal:
             continue
-        temporal_inputs.append({
+        temporal_input = {
             "accountId": str(account_id or ""),
             "snapshotId": str(temporal.get("snapshotId") or ""),
             "payloadHash": str(temporal.get("payloadHash") or ""),
+            "windowsHash": str(temporal.get("windowsHash") or ""),
             "backendId": str(temporal.get("backendId") or ""),
             "featureSetVersion": str(temporal.get("featureSetVersion") or ""),
             "asOf": str(temporal.get("asOf") or ""),
             "symbols": _texts(temporal.get("symbols") or []),
+        }
+        temporal_inputs.append(temporal_input)
+        temporal_semantics.append({
+            "accountId": temporal_input["accountId"],
+            "windowsHash": temporal_input["windowsHash"],
+            "featureSetVersion": temporal_input["featureSetVersion"],
+            "asOf": temporal_input["asOf"],
+            "symbols": temporal_input["symbols"],
         })
     inputs = {
         "scopeKey": str(values.get("scopeKey") or ""),
@@ -52,6 +62,7 @@ def job_comparison_identity(job: Mapping[str, object]):
         "accountIds": _texts(payload.get("accountIds") or payload.get("accountId") or [item.get("accountId") for item in boundaries]),
         "symbols": _texts(payload.get("affectedSymbols") or payload.get("symbols") or payload.get("symbol") or [symbol for item in boundaries for symbol in item.get("symbols") or []]),
         "temporalFeatureInputs": temporal_inputs,
+        "temporalFeatureSemantics": temporal_semantics,
     }
     return {
         **inputs,
@@ -64,7 +75,7 @@ def comparison_input_contract(baseline: Mapping[str, object], candidate: Mapping
     left, right = job_comparison_identity(baseline), job_comparison_identity(candidate)
     checks = {key: bool(left[key]) and left[key] == right[key] for key in (
         "scopeKey", "sourceSnapshotId", "sourceSnapshotAt", "sourcePayloadHash",
-        "accountIds", "symbols", "temporalFeatureInputs",
+        "accountIds", "symbols", "temporalFeatureSemantics",
     )}
     return {
         "contractVersion": COMPARISON_INPUT_CONTRACT_VERSION,

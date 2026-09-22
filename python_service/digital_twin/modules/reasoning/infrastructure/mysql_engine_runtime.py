@@ -8,6 +8,7 @@ from functools import wraps
 from typing import Dict, Iterable, List, Mapping, Optional
 from digital_twin.modules.reasoning.domain.reasoning_engine_versions import EngineControlState, ReasoningEngineDescriptor, candidate_consumes_source_events, engine_status, engine_transition_allowed
 from digital_twin.modules.reasoning.domain.reasoning_shadow import reasoning_comparison_summary
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION
 from digital_twin.modules.reasoning.domain.independent_reasoning import independent_reasoning_request, merge_reasoning_events, reasoning_event_scope, reasoning_queue_slot_key, shard_reasoning_event
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.decisions.contracts import FactDelta
@@ -2876,7 +2877,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     SELECT 1 FROM reasoning_engine_comparisons comparison_row
                     WHERE comparison_row.candidate_job_id = pair.candidate_job_id
                       AND comparison_row.baseline_job_id = pair.baseline_job_id
-                      AND comparison_row.comparison_contract_version = 'reasoning-comparison-input-v2'
+                      AND comparison_row.comparison_contract_version = '""" + COMPARISON_INPUT_CONTRACT_VERSION + """'
                 )
                 GROUP BY pair.candidate_job_id, pair.baseline_job_id,
                          pair.candidate_release_fingerprint, pair.candidate_completed_at

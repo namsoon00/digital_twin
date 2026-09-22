@@ -378,6 +378,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         else {}
     )
     account_id = str(values.get("accountId") or inference_box.get("accountId") or "")
+    graph_input = (
+        values.get("graphInput")
+        if isinstance(values.get("graphInput"), Mapping)
+        else {}
+    )
     rule_evaluations = rule_evaluation_records_from_projection_results({
         account_id or "projection": values,
     })
@@ -400,6 +405,9 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "generationAligned": identity["generationAligned"],
         "inferenceRelationCount": identity["relationCount"],
         "inferenceTraceCount": identity["traceCount"],
+        "temporalFeatureInput": dict(
+            graph_input.get("temporalFeatureInput") or {}
+        ),
         "retryable": retry["retryable"],
         "retryAfterSeconds": retry["retryAfterSeconds"],
         "failureReasonCode": retry["reasonCode"],

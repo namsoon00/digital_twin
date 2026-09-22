@@ -8,6 +8,38 @@ from typing import Dict
 from digital_twin.modules.reasoning.application.projection_input.ports import (
     TemporalInputs,
 )
+from digital_twin.modules.reasoning.domain.reasoning_shadow import (
+    unpack_projection_runtime_contexts,
+)
+
+
+def temporal_feature_input_from_packet(packet, account_id: str) -> Dict[str, object]:
+    """Return the immutable feature identity used by one graph assembly."""
+
+    try:
+        contexts = unpack_projection_runtime_contexts(packet or {})
+    except ValueError:
+        return {}
+    context = dict(contexts.get(str(account_id or "")) or {})
+    snapshot = dict(context.get("temporalFeatureSnapshot") or {})
+    snapshot_id = str(snapshot.get("snapshotId") or "").strip()
+    payload_hash = str(snapshot.get("payloadHash") or "").strip()
+    if not snapshot_id or not payload_hash:
+        return {}
+    return {
+        "snapshotId": snapshot_id,
+        "payloadHash": payload_hash,
+        "backendId": str(snapshot.get("backendId") or "").strip(),
+        "featureSetVersion": str(snapshot.get("featureSetVersion") or "").strip(),
+        "asOf": str(snapshot.get("asOf") or "").strip(),
+        "symbols": sorted(
+            {
+                str(symbol or "").upper().strip()
+                for symbol in snapshot.get("symbols") or []
+                if str(symbol or "").strip()
+            }
+        ),
+    }
 
 
 def temporal_observation_windows(

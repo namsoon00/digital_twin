@@ -7,6 +7,7 @@ from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.reasoning.domain.reasoning_shadow import unpack_projection_runtime_contexts
 import time
 from .ports import CacheFlowInputs, PreparedGraphInput
+from .temporal import temporal_feature_input_from_packet
 
 
 def load_cached_assembly(
@@ -41,9 +42,10 @@ def load_cached_assembly(
         status=str(cache_result.get("status") or ""),
     )
     if str(cache_result.get("status") or "") == "hit":
+        runtime_context_packet = cache_result.get("runtimeContextPacket") or {}
         try:
             cached_contexts = unpack_projection_runtime_contexts(
-                cache_result.get("runtimeContextPacket") or {}
+                runtime_context_packet
             )
             if snapshot.account_id in cached_contexts:
                 _inputs.last_runtime_contexts[snapshot.account_id] = cached_contexts[
@@ -65,6 +67,10 @@ def load_cached_assembly(
                     observation_input.get("referencePositions") or []
                 ),
                 "externalSignalProjection": input_projection,
+                "temporalFeatureInput": temporal_feature_input_from_packet(
+                    runtime_context_packet,
+                    snapshot.account_id,
+                ),
                 "runtimeStages": stage_timings,
             },
         )
@@ -90,16 +96,19 @@ def load_cached_assembly(
     if str(persistent_cache_result.get("status") or "") == "hit":
         graph = persistent_cache_result["graph"]
         persistence_graph = persistent_cache_result["persistenceGraph"]
+        runtime_context_packet = (
+            persistent_cache_result.get("runtimeContextPacket") or {}
+        )
         _inputs.graph_cache.put(
             cache_key,
             graph,
             persistence_graph,
             _inputs.graph_assembly_cache_max_entries(),
-            persistent_cache_result.get("runtimeContextPacket") or {},
+            runtime_context_packet,
         )
         try:
             cached_contexts = unpack_projection_runtime_contexts(
-                persistent_cache_result.get("runtimeContextPacket") or {}
+                runtime_context_packet
             )
             if snapshot.account_id in cached_contexts:
                 _inputs.last_runtime_contexts[snapshot.account_id] = cached_contexts[
@@ -121,6 +130,10 @@ def load_cached_assembly(
                     observation_input.get("referencePositions") or []
                 ),
                 "externalSignalProjection": input_projection,
+                "temporalFeatureInput": temporal_feature_input_from_packet(
+                    runtime_context_packet,
+                    snapshot.account_id,
+                ),
                 "runtimeStages": stage_timings,
             },
         )

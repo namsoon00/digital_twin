@@ -5,7 +5,7 @@ import json
 from typing import Mapping
 
 
-COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v2"
+COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v3"
 
 
 def _mapping(value):
@@ -28,6 +28,22 @@ def job_comparison_identity(job: Mapping[str, object]):
     payload = _mapping(_mapping(values.get("sourceEvent")).get("payload"))
     boundaries = [_mapping(item) for item in values.get("sourceBoundaries") or []]
     result = _mapping(values.get("result"))
+    temporal_inputs = []
+    for account_id, projection in sorted(
+        _mapping(result.get("projection_results") or result.get("projectionResults")).items()
+    ):
+        temporal = _mapping(_mapping(projection).get("temporalFeatureInput"))
+        if not temporal:
+            continue
+        temporal_inputs.append({
+            "accountId": str(account_id or ""),
+            "snapshotId": str(temporal.get("snapshotId") or ""),
+            "payloadHash": str(temporal.get("payloadHash") or ""),
+            "backendId": str(temporal.get("backendId") or ""),
+            "featureSetVersion": str(temporal.get("featureSetVersion") or ""),
+            "asOf": str(temporal.get("asOf") or ""),
+            "symbols": _texts(temporal.get("symbols") or []),
+        })
     inputs = {
         "scopeKey": str(values.get("scopeKey") or ""),
         "sourceSnapshotId": str(values.get("sourceSnapshotId") or ""),
@@ -35,6 +51,7 @@ def job_comparison_identity(job: Mapping[str, object]):
         "sourcePayloadHash": str(values.get("sourcePayloadHash") or ""),
         "accountIds": _texts(payload.get("accountIds") or payload.get("accountId") or [item.get("accountId") for item in boundaries]),
         "symbols": _texts(payload.get("affectedSymbols") or payload.get("symbols") or payload.get("symbol") or [symbol for item in boundaries for symbol in item.get("symbols") or []]),
+        "temporalFeatureInputs": temporal_inputs,
     }
     return {
         **inputs,
@@ -46,7 +63,8 @@ def job_comparison_identity(job: Mapping[str, object]):
 def comparison_input_contract(baseline: Mapping[str, object], candidate: Mapping[str, object]):
     left, right = job_comparison_identity(baseline), job_comparison_identity(candidate)
     checks = {key: bool(left[key]) and left[key] == right[key] for key in (
-        "scopeKey", "sourceSnapshotId", "sourceSnapshotAt", "sourcePayloadHash", "accountIds", "symbols",
+        "scopeKey", "sourceSnapshotId", "sourceSnapshotAt", "sourcePayloadHash",
+        "accountIds", "symbols", "temporalFeatureInputs",
     )}
     return {
         "contractVersion": COMPARISON_INPUT_CONTRACT_VERSION,

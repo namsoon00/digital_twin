@@ -1,16 +1,16 @@
 {
-  "sourceRevision": "d6c80ec85",
+  "sourceRevision": "temporal-input-identity-v1",
   "contractVersion": "projection-input-execution-v2",
-  "reason": "Native account-policy schema contract v2 adds a subject fact version and changes semantic identities. Restoring only the two previous fact builders reproduces all nine V1 scenarios exactly. Projection input orchestration and progress contracts remain unchanged.",
+  "reason": "Projection receipts now retain the immutable temporal feature snapshot identity used by each graph assembly so engine comparisons cannot treat different time-series inputs as equivalent.",
   "scenarios": {
-    "full": "bad14c7aeb9ea76facfd65614015d5b258e14667eafc2d86359b7196c62cd70a",
-    "target": "7bb5b8bcf77c06e3babb9c2d63ff4f951f2a66fcdd7e043766e7895fbd1efcee",
-    "source-facts": "21e0d63c0d63884e58df25f43428efa2ead8966b9ba5d25181899e01896851c8",
-    "live-context": "0637a419bff9e41623ce75600c0be8514e7dbda33dd6f050a34fb15f0b8f5e9d",
-    "memory-hit": "91bc99eb21784b97700dcc01324ddf8f4368ec2be9b9dd795dcd76fdcc6c21ad",
-    "persistent-hit": "1f619dccd472cf829407032d3a311f90d273e253faa3b9519a82ec1ae805122a",
-    "cache-errors": "3803ad108493c91d0b77f0a7a5803f0a6a95c0139ff848675373ed755e6d261d",
-    "scoring-failure": "0fe6b337780c7e8cee8a6b37149c4c69fdb81310622d8e2c3e5d94bd5025d3bb",
-    "world-identity": "af577c909a65b89ae730ad477846d9e8affa87747c3dc153f982ee9b82cc3023"
+    "full": "03705d0c8554853e7362d8bb1a38374b05cf13f04d5664c17ac951c975e89fa0",
+    "target": "b188ec1935421c9ceff1e49715063bcb6d4b04b94ddce6203a491e5bcdd3b6a5",
+    "source-facts": "86e4589daa14e977dce9968030ff92eeb0bcbeabcf70ae3c1dc6ad11baa57e35",
+    "live-context": "62d94766c88429bd6556bdca9198b307eca839c416067b5621433609d6a7fe4f",
+    "memory-hit": "634be6a6fb1cf0e7d540d5c4b8a051275caee502593f98105f5ca9989ae04410",
+    "persistent-hit": "242a5074bfde3b07bcc851f0eb9369a202147dba922ee8a86bc255325f490553",
+    "cache-errors": "406613848fb6d3a80f992b4640a576e0c25993d251fbbc8c6609439b52076b78",
+    "scoring-failure": "83fc7db32cf12d1c72dbf1046dcee7e94e9bcbf47c8a73a5e9095805d106e350",
+    "world-identity": "db8f278d906d78ed1a30684345304c6b6e2f6020197fbd7415fc6462ee57639c"
   }
 }

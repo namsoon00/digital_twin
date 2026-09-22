@@ -25,6 +25,9 @@ from digital_twin.modules.reasoning.domain.reasoning_shadow import (
     independent_reasoning_outcome_packet,
     reasoning_comparison_summary,
 )
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import (
+    comparison_input_contract,
+)
 
 
 def descriptor(status="candidate"):
@@ -59,6 +62,14 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "saved": True,
                     "nativeTypeDbReasoningCompleted": True,
                     "generationAligned": True,
+                    "temporalFeatureInput": {
+                        "snapshotId": "temporal-feature:shared",
+                        "payloadHash": "shared-temporal-payload",
+                        "backendId": "mysql-primary",
+                        "featureSetVersion": "temporal-features-v1",
+                        "asOf": "2026-09-10T00:00:00Z",
+                        "symbols": ["NVDA"],
+                    },
                     "stages": {"totalMs": 100},
                     "ruleEvaluations": [{
                         "rule_id": "graph.price.recovery.v1",
@@ -382,7 +393,46 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertIn("comparison_contract_version", insert_sql)
         self.assertIn("job:active", insert_params)
         self.assertIn("job:candidate", insert_params)
-        self.assertIn("reasoning-comparison-input-v2", insert_params)
+        self.assertIn("reasoning-comparison-input-v3", insert_params)
+
+    def test_comparison_rejects_different_temporal_feature_inputs(self):
+        def job(job_id, snapshot_id, payload_hash, backend_id):
+            return {
+                "jobId": job_id,
+                "scopeKey": "scope:MSTR",
+                "sourceSnapshotId": "source:1",
+                "sourceSnapshotAt": "2026-09-22T00:00:00Z",
+                "sourcePayloadHash": "same-source-payload",
+                "sourceEvent": {
+                    "payload": {
+                        "accountIds": ["default"],
+                        "affectedSymbols": ["MSTR"],
+                    }
+                },
+                "result": {
+                    "projection_results": {
+                        "default": {
+                            "temporalFeatureInput": {
+                                "snapshotId": snapshot_id,
+                                "payloadHash": payload_hash,
+                                "backendId": backend_id,
+                                "featureSetVersion": "temporal-features-v1",
+                                "asOf": "2026-09-22T00:00:00Z",
+                                "symbols": ["MSTR"],
+                            }
+                        }
+                    }
+                },
+            }
+
+        result = comparison_input_contract(
+            job("baseline", "temporal:quest", "quest-hash", "questdb-shadow"),
+            job("candidate", "temporal:mysql", "mysql-hash", "mysql-primary"),
+        )
+
+        self.assertFalse(result["eligible"])
+        self.assertEqual("incomparable-inputs", result["status"])
+        self.assertFalse(result["checks"]["temporalFeatureInputs"])
 
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock

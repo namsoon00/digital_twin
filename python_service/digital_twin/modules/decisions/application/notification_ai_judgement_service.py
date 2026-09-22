@@ -747,6 +747,7 @@ def ai_contract_repair_prompt(
     response: NotificationAIValidatedResponse,
     contract_error: str = "",
     publication_error: str = "",
+    max_prompt_bytes: int = 0,
 ) -> str:
     abstention = dict(getattr(response, "decision_abstention", {}) or {})
     rejected = [
@@ -816,7 +817,7 @@ def ai_contract_repair_prompt(
             "evidenceIds": ["섹션별 허용 근거 ID"],
         }],
     }
-    return "\n".join((
+    instructions = (
         "너는 TypeDB 투자 판단 JSON의 계약 오류만 수정한다. 도구나 파일을 사용하지 않는다.",
         "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
         "reviewMode가 context-narrative이거나 notificationIntent가 context-observation/review-observation 또는 비교가 research-only이면 action=NO_ACTION을 유지한다. 보유 권고, 추가매수 보류 같은 매매 지시도 문장에 쓰지 않는다. 확인된 투자 영향과 다음 관찰 조건을 설명한다.",
@@ -833,10 +834,19 @@ def ai_contract_repair_prompt(
         "BUY·ADD·TRIM·SELL은 decisionReadiness=ready, executionEligibility=eligible, qualification decisionUse=execution, 근거 ID가 있는 supported causalChain을 모두 만족할 때만 선택한다.",
         "필수 응답 골격: " + json.dumps(required_shape, ensure_ascii=False, separators=(",", ":")),
         "검증 오류: " + json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-        "이전 응답: " + previous,
-        "DecisionCore:",
-        decision_core,
-    ))
+    )
+    fixed_prompt = "\n".join((*instructions, "이전 응답: ", "DecisionCore:", decision_core))
+    hard_limit = max(0, int(max_prompt_bytes or 0))
+    if not hard_limit:
+        return "\n".join((*instructions, "이전 응답: " + previous, "DecisionCore:", decision_core))
+    fixed_bytes = len(fixed_prompt.encode("utf-8"))
+    if fixed_bytes > hard_limit:
+        raise NotificationAIContractError(
+            "AI contract repair prompt exceeds the hard limit while preserving DecisionCore."
+        )
+    previous_budget = max(0, hard_limit - fixed_bytes)
+    bounded_previous = previous.encode("utf-8")[:previous_budget].decode("utf-8", errors="ignore")
+    return "\n".join((*instructions, "이전 응답: " + bounded_previous, "DecisionCore:", decision_core))
 
 
 # Compatibility name retained for existing callers and tests.
@@ -1033,6 +1043,7 @@ class NotificationAIJudgementService:
                 response,
                 contract_error,
                 publication_error,
+                max_prompt_bytes=self.max_prompt_bytes,
             )
             repair_remaining = timeout_provider() if timeout_provider else timeout_seconds
             repair_remaining = int(repair_remaining) if repair_remaining not in (None, "", 0, "0") else None

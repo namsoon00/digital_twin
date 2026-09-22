@@ -91,6 +91,8 @@ limit. A retry starts with a 12 KiB minimum-contract packet and uses the same
 bounded expansion path. The compact packet keeps action, hypothesis
 identity, rules, evidence IDs, current facts, continuity, and valuation while
 the unabridged decision brief remains in the immutable audit store.
+Contract-repair prompts use the same hard cap: DecisionCore is retained first
+and the previous model response is trimmed to the remaining byte budget.
 
 Use `npm run python:ai-inference:status` to inspect queue state. The realtime
 status API also exposes `aiInferenceQueue` separately from delivery jobs.

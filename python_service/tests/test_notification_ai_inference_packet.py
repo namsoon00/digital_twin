@@ -838,11 +838,13 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             calls = 0
             profiles = []
             timeouts = []
+            prompts = []
 
             def review(self, prepared):
                 self.calls += 1
                 self.profiles.append(dict(prepared.get("notificationAiExecutionProfile") or {}))
                 self.timeouts.append(prepared.get("_notificationAiTimeoutSecondsOverride"))
+                self.prompts.append(str(prepared.get("_notificationAiPreparedPrompt") or ""))
                 core = prepared["_notificationAiPreparedDecisionCore"]
                 support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
                 view_id = "relation-evidence:not-in-packet" if self.calls == 1 else "fact:currentPrice"
@@ -856,7 +858,9 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 return validated_response_from_payload(
                     prepared,
                     payload,
-                    raw_response=json.dumps(payload, ensure_ascii=False),
+                    raw_response=(
+                        json.dumps(payload, ensure_ascii=False) + ("x" * 100000 if self.calls == 1 else "")
+                    ),
                     source="test AI",
                 )
 
@@ -864,6 +868,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         outcome = NotificationAIJudgementService(
             reviewer,
             {},
+            max_prompt_bytes=48 * 1024,
             repair_reasoning_effort="low",
         ).judge(
             investment_context(),
@@ -878,6 +883,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual("max", reviewer.profiles[0]["reasoningEffort"])
         self.assertEqual("low", reviewer.profiles[1]["reasoningEffort"])
         self.assertEqual([180, 180], reviewer.timeouts)
+        self.assertLessEqual(len(reviewer.prompts[1].encode("utf-8")), 48 * 1024)
         self.assertEqual("low", outcome.execution_spans["repairReasoningEffort"])
         self.assertEqual(0, outcome.response.rejected_claim_count)
         self.assertIn("unknown-evidence-id", outcome.executed_prompt)

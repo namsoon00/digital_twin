@@ -2,7 +2,7 @@
   "version": 1,
   "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "https://latest-savannah-knows-provide.trycloudflare.com",
-  "revision": "6d7acbcb1743",
-  "updatedAt": "2026-09-22T09:13:07.175Z"
+  "baseUrl": "https://grain-copy-floating-irc.trycloudflare.com",
+  "revision": "3640ac3a50df",
+  "updatedAt": "2026-09-22T15:13:24.221Z"
 }

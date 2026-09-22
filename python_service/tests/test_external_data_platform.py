@@ -1037,7 +1037,62 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertFalse(small.material)
         self.assertTrue(material.material)
 
+    def _assert_company_facts_collect_without_recent_disclosure(self):
+        settings = {
+            "opendartApiKey": "test-key",
+            "externalDartCorpCodes": "005930=00126380",
+        }
+        provider = legacy_provider(
+            settings,
+            externalDartEnabled="1",
+            externalDartCompanyFundamentalsEnabled="1",
+            externalDartMaxSymbols="1",
+        )
+
+        def fetch_json(url, _headers):
+            if "/list.json" in url:
+                return {"status": "013", "message": "조회된 데이타가 없습니다.", "list": []}
+            if "/company.json" in url:
+                return {
+                    "status": "000", "corp_name": "삼성전자", "stock_code": "005930",
+                    "ceo_nm": "대표", "acc_mt": "12",
+                }
+            if "/fnlttSinglAcntAll.json" in url:
+                return {"status": "000", "list": [{
+                    "account_nm": "매출액", "thstrm_amount": "100",
+                    "thstrm_dt": "2026.01.01 ~ 2026.06.30", "reprt_code": "11012",
+                    "bsns_year": "2026", "sj_div": "IS",
+                }]}
+            return {"status": "000", "list": []}
+
+        provider.fetch_json = fetch_json
+        signals = empty_signals()
+        subject = ExternalSubject("005930", symbol="005930", name="삼성전자", market="KR", currency="KRW")
+        provider.add_opendart(
+            signals,
+            [position_for(subject)],
+            include_fundamentals=True,
+            include_document=False,
+        )
+
+        row = signals["dartDisclosures"]["005930"]
+        self.assertTrue(row["noDisclosureInLookback"])
+        self.assertEqual("삼성전자", row["company"]["corp_name"])
+        self.assertEqual("100", row["financialStatements"][0]["thstrm_amount"])
+        self.assertTrue(any(item.get("emptyResult") for item in signals["statuses"]))
+
+        job = CollectionJob("opendart.company_facts", "005930", "opendart", 40, subject)
+        with patch(
+            "digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider",
+            return_value=provider,
+        ):
+            result = OpenDartCompanyFactsAdapter().fetch(job, settings)
+        self.assertFalse(result.empty_result)
+        self.assertIn("005930", result.payload["dartDisclosures"])
+        self.assertTrue(result.source_revision.startswith("2026:11012"))
+
     def test_filing_metadata_only_schedules_documents_without_reasoning_event(self):
+        self._assert_company_facts_collect_without_recent_disclosure()
         service = ExternalFactTransitionService()
         previous = {
             "sourceRevision": "filing-list-one",

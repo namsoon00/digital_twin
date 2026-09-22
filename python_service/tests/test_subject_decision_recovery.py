@@ -30,6 +30,8 @@ class Repository:
 
 class Candidate:
     fingerprint = "candidate:fingerprint"
+    disposition_code = "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
+    rule_coverage_state = "no-material-match"
 
 
 class StaleCase:
@@ -43,6 +45,7 @@ class StaleCase:
         self.final_decision = None
         self.notification_job_id = ""
         self.delivery_state = "not-requested"
+        self.inference_dispatch_decision = None
 
     def mark(self, stage, reason="", details=None):
         del reason, details
@@ -51,6 +54,9 @@ class StaleCase:
     def mark_delivery(self, state, reason=""):
         del reason
         self.delivery_state = state
+
+    def record_inference_dispatch(self, decision):
+        self.inference_dispatch_decision = decision
 
 
 class SubjectStore:
@@ -135,7 +141,10 @@ class SubjectDecisionRecoveryTests(unittest.TestCase):
         self.assertEqual("notification:1", subject.notification_job_id)
 
     def test_stale_ready_candidate_becomes_explicit_abstention(self):
+        self._assert_stale_undispatched_candidate_is_archived_as_observation()
+        self._assert_batch_handoff_closes_unselected_subjects_immediately()
         stale_case = StaleCase()
+        stale_case.inference_dispatch_decision = SimpleNamespace(route="HANDOFF_AI")
         store = SubjectStore(stale_case)
         orchestrator = InvestmentReasoningOrchestrator(
             Repository(),
@@ -155,6 +164,55 @@ class SubjectDecisionRecoveryTests(unittest.TestCase):
         })
         self.assertEqual(SUBJECT_ABSTAINED, stale_case.stage)
         self.assertEqual("delivered", stale_case.delivery_state)
+
+    def _assert_stale_undispatched_candidate_is_archived_as_observation(self):
+        stale_case = StaleCase()
+        store = SubjectStore(stale_case)
+        orchestrator = InvestmentReasoningOrchestrator(
+            Repository(),
+            subject_case_repository=store,
+        )
+
+        recovered = orchestrator.recover_stale_subject_cases(30, 10)
+
+        self.assertEqual(1, len(recovered))
+        self.assertEqual(SUBJECT_OBSERVATION, stale_case.stage)
+        self.assertEqual(OBSERVATION, stale_case.publication.outcome_kind)
+        self.assertEqual("ARCHIVE", stale_case.inference_dispatch_decision.route)
+        self.assertEqual("archived", stale_case.delivery_state)
+        self.assertIsNone(stale_case.abstention)
+
+    def _assert_batch_handoff_closes_unselected_subjects_immediately(self):
+        subject = StaleCase()
+        subject.batch_case_id = "case:batch-handoff"
+
+        class BatchStore(SubjectStore):
+            def for_batch(self, batch_case_id):
+                return [subject] if batch_case_id == subject.batch_case_id else []
+
+        class BatchCase:
+            case_id = "case:batch-handoff"
+            stage = CASE_DECISION_SYNTHESIZED
+            subject_case_ids = (subject.subject_case_id,)
+
+            def transition(self, stage, _reason, _details=None):
+                self.stage = stage
+
+        store = BatchStore(subject)
+        orchestrator = InvestmentReasoningOrchestrator(
+            Repository(BatchCase()),
+            subject_case_repository=store,
+        )
+
+        reasoning_case = orchestrator.batch_handoff_completed(
+            "case:batch-handoff",
+            "selected subjects handed off",
+        )
+
+        self.assertEqual(SUBJECT_OBSERVATION, subject.stage)
+        self.assertEqual(OBSERVATION, subject.publication.outcome_kind)
+        self.assertEqual("archived", subject.delivery_state)
+        self.assertEqual("COMPLETED", reasoning_case.stage)
 
         observation = StaleCase()
         observation.subject_case_id = "subject:mstr"

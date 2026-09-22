@@ -473,16 +473,74 @@ def enrich_financial_periods(periods: List[Dict[str, object]], info: Mapping[str
     return result
 
 
-def _sec_fact_periods(facts: Mapping[str, object]) -> List[Dict[str, object]]:
+def _sec_fact_periods(
+    facts: Mapping[str, object],
+    *,
+    frequency: str,
+) -> List[Dict[str, object]]:
     rows: Dict[str, Dict[str, object]] = {}
     for field, value in dict(facts or {}).items():
         if field == "entityName" or not isinstance(value, Mapping):
             continue
+        form = _clean(value.get("form")).upper()
+        fiscal_period = _clean(value.get("fp")).upper()
+        is_annual = form in {"10-K", "20-F", "40-F"} or fiscal_period == "FY"
+        if frequency == "annual" and not is_annual:
+            continue
+        if frequency == "interim" and (is_annual or form != "10-Q"):
+            continue
         period = _clean(value.get("end") or value.get("filed"))
         amount = optional_number(value.get("value"))
         if period and amount is not None:
-            rows.setdefault(period, {"period": period, "provider": "SEC EDGAR"})[str(field)] = amount
-    return [rows[key] for key in sorted(rows, key=_period_sort_key, reverse=True)[:4]]
+            start_date = reporting_period_end(value.get("start"))
+            end_date = reporting_period_end(value.get("end"))
+            frame = _clean(value.get("frame")).upper()
+            interim_duration_basis = (
+                "year-to-date"
+                if "YTD" in frame
+                or (
+                    start_date is not None
+                    and end_date is not None
+                    and (end_date - start_date).days > 120
+                )
+                else "quarterly"
+            )
+            row = rows.setdefault(period, {
+                "period": period,
+                "provider": "SEC EDGAR",
+                "frequency": frequency,
+                "comparisonBasis": (
+                    "year-over-year" if frequency == "annual" else "interim-year-over-year"
+                ),
+                "officialSource": True,
+                "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+                "metricProvenance": {},
+            })
+            row[str(field)] = amount
+            row["metricProvenance"][str(field)] = {
+                "provider": "SEC EDGAR",
+                "metric": _clean(value.get("tag") or field),
+                "period": period,
+                "filed": _clean(value.get("filed")),
+                "form": form,
+                "fiscalPeriod": fiscal_period,
+                "frame": _clean(value.get("frame")),
+                "accessionNumber": _clean(value.get("accessionNumber")),
+                "currency": _clean(value.get("unit")),
+                "scope": "official-filing",
+                "official": True,
+                "durationBasis": (
+                    "annual"
+                    if frequency == "annual"
+                    else interim_duration_basis
+                ),
+            }
+    # ``sec_company_facts_summary`` contains one latest value per metric, not
+    # a historical statement series. Older metric-specific endpoints must not
+    # be presented as additional comparable periods. Keep only the newest
+    # coherent report boundary for this frequency family.
+    ordered_periods = sorted(rows, key=_period_sort_key, reverse=True)
+    return [rows[ordered_periods[0]]] if ordered_periods else []
 
 
 def _compact_executives(yfinance: Mapping[str, object], dart: Mapping[str, object]) -> List[Dict[str, object]]:
@@ -641,21 +699,25 @@ def build_company_knowledge(
 
     dart_basis = dart_disclosure.get("financialStatementBasis") if isinstance(dart_disclosure.get("financialStatementBasis"), Mapping) else {}
     annual = statement_periods(yfinance, currency=_clean(info.get("financialCurrency")))
+    quarterly = statement_periods({
+        "incomeStatement": yfinance.get("quarterlyIncomeStatement"),
+        "balanceSheet": yfinance.get("quarterlyBalanceSheet"),
+        "cashFlow": yfinance.get("quarterlyCashFlow"),
+    }, frequency="quarterly", currency=_clean(info.get("financialCurrency")))
     official_periods = dart_statement_periods(dart_disclosure.get("financialStatements"), dart_basis)
     report_code = _clean(dart_basis.get("reportCode"))
     interim = official_periods if official_periods and report_code not in {"", "11011"} else []
     if official_periods and not interim:
         annual = official_periods
     elif sec_filing.get("facts"):
-        sec_periods = _sec_fact_periods(sec_filing.get("facts") or {})
-        if sec_periods:
-            annual = sec_periods
+        sec_annual = _sec_fact_periods(sec_filing.get("facts") or {}, frequency="annual")
+        sec_interim = _sec_fact_periods(sec_filing.get("facts") or {}, frequency="interim")
+        if sec_annual:
+            annual = sec_annual
+        if sec_interim:
+            interim = sec_interim
     annual = enrich_financial_periods(annual, info)
-    quarterly = enrich_financial_periods(statement_periods({
-        "incomeStatement": yfinance.get("quarterlyIncomeStatement"),
-        "balanceSheet": yfinance.get("quarterlyBalanceSheet"),
-        "cashFlow": yfinance.get("quarterlyCashFlow"),
-    }, frequency="quarterly", currency=_clean(info.get("financialCurrency"))), info)
+    quarterly = enrich_financial_periods(quarterly, info)
     interim = enrich_financial_periods(interim)
     executives = _compact_executives(yfinance, dart_disclosure)
     company = dart_disclosure.get("company") if isinstance(dart_disclosure.get("company"), Mapping) else {}

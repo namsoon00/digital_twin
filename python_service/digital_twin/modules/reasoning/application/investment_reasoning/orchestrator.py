@@ -257,7 +257,14 @@ class InvestmentReasoningOrchestrator:
         max_age_minutes: int = 30,
         limit: int = 100,
     ) -> tuple:
-        """Close point-in-time candidates that missed their AI handoff."""
+        """Close stale candidates without misclassifying undispatched subjects.
+
+        A synthesis can create a subject case even when delivery cadence does
+        not select that subject for AI.  Those cases are not failed handoffs;
+        they are web-history observations and must be closed as such.  Only a
+        case with an explicit HANDOFF_AI dispatch is allowed to become the
+        point-in-time abstention below.
+        """
 
         finder = getattr(self.subject_cases, "stale_ready", None)
         if not callable(finder):
@@ -269,6 +276,15 @@ class InvestmentReasoningOrchestrator:
         )
         for subject_case in finder(max_age_minutes=max_age_minutes, limit=limit) or []:
             if subject_case.stage != SUBJECT_READY or subject_case.publication is not None:
+                continue
+            dispatch = getattr(subject_case, "inference_dispatch_decision", None)
+            if dispatch is None or str(getattr(dispatch, "route", "") or "") != HANDOFF_AI:
+                self._complete_undispatched_subject(
+                    subject_case,
+                    "AI 대상으로 선택되지 않은 TypeDB 종목 결과를 웹 이력으로 종료했습니다.",
+                    "typedb-undispatched-recovery",
+                )
+                recovered.append(subject_case)
                 continue
             subject_case.abstention = DecisionAbstention(
                 reason_code="stale-ready-ai-handoff-missed",
@@ -284,6 +300,59 @@ class InvestmentReasoningOrchestrator:
             self._persist_subject(subject_case)
             recovered.append(subject_case)
         return tuple(recovered)
+
+    def _complete_undispatched_subject(
+        self,
+        subject_case: SubjectDecisionCase,
+        reason: str,
+        source: str,
+    ) -> SubjectDecisionCase:
+        """Finalize one synthesis that was not selected for downstream delivery."""
+
+        disposition_code = str(
+            getattr(subject_case.candidate_set, "disposition_code", "") or ""
+        ).upper()
+        outcome = (
+            OBSERVATION
+            if disposition_code in {
+                CONTEXT_OBSERVATION,
+                NO_MATERIAL_PREDICTIVE_RULE_MATCH,
+            }
+            else SUPPRESSED
+        )
+        target_stage = SUBJECT_OBSERVATION if outcome == OBSERVATION else SUBJECT_SUPPRESSED
+        details = {
+            "source": str(source or "typedb-undispatched"),
+            "dispositionCode": disposition_code,
+            "ruleCoverageState": str(
+                getattr(subject_case.candidate_set, "rule_coverage_state", "") or ""
+            ),
+            "selectedForAiHandoff": False,
+        }
+        subject_case.mark(target_stage, reason, details)
+        subject_case.publication = publication_for_subject_case(
+            subject_case,
+            outcome,
+            explanation_snapshot={"reason": str(reason or ""), **details},
+        )
+        dispatch = InferenceDispatchDecision.create(
+            subject_case,
+            ARCHIVE,
+            str(source or "typedb-undispatched") + "-web-history",
+            str(reason or "TypeDB 결과를 웹 이력에 저장합니다."),
+            details=details,
+        )
+        subject_case.record_inference_dispatch(dispatch)
+        _mark_subject_delivery(
+            subject_case,
+            "archived",
+            reason,
+            eligible=False,
+            reason_code=dispatch.reason_code,
+            value_class="web-history",
+        )
+        self._persist_subject(subject_case)
+        return subject_case
 
     def input_ready(self, case_id: str) -> ReasoningCase:
         reasoning_case = self.required(case_id)
@@ -1245,6 +1314,17 @@ class InvestmentReasoningOrchestrator:
         """Close the batch audit after per-subject work has been handed off."""
 
         reasoning_case = self.required(case_id)
+        for subject_case in self.subject_cases.for_batch(reasoning_case.case_id):
+            if (
+                subject_case.stage == SUBJECT_READY
+                and subject_case.publication is None
+                and getattr(subject_case, "inference_dispatch_decision", None) is None
+            ):
+                self._complete_undispatched_subject(
+                    subject_case,
+                    "이 종목은 이번 실행에서 AI 전달 기준에 선택되지 않아 웹 이력으로만 완료했습니다.",
+                    "typedb-not-selected-for-delivery",
+                )
         if reasoning_case.stage in {
             CASE_HYPOTHESES_READY,
             CASE_DECISION_SYNTHESIZED,

@@ -351,38 +351,45 @@ class ExternalSignalSecMixin:
         units: tuple = ("USD",),
     ) -> Dict[str, object]:
         financial_forms = {"10-K", "10-Q", "20-F", "40-F"}
+        candidates = []
         for tag in tags:
             concept = facts.get(tag)
             unit_rows = concept.get("units") if isinstance(concept, dict) else {}
-            values = []
             if isinstance(unit_rows, dict):
                 for unit in units:
                     if isinstance(unit_rows.get(unit), list):
-                        values = unit_rows.get(unit)
-                        break
-            if not isinstance(values, list):
-                continue
-            candidates = [
-                item for item in values
-                if isinstance(item, dict)
-                and str(item.get("form") or "").upper() in financial_forms
-                and item.get("val") not in (None, "")
-            ]
-            if not candidates:
-                continue
-            latest = sorted(
-                candidates,
-                key=lambda item: (str(item.get("filed") or ""), str(item.get("end") or "")),
-                reverse=True,
-            )[0]
-            return {
-                "tag": tag,
-                "value": number(latest.get("val")),
-                "end": str(latest.get("end") or ""),
-                "filed": str(latest.get("filed") or ""),
-                "fy": str(latest.get("fy") or ""),
-                "fp": str(latest.get("fp") or ""),
-                "form": str(latest.get("form") or ""),
-                "unit": next((unit for unit in units if isinstance(unit_rows, dict) and isinstance(unit_rows.get(unit), list)), ""),
-            }
-        return {}
+                        candidates.extend(
+                            (tag, unit, item)
+                            for item in unit_rows.get(unit) or []
+                            if isinstance(item, dict)
+                            and str(item.get("form") or "").upper() in financial_forms
+                            and item.get("val") not in (None, "")
+                        )
+        if not candidates:
+            return {}
+        # US GAAP aliases change over a company's lifetime. Selecting the
+        # first tag with any value can therefore return a years-old revenue
+        # fact while every other metric is current. Rank all accepted aliases
+        # together and preserve enough filing metadata for period validation.
+        tag, unit, latest = sorted(
+            candidates,
+            key=lambda candidate: (
+                str(candidate[2].get("filed") or ""),
+                str(candidate[2].get("end") or ""),
+                str(candidate[2].get("frame") or ""),
+            ),
+            reverse=True,
+        )[0]
+        return {
+            "tag": tag,
+            "value": number(latest.get("val")),
+            "start": str(latest.get("start") or ""),
+            "end": str(latest.get("end") or ""),
+            "filed": str(latest.get("filed") or ""),
+            "fy": str(latest.get("fy") or ""),
+            "fp": str(latest.get("fp") or ""),
+            "form": str(latest.get("form") or ""),
+            "frame": str(latest.get("frame") or ""),
+            "accessionNumber": str(latest.get("accn") or ""),
+            "unit": unit,
+        }

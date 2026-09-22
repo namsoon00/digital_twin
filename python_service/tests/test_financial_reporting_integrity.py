@@ -11,7 +11,62 @@ from digital_twin.modules.reasoning.domain.portfolio_ontology_company_concepts i
 
 
 class FinancialReportingIntegrityTests(unittest.TestCase):
+    def _assert_sec_period_contracts(self):
+        from digital_twin.infrastructure.external_api.adapters.base import legacy_provider
+
+        provider = legacy_provider({})
+        fact = provider.latest_sec_fact({
+            "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [{
+                "val": 10, "end": "2022-12-31", "filed": "2023-02-01",
+                "form": "10-K", "fp": "FY",
+            }]}},
+            "Revenues": {"units": {"USD": [{
+                "val": 25, "start": "2026-01-01", "end": "2026-06-30",
+                "filed": "2026-08-01", "form": "10-Q", "fp": "Q2",
+                "frame": "CY2026Q2YTD", "accn": "0001-26-000001",
+            }]}},
+        }, ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues"])
+
+        self.assertEqual(25, fact["value"])
+        self.assertEqual("Revenues", fact["tag"])
+        self.assertEqual("2026-01-01", fact["start"])
+        self.assertEqual("CY2026Q2YTD", fact["frame"])
+
+        knowledge = build_company_knowledge(
+            "NVDA",
+            yfinance={
+                "info": {"financialCurrency": "USD"},
+                "incomeStatement": [{"metric": "Total Revenue", "values": {"2025-12-31": 100}}],
+            },
+            sec_filing={
+                "provider": "SEC EDGAR",
+                "facts": {
+                    "entityName": "NVIDIA Corporation",
+                    "revenue": {
+                        "tag": "Revenues", "value": 70, "start": "2026-01-01",
+                        "end": "2026-06-30", "filed": "2026-08-01",
+                        "form": "10-Q", "fp": "Q2", "unit": "USD",
+                    },
+                    "totalDebt": {
+                        "tag": "LongTermDebt", "value": 5, "end": "2020-06-30",
+                        "filed": "2020-08-01", "form": "10-Q", "fp": "Q2", "unit": "USD",
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(100, knowledge["financials"]["annual"][0]["revenue"])
+        self.assertEqual(70, knowledge["financials"]["interim"][0]["revenue"])
+        self.assertEqual(1, len(knowledge["financials"]["interim"]))
+        self.assertNotIn("totalDebt", knowledge["financials"]["interim"][0])
+        self.assertEqual("interim", knowledge["financials"]["interim"][0]["frequency"])
+        self.assertEqual(
+            "year-to-date",
+            knowledge["financials"]["interim"][0]["metricProvenance"]["revenue"]["durationBasis"],
+        )
+
     def test_valid_paired_vendor_ratio_survives_partial_official_override(self):
+        self._assert_sec_period_contracts()
         vendor = {"period": "2026-06-30", "frequency": "quarterly", "revenue": 100, "freeCashFlow": 20,
                   "metricProvenance": {field: {"provider": "yfinance", "durationBasis": "quarterly", "currency": "KRW"}
                                        for field in ("revenue", "freeCashFlow")}}

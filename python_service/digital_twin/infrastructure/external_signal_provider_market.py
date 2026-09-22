@@ -594,6 +594,12 @@ class ExternalSignalMarketMixin:
                     }
 
                 disclosure = self.guarded_call("OpenDART", "list:" + symbol, fetch_disclosure)
+                collect_fundamentals = (
+                    self.dart_company_fundamentals_enabled()
+                    if include_fundamentals is None
+                    else bool(include_fundamentals)
+                )
+                has_recent_disclosure = bool(disclosure)
                 if not disclosure:
                     self.status(
                         signals,
@@ -605,14 +611,24 @@ class ExternalSignalMarketMixin:
                         dataUsable=True,
                         emptyResult=True,
                     )
-                    continue
+                    if not collect_fundamentals:
+                        continue
+                    # Company profile and financial statements are independent
+                    # OpenDART datasets. A quiet disclosure lookback must not
+                    # prevent their scheduled collection.
+                    disclosure = {
+                        "provider": "OpenDART",
+                        "corpCode": corp_code,
+                        "corpName": str(position.name if position else symbol),
+                        "reportName": "",
+                        "receiptNo": "",
+                        "receiptDate": "",
+                        "count": 0,
+                        "items": [],
+                        "noDisclosureInLookback": True,
+                    }
                 if disclosure:
                     disclosure["fetchedAt"] = utc_now_iso()
-                    collect_fundamentals = (
-                        self.dart_company_fundamentals_enabled()
-                        if include_fundamentals is None
-                        else bool(include_fundamentals)
-                    )
                     if collect_fundamentals:
                         self.attach_opendart_company_facts(
                             signals,
@@ -623,7 +639,7 @@ class ExternalSignalMarketMixin:
                             now,
                         )
                     collect_document = self.dart_document_text_enabled() if include_document is None else bool(include_document)
-                    if collect_document:
+                    if collect_document and has_recent_disclosure:
                         disclosure_items = disclosure.get("items") if isinstance(disclosure.get("items"), list) else []
                         prioritized = []
                         for index, item in enumerate(disclosure_items):
@@ -665,7 +681,12 @@ class ExternalSignalMarketMixin:
                                 "documentTextQuality": latest.get("documentTextQuality") or "metadata-only",
                                 "documentState": latest.get("documentState") or "metadata-only",
                             })
-                    signals["dartDisclosures"][symbol] = disclosure
+                    has_company_facts = any(
+                        disclosure.get(key)
+                        for key in ("company", "financialStatements", "executives")
+                    )
+                    if has_recent_disclosure or has_company_facts:
+                        signals["dartDisclosures"][symbol] = disclosure
             except Exception as error:  # noqa: BLE001
                 self.status_for_error(signals, "OpenDART", symbol + " ", error)
 

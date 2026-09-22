@@ -86,8 +86,15 @@ class NewsCollectionQualityTests(unittest.TestCase):
         evidence = self.evidence({"articleText": "Apple raised annual services revenue guidance.", "articleFacts": {"bodyAvailable": True}})
         for _ in range(3):
             evidence = apply_news_ai_analysis(evidence, {"status": "ok"})
-        runner = NewsAnalysisEnrichmentRunner(None, object(), {})
+        runner = NewsAnalysisEnrichmentRunner(None, object(), {
+            "newsAiAnalysisWorkerBatchSize": "1",
+            "newsAiAnalysisWorkerMaxBatchSize": "3",
+            "newsAiAnalysisBacklogScaleThreshold": "6",
+        })
         runner.item_is_fresh = lambda _item: True
+        self.assertEqual(1, runner.effective_model_batch_size(5))
+        self.assertEqual(3, runner.effective_model_batch_size(6))
+        self.assertEqual(2, runner.effective_model_batch_size(99, requested_limit=2))
         self.assertEqual("source-invalid", evidence.raw_payload["aiAnalysis"]["status"])
         self.assertFalse(runner.should_retry(evidence))
         evidence.raw_payload["articleText"] += " Apple also published a revised subscription outlook."
@@ -913,6 +920,11 @@ class NewsCollectionQualityTests(unittest.TestCase):
 
         self.assertEqual("degraded", health.state)
         self.assertEqual("article-original-url-budget-exhausted", health.reason_code)
+        dimensions = health.to_dict()["dimensions"]
+        self.assertEqual("healthy", dimensions["providerAvailability"]["state"])
+        self.assertEqual("full", dimensions["sourceCoverage"]["state"])
+        self.assertEqual("admitted", dimensions["evidenceAdmission"]["state"])
+        self.assertEqual(1, dimensions["evidenceAdmission"]["admittedCount"])
 
     def test_health_is_degraded_when_circuit_breakers_reduce_provider_coverage(self):
         health = evaluate_news_collection_health({
@@ -938,6 +950,9 @@ class NewsCollectionQualityTests(unittest.TestCase):
         })
 
         self.assertEqual("degraded", health.state)
+        dimensions = health.to_dict()["dimensions"]
+        self.assertEqual("healthy", dimensions["providerAvailability"]["state"])
+        self.assertEqual("reduced", dimensions["sourceCoverage"]["state"])
         self.assertEqual("provider-coverage-degraded", health.reason_code)
 
     def test_collection_admission_keeps_only_direct_material_body_from_trusted_source(self):

@@ -25,6 +25,18 @@ class ConsoleOperationsHealthTests(unittest.TestCase):
         self.assertEqual("healthy", component(result, "ai")["state"])
 
         degraded = ConsoleReadModelService().operations_health({
+            "external": {
+                "providers": [{"state": "healthy", "updatedAt": now}],
+                "pipelineHealth": {
+                    "newsCollection": {
+                        "dimensions": {
+                            "providerAvailability": {"state": "healthy"},
+                            "sourceCoverage": {"state": "reduced"},
+                            "evidenceAdmission": {"state": "admitted"},
+                        },
+                    },
+                },
+            },
             "realtime": {
                 "monitoring": {"snapshot": {"occurredAt": now}},
                 "aiInferenceQueue": {
@@ -35,6 +47,11 @@ class ConsoleOperationsHealthTests(unittest.TestCase):
                     "effectiveAiAuthoredCount": 0,
                     "effectiveAiFallbackCount": 8,
                     "effectiveAiLatestAt": now,
+                    "currentAiPerformance": {
+                        "sampleCount": 8,
+                        "averageLatencyMs": 125000,
+                        "overTargetCount": 2,
+                    },
                 },
                 "notificationJobs": {
                     "suppressed": 7,
@@ -50,14 +67,21 @@ class ConsoleOperationsHealthTests(unittest.TestCase):
 
         ai = component(degraded, "ai")
         notifications = component(degraded, "notifications")
+        external = component(degraded, "external-data")
         self.assertEqual("warning", ai["state"])
         self.assertIn("최근 24시간 실효 AI 0/8건", ai["detail"])
         self.assertIn("폴백 8건", ai["detail"])
+        self.assertIn("평균 처리 125.0초", ai["detail"])
+        self.assertIn("프롬프트 목표 초과 2/8건", ai["detail"])
         self.assertNotIn("누적 감사", ai["detail"])
         self.assertIn("정책 억제 7건", notifications["detail"])
         self.assertIn("동일 판단 5", notifications["detail"])
         self.assertIn("중복·쿨다운 2", notifications["detail"])
         self.assertNotIn("누적 보류", notifications["detail"])
+        self.assertEqual("warning", external["state"])
+        self.assertIn("뉴스 공급 healthy", external["detail"])
+        self.assertIn("출처 범위 reduced", external["detail"])
+        self.assertIn("근거 선별 admitted", external["detail"])
 
     def test_stale_snapshot_and_old_reasoning_or_ai_work_are_visible(self):
         old = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()

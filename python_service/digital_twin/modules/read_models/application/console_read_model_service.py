@@ -857,8 +857,18 @@ class ConsoleReadModelService:
         time_series = _mapping(payloads.get("timeSeries"))
         storage = _mapping(payloads.get("storage"))
         providers = _rows(external.get("providers"))
+        news_pipeline = _mapping(_mapping(external.get("pipelineHealth")).get("newsCollection"))
+        news_dimensions = _mapping(news_pipeline.get("dimensions"))
+        news_availability = _mapping(news_dimensions.get("providerAvailability"))
+        news_coverage = _mapping(news_dimensions.get("sourceCoverage"))
+        news_admission = _mapping(news_dimensions.get("evidenceAdmission"))
         now_epoch = datetime.now(timezone.utc).timestamp()
         failed_providers = [item for item in providers if _text(item.get("state")).lower() not in {"healthy", "ok", "ready"}]
+        news_requires_attention = bool(
+            _text(news_availability.get("state")).lower() in {"degraded", "failed"}
+            or _text(news_coverage.get("state")).lower() in {"reduced", "unavailable"}
+            or _text(news_admission.get("state")).lower() in {"quality-limited", "stale"}
+        )
         pending = int(reasoning.get("effectivePendingCount") or reasoning.get("pendingCount") or 0)
         processing = int(reasoning.get("processingCount") or 0)
         notification_summary = _mapping(realtime.get("notificationJobs"))
@@ -874,6 +884,13 @@ class ConsoleReadModelService:
             or "healthy"
         ).lower()
         ai_effective_window_hours = int(ai_summary.get("effectiveAiWindowHours") or 24)
+        ai_performance = _mapping(ai_summary.get("currentAiPerformance"))
+        ai_performance_samples = int(ai_performance.get("sampleCount") or 0)
+        ai_average_latency_seconds = round(
+            int(ai_performance.get("averageLatencyMs") or 0) / 1000.0,
+            1,
+        )
+        ai_prompt_over_target = int(ai_performance.get("overTargetCount") or 0)
         notification_actionable_failures = int(
             notification_summary.get("actionable_failed")
             if notification_summary.get("actionable_failed") is not None
@@ -987,13 +1004,21 @@ class ConsoleReadModelService:
             {
                 "id": "external-data",
                 "label": "외부 데이터 수집",
-                "state": "healthy" if providers and not failed_providers else ("warning" if providers else "unknown"),
+                "state": "healthy" if providers and not failed_providers and not news_requires_attention else ("warning" if providers else "unknown"),
                 "dimension": "freshness",
                 "impact": "user",
-                "reasonCode": "external-data-ready" if providers and not failed_providers else "external-data-provider-attention",
-                "detail": f"공급자 {len(providers)}개 · 확인 필요 {len(failed_providers)}개",
+                "reasonCode": "external-data-ready" if providers and not failed_providers and not news_requires_attention else "external-data-provider-attention",
+                "detail": (
+                    f"공급자 {len(providers)}개 · 확인 필요 {len(failed_providers)}개"
+                    + (
+                        " · 뉴스 공급 " + (_text(news_availability.get("state")) or "미확인")
+                        + " · 출처 범위 " + (_text(news_coverage.get("state")) or "미확인")
+                        + " · 근거 선별 " + (_text(news_admission.get("state")) or "미확인")
+                        if news_dimensions else ""
+                    )
+                ),
                 "updatedAt": max((_text(item.get("updatedAt")) for item in providers), default=""),
-                "action": {} if providers and not failed_providers else {"id": "open-provider-status", "label": "공급자 확인", "view": "data"},
+                "action": {} if providers and not failed_providers and not news_requires_attention else {"id": "open-provider-status", "label": "공급자 확인", "view": "data"},
             },
             {
                 "id": "reasoning",
@@ -1041,6 +1066,11 @@ class ConsoleReadModelService:
                     )
                     + f" · 현재 실패 {ai_actionable_failures}건"
                     + f" · 누적 실패 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건"
+                    + (
+                        f" · 평균 처리 {ai_average_latency_seconds}초"
+                        f" · 프롬프트 목표 초과 {ai_prompt_over_target}/{ai_performance_samples}건"
+                        if ai_performance_samples else ""
+                    )
                     + (f" · 최장 {ai_oldest_age_seconds}초" if ai_oldest_age_seconds else "")
                 ),
                 "updatedAt": ai_oldest_at or _text(

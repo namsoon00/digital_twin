@@ -1253,6 +1253,10 @@ class AIInferenceQueueTests(unittest.TestCase):
             prompt_audit["inferencePacket"]["promptBudget"]["renderedPromptBytes"],
             prompt_audit["inferencePacket"]["promptBudget"]["maxPromptBytes"],
         )
+        self.assertEqual(49152, prompt_audit["promptTarget"]["targetBytes"])
+        self.assertEqual(49152, prompt_audit["promptTarget"]["hardLimitBytes"])
+        self.assertFalse(prompt_audit["promptTarget"]["packetExpandedBeyondTarget"])
+        self.assertFalse(prompt_audit["promptTarget"]["executedPromptOverTarget"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])
@@ -1602,6 +1606,13 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("critical", summary["effectiveAiStatus"])
         self.assertEqual(AI_DECISION_PROMPT_VERSION, summary["currentAiPromptVersion"])
         self.assertEqual(1, summary["historicalAiFallbackCount"])
+        self.assertEqual(
+            {"hypothesis-contract-mismatch": 1},
+            summary["currentAiFallbackReasons"],
+        )
+        self.assertEqual(1, summary["currentAiPerformance"]["sampleCount"])
+        self.assertEqual(0, summary["currentAiPerformance"]["overTargetCount"])
+        self.assertEqual(49152, summary["currentAiPerformance"]["targetPromptBytes"])
 
         mysql_execute(
             self.seed,

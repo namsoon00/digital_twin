@@ -1641,6 +1641,12 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ))))
         except (TypeError, ValueError):
             current_cohort_minimum = 10
+        try:
+            target_prompt_bytes = max(12 * 1024, min(64 * 1024, int(float(
+                self.runtime_settings.get("notificationAiQueueTargetPromptBytes") or 48 * 1024
+            ))))
+        except (TypeError, ValueError):
+            target_prompt_bytes = 48 * 1024
         active_cutoff = (
             datetime.now(timezone.utc) - timedelta(minutes=active_window_minutes)
         ).isoformat().replace("+00:00", "Z")
@@ -1685,6 +1691,27 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "AND result.created_at >= %s",
                 (AI_DECISION_PROMPT_VERSION, effectiveness_cutoff),
             ).fetchone() or {}
+            current_performance_row = connection.execute(
+                "SELECT COUNT(*) AS sample_count, AVG(result.latency_ms) AS average_latency_ms, "
+                "MAX(result.latency_ms) AS maximum_latency_ms, AVG(result.prompt_bytes) AS average_prompt_bytes, "
+                "MAX(result.prompt_bytes) AS maximum_prompt_bytes, "
+                "SUM(CASE WHEN result.prompt_bytes > %s THEN 1 ELSE 0 END) AS over_target_count "
+                "FROM ai_inference_results result JOIN ai_inference_requests request "
+                "ON request.request_id = result.request_id "
+                "WHERE request.message_type = 'investmentInsight' AND request.prompt_version = %s "
+                "AND result.created_at >= %s",
+                (target_prompt_bytes, AI_DECISION_PROMPT_VERSION, effectiveness_cutoff),
+            ).fetchone() or {}
+            current_failure_rows = connection.execute(
+                "SELECT COALESCE(NULLIF(result.contract_failure_code, ''), 'unknown') AS reason_code, "
+                "COUNT(*) AS count FROM ai_inference_results result "
+                "JOIN ai_inference_requests request ON request.request_id = result.request_id "
+                "WHERE request.message_type = 'investmentInsight' AND request.prompt_version = %s "
+                "AND result.created_at >= %s AND result.publication_mode = 'typedb-fallback' "
+                "GROUP BY COALESCE(NULLIF(result.contract_failure_code, ''), 'unknown') "
+                "ORDER BY count DESC, reason_code ASC",
+                (AI_DECISION_PROMPT_VERSION, effectiveness_cutoff),
+            ).fetchall()
         states = {
             _clean(row.get("status")): {
                 "count": int(row.get("count") or 0),
@@ -1732,6 +1759,12 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             current_effectiveness_row.get("contract_passed_count") or 0
         )
         current_fallback_count = int(current_effectiveness_row.get("fallback_count") or 0)
+        current_performance_count = int(current_performance_row.get("sample_count") or 0)
+        current_over_target_count = int(current_performance_row.get("over_target_count") or 0)
+        current_fallback_reasons = {
+            _clean(row.get("reason_code")) or "unknown": int(row.get("count") or 0)
+            for row in current_failure_rows or []
+        }
         historical_status = (
             "critical" if eligible_count >= 10 and authored_count * 2 <= eligible_count
             else "degraded" if eligible_count and authored_count < eligible_count
@@ -1777,6 +1810,20 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ) if current_eligible_count else None,
             "currentAiLatestAt": _clean(current_effectiveness_row.get("latest_at")),
             "currentAiStatus": current_status,
+            "currentAiPerformance": {
+                "sampleCount": current_performance_count,
+                "averageLatencyMs": int(float(current_performance_row.get("average_latency_ms") or 0)),
+                "maximumLatencyMs": int(current_performance_row.get("maximum_latency_ms") or 0),
+                "targetPromptBytes": target_prompt_bytes,
+                "averagePromptBytes": int(float(current_performance_row.get("average_prompt_bytes") or 0)),
+                "maximumPromptBytes": int(current_performance_row.get("maximum_prompt_bytes") or 0),
+                "overTargetCount": current_over_target_count,
+                "overTargetRate": round(
+                    current_over_target_count / current_performance_count,
+                    4,
+                ) if current_performance_count else None,
+            },
+            "currentAiFallbackReasons": current_fallback_reasons,
             "historicalAiEligibleCount": eligible_count,
             "historicalAiAuthoredCount": authored_count,
             "historicalAiContractPassedCount": contract_passed_count,

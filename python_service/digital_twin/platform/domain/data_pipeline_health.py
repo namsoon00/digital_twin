@@ -143,6 +143,7 @@ class DataPipelineHealth:
     transition_candidate_state: str = ""
     transition_candidate_count: int = 0
     transition_confirmed: bool = False
+    dimensions: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -171,6 +172,7 @@ class DataPipelineHealth:
             "transitionCandidateState": payload["transition_candidate_state"],
             "transitionCandidateCount": payload["transition_candidate_count"],
             "transitionConfirmed": payload["transition_confirmed"],
+            "dimensions": payload["dimensions"],
         }
 
 
@@ -325,6 +327,72 @@ def evaluate_news_collection_health(
     zero_age_minutes = elapsed_minutes(baseline_at, current)
 
     if str(result.get("status") or "") == "disabled":
+        availability_state, availability_reason = "disabled", "collection-disabled"
+    elif not target_count:
+        availability_state, availability_reason = "idle", "no-targets"
+    elif not provider_successes and provider_failures:
+        availability_state, availability_reason = "failed", "all-providers-failed"
+    elif not provider_successes and provider_suppressed:
+        availability_state, availability_reason = "degraded", "all-providers-suppressed"
+    elif provider_successes:
+        availability_state, availability_reason = "healthy", "provider-request-succeeded"
+    else:
+        availability_state, availability_reason = "idle", "no-provider-request"
+
+    if provider_successes and (provider_failures or provider_suppressed):
+        coverage_state, coverage_reason = "reduced", "partial-provider-coverage"
+    elif provider_successes:
+        coverage_state, coverage_reason = "full", "configured-provider-coverage"
+    elif provider_failures or provider_suppressed:
+        coverage_state, coverage_reason = "unavailable", "provider-coverage-unavailable"
+    else:
+        coverage_state, coverage_reason = "unknown", "provider-coverage-not-observed"
+
+    if admitted_count:
+        admission_state, admission_reason = "admitted", "quality-evidence-admitted"
+    elif official_metadata_only_count:
+        admission_state, admission_reason = "quality-limited", "official-document-content-missing"
+    elif original_url_budget_count or body_quality_failure_count or body_failure_count:
+        admission_state, admission_reason = "quality-limited", "article-content-quality-limited"
+    elif zero_age_minutes >= max(1, int(stale_after_minutes or 1)):
+        admission_state, admission_reason = "stale", "quality-evidence-stale"
+    elif fetched_count or provider_candidates:
+        admission_state, admission_reason = "filtered", "candidates-not-admitted"
+    else:
+        admission_state, admission_reason = "empty", "no-new-candidates"
+
+    dimensions = {
+        "providerAvailability": {
+            "state": availability_state,
+            "reasonCode": availability_reason,
+            "successCount": provider_successes,
+            "failureCount": provider_failures,
+            "suppressedCount": provider_suppressed,
+        },
+        "sourceCoverage": {
+            "state": coverage_state,
+            "reasonCode": coverage_reason,
+            "successfulProviderCount": successful_provider_count,
+            "circuitOpenProviderCount": circuit_open_provider_count,
+            "uncoveredFailureSymbolCount": len(uncovered_failure_symbols),
+        },
+        "evidenceAdmission": {
+            "state": admission_state,
+            "reasonCode": admission_reason,
+            "candidateCount": provider_candidates,
+            "fetchedCount": fetched_count,
+            "admittedCount": admitted_count,
+            "savedCount": saved_count,
+            "admissionYieldPercent": round(
+                admitted_count / provider_candidates * 100.0,
+                1,
+            ) if provider_candidates else None,
+            "bodyQualityFailureCount": body_quality_failure_count,
+            "originalUrlBudgetRejectedCount": original_url_budget_count,
+        },
+    }
+
+    if str(result.get("status") or "") == "disabled":
         state, reason_code, reason = "disabled", "collection-disabled", "뉴스 수집 기능이 비활성화되어 있습니다."
     elif not target_count:
         state, reason_code, reason = "idle", "no-targets", "수집 대상 보유·관심종목이 없어 대기 중입니다."
@@ -404,6 +472,7 @@ def evaluate_news_collection_health(
         previous_state=previous_state,
         state_changed=state_changed,
         alert_required=alert_required,
+        dimensions=dimensions,
     )
 
 

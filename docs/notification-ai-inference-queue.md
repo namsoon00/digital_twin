@@ -77,15 +77,17 @@ The compatibility notification-first path can still park an existing job in
 - `NOTIFICATION_AI_QUEUE_HEARTBEAT_SECONDS`
 - `NOTIFICATION_AI_QUEUE_MAX_ATTEMPTS`
 - `NOTIFICATION_AI_QUEUE_RETRY_SECONDS`
+- `NOTIFICATION_AI_QUEUE_TARGET_PROMPT_BYTES`
 - `NOTIFICATION_AI_QUEUE_MAX_PROMPT_BYTES`
 - `NOTIFICATION_AI_ATTEMPT_WATCHDOG_SECONDS`
 - `NOTIFICATION_AI_QUEUE_RETENTION_HOURS`
 
 The delivery deadline may remain disabled because inference is asynchronous.
 The attempt watchdog is different: it bounds one local model process so a hung
-execution cannot hold a worker forever. The normal packet targets 15 KiB and
-may expand to a 16 KiB hard cap only when the minimum decision contract does
-not fit. A retry starts with a 12 KiB minimum-contract packet and uses the same
+execution cannot hold a worker forever. A deep investment packet targets 48
+KiB and may expand to the 64 KiB hard cap only when the minimum decision
+contract does not fit. Standard profiles keep their lower profile-specific
+limit. A retry starts with a 12 KiB minimum-contract packet and uses the same
 bounded expansion path. The compact packet keeps action, hypothesis
 identity, rules, evidence IDs, current facts, continuity, and valuation while
 the unabridged decision brief remains in the immutable audit store.

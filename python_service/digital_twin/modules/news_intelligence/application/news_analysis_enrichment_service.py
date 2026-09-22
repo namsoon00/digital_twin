@@ -82,6 +82,22 @@ class NewsAnalysisEnrichmentRunner:
     def batch_size(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisWorkerBatchSize", 1, 1, 10)
 
+    def max_batch_size(self) -> int:
+        return max(
+            self.batch_size(),
+            int_setting(self.settings, "newsAiAnalysisWorkerMaxBatchSize", 2, 1, 10),
+        )
+
+    def backlog_scale_threshold(self) -> int:
+        return int_setting(self.settings, "newsAiAnalysisBacklogScaleThreshold", 6, 2, 1000)
+
+    def effective_model_batch_size(self, pending_count: int, requested_limit: int = 0) -> int:
+        if requested_limit:
+            return max(1, min(self.max_batch_size(), int(requested_limit)))
+        if int(pending_count or 0) >= self.backlog_scale_threshold():
+            return self.max_batch_size()
+        return self.batch_size()
+
     def local_repair_batch_size(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisLocalRepairBatchSize", 25, 1, 100)
 
@@ -289,6 +305,9 @@ class NewsAnalysisEnrichmentRunner:
             "enabled": self.enabled(),
             "intervalSeconds": self.interval_seconds(),
             "batchSize": self.batch_size(),
+            "maxBatchSize": self.max_batch_size(),
+            "effectiveBatchSize": self.effective_model_batch_size(len(candidates)),
+            "backlogScaleThreshold": self.backlog_scale_threshold(),
             "localRepairBatchSize": self.local_repair_batch_size(),
             "retryMinutes": self.retry_minutes(),
             "pendingCount": len(candidates),
@@ -457,6 +476,7 @@ class NewsAnalysisEnrichmentRunner:
                 "storage": storage,
             }
         candidates = self.candidates()
+        model_batch_size = self.effective_model_batch_size(len(candidates), limit)
         durable_queue = self.durable_queue_enabled()
         enqueued_count = self.enqueue_candidates(candidates) if durable_queue else 0
         selected_jobs: Dict[str, Dict[str, object]] = {}
@@ -473,7 +493,7 @@ class NewsAnalysisEnrichmentRunner:
                 *self.evidence_store.claim_news_analysis_work(
                     self.worker_id,
                     "model",
-                    max(1, int(limit or self.batch_size())),
+                    model_batch_size,
                     lease_seconds,
                 ),
             ]
@@ -503,7 +523,7 @@ class NewsAnalysisEnrichmentRunner:
             repair_ids = {item.evidence_id for item in repair_selected}
             repair_candidate_ids = {item.evidence_id for item in repair_candidates}
             model_candidates = [item for item in candidates if item.evidence_id not in repair_candidate_ids]
-            model_selected = model_candidates[: max(1, int(limit or self.batch_size()))]
+            model_selected = model_candidates[:model_batch_size]
             selected = [*repair_selected, *model_selected]
         updated: List[ResearchEvidence] = []
         failures: List[Dict[str, object]] = []
@@ -625,6 +645,7 @@ class NewsAnalysisEnrichmentRunner:
             "processedCount": len(selected),
             "localRepairCount": len(repair_selected),
             "modelProcessedCount": len(model_selected),
+            "effectiveBatchSize": model_batch_size,
             "savedCount": saved,
             "translatedCount": translated_count,
             "failedCount": len(failures),

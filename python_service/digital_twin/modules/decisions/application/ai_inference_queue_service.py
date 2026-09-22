@@ -740,6 +740,13 @@ class AIInferenceQueueRunner:
             12 * 1024,
             64 * 1024,
         )
+        self.target_prompt_bytes = _int_setting(
+            self.settings,
+            "notificationAiQueueTargetPromptBytes",
+            48 * 1024,
+            12 * 1024,
+            self.max_prompt_bytes,
+        )
         repair_effort = str(
             self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
         ).strip().lower()
@@ -866,19 +873,24 @@ class AIInferenceQueueRunner:
                 context["notificationAiExecutionProfile"] = execution_profile
             execution_profile["reasoningEffort"] = request.reasoning_effort
             decision_brief = notification_ai_decision_brief(context, self.settings, execution_profile)
+            preferred_prompt_limit = min(
+                self.max_prompt_bytes,
+                int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
+            )
             attempt_prompt_limit = (
                 min(self.max_prompt_bytes, 12 * 1024)
                 if request.attempts > 1
-                else self.max_prompt_bytes
-            )
-            preferred_prompt_limit = min(
-                attempt_prompt_limit,
-                int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
+                else min(self.target_prompt_bytes, preferred_prompt_limit)
             )
             packet = None
             packet_error = None
             prompt_limits = []
-            for value in (preferred_prompt_limit, 15 * 1024, self.max_prompt_bytes):
+            for value in (
+                attempt_prompt_limit,
+                15 * 1024,
+                preferred_prompt_limit,
+                self.max_prompt_bytes,
+            ):
                 bounded = min(self.max_prompt_bytes, max(12 * 1024, int(value or 0)))
                 if (
                     bounded not in prompt_limits
@@ -1092,6 +1104,14 @@ class AIInferenceQueueRunner:
             "contextRouting": context_routing,
             "promptRelease": prompt_release,
             "promptBudget": packet.prompt_budget,
+            "promptTarget": {
+                "targetBytes": self.target_prompt_bytes,
+                "hardLimitBytes": self.max_prompt_bytes,
+                "packetExpandedBeyondTarget": int(
+                    execution_profile.get("effectiveMaxPromptBytes") or 0
+                ) > self.target_prompt_bytes,
+                "executedPromptOverTarget": prompt_bytes > self.target_prompt_bytes,
+            },
             "decisionContinuity": {
                 "contractVersion": str(continuity_packet.get("contractVersion") or ""),
                 "packetId": str(continuity_packet.get("packetId") or ""),

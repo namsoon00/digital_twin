@@ -18,6 +18,13 @@ def _external_data_status_source_payload() -> Dict[str, object]:
     try:
         payload = dict(build_external_data_collection_runner().status() or {})
         try:
+            from digital_twin.infrastructure.operational_store import data_pipeline_health_store
+
+            stored_health = dict(data_pipeline_health_store().load() or {})
+            payload["pipelineHealth"] = dict(stored_health.get("pipelines") or {})
+        except Exception as error:  # noqa: BLE001 - provider status remains independently useful.
+            payload["pipelineHealth"] = {"status": "unavailable", "error": str(error)[:240]}
+        try:
             payload["newsAnalysis"] = build_news_analysis_enrichment_runner().status()
         except Exception as error:  # noqa: BLE001 - official collection status remains independently useful.
             payload["newsAnalysis"] = {"status": "unavailable", "error": str(error)[:240]}

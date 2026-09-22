@@ -27,6 +27,24 @@ def capture_graph_input(
     )
     input_mode = str(observation_input.get("mode") or "full")
     input_symbols = list(observation_input.get("targetSymbols") or [])
+    computation_symbols = list(input_symbols)
+    if input_mode == "full":
+        requested_computation_symbols = {
+            str(symbol or "").upper().strip()
+            for symbol in (reasoning_context or {}).get(
+                "projectionComputationTargetSymbols"
+            ) or []
+            if str(symbol or "").strip()
+        }
+        available_symbols = {
+            str(getattr(item, "symbol", "") or "").upper().strip()
+            for item in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if str(getattr(item, "symbol", "") or "").strip()
+            and not item.is_cash()
+        }
+        computation_symbols = sorted(
+            requested_computation_symbols.intersection(available_symbols)
+        )
     emit(
         "observation_input.done",
         inputMode=input_mode,
@@ -71,7 +89,7 @@ def capture_graph_input(
     runtime_context = _inputs.runtime_context(
         snapshot,
         active_tbox=active_tbox,
-        target_symbols=input_symbols if input_mode == "target-scoped" else None,
+        target_symbols=computation_symbols or None,
         progress_callback=lambda stage, **details: emit(
             "runtime_context." + str(stage or "unknown"), **details
         ),
@@ -155,6 +173,7 @@ def capture_graph_input(
         observation_input=observation_input,
         input_mode=input_mode,
         input_symbols=input_symbols,
+        computation_symbols=computation_symbols,
         projection_external_signals=projection_external_signals,
         input_projection=input_projection,
         graph_input_snapshot=graph_input_snapshot,

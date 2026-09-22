@@ -448,7 +448,8 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
             "repairInputFallback": {
                 key: repair_input_fallback.get(key)
                 for key in [
-                    "attempted", "mode", "firstStatus", "finalStatus", "applied", "runtimeMs",
+                    "attempted", "mode", "computationTargetSymbols",
+                    "firstStatus", "finalStatus", "applied", "runtimeMs",
                 ]
                 if key in repair_input_fallback
             },

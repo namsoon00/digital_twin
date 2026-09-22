@@ -128,7 +128,9 @@ class ManifestFixture:
         assert release is self.kwargs["rulebox_bootstrap"]
         assert world is self.kwargs["portfolio_world_context"]
         assert kwargs["market_world_context"] is self.kwargs["market_world_context"]
-        assert kwargs["reasoning_context"] is self.kwargs["compact_reasoning_context"]
+        assert kwargs["reasoning_context"] is not self.kwargs["compact_reasoning_context"]
+        assert kwargs["reasoning_context"]["sourceObservedAt"] == STAMP
+        assert kwargs["reasoning_context"]["projectionComputationTargetSymbols"] == ["AAPL"]
         assert kwargs["shared_premise_proof"] is self.kwargs["shared_premise_proof"]
         self.step("build", normalize(kwargs))
         return {
@@ -289,6 +291,12 @@ class InternalManifestTests(unittest.TestCase):
             "observation-followup", result.persistence_graph.worldview["targetScopeRetentionMode"]
         )
         self.assertTrue(result.target_scoped_patch["repairInputFallback"]["applied"])
+        self.assertEqual(
+            ["AAPL"],
+            result.target_scoped_patch["repairInputFallback"][
+                "computationTargetSymbols"
+            ],
+        )
         self.assertEqual(3, fixture.kwargs["runtime_stages"]["targetManifestRepairInputAssemblyMs"])
         self.assertEqual(fixture.original_active, fixture.active)
 

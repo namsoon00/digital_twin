@@ -225,6 +225,7 @@ class PreparedGraphInput:
     observation_input: Dict[str, object]
     input_mode: str
     input_symbols: List[str]
+    computation_symbols: List[str]
     projection_external_signals: Dict[str, object]
     input_projection: Dict[str, object]
     graph_input_snapshot: AccountSnapshot

@@ -14,7 +14,7 @@ from digital_twin.modules.notifications.contracts import build_decision_core_evi
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v9-evidence-preservation"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v10-canonical-ledger"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v5"
 
 RESEARCH_INSIGHT_FACT_LABELS = (
@@ -221,25 +221,55 @@ def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, o
     for item in value or []:
         if not isinstance(item, dict):
             continue
+        kind = str(item.get("kind") or "")
+        # The hypothesis rows are the canonical forward index. Repeating every
+        # reverse rule/hypothesis/source index in each ledger row made the
+        # minimum prompt larger than the model budget without adding evidence.
+        # Keep only links used by claim closure and model-signal provenance.
         row = _selected(
             item,
             (
                 "evidenceId", "role", "kind", "label", "value", "source",
-                "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
-                "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
-                "modelEvidenceIds", "sourceFeatureSnapshotId", "modelReleaseId",
-                "featureSummary", "judgementEligible", "hypothesisRoles",
+                "sourceAsOf", "fetchedAt", "freshness", "relatedEvidenceIds",
+                "sourceFactIds", "modelEvidenceIds", "sourceFeatureSnapshotId",
+                "modelReleaseId", "featureSummary", "judgementEligible",
+                "hypothesisRoles",
             ),
         )
-        for key in (
-            "ruleIds", "hypothesisIds", "relatedEvidenceIds", "sourceFactIds",
-            "modelEvidenceIds",
-        ):
+        for key in ("relatedEvidenceIds", "sourceFactIds", "modelEvidenceIds"):
             if key in row:
-                row[key] = _unique_all(row.get(key) or [])[:8]
-        for key in ("value", "featureSummary"):
-            if key in row and item.get("kind") not in {"fact", "derived", "decision-transition", "model-signal"}:
-                row[key] = _bounded_detail_bytes(row[key], 420)
+                row[key] = _unique_all(row.get(key) or [])[:4]
+        if kind in {"fact", "derived"}:
+            row.pop("featureSummary", None)
+            row.pop("sourceFactIds", None)
+            row.pop("modelEvidenceIds", None)
+            if isinstance(row.get("value"), (dict, list, tuple, set)):
+                row["value"] = _bounded_detail_bytes(row["value"], 700)
+        elif kind == "decision-transition":
+            row.pop("featureSummary", None)
+            row.pop("sourceFactIds", None)
+            row.pop("modelEvidenceIds", None)
+            row["value"] = _minimum_transition_detail(row.get("value"))
+        elif kind == "model-signal":
+            if "value" in row:
+                row["value"] = _bounded_detail_bytes(row["value"], 520)
+            if "featureSummary" in row:
+                row["featureSummary"] = _bounded_detail_bytes(
+                    row["featureSummary"], 420
+                )
+        elif kind in {"financial-comparison", "financial-ratio"}:
+            # The complete paired-period provenance is already retained in
+            # companyEvidence.financialEvidence. Citation rows only need the
+            # exact value, period, source and eligibility fields validated by
+            # _validate_financial_evidence_retention.
+            row.pop("featureSummary", None)
+            row.pop("relatedEvidenceIds", None)
+            row.pop("sourceFactIds", None)
+            row.pop("modelEvidenceIds", None)
+        else:
+            for key in ("value", "featureSummary"):
+                if key in row:
+                    row[key] = _bounded_detail_bytes(row[key], 420)
         if row:
             rows.append(row)
         if len(rows) >= max(1, int(limit or 1)):
@@ -649,13 +679,11 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             ),
         )
         row["label"] = _sentence_text(item.get("label"), 140)
-        if item.get("kind") == "financial-comparison":
-            # Full provenance remains in companyEvidence.financialEvidence;
-            # each numeric citation only repeats its paired measurements.
-            row["featureSummary"] = _selected(item.get("featureSummary"), (
-                "currentPeriod", "previousPeriod", "currentValue", "previousValue",
-                "changePct", "comparisonBasis",
-            ))
+        if item.get("kind") in {"financial-comparison", "financial-ratio"}:
+            # Full paired-period and formula provenance remains in
+            # companyEvidence.financialEvidence. The citation row keeps the
+            # exact scalar, period and source without duplicating that packet.
+            row.pop("featureSummary", None)
         if item.get("value") not in (None, ""):
             row["value"] = (
                 item.get("value")
@@ -696,6 +724,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             retained_observed_fact_count += 1
             if retained_observed_fact_count >= 2:
                 break
+    ledger = _minimum_evidence_ledger_rows(ledger, len(ledger))
     claim_contract = compact_narrative_claim_evidence_contract(ledger)
     decision = _mapping(core.get("decision"))
     return {
@@ -732,7 +761,11 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         ),
         "facts": dict(_mapping(core.get("facts"))),
         "temporalEvidence": core.get("temporalEvidence") or {},
-        "externalEvidence": core.get("externalEvidence") or [],
+        "externalEvidence": [
+            _bounded_detail_bytes(item, 1400)
+            for item in list(core.get("externalEvidence") or [])[:2]
+            if isinstance(item, dict)
+        ],
         "companyEvidence": _minimum_company_evidence(core.get("companyEvidence")),
         "hypothesisSet": {
             **_selected(
@@ -1791,15 +1824,20 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
 def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     budget = max(1, int(budget_bytes or 6 * 1024))
     fitted = json.loads(json.dumps(core, ensure_ascii=False, default=str))
+    protected_fact_ids = {
+        "fact:" + str(key)
+        for key, value in _mapping(fitted.get("facts")).items()
+        if value not in (None, "", [], {})
+    }
     required_evidence_ids = {
         evidence_id
         for item in _mapping(fitted.get("hypothesisSet")).get("hypotheses") or []
         if isinstance(item, dict)
         for key in ("supportingEvidenceIds", "counterEvidenceIds")
         for evidence_id in _unique_all(item.get(key) or [])
-    } | _financial_evidence_ids(fitted) | {
+    } | _financial_evidence_ids(fitted) | protected_fact_ids | {
         str(row.get("evidenceId") or "") for row in fitted.get("evidenceLedger") or []
-        if isinstance(row, dict) and row.get("kind") in {"fact", "derived", "decision-transition", "model-signal"}
+        if isinstance(row, dict) and row.get("kind") in {"decision-transition", "model-signal"}
     }
 
     def compact_ledger(limit: int) -> List[Dict[str, object]]:

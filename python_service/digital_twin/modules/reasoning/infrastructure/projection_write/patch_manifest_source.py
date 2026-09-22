@@ -52,6 +52,14 @@ def repair_manifest_source(
     )
     repair_input_started = clock()
     first_patch_failure = dict(applied_target_patch or {})
+    repair_reasoning_context = {
+        **dict(compact_reasoning_context or {}),
+        # Endpoint completeness needs the full factual graph, but expensive
+        # decision memory and statistical model enrichment still belong to the
+        # original mailbox subjects. Keeping those boundaries separate avoids
+        # recomputing every portfolio subject during a scoped link repair.
+        "projectionComputationTargetSymbols": list(target_symbols or []),
+    }
     repair_projection_graph = build_projection_graph(
         snapshot,
         rulebox_bootstrap,
@@ -60,7 +68,7 @@ def repair_manifest_source(
         target_symbols=target_symbols,
         target_scoped_input=False,
         shared_premise_proof=shared_premise_proof,
-        reasoning_context=compact_reasoning_context,
+        reasoning_context=repair_reasoning_context,
     )
     graph = repair_projection_graph["graph"]
     persistence_graph = repair_projection_graph["persistenceGraph"]
@@ -102,6 +110,7 @@ def repair_manifest_source(
     repair_input_fallback = {
         "attempted": True,
         "mode": "complete-source-assembly-target-persist",
+        "computationTargetSymbols": list(target_symbols or [])[:50],
         "firstStatus": str(first_patch_failure.get("status") or ""),
         "firstMissingEndpointScopeIds": list(
             first_patch_failure.get("missingEndpointScopeIds") or []

@@ -15,6 +15,7 @@ from digital_twin.modules.decisions.domain.investment_narrative_policy import na
 from digital_twin.modules.notifications.contracts import INVESTMENT_INSIGHT
 from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.modules.decisions.domain.notification_ai_gate_text import parse_ai_response_json
+from digital_twin.modules.decisions.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 from digital_twin.modules.decisions.domain.notification_ai_inference_packet import NotificationAIInferencePacket, build_notification_ai_inference_packet
 from digital_twin.modules.notifications.contracts import normalize_narrative_claims, resolved_narrative_claim_evidence_contract
 
@@ -261,6 +262,7 @@ def _structured_claim_evidence_ids(
     prepared_core: Dict[str, object],
     packet: NotificationAIInferencePacket,
     section: str,
+    text: str = "",
 ) -> list:
     claim_contract = resolved_narrative_claim_evidence_contract(
         prepared_core.get("narrativeClaimContract"),
@@ -296,6 +298,35 @@ def _structured_claim_evidence_ids(
         for item in prepared_core.get("evidenceLedger") or []
         if isinstance(item, dict) and str(item.get("evidenceId") or "")
     }
+    # Structured insight text is model-authored before it is copied into a
+    # narrative claim. Its numbers may refer to an allowed observation that
+    # is not one of the four generic recommendations. Greedily attach only
+    # rows that reduce the set of ungrounded quantities; this is deterministic
+    # schema repair and avoids a second full model call.
+    if str(text or "").strip():
+        rows = [ledger_by_id[evidence_id] for evidence_id in evidence_ids]
+        remaining = ungrounded_narrative_numbers(text, rows)
+        if remaining:
+            for evidence_id in allowed.get(section) or []:
+                evidence_id = str(evidence_id or "").strip()
+                if (
+                    not evidence_id
+                    or evidence_id not in packet_ids
+                    or evidence_id not in permitted_ids
+                    or evidence_id in evidence_ids
+                    or evidence_id not in ledger_by_id
+                ):
+                    continue
+                candidate_rows = [*rows, ledger_by_id[evidence_id]]
+                candidate_remaining = ungrounded_narrative_numbers(
+                    text, candidate_rows
+                )
+                if len(candidate_remaining) < len(remaining):
+                    evidence_ids.append(evidence_id)
+                    rows = candidate_rows
+                    remaining = candidate_remaining
+                if not remaining or len(evidence_ids) >= 12:
+                    break
     if not any(
         str((ledger_by_id.get(evidence_id) or {}).get("kind") or "")
         not in {"inference", "data-limit"}
@@ -395,6 +426,7 @@ def recover_structured_investment_insight_claims(
             prepared_core,
             packet,
             section,
+            text,
         )
         if not evidence_ids:
             unavailable_sections.append(section)

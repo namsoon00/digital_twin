@@ -663,6 +663,10 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 item["evidenceId"] for item in fitted["evidenceLedger"]
             })
         )
+        self.assertTrue(all(
+            "ruleIds" not in item and "hypothesisIds" not in item
+            for item in fitted["evidenceLedger"]
+        ))
 
     def test_packet_is_stable_and_declares_section_evidence(self):
         first = build_notification_ai_inference_packet(investment_context(), {})
@@ -980,6 +984,12 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
 
     def test_research_insight_survives_execution_block_and_structured_claim_omission(self):
         context = investment_context()
+        context["ontologyRelationContext"]["facts"].update({
+            "volume": 987654,
+            "volumeRatio": 0.72,
+            "bidAskImbalance": -14.5,
+            "foreignNetVolume": 123456,
+        })
         rule_id = "graph.holding.guard.v1"
         hypothesis_id = "hypothesis:holding-guard"
         context["notificationAiReviewMode"] = "context-narrative"
@@ -1030,7 +1040,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                         "horizon": "short-term",
                         "conviction": "moderate",
                         "dominantThesis": "단기 하방 위험이 회복 가능성보다 우세합니다.",
-                        "causalMechanism": "가격 회복 제한이 단기 수급의 추세 전환을 늦춥니다.",
+                        "causalMechanism": "외국인 순매수 123,456주가 가격 회복 제한을 일부 완화합니다.",
                         "investmentImplication": "회복 확인이 부족해 현재 상승 기대를 뒷받침할 근거는 약합니다.",
                         "catalysts": ["20일선 회복이 관점을 바꿀 촉매입니다."],
                         "risks": ["약한 흐름이 이어질 수 있습니다."],
@@ -1075,6 +1085,11 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             "repaired",
             outcome.execution_spans["structuredInsightRepair"]["status"],
         )
+        mechanism = next(
+            item for item in outcome.response.narrative_claims
+            if item["section"] == "mechanism"
+        )
+        self.assertIn("fact:foreignNetVolume", mechanism["evidenceIds"])
 
         class MissingViewClaimReviewer:
             calls = 0

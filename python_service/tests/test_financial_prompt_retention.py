@@ -94,6 +94,8 @@ class FinancialPromptRetentionTests(unittest.TestCase):
         self.assertEqual("2025-06-30", rows["financial:revenue:previous"]["sourceAsOf"])
         self.assertEqual("OpenDART", rows["financial:revenue:change"]["source"])
         self.assertEqual(25, rows["financial:freeCashFlowMarginPct:ratio"]["value"])
+        self.assertNotIn("featureSummary", rows["financial:revenue:current"])
+        self.assertNotIn("featureSummary", rows["financial:freeCashFlowMarginPct:ratio"])
         self.assertFalse(any(key.startswith("financial:sharesOutstanding:") for key in rows))
         contract = resolved_narrative_claim_evidence_contract(core.get("narrativeClaimContract"), rows.values())
         self.assertIn("financial:revenue:current", json.dumps(contract))

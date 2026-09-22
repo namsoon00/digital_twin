@@ -64,7 +64,7 @@ def attach_model_evidence(
     stage_timings,
     emit,
 ):
-    input_symbols = prepared.input_symbols
+    input_symbols = prepared.computation_symbols
     runtime_context = prepared.runtime_context
     runtime_context_packet = prepared.runtime_context_packet
     active_tbox = prepared.active_tbox
@@ -157,7 +157,23 @@ def attach_model_evidence(
             statistical_result.get("decisionEligible")
             or statistical_result.get("diagnosticReady")
         ):
-            stock_entities = [item for item in graph.entities if item.kind == "stock"]
+            selected_symbols = {
+                str(symbol or "").upper().strip()
+                for symbol in input_symbols or []
+                if str(symbol or "").strip()
+            }
+            stock_entities = [
+                item
+                for item in graph.entities
+                if item.kind == "stock"
+                and (
+                    not selected_symbols
+                    or str((item.properties or {}).get("symbol") or "")
+                    .upper()
+                    .strip()
+                    in selected_symbols
+                )
+            ]
             for stock in stock_entities:
                 symbol = (
                     str((stock.properties or {}).get("symbol") or "").upper().strip()

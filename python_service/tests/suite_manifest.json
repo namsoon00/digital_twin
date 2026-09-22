@@ -21,6 +21,7 @@
     {"file": "test_ai_claim_retry.py", "tier": "unit", "core": true},
     {"file": "test_legacy_notification_contracts.py", "tier": "contract", "core": true},
     {"file": "test_runtime_continuity.py", "tier": "unit", "core": true},
+    {"file": "test_runtime_flow_accounting.py", "tier": "unit", "core": true},
     {"file": "test_runtime_continuity_mysql.py", "tier": "integration", "core": true},
     {"file": "test_internal_decision_history.py", "tier": "integration", "core": true},
     {"file": "test_internal_patch_manifest.py", "tier": "contract", "core": true},

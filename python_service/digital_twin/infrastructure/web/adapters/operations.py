@@ -21,7 +21,7 @@ OPERATIONS_HEALTH_READ_MODEL = StaleReadModelCache(
 )
 
 
-def _console_operations_health_source_payload() -> Dict[str, object]:
+def _console_operations_health_source_payload(force: bool = False) -> Dict[str, object]:
     settings = operational_read_settings()
 
     def storage_payload():
@@ -57,7 +57,7 @@ def _console_operations_health_source_payload() -> Dict[str, object]:
 
     readers = {
         "realtime": realtime_status_payload,
-        "external": external_data_status_payload,
+        "external": lambda: external_data_status_payload(force=force),
         "reasoning": ontology_reasoning_status_payload,
         "engine": reasoning_engine_platform_status_payload,
         "timeSeries": time_series_platform_status_payload,
@@ -77,13 +77,22 @@ def _console_operations_health_source_payload() -> Dict[str, object]:
         except Exception as error:  # noqa: BLE001 - one status source cannot hide the others.
             payloads[key] = {"status": "unavailable", "error": str(error)[:240]}
     executor.shutdown(wait=False, cancel_futures=True)
-    return console_read_model_service().operations_health(payloads)
+    result = console_read_model_service().operations_health(payloads)
+    result["componentFreshness"] = {
+        key: {
+            "generatedAt": value.get("generatedAt") or value.get("observedAt") or "",
+            "readCache": dict(value.get("readCache") or {}),
+            "status": str(value.get("status") or "unknown"),
+        }
+        for key, value in payloads.items()
+    }
+    return result
 
 
 def console_operations_health_api_payload(force: bool = False) -> Dict[str, object]:
     return cached_api_payload(
         OPERATIONS_HEALTH_READ_MODEL,
         "all",
-        _console_operations_health_source_payload,
+        lambda: _console_operations_health_source_payload(force=force),
         force=force,
     )

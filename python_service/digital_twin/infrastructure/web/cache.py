@@ -33,7 +33,16 @@ def cached_api_payload(
         "lastSuccessAt": str(snapshot.get("lastSuccessAt") or ""),
         "lastError": str(snapshot.get("lastError") or ""),
     }
-    if snapshot.get("stale"):
+    components = payload.get("componentFreshness") or {}
+    stale_components = [
+        key for key, value in components.items()
+        if isinstance(value, dict) and (
+            (value.get("readCache") or {}).get("stale")
+            or (value.get("readCache") or {}).get("lastError")
+            or value.get("status") in {"unavailable", "error"}
+        )
+    ] if isinstance(components, dict) else []
+    if snapshot.get("payload") and (snapshot.get("stale") or snapshot.get("lastError") or stale_components):
         reported_freshness = payload.get("dataFreshness")
         if isinstance(reported_freshness, dict):
             payload["dataFreshness"] = {
@@ -54,6 +63,8 @@ def cached_api_payload(
             "status": "stale",
             "ageSeconds": int(snapshot.get("ageSeconds") or 0),
             "lastSuccessAt": str(snapshot.get("lastSuccessAt") or ""),
-            "reason": "마지막 성공 응답을 제공하고 백그라운드에서 갱신 중입니다.",
+            "staleComponents": stale_components,
+            "refreshFailed": bool(snapshot.get("lastError")),
+            "reason": "마지막 성공 응답 또는 갱신되지 않은 구성요소가 포함돼 현재 상태 확인이 필요합니다.",
         }
     return payload

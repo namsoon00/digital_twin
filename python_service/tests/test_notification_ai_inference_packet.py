@@ -1,7 +1,11 @@
 import json
 import unittest
 
-from digital_twin.modules.decisions.application.notification_ai_judgement_service import NotificationAIJudgementService
+from digital_twin.modules.decisions.application.notification_ai_judgement_service import (
+    NotificationAIJudgementService, ai_contract_repair_prompt, ai_response_contract_error,
+)
+from digital_twin.modules.decisions.domain.notification_ai_prompt_release import AI_DECISION_RESPONSE_SCHEMA
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import disagreement_reason_text
 from digital_twin.modules.decisions.public import NotificationAIValidatedGateEnricher
 from digital_twin.modules.decisions.domain.notification_ai_gate_validation import validated_response_from_payload
 from digital_twin.modules.decisions.domain.notification_ai_inference_packet import (
@@ -49,6 +53,7 @@ def investment_context():
             "subject": {"symbol": "035420", "name": "NAVER", "market": "KR"},
             "facts": {"currentPrice": 218000, "ma20Distance": 1.2},
             "source": "typedbInferenceBox",
+            "graphStoreUsed": True,
             "sourceAboxSnapshotId": "abox:1",
             "inferenceGenerationId": "generation:1",
             "activeRules": [rule],
@@ -57,7 +62,7 @@ def investment_context():
                 "allowedActions": ["HOLD"],
                 "blockedActions": ["ADD"],
             },
-            "decision": {"selectedRuleId": rule["ruleId"]},
+            "decision": {"selectedRuleId": rule["ruleId"], "basis": "typedbInferenceBox"},
         },
     }
 
@@ -94,6 +99,98 @@ def response_payload(view_id, support_id, next_id):
 
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
+    def test_verified_claims_do_not_need_duplicate_legacy_evidence(self):
+        packet = build_notification_ai_inference_packet(investment_context())
+        context = packet.bind_context(investment_context())
+        support = packet.decision_core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
+        payload = response_payload("fact:currentPrice", support, "fact:ma20Distance")
+        response = validated_response_from_payload(
+            context, payload, raw_response=json.dumps(payload, ensure_ascii=False), source="test AI",
+        )
+        self.assertGreater(response.verified_claim_count, 0)
+        self.assertNotEqual("blocked", response.validation_state)
+        self.assertEqual("", ai_response_contract_error(context, response))
+
+    def test_explicit_selected_hypothesis_disagreement_survives_same_precomputed_action(self):
+        reason = "단기 반등 근거보다 확인된 위험을 우선합니다."
+        self.assertEqual(reason, disagreement_reason_text(
+            "HOLD", "HOLD", {"disagreementReason": reason}, [], [],
+        ))
+
+    def test_repair_uses_the_same_response_schema_as_first_call(self):
+        packet = build_notification_ai_inference_packet(investment_context())
+        response = validated_response_from_payload(investment_context(), {"action": "HOLD"})
+        prompt = ai_contract_repair_prompt(packet.prompt, response)
+        shape = json.loads(prompt.split("필수 응답 골격: ", 1)[1].split("\n검증 오류:", 1)[0])
+        self.assertEqual(AI_DECISION_RESPONSE_SCHEMA, shape)
+
+    def test_blocked_validation_cannot_pass_local_contract(self):
+        packet = build_notification_ai_inference_packet(investment_context())
+        context = packet.bind_context(investment_context())
+        response = validated_response_from_payload(context, {"action": "HOLD"})
+        self.assertEqual("blocked", response.validation_state)
+        self.assertIn("validation state", ai_response_contract_error(context, response))
+
+    def test_claim_validation_does_not_repair_absent_or_unavailable_data(self):
+        for unavailable in (False, True):
+            with self.subTest(unavailable=unavailable):
+                context = investment_context()
+                if unavailable:
+                    context["ontologyRelationContext"]["dataState"] = "unavailable"
+                packet = build_notification_ai_inference_packet(context)
+                context = packet.bind_context(context)
+                payload = response_payload("unknown:view", "unknown:support", "unknown:next")
+                if unavailable:
+                    payload = response_payload("fact:currentPrice", "rule:graph.holding.guard.v1", "fact:ma20Distance")
+                response = validated_response_from_payload(context, payload, raw_response=json.dumps(payload), source="test AI")
+                self.assertEqual("blocked", response.validation_state)
+
+    def test_verified_counter_claim_counts_without_duplicate_text_list(self):
+        context = investment_context()
+        context["ontologyRelationContext"]["activeRules"].append({
+            "ruleId": "graph.counter", "label": "반대 근거", "evidenceRole": "counter",
+            "knowledgeBasis": {"ruleKind": "decision-rule", "decisionEligibility": "decision-eligible"},
+            "evidenceState": {"evidenceUsableForJudgement": True, "inferenceEligibilityStatus": "eligible"},
+        })
+        packet = build_notification_ai_inference_packet(context)
+        context = packet.bind_context(context)
+        payload = response_payload("fact:currentPrice", "rule:graph.holding.guard.v1", "fact:ma20Distance")
+        counter_id = packet.decision_core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["counter"][0]
+        payload["counterEvidenceStatus"] = "confirmed"
+        payload["narrativeClaims"].append({
+            "claimId": "counter", "section": "counter", "text": "확인된 반대 근거가 있어 회복 여부도 봅니다.",
+            "evidenceIds": [counter_id],
+        })
+        response = validated_response_from_payload(context, payload, raw_response=json.dumps(payload), source="test AI")
+        self.assertEqual("confirmed", response.counter_evidence_status)
+        self.assertEqual("ready", response.validation_state)
+
+    def test_canonical_contract_is_checked_before_repair_success(self):
+        class Reviewer:
+            calls = 0
+
+            def review(self, prepared):
+                self.calls += 1
+                payload = response_payload("fact:currentPrice", "rule:graph.holding.guard.v1", "fact:ma20Distance")
+                return validated_response_from_payload(prepared, payload, raw_response=json.dumps(payload), source="test AI")
+
+        reviewer = Reviewer()
+        checks = []
+
+        def reject(context, response):
+            checks.append(context["_notificationAiInferencePacket"]["packetId"])
+            return "Persisted subject contract rejected the selected evidence."
+
+        outcome = NotificationAIJudgementService(reviewer, {}).judge(investment_context(), validate_response=reject)
+        self.assertFalse(outcome.publishable)
+        self.assertTrue(outcome.repair_attempted)
+        self.assertFalse(outcome.repair_succeeded)
+        self.assertEqual(2, reviewer.calls)
+        self.assertEqual([outcome.packet.packet_id] * 2, checks)
+        self.assertIn("Persisted subject", outcome.final_contract_error)
+        self.assertEqual(["initial", "repair"], [row["attempt"] for row in outcome.model_responses])
+        self.assertTrue(all(json.loads(row["rawResponse"]) for row in outcome.model_responses))
+
     def test_deep_research_profile_uses_full_contract_budget_by_default(self):
         context = investment_context()
         context["ontologyRelationContext"]["reviewLevel"] = "immediate"
@@ -1145,24 +1242,10 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             {},
         ).judge(context)
 
-        self.assertTrue(missing_view_outcome.publishable)
-        self.assertEqual(1, missing_view_reviewer.calls)
-        self.assertFalse(missing_view_outcome.repair_attempted)
-        repaired_view = next(
-            item for item in missing_view_outcome.response.narrative_claims
-            if item["section"] == "view"
-        )
-        verified_implication = next(
-            item for item in missing_view_outcome.response.narrative_claims
-            if item["section"] == "implication"
-        )
-        self.assertEqual(verified_implication["text"], repaired_view["text"])
-        self.assertEqual(
-            "verified-implication-claim",
-            missing_view_outcome.execution_spans[
-                "structuredInsightRepair"
-            ]["sourceSections"]["view"],
-        )
+        self.assertFalse(missing_view_outcome.publishable)
+        self.assertEqual(2, missing_view_reviewer.calls)
+        self.assertTrue(missing_view_outcome.repair_attempted)
+        self.assertNotIn("view", missing_view_outcome.response.verified_claim_sections)
 
         class MissingMechanismClaimReviewer:
             calls = 0
@@ -1191,24 +1274,10 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             {},
         ).judge(context)
 
-        self.assertTrue(missing_mechanism_outcome.publishable)
-        self.assertEqual(1, missing_mechanism_reviewer.calls)
-        self.assertFalse(missing_mechanism_outcome.repair_attempted)
-        repaired_mechanism = next(
-            item for item in missing_mechanism_outcome.response.narrative_claims
-            if item["section"] == "mechanism"
-        )
-        verified_view = next(
-            item for item in missing_mechanism_outcome.response.narrative_claims
-            if item["section"] == "view"
-        )
-        self.assertEqual(verified_view["text"], repaired_mechanism["text"])
-        self.assertEqual(
-            "verified-view-claim",
-            missing_mechanism_outcome.execution_spans[
-                "structuredInsightRepair"
-            ]["sourceSections"]["mechanism"],
-        )
+        self.assertFalse(missing_mechanism_outcome.publishable)
+        self.assertEqual(2, missing_mechanism_reviewer.calls)
+        self.assertTrue(missing_mechanism_outcome.repair_attempted)
+        self.assertNotIn("mechanism", missing_mechanism_outcome.response.verified_claim_sections)
         counter_ledger = [{
             "evidenceId": "assertion:risk",
             "role": "counter",

@@ -189,6 +189,52 @@ LEFT JOIN notification_delivery_attempts t ON t.job_id = n.job_id
 ORDER BY j.completed_at DESC, j.job_id, s.subject_case_id, source_event_id, t.started_at DESC"""
 
 
+# A request-led sample includes failed/superseded work, not only a successful
+# reasoning job's latest descendants. One row per request, no attempt fan-out.
+AI_COHORT = """SELECT r.request_id, r.status AS ai_status, r.created_at,
+r.prompt_version, r.account_id, r.symbol, r.superseded_by,
+(r.last_error <> '') AS has_error,
+s.subject_case_id, s.release_fingerprint, s.deployment_id,
+(CAST(r.account_id AS BINARY) = CAST(s.account_id AS BINARY)
+ AND CAST(r.symbol AS BINARY) = CAST(s.symbol AS BINARY)
+ AND CAST(r.inference_generation_id AS BINARY) = CAST(s.inference_generation_id AS BINARY)) AS scope_match,
+a.result_id, a.publication_mode, a.ai_authored, a.publication_contract_passed,
+a.contract_failure_code, a.validation_state,
+p.publication_id, p.decision_episode_id,
+JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.deliveryState')) AS delivery_state,
+JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.deliveryReasonCode')) AS delivery_reason_code,
+n.job_id AS notification_id, n.status AS notification_status,
+EXISTS(SELECT 1 FROM notification_delivery_attempts t WHERE t.job_id = n.job_id
+ AND t.status = 'delivered' AND t.provider = 'Telegram' AND t.audience = 'account'
+ AND t.channel = 'accountNotification'
+ AND JSON_UNQUOTE(JSON_EXTRACT(t.metadata_json, '$.receiptVerified')) = 'true'
+ AND n.is_mock = 0 AND n.data_quality = 'actual'
+ AND CAST(n.account_id AS BINARY) = CAST(r.account_id AS BINARY)
+ AND CAST(n.symbol AS BINARY) = CAST(r.symbol AS BINARY)) AS receipt_verified
+FROM (SELECT request_id, status, created_at, prompt_version, account_id, symbol,
+ inference_generation_id, superseded_by, last_error, notification_job_id
+ FROM ai_inference_requests WHERE created_at >= %s AND created_at <= %s
+ ORDER BY created_at DESC, request_id DESC LIMIT %s) r
+LEFT JOIN investment_subject_decision_cases s ON s.ai_request_id = r.request_id
+LEFT JOIN ai_inference_results a ON a.request_id = r.request_id
+LEFT JOIN investment_ai_insight_episodes i ON i.request_id = r.request_id
+LEFT JOIN decision_publications p ON p.subject_case_id = s.subject_case_id
+LEFT JOIN notification_jobs n ON n.job_id = COALESCE(NULLIF(p.notification_job_id, ''),
+ NULLIF(i.notification_job_id, ''), r.notification_job_id)
+ORDER BY r.created_at DESC, r.request_id DESC"""
+
+OUTCOME_COHORT = """SELECT t.target_id, t.target_at, t.maximum_delay_minutes,
+t.status, t.exclusion_reason, t.outcome_id, o.outcome_id AS stored_outcome_id,
+(CAST(t.account_id AS BINARY) = CAST(o.account_id AS BINARY)
+ AND CAST(t.symbol AS BINARY) = CAST(o.symbol AS BINARY)
+ AND CAST(t.episode_id AS BINARY) = CAST(o.episode_id AS BINARY)) AS scope_match
+FROM investment_decision_outcome_targets t
+LEFT JOIN investment_decision_outcomes o ON o.outcome_id = t.outcome_id
+WHERE CAST(t.episode_id AS BINARY) IN (SELECT CAST(value AS BINARY) FROM JSON_TABLE(%s, '$[*]'
+ COLUMNS(value VARCHAR(191) PATH '$')) ids)
+ORDER BY t.target_at, t.target_id"""
+
+
 QUEUES = {
     "reasoning": ("reasoning_engine_jobs", "job_id", "job_status", (
         "queued", "retry", "processing", "awaiting_source", "awaiting_world_projection", "failed")),

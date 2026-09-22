@@ -17,6 +17,7 @@ from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import
 from digital_twin.modules.decisions.domain.notification_ai_gate_text import parse_ai_response_json
 from digital_twin.modules.decisions.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 from digital_twin.modules.decisions.domain.notification_ai_inference_packet import NotificationAIInferencePacket, build_notification_ai_inference_packet
+from digital_twin.modules.decisions.domain.notification_ai_prompt_release import AI_DECISION_RESPONSE_SCHEMA
 from digital_twin.modules.notifications.contracts import normalize_narrative_claims, resolved_narrative_claim_evidence_contract
 
 
@@ -63,6 +64,11 @@ def ai_response_contract_error(
 ) -> str:
     """Preflight the AI selection against the compact TypeDB decision contract."""
 
+    if (
+        str(context.get("notificationAiReviewMode") or "").lower() != "context-narrative"
+        and str(response.validation_state or "").lower() in {"blocked", "invalid", "failed", "error"}
+    ):
+        return "AI judgment validation state blocks publication."
     prepared_core = context.get("_notificationAiPreparedDecisionCore")
     if isinstance(prepared_core, dict):
         narrative_only = str(
@@ -392,16 +398,6 @@ def recover_structured_investment_insight_claims(
         if text and section not in existing_sections:
             candidates.append((section, text))
             candidate_sources[(section, text)] = "structured-insight"
-    verified_text_by_section = {
-        section: next((
-            str(item.get("text") or "").strip()
-            for item in response.narrative_claims or []
-            if isinstance(item, dict)
-            and str(item.get("section") or "").strip() == section
-            and str(item.get("text") or "").strip()
-        ), "")
-        for section in ("view", "mechanism", "implication")
-    }
     if "mechanism" not in existing_sections:
         for link in response.causal_chain or []:
             if not isinstance(link, dict):
@@ -411,24 +407,6 @@ def recover_structured_investment_insight_claims(
                 candidates.append(("mechanism", text))
                 candidate_sources[("mechanism", text)] = "structured-causal-chain"
                 break
-    semantic_aliases = (
-        ("view", "implication", "verified-implication-claim"),
-        ("mechanism", "view", "verified-view-claim"),
-        ("implication", "view", "verified-view-claim"),
-    )
-    for target_section, source_section, source_label in semantic_aliases:
-        if target_section in existing_sections:
-            continue
-        text = verified_text_by_section.get(source_section, "")
-        if not text:
-            continue
-        # The model sometimes writes one verified sentence that satisfies two
-        # narrative roles but omits the duplicate schema row. Keep the exact
-        # model-authored sentence and revalidate it against evidence permitted
-        # for the missing section. A structured candidate remains preferred;
-        # this alias is only attempted when that candidate cannot be grounded.
-        candidates.append((target_section, text))
-        candidate_sources[(target_section, text)] = source_label
     if "catalyst" not in existing_sections:
         catalysts = raw_assessment.get("catalysts") or []
         if not isinstance(catalysts, (list, tuple)):
@@ -768,55 +746,7 @@ def ai_contract_repair_prompt(
     marker = "DecisionCore:\n"
     decision_core = str(prompt or "").split(marker, 1)[1] if marker in str(prompt or "") else "{}"
     previous = str(getattr(response, "raw_response", "") or "")[:8 * 1024]
-    required_shape = {
-        "action": "NO_ACTION|BUY|ADD|HOLD|TRIM|SELL|AVOID",
-        "summary": "최종 결론",
-        "currentActionPlan": "현재 대응",
-        "nextActionPlan": "재관측 조건과 판단 변화",
-        "counterEvidenceStatus": "confirmed|none-found|not-checked|unavailable",
-        "invalidationCondition": "검증 근거가 연결된 구체적인 무효화 조건",
-        "followUpConditions": [{
-            "field": "관측 가능한 입력 필드",
-            "operator": ">|>=|<|<=|==|!=",
-            "threshold": "입력에서 재현 가능한 수치",
-            "purpose": "weaken|invalidate|switch",
-            "label": "조건 설명",
-            "onSatisfied": "성립 시 판단 변화",
-        }],
-        "hypotheses": [{
-            "hypothesisId": "입력 ID",
-            "evidenceReviewStatus": "all-input-evidence-reviewed",
-            "verdict": "supported|weakened|rejected|unresolved",
-            "reasoning": "비교 이유",
-        }],
-        "selectedHypothesisId": "입력 ID",
-        "decisionReadiness": "ready|conditional|insufficient",
-        "causalChain": [{
-            "driver": "확인 변화",
-            "channel": "revenue|cost|cash-flow|valuation|flow|risk",
-            "expectedEffect": "영향 경로",
-            "evidenceIds": ["허용 근거 ID"],
-            "status": "supported|contested|unresolved",
-        }],
-        "insightAssessment": {
-            "direction": "positive|balanced|negative",
-            "horizon": "intraday|short-term|medium-term|long-term|multi-horizon",
-            "conviction": "tentative|moderate|strong",
-            "dominantThesis": "지배 결론",
-            "causalMechanism": "관측에서 투자 영향까지의 경로",
-            "investmentImplication": "보유자·관심 투자자에게 주는 의미",
-            "catalysts": ["강화 사건"],
-            "risks": ["반대 시나리오"],
-            "invalidationCondition": "무효화 조건",
-            "thesisKey": "stable-key",
-        },
-        "narrativeClaims": [{
-            "claimId": "고유 ID",
-            "section": "view|mechanism|implication|catalyst|counter|next-condition|limitation",
-            "text": "표시 문장",
-            "evidenceIds": ["섹션별 허용 근거 ID"],
-        }],
-    }
+    required_shape = AI_DECISION_RESPONSE_SCHEMA
     instructions = (
         "너는 TypeDB 투자 판단 JSON의 계약 오류만 수정한다. 도구나 파일을 사용하지 않는다.",
         "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
@@ -867,6 +797,7 @@ class NotificationAIJudgementOutcome:
     final_publication_error: str
     repair_error: str
     execution_spans: Dict[str, object]
+    model_responses: tuple = ()
 
     @property
     def executed_prompt_hash(self) -> str:
@@ -942,6 +873,7 @@ class NotificationAIJudgementService:
         decision_brief: Dict[str, object] = None,
         packet: NotificationAIInferencePacket = None,
         timeout_provider: Callable[[], Optional[int]] = None,
+        validate_response: Callable[[Dict[str, object], NotificationAIValidatedResponse], str] = None,
     ) -> NotificationAIJudgementOutcome:
         total_started = time.monotonic()
         preparation_started = total_started
@@ -965,6 +897,7 @@ class NotificationAIJudgementService:
             review_context["notificationAiExecutionProfile"] = dict(profile)
         initial_model_started = time.monotonic()
         response = self.reviewer.review(review_context)
+        model_responses = [{"attempt": "initial", "rawResponse": str(response.raw_response or "")}]
         initial_model_ms = int((time.monotonic() - initial_model_started) * 1000)
         validation_started = time.monotonic()
         ensure_packet_claim_validation(review_context, prepared_packet, response)
@@ -1007,27 +940,21 @@ class NotificationAIJudgementService:
                     prepared_packet,
                     response,
                 )
+        if not contract_error and not publication_error and validate_response is not None:
+            contract_error = validate_response(review_context, response)
+            if contract_error:
+                initial_contract_error = contract_error
         initial_validation_ms = int((time.monotonic() - validation_started) * 1000)
         comparison_needs_repair = bool(
             enforce_contract
             and hypothesis_comparison_needs_repair(context.get("messageType"), response)
         )
-        schema_only_publication_error = bool(
-            not contract_error
-            and not comparison_needs_repair
-            and not response.rejected_claim_count
-            and publication_error.startswith(
-                "required verified narrative sections are missing:"
-            )
-        )
-        # A second max-reasoning call should not be spent merely to duplicate
-        # an omitted presentation section. Deterministic recovery above either
-        # binds the model's own text to verified evidence or the caller emits
-        # the audited fallback.
+        # Recover same-role structured text first. A missing causal explanation
+        # is a content failure, not a slot to fill by copying the conclusion.
         repair_attempted = bool(
             comparison_needs_repair
             or contract_error
-            or (publication_error and not schema_only_publication_error)
+            or publication_error
         )
         repair_succeeded = False
         repair_error = ""
@@ -1038,13 +965,6 @@ class NotificationAIJudgementService:
         repair_structured_claim_repair = {"status": "not-attempted"}
         executed_prompt = prepared_packet.prompt
         if repair_attempted:
-            executed_prompt = ai_contract_repair_prompt(
-                prepared_packet.prompt,
-                response,
-                contract_error,
-                publication_error,
-                max_prompt_bytes=self.max_prompt_bytes,
-            )
             repair_remaining = timeout_provider() if timeout_provider else timeout_seconds
             repair_remaining = int(repair_remaining) if repair_remaining not in (None, "", 0, "0") else None
             if repair_remaining is not None and repair_remaining < 5:
@@ -1060,7 +980,6 @@ class NotificationAIJudgementService:
                     else repair_remaining
                 ),
             )
-            repair_context["_notificationAiPreparedPrompt"] = executed_prompt
             requested_profile = dict(
                 profile or context.get("notificationAiExecutionProfile") or {}
             )
@@ -1074,8 +993,14 @@ class NotificationAIJudgementService:
             try:
                 if repair_error:
                     raise TimeoutError(repair_error)
+                executed_prompt = ai_contract_repair_prompt(
+                    prepared_packet.prompt, response, contract_error, publication_error,
+                    max_prompt_bytes=self.max_prompt_bytes,
+                )
+                repair_context["_notificationAiPreparedPrompt"] = executed_prompt
                 repair_model_started = time.monotonic()
                 response = self.reviewer.review(repair_context)
+                model_responses.append({"attempt": "repair", "rawResponse": str(response.raw_response or "")})
                 repair_model_ms = int((time.monotonic() - repair_model_started) * 1000)
                 repair_validation_started = time.monotonic()
                 ensure_packet_claim_validation(repair_context, prepared_packet, response)
@@ -1110,6 +1035,8 @@ class NotificationAIJudgementService:
                             prepared_packet,
                             response,
                         )
+                if not contract_error and not publication_error and validate_response is not None:
+                    contract_error = validate_response(repair_context, response)
                 repair_succeeded = bool(
                     not (enforce_contract and hypothesis_comparison_needs_repair(context.get("messageType"), response))
                     and not contract_error
@@ -1132,7 +1059,10 @@ class NotificationAIJudgementService:
             final_contract_error=contract_error,
             final_publication_error=publication_error,
             repair_error=repair_error,
+            model_responses=tuple(model_responses),
             execution_spans={
+                "judgementContractVersion": "notification-ai-judgement-v2",
+                "canonicalValidationEnabled": validate_response is not None,
                 "preparationMs": preparation_ms,
                 "initialModelMs": initial_model_ms,
                 "initialValidationMs": initial_validation_ms,

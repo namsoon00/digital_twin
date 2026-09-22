@@ -180,7 +180,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven final-prompt retention, crowded-ledger, exclusion and budget regressions.
         # Five financial continuity, delivered-baseline, causality and shared-document regressions.
         # Twenty-one evidence preservation, source admission, outcome and real SQL/lock regressions.
-        self.assertLessEqual(total, 1764)
+        # Sixteen shared AI contract, canonical repair, nested freshness and
+        # bounded request/outcome accounting regressions.
+        self.assertLessEqual(total, 1780)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

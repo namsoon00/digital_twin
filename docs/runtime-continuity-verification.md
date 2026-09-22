@@ -44,7 +44,8 @@ progress, which must not be counted as completion. No catch-up polling burst is
 performed after sleep/host suspension or late scheduling.
 
 Exit codes: `0` requires passing sampled infrastructure, observed source-time
-progress and new linked AI evidence; `1` means degraded evidence; `2` means
+progress, new linked AI evidence, a complete request cohort, and a real Telegram
+receipt during observation; `1` means degraded evidence; `2` means
 inconclusive/incomplete or a preflight failure. Missing new AI work is a normal
 possible result of passive observation, not a reason to invoke the model.
 
@@ -87,9 +88,11 @@ possible result of passive observation, not a reason to invoke the model.
 | Source/heartbeat stale threshold | 300 seconds | 30-86,400 seconds |
 | Backlog age threshold | 1,800 seconds | 60-86,400 seconds |
 | Slow HTTP threshold | 2,000 ms | 100-30,000 ms |
+| Minimum authored cohort | 30 requests | 1-200; lowering this does not meet rollout acceptance |
+| Cohort start | run start minus lookback | `--cohort-since` past ISO timestamp, preferably deployment start |
 
-Each observation makes two serial HTTP calls and normally 18 SELECTs for one
-pointed deployment (25 for two, 32 for three), with a hard SELECT-count guard of 40. HTTP
+Each observation makes two serial HTTP calls and normally 20 SELECTs for one
+pointed deployment (27 for two, 34 for three), with a hard SELECT-count guard of 40. HTTP
 bodies are capped at 256 KiB, heartbeat files at 32 KiB, and telemetry routes at
 the row limit. A 20-second observation alarm stops further reads; rollback can
 consume one additional socket timeout. The final observation may end that far
@@ -103,6 +106,15 @@ that nothing failed between observations. A 15-minute run never proves 24-hour
 stability; a longer opt-in duration does not prove it until actually observed.
 
 ## Evidence And Verdicts
+
+`requestCohort` starts from requests, including failed, superseded and unfinished
+work, instead of selecting only successful descendants. Repeated polls count
+once. Fallback results are not AI success; suppression requires a stored reason.
+Pending work, mixed releases, missing/truncated reads or fewer than 30 authored
+cases cannot pass the default cohort gate. Outcome closure is reported separately:
+future observations and explained data gaps are not validated investment results.
+See [flow completion acceptance](flow-completion-acceptance.md) for rollout scope
+and the domestic/US-session checks that the bounded SQL cohort does not prove.
 
 `sampledInfrastructure` is separate from `sourceProgress`, `liveAiLineage` and
 `notificationLineage`. Missing observations, unknown health and unavailable

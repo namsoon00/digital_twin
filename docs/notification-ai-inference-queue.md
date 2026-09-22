@@ -93,6 +93,18 @@ identity, rules, evidence IDs, current facts, continuity, and valuation while
 the unabridged decision brief remains in the immutable audit store.
 Contract-repair prompts use the same hard cap: DecisionCore is retained first
 and the previous model response is trimmed to the remaining byte budget.
+Initial generation and repair use one response schema. The persisted subject
+validator also runs before repair is declared successful; final publication
+still independently validates the result. Verified narrative fact references
+count as evidence without requiring a duplicated legacy list. Missing mechanism
+or investment implication cannot be replaced with copied conclusion text:
+same-role structured recovery is verified, otherwise at most one repair runs.
+
+Compressed execution audits retain initial/repair raw responses locally under
+the existing retention policy. `judgementContractVersion` and
+`canonicalValidationEnabled` identify the new validation path. These are private
+debug artifacts, never customer output or source-controlled test fixtures.
+See [flow completion acceptance](flow-completion-acceptance.md).
 
 Use `npm run python:ai-inference:status` to inspect queue state. The realtime
 status API also exposes `aiInferenceQueue` separately from delivery jobs.

@@ -5,7 +5,7 @@ import json
 import os
 import unittest
 
-from runtime_continuity_reads import ReadOnlyDatabase, SOURCE_SCOPE_MATCH_SQL, database_options
+from runtime_continuity_reads import ReadOnlyDatabase, SOURCE_SCOPE_MATCH_SQL, OUTCOME_COHORT, database_options
 from verify_runtime_continuity import ObservationDeadline, deadline
 
 
@@ -89,6 +89,15 @@ class RuntimeContinuityMySQLTests(unittest.TestCase):
                         if case["boundaries"]:
                             self.assertEqual(row["different_collations"], 1)
                 self.assertEqual(db.queries, len(cases))
+                self.assertIn("SELECT CAST(value AS BINARY) FROM JSON_TABLE", OUTCOME_COHORT)
+                for episode, expected in (("Episode-A", 1), ("episode-a", 0)):
+                    row = db.read("""SELECT CAST(t.episode_id AS BINARY) IN (
+                        SELECT CAST(value AS BINARY) FROM JSON_TABLE(%s, '$[*]'
+                        COLUMNS(value VARCHAR(191) CHARACTER SET utf8mb4
+                        COLLATE utf8mb4_general_ci PATH '$')) ids) AS matched
+                        FROM (SELECT CAST(%s AS CHAR CHARACTER SET utf8mb4)
+                        COLLATE utf8mb4_unicode_ci AS episode_id) t""", (json.dumps(["Episode-A"]), episode))["rows"][0]
+                    self.assertEqual(expected, row["matched"])
         except (Exception, ObservationDeadline) as error:
             code = error.args[0] if error.args and type(error.args[0]) is int else None
             raise AssertionError("Read-only literal MySQL check failed; numeric code=" + str(code)) from None

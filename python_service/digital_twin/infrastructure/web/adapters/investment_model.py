@@ -72,10 +72,11 @@ def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
         refreshed = INVESTMENT_MODEL_READ_MODEL.refresh(key, _investment_model_source_payload)
         payload = dict(refreshed.get("payload") or {})
         payload["cache"] = {
-            "stale": False,
-            "ageSeconds": 0,
+            "stale": bool(refreshed.get("stale") or refreshed.get("lastError")),
+            "ageSeconds": refreshed.get("ageSeconds", 0),
             "refreshing": False,
             "lastSuccessAt": refreshed.get("lastSuccessAt", ""),
+            "lastError": refreshed.get("lastError", ""),
         }
         return payload
     cached = INVESTMENT_MODEL_READ_MODEL.snapshot(key)
@@ -96,11 +97,12 @@ def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
                 ],
             }
         payload["cache"] = {
-            "stale": False,
+            "stale": bool(refreshed.get("stale") or refreshed.get("lastError")),
             "ageSeconds": refreshed.get("ageSeconds", 0),
             "refreshing": False,
             "contractMigrated": True,
             "lastSuccessAt": refreshed.get("lastSuccessAt", ""),
+            "lastError": refreshed.get("lastError", ""),
         }
         return payload
     if cached.get("hasData"):

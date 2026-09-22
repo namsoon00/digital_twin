@@ -19,9 +19,10 @@ import time
 from urllib.parse import urlsplit
 
 from runtime_continuity_reads import (
-    CONTROL, DEPLOYMENT, LINEAGE, QUEUES, SOURCES, ReadOnlyDatabase,
+    AI_COHORT, OUTCOME_COHORT, CONTROL, DEPLOYMENT, LINEAGE, QUEUES, SOURCES, ReadOnlyDatabase,
     database_options, queue_read,
 )
+from runtime_flow_accounting import request_evidence, outcome_evidence, summarize_cohort
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -303,6 +304,16 @@ def collect_database(options, args, redactor, now, started_at):
             result["lineage"] = [lineage_evidence(row, now, started_at, redactor) for row in sample["rows"]]
         else:
             result["missingDeliveryDeployment"] = True
+        cohort_since = args.cohort_since or iso(started_at - timedelta(seconds=args.lookback_seconds))
+        cohort = db.read(AI_COHORT, (cohort_since, iso(now), args.row_limit + 1))
+        episode_ids = sorted({row["decision_episode_id"] for row in cohort["rows"] if row.get("decision_episode_id")})
+        outcomes = db.read(OUTCOME_COHORT, (json.dumps(episode_ids),)) if episode_ids else {"rows": [], "truncated": False}
+        result["requestCohort"] = {
+            "since": cohort_since,
+            "truncated": cohort["truncated"], "outcomesTruncated": outcomes["truncated"],
+            "requests": [request_evidence(row, redactor) for row in cohort["rows"]],
+            "outcomes": [outcome_evidence(row, now, redactor) for row in outcomes["rows"]],
+        }
     except Exception as error:
         result["error"] = error_code(error)
     finally:
@@ -447,7 +458,12 @@ def verdicts(observations, args, missed, completed):
     if len(source_dates) > 1 and any(right < left for left, right in zip(source_dates, source_dates[1:])):
         issues.add("source-time-regressed")
     continuity = "degraded" if issues else "inconclusive" if gaps else "pass"
+    cohort = summarize_cohort(
+        [observation.get("database", {}).get("requestCohort") for observation in observations],
+        args.minimum_ai_samples,
+    )
     return {"sampledInfrastructure": continuity, "issues": sorted(issues), "gaps": sorted(gaps),
+            "requestCohort": cohort,
             "infrastructureScope": "web-supervisor-sources-active-delivery-ai-notification",
             "candidateOnlyHealth": {"status": "degraded" if candidate_issues else "inconclusive",
                                     "issues": sorted(candidate_issues), "notAssumedInactive": True},
@@ -481,6 +497,8 @@ def parse_args(argv=None):
     parser.add_argument("--query-timeout-ms", type=int, default=1000)
     parser.add_argument("--row-limit", type=int, default=100)
     parser.add_argument("--lookback-seconds", type=int, default=3600)
+    parser.add_argument("--cohort-since", default="", help="UTC request creation cutoff for a single deployed revision")
+    parser.add_argument("--minimum-ai-samples", type=int, default=30)
     parser.add_argument("--stale-seconds", type=int, default=300)
     parser.add_argument("--backlog-stale-seconds", type=int, default=1800)
     parser.add_argument("--slow-ms", type=int, default=2000)
@@ -490,12 +508,17 @@ def parse_args(argv=None):
     bounds = {"duration_seconds": (0, 86400), "interval_seconds": (30, 900),
               "timeout_seconds": (1, 5), "query_timeout_ms": (100, 3000), "row_limit": (1, 200),
               "lookback_seconds": (60, 86400), "stale_seconds": (30, 86400),
-              "backlog_stale_seconds": (60, 86400), "slow_ms": (100, 30000)}
+              "backlog_stale_seconds": (60, 86400), "slow_ms": (100, 30000), "minimum_ai_samples": (1, 200)}
     for key, (lower, upper) in bounds.items():
         if not lower <= getattr(args, key) <= upper:
             parser.error(key.replace("_", "-") + " is out of bounds")
     if 0 < args.duration_seconds < args.interval_seconds:
         parser.error("Use duration 0 for a single smoke observation, otherwise at least one interval")
+    if args.cohort_since:
+        parsed = timestamp(args.cohort_since)
+        if not parsed or parsed > datetime.now(timezone.utc):
+            parser.error("cohort-since must be a past ISO timestamp")
+        args.cohort_since = iso(parsed)
     try:
         local_endpoint(args.base_url)
     except (ValueError, TypeError):
@@ -570,9 +593,11 @@ def run(args, options):
         print(json.dumps({"sampledInfrastructure": result["sampledInfrastructure"],
                           "liveAiLineage": result["liveAiLineage"]["status"],
                           "observedCount": len(observations), "durationCompleted": completed}))
-        return 1 if "degraded" in (result["sampledInfrastructure"], result["liveAiLineage"]["status"]) else 0 if (
+        return 1 if "degraded" in (result["sampledInfrastructure"], result["liveAiLineage"]["status"], result["requestCohort"]["status"]) else 0 if (
             result["sampledInfrastructure"] == "pass" and result["liveAiLineage"]["status"] == "pass"
-            and result["sourceProgress"]["status"] == "pass") else 2
+            and result["sourceProgress"]["status"] == "pass"
+            and result["requestCohort"]["status"] == "pass"
+            and result["notificationLineage"]["status"] == "pass") else 2
 
 
 def main(argv=None):

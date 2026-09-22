@@ -969,6 +969,23 @@ class AIInferenceQueueRunner:
         trace_starter = getattr(self.reviewer, "begin_trace", None)
         if callable(trace_starter):
             trace_starter(request.request_id)
+
+        def validate_response(prepared_context, candidate_response):
+            # Validate the same persisted subject contract before calling a
+            # repair successful. This creates no result/publication records.
+            apply_ontology_quality_gate_to_response(
+                candidate_response, context.get("ontologyQualityGate") or {},
+            )
+            candidate_result = AIInferenceResult.create(
+                request, candidate_response.to_dict(), source=candidate_response.source,
+                validation_state=candidate_response.validation_state,
+                latency_ms=0, prompt_bytes=packet.prompt_bytes,
+            )
+            valid, reason = self.reasoning_orchestrator.validate_ai_result(
+                prepared_context, candidate_result,
+            )
+            return "" if valid else reason
+
         try:
             remaining_seconds = self.remaining_execution_seconds(request, request_started)
             if remaining_seconds is not None and remaining_seconds < 5:
@@ -983,6 +1000,11 @@ class AIInferenceQueueRunner:
                 profile=execution_profile,
                 decision_brief=decision_brief,
                 packet=packet,
+                validate_response=(
+                    validate_response
+                    if self.reasoning_orchestrator is not None and not narrative_only
+                    else None
+                ),
             )
             response = judgement_outcome.response
             executed_prompt = judgement_outcome.executed_prompt
@@ -1086,6 +1108,7 @@ class AIInferenceQueueRunner:
             else {}
         )
         execution_audit = {
+            "modelResponses": list(judgement_outcome.model_responses) if judgement_outcome is not None else [],
             "version": "notification-ai-execution-audit-v2",
             "status": "typedb-fallback" if fallback_reason else "completed",
             "requestId": request.request_id,

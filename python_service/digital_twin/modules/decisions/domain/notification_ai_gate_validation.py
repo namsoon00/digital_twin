@@ -621,11 +621,11 @@ def validation_state_for_response(
     return validation_state, data_state, review_level, VALIDATION_STATE_LABELS[validation_state], reasons
 
 def disagreement_reason_text(precomputed_action: str, action: str, payload: Dict[str, object], evidence: List[str], counter: List[str]) -> str:
-    if not precomputed_action or precomputed_action == action:
-        return ""
     explicit = user_friendly_ai_text(payload.get("disagreementReason") or payload.get("disagreement_reason") or "", 220)
     if explicit:
         return explicit
+    if not precomputed_action or precomputed_action == action:
+        return ""
     for item in list(evidence or []) + list(counter or []):
         text = str(item or "")
         if "사전" in text or "후보" in text or "계산" in text:
@@ -2302,6 +2302,20 @@ def validated_response_from_payload(
         or payload.get("execution_decision")
         or fallback.opinion
     )))
+    provenance = response_writer_provenance(
+        type("ResponseSource", (), {"source": source, "raw_response": raw_response})(),
+        context,
+    )
+    narrative_claims, claim_validation = normalize_narrative_claims(
+        context, payload, writer_kind=str(provenance.get("writerKind") or "deterministic"),
+    )
+    # The modern response binds claims to verified facts; the legacy text list
+    # is optional duplication, not a second independent evidence requirement.
+    verified_support_ids = {
+        evidence_id for claim in narrative_claims
+        if claim.get("section") in {"view", "support", "mechanism", "implication"}
+        for evidence_id in claim.get("evidenceIds") or []
+    }
     raw_evidence = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("evidence") or [], 5))
     raw_evidence, temporal_claim_corrected = normalize_temporal_evidence_claims(
         context,
@@ -2312,6 +2326,10 @@ def validated_response_from_payload(
             "조회된 시간 구간 수를 규칙 성립 수로 표현한 문장을 실제 TypeDB 일치 구간 기준으로 보정했습니다."
         )
     raw_counter = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("counterEvidence") or payload.get("counter_evidence") or [], 4))
+    for claim in narrative_claims:
+        if claim.get("section") == "counter":
+            append_unique_text(raw_counter, str(claim.get("text") or ""), 180)
+    evidence_count = max(len(raw_evidence), len(verified_support_ids))
     explicit_disagreement = str(payload.get("disagreementReason") or payload.get("disagreement_reason") or "").strip()
     requested_counter_status = str(
         payload.get("counterEvidenceStatus")
@@ -2330,7 +2348,7 @@ def validated_response_from_payload(
         if len(evidence) >= 5:
             break
         append_unique_text(evidence, watchlist_friendly_text(context, item), 180)
-    if len(raw_evidence) < 2:
+    if evidence_count < 2:
         warnings.append("AI 응답 근거가 부족해 관계 분석 데이터에서 근거를 보강했습니다.")
     counter = list(raw_counter)
     for item in fallback_counter_rows(context, 4):
@@ -2371,7 +2389,7 @@ def validated_response_from_payload(
     precomputed_action = precomputed_action_value(context)
     validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
         context,
-        len(raw_evidence),
+        evidence_count,
         not bool(
             raw_counter
             or explicit_disagreement
@@ -2665,15 +2683,6 @@ def validated_response_from_payload(
         payload.get("followUpConditions") or payload.get("follow_up_conditions") or [],
         relation_facts,
         str(subject.get("symbol") or context.get("rawSymbol") or context.get("symbol") or ""),
-    )
-    provenance = response_writer_provenance(
-        type("ResponseSource", (), {"source": source, "raw_response": raw_response})(),
-        context,
-    )
-    narrative_claims, claim_validation = normalize_narrative_claims(
-        context,
-        payload,
-        writer_kind=str(provenance.get("writerKind") or "deterministic"),
     )
     if claim_validation.get("rejectedClaimCount"):
         warnings.append(

@@ -7,6 +7,37 @@ from digital_twin.modules.read_models.domain.investment_product_readiness import
 
 
 class InvestmentProductReadinessTests(unittest.TestCase):
+    def test_non_revision_candidate_uses_creation_time_for_rollback_role(self):
+        result = investment_model_projection(
+            {
+                "status": "ready",
+                "control": {
+                    "activeDeploymentId": "ontology-v2-mysql-20260922",
+                    "deliveryDeploymentId": "ontology-v2-mysql-20260922",
+                    "candidateDeploymentId": "ontology-v2-scope-20260911",
+                },
+                "deployments": [{
+                    "deploymentId": "ontology-v2-scope-20260911",
+                    "status": "candidate",
+                    "createdAt": "2026-09-11T00:22:23Z",
+                }, {
+                    "deploymentId": "ontology-v2-mysql-20260922",
+                    "status": "active",
+                    "createdAt": "2026-09-21T23:52:30Z",
+                    "capabilities": {"productionDelivery": True},
+                    "ruleExecutionReadiness": {"status": "ready"},
+                }],
+            },
+            {"ruleInventory": {"releaseReady": True}},
+            {},
+            {},
+            {},
+        )
+
+        self.assertEqual("older", result["candidate"]["relationToActive"])
+        self.assertEqual("rollback-reference", result["candidate"]["role"])
+        self.assertFalse(result["candidate"]["eligibleForPromotion"])
+
     def test_compact_operational_status_projects_active_release_and_runtime_readiness(self):
         result = investment_model_projection(
             {

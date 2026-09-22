@@ -263,6 +263,7 @@ def _structured_claim_evidence_ids(
     packet: NotificationAIInferencePacket,
     section: str,
     text: str = "",
+    preferred_ids: tuple = (),
 ) -> list:
     claim_contract = resolved_narrative_claim_evidence_contract(
         prepared_core.get("narrativeClaimContract"),
@@ -280,6 +281,7 @@ def _structured_claim_evidence_ids(
     }
     evidence_ids = []
     for value in [
+        *preferred_ids,
         *(recommended.get(section) or []),
         *(allowed.get(section) or []),
     ]:
@@ -366,6 +368,17 @@ def recover_structured_investment_insight_claims(
         or {}
     )
     raw_assessment = raw_assessment if isinstance(raw_assessment, dict) else {}
+    causal_evidence_ids = []
+    causal_rows = raw_payload.get("causalChain") or raw_payload.get("causal_chain") or []
+    for item in causal_rows if isinstance(causal_rows, list) else []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "unresolved").strip().lower() != "supported":
+            continue
+        for value in item.get("evidenceIds") or item.get("evidence_ids") or []:
+            evidence_id = str(value or "").strip()
+            if evidence_id and evidence_id not in causal_evidence_ids:
+                causal_evidence_ids.append(evidence_id)
     existing_sections = response.verified_claim_sections
     candidates = []
     candidate_sources = {}
@@ -379,25 +392,43 @@ def recover_structured_investment_insight_claims(
         if text and section not in existing_sections:
             candidates.append((section, text))
             candidate_sources[(section, text)] = "structured-insight"
-    if "view" not in existing_sections and not any(
-        section == "view" for section, _text in candidates
-    ):
-        verified_implication = next((
+    verified_text_by_section = {
+        section: next((
             str(item.get("text") or "").strip()
             for item in response.narrative_claims or []
             if isinstance(item, dict)
-            and str(item.get("section") or "").strip() == "implication"
+            and str(item.get("section") or "").strip() == section
             and str(item.get("text") or "").strip()
         ), "")
-        if verified_implication:
-            # Some otherwise valid model responses express the investment
-            # view only in the implication claim. Reuse that exact verified
-            # sentence with view-approved evidence instead of spending a
-            # second max-reasoning model call to duplicate schema content.
-            candidates.insert(0, ("view", verified_implication))
-            candidate_sources[("view", verified_implication)] = (
-                "verified-implication-claim"
-            )
+        for section in ("view", "mechanism", "implication")
+    }
+    if "mechanism" not in existing_sections:
+        for link in response.causal_chain or []:
+            if not isinstance(link, dict):
+                continue
+            text = str(link.get("expectedEffect") or link.get("expected_effect") or "").strip()
+            if text:
+                candidates.append(("mechanism", text))
+                candidate_sources[("mechanism", text)] = "structured-causal-chain"
+                break
+    semantic_aliases = (
+        ("view", "implication", "verified-implication-claim"),
+        ("mechanism", "view", "verified-view-claim"),
+        ("implication", "view", "verified-view-claim"),
+    )
+    for target_section, source_section, source_label in semantic_aliases:
+        if target_section in existing_sections:
+            continue
+        text = verified_text_by_section.get(source_section, "")
+        if not text:
+            continue
+        # The model sometimes writes one verified sentence that satisfies two
+        # narrative roles but omits the duplicate schema row. Keep the exact
+        # model-authored sentence and revalidate it against evidence permitted
+        # for the missing section. A structured candidate remains preferred;
+        # this alias is only attempted when that candidate cannot be grounded.
+        candidates.append((target_section, text))
+        candidate_sources[(target_section, text)] = source_label
     if "catalyst" not in existing_sections:
         catalysts = raw_assessment.get("catalysts") or []
         if not isinstance(catalysts, (list, tuple)):
@@ -420,13 +451,21 @@ def recover_structured_investment_insight_claims(
         return {"status": "not-required"}
 
     additions = []
+    staged_sections = set(existing_sections)
+    staged_sources = {}
     unavailable_sections = []
+    working_claims = list(response.narrative_claims or [])
     for section, text in candidates:
+        if section in staged_sections:
+            continue
         evidence_ids = _structured_claim_evidence_ids(
             prepared_core,
             packet,
             section,
             text,
+            preferred_ids=(
+                tuple(causal_evidence_ids) if section == "mechanism" else ()
+            ),
         )
         if not evidence_ids:
             unavailable_sections.append(section)
@@ -439,12 +478,33 @@ def recover_structured_investment_insight_claims(
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()[:20]
-        additions.append({
+        addition = {
             "claimId": claim_id,
             "section": section,
             "text": text,
             "evidenceIds": evidence_ids,
-        })
+        }
+        claims, validation = normalize_narrative_claims(
+            context,
+            {"narrativeClaims": [*working_claims, addition]},
+            writer_kind="ai",
+        )
+        accepted = any(
+            item.get("claimId") == claim_id
+            and item.get("section") == section
+            for item in claims
+        )
+        if not accepted:
+            unavailable_sections.append(section)
+            continue
+        additions.append(addition)
+        working_claims = claims
+        validation["inferencePacketId"] = packet.packet_id
+        validation["evidenceFingerprint"] = packet.evidence_fingerprint
+        response.narrative_claims = claims
+        response.claim_validation = validation
+        staged_sections.add(section)
+        staged_sources[section] = candidate_sources.get((section, text), "")
     if not additions:
         return {
             "status": "unavailable",
@@ -452,15 +512,6 @@ def recover_structured_investment_insight_claims(
             "sections": sorted(set(unavailable_sections)),
         }
 
-    claims, validation = normalize_narrative_claims(
-        context,
-        {"narrativeClaims": [*(response.narrative_claims or []), *additions]},
-        writer_kind="ai",
-    )
-    validation["inferencePacketId"] = packet.packet_id
-    validation["evidenceFingerprint"] = packet.evidence_fingerprint
-    response.narrative_claims = claims
-    response.claim_validation = validation
     added_ids = {item["claimId"] for item in additions}
     repaired_sections = sorted({
         str(item.get("section") or "")
@@ -470,11 +521,12 @@ def recover_structured_investment_insight_claims(
     return {
         "status": "repaired" if repaired_sections else "rejected",
         "sections": repaired_sections,
-        "unavailableSections": sorted(set(unavailable_sections)),
+        "unavailableSections": sorted(
+            set(unavailable_sections) - set(repaired_sections)
+        ),
         "sourceSections": {
-            section: candidate_sources.get((section, text), "")
-            for section, text in candidates
-            if section in repaired_sections
+            section: staged_sources.get(section, "")
+            for section in repaired_sections
         },
     }
 
@@ -946,10 +998,26 @@ class NotificationAIJudgementService:
                     response,
                 )
         initial_validation_ms = int((time.monotonic() - validation_started) * 1000)
+        comparison_needs_repair = bool(
+            enforce_contract
+            and hypothesis_comparison_needs_repair(context.get("messageType"), response)
+        )
+        schema_only_publication_error = bool(
+            not contract_error
+            and not comparison_needs_repair
+            and not response.rejected_claim_count
+            and publication_error.startswith(
+                "required verified narrative sections are missing:"
+            )
+        )
+        # A second max-reasoning call should not be spent merely to duplicate
+        # an omitted presentation section. Deterministic recovery above either
+        # binds the model's own text to verified evidence or the caller emits
+        # the audited fallback.
         repair_attempted = bool(
-            (enforce_contract and hypothesis_comparison_needs_repair(context.get("messageType"), response))
+            comparison_needs_repair
             or contract_error
-            or publication_error
+            or (publication_error and not schema_only_publication_error)
         )
         repair_succeeded = False
         repair_error = ""

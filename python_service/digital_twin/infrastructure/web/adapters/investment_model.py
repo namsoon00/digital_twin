@@ -104,14 +104,29 @@ def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
         }
         return payload
     if cached.get("hasData"):
-        refresh_started = False
         if cached.get("stale"):
-            refresh_started = INVESTMENT_MODEL_READ_MODEL.refresh_async(key, _investment_model_source_payload)
+            # Release control is safety-critical read-side state. Returning a
+            # previous active/candidate pair for one request can display the
+            # wrong promotion gate, so refresh stale state synchronously and
+            # retain the prior payload only when dependencies fail.
+            refreshed = INVESTMENT_MODEL_READ_MODEL.refresh(
+                key,
+                _investment_model_source_payload,
+            )
+            payload = dict(refreshed.get("payload") or cached_payload)
+            payload["cache"] = {
+                "stale": bool(refreshed.get("stale")),
+                "ageSeconds": refreshed.get("ageSeconds", cached.get("ageSeconds", 0)),
+                "refreshing": False,
+                "lastSuccessAt": refreshed.get("lastSuccessAt", cached.get("lastSuccessAt", "")),
+                "lastError": refreshed.get("lastError", ""),
+            }
+            return payload
         payload = dict(cached.get("payload") or {})
         payload["cache"] = {
-            "stale": bool(cached.get("stale")),
+            "stale": False,
             "ageSeconds": cached.get("ageSeconds", 0),
-            "refreshing": bool(cached.get("refreshing") or refresh_started),
+            "refreshing": bool(cached.get("refreshing")),
             "lastSuccessAt": cached.get("lastSuccessAt", ""),
         }
         return payload

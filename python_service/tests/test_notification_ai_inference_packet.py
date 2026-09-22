@@ -10,6 +10,9 @@ from digital_twin.modules.decisions.domain.notification_ai_inference_packet impo
 from digital_twin.modules.decisions.domain.notification_ai_context_router import (
     fit_notification_ai_decision_core,
 )
+from digital_twin.modules.decisions.domain.notification_ai_decision_brief import (
+    notification_ai_execution_profile,
+)
 from digital_twin.modules.notifications.domain.notification_narrative import (
     apply_narrative_brief_to_response,
     build_investment_narrative_brief,
@@ -91,6 +94,16 @@ def response_payload(view_id, support_id, next_id):
 
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
+    def test_deep_research_profile_uses_full_contract_budget_by_default(self):
+        context = investment_context()
+        context["ontologyRelationContext"]["reviewLevel"] = "immediate"
+
+        profile = notification_ai_execution_profile(context, {})
+
+        self.assertEqual("notification-ai-execution-profile-v5", profile["version"])
+        self.assertEqual("deepResearch", profile["name"])
+        self.assertEqual(64 * 1024, profile["maxPromptBytes"])
+
     def test_display_rounding_and_korean_direction_preserve_numeric_grounding(self):
         rows = [
             {"evidenceId": "fact:ma20Distance", "label": "20일 평균 괴리", "value": -4.75781},
@@ -1040,13 +1053,20 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                         "horizon": "short-term",
                         "conviction": "moderate",
                         "dominantThesis": "단기 하방 위험이 회복 가능성보다 우세합니다.",
-                        "causalMechanism": "외국인 순매수 123,456주가 가격 회복 제한을 일부 완화합니다.",
+                        "causalMechanism": "외국인 매수 흐름이 가격 회복 제한을 일부 완화합니다.",
                         "investmentImplication": "회복 확인이 부족해 현재 상승 기대를 뒷받침할 근거는 약합니다.",
                         "catalysts": ["20일선 회복이 관점을 바꿀 촉매입니다."],
                         "risks": ["약한 흐름이 이어질 수 있습니다."],
                         "invalidationCondition": "현재가가 20일선 위에서 유지되면 하방 관점을 무효화합니다.",
                         "thesisKey": "holding-guard",
                     },
+                    "causalChain": [{
+                        "driver": "외국인 매수 흐름",
+                        "channel": "flow",
+                        "expectedEffect": "가격 회복 제한을 일부 완화합니다.",
+                        "evidenceIds": ["fact:foreignNetVolume"],
+                        "status": "supported",
+                    }],
                     # Deliberately omit mechanism/implication claim rows. The
                     # service may only reuse the model's structured text.
                     "narrativeClaims": [{
@@ -1102,7 +1122,9 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                     if item.get("section") != "view"
                 ]
                 assessment = dict(payload.get("insightAssessment") or {})
-                assessment["dominantThesis"] = ""
+                assessment["dominantThesis"] = (
+                    "근거에 없는 999999원 목표가가 현재 관점을 설명합니다."
+                )
                 payload["insightAssessment"] = assessment
                 return validated_response_from_payload(
                     prepared,
@@ -1134,6 +1156,52 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             missing_view_outcome.execution_spans[
                 "structuredInsightRepair"
             ]["sourceSections"]["view"],
+        )
+
+        class MissingMechanismClaimReviewer:
+            calls = 0
+
+            def review(self, prepared):
+                self.calls += 1
+                payload = outcome.response.to_dict()
+                payload["narrativeClaims"] = [
+                    item for item in payload.get("narrativeClaims") or []
+                    if item.get("section") != "mechanism"
+                ]
+                assessment = dict(payload.get("insightAssessment") or {})
+                assessment["causalMechanism"] = ""
+                payload["insightAssessment"] = assessment
+                payload["causalChain"] = []
+                return validated_response_from_payload(
+                    prepared,
+                    payload,
+                    raw_response=json.dumps(payload, ensure_ascii=False),
+                    source="test AI",
+                )
+
+        missing_mechanism_reviewer = MissingMechanismClaimReviewer()
+        missing_mechanism_outcome = NotificationAIJudgementService(
+            missing_mechanism_reviewer,
+            {},
+        ).judge(context)
+
+        self.assertTrue(missing_mechanism_outcome.publishable)
+        self.assertEqual(1, missing_mechanism_reviewer.calls)
+        self.assertFalse(missing_mechanism_outcome.repair_attempted)
+        repaired_mechanism = next(
+            item for item in missing_mechanism_outcome.response.narrative_claims
+            if item["section"] == "mechanism"
+        )
+        verified_view = next(
+            item for item in missing_mechanism_outcome.response.narrative_claims
+            if item["section"] == "view"
+        )
+        self.assertEqual(verified_view["text"], repaired_mechanism["text"])
+        self.assertEqual(
+            "verified-view-claim",
+            missing_mechanism_outcome.execution_spans[
+                "structuredInsightRepair"
+            ]["sourceSections"]["mechanism"],
         )
         counter_ledger = [{
             "evidenceId": "assertion:risk",

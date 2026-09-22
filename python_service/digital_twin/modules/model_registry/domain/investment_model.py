@@ -7,6 +7,7 @@ without copying rules into another mutable store.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Dict, Mapping
 
 from digital_twin.modules.read_models.contracts import investment_product_readiness
@@ -44,6 +45,45 @@ def _release_revision(value: object) -> int:
         return int(current.rsplit("-r", 1)[1].split("-", 1)[0])
     except (TypeError, ValueError):
         return 0
+
+
+def _release_created_at(value: object) -> float:
+    current = _text(value)
+    if not current:
+        return 0.0
+    try:
+        return datetime.fromisoformat(current.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _candidate_relation(
+    active_id: str,
+    candidate_id: str,
+    active: Mapping[str, object],
+    candidate: Mapping[str, object],
+) -> str:
+    if candidate_id and candidate_id == active_id:
+        return "same"
+    active_revision = _release_revision(active_id)
+    candidate_revision = _release_revision(candidate_id)
+    if active_revision and candidate_revision:
+        return "older" if candidate_revision < active_revision else "newer"
+    active_release = _mapping(active.get("releaseBundle"))
+    candidate_release = _mapping(candidate.get("releaseBundle"))
+    active_created = _release_created_at(
+        active.get("createdAt")
+        or active_release.get("created_at")
+        or active_release.get("createdAt")
+    )
+    candidate_created = _release_created_at(
+        candidate.get("createdAt")
+        or candidate_release.get("created_at")
+        or candidate_release.get("createdAt")
+    )
+    if active_created and candidate_created and active_created != candidate_created:
+        return "older" if candidate_created < active_created else "newer"
+    return "unresolved"
 
 
 def _backend_label(adapter_name: object, backend_id: object) -> str:
@@ -163,11 +203,11 @@ def investment_model_projection(
         **_mapping(candidate.get("health")),
     }
     candidate_release = _mapping(candidate.get("releaseBundle"))
-    candidate_relation = (
-        "older" if _release_revision(candidate_id) and _release_revision(active_id) and _release_revision(candidate_id) < _release_revision(active_id)
-        else "newer" if _release_revision(candidate_id) > _release_revision(active_id)
-        else "same" if candidate_id and candidate_id == active_id
-        else "unresolved"
+    candidate_relation = _candidate_relation(
+        active_id,
+        candidate_id,
+        active,
+        candidate,
     )
     counts = _mapping(catalog.get("counts"))
     blockers = [str(item) for item in promotion.get("blockers") or [] if str(item).strip()]

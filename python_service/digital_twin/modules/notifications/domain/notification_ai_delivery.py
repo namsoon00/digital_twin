@@ -199,22 +199,42 @@ def verified_typedb_direct_delivery_authorization(
         for item in semantic.get("authorizationSources") or []
         if _text(item)
     }
+    observation = typedb_context_observation_contract(payload)
+    stage_observation = bool(
+        observation.get("decisionEligibility") == "stage-observation"
+    )
     revision_keys = [
         _text(item)
         for item in trigger.get("materialRevisionKeys") or []
         if _text(item)
     ]
-    if not (
+    common_authorization = bool(
         _text(payload.get("notificationDecisionOwner")).lower() == "typedb"
         and _text(bypass.get("status")).lower() == "typedb-direct"
         and _text(dispatch.get("route")).upper() == "PUBLISH_TYPEDB"
         and _text(semantic.get("decision")).lower() == "send"
-        and "verified-reasoning-trigger" in authorization_sources
+    )
+    verified_trigger = bool(
+        "verified-reasoning-trigger" in authorization_sources
         and _text(trigger.get("status")).lower() == "verified-material-transition"
         and trigger.get("material") is True
         and trigger.get("userObservable") is True
         and revision_keys
-    ):
+    )
+    verified_stage_source = bool(
+        stage_observation
+        and observation.get("subjectCaseId")
+        and observation.get("candidateFingerprint")
+        and observation.get("sourceAboxSnapshotId")
+        and observation.get("inferenceGenerationId")
+        and authorization_sources.intersection({
+            "material-source-event",
+            "verified-follow-up-transition",
+            "verified-source-document",
+            "typedb-notification-intent",
+        })
+    )
+    if not common_authorization or not (verified_trigger or verified_stage_source):
         return {}
 
     matched_conditions = [
@@ -232,6 +252,7 @@ def verified_typedb_direct_delivery_authorization(
         "status": "authorized",
         "reason": reasons[0] if reasons else _text(semantic.get("reason")),
         "cadenceTier": "immediate" if immediate else "material",
+        "stageObservation": stage_observation,
         "matchedConditions": matched_conditions,
         "materialRevisionKeys": revision_keys,
     }
@@ -549,7 +570,11 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
     insight_assessment = _mapping(validated.get("insightAssessment"))
     insight_transition = _mapping(context.get("investmentInsightTransition"))
     execution_audit = _mapping(context.get("notificationAiExecutionAudit"))
-    publication = _mapping(context.get("decisionPublication"))
+    publication = (
+        _mapping(context.get("typedbObservationPublication"))
+        if typedb_context_observation_contract(context)
+        else {}
+    ) or _mapping(context.get("decisionPublication"))
     writer = _mapping(context.get("notificationWriterProvenance"))
     ai_transition = _mapping(context.get("aiDecisionTransition"))
     user_transition = _mapping(context.get("investmentNotificationTransition"))
@@ -864,7 +889,11 @@ def decision_delta_from_context(context: Mapping[str, object]) -> DecisionDelta:
     insight_assessment = _mapping(validated.get("insightAssessment"))
     insight_transition = _mapping(values.get("investmentInsightTransition"))
     execution_audit = _mapping(values.get("notificationAiExecutionAudit"))
-    publication = _mapping(values.get("decisionPublication"))
+    publication = (
+        _mapping(values.get("typedbObservationPublication"))
+        if typedb_context_observation_contract(values)
+        else {}
+    ) or _mapping(values.get("decisionPublication"))
     writer = _mapping(values.get("notificationWriterProvenance"))
     ai_transition = _mapping(values.get("aiDecisionTransition"))
     user_transition = _mapping(values.get("investmentNotificationTransition"))

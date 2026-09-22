@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.decisions.domain.events import investment_inference_episode_completed_event
-from digital_twin.modules.decisions.domain.investment_reasoning import ARCHIVE, HANDOFF_AI, INVALID, PUBLISH_TYPEDB, inference_dispatch_decision
+from digital_twin.modules.decisions.domain.investment_reasoning import ARCHIVE, HANDOFF_AI, INVALID, PUBLISH_TYPEDB, InferenceDispatchDecision, inference_dispatch_decision
+from digital_twin.modules.notifications.contracts import context_observation_delivery_decision
 from digital_twin.modules.portfolio.contracts import AlertEvent
 
 
@@ -49,6 +51,7 @@ class InvestmentInsightDispatchService:
         account_contexts = self._account_contexts()
         ai_events = []
         typedb_queued_events = []
+        typedb_companion_outcomes = []
         outcomes = []
         route_counts = {
             PUBLISH_TYPEDB: 0,
@@ -117,6 +120,16 @@ class InvestmentInsightDispatchService:
                         self.reasoning_orchestrator.required_subject(subject_case_id)
                     )
                 )
+                companion = self._publish_ai_handoff_typedb_observation(
+                    event,
+                    source_event,
+                    subject_case,
+                    account_contexts.get(str(getattr(event, "account_id", "") or ""), {}),
+                )
+                if companion:
+                    typedb_companion_outcomes.append(companion[0])
+                    if companion[0].get("queued"):
+                        typedb_queued_events.append(companion[1])
                 ai_events.append(event)
                 continue
 
@@ -195,8 +208,100 @@ class InvestmentInsightDispatchService:
             "queuedEvents": queued_events,
             "typedbQueuedEvents": typedb_queued_events,
             "aiQueuedEvents": ai_queued_events,
+            "typedbCompanionOutcomes": typedb_companion_outcomes,
             "outcomes": outcomes,
         }
+
+    def _publish_ai_handoff_typedb_observation(
+        self,
+        event: AlertEvent,
+        source_event,
+        subject_case,
+        account_context: Mapping[str, object],
+    ):
+        """Publish the verified TypeDB stage without replacing the AI route."""
+
+        context = deepcopy(_mapping(getattr(event, "metadata", {}) or {}))
+        for key in (
+            "preDecisionDeliveryCadence",
+            "cooldownDecision",
+            "cooldownReason",
+            "cooldownSuppressed",
+        ):
+            context.pop(key, None)
+        nested_metadata = _mapping(context.get("metadata"))
+        if nested_metadata:
+            for key in (
+                "preDecisionDeliveryCadence",
+                "cooldownDecision",
+                "cooldownReason",
+                "cooldownSuppressed",
+            ):
+                nested_metadata.pop(key, None)
+            context["metadata"] = nested_metadata
+        relation = _mapping(context.get("ontologyRelationContext"))
+        relation_decision = _mapping(relation.get("decision"))
+        synthesis = getattr(subject_case, "synthesis", None)
+        candidate = getattr(subject_case, "candidate_set", None)
+        selected_rule_id = str(
+            getattr(synthesis, "selected_rule_id", "")
+            or relation_decision.get("selectedRuleId")
+            or ""
+        ).strip()
+        hypothesis_ids = list(dict.fromkeys([
+            *tuple(getattr(candidate, "execution_eligible_hypothesis_ids", ()) or ()),
+            *tuple(getattr(candidate, "eligible_hypothesis_ids", ()) or ()),
+            *tuple(getattr(candidate, "reference_hypothesis_ids", ()) or ()),
+        ]))
+        if not selected_rule_id or not hypothesis_ids:
+            return None
+
+        context["investmentSubjectDecisionCase"] = (
+            self.reasoning_orchestrator.compact_subject_context(subject_case)
+        )
+        context["typedbAiHandoffObservation"] = {
+            "status": "eligible",
+            "subjectCaseId": subject_case.subject_case_id,
+            "inferenceGenerationId": subject_case.inference_generation_id,
+            "candidateFingerprint": str(getattr(candidate, "fingerprint", "") or ""),
+            "selectedRuleId": selected_rule_id,
+            "hypothesisIds": hypothesis_ids,
+        }
+        context["typedbObservationPublication"] = {
+            "publicationId": "typedb-stage:" + subject_case.subject_case_id,
+            "subjectCaseId": subject_case.subject_case_id,
+            "outcomeKind": "OBSERVATION",
+            "fingerprint": str(getattr(candidate, "fingerprint", "") or ""),
+        }
+        semantic_delivery = context_observation_delivery_decision(context)
+        if str(semantic_delivery.get("decision") or "").strip().lower() != "send":
+            return None
+
+        companion_decision = InferenceDispatchDecision.create(
+            subject_case,
+            PUBLISH_TYPEDB,
+            "material-typedb-stage-observation",
+            str(semantic_delivery.get("reason") or "AI 판단 전 TypeDB 관계 변화가 확인됐습니다."),
+            source_event_id=source_event.event_id,
+            details={
+                "semanticDeliveryDecision": semantic_delivery,
+                "parentDispatchDecisionId": subject_case.inference_dispatch_decision.decision_id,
+                "parentDispatchRoute": HANDOFF_AI,
+            },
+        )
+        companion_event = deepcopy(event)
+        companion_event.key = str(getattr(event, "key", "") or "") + ":typedb-stage"
+        companion_event.metadata = context
+        outcome = self._publish_typedb(
+            companion_event,
+            source_event,
+            companion_decision,
+            account_context,
+            record_subject=False,
+            reconcile_subject=False,
+        )
+        outcome["companionOfRoute"] = HANDOFF_AI
+        return outcome, companion_event
 
     def _publish_typedb(
         self,
@@ -204,9 +309,13 @@ class InvestmentInsightDispatchService:
         source_event,
         decision,
         account_context: Mapping[str, object],
+        *,
+        record_subject: bool = True,
+        reconcile_subject: bool = True,
     ) -> Dict[str, object]:
         subject_case_id = decision.subject_case_id
-        self.reasoning_orchestrator.record_inference_dispatch(subject_case_id, decision)
+        if record_subject:
+            self.reasoning_orchestrator.record_inference_dispatch(subject_case_id, decision)
         context = _mapping(getattr(event, "metadata", {}) or {})
         context["investmentSubjectDecisionCase"] = (
             self.reasoning_orchestrator.compact_subject_context(
@@ -269,7 +378,8 @@ class InvestmentInsightDispatchService:
                 else str(getattr(job, "last_error", "") or "알림 발송 정책이 TypeDB 관찰을 억제했습니다.")
             ),
         }
-        self.reasoning_orchestrator.decision_delivery_reconciled(job.context, outcome)
+        if reconcile_subject:
+            self.reasoning_orchestrator.decision_delivery_reconciled(job.context, outcome)
         return outcome
 
     def _account_contexts(self) -> Dict[str, object]:

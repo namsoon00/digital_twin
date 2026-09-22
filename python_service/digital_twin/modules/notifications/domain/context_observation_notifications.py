@@ -12,6 +12,7 @@ from digital_twin.modules.notifications.domain.follow_up_transition_evidence imp
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
 CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v5"
+TYPEDB_AI_HANDOFF_OBSERVATION_VERSION = "typedb-ai-handoff-observation-v1"
 REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v2"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
 REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v7"
@@ -127,6 +128,106 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
     relation = _relation_context(payload)
     if not is_graph_backed_relation_context(relation):
         return {}
+    stage_observation = _mapping(payload.get("typedbAiHandoffObservation"))
+    if stage_observation:
+        subject_case = _mapping(payload.get("investmentSubjectDecisionCase"))
+        candidate = _mapping(subject_case.get("candidateSet"))
+        synthesis = _mapping(subject_case.get("synthesis"))
+        subject_case_id = _text(
+            payload.get("investmentSubjectDecisionCaseId")
+            or subject_case.get("subjectCaseId")
+        )
+        generation_id = _text(
+            subject_case.get("inferenceGenerationId")
+            or synthesis.get("inference_generation_id")
+            or synthesis.get("inferenceGenerationId")
+        )
+        candidate_fingerprint = _text(candidate.get("fingerprint"))
+        selected_rule_id = _text(stage_observation.get("selectedRuleId"))
+        canonical_selected_rule_id = _text(
+            synthesis.get("selected_rule_id")
+            or synthesis.get("selectedRuleId")
+            or _mapping(relation.get("decision")).get("selectedRuleId")
+        )
+        hypothesis_ids = [
+            _text(item)
+            for item in stage_observation.get("hypothesisIds") or []
+            if _text(item)
+        ]
+        candidate_hypothesis_ids = {
+            _text(item)
+            for key in (
+                "executionEligibleHypothesisIds",
+                "eligibleHypothesisIds",
+                "referenceHypothesisIds",
+            )
+            for item in candidate.get(key) or []
+            if _text(item)
+        }
+        graph = _mapping(relation.get("graphStoreInference"))
+        relation_generation_id = _text(
+            relation.get("inferenceGenerationId")
+            or graph.get("inferenceGenerationId")
+        )
+        identity_matches = bool(
+            _text(stage_observation.get("status")).lower() == "eligible"
+            and subject_case_id
+            and subject_case_id == _text(stage_observation.get("subjectCaseId"))
+            and generation_id
+            and generation_id == _text(stage_observation.get("inferenceGenerationId"))
+            and candidate_fingerprint
+            and candidate_fingerprint == _text(stage_observation.get("candidateFingerprint"))
+            and selected_rule_id
+            and selected_rule_id == canonical_selected_rule_id
+            and set(hypothesis_ids) == candidate_hypothesis_ids
+            and (not relation_generation_id or relation_generation_id == generation_id)
+        )
+        if not identity_matches:
+            return {}
+        selected_row: Dict[str, object] = {}
+        for row in _rule_rows(relation):
+            rule_id = _text(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId"))
+            if rule_id == selected_rule_id:
+                selected_row = row
+                break
+        if not selected_row:
+            return {}
+        subject = _mapping(relation.get("subject"))
+        facts = _mapping(relation.get("facts"))
+        return {
+            "schemaVersion": TYPEDB_AI_HANDOFF_OBSERVATION_VERSION,
+            "status": "eligible",
+            "decisionMode": CONTEXT_OBSERVATION_DECISION_MODE,
+            "messageClass": "typedb-ai-handoff-stage-change",
+            "selectedRuleId": selected_rule_id,
+            "selectedRuleLabel": _text(
+                selected_row.get("label")
+                or selected_row.get("ruleLabel")
+                or selected_row.get("targetLabel")
+                or stage_observation.get("selectedRuleLabel")
+            ),
+            "ruleKind": "ai-handoff-stage-observation",
+            "decisionEligibility": "stage-observation",
+            "requiresHypothesis": True,
+            "requiresAiJudgement": False,
+            "requiresAiNarrative": False,
+            "action": "NO_ACTION",
+            "validationState": "typedb-stage-verified",
+            "symbol": _text(subject.get("symbol") or facts.get("symbol")).upper(),
+            "market": _text(subject.get("market") or facts.get("market")).upper(),
+            "hypothesisIds": hypothesis_ids,
+            "subjectCaseId": subject_case_id,
+            "candidateFingerprint": candidate_fingerprint,
+            "graphSource": _text(relation.get("source")),
+            "graphStore": _text(relation.get("graphStore") or graph.get("graphStore")),
+            "sourceAboxSnapshotId": _text(
+                relation.get("sourceAboxSnapshotId")
+                or graph.get("sourceAboxSnapshotId")
+                or subject_case.get("sourceAboxSnapshotId")
+            ),
+            "inferenceGenerationId": generation_id,
+            "aiHandoffPending": True,
+        }
     lifecycle_transition = relation_lifecycle_transition_contract(relation)
     if (
         relation.get("relationLifecycleOnly") is True
@@ -474,7 +575,9 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     contract = typedb_context_observation_contract(payload)
     if not contract:
         return {}
-    publication = _mapping(payload.get("decisionPublication"))
+    publication = _mapping(payload.get("typedbObservationPublication")) or _mapping(
+        payload.get("decisionPublication")
+    )
     outcome = _text(publication.get("outcomeKind")).upper()
     insight = _mapping(payload.get("ontologyInsight"))
     semantic = _mapping(insight.get("semanticComponents"))
@@ -538,6 +641,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "verifiedEvidenceId": _text(verified_evidence.get("evidenceId")),
         "reasoningDeliveryTrigger": reasoning_trigger,
         "relationLifecycleTransition": lifecycle_transition,
+        "stageObservation": contract.get("decisionEligibility") == "stage-observation",
     }
     if outcome != "OBSERVATION":
         decision.update({
@@ -553,16 +657,23 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         })
         return decision
     if authorization_sources:
+        stage_observation = contract.get("decisionEligibility") == "stage-observation"
         decision.update({
             "decision": "send",
             "reason": (
                 str(lifecycle_transition.get("changeLabel") or "관계 변화")
                 + "이 정상 TypeDB 추론 세대에서 확인됐습니다."
                 if lifecycle_transition
+                else "TypeDB가 AI 판단에 전달한 관계 변화와 근거 수치가 확인됐습니다."
+                if stage_observation
                 else "검증된 참고 관찰에 사용자에게 알릴 구체적인 새 근거가 연결됐습니다."
             ),
             "suppressionReason": "",
-            "pushValueClass": "material-context-observation",
+            "pushValueClass": (
+                "material-typedb-stage-observation"
+                if stage_observation
+                else "material-context-observation"
+            ),
         })
     return decision
 

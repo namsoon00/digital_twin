@@ -16,6 +16,8 @@ from digital_twin.modules.decisions.domain.investment_reasoning import (
     inference_dispatch_decision,
 )
 from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT
+from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+from digital_twin.modules.notifications.domain.notification_ai_delivery import final_ai_delivery_decision
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
@@ -555,6 +557,89 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assertEqual(
             "typedb-notification-already-recorded",
             repeated["outcomes"][0]["status"],
+        )
+        self.assert_material_ai_handoff_also_publishes_one_typedb_stage_observation()
+
+    def assert_material_ai_handoff_also_publishes_one_typedb_stage_observation(self):
+        actionable = subject_case(
+            "subject:actionable-stage",
+            action_authority="originate",
+            eligible=("hypothesis:mstr:trend",),
+            outcome="READY",
+        )
+        stage_context = context_observation(actionable)
+        predictive_basis = {
+            "owner": "market-hypothesis",
+            "ruleKind": "predictive",
+            "decisionEligibility": "action-candidate",
+            "requiresHypothesis": True,
+        }
+        relation_context = stage_context["ontologyRelationContext"]
+        for group in ("activeRules", "matchedRules"):
+            relation_context[group][0]["knowledgeBasis"] = predictive_basis
+        for group in ("relations", "traces"):
+            relation_context["graphStoreInference"][group][0]["knowledgeBasis"] = predictive_basis
+        selected_rule_id = stage_context["ontologyRelationContext"]["decision"]["selectedRuleId"]
+        actionable.synthesis = DecisionSynthesis.from_dict({
+            **actionable.synthesis.to_dict(),
+            "selected_rule_id": selected_rule_id,
+        })
+        stage_context.update({
+            "investmentSubjectDecisionCase": actionable.to_dict(),
+            "requiresAiJudgement": True,
+        })
+        orchestrator = FakeOrchestrator([actionable])
+        notification_queue = FakeNotificationQueue()
+        ai_handoff = FakeAIHandoff()
+        service = InvestmentInsightDispatchService(
+            FakeIngress(),
+            notification_queue,
+            ai_handoff,
+            orchestrator,
+        )
+
+        result = service.dispatch([alert(actionable, stage_context, "stage")])
+
+        self.assertEqual("typedb-and-ai-queued", result["status"])
+        self.assertEqual(1, result["typedbPublishedCount"])
+        self.assertEqual(1, result["aiQueuedCount"])
+        self.assertEqual(1, len(notification_queue.jobs))
+        self.assertEqual(1, len(ai_handoff.events))
+        self.assertEqual(HANDOFF_AI, actionable.inference_dispatch_decision.route)
+        companion = result["typedbCompanionOutcomes"][0]
+        self.assertTrue(companion["queued"])
+        self.assertEqual(HANDOFF_AI, companion["companionOfRoute"])
+        typedb_job = next(iter(notification_queue.jobs.values()))
+        self.assertEqual(
+            "stage-observation",
+            typedb_context_observation_contract(typedb_job.context)["decisionEligibility"],
+        )
+        self.assertEqual(
+            PUBLISH_TYPEDB,
+            typedb_job.context["inferenceDispatchDecision"]["route"],
+        )
+        self.assertEqual("send", final_ai_delivery_decision(typedb_job.context)["decision"])
+        self.assertFalse(
+            typedb_job.context["notificationWriterProvenance"]["aiAuthored"]
+        )
+        typedb_job.context["displayTarget"] = "스트래티지 / MSTR"
+        typedb_message = execution_telegram_message(
+            typedb_job.context,
+            NotificationAIValidatedResponse(action="NO_ACTION"),
+        )
+        self.assertIn("🔗 스트래티지 · 달라진 신호", typedb_message)
+        self.assertIn("무엇이 달라졌나요", typedb_message)
+        self.assertIn(
+            "이 변화가 투자 행동을 바꿀 수준이면 AI 종합 판단이 별도 알림으로 이어집니다.",
+            typedb_message,
+        )
+        self.assertNotIn("AI 투자 인사이트", typedb_message)
+
+        repeated = service.dispatch([alert(actionable, stage_context, "stage-retry")])
+        self.assertEqual(1, len(notification_queue.jobs))
+        self.assertEqual(
+            "typedb-notification-already-recorded",
+            repeated["typedbCompanionOutcomes"][0]["status"],
         )
 
 

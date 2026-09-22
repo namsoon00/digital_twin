@@ -274,8 +274,11 @@ for name in sys.modules:
         instance.decision_episode_store = SimpleNamespace(
             list_for_symbols=failure, performance=failure
         )
+        # Optional memory and lifecycle sources may be unavailable. The market
+        # time-series source is a required price-path input, so this scenario
+        # models a healthy read with no history rather than a backend failure.
         instance.market_time_series_store = SimpleNamespace(
-            load_temporal_windows=failure
+            load_temporal_windows=Mock(return_value={})
         )
         instance.hypothesis_proposal_store = SimpleNamespace(
             list_hypothesis_proposals=failure

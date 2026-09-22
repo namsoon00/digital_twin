@@ -1105,6 +1105,7 @@ class ReasoningEnginePlatformService:
         graph_database: str = "",
         release_seed_artifact: Mapping[str, object] = None,
         expected_baseline_deployment_id: str = "",
+        time_series_backend_id: str = "",
     ) -> Dict[str, object]:
         """Register a new V2 candidate without disturbing active delivery."""
 
@@ -1197,6 +1198,31 @@ class ReasoningEnginePlatformService:
             or active_row.get("time_series_backend_id")
             or ""
         ).strip() if active_is_v2 else ""
+        requested_time_series = str(time_series_backend_id or "").strip()
+        known_time_series_backends = {
+            str(value or "").strip()
+            for value in (
+                self.settings.get("timeSeriesActiveBackendId") or "mysql-primary",
+                self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow",
+                inherited_time_series,
+                base.time_series_backend_id,
+            )
+            if str(value or "").strip()
+        }
+        if requested_time_series and requested_time_series not in known_time_series_backends:
+            return {
+                "status": "blocked",
+                "deploymentId": clean_deployment_id,
+                "blockers": ["unknown-time-series-backend"],
+                "requestedTimeSeriesBackendId": requested_time_series,
+                "knownTimeSeriesBackendIds": sorted(known_time_series_backends),
+            }
+        selected_time_series = (
+            requested_time_series
+            or inherited_time_series
+            or str(self.settings.get("timeSeriesActiveBackendId") or "").strip()
+            or base.time_series_backend_id
+        )
         bundle = base.release_bundle
         authored_artifact = dict(release_seed_artifact or {})
         if authored_artifact:
@@ -1217,7 +1243,7 @@ class ReasoningEnginePlatformService:
             deployment_id=clean_deployment_id,
             status="provisioning",
             graph_store_binding=candidate_graph_store,
-            time_series_backend_id=inherited_time_series or base.time_series_backend_id,
+            time_series_backend_id=selected_time_series,
             release_bundle=EngineReleaseBundle(
                 tbox_release_id=(str(tbox.get("version")) + "@" + str(tbox.get("fingerprint"))) if authored_artifact else bundle.tbox_release_id,
                 rulebox_release_id=("ontology-evolution@" + str(authored_artifact["ruleboxFingerprint"])) if authored_artifact else bundle.rulebox_release_id,

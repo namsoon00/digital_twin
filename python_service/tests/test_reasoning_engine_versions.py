@@ -982,6 +982,98 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             len(restored_graph.relations),
         )
 
+    def test_register_v2_release_can_switch_from_broken_active_time_series_backend(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v2-active": {
+                        "deploymentId": "v2-active",
+                        "engineFamily": "ontology-investment-brain",
+                        "engineVersion": "v2",
+                        "status": "active",
+                        "graphStoreBinding": "typedb-production",
+                        "timeSeriesBackendId": "questdb-shadow",
+                    },
+                }
+                self.control_value = EngineControlState("v2-active", "v2-active", "", 4)
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return self.control_value
+
+            def upsert(self, descriptor):
+                self.rows[descriptor.deployment_id] = descriptor.to_dict()
+
+            def set_control(self, active, delivery, candidate, expected_version=None):
+                del expected_version
+                self.control_value = EngineControlState(active, delivery, candidate, 5)
+                return self.control_value
+
+            def update_capabilities(self, deployment_id, capabilities):
+                self.rows[deployment_id]["capabilities"] = dict(capabilities)
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "timeSeriesActiveBackendId": "mysql-primary",
+                "timeSeriesShadowBackendId": "questdb-shadow",
+            },
+        )
+
+        result = platform.register_v2_release(
+            "v2-mysql-candidate",
+            "release-mysql-candidate",
+            time_series_backend_id="mysql-primary",
+        )
+
+        self.assertEqual("registered", result["status"])
+        self.assertEqual(
+            "mysql-primary",
+            result["deployment"]["timeSeriesBackendId"],
+        )
+
+    def test_register_v2_release_rejects_unknown_time_series_backend(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v2-active": {
+                        "deploymentId": "v2-active",
+                        "engineVersion": "v2",
+                        "status": "active",
+                        "graphStoreBinding": "typedb-production",
+                        "timeSeriesBackendId": "questdb-shadow",
+                    },
+                }
+                self.control_value = EngineControlState("v2-active", "v2-active", "", 4)
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return self.control_value
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {"timeSeriesActiveBackendId": "mysql-primary"},
+        )
+
+        result = platform.register_v2_release(
+            "v2-invalid-candidate",
+            "release-invalid-candidate",
+            time_series_backend_id="missing-backend",
+        )
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual(["unknown-time-series-backend"], result["blockers"])
+
     def test_candidate_database_name_does_not_reuse_fixed_shadow_storage(self):
         class Registry:
             @staticmethod

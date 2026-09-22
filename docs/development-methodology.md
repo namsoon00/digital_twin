@@ -34,7 +34,15 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   Reasoning code consumes immutable `TemporalFeatureSnapshot` packets and must
   not import MySQL, QuestDB, or a future vendor driver. New backends are first
   registered as shadow targets, replayed from the durable outbox, compared at
-  the feature boundary, and promoted through the control plane.
+  the feature boundary, and promoted through the control plane. A successful
+  query with insufficient history may produce explicit empty windows; a
+  backend exception must fail the reasoning input closed and must never be
+  converted into apparent absence of market history. Reasoning deployment
+  registration may inherit a time-series binding only when that binding is
+  intentionally unchanged. A backend repair or migration must register an
+  explicit known backend ID in the immutable candidate release, validate it
+  with real subject data, and promote the candidate through the normal control
+  plane rather than mutating active delivery in place.
 - Treat reasoning engines as immutable versioned deployments. TBox, RuleBox,
   prompt, feature-set, graph-store, and time-series bindings form one release
   bundle. Only the delivery deployment may emit notifications; shadow and

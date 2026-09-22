@@ -1397,6 +1397,7 @@ def reasoning_engine_platform_command(args) -> int:
             args.deployment_id,
             args.release_id,
             graph_database=getattr(args, "graph_database", ""),
+            time_series_backend_id=getattr(args, "time_series_backend", ""),
         )
         if result.get("status") == "registered":
             deployment = dict(result.get("deployment") or {})
@@ -2669,6 +2670,14 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_register.add_argument("--deployment-id", required=True)
     reasoning_register.add_argument("--release-id", required=True)
     reasoning_register.add_argument("--graph-database", default="")
+    reasoning_register.add_argument(
+        "--time-series-backend",
+        default="",
+        help=(
+            "Freeze the candidate to a registered time-series backend. "
+            "Omit only when inheriting the active release is intentional."
+        ),
+    )
     for action_name in ["candidate", "promote"]:
         action = reasoning_engine_actions.add_parser(action_name)
         action.add_argument("--deployment-id", default="ontology-v2-shadow")

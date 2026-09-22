@@ -34,14 +34,13 @@ def temporal_observation_windows(
     if not symbols:
         return {}
     definitions = parse_temporal_windows(_inputs.settings.get("temporalWindowPeriods"))
-    try:
-        return _inputs.market_time_series_store.load_temporal_windows(
-            snapshot.account_id,
-            symbols,
-            definitions,
-            as_of=str(snapshot.generated_at or ""),
-        )
-    except (
-        Exception
-    ):  # noqa: BLE001 - short snapshot history remains a valid compatibility fallback.
-        return {}
+    # A successful read with short history returns explicit empty windows. A
+    # backend failure is materially different: swallowing it here would turn
+    # an infrastructure incident into apparent market-data absence and let the
+    # investment brain continue without its price-path evidence.
+    return _inputs.market_time_series_store.load_temporal_windows(
+        snapshot.account_id,
+        symbols,
+        definitions,
+        as_of=str(snapshot.generated_at or ""),
+    )

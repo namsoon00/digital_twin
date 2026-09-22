@@ -65,6 +65,7 @@
     {"file": "test_market_observation_delivery.py", "tier": "unit", "core": true},
     {"file": "test_kis_realtime_integrity.py", "tier": "unit", "core": true},
     {"file": "test_market_time_series_daily_candles.py", "tier": "unit", "core": true},
+    {"file": "test_temporal_observation_windows.py", "tier": "unit", "core": true},
     {"file": "test_outcome_benchmark_collection.py", "tier": "unit", "core": true},
     {"file": "test_notification_decision_quality.py", "tier": "unit", "core": true},
     {"file": "test_customer_notification_explanation.py", "tier": "unit", "core": true},

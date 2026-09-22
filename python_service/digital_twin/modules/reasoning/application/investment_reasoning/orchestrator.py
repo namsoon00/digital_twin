@@ -266,15 +266,18 @@ class InvestmentReasoningOrchestrator:
         point-in-time abstention below.
         """
 
-        finder = getattr(self.subject_cases, "stale_ready", None)
-        if not callable(finder):
-            return ()
         recovered = []
         reason = (
             "AI handoff did not start before the point-in-time facts expired; "
             "fresh reasoning is required."
         )
-        for subject_case in finder(max_age_minutes=max_age_minutes, limit=limit) or []:
+        finder = getattr(self.subject_cases, "stale_ready", None)
+        stale_ready = (
+            finder(max_age_minutes=max_age_minutes, limit=limit) or []
+            if callable(finder)
+            else []
+        )
+        for subject_case in stale_ready:
             if subject_case.stage != SUBJECT_READY or subject_case.publication is not None:
                 continue
             dispatch = getattr(subject_case, "inference_dispatch_decision", None)
@@ -299,6 +302,24 @@ class InvestmentReasoningOrchestrator:
             subject_case.publication = publication_for_subject_case(subject_case, ABSTAIN)
             self._persist_subject(subject_case)
             recovered.append(subject_case)
+        reconciliation_finder = getattr(
+            self.subject_cases,
+            "stale_delivery_reconciliations",
+            None,
+        )
+        if callable(reconciliation_finder):
+            for item in reconciliation_finder(
+                max_age_minutes=min(max(1, int(max_age_minutes or 30)), 5),
+                limit=limit,
+            ) or []:
+                values = _mapping(item)
+                context = _mapping(values.get("context"))
+                outcome = _mapping(values.get("deliveryOutcome"))
+                if not context or not outcome:
+                    continue
+                reconciled = self.decision_delivery_reconciled(context, outcome)
+                if reconciled is not None:
+                    recovered.append(reconciled)
         return tuple(recovered)
 
     def _complete_undispatched_subject(
@@ -876,7 +897,11 @@ class InvestmentReasoningOrchestrator:
         subject_case_id = self.subject_case_id_from_context(context)
         if not subject_case_id:
             return None
-        subject_case = self.required_subject(subject_case_id, context)
+        subject_case = self.required_subject(
+            subject_case_id,
+            context,
+            connection=connection,
+        )
         outcome = _mapping(delivery_outcome)
         queued = bool(outcome.get("queued"))
         notification_job_id = str(outcome.get("notificationJobId") or "")
@@ -1647,9 +1672,17 @@ class InvestmentReasoningOrchestrator:
         self,
         subject_or_batch_case_id: str,
         context: Mapping[str, object] = None,
+        *,
+        connection=None,
     ) -> SubjectDecisionCase:
         explicit = self.subject_case_id_from_context(context or {})
-        subject_case = self.subject_cases.get(explicit or str(subject_or_batch_case_id or ""))
+        subject_case_id = explicit or str(subject_or_batch_case_id or "")
+        get_with_connection = getattr(self.subject_cases, "get_with_connection", None)
+        subject_case = (
+            get_with_connection(connection, subject_case_id)
+            if connection is not None and callable(get_with_connection)
+            else self.subject_cases.get(subject_case_id)
+        )
         if subject_case:
             return subject_case
         batch_case_id = str(subject_or_batch_case_id or "")

@@ -10,6 +10,7 @@ from digital_twin.modules.market_data.domain.events import external_fact_changed
 from digital_twin.modules.market_data.application.external_data.contracts import DatasetDescriptor, ExternalSubject, setting_enabled
 from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService, FactTransition
 from digital_twin.modules.market_data.domain.external_call import ExternalCallDeferred
+from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
 
 
 def utc_now() -> datetime:
@@ -93,18 +94,35 @@ class ExternalDataCollectionService:
             return True
         return (self.now_provider() - self._last_partition_sync_at).total_seconds() >= self.sync_interval_seconds()
 
-    def sync_partitions(self, subjects: Iterable[ExternalSubject] = None, force: bool = False) -> Dict[str, object]:
+    def sync_partitions(
+        self,
+        subjects: Iterable[ExternalSubject] = None,
+        force: bool = False,
+        dataset_ids: Iterable[str] = None,
+    ) -> Dict[str, object]:
         if not self.should_sync_partitions(force=force) and subjects is None:
             return {"status": "fresh", "synced": False, "partitionCount": 0}
+        selected_datasets = self.registry.validate_dataset_ids(dataset_ids)
         subject_rows = list(subjects) if subjects is not None else self.store.list_subjects()
-        partitions = self.registry.desired_partitions(subject_rows, self.settings)
+        partitions = self.registry.desired_partitions(
+            subject_rows,
+            self.settings,
+            dataset_ids=selected_datasets,
+        )
         adapters = self.registry.adapters()
         descriptor_by_dataset = {adapter.descriptor.dataset_id: adapter.descriptor for adapter in adapters}
         plans = [(descriptor_by_dataset[item.dataset_id], item) for item in partitions]
+        static_dataset_ids = set(self.registry.static_dataset_ids(self.settings))
+        replaceable_dataset_ids = (
+            [dataset_id for dataset_id in selected_datasets if dataset_id in static_dataset_ids]
+            if selected_datasets
+            else sorted(static_dataset_ids)
+        )
         saved = self.store.sync_partitions(
             plans,
-            self.registry.static_dataset_ids(self.settings),
+            replaceable_dataset_ids,
             now=self.now_provider(),
+            deactivate_missing=subjects is None,
         )
         self._last_partition_sync_at = self.now_provider()
         return {
@@ -113,32 +131,96 @@ class ExternalDataCollectionService:
             "subjectCount": len(subject_rows),
             "partitionCount": len(partitions),
             "savedCount": saved,
+            "datasetIds": selected_datasets,
         }
 
     def request_subjects(self, subjects: Iterable[ExternalSubject]) -> Dict[str, object]:
         """Register work without calling a vendor from the requesting path."""
         return self.sync_partitions(subjects=list(subjects or []), force=True)
 
-    def run_once(self, force: bool = False) -> Dict[str, object]:
+    def run_once(
+        self,
+        force: bool = False,
+        dataset_ids: Iterable[str] = None,
+        subject_keys: Iterable[str] = None,
+        max_batches: int = 1,
+    ) -> Dict[str, object]:
         if not self.enabled() and not force:
             return {"status": "disabled", "processedCount": 0}
+        selected_datasets = self.registry.validate_dataset_ids(dataset_ids)
+        selected_subjects = sorted({
+            str(item or "").upper().strip()
+            for item in subject_keys or []
+            if str(item or "").strip()
+        })
+        available_subjects = self.store.list_subjects() if selected_subjects else None
+        scoped_subjects = None
+        if selected_subjects:
+            scoped_subjects = [
+                subject for subject in available_subjects or []
+                if str(subject.subject_key or "").upper() in selected_subjects
+                or str(subject.symbol or "").upper() in selected_subjects
+            ]
+            resolved = {
+                str(subject.subject_key or subject.symbol or "").upper()
+                for subject in scoped_subjects
+            }
+            missing = [item for item in selected_subjects if item not in resolved]
+            if missing:
+                raise ValueError("Unknown external-data subjects: " + ", ".join(missing))
         migration = self.legacy_importer.import_if_empty() if self.legacy_importer else {"status": "not-configured"}
         projection_before = self.reconcile_official_evidence()
         cleanup = self.cleanup_history_if_due(force=force)
-        sync = self.sync_partitions(force=force)
+        sync = self.sync_partitions(
+            subjects=scoped_subjects,
+            force=force,
+            dataset_ids=selected_datasets,
+        )
         recovery = self.recover_documents()
         if force and hasattr(self.store, "make_due"):
-            self.store.make_due()
-        jobs = self.store.claim_due(
-            self.worker_id,
-            self.batch_size(),
-            self.lease_seconds(),
-            now=self.now_provider(),
-        )
-        if not jobs:
-            return {
+            self.store.make_due(
+                dataset_ids=selected_datasets,
+                subject_keys=selected_subjects,
+            )
+        results: List[Dict[str, object]] = []
+        batch_count = 0
+        for _ in range(max(1, min(100, int(max_batches or 1)))):
+            jobs = self.store.claim_due(
+                self.worker_id,
+                self.batch_size(),
+                self.lease_seconds(),
+                now=self.now_provider(),
+                dataset_ids=selected_datasets,
+                subject_keys=selected_subjects,
+            )
+            if not jobs:
+                break
+            batch_count += 1
+            provider_groups: Dict[str, List[object]] = {}
+            for job in jobs:
+                provider_groups.setdefault(str(job.provider_id or job.dataset_id), []).append(job)
+            groups = list(provider_groups.values())
+            if self.concurrency() <= 1 or len(groups) == 1:
+                results.extend(result for group in groups for result in self._process_provider_jobs(group))
+            else:
+                with ThreadPoolExecutor(max_workers=min(self.concurrency(), len(groups))) as executor:
+                    futures = {executor.submit(self._process_provider_jobs, group): group for group in groups}
+                    for future in as_completed(futures):
+                        try:
+                            results.extend(future.result())
+                        except Exception as error:  # noqa: BLE001 - one collection partition cannot stop the batch.
+                            for job in futures[future]:
+                                results.append({
+                                    "datasetId": job.dataset_id,
+                                    "partitionKey": job.partition_key,
+                                    "status": "error",
+                                    "error": str(error)[:500],
+                                })
+        if not results:
+            idle_payload = {
                 "status": "idle",
                 "processedCount": 0,
+                "batchCount": 0,
                 "partitionSync": sync,
                 "documentRecovery": recovery,
                 "legacyMigration": migration,
@@ -146,27 +228,12 @@ class ExternalDataCollectionService:
                 "officialEvidenceProjection": projection_before,
                 "summary": self.store.summary(),
             }
-        provider_groups: Dict[str, List[object]] = {}
-        for job in jobs:
-            provider_groups.setdefault(str(job.provider_id or job.dataset_id), []).append(job)
-        groups = list(provider_groups.values())
-        if self.concurrency() <= 1 or len(groups) == 1:
-            results = [result for group in groups for result in self._process_provider_jobs(group)]
-        else:
-            results: List[Dict[str, object]] = []
-            with ThreadPoolExecutor(max_workers=min(self.concurrency(), len(groups))) as executor:
-                futures = {executor.submit(self._process_provider_jobs, group): group for group in groups}
-                for future in as_completed(futures):
-                    try:
-                        results.extend(future.result())
-                    except Exception as error:  # noqa: BLE001 - one collection partition cannot stop the batch.
-                        for job in futures[future]:
-                            results.append({
-                                "datasetId": job.dataset_id,
-                                "partitionKey": job.partition_key,
-                                "status": "error",
-                                "error": str(error)[:500],
-                            })
+            if selected_datasets or selected_subjects:
+                idle_payload["scope"] = {
+                    "datasetIds": selected_datasets,
+                    "subjectKeys": selected_subjects,
+                }
+            return idle_payload
         failures = [item for item in results if item.get("status") == "error"]
         attention = [item for item in results if item.get("requiresAttention")]
         deferred = [item for item in results if item.get("status") == "deferred"]
@@ -175,6 +242,7 @@ class ExternalDataCollectionService:
         return {
             "status": "partial" if failures or attention else "ok",
             "processedCount": len(results),
+            "batchCount": batch_count,
             "successCount": len(results) - len(failures) - len(deferred),
             "failureCount": len(failures),
             "deferredCount": len(deferred),
@@ -190,6 +258,10 @@ class ExternalDataCollectionService:
                 "after": projection_after,
             },
             "summary": self.store.summary(),
+            "scope": {
+                "datasetIds": selected_datasets,
+                "subjectKeys": selected_subjects,
+            },
         }
 
     def recover_documents(self) -> Dict[str, object]:
@@ -423,6 +495,12 @@ class ExternalDataCollectionService:
             projection_status = dict(loader() or {})
         elif self.evidence_reconciler:
             projection_status = dict(getattr(self.evidence_reconciler, "last_result", {}) or {})
+        summary = self.store.summary()
+        descriptors = self.registry.descriptors(self.settings)
+        fitness_loader = getattr(self.store, "fact_fitness_rows", None)
+        subjects = self.store.list_subjects()
+        subject_keys = [str(item.subject_key or item.symbol or "").upper() for item in subjects]
+        facts = fitness_loader(subject_keys) if callable(fitness_loader) else self.store.list_current(subject_keys)
         return {
             "enabled": self.enabled(),
             "workerId": self.worker_id,
@@ -430,8 +508,15 @@ class ExternalDataCollectionService:
             "batchSize": self.batch_size(),
             "concurrency": self.concurrency(),
             "leaseSeconds": self.lease_seconds(),
-            "registry": self.registry.descriptors(self.settings),
+            "registry": descriptors,
+            "fitness": evaluate_external_data_fitness(
+                facts,
+                summary.get("providers") or [],
+                descriptors,
+                subject_keys,
+                include_subjects=False,
+            ),
             "officialEvidenceProjection": projection_status,
             "documentRecovery": self.document_recovery.last_result if self.document_recovery else {"status": "not-configured"},
-            **self.store.summary(),
+            **summary,
         }

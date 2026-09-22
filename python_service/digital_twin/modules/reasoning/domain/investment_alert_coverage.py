@@ -615,3 +615,74 @@ def evaluate_alert_coverage_health(
         "overdueCoverageIds": [_text(item.get("coverageId")) for item in overdue[:20]],
         "failedCoverageIds": [_text(item.get("coverageId")) for item in failures[:20]],
     }
+
+
+def evaluate_subject_decision_lifecycle_health(
+    records: Iterable[Mapping[str, object]],
+    *,
+    now: Optional[datetime] = None,
+    deadline_seconds: int = 300,
+) -> Dict[str, object]:
+    """Audit recent subject cases independently from notification transport."""
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    rows = [dict(item or {}) for item in records or []]
+    terminal_stages = {
+        "PUBLISHED", "REVIEW_ONLY", "ABSTAINED", "OBSERVATION",
+        "SUPPRESSED", "BLOCKED", "SUPERSEDED", "EXPIRED",
+    }
+    terminal_delivery = {"delivered", "suppressed", "superseded", "failed"}
+    stage_counts: Dict[str, int] = {}
+    overdue = []
+    missing_reason = []
+    for item in rows:
+        stage = _text(item.get("stage")).upper() or "UNKNOWN"
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        delivery_state = _text(item.get("deliveryState")).lower()
+        terminal = bool(item.get("completedAt")) or stage in terminal_stages or delivery_state in terminal_delivery
+        if not terminal:
+            updated = _parse_time(item.get("updatedAt") or item.get("createdAt"))
+            if updated and (current - updated).total_seconds() >= max(1, int(deadline_seconds or 300)):
+                overdue.append(item)
+            continue
+        if not any((
+            _text(item.get("deliveryReasonCode")),
+            _text(item.get("deliveryReason")),
+            _text(item.get("abstentionReasonCode")),
+            _text(item.get("publicationOutcomeKind")),
+            _text(item.get("dispatchReasonCode")),
+            _text(item.get("finalAction")),
+            _text(item.get("lastErrorReason")),
+        )):
+            missing_reason.append(item)
+    ready_rows = [item for item in rows if _text(item.get("stage")).upper() == "READY"]
+    oldest_ready_seconds = 0
+    for item in ready_rows:
+        updated = _parse_time(item.get("updatedAt") or item.get("createdAt"))
+        if updated:
+            oldest_ready_seconds = max(oldest_ready_seconds, int((current - updated).total_seconds()))
+    if overdue:
+        state = "warning"
+        reason = "판단 케이스가 제한 시간 안에 다음 단계 또는 설명 가능한 종료 상태에 도달하지 못했습니다."
+    elif missing_reason:
+        state = "warning"
+        reason = "종료된 판단 케이스에 사용자·운영 추적용 종료 사유가 없습니다."
+    else:
+        state = "healthy"
+        reason = "최근 판단 케이스가 모두 진행 중이거나 설명 가능한 종료 상태입니다."
+    return {
+        "state": state,
+        "reason": reason,
+        "recordCount": len(rows),
+        "stageCounts": stage_counts,
+        "readyCount": len(ready_rows),
+        "oldestReadySeconds": max(0, oldest_ready_seconds),
+        "overdueCount": len(overdue),
+        "missingTerminalReasonCount": len(missing_reason),
+        "overdueSubjectCaseIds": [_text(item.get("subjectCaseId")) for item in overdue[:20]],
+        "missingReasonSubjectCaseIds": [_text(item.get("subjectCaseId")) for item in missing_reason[:20]],
+        "deadlineSeconds": max(1, int(deadline_seconds or 300)),
+    }

@@ -75,6 +75,14 @@ class SubjectStore:
         self.saved.append(subject_case)
         return subject_case
 
+    def get_with_connection(self, connection, subject_case_id):
+        self.read_connection = connection
+        return self.get(subject_case_id)
+
+    def save_with_connection(self, connection, subject_case):
+        self.write_connection = connection
+        self.saved.append(subject_case)
+
 
 class SubjectDecisionRecoveryTests(unittest.TestCase):
     def assert_subject_delivery_keeps_actual_outbox_reason_separate_from_hypothesis_readiness(self):
@@ -101,6 +109,15 @@ class SubjectDecisionRecoveryTests(unittest.TestCase):
         self.assertTrue(result.delivery_eligible)
         self.assertEqual("queued-job", result.notification_job_id)
         self.assertEqual("verified-investment-insight-condition", result.delivery_reason_code)
+        transaction = object()
+        result = orchestrator.decision_delivery_reconciled(
+            context,
+            {"queued": False, "reasonCode": "transactional-suppression"},
+            connection=transaction,
+        )
+        self.assertIs(transaction, store.read_connection)
+        self.assertIs(transaction, store.write_connection)
+        self.assertEqual("transactional-suppression", result.delivery_reason_code)
         subject.stage = SUBJECT_REVIEW_ONLY
         subject.publication = SimpleNamespace(outcome_kind=REVIEW_ONLY)
         context["deliverySuppressionReason"] = "account_delivery_disabled"
@@ -164,6 +181,41 @@ class SubjectDecisionRecoveryTests(unittest.TestCase):
         })
         self.assertEqual(SUBJECT_ABSTAINED, stale_case.stage)
         self.assertEqual("delivered", stale_case.delivery_state)
+
+        reconciled_case = StaleCase()
+        reconciled_case.stage = "VALIDATED"
+        reconciled_case.delivery_state = "awaiting-ai"
+
+        class ReconciliationStore(SubjectStore):
+            def stale_ready(self, max_age_minutes=30, limit=100):
+                return []
+
+            def stale_delivery_reconciliations(self, max_age_minutes=5, limit=100):
+                return [{
+                    "subjectCase": reconciled_case,
+                    "context": {
+                        "investmentSubjectDecisionCaseId": reconciled_case.subject_case_id,
+                        "decisionReconciliation": {
+                            "notificationDecision": "suppress",
+                            "reasonCode": "initial_graph_baseline",
+                        },
+                    },
+                    "deliveryOutcome": {
+                        "queued": False,
+                        "status": "web-only",
+                        "reasonCode": "initial_graph_baseline",
+                    },
+                }]
+
+        reconciliation_store = ReconciliationStore(reconciled_case)
+        reconciliation_orchestrator = InvestmentReasoningOrchestrator(
+            Repository(),
+            subject_case_repository=reconciliation_store,
+        )
+        repaired = reconciliation_orchestrator.recover_stale_subject_cases(30, 10)
+        self.assertEqual((reconciled_case,), repaired)
+        self.assertEqual("suppressed", reconciled_case.delivery_state)
+        self.assertEqual("initial_graph_baseline", reconciled_case.delivery_reason_code)
 
     def _assert_stale_undispatched_candidate_is_archived_as_observation(self):
         stale_case = StaleCase()

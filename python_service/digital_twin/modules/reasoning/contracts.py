@@ -66,6 +66,7 @@ _EXPORTS.update({
     'derive_delivery_eligibility': ('digital_twin.modules.reasoning.domain.investment_alert_coverage', 'derive_delivery_eligibility'),
     'entity_id': ('digital_twin.modules.reasoning.domain.ontology_contracts', 'entity_id'),
     'evaluate_alert_coverage_health': ('digital_twin.modules.reasoning.domain.investment_alert_coverage', 'evaluate_alert_coverage_health'),
+    'evaluate_subject_decision_lifecycle_health': ('digital_twin.modules.reasoning.domain.investment_alert_coverage', 'evaluate_subject_decision_lifecycle_health'),
     'fact_change_contract': ('digital_twin.modules.reasoning.domain.fact_changes', 'fact_change_contract'),
     'fact_revision_id': ('digital_twin.modules.reasoning.domain.fact_changes', 'fact_revision_id'),
     'fact_signature': ('digital_twin.modules.reasoning.domain.fact_changes', 'fact_signature'),

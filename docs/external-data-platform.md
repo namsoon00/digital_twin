@@ -16,6 +16,10 @@ This boundary supplies source facts. It does not decide `BUY`, `SELL`, or `HOLD`
 6. Vendor I/O runs outside database transactions.
 7. A short transaction updates `external_fact_current`, optionally appends `external_fact_revision`, records a material source event, and releases the lease.
 8. `ExternalSignalsReadModelService` merges relevant current facts into the compatibility `externalSignals` shape.
+9. The fitness read model evaluates each subject by decision purpose, so a
+   successful provider call is not confused with data that is usable for a
+   price, valuation, disclosure, news, consensus, derivative, macro, or crypto
+   decision.
 
 ## Datasets
 
@@ -64,6 +68,16 @@ npm run python:external-data:status
 npm run python:external-data:once
 npm run python:external-data:once -- --force
 npm run python:external-data:watch
+
+# Repair selected durable facts without disturbing other partitions.
+python3 python_service/service.py external-data refresh \
+  --datasets sec.company_facts,opendart.company_facts \
+  --symbols NVDA,000660 \
+  --max-batches 20
 ```
 
-Web status is available at `GET /api/external-data/status`. It reports configured policies, partition backlog, current fact storage, provider state, and 24-hour latency/error aggregates without exposing API keys or raw credentials.
+The refresh command validates dataset and subject identifiers, marks only that
+scope due, and drains bounded batches through the normal rate-limit, retry, and
+circuit-breaker path. It does not deactivate unrelated subjects or datasets.
+
+Web status is available at `GET /api/external-data/status`. It reports configured policies, partition backlog, current fact storage, provider state, purpose-specific fitness, and 24-hour latency/error aggregates without exposing API keys or raw credentials. Fitness states are `fresh`, `partial`, `stale`, `unsupported`, `failed`, and `not-collected`; `partial` means the minimum usable source exists but the configured cross-check source does not.

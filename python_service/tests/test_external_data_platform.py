@@ -200,7 +200,8 @@ class MemoryCollectionStore:
     def list_subjects(self):
         return [ExternalSubject("NVDA", symbol="NVDA", market="US", currency="USD")]
 
-    def sync_partitions(self, plans, _dataset_ids, now=None):
+    def sync_partitions(self, plans, _dataset_ids, now=None, deactivate_missing=True):
+        del deactivate_missing
         self.jobs = [
             CollectionJob(
                 descriptor.dataset_id,
@@ -213,8 +214,8 @@ class MemoryCollectionStore:
         ]
         return len(self.jobs)
 
-    def claim_due(self, worker_id, limit, lease_seconds, now=None):
-        del worker_id, lease_seconds, now
+    def claim_due(self, worker_id, limit, lease_seconds, now=None, dataset_ids=None, subject_keys=None):
+        del worker_id, lease_seconds, now, dataset_ids, subject_keys
         jobs, self.jobs = self.jobs[:limit], self.jobs[limit:]
         return [replace(job, attempt_count=job.attempt_count + 1) for job in jobs]
 
@@ -791,6 +792,15 @@ class ExternalDataPlatformTest(unittest.TestCase):
 
         self.assertEqual(["NVDA"], [item.partition_key for item in partitions])
         self.assertEqual("test-provider", registry.adapter("test.market").descriptor.provider_id)
+        self.assertEqual(["test.market"], registry.validate_dataset_ids(["test.market"]))
+        self.assertEqual(
+            ["NVDA"],
+            [item.partition_key for item in registry.desired_partitions(
+                [subject], {}, dataset_ids=["test.market"],
+            )],
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown external datasets"):
+            registry.validate_dataset_ids(["missing.dataset"])
 
     def test_followup_document_work_is_durable_and_not_a_static_partition(self):
         store = MemoryCollectionStore()
@@ -952,6 +962,14 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(1, result["processedCount"])
         self.assertEqual(1, len(store.completed))
         self.assertEqual([], store.events, "initial baselines must not fan out reasoning events")
+
+        scoped = service.run_once(
+            dataset_ids=["test.market"],
+            subject_keys=["NVDA"],
+            max_batches=2,
+        )
+        self.assertEqual({"datasetIds": ["test.market"], "subjectKeys": ["NVDA"]}, scoped["scope"])
+        self.assertEqual(1, scoped["batchCount"])
 
     def test_document_collection_persists_recovery_purpose_in_immutable_observation(self):
         for dataset in ("sec.document", "opendart.document"):
@@ -1311,6 +1329,11 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(2, signals["externalDataPlatform"]["factCount"])
         self.assertEqual(["yfinance.price"], signals["externalDataPlatform"]["staleDatasets"])
         self.assertTrue(any(item.get("datasetId") == "fred.macro" and not item.get("ok") for item in signals["statuses"]))
+        fitness = signals["externalDataPlatform"]["fitness"]
+        self.assertEqual("stale", fitness["subjects"]["NVDA"]["purposes"]["market-price"]["state"])
+        self.assertEqual("not-collected", fitness["subjects"]["NVDA"]["purposes"]["derivatives"]["state"])
+        self.assertEqual("fresh", fitness["subjects"]["GLOBAL"]["purposes"]["crypto-market"]["state"])
+        self.assertEqual("failed", fitness["subjects"]["GLOBAL"]["purposes"]["macro-regime"]["state"])
 
 
 if __name__ == "__main__":

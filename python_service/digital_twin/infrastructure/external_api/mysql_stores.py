@@ -186,6 +186,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         plans: Iterable[tuple],
         known_dataset_ids: Iterable[str],
         now: datetime = None,
+        deactivate_missing: bool = True,
     ) -> int:
         current = now or utc_now()
         stamp = iso(current)
@@ -193,7 +194,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         datasets = sorted({str(item or "") for item in known_dataset_ids or [] if str(item or "")})
 
         def mutation(connection):
-            if datasets:
+            if datasets and deactivate_missing:
                 placeholders = ", ".join(["%s"] * len(datasets))
                 connection.execute(
                     "UPDATE external_dataset_state SET active = 0, updated_at = %s "
@@ -332,13 +333,23 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         lease_seconds: int,
         now: datetime = None,
         dataset_ids: Iterable[str] = None,
+        subject_keys: Iterable[str] = None,
     ) -> List[CollectionJob]:
         current = now or utc_now()
         stamp = iso(current)
         lease_until = iso(current + timedelta(seconds=max(15, int(lease_seconds or 120))))
         row_limit = max(1, min(100, int(limit or 1)))
         datasets = sorted({str(value) for value in dataset_ids or []})
+        subjects = sorted({str(value).upper() for value in subject_keys or [] if str(value or "").strip()})
         dataset_filter = " AND dataset_id IN (" + ", ".join(["%s"] * len(datasets)) + ")" if datasets else ""
+        subject_filter = ""
+        if subjects:
+            placeholders = ", ".join(["%s"] * len(subjects))
+            subject_filter = (
+                " AND (UPPER(partition_key) IN (" + placeholders + ")"
+                " OR UPPER(JSON_UNQUOTE(JSON_EXTRACT(subject_json, '$.subjectKey'))) IN ("
+                + placeholders + "))"
+            )
 
         def mutation(connection):
             rows = connection.execute(
@@ -349,12 +360,12 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 WHERE active = 1
                   AND next_due_at <= %s
                   AND (job_status = 'pending' OR lease_until = '' OR lease_until <= %s)
-                """ + dataset_filter + """
+                """ + dataset_filter + subject_filter + """
                 ORDER BY priority DESC, next_due_at, dataset_id, partition_key
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
                 """,
-                (stamp, stamp, *datasets, row_limit),
+                (stamp, stamp, *datasets, *subjects, *subjects, row_limit),
             ).fetchall()
             jobs: List[CollectionJob] = []
             for row in rows:
@@ -544,8 +555,13 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 connection.execute("UPDATE external_dataset_state SET next_due_at = %s, updated_at = %s WHERE dataset_id = 'sec.document' AND job_status = 'pending' AND last_error IN (%s, %s, %s)",
                     (stamp, stamp, "circuit-open", "SEC document job requires a contact email, accession number, and URL", "SEC contact email is not configured"))
 
-    def make_due(self, dataset_ids: Iterable[str] = None) -> int:
+    def make_due(
+        self,
+        dataset_ids: Iterable[str] = None,
+        subject_keys: Iterable[str] = None,
+    ) -> int:
         datasets = sorted({str(item or "") for item in dataset_ids or [] if str(item or "")})
+        subjects = sorted({str(item or "").upper() for item in subject_keys or [] if str(item or "")})
         stamp = iso(utc_now())
         sql = "UPDATE external_dataset_state SET next_due_at = %s, job_status = 'pending', lease_owner = '', lease_until = '', updated_at = %s WHERE active = 1"
         params: List[object] = [stamp, stamp]
@@ -553,6 +569,15 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             placeholders = ", ".join(["%s"] * len(datasets))
             sql += " AND dataset_id IN (" + placeholders + ")"
             params.extend(datasets)
+        if subjects:
+            placeholders = ", ".join(["%s"] * len(subjects))
+            sql += (
+                " AND (UPPER(partition_key) IN (" + placeholders + ")"
+                " OR UPPER(JSON_UNQUOTE(JSON_EXTRACT(subject_json, '$.subjectKey'))) IN ("
+                + placeholders + "))"
+            )
+            params.extend(subjects)
+            params.extend(subjects)
         with self.transaction() as connection:
             cursor = connection.execute(sql, tuple(params))
         return int(cursor.rowcount or 0)
@@ -1045,6 +1070,38 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(sql, tuple(params)).fetchall()
         return [self._fact_row(row) for row in rows]
+
+    def fact_fitness_rows(self, subject_keys: Iterable[str] = None) -> List[Dict[str, object]]:
+        """Read only metadata needed by the status fitness model."""
+
+        subjects = sorted({str(item or "").strip() for item in subject_keys or [] if str(item or "").strip()})
+        sql = (
+            "SELECT dataset_id, subject_key, source_as_of, fetched_at, expires_at, "
+            "quality_json, payload_json <> '{}' AS payload_present "
+            "FROM external_fact_current"
+        )
+        params: List[object] = []
+        if subjects:
+            placeholders = ", ".join(["%s"] * len(subjects))
+            sql += " WHERE subject_key = 'global' OR subject_key IN (" + placeholders + ")"
+            params.extend(subjects)
+        sql += " ORDER BY dataset_id, subject_key"
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        current = utc_now()
+        result = []
+        for row in rows or []:
+            expiry = parse_iso(row.get("expires_at"))
+            result.append({
+                "datasetId": str(row.get("dataset_id") or ""),
+                "subjectKey": str(row.get("subject_key") or ""),
+                "sourceAsOf": str(row.get("source_as_of") or ""),
+                "fetchedAt": str(row.get("fetched_at") or ""),
+                "freshnessState": "fresh" if expiry and expiry >= current else "stale",
+                "quality": _json_loads(row.get("quality_json"), {}),
+                "payloadPresent": bool(row.get("payload_present")),
+            })
+        return result
 
     def provider_statuses(self) -> List[Dict[str, object]]:
         with self.connect() as connection:

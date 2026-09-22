@@ -4,7 +4,7 @@
 from contextlib import nullcontext
 import hashlib
 import json
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from digital_twin.modules.decisions.domain.investment_reasoning import SubjectDecisionCase
 from digital_twin.modules.decisions.domain.events import investment_inference_dispatch_decided_event, investment_inference_episode_completed_event
@@ -284,11 +284,17 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
 
     def get(self, subject_case_id: str) -> Optional[SubjectDecisionCase]:
         with self.connect() as connection:
-            row = connection.execute(
-                "SELECT payload_json FROM investment_subject_decision_cases WHERE subject_case_id = %s",
-                (str(subject_case_id or ""),),
-            ).fetchone()
-        return self.case_from_row(row)
+            return self.get_with_connection(connection, subject_case_id)
+
+    @staticmethod
+    def get_with_connection(connection, subject_case_id: str) -> Optional[SubjectDecisionCase]:
+        """Read the latest subject version visible to the active transaction."""
+
+        row = connection.execute(
+            "SELECT payload_json FROM investment_subject_decision_cases WHERE subject_case_id = %s",
+            (str(subject_case_id or ""),),
+        ).fetchone()
+        return MySQLSubjectDecisionCaseStore.case_from_row(row)
 
     def for_batch(self, batch_case_id: str) -> List[SubjectDecisionCase]:
         with self.connect() as connection:
@@ -318,6 +324,61 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
                 (age_minutes,),
             ).fetchall()
         return [item for item in (self.case_from_row(row) for row in rows or []) if item]
+
+    def stale_delivery_reconciliations(
+        self,
+        max_age_minutes: int = 5,
+        limit: int = 100,
+    ) -> List[Dict[str, object]]:
+        """Return durable post-AI outcomes missing from the subject lifecycle.
+
+        The AI insight episode is committed in the same transaction as the
+        completed request and therefore owns the authoritative notification
+        admission result. This query repairs only cases for which that durable
+        result exists; it never guesses whether a notification was delivered.
+        """
+
+        age_minutes = max(1, min(24 * 60, int(max_age_minutes or 5)))
+        row_limit = max(1, min(1000, int(limit or 100)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT decision.payload_json AS subject_payload_json, "
+                "episode.payload_json AS episode_payload_json "
+                "FROM investment_subject_decision_cases AS decision "
+                "JOIN ai_inference_requests AS request "
+                "ON request.request_id = decision.ai_request_id "
+                "JOIN investment_ai_insight_episodes AS episode "
+                "ON episode.request_id = request.request_id "
+                "WHERE request.status = 'completed' "
+                "AND decision.stage IN ('AI_COMPLETED', 'VALIDATED') "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(decision.payload_json, '$.deliveryState')) "
+                "IN ('awaiting-ai', 'pending', 'processing', 'retry') "
+                "AND decision.updated_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL %s MINUTE) "
+                "ORDER BY decision.updated_at ASC LIMIT " + str(row_limit),
+                (age_minutes,),
+            ).fetchall()
+        reconciliations = []
+        for row in rows or []:
+            subject_payload = _json_loads(row.get("subject_payload_json"), {})
+            episode_payload = _json_loads(row.get("episode_payload_json"), {})
+            reconciliation = dict(episode_payload.get("reconciliation") or {})
+            delivery_outcome = dict(reconciliation.get("deliveryOutcome") or {})
+            subject_case = (
+                SubjectDecisionCase.from_dict(subject_payload)
+                if subject_payload
+                else None
+            )
+            if not subject_case or not reconciliation or not delivery_outcome:
+                continue
+            reconciliations.append({
+                "subjectCase": subject_case,
+                "context": {
+                    "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
+                    "decisionReconciliation": reconciliation,
+                },
+                "deliveryOutcome": delivery_outcome,
+            })
+        return reconciliations
 
     def get_by_scope(
         self,

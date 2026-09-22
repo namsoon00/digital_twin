@@ -231,9 +231,10 @@
   },
   "storage": {
     "modules/decisions/infrastructure/mysql_subject_decision_cases.py::MySQLSubjectDecisionCaseStore": {
-      "hash": "2609dac339f7e5adebed68c0955ba0187c193f65c75fc540a5430ed5b4f2fdf2",
-      "reason": "Serialize subject decision lifecycle writes and make equal or stale AI retries first-writer-wins before immutable audit insertion; test_decision_audit_entries."
+      "hash": "38799ee80a38db69ae9914840ea5dbdcd8853c5ece83acce87a2cc9f511238f2",
+      "reason": "Serialize subject decision lifecycle writes, read the latest version through the active AI publication transaction, and recover only durable post-AI delivery outcomes from insight episodes; test_decision_audit_entries and test_subject_decision_recovery."
     },
+    "modules/notifications/infrastructure/mysql_investment_alert_coverage.py::MySQLInvestmentAlertCoverageStore": {"hash": "03c8b25c0083a4b132d15f699436ef139b3fd48b9f9520dde1ecdb53a10dd202", "reason": "Audit recent subject decision stages and terminal reasons beside material-event delivery coverage without changing notification admission; test_investment_alert_coverage and test_investment_alert_coverage_service."},
     "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.complete": {"hash": "2cb9ff96fe4360b33498b48eda9c25615244f97e6f3f41e741cd797ebb31bdbd", "reason": "Propagate actual admission reason codes atomically and retain aggregate model-call and token usage with each compressed execution audit; test_ai_inference_queue and test_subject_decision_recovery; docs/ai-follow-up-tracking.md."},
     "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.enqueue_subject_decision": {"hash": "74a455ac1095f3c7928c01245455d0fe742372cc8302e49a824fad97c6570047", "reason": "Apply durable per-subject cooldown and daily AI budgets before queue insertion while exempting action changes, tracked conditions, and new external evidence; test_ai_inference_queue."},
     "modules/notifications/infrastructure/mysql_notification_jobs.py::MySQLNotificationJobStore": {"hash": "9973499494ad5dcdda35c76d33e563aa1a10633179a1df6cdc5f24337f6a697c", "reason": "Require intraday granularity and pre-event observed clock before ranking follow-up prices; serialize account/subject delivery receipts with a connection-scoped named lock. test_information_followups, test_insight_evidence_flow; docs/insight-evidence-flow-remediation.md."},

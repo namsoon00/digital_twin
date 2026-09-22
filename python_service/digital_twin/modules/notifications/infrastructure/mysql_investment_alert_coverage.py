@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Dict, Mapping
 
-from digital_twin.modules.reasoning.contracts import ALERT_COVERAGE_CONTRACT_VERSION, derive_coverage_outcome, derive_delivery_eligibility, evaluate_alert_coverage_health, material_event_assessment
+from digital_twin.modules.reasoning.contracts import ALERT_COVERAGE_CONTRACT_VERSION, derive_coverage_outcome, derive_delivery_eligibility, evaluate_alert_coverage_health, evaluate_subject_decision_lifecycle_health, material_event_assessment
 from digital_twin.modules.notifications.domain.context_observation_notifications import is_typedb_context_observation_notification
 from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
@@ -412,6 +412,7 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                 ).fetchone()
                 clean_deployment = _text((row or {}).get("deployment_id"))
             rows = []
+            subject_lifecycle_rows = []
             if clean_deployment:
                 rows = connection.execute(
                     """
@@ -423,6 +424,17 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                     FROM investment_alert_coverage
                     WHERE deployment_id = %s AND event_at >= %s
                     ORDER BY event_at DESC, coverage_id DESC
+                    """,
+                    (clean_deployment, cutoff),
+                ).fetchall()
+                subject_lifecycle_rows = connection.execute(
+                    """
+                    SELECT subject_case_id, stage, outcome_kind, payload_json,
+                           created_at, updated_at, completed_at
+                    FROM investment_subject_decision_cases
+                    WHERE deployment_id = %s AND created_at >= %s
+                    ORDER BY updated_at DESC, subject_case_id DESC
+                    LIMIT 5000
                     """,
                     (clean_deployment, cutoff),
                 ).fetchall()
@@ -458,6 +470,37 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
             deadline_seconds=deadline_seconds,
             starvation_min_candidates=starvation_min_candidates,
         )
+        lifecycle_records = []
+        for row in subject_lifecycle_rows or []:
+            payload = _mapping(row.get("payload_json"))
+            abstention = _mapping(payload.get("abstention"))
+            publication = _mapping(payload.get("publication"))
+            dispatch = _mapping(payload.get("inferenceDispatchDecision"))
+            final_decision = _mapping(payload.get("finalDecision"))
+            errors = [item for item in payload.get("errors") or [] if isinstance(item, Mapping)]
+            lifecycle_records.append({
+                "subjectCaseId": _text(row.get("subject_case_id")),
+                "stage": _text(row.get("stage")),
+                "deliveryState": _text(payload.get("deliveryState")),
+                "deliveryReason": _text(payload.get("deliveryReason")),
+                "deliveryReasonCode": _text(payload.get("deliveryReasonCode")),
+                "abstentionReasonCode": _text(abstention.get("reasonCode")),
+                "publicationOutcomeKind": _text(publication.get("outcomeKind") or row.get("outcome_kind")),
+                "dispatchReasonCode": _text(dispatch.get("reasonCode")),
+                "finalAction": _text(final_decision.get("action")),
+                "lastErrorReason": _text((errors[-1] if errors else {}).get("reason")),
+                "createdAt": _text(row.get("created_at")),
+                "updatedAt": _text(row.get("updated_at")),
+                "completedAt": _text(row.get("completed_at")),
+            })
+        lifecycle = evaluate_subject_decision_lifecycle_health(
+            lifecycle_records,
+            now=current,
+            deadline_seconds=deadline_seconds,
+        )
+        if health.get("state") == "healthy" and lifecycle.get("state") != "healthy":
+            health = {**health, "state": lifecycle["state"], "reason": lifecycle["reason"]}
+        health["decisionLifecycle"] = lifecycle
         state_counts = {}
         for record in records:
             state = _text(record.get("state")) or "UNKNOWN"
@@ -466,6 +509,7 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
             "deploymentId": clean_deployment,
             "lookbackHours": max(1, int(lookback_hours or 24)),
             "health": health,
+            "decisionLifecycle": lifecycle,
             "stateCounts": state_counts,
             "recordCount": len(records),
             "latest": records[:40],

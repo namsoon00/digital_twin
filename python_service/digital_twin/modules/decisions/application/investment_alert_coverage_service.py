@@ -19,6 +19,10 @@ def _text(value: object) -> str:
     return " ".join(str(value or "").strip().split())
 
 
+def _mapping(value: object) -> Dict[str, object]:
+    return dict(value or {}) if isinstance(value, Mapping) else {}
+
+
 def _int_setting(settings: Mapping[str, object], key: str, fallback: int, lower: int, upper: int) -> int:
     try:
         value = int(float(str((settings or {}).get(key) or fallback)))
@@ -125,6 +129,7 @@ class InvestmentAlertCoverageService:
             now=current,
         ) or {})
         health = dict(result.get("health") or {})
+        lifecycle = dict(result.get("decisionLifecycle") or health.get("decisionLifecycle") or {})
         state = _text(health.get("state") or "unknown").lower()
         previous = dict(self.store.load_health_state(deployment_id) or {})
         previous_state = _text(previous.get("state") or "healthy").lower()
@@ -188,6 +193,7 @@ class InvestmentAlertCoverageService:
             "checkedAt": _utc_iso(current),
             "stateCounts": dict(result.get("stateCounts") or {}),
             "recordCount": int(result.get("recordCount") or 0),
+            "decisionLifecycle": lifecycle,
         }
         if alert_required:
             payload["lastAlertAt"] = _utc_iso(current)
@@ -221,6 +227,13 @@ class InvestmentAlertCoverageNotificationEnqueuer:
             + str(payload.get("terminalCoveragePct") or 0) + "%",
             "• 제한시간 초과: " + str(int(payload.get("overdueEventCount") or 0)) + "건",
             "• 처리 실패: " + str(int(payload.get("failedEventCount") or 0)) + "건",
+            "• 판단 케이스: READY "
+            + str(int(_mapping(payload.get("decisionLifecycle")).get("readyCount") or 0))
+            + "건 · 지연 "
+            + str(int(_mapping(payload.get("decisionLifecycle")).get("overdueCount") or 0))
+            + "건 · 종료 사유 누락 "
+            + str(int(_mapping(payload.get("decisionLifecycle")).get("missingTerminalReasonCount") or 0))
+            + "건",
             "• 판단 후보: " + str(int(payload.get("candidateEventCount") or 0))
             + "건 · 발송 가치 " + str(int(payload.get("deliveryEligibleCandidateCount") or 0))
             + "건 · 전달 " + str(int(payload.get("deliveredEligibleCandidateCount") or 0)) + "건",

@@ -17,6 +17,7 @@ from digital_twin.modules.reasoning.domain.investment_alert_coverage import (
     derive_delivery_eligibility,
     derive_coverage_outcome,
     evaluate_alert_coverage_health,
+    evaluate_subject_decision_lifecycle_health,
     material_event_assessment,
     reasoning_delivery_trigger,
 )
@@ -179,6 +180,25 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
         quiet = evaluate_alert_coverage_health([], now=now)
         self.assertEqual("healthy", quiet["state"])
         self.assertEqual(100.0, quiet["terminalCoveragePct"])
+
+        lifecycle = evaluate_subject_decision_lifecycle_health([
+            {
+                "subjectCaseId": "case:ready",
+                "stage": "READY",
+                "updatedAt": (now - timedelta(minutes=10)).isoformat(),
+            },
+            {
+                "subjectCaseId": "case:suppressed",
+                "stage": "VALIDATED",
+                "deliveryState": "suppressed",
+                "deliveryReasonCode": "unchanged-decision",
+                "updatedAt": now.isoformat(),
+            },
+        ], now=now, deadline_seconds=300)
+        self.assertEqual("warning", lifecycle["state"])
+        self.assertEqual(1, lifecycle["readyCount"])
+        self.assertEqual(1, lifecycle["overdueCount"])
+        self.assertEqual(0, lifecycle["missingTerminalReasonCount"])
 
     def test_health_detects_candidate_starvation_only_after_material_candidates(self):
         now = datetime(2026, 9, 1, 4, 0, tzinfo=timezone.utc)

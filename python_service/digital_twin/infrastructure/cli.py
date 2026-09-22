@@ -2097,6 +2097,16 @@ def external_data_command(args) -> int:
     if args.external_data_action == "once":
         print(json.dumps(runner.run_once(force=args.force), ensure_ascii=False))
         return 0
+    if args.external_data_action == "refresh":
+        dataset_ids = [item.strip() for item in str(args.datasets or "").split(",") if item.strip()]
+        subject_keys = [item.strip().upper() for item in str(args.symbols or "").split(",") if item.strip()]
+        print(json.dumps(runner.run_once(
+            force=True,
+            dataset_ids=dataset_ids,
+            subject_keys=subject_keys,
+            max_batches=int(args.max_batches or 20),
+        ), ensure_ascii=False))
+        return 0
     if args.external_data_action == "watch":
         runner = ReloadingCollectionRunner(runner, build_external_data_collection_runner, runtime_settings, settings)
         ExternalDataCollectionScheduler(runner, runner.interval_seconds()).run_forever()
@@ -2767,6 +2777,13 @@ def build_parser() -> argparse.ArgumentParser:
     external_data_actions = external_data.add_subparsers(dest="external_data_action", required=True)
     external_once = external_data_actions.add_parser("once")
     external_once.add_argument("--force", action="store_true")
+    external_refresh = external_data_actions.add_parser(
+        "refresh",
+        help="Refresh only selected datasets and symbols without replacing other partitions",
+    )
+    external_refresh.add_argument("--datasets", required=True)
+    external_refresh.add_argument("--symbols", default="")
+    external_refresh.add_argument("--max-batches", default="20")
     external_data_actions.add_parser("watch")
     external_data_actions.add_parser("status")
     external_data.set_defaults(func=external_data_command)

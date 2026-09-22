@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable
 
 from digital_twin.modules.news_intelligence.contracts import merge_company_knowledge_rows
+from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
 
 
 EXTERNAL_SIGNAL_MAP_FIELDS = {
@@ -132,7 +133,8 @@ class ExternalSignalsReadModelService:
         }
         datasets = set()
         stale = set()
-        rows = [row for row in self.fact_store.list_current(subject_keys) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
+        requested_subjects = [str(item or "").upper().strip() for item in subject_keys or [] if str(item or "").strip()]
+        rows = [row for row in self.fact_store.list_current(requested_subjects) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
         for row in rows:
             fragment = row.get("payload") if isinstance(row.get("payload"), dict) else {}
             for key, value in fragment.items():
@@ -194,5 +196,14 @@ class ExternalSignalsReadModelService:
             "factCount": len(rows),
             "datasets": sorted(datasets),
             "staleDatasets": sorted(stale),
+            "fitness": evaluate_external_data_fitness(
+                rows,
+                self.fact_store.provider_statuses(),
+                [
+                    {"datasetId": row.get("datasetId"), "enabled": True}
+                    for row in rows
+                ],
+                requested_subjects,
+            ),
         }
         return result

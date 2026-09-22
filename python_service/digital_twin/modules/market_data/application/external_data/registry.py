@@ -32,11 +32,15 @@ class ExternalDatasetRegistry:
         self,
         subjects: Iterable[ExternalSubject],
         settings: Dict[str, object],
+        dataset_ids: Iterable[str] = None,
     ) -> List[CollectionPartition]:
         rows: List[CollectionPartition] = []
         subject_rows = list(subjects or [])
+        selected = {str(item or "").strip() for item in dataset_ids or [] if str(item or "").strip()}
         for adapter in self.adapters():
             descriptor = adapter.descriptor
+            if selected and descriptor.dataset_id not in selected:
+                continue
             if not descriptor.enabled(settings):
                 continue
             if descriptor.partition_strategy == "followup":
@@ -44,6 +48,17 @@ class ExternalDatasetRegistry:
             partitions = adapter.partitions(subject_rows, settings)
             rows.extend(partitions[:descriptor.resolved_max_partitions(settings)])
         return rows
+
+    def validate_dataset_ids(self, dataset_ids: Iterable[str] = None) -> List[str]:
+        selected = sorted({
+            str(item or "").strip()
+            for item in dataset_ids or []
+            if str(item or "").strip()
+        })
+        unknown = [dataset_id for dataset_id in selected if dataset_id not in self._adapters]
+        if unknown:
+            raise ValueError("Unknown external datasets: " + ", ".join(unknown))
+        return selected
 
     def static_dataset_ids(self, settings: Dict[str, object]) -> List[str]:
         return [

@@ -24,7 +24,7 @@ class NotificationAIValidatedGateEnricher:
                 self.settings,
                 max_prompt_bytes=int(self.settings.get("notificationAiQueueMaxPromptBytes") or 24 * 1024),
                 repair_reasoning_effort=str(
-                    self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
+                    self.settings.get("notificationAiComparisonRepairReasoningEffort") or "medium"
                 ),
                 repair_timeout_seconds=int(
                     self.settings.get("notificationAiComparisonRepairTimeoutSeconds") or 0

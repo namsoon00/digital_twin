@@ -336,6 +336,81 @@ def notification_ai_material_fingerprint(context: Mapping[str, object]) -> str:
     return _canonical_hash(notification_ai_material_contract(context))
 
 
+def notification_ai_cost_control_exemption(context: Mapping[str, object]) -> Dict[str, object]:
+    """Identify changes that must bypass operational AI request budgets.
+
+    Cost control may defer repetitive observations, but it must not hide a new
+    action, a changed action envelope, or new external evidence. This contract
+    contains no investment judgement; it only protects high-value queue work.
+    """
+
+    values = dict(context or {})
+    material = notification_ai_material_contract(values)
+    transition = _mapping(material.get("transition"))
+    kind = _clean(transition.get("kind")).lower()
+    source_events = _texts(material.get("materialSourceEventKeys") or [])
+    news_impact = _mapping(values.get("newsImpact"))
+    research = (
+        _mapping(values.get("researchCycle"))
+        or _mapping(_mapping(values.get("ontologyRelationContext")).get("researchCycle"))
+    )
+    trigger = _mapping(material.get("reasoningDeliveryTrigger"))
+    lifecycle = _mapping(material.get("relationLifecycleTransition"))
+    reasons = []
+    if kind in {"direction-changed", "action-changed", "envelope-changed"}:
+        reasons.append("decision-transition")
+    if source_events:
+        reasons.append("new-source-evidence")
+    if bool(news_impact.get("decisionChanging")):
+        reasons.append("decision-changing-news")
+    if int(research.get("changedEvidenceCount") or 0) > 0:
+        reasons.append("verified-research-update")
+    if trigger and (
+        bool(trigger.get("observationFollowup"))
+        or bool(trigger.get("matchedConditions"))
+        or bool(trigger.get("materialRevisionKeys"))
+    ):
+        reasons.append("tracked-condition-transition")
+    if _clean(lifecycle.get("changeKind")).lower() in {
+        "formed", "invalidated", "confirmed", "reversed",
+    }:
+        reasons.append("material-lifecycle-transition")
+    return {
+        "exempt": bool(reasons),
+        "reasons": _texts(reasons),
+    }
+
+
+def notification_ai_cost_control_policy(settings: Mapping[str, object]) -> Dict[str, object]:
+    configured = dict(settings or {})
+
+    def bounded(key: str, fallback: int, minimum: int, maximum: int) -> int:
+        try:
+            return max(minimum, min(maximum, int(configured.get(key))))
+        except (TypeError, ValueError):
+            return fallback
+
+    enabled_value = _clean(configured.get("notificationAiCostControlEnabled")).lower()
+    return {
+        # Test and compatibility stores that do not provide this setting retain
+        # their original queue semantics. Runtime settings always provide it.
+        "enabled": (
+            "notificationAiCostControlEnabled" in configured
+            and enabled_value not in {"", "0", "false", "no", "off", "disabled"}
+        ),
+        "subjectCooldownMinutes": bounded(
+            "notificationAiSubjectCooldownMinutes", 180, 0, 24 * 60,
+        ),
+        "subjectDailyLimit": bounded(
+            "notificationAiSubjectDailyLimit", 6, 1, 1000,
+        ),
+        "dailyLimit": bounded("notificationAiDailyLimit", 40, 1, 10000),
+        "maxEffortDailyLimit": bounded(
+            "notificationAiMaxEffortDailyLimit", 8, 0, 1000,
+        ),
+    }
+
+
 def notification_ai_can_join_active(
     active_context: Mapping[str, object],
     incoming_context: Mapping[str, object],

@@ -654,6 +654,13 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         MySQLColumnDefinition("ai_inference_results", "publication_contract_passed", "TINYINT NOT NULL DEFAULT 0"),
         MySQLColumnDefinition("ai_inference_results", "contract_failure_code", "VARCHAR(96) NOT NULL DEFAULT ''"),
     ),
+    "ai_inference_execution_audits": (
+        MySQLColumnDefinition("ai_inference_execution_audits", "model_call_count", "INT NOT NULL DEFAULT 0"),
+        MySQLColumnDefinition("ai_inference_execution_audits", "input_tokens", "BIGINT NOT NULL DEFAULT 0"),
+        MySQLColumnDefinition("ai_inference_execution_audits", "cached_input_tokens", "BIGINT NOT NULL DEFAULT 0"),
+        MySQLColumnDefinition("ai_inference_execution_audits", "output_tokens", "BIGINT NOT NULL DEFAULT 0"),
+        MySQLColumnDefinition("ai_inference_execution_audits", "reasoning_output_tokens", "BIGINT NOT NULL DEFAULT 0"),
+    ),
     "ontology_reasoning_mailbox_events": (
         MySQLColumnDefinition(
             "ontology_reasoning_mailbox_events",

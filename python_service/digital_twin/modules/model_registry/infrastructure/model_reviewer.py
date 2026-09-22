@@ -163,7 +163,7 @@ def codex_process_arguments(
     return arguments
 
 
-def background_codex_process_arguments(reasoning_effort: str = "max") -> list:
+def background_codex_process_arguments(reasoning_effort: str = "high") -> list:
     return codex_process_arguments(reasoning_effort, background_ai_runtime_dir())
 
 

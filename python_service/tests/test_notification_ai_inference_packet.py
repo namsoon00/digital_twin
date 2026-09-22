@@ -191,7 +191,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual(["initial", "repair"], [row["attempt"] for row in outcome.model_responses])
         self.assertTrue(all(json.loads(row["rawResponse"]) for row in outcome.model_responses))
 
-    def test_deep_research_profile_uses_full_contract_budget_by_default(self):
+    def test_deep_research_profile_uses_bounded_contract_budget_by_default(self):
         context = investment_context()
         context["ontologyRelationContext"]["reviewLevel"] = "immediate"
 
@@ -199,7 +199,8 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
 
         self.assertEqual("notification-ai-execution-profile-v5", profile["version"])
         self.assertEqual("deepResearch", profile["name"])
-        self.assertEqual(64 * 1024, profile["maxPromptBytes"])
+        self.assertEqual("high", profile["reasoningEffort"])
+        self.assertEqual(40 * 1024, profile["maxPromptBytes"])
 
     def test_display_rounding_and_korean_direction_preserve_numeric_grounding(self):
         rows = [

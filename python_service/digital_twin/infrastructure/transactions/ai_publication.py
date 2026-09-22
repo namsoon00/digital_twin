@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Mapping, Optional
 
-from digital_twin.modules.decisions.domain.ai_inference_queue import AI_INFERENCE_COMPLETED, AI_INFERENCE_FAILED, AI_INFERENCE_PENDING, AI_INFERENCE_PROCESSING, AI_INFERENCE_RETRY, AI_INFERENCE_SUPERSEDED, AIInferenceRequest, AIInferenceResult, notification_ai_can_join_active, notification_ai_material_fingerprint
+from digital_twin.modules.decisions.domain.ai_inference_queue import AI_INFERENCE_COMPLETED, AI_INFERENCE_FAILED, AI_INFERENCE_PENDING, AI_INFERENCE_PROCESSING, AI_INFERENCE_RETRY, AI_INFERENCE_SUPERSEDED, AIInferenceRequest, AIInferenceResult, notification_ai_can_join_active, notification_ai_cost_control_exemption, notification_ai_cost_control_policy, notification_ai_material_fingerprint
 from digital_twin.modules.decisions.domain.event_types import AI_INFERENCE_COMPLETED as AI_INFERENCE_COMPLETED_EVENT, AI_INFERENCE_REQUESTED, AI_INFERENCE_SUPERSEDED as AI_INFERENCE_SUPERSEDED_EVENT, INVESTMENT_AI_INSIGHT_COMPLETED, INVESTMENT_AI_INSIGHT_FAILED, INVESTMENT_AI_INSIGHT_REQUESTED
 from digital_twin.modules.decisions.domain.events import ai_inference_event, investment_ai_insight_event, investment_decision_reconciled_event
 from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight import AIInsightEpisode, SUBJECT_DECISION_ORIGIN, ai_insight_handoff
@@ -573,6 +573,60 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     "existing": True,
                     "materialFingerprint": request.material_fingerprint,
                 }
+
+            cost_policy = notification_ai_cost_control_policy(self.runtime_settings)
+            exemption = notification_ai_cost_control_exemption(request.context)
+            if latest and bool(cost_policy.get("enabled")) and not bool(exemption.get("exempt")):
+                now = datetime.now(timezone.utc)
+                day_cutoff = (now - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
+                cooldown_minutes = int(cost_policy.get("subjectCooldownMinutes") or 0)
+                cooldown_cutoff = (
+                    now - timedelta(minutes=cooldown_minutes)
+                ).isoformat().replace("+00:00", "Z")
+                budget_row = connection.execute(
+                    "SELECT COUNT(*) AS global_count, "
+                    "SUM(CASE WHEN subject_key = %s THEN 1 ELSE 0 END) AS subject_count, "
+                    "SUM(CASE WHEN reasoning_effort = 'max' THEN 1 ELSE 0 END) AS max_count "
+                    "FROM ai_inference_requests WHERE created_at >= %s AND status <> %s",
+                    (request.subject_key, day_cutoff, AI_INFERENCE_SUPERSEDED),
+                ).fetchone() or {}
+                global_count = int(budget_row.get("global_count") or 0)
+                subject_count = int(budget_row.get("subject_count") or 0)
+                max_count = int(budget_row.get("max_count") or 0)
+                subject_limit = int(cost_policy.get("subjectDailyLimit") or 6)
+                global_limit = int(cost_policy.get("dailyLimit") or 40)
+                max_limit = int(cost_policy.get("maxEffortDailyLimit") or 0)
+                latest_created_at = _clean(latest.get("created_at"))
+                reason_code = ""
+                if global_count >= global_limit:
+                    reason_code = "daily-request-budget"
+                elif subject_count >= subject_limit:
+                    reason_code = "subject-daily-budget"
+                elif request.reasoning_effort == "max" and max_count >= max_limit:
+                    reason_code = "max-effort-daily-budget"
+                elif cooldown_minutes and latest_created_at >= cooldown_cutoff:
+                    reason_code = "subject-cooldown"
+                if reason_code:
+                    return {
+                        "status": "coalesced-cost-control",
+                        "reasonCode": reason_code,
+                        "reason": "새로운 행동 변화나 외부 근거가 없는 반복 관측이라 AI 재분석을 생략했습니다.",
+                        "requestId": latest_id,
+                        "notificationJobId": "",
+                        "reservedNotificationJobId": job.job_id,
+                        "subjectKey": request.subject_key,
+                        "subjectCaseId": request.origin_id,
+                        "existing": True,
+                        "budget": {
+                            "globalCount": global_count,
+                            "globalLimit": global_limit,
+                            "subjectCount": subject_count,
+                            "subjectLimit": subject_limit,
+                            "maxEffortCount": max_count,
+                            "maxEffortLimit": max_limit,
+                            "cooldownMinutes": cooldown_minutes,
+                        },
+                    }
 
             self.insert_request_with_connection(connection, request)
             if latest:
@@ -1702,6 +1756,26 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "AND result.created_at >= %s",
                 (target_prompt_bytes, AI_DECISION_PROMPT_VERSION, effectiveness_cutoff),
             ).fetchone() or {}
+            current_usage_row = connection.execute(
+                "SELECT COUNT(*) AS audited_request_count, "
+                "COALESCE(SUM(audit.model_call_count), 0) AS model_call_count, "
+                "COALESCE(SUM(audit.input_tokens), 0) AS input_tokens, "
+                "COALESCE(SUM(audit.cached_input_tokens), 0) AS cached_input_tokens, "
+                "COALESCE(SUM(audit.output_tokens), 0) AS output_tokens, "
+                "COALESCE(SUM(audit.reasoning_output_tokens), 0) AS reasoning_output_tokens "
+                "FROM ai_inference_execution_audits audit "
+                "JOIN ai_inference_requests request ON request.request_id = audit.request_id "
+                "WHERE request.message_type = 'investmentInsight' "
+                "AND request.prompt_version = %s AND audit.created_at >= %s",
+                (AI_DECISION_PROMPT_VERSION, effectiveness_cutoff),
+            ).fetchone() or {}
+            current_effort_rows = connection.execute(
+                "SELECT reasoning_effort, COUNT(*) AS count "
+                "FROM ai_inference_requests WHERE message_type = 'investmentInsight' "
+                "AND prompt_version = %s AND created_at >= %s "
+                "GROUP BY reasoning_effort ORDER BY reasoning_effort",
+                (AI_DECISION_PROMPT_VERSION, effectiveness_cutoff),
+            ).fetchall()
             current_failure_rows = connection.execute(
                 "SELECT COALESCE(NULLIF(result.contract_failure_code, ''), 'unknown') AS reason_code, "
                 "COUNT(*) AS count FROM ai_inference_results result "
@@ -1765,6 +1839,12 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             _clean(row.get("reason_code")) or "unknown": int(row.get("count") or 0)
             for row in current_failure_rows or []
         }
+        input_tokens = int(current_usage_row.get("input_tokens") or 0)
+        cached_input_tokens = int(current_usage_row.get("cached_input_tokens") or 0)
+        current_effort_counts = {
+            _clean(row.get("reasoning_effort")) or "unknown": int(row.get("count") or 0)
+            for row in current_effort_rows or []
+        }
         historical_status = (
             "critical" if eligible_count >= 10 and authored_count * 2 <= eligible_count
             else "degraded" if eligible_count and authored_count < eligible_count
@@ -1822,6 +1902,16 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     current_over_target_count / current_performance_count,
                     4,
                 ) if current_performance_count else None,
+            },
+            "currentAiUsage": {
+                "auditedRequestCount": int(current_usage_row.get("audited_request_count") or 0),
+                "modelCallCount": int(current_usage_row.get("model_call_count") or 0),
+                "inputTokens": input_tokens,
+                "cachedInputTokens": cached_input_tokens,
+                "uncachedInputTokens": max(0, input_tokens - cached_input_tokens),
+                "outputTokens": int(current_usage_row.get("output_tokens") or 0),
+                "reasoningOutputTokens": int(current_usage_row.get("reasoning_output_tokens") or 0),
+                "reasoningEffortCounts": current_effort_counts,
             },
             "currentAiFallbackReasons": current_fallback_reasons,
             "historicalAiEligibleCount": eligible_count,

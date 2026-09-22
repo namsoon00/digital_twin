@@ -30,7 +30,7 @@ CHANGED_METHODS = {
         "completed_comparison_pairs",
     },
     # Claim now retries its whole transaction; test_ai_claim_retry preserves its SQL/guards.
-    "MySQLAIInferenceQueueStore": {"complete", "claim"},
+    "MySQLAIInferenceQueueStore": {"complete", "claim", "enqueue_subject_decision"},
     "MySQLMarketObservationReasoningAnchorStore": {
         "repair_completed_reasoning_receipts"
     },

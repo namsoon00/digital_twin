@@ -891,6 +891,10 @@ class ConsoleReadModelService:
             1,
         )
         ai_prompt_over_target = int(ai_performance.get("overTargetCount") or 0)
+        ai_usage = _mapping(ai_summary.get("currentAiUsage"))
+        ai_model_calls = int(ai_usage.get("modelCallCount") or 0)
+        ai_input_tokens = int(ai_usage.get("inputTokens") or 0)
+        ai_output_tokens = int(ai_usage.get("outputTokens") or 0)
         notification_actionable_failures = int(
             notification_summary.get("actionable_failed")
             if notification_summary.get("actionable_failed") is not None
@@ -1070,6 +1074,11 @@ class ConsoleReadModelService:
                         f" · 평균 처리 {ai_average_latency_seconds}초"
                         f" · 프롬프트 목표 초과 {ai_prompt_over_target}/{ai_performance_samples}건"
                         if ai_performance_samples else ""
+                    )
+                    + (
+                        f" · 모델 호출 {ai_model_calls}회"
+                        f" · 입력 {ai_input_tokens:,}토큰 · 출력 {ai_output_tokens:,}토큰"
+                        if ai_model_calls else ""
                     )
                     + (f" · 최장 {ai_oldest_age_seconds}초" if ai_oldest_age_seconds else "")
                 ),

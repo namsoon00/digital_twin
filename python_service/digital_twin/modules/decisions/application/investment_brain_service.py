@@ -6,7 +6,7 @@ from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarge
 from digital_twin.modules.news_intelligence.contracts import ReasoningGeneration, ResearchRun, complete_reasoning_handoff
 from digital_twin.modules.outcomes.contracts import attach_abox_hypothesis_calibrations
 from digital_twin.modules.notifications.contracts import INVESTMENT_INSIGHT
-from digital_twin.modules.decisions.domain.notification_ai_decision_brief import AI_DECISION_CONTRACT_VERSION, AI_DECISION_PROMPT_VERSION
+from digital_twin.modules.decisions.domain.notification_ai_decision_brief import AI_DECISION_CONTRACT_VERSION, AI_DECISION_PROMPT_VERSION, notification_ai_execution_profile
 from digital_twin.modules.reasoning.contracts import relation_context_from_inferencebox
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import PortfolioSummary, Position
@@ -52,7 +52,7 @@ class InvestmentBrainService:
             self.settings,
             max_prompt_bytes=int(self.settings.get("notificationAiQueueMaxPromptBytes") or 24 * 1024),
             repair_reasoning_effort=str(
-                self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
+                self.settings.get("notificationAiComparisonRepairReasoningEffort") or "medium"
             ),
             repair_timeout_seconds=int(
                 self.settings.get("notificationAiComparisonRepairTimeoutSeconds") or 0
@@ -160,12 +160,14 @@ class InvestmentBrainService:
             "criteria": ["TypeDB 동적 인과 가설 비교", "반대 근거와 데이터 공백 조사", "검증 근거 반영 후 공통 AI 심판"],
             "ontologyRelationContext": relation_context,
             "investmentBrainQuestion": question.to_dict(),
-            "notificationAiReplayManifest": {
-                "promptVersion": AI_DECISION_PROMPT_VERSION,
-                "modelVersion": str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
-                "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
-                "reasoningEffort": "max",
-            },
+        }
+        execution_profile = notification_ai_execution_profile(context, self.settings)
+        context["notificationAiExecutionProfile"] = execution_profile
+        context["notificationAiReplayManifest"] = {
+            "promptVersion": AI_DECISION_PROMPT_VERSION,
+            "modelVersion": str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
+            "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
+            "reasoningEffort": str(execution_profile.get("reasoningEffort") or "medium"),
         }
         outcome = self.ai_judgement_service.judge(context)
         if not outcome.publishable:

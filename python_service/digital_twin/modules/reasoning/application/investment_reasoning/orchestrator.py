@@ -877,7 +877,10 @@ class InvestmentReasoningOrchestrator:
             return subject
         subject.ai_handoff_outcome = receipt
         queued = status in {"awaiting-ai-insight", "pending", "processing", "retry"}
-        coalesced = status in {"coalesced-material", "coalesced-identical", "coalesced-active"}
+        coalesced = status in {
+            "coalesced-material", "coalesced-identical", "coalesced-active",
+            "coalesced-cost-control",
+        }
         reason = str(receipt.get("reason") or receipt.get("reasonCode") or (
             "AI 요청이 큐에 등록됐습니다. 최종 알림 발송은 분석 뒤 따로 판단합니다." if queued else
             "동일한 판단 의미의 AI 요청에 병합했습니다. 중복 분석은 실행하지 않습니다." if coalesced else

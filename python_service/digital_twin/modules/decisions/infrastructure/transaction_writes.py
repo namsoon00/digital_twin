@@ -6,6 +6,7 @@ from typing import Any, Callable
 import gzip
 from digital_twin.modules.decisions.domain.ai_inference_queue import AI_INFERENCE_COMPLETED, AI_INFERENCE_SUPERSEDED, AIInferenceRequest
 from digital_twin.infrastructure.operational_common import json_dumps
+from digital_twin.infrastructure.ai_usage_metrics import ai_execution_usage
 
 
 def insert_ai_request(
@@ -92,7 +93,9 @@ def insert_ai_execution_audit(
     return connection.execute(
         "INSERT INTO ai_inference_execution_audits ("
         "request_id, notification_job_id, artifact_fingerprint, prompt_hash, model, "
-        "reasoning_effort, artifact_gzip, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        "reasoning_effort, model_call_count, input_tokens, cached_input_tokens, "
+        "output_tokens, reasoning_output_tokens, artifact_gzip, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             request.request_id,
             request.notification_job_id,
@@ -100,6 +103,11 @@ def insert_ai_execution_audit(
             _bound__clean(execution_audit.get("promptHash")),
             request.model,
             request.reasoning_effort,
+            ai_execution_usage(execution_audit)["model_call_count"],
+            ai_execution_usage(execution_audit)["input_tokens"],
+            ai_execution_usage(execution_audit)["cached_input_tokens"],
+            ai_execution_usage(execution_audit)["output_tokens"],
+            ai_execution_usage(execution_audit)["reasoning_output_tokens"],
             gzip.compress(audit_json.encode("utf-8"), compresslevel=6),
             stamp,
         ),

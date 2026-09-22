@@ -24,6 +24,7 @@ from digital_twin.modules.decisions.domain.notification_ai_gate_contracts import
 from digital_twin.modules.decisions.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
 from digital_twin.modules.decisions.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.infrastructure.ai_usage_metrics import ai_execution_usage
 from mysql_fixtures import (
     TestAIInferenceQueueStore,
     TestNotificationJobStore,
@@ -44,6 +45,26 @@ class AttemptQueueTimingTest(unittest.TestCase):
         self.assertIsNone(ai_attempt_queue_wait_ms(SimpleNamespace(started_at="2026-09-16T00:15:03Z")))
         self.assertIsNone(ai_attempt_queue_wait_ms(SimpleNamespace(available_at="2026-09-16T00:15:00Z",
                                                                    started_at="2026-09-16T00:00:01Z")))
+
+    def assert_execution_usage_sums_only_model_attempt_usage(self):
+        usage = ai_execution_usage({
+            "executionSpans": {"modelAttempts": [
+                {"modelOutput": {"usage": {
+                    "input_tokens": 100, "cached_input_tokens": 60,
+                    "output_tokens": 25, "reasoning_output_tokens": 15,
+                }}},
+                {"modelOutput": {"usage": {
+                    "input_tokens": 80, "cached_input_tokens": 20,
+                    "output_tokens": 10, "reasoning_output_tokens": 7,
+                }}},
+            ]},
+        })
+
+        self.assertEqual(2, usage["model_call_count"])
+        self.assertEqual(180, usage["input_tokens"])
+        self.assertEqual(80, usage["cached_input_tokens"])
+        self.assertEqual(35, usage["output_tokens"])
+        self.assertEqual(22, usage["reasoning_output_tokens"])
 
 
 class FakeReviewer:
@@ -359,6 +380,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("satisfied", self.queue.latest_insight_episodes("main", "005930", 1)[0]["insight"]["followUpConditions"][0]["status"])
 
     def test_subject_decision_ai_is_independent_idempotent_and_delivery_gated(self):
+        AttemptQueueTimingTest.assert_execution_usage_sums_only_model_attempt_usage(self)
         self.assert_review_followups_reach_outbox_once_with_the_final_reason_preserved()
         self.assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist()
         self.assert_review_only_subject_queues_narrative_without_action_transition()
@@ -367,6 +389,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assert_subject_decision_notification_admission_is_reflected_in_episode()
         self.assert_subject_decision_ai_failure_never_creates_notification()
         self.assert_subject_decision_queue_coalesces_same_material_meaning()
+        self.assert_subject_cost_control_defers_repetitive_work_but_not_action_changes()
         self.assert_material_source_and_lifecycle_changes_replace_ai_work()
 
     def test_duplicate_insight_keeps_watches_without_notifications_or_confirmation_resets(self):
@@ -926,6 +949,54 @@ class AIInferenceQueueTests(unittest.TestCase):
             )
         )
         self.assertEqual("completed", self.queue.get(first.request_id).status)
+
+    def assert_subject_cost_control_defers_repetitive_work_but_not_action_changes(self):
+        self.setUp()
+        self.queue.runtime_settings.update({
+            "notificationAiCostControlEnabled": "1",
+            "notificationAiSubjectCooldownMinutes": "180",
+            "notificationAiSubjectDailyLimit": "6",
+            "notificationAiDailyLimit": "40",
+            "notificationAiMaxEffortDailyLimit": "8",
+        })
+        first_job, first = self.create_detached_request("subject:cost:first")
+        self.assertEqual(
+            "awaiting-ai-insight",
+            self.queue.enqueue_subject_decision(first_job, first)["status"],
+        )
+
+        repeated_job, repeated = self.create_detached_request("subject:cost:repeated")
+        repeated.material_fingerprint = "b" * 64
+        repeated_outcome = self.queue.enqueue_subject_decision(repeated_job, repeated)
+
+        self.assertEqual("coalesced-cost-control", repeated_outcome["status"])
+        self.assertEqual("subject-cooldown", repeated_outcome["reasonCode"])
+        self.assertEqual(1, int(mysql_fetchone(
+            self.seed, "SELECT COUNT(*) FROM ai_inference_requests"
+        )[0]))
+
+        changed_job, _ = self.create_detached_request("subject:cost:action-changed")
+        changed_job.context["decisionTransition"] = {
+            "kind": "action-changed",
+            "material": True,
+            "currentAction": "ADD",
+        }
+        changed_handoff = AIInsightHandoff.create(changed_job.context, changed_job.to_dict())
+        changed_job.context["investmentAIInsightHandoff"] = changed_handoff.to_dict()
+        changed = AIInferenceRequest.create_for_subject_decision(
+            changed_job,
+            changed_job.context,
+            changed_handoff,
+            model="gpt-5.6-sol",
+            reasoning_effort="high",
+        )
+
+        changed_outcome = self.queue.enqueue_subject_decision(changed_job, changed)
+
+        self.assertEqual("awaiting-ai-insight", changed_outcome["status"])
+        self.assertEqual(2, int(mysql_fetchone(
+            self.seed, "SELECT COUNT(*) FROM ai_inference_requests"
+        )[0]))
 
     def test_verified_ai_narrative_survives_action_contract_fallback(self):
         reviewed = NotificationAIValidatedResponse(

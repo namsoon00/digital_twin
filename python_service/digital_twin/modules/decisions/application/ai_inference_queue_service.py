@@ -603,17 +603,14 @@ class NotificationAIRequestEnqueuer:
             self.settings,
         )
         execution_profile = notification_ai_execution_profile(context, self.settings)
-        # Investment judgment is intentionally pinned to the configured top
-        # model and max effort; lower-effort repair remains a separate bounded
-        # contract-repair pass.
-        execution_profile["reasoningEffort"] = "max"
         context["notificationAiExecutionProfile"] = execution_profile
-        model = "gpt-5.6-sol"
+        model = str(self.settings.get("notificationAiModel") or "gpt-5.6-sol").strip()
+        reasoning_effort = str(execution_profile.get("reasoningEffort") or "medium")
         context["notificationAiReplayManifest"] = {
             "promptVersion": AI_DECISION_PROMPT_VERSION,
             "modelVersion": model,
             "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
-            "reasoningEffort": "max",
+            "reasoningEffort": reasoning_effort,
         }
         job.context = context
         handoff = AIInsightHandoff.create(context, job.to_dict())
@@ -629,7 +626,7 @@ class NotificationAIRequestEnqueuer:
             context,
             handoff,
             model=model,
-            reasoning_effort="max",
+            reasoning_effort=reasoning_effort,
             prompt_version=AI_DECISION_PROMPT_VERSION,
         )
         outcome = self.queue.enqueue_subject_decision(job, request)
@@ -645,9 +642,12 @@ class NotificationAIRequestEnqueuer:
             )
         elif (
             not narrative_only
-            and status in {"coalesced-material", "coalesced-identical", "coalesced-active"}
+            and status in {
+                "coalesced-material", "coalesced-identical", "coalesced-active",
+                "coalesced-cost-control",
+            }
         ):
-            reason = (
+            reason = str(outcome.get("reason") or "") or (
                 "진행 중인 최고 모델 분석을 중단하지 않도록 이번 중간 판단 건을 "
                 "별도 AI 실행 없이 종료했습니다."
                 if status == "coalesced-active" and outcome.get("refreshRequired")
@@ -748,10 +748,10 @@ class AIInferenceQueueRunner:
             self.max_prompt_bytes,
         )
         repair_effort = str(
-            self.settings.get("notificationAiComparisonRepairReasoningEffort") or "max"
+            self.settings.get("notificationAiComparisonRepairReasoningEffort") or "medium"
         ).strip().lower()
         self.comparison_repair_reasoning_effort = (
-            repair_effort if repair_effort in {"low", "medium", "high", "max"} else "max"
+            repair_effort if repair_effort in {"low", "medium", "high", "max"} else "medium"
         )
         self.comparison_repair_timeout_seconds = _optional_seconds_setting(
             self.settings,

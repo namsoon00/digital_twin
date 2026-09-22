@@ -234,7 +234,8 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
     def assert_queue_receipt_distinguishes_admission_from_dispatch_intent(self):
         for status, state in [
             ("awaiting-ai-insight", "awaiting-ai"), ("coalesced-material", "coalesced-ai"),
-            ("coalesced-active", "coalesced-ai"), ("web-only-no-decision-value", "archived"),
+            ("coalesced-active", "coalesced-ai"), ("coalesced-cost-control", "coalesced-ai"),
+            ("web-only-no-decision-value", "archived"),
             ("handoff-error", "failed"),
         ]:
             with self.subTest(status=status):

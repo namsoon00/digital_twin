@@ -136,7 +136,7 @@ def notification_ai_execution_profile(
     deep_reasons: List[str] = []
     if review_level in {"immediate", "act"}:
         deep_reasons.append("high-review-level")
-    if change_state in {"direction-changed", "action-changed", "new-condition", "envelope-changed"}:
+    if change_state in {"direction-changed", "action-changed", "envelope-changed"}:
         deep_reasons.append("material-decision-change")
     if conflict_state in {"mixed", "conflicted", "contested", "blocking"}:
         deep_reasons.append("competing-evidence")
@@ -154,16 +154,16 @@ def notification_ai_execution_profile(
     if profile == AI_PROFILE_DEEP_RESEARCH:
         effort = _reasoning_effort(
             fixed_effort or settings.get("notificationAiDeepReasoningEffort"),
-            "max",
+            "high",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 64 * 1024, 12 * 1024, 64 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 40 * 1024, 12 * 1024, 64 * 1024)
     else:
         effort = _reasoning_effort(
             fixed_effort or settings.get("notificationAiStandardReasoningEffort"),
-            "high",
+            "medium",
         )
         prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 24 * 1024, 12 * 1024, 32 * 1024)
-    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 64 * 1024, 12 * 1024, 64 * 1024)
+    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 48 * 1024, 12 * 1024, 64 * 1024)
     return {
         "version": "notification-ai-execution-profile-v5",
         "name": profile,

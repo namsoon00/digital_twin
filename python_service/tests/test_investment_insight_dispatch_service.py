@@ -160,7 +160,8 @@ class FakeOrchestrator:
 
     @staticmethod
     def compact_subject_context(case):
-        return case.to_dict()
+        from digital_twin.modules.reasoning.application.investment_reasoning.orchestrator import InvestmentReasoningOrchestrator
+        return InvestmentReasoningOrchestrator.compact_subject_context(case)
 
     def record_inference_dispatch(self, subject_case_id, decision, delivery_state=""):
         case = self.required_subject(subject_case_id)
@@ -635,12 +636,34 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         )
         self.assertNotIn("AI 투자 인사이트", typedb_message)
 
+        compact_subject = typedb_job.context["investmentSubjectDecisionCase"]
+        self.assertNotIn("candidateSet", compact_subject)
+        self.assertEqual(
+            ["hypothesis:mstr:trend"],
+            compact_subject["eligibleHypothesisIds"],
+        )
+
         repeated = service.dispatch([alert(actionable, stage_context, "stage-retry")])
         self.assertEqual(1, len(notification_queue.jobs))
         self.assertEqual(
             "typedb-notification-already-recorded",
             repeated["typedbCompanionOutcomes"][0]["status"],
         )
+
+        missing_relation_selection = context_observation(actionable)
+        missing_relation_selection["ontologyRelationContext"]["decision"] = {}
+        actionable.synthesis = DecisionSynthesis.from_dict({
+            **actionable.synthesis.to_dict(),
+            "selected_rule_id": "",
+        })
+        suppressed = service.dispatch([
+            alert(actionable, missing_relation_selection, "stage-no-selection")
+        ])
+        self.assertEqual(
+            "typedb-stage-missing-selected-rule",
+            suppressed["typedbCompanionOutcomes"][0]["reasonCode"],
+        )
+        self.assertFalse(suppressed["typedbCompanionOutcomes"][0]["queued"])
 
 
 if __name__ == "__main__":

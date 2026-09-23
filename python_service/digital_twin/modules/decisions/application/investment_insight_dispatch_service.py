@@ -128,7 +128,7 @@ class InvestmentInsightDispatchService:
                 )
                 if companion:
                     typedb_companion_outcomes.append(companion[0])
-                    if companion[0].get("queued"):
+                    if companion[0].get("queued") and companion[1] is not None:
                         typedb_queued_events.append(companion[1])
                 ai_events.append(event)
                 continue
@@ -253,8 +253,20 @@ class InvestmentInsightDispatchService:
             *tuple(getattr(candidate, "eligible_hypothesis_ids", ()) or ()),
             *tuple(getattr(candidate, "reference_hypothesis_ids", ()) or ()),
         ]))
-        if not selected_rule_id or not hypothesis_ids:
-            return None
+        if not selected_rule_id:
+            return self._typedb_companion_suppression(
+                event,
+                subject_case,
+                "typedb-stage-missing-selected-rule",
+                "TypeDB 후보 관계는 있으나 대표 관계가 선택되지 않아 별도 알림을 만들지 않았습니다.",
+            ), None
+        if not hypothesis_ids:
+            return self._typedb_companion_suppression(
+                event,
+                subject_case,
+                "typedb-stage-missing-hypotheses",
+                "TypeDB 대표 관계에 연결된 가설 후보가 없어 별도 알림을 만들지 않았습니다.",
+            ), None
 
         context["investmentSubjectDecisionCase"] = (
             self.reasoning_orchestrator.compact_subject_context(subject_case)
@@ -275,7 +287,19 @@ class InvestmentInsightDispatchService:
         }
         semantic_delivery = context_observation_delivery_decision(context)
         if str(semantic_delivery.get("decision") or "").strip().lower() != "send":
-            return None
+            return self._typedb_companion_suppression(
+                event,
+                subject_case,
+                str(
+                    semantic_delivery.get("suppressionReason")
+                    or "typedb-stage-contract-rejected"
+                ),
+                str(
+                    semantic_delivery.get("reason")
+                    or "TypeDB 단계 알림 계약을 충족하지 못했습니다."
+                ),
+                semantic_delivery=semantic_delivery,
+            ), None
 
         companion_decision = InferenceDispatchDecision.create(
             subject_case,
@@ -302,6 +326,31 @@ class InvestmentInsightDispatchService:
         )
         outcome["companionOfRoute"] = HANDOFF_AI
         return outcome, companion_event
+
+    @staticmethod
+    def _typedb_companion_suppression(
+        event: AlertEvent,
+        subject_case,
+        reason_code: str,
+        reason: str,
+        *,
+        semantic_delivery: Mapping[str, object] = None,
+    ) -> Dict[str, object]:
+        outcome = {
+            "status": "typedb-companion-suppressed",
+            "route": PUBLISH_TYPEDB,
+            "companionOfRoute": HANDOFF_AI,
+            "eventKey": str(getattr(event, "key", "") or ""),
+            "symbol": str(getattr(event, "symbol", "") or "").upper(),
+            "subjectCaseId": str(getattr(subject_case, "subject_case_id", "") or ""),
+            "notificationJobId": "",
+            "queued": False,
+            "reasonCode": reason_code,
+            "reason": reason,
+        }
+        if semantic_delivery:
+            outcome["semanticDeliveryDecision"] = dict(semantic_delivery)
+        return outcome
 
     def _publish_typedb(
         self,

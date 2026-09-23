@@ -131,7 +131,10 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
     stage_observation = _mapping(payload.get("typedbAiHandoffObservation"))
     if stage_observation:
         subject_case = _mapping(payload.get("investmentSubjectDecisionCase"))
-        candidate = _mapping(subject_case.get("candidateSet"))
+        # Production uses the compact subject projection, where the candidate
+        # identity and hypothesis ids live at the subject root. Historical and
+        # test payloads may still carry the full nested candidate snapshot.
+        candidate = _mapping(subject_case.get("candidateSet")) or subject_case
         synthesis = _mapping(subject_case.get("synthesis"))
         subject_case_id = _text(
             payload.get("investmentSubjectDecisionCaseId")
@@ -142,7 +145,11 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             or synthesis.get("inference_generation_id")
             or synthesis.get("inferenceGenerationId")
         )
-        candidate_fingerprint = _text(candidate.get("fingerprint"))
+        candidate_fingerprint = _text(
+            candidate.get("fingerprint")
+            or candidate.get("candidateFingerprint")
+            or subject_case.get("candidateFingerprint")
+        )
         selected_rule_id = _text(stage_observation.get("selectedRuleId"))
         canonical_selected_rule_id = _text(
             synthesis.get("selected_rule_id")
@@ -160,6 +167,9 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
                 "executionEligibleHypothesisIds",
                 "eligibleHypothesisIds",
                 "referenceHypothesisIds",
+                "execution_eligible_hypothesis_ids",
+                "eligible_hypothesis_ids",
+                "reference_hypothesis_ids",
             )
             for item in candidate.get(key) or []
             if _text(item)

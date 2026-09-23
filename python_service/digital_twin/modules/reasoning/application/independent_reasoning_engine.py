@@ -1669,10 +1669,14 @@ class V2ReasoningEngine:
             delivery_events = list(handoff.get("queuedEvents") or [])
             insight_dispatch_status = str(handoff.get("status") or "web-only")
             insight_dispatch_routes = dict(handoff.get("routeCounts") or {})
+            persisted_dispatch_outcomes = [
+                *(handoff.get("outcomes") or []),
+                *(handoff.get("typedbCompanionOutcomes") or []),
+            ]
             insight_dispatch_outcomes = tuple({key: row[key] for key in (
                 "status", "route", "symbol", "subjectCaseId", "requestId", "reason", "reasonCode",
-                "existing", "refreshRequired",
-            ) if key in row} for row in handoff.get("outcomes") or [])
+                "existing", "refreshRequired", "companionOfRoute", "queued", "notificationJobId",
+            ) if key in row} for row in persisted_dispatch_outcomes)
             typedb_published_count = int(handoff.get("typedbPublishedCount") or 0)
             ai_queued_count = int(
                 handoff.get("aiQueuedCount")

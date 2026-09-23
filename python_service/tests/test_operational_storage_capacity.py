@@ -337,7 +337,7 @@ class OperationalStorageCapacityTests(unittest.TestCase):
                 return 16 * 1024 * 1024 * 1024 if Path(path).name == "mysql-runtime" else 0
 
             inventory = operational_storage_inventory(
-                {},
+                {"operationalMySqlDataMaxSizeMb": "16384"},
                 data_path=root,
                 disk_usage_provider=lambda _path: SimpleNamespace(
                     free=80 * 1024 * 1024 * 1024,

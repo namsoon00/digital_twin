@@ -96,6 +96,20 @@ def _stable_payload(value: object) -> object:
     return value
 
 
+def _stable_company_event_contract(value: object) -> object:
+    """Exclude collection identity while retaining the event's business meaning."""
+    if not isinstance(value, Mapping):
+        return value
+    return {
+        str(key): candidate
+        for key, candidate in value.items()
+        if _normalized_key(key) not in {
+            "observationid", "sourcereferences", "sourcedocumentid",
+            "correctssourcedocumentid",
+        }
+    }
+
+
 def _semantic_payload(value: object) -> Dict[str, object]:
     """Return the graph-relevant portion of an evidence payload.
 
@@ -110,15 +124,8 @@ def _semantic_payload(value: object) -> Dict[str, object]:
         if normalized not in INFERENCE_PAYLOAD_KEYS:
             continue
         stable = _stable_payload(candidate)
-        if normalized == "companyeventcontract" and isinstance(stable, Mapping):
-            stable = {
-                str(nested_key): nested_value
-                for nested_key, nested_value in stable.items()
-                if _normalized_key(nested_key) not in {
-                    "observationid", "sourcereferences", "sourcedocumentid",
-                    "correctssourcedocumentid",
-                }
-            }
+        if normalized == "companyeventcontract":
+            stable = _stable_company_event_contract(stable)
         if normalized == "aianalysis" and isinstance(stable, Mapping):
             stable = {
                 str(nested_key): nested_value
@@ -160,6 +167,11 @@ def evidence_content_signature(evidence) -> str:
     # not make an unchanged active fact look like a new inference input.
     payload.pop("evidenceLifecycleState", None)
     payload.pop("evidenceLifecycleChangedAt", None)
+    stable_payload = _stable_payload(payload)
+    if isinstance(stable_payload, dict) and "companyEventContract" in stable_payload:
+        stable_payload["companyEventContract"] = _stable_company_event_contract(
+            stable_payload["companyEventContract"]
+        )
     return fact_signature({
         "evidenceId": str(getattr(evidence, "evidence_id", "") or "").strip(),
         "symbol": clean_symbol(getattr(evidence, "symbol", "")),
@@ -181,7 +193,7 @@ def evidence_content_signature(evidence) -> str:
         "materialityState": str(getattr(evidence, "materiality_state", "context") or "context").strip(),
         "dataState": str(getattr(evidence, "data_state", "partial") or "partial").strip(),
         "validationState": str(getattr(evidence, "validation_state", "conditional") or "conditional").strip(),
-        "payload": _stable_payload(payload),
+        "payload": stable_payload,
     })
 
 

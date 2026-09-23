@@ -63,6 +63,13 @@ INFERENCE_PAYLOAD_KEYS = {
     "form", "receiptno", "reportname", "regulatoryeventtype",
     "promptevidenceadmission", "newseligibility", "officialdocumentstate",
     "documentverified", "analysisready", "storyidentityversion",
+    "companyeventcontract", "corporateactiontype", "eventlifecyclestate",
+    "eventrevisionstate", "issuedsharecount", "releasedsharecount",
+    "remainingsharecount", "registeredsharecount", "cashdividendpercommonshare",
+    "cashdividendperpreferredshare", "commoncashdividendratepct",
+    "commonstockdividendratepct", "preferredstockdividendratepct",
+    "issuereason", "issuereasoncode", "rightreason", "rightreasoncode",
+    "shareclasscode", "shareclassname", "parvalue",
 }
 
 PRESENTATION_ONLY_PAYLOAD_KEYS = {
@@ -103,6 +110,15 @@ def _semantic_payload(value: object) -> Dict[str, object]:
         if normalized not in INFERENCE_PAYLOAD_KEYS:
             continue
         stable = _stable_payload(candidate)
+        if normalized == "companyeventcontract" and isinstance(stable, Mapping):
+            stable = {
+                str(nested_key): nested_value
+                for nested_key, nested_value in stable.items()
+                if _normalized_key(nested_key) not in {
+                    "observationid", "sourcereferences", "sourcedocumentid",
+                    "correctssourcedocumentid",
+                }
+            }
         if normalized == "aianalysis" and isinstance(stable, Mapping):
             stable = {
                 str(nested_key): nested_value

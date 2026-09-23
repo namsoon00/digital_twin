@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Tuple
 from digital_twin.modules.news_intelligence.domain.disclosure_analysis import DISCLOSURE_ANALYSIS_PROMPT_VERSION, disclosure_analysis_payload, local_disclosure_analysis
 from digital_twin.modules.news_intelligence.domain.disclosure_quality import apply_disclosure_document_quality
 from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
+from digital_twin.modules.news_intelligence.domain.company_event import bind_company_event_contract
 from digital_twin.modules.market_data.contracts import clamp, number
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
 from digital_twin.modules.reasoning.contracts import DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, VALIDATION_STATE_LABELS, conflict_state_from_roles
@@ -223,6 +224,15 @@ class ResearchEvidence:
             payload["evidenceLifecycleState"] = lifecycle_state
         if lifecycle_changed_at:
             payload["evidenceLifecycleChangedAt"] = lifecycle_changed_at
+        normalized_kind = str(kind or "news").strip().lower() or "news"
+        if normalized_kind in {"news", "disclosure", "filing", "sec-filing", "sec_filing", "corporate-action"}:
+            payload = bind_company_event_contract(
+                payload,
+                symbol=symbol,
+                kind=normalized_kind,
+                title=title,
+                published_at=published_at or observed_at,
+            )
         if not payload.get("sourceTrustState"):
             payload["sourceTrustState"] = (
                 news_domain.news_source_trust_state(legacy_confidence)
@@ -328,6 +338,8 @@ class ResearchEvidence:
             "documentHash": str(payload.get("documentHash") or ""),
             "sourceRevision": str(payload.get("sourceRevision") or ""),
             "sourceAsOf": str(payload.get("sourceAsOf") or self.published_at or self.observed_at),
+            "companyEventContract": dict(payload.get("companyEventContract") or {}),
+            "sourceReferences": list(payload.get("sourceReferences") or []),
             "disclosureAnalysis": dict(payload.get("disclosureAnalysis") or {}),
             "sourcePublisher": str(payload.get("sourcePublisher") or ""),
             "sourceOrigin": str(payload.get("sourceOrigin") or ""),
@@ -746,6 +758,10 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
             "reportDate": str(latest.get("reportDate") or ""),
             "primaryDocument": str(latest.get("primaryDocument") or ""),
             "filingIndexUrl": sec_filing_index_url(sec.get("cik"), latest.get("accessionNumber")),
+            "sourceReferences": list(latest.get("sourceReferences") or []),
+            "eventRevisionState": str(latest.get("eventRevisionState") or ""),
+            "eventLifecycleState": str(latest.get("eventLifecycleState") or ""),
+            "correctsSourceDocumentId": str(latest.get("correctsSourceDocumentId") or ""),
         }, title=form, source=source, document_text=document_text, document_quality=document_quality, metadata_verified=bool(form and filing_date))
         evidence.append(ResearchEvidence(
             evidence_id="research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
@@ -852,6 +868,11 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
                 "filerName": str(disclosure_item.get("flrName") or ""),
                 "remarks": str(disclosure_item.get("remarks") or ""),
                 "officialDocumentUrl": opendart_url(receipt_no),
+                "sourceReferences": list(disclosure_item.get("sourceReferences") or []),
+                "eventRevisionState": str(disclosure_item.get("eventRevisionState") or ""),
+                "eventLifecycleState": str(disclosure_item.get("eventLifecycleState") or ""),
+                "originalReceiptNo": str(disclosure_item.get("originalReceiptNo") or ""),
+                "correctsSourceDocumentId": str(disclosure_item.get("correctsSourceDocumentId") or ""),
             }, title=report, source=source, document_text=document_text, document_quality=document_quality, metadata_verified=bool(report and receipt_date and receipt_no))
             evidence.append(ResearchEvidence(
                 evidence_id="research:" + normalized_symbol + ":dart:" + (receipt_no or report),
@@ -893,6 +914,10 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             "stockImpactReasonKo",
             "aiAnalysis",
             "articleAiAnalysisVersion",
+            "companyEventContract",
+            "sourceReferences",
+            "eventRevisionState",
+            "eventLifecycleState",
         ]:
             if key in item and key not in raw_payload:
                 raw_payload[key] = item.get(key)
@@ -935,6 +960,53 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
     evidence = research_evidence_from_facts(normalized_symbol, facts)
     sec = (external_signals.get("secFilings") or {}).get(normalized_symbol) if isinstance(external_signals.get("secFilings"), dict) else {}
     evidence.extend(sec_research_evidence(normalized_symbol, sec if isinstance(sec, dict) else {}))
+    corporate_group = external_signals.get("corporateActions") if isinstance(external_signals.get("corporateActions"), dict) else {}
+    corporate_actions = corporate_group.get(normalized_symbol) if isinstance(corporate_group.get(normalized_symbol), dict) else {}
+    for event_id, source_event in corporate_actions.items():
+        if not isinstance(source_event, dict):
+            continue
+        event = dict(source_event)
+        action_type = str(event.get("eventType") or "corporate-action").strip()
+        label = {
+            "dividend": "배당 일정",
+            "equity-issuance": "주식 발행",
+            "lockup-release": "보호예수 해제",
+            "shareholder-right": "주주 권리 일정",
+        }.get(action_type, "기업행동")
+        published_at = str(event.get("publishedAt") or event.get("announcedAt") or "").strip()
+        observed_at = str(event.get("observedAt") or published_at or "").strip()
+        event_date = next((
+            str(event.get(key) or "").strip()
+            for key in (
+                "exerciseStartDate", "releaseDate", "issueDate", "recordDate",
+                "cashPaymentDate", "listingDate",
+            )
+            if str(event.get(key) or "").strip()
+        ), "")
+        payload = {
+            **event,
+            "relationScope": "direct",
+            "sourceTrustState": "trusted" if event.get("officialSource") else "standard",
+            "materialityState": "material" if action_type in {"equity-issuance", "lockup-release"} else "notable",
+            "dataState": "sufficient",
+            "validationState": "ready" if event.get("officialSource") else "conditional",
+            "eventType": "capital_policy",
+            "corporateActionType": action_type,
+            "sourcePublisher": str(event.get("provider") or "공식 기업행동 데이터"),
+        }
+        evidence.append(ResearchEvidence(
+            evidence_id="research:" + normalized_symbol + ":corporate-action:" + str(event.get("eventId") or event_id),
+            symbol=normalized_symbol,
+            kind="corporate-action",
+            source=str(event.get("provider") or "공식 기업행동 데이터"),
+            title=label,
+            summary=(label + (" · 기준일 " + event_date if event_date else "")),
+            url=str(event.get("sourceUrl") or ""),
+            observed_at=event_date or observed_at,
+            polarity="context",
+            published_at=published_at,
+            raw_payload=payload,
+        ))
     stored_group = external_signals.get("researchEvidence") if isinstance(external_signals.get("researchEvidence"), dict) else {}
     stored_items = stored_group.get(normalized_symbol) if isinstance(stored_group.get(normalized_symbol), list) else []
     for item in stored_items:

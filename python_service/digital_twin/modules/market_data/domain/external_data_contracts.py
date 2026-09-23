@@ -16,12 +16,15 @@ from typing import Dict, Mapping, Tuple
 SOURCE_REFERENCE_VERSION = "external-source-reference-v1"
 SOURCE_SCHEMA_LEGACY_VERSION = "external-source-legacy-v1"
 OFFICIAL_EVIDENCE_CONSUMER_ID = "external-official-evidence"
-OFFICIAL_EVIDENCE_PROJECTOR_VERSION = "official-evidence-projection-v4"
+OFFICIAL_EVIDENCE_PROJECTOR_VERSION = "official-evidence-projection-v5-company-events"
 OFFICIAL_EVIDENCE_DATASET_IDS = frozenset({
     "opendart.disclosures",
     "opendart.document",
     "sec.submissions",
     "sec.document",
+    "public-data.kr-dividends",
+    "public-data.kr-capital-events",
+    "public-data.kr-shareholder-rights",
 })
 
 DATA_CATEGORIES = frozenset({

@@ -1433,6 +1433,44 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("not-collected", fitness["subjects"]["NVDA"]["purposes"]["derivatives"]["state"])
         self.assertEqual("fresh", fitness["subjects"]["GLOBAL"]["purposes"]["crypto-market"]["state"])
         self.assertEqual("failed", fitness["subjects"]["GLOBAL"]["purposes"]["macro-regime"]["state"])
+        self._assert_read_model_binds_company_event_to_exact_fact_revision()
+
+    def _assert_read_model_binds_company_event_to_exact_fact_revision(self):
+        class EventFactStore:
+            def list_current(self, _subject_keys):
+                return [{
+                    "datasetId": "public-data.kr-capital-events",
+                    "providerId": "data-go-kr-fsc",
+                    "subjectKey": "005930",
+                    "revisionId": "capital-revision-1",
+                    "sourceRevision": "provider-capital-1",
+                    "payloadHash": "capital-hash-1",
+                    "sourceSchemaVersion": "official-corporate-action-source-v1",
+                    "sourceAsOf": "2026-08-27T00:00:00Z",
+                    "fetchedAt": "2026-08-27T00:01:00Z",
+                    "availability": "observed",
+                    "freshnessState": "fresh",
+                    "payload": {"corporateActions": {"005930": {"issue": {
+                        "eventId": "issue", "eventType": "equity-issuance",
+                        "tboxClass": "EquityIssuanceEvent", "issueDate": "20260901",
+                        "eventLifecycleState": "upcoming", "issuedShareCount": 1000,
+                        "provider": "금융위원회·공공데이터포털", "officialSource": True,
+                    }}}},
+                }]
+
+            @staticmethod
+            def provider_statuses():
+                return []
+
+        signals = ExternalSignalsReadModelService(EventFactStore()).signals_for_subjects(["005930"])
+        event = signals["corporateActions"]["005930"]["issue"]
+        contract = event["companyEventContract"]
+
+        self.assertEqual("company-event-observation-v1", contract["version"])
+        self.assertEqual("capital-revision-1", contract["sourceReferences"][0]["revisionId"])
+        compact = compact_external_signals_for_ontology(signals, target_symbols=["005930"])
+        compact_contract = compact["corporateActions"]["005930"]["issue"]["companyEventContract"]
+        self.assertEqual("capital-hash-1", compact_contract["sourceReferences"][0]["payloadHash"])
 
 
 if __name__ == "__main__":

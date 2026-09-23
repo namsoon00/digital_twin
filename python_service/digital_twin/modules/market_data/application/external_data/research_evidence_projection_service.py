@@ -17,11 +17,12 @@ from digital_twin.modules.news_intelligence.contracts import DISCLOSURE_ANALYSIS
 from digital_twin.modules.news_intelligence.contracts import claim_policy, governed_evidence
 from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget, ResearchEvidence, research_evidence_from_external_signals
 from digital_twin.modules.news_intelligence.contracts import evidence_materiality
+from digital_twin.modules.news_intelligence.contracts import bind_company_event_contract, source_reference_from_fact_row
 from digital_twin.modules.decisions.contracts import assess_prompt_evidence, attach_prompt_evidence_admission
 
 
 OFFICIAL_DATASET_IDS = set(OFFICIAL_EVIDENCE_DATASET_IDS)
-OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing"}
+OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing", "corporate-action"}
 DEFAULT_INITIAL_LOOKBACK_MINUTES = 10
 DEFAULT_MAX_REPLAY_AGE_MINUTES = 180
 CURRENT_FACT_BACKFILL_VERSION = OFFICIAL_EVIDENCE_PROJECTOR_VERSION
@@ -153,6 +154,7 @@ class ExternalOfficialEvidenceProjectionService:
             now = now.replace(tzinfo=timezone.utc)
         source_revision = _text(row.get("sourceRevision"))
         source_as_of = _text(row.get("sourceAsOf"))
+        source_reference = source_reference_from_fact_row(row)
         for item in items:
             payload = dict(item.raw_payload or {})
             document_text = _text(payload.get("officialDocumentText"))
@@ -184,8 +186,16 @@ class ExternalOfficialEvidenceProjectionService:
                     "officialDocumentFetchedAt": _text(row.get("fetchedAt")),
                     "officialDocumentCollectionSource": collection_source,
                 })
-            item.raw_payload = payload
-            self.enrich_disclosure_analysis(item)
+            item.raw_payload = bind_company_event_contract(
+                payload,
+                symbol=item.symbol,
+                kind=item.kind,
+                title=item.title,
+                published_at=item.published_at or item.observed_at,
+                source_references=[source_reference] if source_reference else [],
+            )
+            if _text(item.kind).lower() in {"disclosure", "filing", "sec-filing", "sec_filing"}:
+                self.enrich_disclosure_analysis(item)
 
         first_payload = items[0].raw_payload if isinstance(items[0].raw_payload, dict) else {}
         target = NewsCollectionTarget(
@@ -240,6 +250,12 @@ class ExternalOfficialEvidenceProjectionService:
                 or getattr(mutation, "inference_changed_symbols", [])
                 or []
             )
+            includes_corporate_action = any(_text(item.kind).lower() == "corporate-action" for item in changed_items)
+            fact_types = ["ResearchEvidence", "VerifiedClaim"]
+            if includes_corporate_action:
+                fact_types.append("CorporateAction")
+            else:
+                fact_types.append("DisclosureFiling")
             event_payload = {
                 "source": "external-official-evidence-projection",
                 "status": "ok",
@@ -272,16 +288,23 @@ class ExternalOfficialEvidenceProjectionService:
                     inference_symbols,
                     changed_count=len(inference_symbols),
                     observed_count=len(items),
-                    fact_types=["ResearchEvidence", "DisclosureFiling", "VerifiedClaim"],
+                    fact_types=fact_types,
                     fact_types_by_symbol={
-                        value: ["ResearchEvidence", "DisclosureFiling", "VerifiedClaim"]
+                        value: list(fact_types)
                         for value in inference_symbols
                     },
                     changed_fields_by_symbol={
-                        value: ["external.researchEvidence", "external.officialDocument"]
+                        value: [
+                            "external.researchEvidence",
+                            "external.corporateActions" if includes_corporate_action else "external.officialDocument",
+                        ]
                         for value in inference_symbols
                     },
-                    reason="검증된 SEC/OpenDART 문서 변경을 TypeDB ABox에 반영합니다.",
+                    reason=(
+                        "검증된 공식 기업행동 변경을 TypeDB ABox에 반영합니다."
+                        if includes_corporate_action
+                        else "검증된 SEC/OpenDART 문서 변경을 TypeDB ABox에 반영합니다."
+                    ),
                     materiality_assessments=assessments,
                     fact_revisions_by_symbol=event_payload["factRevisionsBySymbol"],
                     evidence_deltas=event_payload["evidenceDeltas"],

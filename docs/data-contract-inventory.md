@@ -114,6 +114,19 @@ evidence → issuer/listing identity로 대상 확인 → reasoning source snaps
 가치평가에는 사용할 수 없다. 동일 수치라도 기간·표본·revision이 다르면 다른
 원천 관측이며, 실제 투자 추론 재실행 여부는 정규화된 material change가 결정한다.
 
+### News, disclosures and corporate actions
+
+뉴스, OpenDART 공시, SEC filing과 공식 기업행동은
+`company-event-observation-v1`로 정규화한다. 문서 종류, 사건 종류, 발표일,
+효력일, 기준일, 보고기간, lifecycle, 정정·철회 상태와 exact source revision을
+분리해 보존한다. 수집 시각은 발표일이나 효력일로 사용하지 않는다.
+
+OpenDART·SEC 문서와 공공데이터포털의 배당·주식 발행·보호예수·주주 권리 일정은
+동일한 leased official-evidence projection 경계를 사용한다. 기업행동 projection은
+canonical evidence와 ABox를 갱신하지만 단독 고객 알림을 만들지 않는다. 정정 관계는
+공급자가 원문 식별자를 제공할 때만 연결하며 제목 유사성만으로 정정 대상을 만들지
+않는다. 자세한 계약은 `docs/company-event-integrity.md`를 따른다.
+
 ## Known Gaps
 
 - 실제 운영 데이터셋별 row count, 보존 기간, 최근 성공 시각은 로컬 DB 상태라 이

@@ -104,3 +104,11 @@
   frontend test가 통과했다.
 - 실제 공급자 미지원 데이터와 point-in-time 컨센서스·실제 체결 feed는 위의
   deferred 상태를 유지한다.
+- 뉴스·공시·기업행동에 `company-event-observation-v1`을 적용했다. 공식 기업행동도
+  leased evidence projection 대상이며, read model과 ABox provenance가 immutable
+  fact revision과 payload hash를 보존한다. 정정·철회, 발표일·효력일·보고기간은
+  별도 필드이고 미제공 정정 연결은 추정하지 않는다.
+- 2026-09-23 운영 DB 읽기 전용 검증에서 current fact 186건 중 회사 이벤트 fact
+  52건이 계약 487개를 만들었고, 487개 모두 원천 행의 revision ID와 payload hash에
+  정확히 연결됐다. 기업행동의 구체 타입과 효력일은 유지됐으며, 공급자가 발표일을
+  제공하지 않은 자료에는 발표일을 임의 생성하지 않았다.

@@ -2,13 +2,74 @@ import unittest
 from unittest.mock import patch
 
 from digital_twin.modules.news_intelligence.domain.disclosure_analysis import build_disclosure_analysis_prompt, local_disclosure_analysis
+from digital_twin.modules.news_intelligence.domain.company_event import company_event_contract
 from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
 from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document, normalize_official_document_text
 from digital_twin.modules.news_intelligence.domain.investment_research import disclosure_evidence_payload, research_evidence_from_facts
+from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence
+from digital_twin.modules.news_intelligence.domain.evidence_delta import evidence_inference_signature
 from digital_twin.infrastructure.disclosure_analyzer import CommandDisclosureAnalyzer
 
 
 class DisclosureTaxonomyTests(unittest.TestCase):
+    def _assert_company_event_contract_separates_correction_from_collection_time(self):
+        contract = company_event_contract(
+            symbol="005930",
+            kind="disclosure",
+            title="기재정정 자기주식 취득 결정",
+            published_at="2026-08-26",
+            payload={
+                "receiptNo": "202608260001",
+                "originalReceiptNo": "202608250001",
+                "reportName": "기재정정 자기주식 취득 결정",
+                "eventType": "capital_policy",
+                "effectiveFrom": "2026-09-01",
+                "fetchedAt": "2026-08-27T01:00:00Z",
+            },
+        )
+
+        self.assertEqual("corrected", contract["revisionState"])
+        self.assertEqual("202608250001", contract["correctsSourceDocumentId"])
+        self.assertEqual("2026-08-26", contract["publishedAt"])
+        self.assertEqual("2026-09-01", contract["effectiveFrom"])
+        self.assertNotEqual("2026-08-27T01:00:00Z", contract["publishedAt"])
+
+    def _assert_corporate_action_inference_ignores_lineage_only_revision_but_detects_share_change(self):
+        def evidence(revision_id, shares):
+            return ResearchEvidence(
+                "research:005930:corporate-action:issue-1",
+                "005930",
+                "corporate-action",
+                "공공데이터포털",
+                "주식 발행",
+                observed_at="2026-09-01",
+                raw_payload={
+                    "eventId": "issue-1",
+                    "eventType": "capital_policy",
+                    "corporateActionType": "equity-issuance",
+                    "issueDate": "2026-09-01",
+                    "issuedShareCount": shares,
+                    "eventLifecycleState": "upcoming",
+                    "relationScope": "direct",
+                    "sourceTrustState": "trusted",
+                    "materialityState": "material",
+                    "dataState": "sufficient",
+                    "validationState": "ready",
+                    "sourceReferences": [{
+                        "datasetId": "public-data.kr-capital-events",
+                        "revisionId": revision_id,
+                        "payloadHash": "hash-" + revision_id,
+                    }],
+                },
+            )
+
+        first = evidence("revision-1", 1000)
+        lineage_refresh = evidence("revision-2", 1000)
+        changed_amount = evidence("revision-3", 2000)
+
+        self.assertEqual(evidence_inference_signature(first), evidence_inference_signature(lineage_refresh))
+        self.assertNotEqual(evidence_inference_signature(first), evidence_inference_signature(changed_amount))
+
     def test_disclosure_categories_do_not_default_every_filing_to_capital_policy(self):
         earnings = classify_disclosure("분기보고서", "분기보고서", "OpenDART")
         contract = classify_disclosure("단일판매ㆍ공급계약체결", "", "OpenDART")
@@ -18,6 +79,8 @@ class DisclosureTaxonomyTests(unittest.TestCase):
         self.assertEqual("supply_chain", contract["eventType"])
         self.assertEqual("capital_policy", ownership["eventType"])
         self.assertEqual("notable", ownership["materialityState"])
+        self._assert_company_event_contract_separates_correction_from_collection_time()
+        self._assert_corporate_action_inference_ignores_lineage_only_revision_but_detects_share_change()
 
     def test_dart_collection_preserves_each_bounded_filing_as_distinct_evidence(self):
         rows = research_evidence_from_facts("005930", {

@@ -1044,6 +1044,11 @@ def add_symbol_fundamental_event_concepts(
         label = str(value.get("reportName") or "DART 공시 이벤트")
     elif latest:
         label = "SEC " + str(latest.get("form") or "filing") + " 이벤트"
+    event_contract = value.get("companyEventContract") if isinstance(value.get("companyEventContract"), dict) else {}
+    if not event_contract and isinstance(latest.get("companyEventContract"), dict):
+        event_contract = dict(latest.get("companyEventContract") or {})
+    source_references = event_contract.get("sourceReferences") if isinstance(event_contract.get("sourceReferences"), list) else []
+    source_reference = next((dict(item) for item in source_references if isinstance(item, dict)), {})
     event_id = add_entity(graph, "fundamental-event", symbol + ":" + group, label, {
         "tboxClass": "FundamentalObservation",
         "tboxClasses": ["Observation", "ExternalObservation", "FundamentalObservation", "ExternalSignal", "DisclosureEvent", "EarningsEvent", "ValuationSignal"],
@@ -1052,6 +1057,9 @@ def add_symbol_fundamental_event_concepts(
         "provider": str(value.get("provider") or ""),
         "latestFiling": latest,
         "facts": facts,
+        "companyEventContract": dict(event_contract),
+        "sourceRevisionId": str(source_reference.get("revisionId") or ""),
+        "sourcePayloadHash": str(source_reference.get("payloadHash") or ""),
     })
     add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=1.0, properties={"source": group, "aiInfluenceLabel": label})
     add_relation(graph, stock_id, event_id, "HAS_VALUATION", weight=0.7, properties={"source": group, "polarity": "context", "aiInfluenceLabel": label})
@@ -1077,6 +1085,10 @@ def add_symbol_fundamental_event_concepts(
             "receiptNo": str(value.get("receiptNo") or value.get("receipt_no") or latest.get("accessionNumber") or ""),
             "receiptDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or ""),
             "latestFiling": latest,
+            "companyEventContract": dict(event_contract),
+            "sourceDatasetId": str(source_reference.get("datasetId") or ""),
+            "sourceRevisionId": str(source_reference.get("revisionId") or ""),
+            "sourcePayloadHash": str(source_reference.get("payloadHash") or ""),
             **disclosure_state,
             **disclosure_time,
         })
@@ -1087,6 +1099,22 @@ def add_symbol_fundamental_event_concepts(
         add_relation(graph, stock_id, filing_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties={**props, **disclosure_state})
         add_relation(graph, filing_id, stock_id, "MENTIONS_INSTRUMENT", weight=0.78, properties={**props, **disclosure_state})
         add_relation(graph, event_id, filing_id, "HAS_PROVENANCE", weight=1.0, properties={**props, **disclosure_state})
+        if source_reference.get("datasetId") and source_reference.get("revisionId"):
+            source_id = add_entity(
+                graph,
+                "data-source",
+                str(source_reference.get("datasetId")) + ":" + str(source_reference.get("revisionId")),
+                str(value.get("provider") or source_reference.get("providerId") or group),
+                {
+                    "tboxClass": "DataSource",
+                    "tboxClasses": ["DataSource", "Provenance"],
+                    "datasetId": str(source_reference.get("datasetId") or ""),
+                    "sourceRevisionId": str(source_reference.get("revisionId") or ""),
+                    "sourcePayloadHash": str(source_reference.get("payloadHash") or ""),
+                    "sourceAsOf": str(source_reference.get("sourceAsOf") or ""),
+                },
+            )
+            add_relation(graph, filing_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={**props, **disclosure_state})
     add_symbol_corporate_action_concept(graph, stock_id, event_id, symbol, group, value, label, evaluated_at, event_time_settings)
     add_symbol_regulatory_event_concept(graph, stock_id, event_id, symbol, group, value, label, evaluated_at, event_time_settings)
     add_symbol_earnings_event_from_filing(graph, stock_id, event_id, symbol, group, value, label, evaluated_at, event_time_settings)

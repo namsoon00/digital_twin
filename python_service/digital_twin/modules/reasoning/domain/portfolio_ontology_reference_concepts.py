@@ -275,6 +275,9 @@ def add_official_corporate_action_concepts(
         if not event_key:
             continue
         tbox_class = _text(event.get("tboxClass") or "CorporateAction")
+        event_contract = event.get("companyEventContract") if isinstance(event.get("companyEventContract"), Mapping) else {}
+        source_references = event_contract.get("sourceReferences") if isinstance(event_contract.get("sourceReferences"), list) else []
+        source_reference = next((dict(item) for item in source_references if isinstance(item, Mapping)), {})
         decision_contract = _corporate_action_decision_contract(event)
         event_decision_eligible = bool(decision_contract["eligible"])
         label = (position.name or symbol) + " " + {
@@ -301,12 +304,22 @@ def add_official_corporate_action_concepts(
             "eventDecisionEligible": event_decision_eligible,
             "eventDecisionCategory": decision_contract["category"],
             "eventDecisionReason": decision_contract["reason"],
+            "companyEventContract": dict(event_contract),
         })
-        source_id = add_entity(graph, "data-source", "public-data:" + event_type, _text(event.get("provider") or "공공데이터포털"), {
+        source_key = (
+            _text(source_reference.get("datasetId")) + ":" + _text(source_reference.get("revisionId"))
+            if source_reference.get("datasetId") and source_reference.get("revisionId")
+            else "public-data:" + event_type
+        )
+        source_id = add_entity(graph, "data-source", source_key, _text(event.get("provider") or "공공데이터포털"), {
             "tboxClass": "DataSource",
             "tboxClasses": ["DataSource", "Provenance"],
             "sourceUrl": _text(event.get("sourceUrl")),
             "officialSource": True,
+            "datasetId": _text(source_reference.get("datasetId")),
+            "sourceRevisionId": _text(source_reference.get("revisionId")),
+            "sourcePayloadHash": _text(source_reference.get("payloadHash")),
+            "sourceAsOf": _text(source_reference.get("sourceAsOf")),
         })
         props = _relation_properties(
             "공식 " + label,

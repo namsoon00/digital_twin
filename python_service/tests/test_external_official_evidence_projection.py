@@ -206,7 +206,10 @@ def dart_fact(dataset_id="opendart.document"):
         "sourceRevision": "dart-batch-20260825",
         "sourceAsOf": "2026-08-25T00:00:00Z",
         "fetchedAt": "2026-08-25T00:02:00Z",
+        "revisionId": "internal-dart-revision-1",
         "payloadHash": "fact-hash",
+        "sourceSchemaVersion": "opendart-document-source-v1",
+        "availability": "observed",
         "payload": {
             "dartDisclosures": {
                 "005930": {
@@ -245,7 +248,10 @@ def sec_fact(dataset_id="sec.document"):
         "sourceRevision": "0000320193-26-000100",
         "sourceAsOf": "2026-08-25T00:00:00Z",
         "fetchedAt": "2026-08-25T00:02:00Z",
+        "revisionId": "internal-sec-revision-1",
         "payloadHash": "sec-fact-hash",
+        "sourceSchemaVersion": "sec-document-source-v1",
+        "availability": "observed",
         "payload": {
             "secFilings": {
                 "AAPL": {
@@ -305,10 +311,15 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertEqual("202608250001", evidence.raw_payload["sourceRevision"])
         self.assertEqual("20260825", evidence.raw_payload["sourceAsOf"])
         self.assertEqual("dart-batch-20260825", evidence.raw_payload["externalFactSourceRevision"])
+        event_contract = evidence.raw_payload["companyEventContract"]
+        self.assertEqual("company-event-observation-v1", event_contract["version"])
+        self.assertEqual("internal-dart-revision-1", event_contract["sourceReferences"][0]["revisionId"])
+        self.assertEqual("original", event_contract["revisionState"])
         collected = next(event for event in self.publisher.events if event.name == RESEARCH_EVIDENCE_COLLECTED)
         self.assertEqual("research-evidence-change-v2", collected.payload["eventContract"])
         self.assertEqual(1, collected.payload["alertEligibleCount"])
         self.assertEqual(1, len(collected.payload["alertEligibleItems"]))
+        self._assert_projects_official_corporate_action_with_exact_revision_without_direct_alert()
 
     def test_projection_is_idempotent(self):
         first = self.projector.project_event(self.event())
@@ -316,6 +327,49 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
 
         self.assertEqual(1, first["writtenCount"])
         self.assertEqual(0, second["writtenCount"])
+
+    def _assert_projects_official_corporate_action_with_exact_revision_without_direct_alert(self):
+        row = {
+            "datasetId": "public-data.kr-capital-events",
+            "subjectKey": "005930",
+            "providerId": "data-go-kr-fsc",
+            "sourceRevision": "capital-batch-20260825",
+            "sourceAsOf": "2026-08-25T00:00:00Z",
+            "fetchedAt": "2026-08-25T00:02:00Z",
+            "revisionId": "internal-capital-revision-1",
+            "payloadHash": "capital-fact-hash",
+            "sourceSchemaVersion": "official-corporate-action-source-v1",
+            "availability": "observed",
+            "payload": {"corporateActions": {"005930": {"issue-1": {
+                "eventId": "issue-1",
+                "eventType": "equity-issuance",
+                "tboxClass": "EquityIssuanceEvent",
+                "issueDate": "2026-09-01",
+                "listingDate": "2026-09-10",
+                "issuedShareCount": 1000000,
+                "eventLifecycleState": "upcoming",
+                "baseDate": "2026-08-25",
+                "provider": "금융위원회·공공데이터포털",
+                "officialSource": True,
+            }}}},
+        }
+        publisher = MemoryPublisher()
+        evidence_store = MemoryEvidenceStore()
+        projector = ExternalOfficialEvidenceProjectionService(
+            MemoryFactStore(row), evidence_store, publisher, {}, now_provider=lambda: self.now,
+        )
+
+        result = projector.project_fact(row)
+
+        self.assertEqual("ok", result["status"])
+        evidence = evidence_store.items["research:005930:corporate-action:issue-1"]
+        contract = evidence.raw_payload["companyEventContract"]
+        self.assertEqual("corporate-action", contract["kind"])
+        self.assertEqual("equity-issuance", contract["eventType"])
+        self.assertEqual("2026-09-01", contract["effectiveFrom"])
+        self.assertEqual("internal-capital-revision-1", contract["sourceReferences"][0]["revisionId"])
+        collected = next(event for event in publisher.events if event.name == RESEARCH_EVIDENCE_COLLECTED)
+        self.assertEqual(0, collected.payload["alertEligibleCount"])
 
     def test_recovery_document_stays_silent_after_durable_event_replay(self):
         for factory in (dart_fact, sec_fact):
@@ -510,6 +564,12 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertEqual("verified", filing.properties["documentVerificationState"])
         self.assertEqual("ready", filing.properties["documentAnalysisState"])
         self.assertEqual("eligible", filing.properties["evidenceEligibilityState"])
+        self.assertEqual("internal-dart-revision-1", filing.properties["sourceRevisionId"])
+        provenance = next(
+            item for item in graph.entities
+            if item.kind == "data-source" and item.properties.get("sourceRevisionId") == "internal-dart-revision-1"
+        )
+        self.assertEqual("fact-hash", provenance.properties["sourcePayloadHash"])
         filing_relations = [
             item for item in graph.relations
             if item.target == filing.entity_id and item.relation_type == "HAS_EXTERNAL_SIGNAL"

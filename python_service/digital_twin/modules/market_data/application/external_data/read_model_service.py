@@ -1,7 +1,11 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable
 
-from digital_twin.modules.news_intelligence.contracts import merge_company_knowledge_rows
+from digital_twin.modules.news_intelligence.contracts import (
+    bind_company_event_contract,
+    merge_company_knowledge_rows,
+    source_reference_from_fact_row,
+)
 from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
 
 
@@ -26,6 +30,130 @@ EXTERNAL_SIGNAL_MAP_FIELDS = {
 
 EXTERNAL_SIGNAL_ARCHIVE_FIELDS = {"sourceArchive"}
 CALENDAR_REFERENCE_DATASETS = {"official.bls-release", "official.fomc-release", "official.bok-release", "official.bls-statistics"}
+COMPANY_EVENT_DATASETS = {
+    "opendart.disclosures", "opendart.document", "sec.submissions", "sec.document",
+    "public-data.kr-dividends", "public-data.kr-capital-events",
+    "public-data.kr-shareholder-rights", "yfinance.news",
+}
+
+
+def bind_external_event_lineage(fragment: Dict[str, object], fact_row: Dict[str, object]) -> Dict[str, object]:
+    """Attach one exact fact revision to each event represented by that fact."""
+
+    source = dict(fragment or {})
+    if str(fact_row.get("datasetId") or "") not in COMPANY_EVENT_DATASETS:
+        return source
+    result = dict(source)
+    source_reference = source_reference_from_fact_row(fact_row)
+    if not source_reference:
+        return result
+    subject = str(fact_row.get("subjectKey") or "").upper().strip()
+
+    corporate_groups = {
+        symbol: dict(events) if isinstance(events, dict) else events
+        for symbol, events in (result.get("corporateActions") or {}).items()
+    } if isinstance(result.get("corporateActions"), dict) else {}
+    if corporate_groups:
+        result["corporateActions"] = corporate_groups
+    for symbol, events in list(corporate_groups.items()):
+        if not isinstance(events, dict):
+            continue
+        corporate_groups[symbol] = {
+            event_id: bind_company_event_contract(
+                event,
+                symbol=symbol or subject,
+                kind="corporate-action",
+                title=event.get("eventType") if isinstance(event, dict) else "",
+                published_at=(event.get("publishedAt") or event.get("announcedAt")) if isinstance(event, dict) else "",
+                source_references=[source_reference],
+            ) if isinstance(event, dict) else event
+            for event_id, event in events.items()
+        }
+
+    dart_groups = {
+        symbol: dict(disclosure) if isinstance(disclosure, dict) else disclosure
+        for symbol, disclosure in (result.get("dartDisclosures") or {}).items()
+    } if isinstance(result.get("dartDisclosures"), dict) else {}
+    if dart_groups:
+        result["dartDisclosures"] = dart_groups
+    for symbol, disclosure in list(dart_groups.items()):
+        if not isinstance(disclosure, dict):
+            continue
+        items = disclosure.get("items") if isinstance(disclosure.get("items"), list) else []
+        disclosure["items"] = [
+            bind_company_event_contract(
+                item,
+                symbol=symbol or subject,
+                kind="disclosure",
+                title=item.get("reportName") or item.get("report_name"),
+                published_at=item.get("receiptDate") or item.get("receipt_date"),
+                source_references=[source_reference],
+            ) if isinstance(item, dict) else item
+            for item in items
+        ]
+        dart_groups[symbol] = bind_company_event_contract(
+            disclosure,
+            symbol=symbol or subject,
+            kind="disclosure",
+            title=disclosure.get("reportName") or disclosure.get("report_name"),
+            published_at=disclosure.get("receiptDate") or disclosure.get("receipt_date"),
+            source_references=[source_reference],
+        )
+
+    sec_groups = {
+        symbol: dict(filing) if isinstance(filing, dict) else filing
+        for symbol, filing in (result.get("secFilings") or {}).items()
+    } if isinstance(result.get("secFilings"), dict) else {}
+    if sec_groups:
+        result["secFilings"] = sec_groups
+    for symbol, filing_group in list(sec_groups.items()):
+        if not isinstance(filing_group, dict):
+            continue
+        latest = filing_group.get("latestFiling") if isinstance(filing_group.get("latestFiling"), dict) else {}
+        if latest:
+            filing_group["latestFiling"] = bind_company_event_contract(
+                latest,
+                symbol=symbol or subject,
+                kind="filing",
+                title=latest.get("form"),
+                published_at=latest.get("filingDate") or latest.get("filed"),
+                source_references=[source_reference],
+            )
+        recent = filing_group.get("recentFilings") if isinstance(filing_group.get("recentFilings"), list) else []
+        filing_group["recentFilings"] = [
+            bind_company_event_contract(
+                item,
+                symbol=symbol or subject,
+                kind="filing",
+                title=item.get("form"),
+                published_at=item.get("filingDate") or item.get("filed"),
+                source_references=[source_reference],
+            ) if isinstance(item, dict) else item
+            for item in recent
+        ]
+
+    news_groups = {
+        symbol: dict(headlines) if isinstance(headlines, dict) else headlines
+        for symbol, headlines in (result.get("newsHeadlines") or {}).items()
+    } if isinstance(result.get("newsHeadlines"), dict) else {}
+    if news_groups:
+        result["newsHeadlines"] = news_groups
+    for symbol, headlines in list(news_groups.items()):
+        if not isinstance(headlines, dict):
+            continue
+        items = headlines.get("items") if isinstance(headlines.get("items"), list) else []
+        headlines["items"] = [
+            bind_company_event_contract(
+                item,
+                symbol=symbol or subject,
+                kind="news",
+                title=item.get("title"),
+                published_at=item.get("publishedAt") or item.get("seenDate") or item.get("seendate"),
+                source_references=[source_reference],
+            ) if isinstance(item, dict) else item
+            for item in items
+        ]
+    return result
 
 
 def merge_dict(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
@@ -139,6 +267,7 @@ class ExternalSignalsReadModelService:
         rows = [row for row in self.fact_store.list_current(requested_subjects) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
         for row in rows:
             fragment = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            fragment = bind_external_event_lineage(fragment, row)
             for key, value in fragment.items():
                 if key == "statuses" and isinstance(value, list):
                     result["statuses"].extend([dict(item) for item in value if isinstance(item, dict)])

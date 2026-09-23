@@ -214,6 +214,38 @@ def _compact_claim_ledger(value: object) -> Dict[str, object]:
     return result
 
 
+def _compact_company_event_contract(value: object) -> Dict[str, object]:
+    source = value if isinstance(value, Mapping) else {}
+    result = _selected(
+        source,
+        [
+            "version", "observationId", "eventId", "symbol", "kind", "eventType",
+            "category", "title", "announcedAt", "publishedAt", "effectiveFrom",
+            "effectiveTo", "recordDate", "reportingPeriod", "lifecycleState",
+            "revisionState", "sourceDocumentId", "correctsSourceDocumentId",
+        ],
+        text_limit=500,
+        depth=1,
+    )
+    references = source.get("sourceReferences") if isinstance(source.get("sourceReferences"), list) else []
+    compact_references = [
+        _selected(
+            item,
+            [
+                "contractVersion", "datasetId", "providerId", "subjectKey", "revisionId",
+                "providerRevision", "payloadHash", "sourceSchemaVersion", "sourceAsOf", "availability",
+            ],
+            text_limit=300,
+            depth=1,
+        )
+        for item in references[:4]
+        if isinstance(item, Mapping)
+    ]
+    if compact_references:
+        result["sourceReferences"] = compact_references
+    return result
+
+
 def _compact_article_facts(value: object) -> Dict[str, object]:
     return _selected(
         value,
@@ -277,6 +309,12 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
         value = source.get(key) if isinstance(source.get(key), Mapping) else item.get(key)
         if isinstance(value, Mapping):
             result[key] = _bounded_value(value, text_limit=500, list_limit=10, map_limit=30, depth=3)
+    event_contract = source.get("companyEventContract") if isinstance(source.get("companyEventContract"), Mapping) else item.get("companyEventContract")
+    if isinstance(event_contract, Mapping):
+        result["companyEventContract"] = _compact_company_event_contract(event_contract)
+    references = source.get("sourceReferences") if isinstance(source.get("sourceReferences"), list) else item.get("sourceReferences")
+    if isinstance(references, list):
+        result["sourceReferences"] = _compact_company_event_contract({"sourceReferences": references}).get("sourceReferences", [])
     for key in ["ontologyRelations", "entityLinks"]:
         value = source.get(key) if isinstance(source.get(key), list) else item.get(key)
         if isinstance(value, list):
@@ -301,6 +339,7 @@ def compact_research_evidence_item(value: object) -> Dict[str, object]:
             "analysisConflictSource", "analysisConflictReasonKo", "analysisConflictAiPolarity",
             "analysisConflictExistingPolarity",
             "officialDocumentState", "documentVerified", "analysisReady",
+            "companyEventContract", "sourceReferences",
         ],
         text_limit=900,
         list_limit=10,
@@ -309,6 +348,12 @@ def compact_research_evidence_item(value: object) -> Dict[str, object]:
     payload = _compact_research_payload(source)
     if payload:
         result["payload"] = payload
+    event_contract = _compact_company_event_contract(source.get("companyEventContract"))
+    if event_contract:
+        result["companyEventContract"] = event_contract
+    references = source.get("sourceReferences") if isinstance(source.get("sourceReferences"), list) else []
+    if references:
+        result["sourceReferences"] = _compact_company_event_contract({"sourceReferences": references}).get("sourceReferences", [])
     for key, compact in [
         ("aiAnalysis", _compact_ai_analysis(source.get("aiAnalysis"))),
         ("articleFacts", _compact_article_facts(source.get("articleFacts"))),
@@ -544,6 +589,10 @@ def _compact_filing(value: object) -> Dict[str, object]:
         depth=2,
     )
     if latest:
+        latest_source = source.get("latestFiling") if isinstance(source.get("latestFiling"), Mapping) else {}
+        contract = _compact_company_event_contract(latest_source.get("companyEventContract"))
+        if contract:
+            latest["companyEventContract"] = contract
         result["latestFiling"] = latest
     facts = _compact_financial_facts(source.get("facts"))
     if facts:
@@ -686,13 +735,19 @@ def _compact_corporate_actions(value: object) -> Dict[str, object]:
             selected.append((event_id, event))
             seen_ids.add(event_id)
     return {
-        event_id: _bounded_value(
-            event,
-            text_limit=320,
-            list_limit=6,
-            map_limit=60,
-            depth=3,
-        )
+        event_id: {
+            **dict(_bounded_value(
+                event,
+                text_limit=320,
+                list_limit=6,
+                map_limit=60,
+                depth=3,
+            )),
+            **({"companyEventContract": _compact_company_event_contract(event.get("companyEventContract"))}
+               if _compact_company_event_contract(event.get("companyEventContract")) else {}),
+            **({"sourceReferences": _compact_company_event_contract({"sourceReferences": event.get("sourceReferences")}).get("sourceReferences", [])}
+               if isinstance(event.get("sourceReferences"), list) else {}),
+        }
         for event_id, event in selected[:16]
     }
 

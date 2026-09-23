@@ -189,6 +189,18 @@ class FakeOrchestrator:
         self.cases[subject.subject_case_id] = subject
 
 
+class DetachedRecordOrchestrator(FakeOrchestrator):
+    """Model repositories that persist and reload instead of mutating the caller object."""
+
+    def record_inference_dispatch(self, subject_case_id, decision, delivery_state=""):
+        case = deepcopy(self.required_subject(subject_case_id))
+        case.record_inference_dispatch(decision)
+        if delivery_state:
+            case.mark_delivery(delivery_state, decision.reason)
+        self.cases[subject_case_id] = case
+        return case
+
+
 class FakeIngress:
     @staticmethod
     def job_from_alert(event, source_event=None, account_context=None):
@@ -698,6 +710,53 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         ])
         self.assertEqual("typedb-and-ai-queued", delivered["status"])
         self.assertTrue(delivered["typedbCompanionOutcomes"][0]["queued"])
+        self.assert_ai_handoff_companion_does_not_depend_on_repository_object_mutation()
+
+    def assert_ai_handoff_companion_does_not_depend_on_repository_object_mutation(self):
+        actionable = subject_case(
+            "subject:detached-stage",
+            action_authority="originate",
+            eligible=("hypothesis:mstr:trend",),
+            outcome="READY",
+        )
+        context = context_observation(actionable)
+        predictive_basis = {
+            "owner": "market-hypothesis",
+            "ruleKind": "predictive",
+            "decisionEligibility": "action-candidate",
+            "requiresHypothesis": True,
+        }
+        relation_context = context["ontologyRelationContext"]
+        for group in ("activeRules", "matchedRules"):
+            relation_context[group][0]["knowledgeBasis"] = predictive_basis
+        for group in ("relations", "traces"):
+            relation_context["graphStoreInference"][group][0]["knowledgeBasis"] = predictive_basis
+        actionable.synthesis = DecisionSynthesis.from_dict({
+            **actionable.synthesis.to_dict(),
+            "selected_rule_id": relation_context["decision"]["selectedRuleId"],
+        })
+        context.update({
+            "investmentSubjectDecisionCase": actionable.to_dict(),
+            "requiresAiJudgement": True,
+        })
+        orchestrator = DetachedRecordOrchestrator([actionable])
+        notification_queue = FakeNotificationQueue()
+        service = InvestmentInsightDispatchService(
+            FakeIngress(),
+            notification_queue,
+            FakeAIHandoff(),
+            orchestrator,
+        )
+
+        result = service.dispatch([alert(actionable, context, "detached-stage")])
+
+        self.assertEqual("typedb-and-ai-queued", result["status"])
+        self.assertIsNone(actionable.inference_dispatch_decision)
+        self.assertEqual(
+            HANDOFF_AI,
+            orchestrator.required_subject(actionable.subject_case_id).inference_dispatch_decision.route,
+        )
+        self.assertTrue(result["typedbCompanionOutcomes"][0]["queued"])
 
 
 if __name__ == "__main__":

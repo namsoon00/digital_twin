@@ -124,6 +124,7 @@ class InvestmentInsightDispatchService:
                     event,
                     source_event,
                     subject_case,
+                    decision,
                     account_contexts.get(str(getattr(event, "account_id", "") or ""), {}),
                 )
                 if companion:
@@ -217,6 +218,7 @@ class InvestmentInsightDispatchService:
         event: AlertEvent,
         source_event,
         subject_case,
+        parent_decision: InferenceDispatchDecision,
         account_context: Mapping[str, object],
     ):
         """Publish the verified TypeDB stage without replacing the AI route."""
@@ -314,7 +316,7 @@ class InvestmentInsightDispatchService:
             source_event_id=source_event.event_id,
             details={
                 "semanticDeliveryDecision": semantic_delivery,
-                "parentDispatchDecisionId": subject_case.inference_dispatch_decision.decision_id,
+                "parentDispatchDecisionId": parent_decision.decision_id,
                 "parentDispatchRoute": HANDOFF_AI,
             },
         )

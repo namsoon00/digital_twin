@@ -1135,6 +1135,39 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             (str(deployment_id or ""), str(scope_key or "")),
         ).fetchall() or []
 
+    @staticmethod
+    def source_event_already_materialized_with_connection(
+        connection,
+        deployment_id: str,
+        source_event_id: str,
+    ) -> bool:
+        """Return whether durable lineage already represents this source event.
+
+        Latest-state mailbox updates replace the pending job's direct source
+        identity, so lineage is the durable source-of-truth for predecessors.
+        The direct job lookup remains necessary for rows created before lineage
+        backfill and for the mailbox's current source event.
+        """
+
+        clean_event_id = str(source_event_id or "").strip()
+        if not clean_event_id:
+            return False
+        row = connection.execute(
+            "SELECT ("
+            "EXISTS(SELECT 1 FROM reasoning_engine_job_sources "
+            "WHERE deployment_id = %s AND source_event_id = %s) OR "
+            "EXISTS(SELECT 1 FROM reasoning_engine_jobs "
+            "WHERE deployment_id = %s AND source_event_id = %s)"
+            ") AS represented",
+            (
+                str(deployment_id or ""),
+                clean_event_id,
+                str(deployment_id or ""),
+                clean_event_id,
+            ),
+        ).fetchone()
+        return bool((row or {}).get("represented"))
+
     @classmethod
     def persist_job_sources_with_connection(
         cls,
@@ -1201,8 +1234,15 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         stamp = iso_utc()
         saved_jobs = []
         superseded = 0
+        mailbox_updates = 0
         for deployment_id in deployments:
             for source_event in source_events:
+                if cls.source_event_already_materialized_with_connection(
+                    connection,
+                    deployment_id,
+                    source_event.event_id,
+                ):
+                    continue
                 material = cls.queued_job_material(deployment_id, source_event)
                 request = material["request"]
                 pending_rows = []
@@ -1221,6 +1261,83 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                         request = material["request"]
                 source_boundary = material["primary"]
                 source_boundaries = material["boundaries"]
+                if request.supersedable and pending_rows:
+                    # A latest-state scope is a durable mailbox slot, not an
+                    # append-only execution queue. Rewrite the newest pending
+                    # owner in place and retain every predecessor in the
+                    # lineage table. At most one waiting row can therefore
+                    # exist per account/symbol/lane even during event bursts.
+                    survivor_row = pending_rows[-1]
+                    job_id = str(survivor_row.get("job_id") or "")
+                    predecessor_job_ids = [
+                        str(row.get("job_id") or "")
+                        for row in pending_rows
+                        if str(row.get("job_id") or "") and str(row.get("job_id") or "") != job_id
+                    ]
+                    cls.persist_job_sources_with_connection(
+                        connection,
+                        deployment_id,
+                        job_id,
+                        source_event,
+                        predecessor_job_ids=predecessor_job_ids,
+                    )
+                    priority = cls.event_priority(source_event)
+                    cursor = connection.execute(
+                        """
+                        UPDATE reasoning_engine_jobs
+                        SET source_event_id = %s, source_snapshot_id = %s,
+                            source_snapshot_at = %s, source_boundary_json = %s,
+                            source_payload_hash = %s, scope_key = %s,
+                            input_fingerprint = %s, request_json = %s,
+                            result_json = '{}', job_status = %s, priority = %s,
+                            supersedable = 1, attempts = 0, reasoning_lane = %s,
+                            available_at = %s, lease_owner = '', lease_expires_at = '',
+                            heartbeat_at = '', claimed_at = '', current_stage = '',
+                            stage_started_at = '', stage_updated_at = '',
+                            stage_details_json = NULL, release_fingerprint = '',
+                            validation_cohort_id = '', runtime_revision = '',
+                            superseded_by_job_id = '', terminal_reason_code = '',
+                            queue_wait_ms = 0, duration_ms = 0, last_error = '',
+                            completed_at = '', updated_at = %s
+                        WHERE job_id = %s
+                          AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection')
+                        """,
+                        (
+                            str(source_event.event_id or "")[:191],
+                            str(source_boundary.get("snapshotId") or "")[:191],
+                            str(source_boundary.get("generatedAt") or "")[:40],
+                            canonical_json(source_boundaries),
+                            payload_fingerprint(source_event.to_dict()),
+                            str(material["scopeKey"] or "")[:191],
+                            request.input_fingerprint[:64],
+                            material["requestJson"],
+                            "queued" if source_boundaries else "awaiting_source",
+                            priority,
+                            material["lane"],
+                            stamp,
+                            stamp,
+                            job_id,
+                        ),
+                    )
+                    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                        raise RuntimeError(
+                            "The durable reasoning mailbox slot changed during ingress."
+                        )
+                    if predecessor_job_ids:
+                        placeholders = ",".join(["%s"] * len(predecessor_job_ids))
+                        updated = connection.execute(
+                            "UPDATE reasoning_engine_jobs SET job_status = 'superseded', "
+                            "completed_at = %s, available_at = '', lease_owner = '', "
+                            "lease_expires_at = '', superseded_by_job_id = %s, "
+                            "terminal_reason_code = 'newer-scope-owner', "
+                            "last_error = 'Merged into the durable latest-state mailbox slot.', "
+                            "updated_at = %s WHERE job_id IN (" + placeholders + ")",
+                            (stamp, job_id, stamp, *predecessor_job_ids),
+                        )
+                        superseded += int(getattr(updated, "rowcount", 0) or 0)
+                    saved_jobs.append(job_id)
+                    mailbox_updates += 1
+                    continue
                 job_id = "reasoning-engine-job:" + uuid.uuid4().hex
                 cursor = connection.execute(
                     """
@@ -1283,6 +1400,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "savedJobIds": saved_jobs,
             "deploymentIds": deployments,
             "supersededCount": superseded,
+            "mailboxUpdatedCount": mailbox_updates,
             "sourceShardCount": len(source_events),
             "sourceShardSymbolLimit": 1,
             "nativeTargetSymbolLimit": symbol_limit,

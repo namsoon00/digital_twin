@@ -641,8 +641,11 @@ class Rehearsal:
         expected = {
             "monitor_snapshots": self.config.accounts, "monitor_snapshot_history": cases * REVISIONS,
             "verified_reasoning_source_snapshots": cases * REVISIONS,
-            "reasoning_engine_jobs": cases * REVISIONS + 1,
-            "reasoning_engine_job_sources": cases * 6 + 1,
+            # Latest-state reasoning uses one durable mailbox owner per
+            # account/symbol wave while retaining every source revision in
+            # reasoning_engine_job_sources.
+            "reasoning_engine_jobs": cases + 1,
+            "reasoning_engine_job_sources": cases * REVISIONS + 1,
             "market_observation_reasoning_receipts": cases,
             "market_observation_reasoning_anchors": self.config.accounts + 1,
             "notification_jobs": cases, "notification_delivery_attempts": cases,
@@ -660,7 +663,7 @@ class Rehearsal:
         for table, column, state in (("notification_jobs", "status", "done"), ("ai_inference_requests", "status", "completed")):
             require(self.sql("SELECT COUNT(*) AS n FROM " + table + " WHERE " + column + " <> %s", (state,))["n"] == 0, "Unsettled queue: " + table)
         states = {row["job_status"]: row["n"] for row in self.sql("SELECT job_status, COUNT(*) AS n FROM reasoning_engine_jobs GROUP BY job_status", many=True)}
-        require(states == {"completed": cases, "superseded": cases * 2, "failed": 1}, "Terminal reasoning state counts mismatch")
+        require(states == {"completed": cases, "failed": 1}, "Terminal reasoning mailbox state counts mismatch")
         violations = self.sql("""SELECT COUNT(*) AS n FROM investment_decision_outcomes o
             JOIN investment_decision_episodes e ON e.episode_id = o.episode_id
             JOIN ai_inference_requests a ON e.episode_id = CONCAT('episode:', a.request_id)

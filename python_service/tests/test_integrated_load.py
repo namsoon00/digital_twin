@@ -157,10 +157,10 @@ class IntegratedLoadMySQLTests(unittest.TestCase):
         self.assertTrue(counts["matched"])
         self.assertEqual(counts["expected"], counts["actual"])
         self.assertEqual(19, counts["sourceEventCount"])
-        self.assertEqual(37, counts["actual"]["reasoning_engine_job_sources"])
+        self.assertEqual(19, counts["actual"]["reasoning_engine_job_sources"])
         self.assertEqual(6, counts["joinedOutcomeAnchors"])
         self.assertEqual(0, counts["accountViolations"])
-        self.assertEqual({"completed": 6, "superseded": 12, "failed": 1}, counts["reasoningStates"])
+        self.assertEqual({"completed": 6, "failed": 1}, counts["reasoningStates"])
 
     def test_expiry_reclaim_retry_rollback_and_terminal_fences_were_exercised(self):
         counters = self.report["counters"]

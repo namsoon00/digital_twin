@@ -148,6 +148,17 @@ function renderNotificationAIReviewSection(jobId) {
   var validationById = {};
   validations.forEach(function (item) { if (item && item.claimId) validationById[item.claimId] = item; });
   var executed = Boolean(execution.executed);
+  var transparency = execution.transparency && typeof execution.transparency === "object" ? execution.transparency : {};
+  var aiFallback = transparency.aiFallback && typeof transparency.aiFallback === "object" ? transparency.aiFallback : {};
+  var newsExclusion = transparency.newsExclusion && typeof transparency.newsExclusion === "object" ? transparency.newsExclusion : {};
+  var newsReasons = Array.isArray(newsExclusion.reasons) ? newsExclusion.reasons : [];
+  var transparencyRows = [];
+  if (aiFallback.used) {
+    transparencyRows.push('<div><span class="tone-chip caution">AI 대체</span><p><strong>AI 의견을 사용하지 않은 이유</strong>' + escapeHtml(aiFallback.reason || "검증된 AI 결과를 만들지 못했습니다.") + '</p><em>' + escapeHtml("최종 작성: " + (aiFallback.resultOwner || "TypeDB 관계 추론과 시스템 근거 요약")) + '</em></div>');
+  }
+  if (newsExclusion.available && (Number(newsExclusion.excludedCount || 0) > 0 || Number(newsExclusion.omittedForBudgetCount || 0) > 0)) {
+    transparencyRows.push('<div><span class="tone-chip hold">자료 제외</span><p><strong>뉴스·공시 사용 범위</strong>' + escapeHtml(newsExclusion.summary || "") + '</p><em>' + escapeHtml(newsReasons.map(function (item) { return (item.label || item.reasonCode) + " " + Number(item.count || 0) + "건"; }).join(" · ") || "상세 제외 사유 기록 없음") + '</em></div>');
+  }
   return [
     '<section class="notification-ai-review-section">',
     '<header><div><strong>AI 실행과 채택 결과</strong><span>모델 실행 여부와 최종 알림에 사용된 범위를 분리해 표시합니다.</span></div><span class="tone-chip ' + (executed ? "watch" : "hold") + '">' + escapeHtml(executed ? "AI 실행됨" : "AI 실행 없음") + '</span></header>',
@@ -169,6 +180,7 @@ function renderNotificationAIReviewSection(jobId) {
       spans.repairModelMs ? "교정 " + notificationPipelineDuration(spans.repairModelMs) : ""
     ].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
     '</dl>',
+    transparencyRows.length ? '<div class="notification-ai-claim-list">' + transparencyRows.join("") + '</div>' : '',
     '<div class="notification-ai-publication"><strong>문장 발행 결과</strong><span>' + escapeHtml([writer.label || writer.writerKind, "AI " + Number(publication.aiClaimCount || 0) + "개", "시스템 " + Number(publication.deterministicClaimCount || 0) + "개"].filter(Boolean).join(" · ")) + '</span></div>',
     '<div class="notification-ai-publication"><strong>최종 채택 판단</strong><span>' + escapeHtml([finalDecision.actionLabel || finalDecision.action || "기록 없음", comparison.comparisonStateLabel || comparison.comparisonState, finalDecision.validationLabel || finalDecision.validationState].filter(Boolean).join(" · ")) + '</span></div>',
     claims.length ? '<div class="notification-ai-claim-list">' + claims.map(function (claim) {

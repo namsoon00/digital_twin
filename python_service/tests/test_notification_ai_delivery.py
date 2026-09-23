@@ -16,6 +16,10 @@ from digital_twin.modules.decisions.domain.investment_reasoning.ai_insight impor
 from digital_twin.modules.notifications.domain.notification_delivery_explanation import (
     build_customer_delivery_explanation,
 )
+from digital_twin.modules.notifications.domain.notification_transparency import (
+    ai_fallback_disclosure,
+    news_exclusion_disclosure,
+)
 from digital_twin.modules.notifications.domain.notification_rules import NotificationRuleDecision
 from digital_twin.modules.notifications.domain.notification_rules import (
     apply_state_cooldown_rule,
@@ -620,7 +624,24 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
     def test_typedb_fallback_is_suppressed_when_only_readiness_label_changed(self):
         context = watchlist_context()
-        context["notificationAiExecutionAudit"] = {"status": "typedb-fallback"}
+        context["notificationAiExecutionAudit"] = {
+            "status": "typedb-fallback",
+            "aiAttempted": True,
+            "fallback": {"used": True},
+            "failure": {"category": "timeout", "stage": "model-execution"},
+            "contextRouting": {
+                "evidenceAdmission": {
+                    "evaluatedCount": 8,
+                    "eligibleCount": 3,
+                    "excludedCount": 5,
+                    "omittedForBudgetCount": 1,
+                    "reasonCounts": {
+                        "different-subject": 3,
+                        "evidence-stale": 2,
+                    },
+                },
+            },
+        }
         context["decisionTransition"] = {
             "kind": "readiness-context-changed",
             "material": False,
@@ -632,6 +653,14 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("suppress", decision["decision"])
         self.assertTrue(decision["typedbFallback"])
+        fallback = ai_fallback_disclosure(context)
+        self.assertEqual("timeout", fallback["reasonCode"])
+        self.assertIn("완료 대기 시간", fallback["reason"])
+        self.assertIn("TypeDB 관계 추론", fallback["resultOwner"])
+        exclusion = news_exclusion_disclosure(context)
+        self.assertEqual(5, exclusion["excludedCount"])
+        self.assertIn("후보 8건 중 3건", exclusion["summary"])
+        self.assertIn("다른 종목을 주로 다룬 자료 3건", exclusion["rows"])
 
     def _assert_material_review_delivery_is_not_revoked_by_initial_baseline_rule(self):
         rule = default_notification_rule("investmentInsight")

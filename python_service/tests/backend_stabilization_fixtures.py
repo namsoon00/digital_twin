@@ -27,6 +27,7 @@ CHANGED_METHODS = {
         "await_world_projection",
         "await_target_scope_repair",
         "reshard_claimed_job",
+        "ingress_event_with_connection",
         "completed_comparison_pairs",
     },
     # Claim now retries its whole transaction; test_ai_claim_retry preserves its SQL/guards.
@@ -39,6 +40,7 @@ ADDED_METHODS = {
     "MySQLReasoningEngineJobStore": {
         "repair_completed_receipts",
         "_completed_comparison_pairs_locked",
+        "source_event_already_materialized_with_connection",
     }
 }
 

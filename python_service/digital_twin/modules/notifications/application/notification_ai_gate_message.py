@@ -23,6 +23,7 @@ from digital_twin.modules.notifications.domain.notification_icon_policy import n
 from digital_twin.modules.notifications.domain.notification_title_policy import investment_action_title, investment_notification_title
 from digital_twin.modules.notifications.domain.notification_explanation import build_notification_explanation_packet, normalize_notification_detail_level
 from digital_twin.modules.notifications.domain.notification_narrative import response_writer_provenance
+from digital_twin.modules.notifications.domain.notification_transparency import ai_fallback_disclosure, news_exclusion_disclosure
 from digital_twin.modules.notifications.domain.notification_decision_policy import includes_portfolio_rebalance_policy
 from digital_twin.modules.model_registry.contracts import user_facing_investment_language
 from digital_twin.modules.decisions.contracts import investment_decision_actionability, is_concrete_observable_condition
@@ -5246,6 +5247,12 @@ def research_narrative_telegram_message(
     financial_rows = financial_evidence_rows(context)
     change_rows = (_financial_review_change_rows(context, response, transition_line)
                    if financial_rows else [transition_line] if transition_line else [])
+    ai_fallback = ai_fallback_disclosure(context)
+    news_exclusion = news_exclusion_disclosure(context)
+    context["notificationTransparency"] = {
+        "aiFallback": ai_fallback,
+        "newsExclusion": news_exclusion,
+    }
     document = CustomerInvestmentDocument(
         role=identity["role"],
         headline=headline,
@@ -5268,6 +5275,18 @@ def research_narrative_telegram_message(
                 ("additional", "추가로 볼 자료", additional_follow_up_rows),
                 ("next-update", "다음 알림", next_update_rows),
                 ("current", "현재 상황", flow_rows),
+                (
+                    "analysis-source",
+                    "AI 사용 상태",
+                    [ai_fallback.get("userMessage")] if ai_fallback.get("used") else [],
+                ),
+                (
+                    "excluded-evidence",
+                    "뉴스·공시 제외 사유",
+                    [news_exclusion.get("summary"), *news_exclusion.get("rows", [])]
+                    if news_exclusion.get("excludedCount") or news_exclusion.get("omittedForBudgetCount")
+                    else [],
+                ),
             )
             if rows
         ),
@@ -5543,6 +5562,12 @@ def execution_telegram_message_decision_first(
     financial_rows = financial_evidence_rows(context)
     change_rows = (_financial_review_change_rows(context, response, transition_line)
                    if financial_rows else [transition_line] if transition_line else [])
+    ai_fallback = ai_fallback_disclosure(context)
+    news_exclusion = news_exclusion_disclosure(context)
+    context["notificationTransparency"] = {
+        "aiFallback": ai_fallback,
+        "newsExclusion": news_exclusion,
+    }
     document = CustomerInvestmentDocument(
         role=identity["role"],
         headline=headline,
@@ -5571,6 +5596,18 @@ def execution_telegram_message_decision_first(
                     market_rows[:2] if str(response.action or "").upper() not in {"BUY", "ADD"} else [],
                 ),
                 ("limitations", "자료 참고", limitations[:1]),
+                (
+                    "analysis-source",
+                    "AI 사용 상태",
+                    [ai_fallback.get("userMessage")] if ai_fallback.get("used") else [],
+                ),
+                (
+                    "excluded-evidence",
+                    "뉴스·공시 제외 사유",
+                    [news_exclusion.get("summary"), *news_exclusion.get("rows", [])]
+                    if news_exclusion.get("excludedCount") or news_exclusion.get("omittedForBudgetCount")
+                    else [],
+                ),
             )
             if rows
         ),

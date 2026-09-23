@@ -246,7 +246,9 @@
     "modules/reasoning/domain/ontology_projection_input.py::_compact_global_external_signals_for_ontology": {"hash": "2bfd51b140042dca451dc46cd2016e7bf8357029d1a670f1f3ef43468d83614b", "reason": "Preserve bounded global external source revisions in frozen reasoning inputs; test_external_data_platform; docs/data-integration-acceptance.md."},
     "modules/reasoning/domain/ontology_projection_input.py::compact_symbol_external_signals_for_ontology": {"hash": "3927aef5321215bb07f50ccd66f72d9e387f58809405a81c5a57ed9a807d6e3e", "reason": "Preserve only the selected subjects' exact external source revisions in symbol-scoped reasoning inputs; test_external_data_platform; docs/data-integration-acceptance.md."},
     "modules/reasoning/domain/ontology_projection_input.py::compact_external_signals_for_ontology": {"hash": "828de81d1f87ed5b15e85863def53a8b0eb5e8ac432bacdd0767623daae9b3f1", "reason": "Merge global and symbol lineage without dropping either exact source reference set; test_external_data_platform; docs/data-integration-acceptance.md."},
-    "modules/reasoning/domain/ontology_projection_input.py::frozen_monitor_state_for_reasoning": {"hash": "adf7a0510fa63e9eeabe885f0a65ad3a17ccfad9f8acd500ef627b13978d0a97", "reason": "Retain global and symbol source lineage when composing immutable replay input instead of overwriting one scope; test_external_data_platform; docs/data-integration-acceptance.md."}
+    "modules/reasoning/domain/ontology_projection_input.py::frozen_monitor_state_for_reasoning": {"hash": "adf7a0510fa63e9eeabe885f0a65ad3a17ccfad9f8acd500ef627b13978d0a97", "reason": "Retain global and symbol source lineage when composing immutable replay input instead of overwriting one scope; test_external_data_platform; docs/data-integration-acceptance.md."},
+    "modules/notifications/domain/notification_narrative.py::response_writer_provenance": {"hash": "73dd2f18246c0e5eff8a63f8103a51d052e31ba90071e60ded0f684911c86b79", "reason": "Expose the verified AI fallback reason and actual result owner beside writer provenance; test_notification_ai_delivery."},
+    "modules/notifications/domain/notification_reverse_reasoning.py::build_notification_reverse_reasoning_trace": {"hash": "2350b70395b414b70928a5dd367c75240d44e01ef3b7e5aeddd22357ce5375d9", "reason": "Expose customer-safe AI fallback and news evidence exclusion audits in the immutable notification detail trace; test_notification_ai_delivery and frontend notification detail validation."}
   },
   "ports": {
     "modules/market_data/domain/repositories.py::MarketTimeSeriesRepository": {"hash": "f068bc22fc998962bfcf62ea20e588f44915d9a56ffae8b25d8fe7154fa6f2d8", "reason": "Add explicit historical-price ingestion through the versioned time-series port, keeping atomic storage and replica projection outside the collector; test_outcome_benchmark_collection."}
@@ -281,6 +283,10 @@
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.target_deployments_with_connection": {
       "hash": "321ef2f154b3bffca77fdaa78184f4ae3651289cb978d85d149acd62c6f41394",
       "reason": "Route isolated experiments from authoritative candidate control and their shadow ownership receipt, not a stale configured release ID; retain active/delivery routing and exclude retired or rollback-only releases. test_reasoning_ingress_router, test_ai_inference_worker_runtime and test_ontology_evolution."
+    },
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.ingress_event_with_connection": {
+      "hash": "4531fa5b3a2f562d80199c0a2ae7fd3864082d5784c4e1288c22376541c5cf19",
+      "reason": "Replace append-and-supersede pending work with one durable latest-state mailbox owner per deployment and scope while preserving all source lineage; test_independent_reasoning_engine and test_integrated_load."
     },
     "modules/news_intelligence/infrastructure/mysql_research_evidence.py::MySQLResearchEvidenceStore": {
       "hash": "566ee121e1109ed31305adeb2540069472df67fd6db83e88685a8582d7e839bd",

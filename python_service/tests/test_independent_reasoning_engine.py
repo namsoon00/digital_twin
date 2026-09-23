@@ -1894,6 +1894,93 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         }
         self.assertEqual({"event:middle", "event:new"}, inserted_event_ids)
 
+        class MaterializedCursor:
+            @staticmethod
+            def fetchone():
+                return {"represented": 1}
+
+        class MaterializedConnection:
+            @staticmethod
+            def execute(statement, _parameters):
+                assert "reasoning_engine_job_sources" in statement
+                assert "reasoning_engine_jobs" in statement
+                return MaterializedCursor()
+
+        self.assertTrue(
+            MySQLReasoningEngineJobStore.source_event_already_materialized_with_connection(
+                MaterializedConnection(),
+                "ontology-v2-production",
+                "event:new",
+            )
+        )
+
+        deployment_id = "ontology-v2-production"
+        previous = source_event("MSTR")
+        current = DomainEvent(
+            name=previous.name,
+            aggregate_id=previous.aggregate_id,
+            occurred_at="2026-08-16T00:01:00Z",
+            event_id="event:MSTR:new",
+            payload={
+                **dict(previous.payload),
+                "sourceObservedAt": "2026-08-16T00:01:00Z",
+                "factTypes": ["PRICE_OBSERVATION", "VOLUME_OBSERVATION"],
+            },
+        )
+        previous_material = MySQLReasoningEngineJobStore.queued_job_material(
+            deployment_id,
+            previous,
+        )
+
+        class MailboxConnection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, statement, parameters=()):
+                self.calls.append((str(statement), tuple(parameters or ())))
+                return SimpleNamespace(rowcount=1)
+
+        mailbox_connection = MailboxConnection()
+        pending = [{
+            "job_id": "job:mailbox:mstr",
+            "request_json": previous_material["requestJson"],
+        }]
+        with patch.object(
+            MySQLReasoningEngineJobStore,
+            "target_deployments_with_connection",
+            return_value=[deployment_id],
+        ), patch.object(
+            MySQLReasoningEngineJobStore,
+            "native_target_symbol_limit_with_connection",
+            return_value=4,
+        ), patch.object(
+            MySQLReasoningEngineJobStore,
+            "bind_source_boundaries_with_connection",
+            return_value=current,
+        ), patch.object(
+            MySQLReasoningEngineJobStore,
+            "source_event_already_materialized_with_connection",
+            return_value=False,
+        ), patch.object(
+            MySQLReasoningEngineJobStore,
+            "pending_slot_rows_with_connection",
+            return_value=pending,
+        ), patch.object(
+            MySQLReasoningEngineJobStore,
+            "persist_job_sources_with_connection",
+        ) as persist_sources:
+            mailbox_result = MySQLReasoningEngineJobStore.ingress_event_with_connection(
+                mailbox_connection,
+                current,
+            )
+
+        statements = [statement for statement, _parameters in mailbox_connection.calls]
+        self.assertEqual(["job:mailbox:mstr"], mailbox_result["savedJobIds"])
+        self.assertEqual(1, mailbox_result["mailboxUpdatedCount"])
+        self.assertFalse(any("INSERT IGNORE INTO reasoning_engine_jobs" in item for item in statements))
+        self.assertTrue(any("UPDATE reasoning_engine_jobs" in item for item in statements))
+        persist_sources.assert_called_once()
+
         class EventLogConnection:
             def __init__(self):
                 self.sql = ""

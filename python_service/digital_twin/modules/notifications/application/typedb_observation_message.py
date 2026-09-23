@@ -17,6 +17,7 @@ from digital_twin.modules.decisions.contracts import reference_date
 from digital_twin.modules.notifications.domain.notification_delivery_explanation import customer_delivery_explanation_lines
 from digital_twin.modules.notifications.application.customer_investment_message import render_customer_investment_document
 from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_rows, financial_evidence_links, financial_evidence_title
+from digital_twin.modules.notifications.domain.notification_transparency import ai_fallback_disclosure, news_exclusion_disclosure
 
 
 FIELD_LABELS = {
@@ -870,6 +871,12 @@ def typedb_observation_telegram_message(
         or context.get("messageDeliveryLevel")
         or "beginner"
     ).strip()
+    ai_fallback = ai_fallback_disclosure(context)
+    news_exclusion = news_exclusion_disclosure(context)
+    context["notificationTransparency"] = {
+        "aiFallback": ai_fallback,
+        "newsExclusion": news_exclusion,
+    }
     document = CustomerInvestmentDocument(
         role="typedb-observation",
         headline=headline,
@@ -904,6 +911,18 @@ def typedb_observation_telegram_message(
                 ),
                 ("current", "현재 상황", flow_rows),
                 ("limitations", "자료 참고", limitation_rows[:1]),
+                (
+                    "analysis-source",
+                    "AI 사용 상태",
+                    [ai_fallback.get("userMessage")] if ai_fallback.get("used") else [],
+                ),
+                (
+                    "excluded-evidence",
+                    "뉴스·공시 제외 사유",
+                    [news_exclusion.get("summary"), *news_exclusion.get("rows", [])]
+                    if news_exclusion.get("excludedCount") or news_exclusion.get("omittedForBudgetCount")
+                    else [],
+                ),
             )
             if rows
         ),

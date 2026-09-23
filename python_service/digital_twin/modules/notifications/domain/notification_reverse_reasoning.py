@@ -15,6 +15,7 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.decisions.contracts import relation_context_value
 from digital_twin.modules.decisions.contracts import all_source_urls_for_context, source_detail_map
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+from digital_twin.modules.notifications.domain.notification_transparency import ai_fallback_disclosure, news_exclusion_disclosure
 from digital_twin.modules.decisions.contracts import RuleEvaluationRecord, RuleMatchProof
 
 
@@ -797,6 +798,12 @@ def build_notification_reverse_reasoning_trace(
             "latencyMs": int(ai_execution.get("latencyMs") or 0),
             "executed": bool(ai_execution.get("aiAttempted")),
             "writerProvenance": writer,
+            "fallback": _dict(ai_execution.get("fallback")),
+            "failure": _dict(ai_execution.get("failure")),
+            "transparency": {
+                "aiFallback": ai_fallback_disclosure(values),
+                "newsExclusion": news_exclusion_disclosure(values),
+            },
             "ontologyDecisionQuality": ontology_quality,
             "ontologyQualityGate": ontology_quality_gate,
         },

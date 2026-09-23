@@ -15,6 +15,7 @@ import re
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+from digital_twin.modules.notifications.domain.notification_transparency import ai_fallback_disclosure
 from digital_twin.modules.read_models.contracts import build_customer_evidence_explanations
 from digital_twin.modules.decisions.contracts import inference_evidence_assertions
 from digital_twin.modules.decisions.contracts import relation_context_value
@@ -313,6 +314,7 @@ def response_writer_provenance(response: object, context: Mapping[str, object] =
     else:
         writer_kind = "deterministic"
         label = "시스템 근거 요약"
+    fallback_disclosure = ai_fallback_disclosure(context or {})
     return {
         "version": "notification-writer-provenance-v1",
         "writerKind": writer_kind,
@@ -323,6 +325,17 @@ def response_writer_provenance(response: object, context: Mapping[str, object] =
         "requestId": _text(execution.get("requestId"), 180),
         "aiAuthored": ai_authored,
         "fallbackUsed": bool(explicit_fallback or local_source),
+        "fallbackReasonCode": (
+            fallback_disclosure.get("reasonCode") if fallback_disclosure.get("used") else ""
+        ),
+        "fallbackReason": (
+            fallback_disclosure.get("reason") if fallback_disclosure.get("used") else ""
+        ),
+        "resultOwner": (
+            fallback_disclosure.get("resultOwner")
+            if fallback_disclosure.get("used")
+            else label
+        ),
         "writerRole": "narrative-only" if narrative_only else "decision-and-narrative",
         "decisionOwner": "typedb" if narrative_only or not ai_authored else "ai",
     }

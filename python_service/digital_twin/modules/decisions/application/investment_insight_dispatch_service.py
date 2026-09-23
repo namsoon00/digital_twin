@@ -8,7 +8,7 @@ from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.decisions.domain.events import investment_inference_episode_completed_event
 from digital_twin.modules.decisions.domain.investment_reasoning import ARCHIVE, HANDOFF_AI, INVALID, PUBLISH_TYPEDB, InferenceDispatchDecision, inference_dispatch_decision
-from digital_twin.modules.notifications.contracts import context_observation_delivery_decision
+from digital_twin.modules.notifications.contracts import context_observation_delivery_decision, typedb_ai_handoff_relation_set, typedb_ai_handoff_relation_set_fingerprint
 from digital_twin.modules.portfolio.contracts import AlertEvent
 
 
@@ -240,33 +240,37 @@ class InvestmentInsightDispatchService:
                 nested_metadata.pop(key, None)
             context["metadata"] = nested_metadata
         relation = _mapping(context.get("ontologyRelationContext"))
-        relation_decision = _mapping(relation.get("decision"))
-        synthesis = getattr(subject_case, "synthesis", None)
         candidate = getattr(subject_case, "candidate_set", None)
-        selected_rule_id = str(
-            getattr(synthesis, "selected_rule_id", "")
-            or relation_decision.get("selectedRuleId")
-            or ""
-        ).strip()
         hypothesis_ids = list(dict.fromkeys([
             *tuple(getattr(candidate, "execution_eligible_hypothesis_ids", ()) or ()),
             *tuple(getattr(candidate, "eligible_hypothesis_ids", ()) or ()),
             *tuple(getattr(candidate, "reference_hypothesis_ids", ()) or ()),
         ]))
-        if not selected_rule_id:
-            return self._typedb_companion_suppression(
-                event,
-                subject_case,
-                "typedb-stage-missing-selected-rule",
-                "TypeDB 후보 관계는 있으나 대표 관계가 선택되지 않아 별도 알림을 만들지 않았습니다.",
-            ), None
         if not hypothesis_ids:
             return self._typedb_companion_suppression(
                 event,
                 subject_case,
                 "typedb-stage-missing-hypotheses",
-                "TypeDB 대표 관계에 연결된 가설 후보가 없어 별도 알림을 만들지 않았습니다.",
+                "TypeDB 관계에 연결된 가설 후보가 없어 별도 알림을 만들지 않았습니다.",
             ), None
+        relation_rows = typedb_ai_handoff_relation_set(relation, hypothesis_ids)
+        relation_ids = [
+            str(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId") or "").strip()
+            for row in relation_rows
+        ]
+        relation_ids = [value for value in relation_ids if value]
+        if not relation_ids:
+            return self._typedb_companion_suppression(
+                event,
+                subject_case,
+                "typedb-stage-missing-relations",
+                "가설 후보에 연결된 검증 관계가 없어 TypeDB 단계 알림을 만들지 않았습니다.",
+            ), None
+        relation_set_fingerprint = typedb_ai_handoff_relation_set_fingerprint(
+            relation_ids,
+            hypothesis_ids,
+            subject_case.inference_generation_id,
+        )
 
         context["investmentSubjectDecisionCase"] = (
             self.reasoning_orchestrator.compact_subject_context(subject_case)
@@ -276,8 +280,9 @@ class InvestmentInsightDispatchService:
             "subjectCaseId": subject_case.subject_case_id,
             "inferenceGenerationId": subject_case.inference_generation_id,
             "candidateFingerprint": str(getattr(candidate, "fingerprint", "") or ""),
-            "selectedRuleId": selected_rule_id,
             "hypothesisIds": hypothesis_ids,
+            "relationIds": relation_ids,
+            "relationSetFingerprint": relation_set_fingerprint,
         }
         context["typedbObservationPublication"] = {
             "publicationId": "typedb-stage:" + subject_case.subject_case_id,

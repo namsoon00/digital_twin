@@ -8,11 +8,11 @@ scope and composes operational constraints around the investment opinion.
 from collections import Counter
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.modules.reasoning.domain.ontology_decision_state import decision_effect_from_relation, semantic_relation_sort_key
+from digital_twin.modules.reasoning.domain.ontology_decision_state import decision_effect_from_relation
 from digital_twin.modules.model_registry.contracts import ASSESSMENT_SCOPES, rule_assessment_scope
 
 
-DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v4"
+DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v5"
 
 
 def _text(value: object) -> str:
@@ -156,27 +156,26 @@ def _assessment(scope: str, entries: List[Dict[str, object]]) -> Dict[str, objec
         status = "supported"
     else:
         status = "observed"
-    selectable_entries = entries
-    if scope == "investment-opinion":
-        selectable_entries = [
-            item
-            for item in opinion_entries
-            if candidate_actions
-            and _text(item.get("candidateAction")).upper() == candidate_actions[0]
-        ] if not action_conflict else []
-    selected = (
-        min(selectable_entries, key=lambda item: semantic_relation_sort_key(item["relation"]))
-        if selectable_entries else {}
+    candidate_action = (
+        candidate_actions[0]
+        if scope == "investment-opinion" and len(candidate_actions) == 1
+        else ""
     )
+    candidate_action_label = next((
+        _text(item.get("candidateActionLabel"))
+        for item in opinion_entries
+        if _text(item.get("candidateAction")).upper() == candidate_action
+        and _text(item.get("candidateActionLabel"))
+    ), "")
     public_entries = [{key: value for key, value in item.items() if key != "relation"} for item in entries]
     return {
         "assessmentScope": scope,
         "status": status,
         "authoritativeSource": "typedb-materialized-rule-relations",
         "ruleIds": _strings(item.get("ruleId") for item in entries),
-        "selectedRuleId": _text(selected.get("ruleId")),
-        "candidateAction": _text(selected.get("candidateAction")) if scope == "investment-opinion" else "",
-        "candidateActionLabel": _text(selected.get("candidateActionLabel")) if scope == "investment-opinion" else "",
+        "selectedRuleId": "",
+        "candidateAction": candidate_action,
+        "candidateActionLabel": candidate_action_label,
         "candidateActions": candidate_actions,
         "candidateRuleIdsByAction": {
             action: _strings(

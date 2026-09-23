@@ -1,16 +1,16 @@
 {
   "sourceRevision": "temporal-input-identity-v1",
   "contractVersion": "projection-input-execution-v2",
-  "reason": "Projection receipts now retain the immutable temporal feature snapshot identity used by each graph assembly so engine comparisons cannot treat different time-series inputs as equivalent.",
+  "reason": "Projection receipts retain immutable temporal identity and the normalized official company-event evidence included in each graph assembly.",
   "scenarios": {
-    "full": "03705d0c8554853e7362d8bb1a38374b05cf13f04d5664c17ac951c975e89fa0",
-    "target": "b188ec1935421c9ceff1e49715063bcb6d4b04b94ddce6203a491e5bcdd3b6a5",
-    "source-facts": "86e4589daa14e977dce9968030ff92eeb0bcbeabcf70ae3c1dc6ad11baa57e35",
-    "live-context": "62d94766c88429bd6556bdca9198b307eca839c416067b5621433609d6a7fe4f",
-    "memory-hit": "634be6a6fb1cf0e7d540d5c4b8a051275caee502593f98105f5ca9989ae04410",
-    "persistent-hit": "242a5074bfde3b07bcc851f0eb9369a202147dba922ee8a86bc255325f490553",
-    "cache-errors": "406613848fb6d3a80f992b4640a576e0c25993d251fbbc8c6609439b52076b78",
-    "scoring-failure": "83fc7db32cf12d1c72dbf1046dcee7e94e9bcbf47c8a73a5e9095805d106e350",
-    "world-identity": "db8f278d906d78ed1a30684345304c6b6e2f6020197fbd7415fc6462ee57639c"
+    "full": "8b8e6ab7a119e44e51bf88ec39b9cb745a8f7c5fd9cff314064989031299c922",
+    "target": "1dc288ff7bb3ee79d62f72322beef0231e4287ecb974cdf55c8351674f9b40f8",
+    "source-facts": "1b7199b95d221a9a909737714332901ea49ae9b28370d2b33143724e11099ec8",
+    "live-context": "1bf9e99ab0075858b893d5e2da2e47fb1222d4427c39529cc032ac208840651c",
+    "memory-hit": "b32b26e37c96e11e4c340a807ec3365558e9d3a2da2585eacbf85331968d89ca",
+    "persistent-hit": "aa016efe0dd3f8b45b08e6c26fbbd06e2fbaf1b49c0188ed99c6f60ab30b21cf",
+    "cache-errors": "217fd4531c50d0a5055cd11da736bea9944de0789b7fd03f4027f0246ae7f0c5",
+    "scoring-failure": "9362a9b1c570fadf88fc9c433529947dd68970c0738bde81fac48213f71480b1",
+    "world-identity": "22568305207a41b11eb74b5e21c03d5942b3a1bf4bea2f9cd8db6bc2dbad85be"
   }
 }

@@ -210,7 +210,9 @@ class SubjectReasoningLineageTests(unittest.TestCase):
         self.assertEqual(0, lineage["integrity"]["invalidRuleEvaluationCount"])
         self.assertEqual("pass", lineage["integrity"]["state"])
         self.assertEqual([RULE_ID], [row["id"] for row in reasoning["rules"]])
-        self.assertTrue(reasoning["rules"][0]["selected"])
+        self.assertFalse(reasoning["rules"][0]["selected"])
+        self.assertTrue(reasoning["rules"][0]["inRelationSet"])
+        self.assertEqual([RULE_ID], lineage["identity"]["relationSetIds"])
         self.assertEqual(1776000, reasoning["facts"][0]["observedValue"])
         self.assertNotIn("005380", str(lineage))
         self.assertEqual("typedb-fallback", lineage["ai"]["status"])
@@ -278,7 +280,7 @@ class SubjectReasoningLineageTests(unittest.TestCase):
             research_episode,
         )
         jointly_led_path = jointly_led_lineage["explanation"]["causalPaths"][0]
-        self.assertTrue(jointly_led_path["selected"])
+        self.assertFalse(jointly_led_path["selected"])
         self.assertTrue(jointly_led_path["researchLead"])
         self.assertEqual("ai-research-lead", jointly_led_path["selectionSource"])
 

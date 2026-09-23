@@ -733,7 +733,11 @@ class OntologyInferenceContextTests(unittest.TestCase):
         matches = matches_from_inference([stale_rule, fresh_rule], traces, facts=facts)
         envelope = action_envelope_from_inference(facts, matches, [stale_rule, fresh_rule])
 
-        self.assertEqual("graph.temporal.recovery.hold.v1", envelope["selectedRuleId"])
+        self.assertEqual("", envelope["selectedRuleId"])
+        self.assertEqual(
+            ["graph.temporal.recovery.hold.v1"],
+            envelope["coreInferenceSelection"]["relationSetIds"],
+        )
         self.assertEqual("HOLD", envelope["preferredAction"])
         self.assertEqual(["graph.cross_listing.adr_premium_risk.v1"], envelope["dataReadiness"]["excludedRuleIds"])
         self.assertFalse(envelope["judgementBlocked"])

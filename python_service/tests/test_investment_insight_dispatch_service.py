@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 from unittest.mock import Mock
 
 from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
@@ -615,6 +616,22 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             "stage-observation",
             typedb_context_observation_contract(typedb_job.context)["decisionEligibility"],
         )
+        stage_contract = typedb_context_observation_contract(typedb_job.context)
+        self.assertNotIn("selectedRuleId", stage_contract)
+        self.assertEqual(
+            ["graph.benchmark.beta.context.v1"],
+            stage_contract["relationIds"],
+        )
+        self.assertEqual(64, len(stage_contract["relationSetFingerprint"]))
+        self.assertNotIn(
+            "selectedRuleId",
+            typedb_job.context["typedbAiHandoffObservation"],
+        )
+        mismatched_relation_set = deepcopy(typedb_job.context)
+        mismatched_relation_set["typedbAiHandoffObservation"]["relationIds"] = [
+            "graph.unrelated.rule.v1"
+        ]
+        self.assertEqual({}, typedb_context_observation_contract(mismatched_relation_set))
         self.assertEqual(
             PUBLISH_TYPEDB,
             typedb_job.context["inferenceDispatchDecision"]["route"],
@@ -630,6 +647,8 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         )
         self.assertIn("🔗 스트래티지 · 달라진 신호", typedb_message)
         self.assertIn("무엇이 달라졌나요", typedb_message)
+        self.assertIn("확인된 관계", typedb_message)
+        self.assertNotIn("대표 관계", typedb_message)
         self.assertIn(
             "이 변화가 투자 행동을 바꿀 수준이면 AI 종합 판단이 별도 알림으로 이어집니다.",
             typedb_message,
@@ -650,20 +669,35 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             repeated["typedbCompanionOutcomes"][0]["status"],
         )
 
-        missing_relation_selection = context_observation(actionable)
-        missing_relation_selection["ontologyRelationContext"]["decision"] = {}
-        actionable.synthesis = DecisionSynthesis.from_dict({
-            **actionable.synthesis.to_dict(),
+        no_selection = subject_case(
+            "subject:research-stage",
+            action_authority="originate",
+            eligible=("hypothesis:mstr:research",),
+            outcome="REVIEW_ONLY",
+        )
+        missing_relation_selection = context_observation(no_selection)
+        missing_relation_selection["ontologyRelationContext"]["decision"] = {
+            "basis": "typedbInferenceBox",
+        }
+        for group in ("activeRules", "matchedRules"):
+            missing_relation_selection["ontologyRelationContext"][group][0]["knowledgeBasis"] = predictive_basis
+        for group in ("relations", "traces"):
+            missing_relation_selection["ontologyRelationContext"]["graphStoreInference"][group][0]["knowledgeBasis"] = predictive_basis
+        no_selection.synthesis = DecisionSynthesis.from_dict({
+            **no_selection.synthesis.to_dict(),
             "selected_rule_id": "",
         })
-        suppressed = service.dispatch([
-            alert(actionable, missing_relation_selection, "stage-no-selection")
-        ])
-        self.assertEqual(
-            "typedb-stage-missing-selected-rule",
-            suppressed["typedbCompanionOutcomes"][0]["reasonCode"],
+        no_selection_service = InvestmentInsightDispatchService(
+            FakeIngress(),
+            FakeNotificationQueue(),
+            FakeAIHandoff(),
+            FakeOrchestrator([no_selection]),
         )
-        self.assertFalse(suppressed["typedbCompanionOutcomes"][0]["queued"])
+        delivered = no_selection_service.dispatch([
+            alert(no_selection, missing_relation_selection, "stage-no-selection")
+        ])
+        self.assertEqual("typedb-and-ai-queued", delivered["status"])
+        self.assertTrue(delivered["typedbCompanionOutcomes"][0]["queued"])
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Dict, Iterable, List, Mapping
 
 from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract
@@ -12,8 +14,8 @@ from digital_twin.modules.notifications.domain.follow_up_transition_evidence imp
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
 CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v5"
-TYPEDB_AI_HANDOFF_OBSERVATION_VERSION = "typedb-ai-handoff-observation-v1"
-REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v2"
+TYPEDB_AI_HANDOFF_OBSERVATION_VERSION = "typedb-ai-handoff-observation-v2"
+REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v3"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
 REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v7"
 
@@ -103,6 +105,104 @@ def _rule_rows(relation: Mapping[str, object]) -> Iterable[Dict[str, object]]:
                 yield dict(item)
 
 
+def _rule_id(row: Mapping[str, object]) -> str:
+    return _text(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId"))
+
+
+def _hypothesis_rows(relation: Mapping[str, object]) -> Iterable[Dict[str, object]]:
+    brain = _mapping(relation.get("investmentBrain"))
+    hypothesis_set = _mapping(relation.get("hypothesisSet")) or _mapping(
+        brain.get("hypothesisSet")
+    )
+    for item in hypothesis_set.get("hypotheses") or []:
+        if isinstance(item, Mapping):
+            yield dict(item)
+
+
+def typedb_ai_handoff_relation_set(
+    relation: Mapping[str, object], hypothesis_ids: Iterable[object]
+) -> List[Dict[str, object]]:
+    """Return every verified TypeDB relation that supports the handoff candidates.
+
+    This is deliberately a set projection, not a winner selection.  The AI may
+    compare hypotheses later, but the deterministic TypeDB stage must preserve
+    all graph-authored relations that explain those candidates.
+    """
+
+    candidate_ids = {_text(value) for value in hypothesis_ids or [] if _text(value)}
+    supporting_rule_ids = set()
+    for hypothesis in _hypothesis_rows(relation):
+        hypothesis_id = _text(hypothesis.get("hypothesisId") or hypothesis.get("hypothesis_id"))
+        if hypothesis_id not in candidate_ids:
+            continue
+        for value in hypothesis.get("supportingRuleIds") or hypothesis.get("supporting_rule_ids") or []:
+            if _text(value):
+                supporting_rule_ids.add(_text(value))
+
+    decision = _mapping(relation.get("decision"))
+    envelope = _mapping(relation.get("actionEnvelope")) or _mapping(
+        decision.get("actionEnvelope")
+    )
+    assessments = _mapping(relation.get("assessmentBundle"))
+    opinion = _mapping(assessments.get("investmentOpinion"))
+    for container, keys in (
+        (envelope, ("drivingRuleIds", "supportRuleIds")),
+        (opinion, ("ruleIds",)),
+    ):
+        for key in keys:
+            for value in container.get(key) or []:
+                if _text(value):
+                    supporting_rule_ids.add(_text(value))
+
+    rows_by_id: Dict[str, Dict[str, object]] = {}
+    fallback_rows: Dict[str, Dict[str, object]] = {}
+    for row in _rule_rows(relation):
+        rule_id = _rule_id(row)
+        if not rule_id or row.get("matched") is False:
+            continue
+        rows_by_id.setdefault(rule_id, row)
+        basis = _mapping(row.get("knowledgeBasis") or row.get("knowledge_basis"))
+        rule_kind = _text(
+            basis.get("ruleKind")
+            or basis.get("rule_kind")
+            or row.get("ruleKind")
+            or row.get("rule_kind")
+        ).lower()
+        requires_hypothesis = _text(
+            basis.get("requiresHypothesis")
+            if "requiresHypothesis" in basis
+            else basis.get("requires_hypothesis")
+        ).lower() in {"1", "true", "yes", "on"}
+        if (
+            not _explicit_false(row, basis)
+            and (
+                rule_kind in {"predictive", "predictive-hypothesis"}
+                or requires_hypothesis
+            )
+        ):
+            fallback_rows.setdefault(rule_id, row)
+
+    selected_ids = sorted(rule_id for rule_id in supporting_rule_ids if rule_id in rows_by_id)
+    if not selected_ids:
+        selected_ids = sorted(fallback_rows)
+    return [rows_by_id[rule_id] for rule_id in selected_ids]
+
+
+def typedb_ai_handoff_relation_set_fingerprint(
+    relation_ids: Iterable[object],
+    hypothesis_ids: Iterable[object],
+    inference_generation_id: object,
+) -> str:
+    material = {
+        "hypothesisIds": sorted({_text(value) for value in hypothesis_ids or [] if _text(value)}),
+        "inferenceGenerationId": _text(inference_generation_id),
+        "relationIds": sorted({_text(value) for value in relation_ids or [] if _text(value)}),
+    }
+    return hashlib.sha256(
+        json.dumps(material, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _explicit_false(row: Mapping[str, object], basis: Mapping[str, object]) -> bool:
     for container in (basis, row):
         if "requiresHypothesis" in container:
@@ -150,12 +250,6 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             or candidate.get("candidateFingerprint")
             or subject_case.get("candidateFingerprint")
         )
-        selected_rule_id = _text(stage_observation.get("selectedRuleId"))
-        canonical_selected_rule_id = _text(
-            synthesis.get("selected_rule_id")
-            or synthesis.get("selectedRuleId")
-            or _mapping(relation.get("decision")).get("selectedRuleId")
-        )
         hypothesis_ids = [
             _text(item)
             for item in stage_observation.get("hypothesisIds") or []
@@ -179,6 +273,18 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             relation.get("inferenceGenerationId")
             or graph.get("inferenceGenerationId")
         )
+        relation_rows = typedb_ai_handoff_relation_set(relation, hypothesis_ids)
+        relation_ids = [_rule_id(row) for row in relation_rows if _rule_id(row)]
+        marker_relation_ids = sorted({
+            _text(item)
+            for item in stage_observation.get("relationIds") or []
+            if _text(item)
+        })
+        relation_set_fingerprint = typedb_ai_handoff_relation_set_fingerprint(
+            relation_ids,
+            hypothesis_ids,
+            generation_id,
+        )
         identity_matches = bool(
             _text(stage_observation.get("status")).lower() == "eligible"
             and subject_case_id
@@ -187,35 +293,30 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             and generation_id == _text(stage_observation.get("inferenceGenerationId"))
             and candidate_fingerprint
             and candidate_fingerprint == _text(stage_observation.get("candidateFingerprint"))
-            and selected_rule_id
-            and selected_rule_id == canonical_selected_rule_id
             and set(hypothesis_ids) == candidate_hypothesis_ids
+            and relation_ids
+            and sorted(relation_ids) == marker_relation_ids
+            and relation_set_fingerprint == _text(stage_observation.get("relationSetFingerprint"))
             and (not relation_generation_id or relation_generation_id == generation_id)
         )
         if not identity_matches:
             return {}
-        selected_row: Dict[str, object] = {}
-        for row in _rule_rows(relation):
-            rule_id = _text(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId"))
-            if rule_id == selected_rule_id:
-                selected_row = row
-                break
-        if not selected_row:
-            return {}
         subject = _mapping(relation.get("subject"))
         facts = _mapping(relation.get("facts"))
+        relation_summaries = [{
+            "relationId": _rule_id(row),
+            "label": _text(
+                row.get("label") or row.get("ruleLabel") or row.get("targetLabel")
+            ),
+            "decisionEffect": _text(row.get("decisionEffect") or row.get("decision_effect")),
+            "evidenceRole": _text(row.get("evidenceRole") or row.get("evidence_role")),
+            "candidateAction": _text(row.get("candidateAction") or row.get("candidate_action")).upper(),
+        } for row in relation_rows]
         return {
             "schemaVersion": TYPEDB_AI_HANDOFF_OBSERVATION_VERSION,
             "status": "eligible",
             "decisionMode": CONTEXT_OBSERVATION_DECISION_MODE,
             "messageClass": "typedb-ai-handoff-stage-change",
-            "selectedRuleId": selected_rule_id,
-            "selectedRuleLabel": _text(
-                selected_row.get("label")
-                or selected_row.get("ruleLabel")
-                or selected_row.get("targetLabel")
-                or stage_observation.get("selectedRuleLabel")
-            ),
             "ruleKind": "ai-handoff-stage-observation",
             "decisionEligibility": "stage-observation",
             "requiresHypothesis": True,
@@ -226,6 +327,9 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             "symbol": _text(subject.get("symbol") or facts.get("symbol")).upper(),
             "market": _text(subject.get("market") or facts.get("market")).upper(),
             "hypothesisIds": hypothesis_ids,
+            "relationIds": relation_ids,
+            "relations": relation_summaries,
+            "relationSetFingerprint": relation_set_fingerprint,
             "subjectCaseId": subject_case_id,
             "candidateFingerprint": candidate_fingerprint,
             "graphSource": _text(relation.get("source")),
@@ -420,18 +524,15 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
     )
     if action_authority not in {"modify", "observe"} and not qualification_pending:
         return {}
-    selected_rule_id = _text(
-        synthesis.get("selected_rule_id")
-        or synthesis.get("selectedRuleId")
-        or _mapping(relation.get("decision")).get("selectedRuleId")
-    )
     review_hypothesis_ids = list(dict.fromkeys([
         *eligible_hypothesis_ids,
         *reference_hypothesis_ids,
     ]))
     if not review_hypothesis_ids:
         return {}
-    if not research_only and (not selected_rule_id or not eligible_hypothesis_ids):
+    relation_rows = typedb_ai_handoff_relation_set(relation, review_hypothesis_ids)
+    relation_ids = [_rule_id(row) for row in relation_rows if _rule_id(row)]
+    if not relation_ids or (not research_only and not eligible_hypothesis_ids):
         return {}
     subject = _mapping(relation.get("subject"))
     facts = _mapping(relation.get("facts"))
@@ -447,7 +548,16 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
             if research_only
             else "typedb-risk-or-constraint-review"
         ),
-        "selectedRuleId": selected_rule_id,
+        "relationIds": relation_ids,
+        "relations": [{
+            "relationId": _rule_id(row),
+            "label": _text(
+                row.get("label") or row.get("ruleLabel") or row.get("targetLabel")
+            ),
+            "decisionEffect": _text(row.get("decisionEffect") or row.get("decision_effect")),
+            "evidenceRole": _text(row.get("evidenceRole") or row.get("evidence_role")),
+            "candidateAction": _text(row.get("candidateAction") or row.get("candidate_action")).upper(),
+        } for row in relation_rows],
         "ruleKind": "review-observation",
         "decisionEligibility": "review-only",
         "requiresHypothesis": True,
@@ -643,7 +753,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "suppressionReason": "context_observation_web_history",
         "pushValueClass": "web-only-context-observation",
         "publicationOutcome": outcome,
-        "selectedRuleId": contract.get("selectedRuleId"),
+        "relationIds": list(contract.get("relationIds") or []),
         "authorizationSources": authorization_sources,
         "materialSourceEventCount": len(material_source_keys),
         "verifiedFollowUpTransitionCount": len(verified_follow_ups),
@@ -653,6 +763,8 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "relationLifecycleTransition": lifecycle_transition,
         "stageObservation": contract.get("decisionEligibility") == "stage-observation",
     }
+    if decision["stageObservation"]:
+        decision.pop("selectedRuleId", None)
     if outcome != "OBSERVATION":
         decision.update({
             "reason": "검증된 참고 관찰 발행물이 없어 투자 푸시로 보내지 않습니다.",
@@ -760,7 +872,7 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         "suppressionReason": "review_observation_web_history",
         "pushValueClass": "web-only-review-observation",
         "publicationOutcome": outcome,
-        "selectedRuleId": contract.get("selectedRuleId"),
+        "relationIds": list(contract.get("relationIds") or []),
         "authorizationSources": authorization_sources,
         "materialSourceEventCount": len(material_source_keys),
         "verifiedFollowUpTransitionCount": len(verified_follow_ups),

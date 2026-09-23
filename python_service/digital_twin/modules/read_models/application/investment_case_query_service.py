@@ -478,7 +478,12 @@ class InvestmentCaseQueryService:
             for item in candidate_set.get("hypotheses") or []
             if isinstance(item, Mapping)
         ][:8]
-        selected_rule = text(synthesis.get("selected_rule_id") or synthesis.get("selectedRuleId"))
+        relation_set_ids = list(dict.fromkeys(
+            text(rule_id)
+            for hypothesis in hypotheses
+            for rule_id in hypothesis.get("supportingRuleIds") or []
+            if text(rule_id)
+        ))
         candidate_label = action if action != "NO_ACTION" else "관계 관찰"
         disposition_headlines = {
             "RULE_COVERAGE_GAP_CANDIDATE": "규칙은 성립했지만 가설 생성이 누락되어 내부 보완 작업을 등록했습니다.",
@@ -722,7 +727,10 @@ class InvestmentCaseQueryService:
             },
             "explanation": {
                 "primaryCause": {
-                    "title": selected_rule or "TypeDB 경쟁 가설",
+                    "title": (
+                        "TypeDB 관계 " + str(len(relation_set_ids)) + "개"
+                        if relation_set_ids else "TypeDB 경쟁 가설"
+                    ),
                     "summary": headline,
                     "effect": "최종 AI 판단 전에는 주문 행동으로 사용하지 않습니다." if not has_final else "검증된 최종 행동 의견입니다.",
                 },
@@ -732,7 +740,8 @@ class InvestmentCaseQueryService:
                 "sourceAboxSnapshotId": text(case.get("sourceAboxSnapshotId")),
                 "inferenceGenerationId": text(case.get("inferenceGenerationId")),
                 "candidateFingerprint": text(candidate_set.get("fingerprint")),
-                "selectedRuleId": selected_rule,
+                "selectedRuleId": "",
+                "relationSetIds": relation_set_ids,
                 "candidateAction": action,
                 "allowedActions": list(candidate_set.get("allowedActions") or []),
                 "blockedActions": list(candidate_set.get("blockedActions") or []),

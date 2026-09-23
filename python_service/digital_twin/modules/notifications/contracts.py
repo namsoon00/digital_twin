@@ -137,6 +137,8 @@ _EXPORTS.update({
     'symbol_with_code': ('digital_twin.modules.notifications.domain.notification_templates', 'symbol_with_code'),
     'trade_strength_label': ('digital_twin.modules.notifications.domain.alert_formatting', 'trade_strength_label'),
     'typedb_context_observation_contract': ('digital_twin.modules.notifications.domain.context_observation_notifications', 'typedb_context_observation_contract'),
+    'typedb_ai_handoff_relation_set': ('digital_twin.modules.notifications.domain.context_observation_notifications', 'typedb_ai_handoff_relation_set'),
+    'typedb_ai_handoff_relation_set_fingerprint': ('digital_twin.modules.notifications.domain.context_observation_notifications', 'typedb_ai_handoff_relation_set_fingerprint'),
     'typedb_narrative_only_contract': ('digital_twin.modules.notifications.domain.context_observation_notifications', 'typedb_narrative_only_contract'),
     'typedb_review_observation_contract': ('digital_twin.modules.notifications.domain.context_observation_notifications', 'typedb_review_observation_contract'),
 })

@@ -471,8 +471,8 @@ function renderNotificationReverseReasoning(job) {
   var ruleBody = notificationReasoningTraceItems(rules, "notification-reasoning-rule-list", function (rule) {
     var meta = [rule.reviewLabel, rule.dataStateLabel, rule.evidenceRole].filter(Boolean).join(" · ");
     return [
-      '<div class="notification-reasoning-rule' + (rule.selected ? ' selected' : '') + '">',
-      '<span>' + (rule.selected ? "선택 규칙" : "성립 규칙") + '</span>',
+      '<div class="notification-reasoning-rule' + (rule.inRelationSet ? ' selected' : '') + '">',
+      '<span>' + (rule.inRelationSet ? "가설 연결 관계" : "확인된 관계") + '</span>',
       '<strong>' + escapeHtml(rule.label || rule.ruleId || "관계 규칙") + '</strong>',
       meta ? '<em>' + escapeHtml(meta) + '</em>' : '',
       rule.inferenceTraceId ? '<code>' + escapeHtml(rule.inferenceTraceId) + '</code>' : '',

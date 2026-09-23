@@ -1567,7 +1567,6 @@ def action_envelope_from_inference(
     opinion_entries = [item for item in entries if item["match"].rule_id in opinion_rule_ids]
     context_rule_ids = set(market_context.get("ruleIds") or [])
     context_entries = [item for item in entries if item["match"].rule_id in context_rule_ids]
-    selected_opinion_rule_id = str(investment_opinion.get("selectedRuleId") or "").strip()
     opinion_candidate_actions = unique_texts(
         str(value or "").strip().upper()
         for value in investment_opinion.get("candidateActions") or []
@@ -1575,39 +1574,7 @@ def action_envelope_from_inference(
     comparison_required = bool(
         investment_opinion.get("actionConflict") and len(opinion_candidate_actions) > 1
     )
-    selected_entry = next(
-        (item for item in opinion_entries if item["match"].rule_id == selected_opinion_rule_id),
-        None,
-    )
     investment_view_action = str(investment_opinion.get("candidateAction") or "").strip().upper()
-    if selected_entry is None and investment_view_action:
-        matching_opinion_entries = [
-            item
-            for item in opinion_entries
-            if str(
-                item["relation"].get("candidateAction")
-                or item["relation"].get("candidate_action")
-                or item["match"].candidate_action
-                or ""
-            ).strip().upper() == investment_view_action
-        ]
-        selected_entry = (
-            min(matching_opinion_entries, key=lambda item: semantic_relation_sort_key(item["relation"]))
-            if matching_opinion_entries else None
-        )
-    if selected_entry is not None:
-        selected_opinion_rule_id = selected_entry["match"].rule_id
-    selected_context_rule_id = str(market_context.get("selectedRuleId") or "").strip()
-    selected_context_entry = next(
-        (item for item in context_entries if item["match"].rule_id == selected_context_rule_id),
-        None,
-    )
-    if selected_context_entry is None and context_entries:
-        selected_context_entry = min(
-            context_entries,
-            key=lambda item: semantic_relation_sort_key(item["relation"]),
-        )
-        selected_context_rule_id = selected_context_entry["match"].rule_id
     candidate_contract_conflict = bool(
         investment_view_action
         and (
@@ -1637,7 +1604,7 @@ def action_envelope_from_inference(
 
     if comparison_required and not quality_blocked and not blocked_policy_entries:
         status = "HYPOTHESIS_COMPARISON_REQUIRED"
-    elif not investment_view_action and selected_context_entry is not None and not quality_blocked:
+    elif not investment_view_action and context_entries and not quality_blocked:
         status = "CONTEXT_OBSERVATION"
     elif not investment_view_action and not quality_blocked and not blocked_policy_entries:
         status = "NO_ELIGIBLE_THESIS"
@@ -1743,9 +1710,15 @@ def action_envelope_from_inference(
         return values[:6]
 
     status_label = ACTION_ENVELOPE_STATUS_LABELS.get(status, "조건 확인")
-    selected_rule_id = selected_opinion_rule_id or selected_context_rule_id
-    selected_effect = str(
-        (selected_entry or selected_context_entry or {}).get("effect") or ""
+    selected_rule_id = ""
+    opinion_effects = {
+        str(item.get("effect") or "").strip().lower()
+        for item in opinion_entries
+        if str(item.get("effect") or "").strip()
+    }
+    selected_effect = next(
+        (effect for effect in ("support", "block", "constrain", "defer") if effect in opinion_effects),
+        "",
     )
     candidate_actions = unique_texts(
         item["relation"].get("candidateAction")
@@ -1783,7 +1756,7 @@ def action_envelope_from_inference(
             else "holding-review"
         )
     return {
-        "version": "typedb-action-envelope-v5",
+        "version": "typedb-action-envelope-v6",
         "source": "typedb-materialized-decision-effects",
         "status": status,
         "statusLabel": status_label,
@@ -1856,18 +1829,20 @@ def action_envelope_from_inference(
         ],
         "coreInferenceSelection": {
             "tboxClass": "CoreInferenceSelection",
-            "selectedRuleId": selected_opinion_rule_id,
+            "selectedRuleId": "",
+            "relationSetIds": unique_texts([item["match"].rule_id for item in opinion_entries])[:12],
             "eligibleRuleIds": unique_texts([item["match"].rule_id for item in opinion_entries])[:12],
             "excludedRuleIds": unique_texts([item["match"].rule_id for item in excluded_entries])[:12],
-            "selectionBasis": "fresh-usable-typedb-inference",
+            "selectionBasis": "complete-fresh-usable-typedb-relation-set",
         },
         "contextObservationSelection": {
             "tboxClass": "ContextObservationSelection",
-            "selectedRuleId": selected_context_rule_id,
+            "selectedRuleId": "",
+            "relationSetIds": unique_texts([item["match"].rule_id for item in context_entries])[:12],
             "eligibleRuleIds": unique_texts(
                 [item["match"].rule_id for item in context_entries]
             )[:12],
-            "selectionBasis": "fresh-usable-typedb-context-observation",
+            "selectionBasis": "complete-fresh-usable-typedb-context-set",
         },
         "nextChecks": metadata_rows("next_checks", driving or entries),
         "invalidationConditions": metadata_rows("weaken_conditions", by_effect["block"] + by_effect["defer"] + by_effect["constrain"]),
@@ -1910,104 +1885,75 @@ def decision_from_inference(
     )
     if not candidates:
         market_context = dict(assessment_bundle.get("marketContext") or {})
-        context_rule_id = str(
-            market_context.get("selectedRuleId")
-            or action_envelope.get("selectedRuleId")
-            or ""
-        ).strip()
-        context_match = next(
-            (
-                item for item in matches
-                if item.matched
-                and not item.reference_only
-                and item.rule_id == context_rule_id
-            ),
-            None,
-        )
-        if context_match is not None:
-            context_relation = relation_for_match(context_match, relations)
-            context_trace = next(
-                (
-                    item for item in traces
-                    if str(item.get("ruleId") or "") == context_match.rule_id
-                ),
-                {},
+        context_rule_ids = set(market_context.get("ruleIds") or [])
+        context_matches = [
+            item for item in matches
+            if item.matched
+            and not item.reference_only
+            and item.rule_id in context_rule_ids
+        ]
+        if context_matches:
+            context_relations = [
+                relation_for_match(item, relations) for item in context_matches
+            ]
+            context_labels = unique_texts(
+                relation.get("decisionLabel") or match.label
+                for match, relation in zip(context_matches, context_relations)
+            )
+            context_stages = unique_texts(
+                relation.get("decisionStage") for relation in context_relations
+            )
+            context_types = unique_texts(
+                relation.get("type") or relation.get("relationType")
+                for relation in context_relations
             )
             return {
-                "label": str(
-                    context_relation.get("decisionLabel")
-                    or context_match.label
-                    or "중요 자료 확인"
-                ),
-                "tone": str(context_relation.get("decisionTone") or "watch"),
+                "label": context_labels[0] if len(context_labels) == 1 else "여러 시장 관계 확인",
+                "tone": "watch",
                 "basis": source_name,
-                "selectedRuleId": context_match.rule_id,
-                "selectionRole": "context-observation-reference-only",
+                "selectedRuleId": "",
+                "selectionRole": "context-observation-relation-set",
                 "finalDecisionOwner": "typedb-semantic-context",
                 "candidateRuleIds": unique_texts(
                     [item.rule_id for item in matches if item.matched]
                 )[:12],
-                "eligibleRuleIds": [context_match.rule_id],
+                "eligibleRuleIds": unique_texts(item.rule_id for item in context_matches)[:12],
+                "relationSetIds": unique_texts(item.rule_id for item in context_matches)[:12],
                 "excludedRuleIds": list(
                     (action_envelope.get("dataReadiness") or {}).get(
                         "excludedRuleIds"
                     ) or []
                 ),
                 "candidateDecisionStages": [],
-                "selectedInferenceTraceId": str(context_trace.get("id") or ""),
-                "decisionStage": str(
-                    context_relation.get("decisionStage") or "REFERENCE_OBSERVATION"
-                ),
-                "actionGroup": str(
-                    context_relation.get("actionGroup") or "alertReview"
-                ),
-                "actionLevel": str(
-                    context_relation.get("actionLevel") or "watch"
-                ),
-                "reviewLevel": context_match.review_level or "observe",
-                "reviewLevelLabel": context_match.review_label
-                or REVIEW_LEVEL_LABELS["observe"],
-                "dataState": context_match.data_state or "partial",
+                "selectedInferenceTraceId": "",
+                "decisionStage": context_stages[0] if len(context_stages) == 1 else "CONTEXT_RELATION_SET",
+                "actionGroup": "alertReview",
+                "actionLevel": "watch",
+                "reviewLevel": "observe",
+                "reviewLevelLabel": REVIEW_LEVEL_LABELS["observe"],
+                "dataState": str((action_envelope.get("dataReadiness") or {}).get("dataState") or "partial"),
                 "dataStateLabel": DATA_STATE_LABELS.get(
-                    context_match.data_state or "partial",
+                    str((action_envelope.get("dataReadiness") or {}).get("dataState") or "partial"),
                     DATA_STATE_LABELS["partial"],
                 ),
                 "evidenceRole": "context",
-                "sourceRelationType": str(
-                    context_relation.get("type")
-                    or context_relation.get("relationType")
-                    or ""
-                ),
+                "sourceRelationType": context_types[0] if len(context_types) == 1 else "",
+                "sourceRelationTypes": context_types,
                 "stagePolicySource": "typedbContextObservation",
                 "judgementBlocked": False,
                 "investmentJudgementAvailable": False,
                 "actionPolicyApplied": False,
                 "nativeTypeDbReasoned": True,
-                "primaryAction": str(
-                    context_relation.get("primaryAction") or "REVIEW_EVIDENCE"
-                ),
-                "primaryActionLabel": str(
-                    context_relation.get("primaryActionLabel")
-                    or "공시 원문과 후속 반응 확인"
-                ),
+                "primaryAction": "REVIEW_EVIDENCE",
+                "primaryActionLabel": "근거 원문과 후속 반응 확인",
                 "candidateAction": "",
                 "candidateActionLabel": "",
-                "blockedActionLabels": list(
-                    context_relation.get("blockedActionLabels") or []
-                ),
-                "strengthenConditions": list(
-                    context_relation.get("strengthenConditions") or []
-                ),
-                "weakenConditions": list(
-                    context_relation.get("weakenConditions") or []
-                ),
-                "nextChecks": list(context_relation.get("nextChecks") or []),
-                "notificationCategory": str(
-                    context_relation.get("notificationCategory") or "relationshipChange"
-                ),
-                "notificationSeverity": str(
-                    context_relation.get("notificationSeverity") or "WATCH"
-                ),
+                "blockedActionLabels": [],
+                "strengthenConditions": list(action_envelope.get("strengthenConditions") or []),
+                "weakenConditions": list(action_envelope.get("invalidationConditions") or []),
+                "nextChecks": list(action_envelope.get("nextChecks") or []),
+                "notificationCategory": "relationshipChange",
+                "notificationSeverity": "WATCH",
                 "actionEnvelope": action_envelope,
             }
         missing_effect_rule_ids = list(action_envelope.get("missingDecisionEffectRuleIds") or [])
@@ -2072,29 +2018,28 @@ def decision_from_inference(
             "missingDecisionEffectRuleIds": missing_effect_rule_ids,
             "actionEnvelope": action_envelope,
         }
-    selected_rule_id = str(action_envelope.get("selectedRuleId") or "").strip()
-    selected = next((item for item in candidates if item.rule_id == selected_rule_id), None)
-    if selected is None:
-        selected = min(candidates, key=lambda item: semantic_relation_sort_key(relation_for_match(item, relations)))
-    relation = relation_for_match(selected, relations)
+    candidate_relations = [relation_for_match(item, relations) for item in candidates]
+    candidate_stages = [
+        decision_stage_from_relation(relation) for relation in candidate_relations
+    ]
     action_policy = {
-        "targetRole": action_envelope.get("targetRole") or action_policy_from_relation_or_facts(facts, relation).get("targetRole"),
-        "actionPolicy": action_envelope.get("actionPolicy") or action_policy_from_relation_or_facts(facts, relation).get("actionPolicy"),
-        "allowedActions": list(action_envelope.get("allowedActions") or action_policy_from_relation_or_facts(facts, relation).get("allowedActions") or []),
-        "blockedActions": list(action_envelope.get("blockedActions") or action_policy_from_relation_or_facts(facts, relation).get("blockedActions") or []),
+        "targetRole": action_envelope.get("targetRole") or action_policy_from_relation_or_facts(facts, {}).get("targetRole"),
+        "actionPolicy": action_envelope.get("actionPolicy") or action_policy_from_relation_or_facts(facts, {}).get("actionPolicy"),
+        "allowedActions": list(action_envelope.get("allowedActions") or action_policy_from_relation_or_facts(facts, {}).get("allowedActions") or []),
+        "blockedActions": list(action_envelope.get("blockedActions") or action_policy_from_relation_or_facts(facts, {}).get("blockedActions") or []),
     }
-    stage = decision_stage_from_relation(relation)
-    if stage is None:
+    if any(stage is None for stage in candidate_stages):
         # ``active`` above already excludes this state.  Keep the guard here so
         # a malformed relation can never be converted into a default hold.
         return {
             "label": "TypeDB 판단 정책 누락",
             "tone": "caution",
             "basis": source_name,
-            "selectedRuleId": selected.rule_id,
+            "selectedRuleId": "",
             "selectionRole": "blocked-missing-typedb-decision-policy",
             "finalDecisionOwner": "typedb-direct-typeql-rules",
             "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
+            "relationSetIds": unique_texts([item.rule_id for item in candidates])[:12],
             "candidateDecisionStages": [],
             "selectedInferenceTraceId": "",
             "decisionStage": "",
@@ -2105,7 +2050,7 @@ def decision_from_inference(
             "dataState": "unavailable",
             "dataStateLabel": DATA_STATE_LABELS["unavailable"],
             "evidenceRole": "blocking",
-            "sourceRelationType": str(relation.get("type") or ""),
+            "sourceRelationType": "",
             "stagePolicySource": "missingTypeDbDecisionMetadata",
             "judgementBlocked": True,
             "actionPolicyApplied": False,
@@ -2122,12 +2067,17 @@ def decision_from_inference(
             "notificationSeverity": "",
             "actionEnvelope": action_envelope,
         }
-    materialized_candidate_action = str(
+    materialized_candidate_actions = unique_texts(
         relation.get("candidateAction")
         or relation.get("candidate_action")
-        or selected.candidate_action
-        or ""
-    ).strip().upper()
+        or candidate.candidate_action
+        for candidate, relation in zip(candidates, candidate_relations)
+    )
+    materialized_candidate_action = (
+        materialized_candidate_actions[0]
+        if len(materialized_candidate_actions) == 1
+        else ""
+    )
     candidate_action = str(
         action_envelope.get("investmentViewAction")
         or materialized_candidate_action
@@ -2142,75 +2092,104 @@ def decision_from_inference(
         for value in action_policy.get("blockedActions") or []
         if str(value or "").strip()
     }
-    # This is a target-role safety boundary.  It consumes the action authored
-    # by the materialized RuleBox relation and never derives an action from a
-    # stage name or an action group in Python.
+    # This target-role boundary consumes only the action shared by the
+    # materialized relation set. It never derives an action from a stage name.
     execution_action = str(action_envelope.get("executionAction") or "NO_ACTION").strip().upper()
     action_policy_applied = bool(
         candidate_action
         and execution_action not in {candidate_action, ""}
     )
-    trace = next((item for item in traces if str(item.get("ruleId") or "") == selected.rule_id), {})
-    materialized_label = str(
+    materialized_labels = unique_texts(
         relation.get("decisionLabel")
         or relation.get("decision_label")
-        or selected.decision_label
+        or candidate.decision_label
         or stage.label
-    ).strip()
-    label = "신규 진입 보류" if action_policy_applied and action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE else materialized_label
-    envelope_data_state = str((action_envelope.get("dataReadiness") or {}).get("dataState") or selected.data_state)
-    review_level = review_level_for(stage.action_level, envelope_data_state)
-    candidate_stages = []
-    for item in candidates:
-        if not item.matched:
-            continue
-        candidate_stage = decision_stage_from_relation(relation_for_match(item, relations))
-        if candidate_stage is not None:
-            candidate_stages.append(candidate_stage.stage_key)
+        for candidate, relation, stage in zip(candidates, candidate_relations, candidate_stages)
+    )
+    label = (
+        "신규 진입 보류"
+        if action_policy_applied and action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE
+        else materialized_labels[0]
+        if len(materialized_labels) == 1
+        else str(action_envelope.get("statusLabel") or "여러 투자 관계 비교")
+    )
+    envelope_data_state = str(
+        (action_envelope.get("dataReadiness") or {}).get("dataState") or "partial"
+    )
+    stage_keys = unique_texts(stage.stage_key for stage in candidate_stages)
+    action_groups = unique_texts(stage.action_group for stage in candidate_stages)
+    action_levels = unique_texts(stage.action_level for stage in candidate_stages)
+    tones = unique_texts(stage.tone for stage in candidate_stages)
+    relation_types = unique_texts(
+        relation.get("type") or relation.get("relationType")
+        for relation in candidate_relations
+    )
+    evidence_roles = unique_texts(candidate.evidence_role for candidate in candidates)
+    candidate_action_labels = unique_texts(
+        relation.get("candidateActionLabel")
+        or relation.get("candidate_action_label")
+        or candidate.candidate_action_label
+        for candidate, relation in zip(candidates, candidate_relations)
+    )
+    primary_actions = unique_texts(
+        relation.get("primaryAction")
+        or relation.get("primary_action")
+        or candidate.primary_action
+        for candidate, relation in zip(candidates, candidate_relations)
+    )
+    primary_action_labels = unique_texts(
+        relation.get("primaryActionLabel")
+        or relation.get("primary_action_label")
+        or candidate.primary_action_label
+        for candidate, relation in zip(candidates, candidate_relations)
+    )
+    action_level = action_levels[0] if len(action_levels) == 1 else "watch"
+    review_level = review_level_for(action_level, envelope_data_state)
     return {
         "label": label,
-        "tone": stage.tone,
+        "tone": tones[0] if len(tones) == 1 else "watch",
         "basis": source_name,
-        "selectedRuleId": selected.rule_id,
-        "selectionRole": "typedb-action-envelope-baseline-not-final-opinion",
+        "selectedRuleId": "",
+        "selectionRole": "typedb-relation-set-baseline-not-final-opinion",
         "finalDecisionOwner": "ai-hypothesis-competition",
         "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
         "eligibleRuleIds": unique_texts([item.rule_id for item in candidates])[:12],
+        "relationSetIds": unique_texts([item.rule_id for item in candidates])[:12],
         "excludedRuleIds": list((action_envelope.get("dataReadiness") or {}).get("excludedRuleIds") or []),
-        "candidateDecisionStages": unique_texts(candidate_stages)[:8],
-        "selectedInferenceTraceId": str(trace.get("id") or ""),
-        "decisionStage": stage.stage_key,
-        "actionGroup": stage.action_group,
-        "actionLevel": stage.action_level,
+        "candidateDecisionStages": stage_keys[:8],
+        "selectedInferenceTraceId": "",
+        "decisionStage": stage_keys[0] if len(stage_keys) == 1 else "RELATION_SET_COMPARISON",
+        "actionGroup": action_groups[0] if len(action_groups) == 1 else "multiRelation",
+        "actionLevel": action_level,
         "reviewLevel": review_level,
         "reviewLevelLabel": REVIEW_LEVEL_LABELS[review_level],
         "dataState": envelope_data_state,
         "dataStateLabel": DATA_STATE_LABELS.get(envelope_data_state, DATA_STATE_LABELS["partial"]),
-        "evidenceRole": selected.evidence_role,
-        "decisionEffect": str(action_envelope.get("selectedDecisionEffect") or selected.decision_effect or decision_effect_from_relation(relation)),
-        "sourceRelationType": str(relation.get("type") or ""),
+        "evidenceRole": evidence_roles[0] if len(evidence_roles) == 1 else "mixed",
+        "decisionEffect": str(action_envelope.get("selectedDecisionEffect") or ""),
+        "sourceRelationType": relation_types[0] if len(relation_types) == 1 else "",
+        "sourceRelationTypes": relation_types,
         "stagePolicySource": inference_relation_policy_source(source_name),
         "judgementBlocked": bool(action_envelope.get("judgementBlocked")),
-        "primaryAction": str(relation.get("primaryAction") or relation.get("primary_action") or selected.primary_action or ""),
-        "primaryActionLabel": str(relation.get("primaryActionLabel") or relation.get("primary_action_label") or selected.primary_action_label or materialized_label),
+        "primaryAction": primary_actions[0] if len(primary_actions) == 1 else "",
+        "primaryActionLabel": primary_action_labels[0] if len(primary_action_labels) == 1 else label,
         "candidateAction": candidate_action,
         "investmentViewAction": candidate_action,
         "executionAction": execution_action,
-        # Preserve the action authored by the selected TypeDB relation for
-        # target-role policy rendering. The envelope may deliberately narrow
-        # it to HOLD, but a holding-only action on a watchlist item still has
-        # to be shown as unavailable rather than as a valid entry candidate.
+        # Preserve a source action only when every relation agrees on it.
         "sourceCandidateAction": materialized_candidate_action,
-        "candidateActionLabel": str(relation.get("candidateActionLabel") or relation.get("candidate_action_label") or selected.candidate_action_label or ""),
-        "blockedActionLabels": string_list(relation.get("blockedActionLabels") or relation.get("blocked_action_labels") or selected.blocked_action_labels),
-        "strengthenConditions": list(action_envelope.get("strengthenConditions") or string_list(relation.get("strengthenConditions") or relation.get("strengthen_conditions") or selected.strengthen_conditions)),
-        "weakenConditions": list(action_envelope.get("invalidationConditions") or string_list(relation.get("weakenConditions") or relation.get("weaken_conditions") or selected.weaken_conditions)),
-        "nextChecks": list(action_envelope.get("nextChecks") or string_list(relation.get("nextChecks") or relation.get("next_checks") or selected.next_checks)),
-        "notificationCategory": str(relation.get("notificationCategory") or relation.get("notification_category") or selected.notification_category or ""),
-        "notificationSeverity": str(relation.get("notificationSeverity") or relation.get("notification_severity") or selected.notification_severity or ""),
+        "candidateActionLabel": candidate_action_labels[0] if len(candidate_action_labels) == 1 else "",
+        "blockedActionLabels": [],
+        "strengthenConditions": list(action_envelope.get("strengthenConditions") or []),
+        "weakenConditions": list(action_envelope.get("invalidationConditions") or []),
+        "nextChecks": list(action_envelope.get("nextChecks") or []),
+        "notificationCategory": "",
+        "notificationSeverity": "",
         **action_policy,
         "actionPolicyApplied": action_policy_applied,
-        "nativeTypeDbReasoned": bool(relation.get("nativeTypeDbReasoned") or trace.get("nativeTypeDbReasoned")),
+        "nativeTypeDbReasoned": any(
+            bool(relation.get("nativeTypeDbReasoned")) for relation in candidate_relations
+        ),
         "actionEnvelope": action_envelope,
     }
 

@@ -904,7 +904,7 @@ def subject_reasoning_lineage(
     symbol = _text(subject.get("symbol")).upper()
     source_abox_snapshot_id = _text(_first(subject, "source_abox_snapshot_id", "sourceAboxSnapshotId"))
     inference_generation_id = _text(_first(subject, "inference_generation_id", "inferenceGenerationId"))
-    selected_rule_id = _text(_first(synthesis, "selected_rule_id", "selectedRuleId"))
+    selected_rule_id = ""
     ai_insight = _mapping(ai_episode.get("insight"))
     ai_insight_assessment = _mapping(ai_insight.get("insightAssessment"))
     selected_hypothesis_id = _text(
@@ -969,8 +969,6 @@ def subject_reasoning_lineage(
     ], 100))
     quality_rule_ids = set(_unique(_rows(_first(synthesis, "data_quality_rule_ids", "dataQualityRuleIds", default=[])), 100))
     relevant_rule_ids = set(hypothesis_rules) | constraint_rule_ids | quality_rule_ids
-    if selected_rule_id:
-        relevant_rule_ids.add(selected_rule_id)
 
     issues: List[Dict[str, object]] = []
     limitations: List[str] = []
@@ -1115,7 +1113,8 @@ def subject_reasoning_lineage(
             "ruleId": rule_id,
             "label": _human_identifier(rule_id),
             "matched": bool(evaluation.get("matched", True)),
-            "selected": rule_id == selected_rule_id,
+            "selected": False,
+            "inRelationSet": rule_id in hypothesis_rules,
             "decisionEligible": bool(evaluation.get("decision_eligible") or evaluation.get("decisionEligible")),
             "dataState": "sufficient" if condition_rows else "partial",
             "freshnessStatus": next((_text(item.get("freshnessStatus")) for item in condition_rows if _text(item.get("freshnessStatus"))), ""),
@@ -1132,7 +1131,8 @@ def subject_reasoning_lineage(
             "label": _human_identifier(rule_id),
             "description": description,
             "evidenceRole": evidence_role,
-            "selected": rule_id == selected_rule_id,
+            "selected": False,
+            "inRelationSet": rule_id in hypothesis_rules,
             "decisionEligible": bool(evaluation.get("decision_eligible") or evaluation.get("decisionEligible")),
             "candidateAction": next((_text(item.get("candidateAction")) for item in related_hypotheses), ""),
             "traceIds": [],
@@ -1158,13 +1158,6 @@ def subject_reasoning_lineage(
             "state": "blocked" if selected_rule_id in missing_rule_ids else "warning",
             "detail": "가설이 참조한 규칙 증거를 현재 종목의 저장 세대에서 찾지 못했습니다: " + ", ".join(missing_rule_ids[:6]),
             "ruleIds": missing_rule_ids,
-        })
-    if selected_rule_id and selected_rule_id not in proof_rule_ids:
-        issues.append({
-            "code": "SELECTED_RULE_PROOF_MISSING",
-            "state": "blocked",
-            "detail": "선택 규칙의 관측 사실과 실행 trace가 없어 연결된 투자 설명으로 사용할 수 없습니다.",
-            "ruleId": selected_rule_id,
         })
     if limitations:
         issues.append({
@@ -1420,6 +1413,7 @@ def subject_reasoning_lineage(
                 100,
             ),
             "selectedRuleId": selected_rule_id,
+            "relationSetIds": sorted(hypothesis_rules),
             "selectedHypothesisId": selected_hypothesis_id,
             "researchLeadHypothesisId": research_lead_hypothesis_id,
             "aiInsightEpisodeId": _text(ai_episode.get("episodeId")),

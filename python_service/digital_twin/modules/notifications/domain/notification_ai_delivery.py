@@ -635,7 +635,9 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
             if key not in {"version", "publicationOutcome"}
         })
         base["contextObservationDeliveryVersion"] = observation_decision.get("version")
-        base["contextObservationSelectedRuleId"] = observation_decision.get("selectedRuleId")
+        base["contextObservationRelationIds"] = list(
+            observation_decision.get("relationIds") or []
+        )
         return base
     if typedb_review_observation_contract(context) and publication_outcome == "REVIEW_ONLY":
         if base["typedbFallback"]:
@@ -653,7 +655,9 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
             if key not in {"version", "publicationOutcome"}
         })
         base["reviewObservationDeliveryVersion"] = review_decision.get("version")
-        base["reviewObservationSelectedRuleId"] = review_decision.get("selectedRuleId")
+        base["reviewObservationRelationIds"] = list(
+            review_decision.get("relationIds") or []
+        )
         return base
     if publication_outcome in {"REVIEW_ONLY", "ABSTAIN", "ABSTAINED"}:
         base.update({

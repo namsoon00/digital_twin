@@ -466,6 +466,44 @@ def _rule_summary_rows(
 ) -> List[str]:
     """Explain rule diversity without presenting reference-only rows as decisions."""
 
+    stage_relations = [
+        _mapping(item)
+        for item in observation.get("relations") or []
+        if isinstance(item, Mapping)
+    ]
+    if stage_relations:
+        grouped: Dict[str, List[str]] = {
+            "positive": [],
+            "caution": [],
+            "other": [],
+        }
+        for relation_row in stage_relations:
+            label = _text(relation_row.get("label"))
+            if not label:
+                continue
+            effect = str(relation_row.get("decisionEffect") or "").strip().lower()
+            evidence_role = str(relation_row.get("evidenceRole") or "").strip().lower()
+            group = (
+                "positive"
+                if effect == "support" and evidence_role not in {"risk", "counter", "blocking"}
+                else "caution"
+                if effect in {"block", "constrain", "defer"}
+                or evidence_role in {"risk", "counter", "blocking"}
+                else "other"
+            )
+            if label not in grouped[group]:
+                grouped[group].append(label)
+        rows = []
+        for key, prefix in (
+            ("positive", "긍정 근거"),
+            ("caution", "주의 근거"),
+            ("other", "확인된 관계"),
+        ):
+            labels = grouped[key]
+            if labels:
+                rows.append(prefix + ": " + ", ".join(labels[:3]))
+        return rows[:3]
+
     relation = relation_context_value(context)
     selected_rule_id = str(observation.get("selectedRuleId") or "").strip()
     active_labels: List[str] = []
@@ -758,7 +796,16 @@ def typedb_observation_telegram_message(
 
     observation = typedb_context_observation_contract(context)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
-    relation_label = _text(observation.get("selectedRuleLabel") or "중요한 변화")
+    stage_relations = [
+        _mapping(item)
+        for item in observation.get("relations") or []
+        if isinstance(item, Mapping)
+    ]
+    relation_label = _text(
+        observation.get("selectedRuleLabel")
+        or (stage_relations[0].get("label") if stage_relations else "")
+        or "중요한 변화"
+    )
     label = _notification_intent_label(context) or relation_label
     symbol = str(observation.get("symbol") or context.get("symbol") or "").strip().upper()
     target_name = CRYPTO_DISPLAY_NAMES.get(symbol) or _target_name(target)
@@ -772,8 +819,9 @@ def typedb_observation_telegram_message(
         item for item in projected_rows
         if any(token in item for token in ("부족", "미확인", "확인되지", "신선도", "제외"))
     ]
+    relation_ids = list(observation.get("relationIds") or [])
     evidence_rows = _unique([
-        *_selected_rule_condition_rows(context, observation),
+        *_selected_rule_condition_rows(context, observation, relation_ids),
         *[item for item in projected_rows if item not in limitation_rows],
         *list(presentation.get("confirmedFacts") or []),
     ], 3)
@@ -837,7 +885,11 @@ def typedb_observation_telegram_message(
             for key, title, rows in (
                 ("change", "가격 변화" if kind.key == "price-change" else "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
                 ("relation-status", "관계 판단", relation_unchanged_rows),
-                ("rules", "사용된 규칙", rule_summary_rows),
+                (
+                    "rules",
+                    "확인된 관계" if stage_relations else "사용된 규칙",
+                    rule_summary_rows,
+                ),
                 ("importance", "왜 중요한가요", [*notification_condition_rows, *evidence_rows]),
                 ("financial-evidence", financial_evidence_title(context), financial_evidence_rows(context)),
                 ("tracking", "시스템이 추적 중", follow_up_rows),

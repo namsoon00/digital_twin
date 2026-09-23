@@ -66,6 +66,7 @@ def _hypotheses(relation_context: Mapping[str, object]) -> Tuple[Dict[str, objec
 def decision_data_gaps_from_relation_context(
     relation_context: Mapping[str, object],
     selected_rule_id: str = "",
+    relevant_rule_ids: Iterable[str] = (),
 ) -> Tuple[DataGap, ...]:
     """Return only gaps with an explicit decision/runtime requirement.
 
@@ -80,6 +81,7 @@ def decision_data_gaps_from_relation_context(
         "executionVolume": _mapping(availability.get("executionVolume")),
         "investorFlow": _mapping(availability.get("investorFlow")),
     }
+    current_rule_ids = set(_texts([selected_rule_id, *tuple(relevant_rule_ids or ())]))
     rows = []
     for raw in relation.get("missingData") or facts.get("missingData") or []:
         item = dict(raw) if isinstance(raw, Mapping) else {
@@ -90,12 +92,12 @@ def decision_data_gaps_from_relation_context(
         provider = availability_by_code.get(code, {})
         required_by_rule_ids = _texts(item.get("requiredByRuleIds"))
         selected_rule_requires_gap = bool(
-            selected_rule_id
+            current_rule_ids
             and (
-                selected_rule_id in set(required_by_rule_ids)
+                current_rule_ids.intersection(required_by_rule_ids)
                 or (
                     code == "valuationInputs"
-                    and selected_rule_id.startswith("graph.valuation.")
+                    and any(rule_id.startswith("graph.valuation.") for rule_id in current_rule_ids)
                 )
             )
         )
@@ -271,6 +273,9 @@ def decision_synthesis_from_relation_context(
         or envelope.get("selectedRuleId")
         or ""
     )
+    opinion_rule_ids = set(_texts(
+        opinion_assessment.get("ruleIds") or envelope.get("drivingRuleIds")
+    ))
     context_observation = typedb_context_observation_contract(relation)
     selected_decision_effect = str(
         envelope.get("selectedDecisionEffect")
@@ -332,7 +337,11 @@ def decision_synthesis_from_relation_context(
             for candidate_action in actions_by_rule.get(rule_id, []):
                 if candidate_action not in actions:
                     actions.append(candidate_action)
-        if not actions and selected_rule_id in supporting_rule_ids and graph_candidate_action:
+        if (
+            not actions
+            and opinion_rule_ids.intersection(supporting_rule_ids)
+            and graph_candidate_action
+        ):
             actions.append(graph_candidate_action)
         if not actions:
             actions.append("UNSPECIFIED")
@@ -357,16 +366,11 @@ def decision_synthesis_from_relation_context(
 
     selected_path_eligible = any(
         eligible
-        and selected_rule_id
-        and selected_rule_id in {
-            str(value or "").strip()
-            for value in (
-                hypothesis.get("supportingRuleIds")
-                or hypothesis.get("supporting_rule_ids")
-                or []
-            )
-        }
-        for _action, hypothesis, eligible, _execution_eligible, admissible in hypothesis_paths
+        and (
+            graph_candidate_action in {"", "NO_ACTION"}
+            or action == graph_candidate_action
+        )
+        for action, _hypothesis, eligible, _execution_eligible, admissible in hypothesis_paths
         if admissible
     )
     eligible_comparison_paths = {
@@ -383,19 +387,14 @@ def decision_synthesis_from_relation_context(
         selected_decision_effect = "support"
     selected_path_execution_eligible = any(
         execution_eligible
-        and selected_rule_id
-        and selected_rule_id in {
-            str(value or "").strip()
-            for value in (
-                hypothesis.get("supportingRuleIds")
-                or hypothesis.get("supporting_rule_ids")
-                or []
-            )
-        }
-        for _action, hypothesis, _eligible, execution_eligible, admissible in hypothesis_paths
+        and (
+            graph_candidate_action in {"", "NO_ACTION"}
+            or action == graph_candidate_action
+        )
+        for action, _hypothesis, _eligible, execution_eligible, admissible in hypothesis_paths
         if admissible
     )
-    if not selected_rule_id and comparison_required:
+    if comparison_required:
         selected_path_execution_eligible = any(
             execution_eligible
             for _action, _hypothesis, _eligible, execution_eligible, admissible in hypothesis_paths
@@ -481,6 +480,7 @@ def decision_synthesis_from_relation_context(
     data_gaps = decision_data_gaps_from_relation_context(
         relation,
         selected_rule_id=selected_rule_id,
+        relevant_rule_ids=opinion_rule_ids,
     )
     explicit_data_state = str(
         relation.get("dataState") or decision.get("dataState") or ""

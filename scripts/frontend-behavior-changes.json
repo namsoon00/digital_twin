@@ -74,5 +74,9 @@
   {
     "reason": "Show sourced financial comparison rows in compact notification details as well as the full customer document.",
     "functions": ["renderNotificationCustomerDocument"]
+  },
+  {
+    "reason": "Present every TypeDB relation linked to candidate hypotheses and reserve selected state for the AI-selected hypothesis.",
+    "functions": ["renderNotificationReverseReasoning"]
   }
 ]

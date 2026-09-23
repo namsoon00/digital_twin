@@ -162,7 +162,7 @@
     ontologyRuleCandidateAiEnabled: "1",
     ontologyRuleCandidateAiUseCodex: "1",
     ontologyRuleCandidateAiCommand: "",
-    ontologyRuleCandidateAiTimeoutSeconds: "120",
+    ontologyRuleCandidateAiTimeoutSeconds: "0",
     ontologyRuleCandidateAiIntervalMinutes: "60",
     ontologyRuleCandidateAiMaxCandidates: "3",
     ontologyTypeDbEnabled: "1",

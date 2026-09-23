@@ -1,0 +1,12 @@
+# Cloudflare Pages static deployments. Tunnel responses are owned by the web server.
+/*
+  Cache-Control: no-cache, max-age=0, must-revalidate
+  CDN-Cache-Control: no-store
+  Cloudflare-CDN-Cache-Control: no-store
+
+/api/*
+  Cache-Control: no-store
+
+/service-worker.js
+  Cache-Control: no-store
+  Service-Worker-Allowed: /

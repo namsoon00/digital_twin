@@ -88,10 +88,10 @@
       : (ai.rationale || "중요한 판단 변화가 없어 현재 리비전에서는 AI를 실행하지 않았습니다.");
     return [
       '<section class="cws-section cws-interpretation ' + escapeHtml(interpretationTone(item.status)) + '">',
-      '<header><div><span>Portfolio interpretation</span><h2>현재 위험과 해석</h2></div><span class="cws-status-chip ' + escapeHtml(interpretationTone(item.status)) + '">' + escapeHtml(item.statusLabel || "해석 상태 확인") + '</span></header>',
+      '<header><div><h2>' + (revision.state === "stale" || (ai.executed && !ai.current) ? '현재 위험·이전 해석' : '현재 위험과 해석') + '</h2></div><span class="cws-status-chip ' + escapeHtml(interpretationTone(item.status)) + '">' + escapeHtml(item.statusLabel || "해석 상태 확인") + '</span></header>',
       '<div class="cws-interpretation-main">',
       '<div><strong>' + escapeHtml(item.headline || "포트폴리오 해석을 준비하고 있습니다.") + '</strong><p>' + escapeHtml(item.rationale || "") + '</p></div>',
-      '<div class="cws-source-badges"><span>계산</span><span>TypeDB</span><span class="' + (ai.executed ? "active" : "muted") + '">AI ' + escapeHtml(ai.executed ? "실행" : "미실행") + '</span></div>',
+      compact ? '' : '<div class="cws-source-badges"><span>계산</span><span>규칙</span><span class="' + (ai.executed ? "active" : "muted") + '">AI ' + escapeHtml(ai.executed ? "실행" : "미실행") + '</span></div>',
       '</div>',
       driverRows ? '<ul class="cws-driver-list">' + driverRows + '</ul>' : '',
       '<div class="cws-ai-note"><span>' + escapeHtml(ai.executed ? "AI 해석" : "AI 상태") + '</span><p>' + escapeHtml(aiMessage) + '</p><em>' + escapeHtml(revision.state === "stale" ? "현재 원장과 리비전 불일치" : "현재 원장 기준") + '</em></div>',
@@ -110,8 +110,8 @@
       return [
         '<button type="button" class="cws-exposure-row" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(item.symbol) + '">',
         '<span><strong>' + escapeHtml(item.name || item.symbol) + '</strong><em>' + escapeHtml(item.symbol + " · " + quantity(item.quantity) + "주") + '</em></span>',
-        '<span class="cws-weight"><i style="--weight:' + width + '%"></i><b>' + escapeHtml(percent(item.currentWeightPct)) + '</b></span>',
-        '<span class="' + tone(item.profitLossRate) + '"><strong>' + escapeHtml(percent(item.profitLossRate)) + '</strong><em>' + escapeHtml(money(item.marketValueKrw)) + '</em></span>',
+        '<span class="cws-weight"><em>비중</em><i style="--weight:' + width + '%"></i><b>' + escapeHtml(percent(item.currentWeightPct)) + '</b></span>',
+        '<span class="' + tone(item.profitLossRate) + '"><em>평가 손익률</em><strong>' + escapeHtml(percent(item.profitLossRate)) + '</strong><em>' + escapeHtml(money(item.marketValueKrw)) + '</em></span>',
         '<b aria-hidden="true">→</b>',
         '</button>'
       ].join("");
@@ -120,10 +120,10 @@
       return '<div><span>' + escapeHtml([item.exposure_type, item.key].filter(Boolean).join(" · ")) + '</span><strong class="danger">한도 ' + escapeHtml(percent(item.policyDeltaPct)) + ' 초과</strong></div>';
     }).join("") + '</div>' : '<div class="cws-policy-clear"><strong>배분 한도 안</strong><span>현재 저장된 노출 기준</span></div>';
     return [
-      portfolioInterpretationCard(payload, false),
+      portfolioInterpretationCard(payload, true),
       '<div class="cws-grid cws-grid-primary">',
       '<section class="cws-section"><header><div><span>보유 구성</span><h2>종목별 노출</h2></div><strong>' + positions.length + '개</strong></header>' + exposureRows + '</section>',
-      '<section class="cws-section"><header><div><span>위험 예산</span><h2>정책 이탈</h2></div><strong>' + breaches.length + '건</strong></header>',
+      '<section class="cws-section"><header><div><span>배분 기준</span><h2>배분 한도 이탈</h2></div><strong>' + breaches.length + '건</strong></header>',
       breachRows,
       '<dl class="cws-risk-facts"><div><dt>기간 수익률</dt><dd class="' + tone(risk.periodReturnPct) + '">' + escapeHtml(percent(risk.periodReturnPct)) + '</dd></div><div><dt>연환산 변동성</dt><dd>' + escapeHtml(percent(risk.annualizedVolatilityPct)) + '</dd></div><div><dt>최대 낙폭</dt><dd class="danger">' + escapeHtml(percent(risk.maximumDrawdownPct)) + '</dd></div><div><dt>표본</dt><dd>' + escapeHtml(risk.sampleCount || 0) + '개</dd></div></dl>',
       '</section>',
@@ -230,15 +230,15 @@
               : portfolioSummary(payload);
     return [
       '<div class="cws-page cws-portfolio">',
-      '<div class="cws-metrics">',
+      sectionTabs([["summary", "요약", "노출·위험"], ["positions", "보유", "수량·손익"], ["rebalance", "리밸런싱", "정책·대안"], ["activity", "활동", "원장·검토"]], view, "data-portfolio-view"),
+      '<div class="cws-view" data-portfolio-active="' + escapeHtml(view) + '">' + content + '</div>',
+      '<details class="oa-secondary-details" id="disclosure-portfolio-metrics"><summary><strong>자산·위험 지표 전체</strong></summary><div class="cws-metrics">',
       metric("총 평가", money(summary.total), summary.positionCount + "개 보유"),
       metric("현금", money(summary.cash), "비중 " + percent(summary.cashWeightPct), summary.cashWeightPct < 3 ? "danger" : "neutral"),
       metric("기간 수익률", percent(summary.periodReturnPct), "저장 시계열 기준", tone(summary.periodReturnPct)),
       metric("최대 낙폭", percent(summary.maximumDrawdownPct), "위험 표본", "danger"),
-      metric("정책 이탈", (summary.policyBreachCount || 0) + "건", summary.rebalanceStatus || "배분 확인", summary.policyBreachCount ? "danger" : "positive"),
-      '</div>',
-      sectionTabs([["summary", "요약", "노출·위험"], ["positions", "보유", "수량·손익"], ["rebalance", "리밸런싱", "정책·대안"], ["activity", "활동", "원장·검토"]], view, "data-portfolio-view"),
-      '<div class="cws-view" data-portfolio-active="' + escapeHtml(view) + '">' + content + '</div>',
+      metric("전체 한도 이탈", (summary.policyBreachCount || 0) + "건", "배분 " + (summary.exposureBreachCount ?? "미확인") + " · 위험 " + (summary.riskBreachCount ?? "미확인"), summary.policyBreachCount ? "danger" : "neutral"),
+      '</div></details>',
       '</div>'
     ].join("");
   }

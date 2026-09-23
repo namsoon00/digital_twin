@@ -1,0 +1,108 @@
+import { escapeHtml } from "../shared/text.mjs";
+
+const reasons = {
+  "isolated-release-required": "운영과 분리된 실험 버전을 준비하고 있습니다.",
+  "independent-outcomes-required": "같은 시점의 기존 가설과 새 가설을 비교할 독립된 결과가 더 필요합니다.",
+  "paired-holdout-and-runtime-checks-passed": "사후 결과 비교와 실행 검증을 통과해 자동 반영했습니다.",
+  "runtime-readiness-required": "투자 결과 비교는 통과했으며, 실제 추론 실행과 입력 정합성을 확인 중입니다.",
+  "another-candidate-or-rollback-release-in-use": "다른 실험 또는 복원 버전이 사용 중입니다. 운영 알림은 계속 실행됩니다.",
+  "evolution-dependency-error": "연결이나 실행 오류가 발생했습니다. 같은 실험 버전으로 다시 확인합니다.",
+  "baseline-or-candidate-replaced": "운영 기준 또는 실험 버전이 바뀌어 이 비교를 종료했습니다.",
+  "not-better-than-baseline": "사전에 정한 비교 구간에서 기존 가설보다 나아지지 않아 반영하지 않았습니다.",
+  "observation-window-expired": "정해진 관측 기간이 끝나 실험을 종료했습니다.",
+  "candidate-start-window-expired": "대기 기간 안에 실험을 시작하지 못해 종료했습니다.",
+  "adopted-release-under-observation": "운영 반영 이후의 새 결과를 따로 확인하고 있습니다.",
+  "post-adoption-cohort-no-regression": "반영 후 검증 구간에서 복원 기준에 해당하는 악화가 확인되지 않았습니다.",
+  "forward-regression": "반영 후 성과가 악화되어 이전 버전으로 복원했습니다.",
+  "operational-failure": "실행 계약 오류가 확인되어 이전 버전으로 복원했습니다.",
+  "shadow-policy-no-deployment": "실험 전용 정책이므로 검증을 통과해도 운영에 반영하지 않습니다.",
+  "evolution-disabled-by-operator": "자동 진화가 중지된 상태입니다.",
+  "external-validation-required": "자동 비교로 확인할 수 없는 별도 연구 조건이 남아 반영하지 않았습니다.",
+  "post-adoption-window-expired": "운영 반영 후 정해진 기간 안에 검증을 마치지 못해 이전 버전으로 복원했습니다.",
+  "observation-future-collection": "현재 보관 자료만으로는 부족합니다. 수집 중인 자료로 새 관측 기간을 채운 뒤 시작합니다.",
+  "observation-unsupported": "필요한 지표나 관측 기간을 현재 수집·보관 기능이 지원하지 않습니다. 수집 기능을 먼저 보완해야 합니다.",
+  "observation-unavailable": "실험 입력 저장소를 사용할 수 없어 비교를 시작하지 않았습니다.",
+  "experiment-inference-not-observed": "실험 버전의 해당 종목 추론 기록이 없습니다. 실험 실행과 데이터 연결을 확인해야 합니다.",
+  "experiment-condition-not-observed-in-sample": "최근 확인한 추론에서는 이 실험의 조건이 성립하지 않았습니다. 아직 성과를 비교할 사례가 없습니다.",
+  "experiment-candidate-not-eligible": "실험 조건은 감지됐지만 예측 검증에 필요한 근거가 부족해 관측 대상으로 등록되지 않았습니다.",
+  "experiment-input-capture-missing": "관측 가능한 실험 조건은 있지만 당시 입력 저장 기록이 없습니다. 수집 연결을 점검해야 합니다.",
+  "experiment-inputs-unavailable": "실험 당시 필수 입력이 없거나 복구되지 않아 비교에서 제외했습니다.",
+  "experiment-comparator-not-captured": "새 가설은 관측됐지만 같은 시점의 비교 가설이 없어 아직 비교할 수 없습니다.",
+  "experiment-outcome-contract-mismatch": "관측 결과의 시점이나 근거가 사전에 정한 검증 기준과 맞지 않습니다.",
+  "experiment-outcome-not-recorded": "입력은 보존됐지만 결과가 아직 저장되지 않았습니다. 관측 예약을 확인합니다.",
+  "experiment-outcome-schedule-missing": "실험 결과를 확인할 관측 예약이 없습니다. 예약 연결을 점검해야 합니다.",
+  "experiment-outcome-excluded": "관측 예약이 평가에서 제외됐습니다. 기다리기만 해서는 결과가 채워지지 않습니다.",
+  "experiment-outcome-data-gap": "관측 시점의 필수 자료가 부족합니다. 해당 시점의 자료 복구가 필요합니다.",
+  "experiment-outcome-overdue": "예약된 관측 시점과 허용 지연을 지났지만 결과가 없습니다. 결과 수집을 점검해야 합니다.",
+  "experiment-outcome-capture-pending": "관측 예약과 실험 결과 저장을 연결하는 단계를 확인하고 있습니다.",
+  "experiment-outcome-not-due": "입력은 보존됐으며 예약된 결과 관측 시점을 기다리고 있습니다.",
+};
+
+const dataStates = { ready: "자료 확보", "future-collection": "새 관측 대기", unsupported: "수집·보관 기능 보완 필요", "historical-unrecoverable": "당시 자료 복구 불가" };
+
+export function renderHypothesisProgress(item = {}, formatClock = value => String(value || "")) {
+  const progress = item.progress;
+  if (!progress) return "";
+  const repair = item.retry?.contractRepair;
+  return '<section class="hypothesis-development-retry" aria-label="가설 진행 상태"><header><strong>' +
+    escapeHtml(progress.label) + '</strong></header><p>' + escapeHtml(progress.nextAction) + '</p><dl>' +
+    '<div><dt>누적 AI 작성</dt><dd>' + escapeHtml(progress.authoringAttempts) + '회</dd></div>' +
+    '<div><dt>다음 확인</dt><dd>' + escapeHtml(progress.nextCheckAt ? formatClock(progress.nextCheckAt) : '자동 예약 없음') + '</dd></div>' +
+    '<div><dt>비교 실험</dt><dd>' + escapeHtml(progress.experimentStateLabel || (progress.experimentStarted ? '격리 버전 관측 중' : '아직 시작하지 않음')) + '</dd></div>' +
+    (repair ? '<div><dt>명세 보정</dt><dd>' + escapeHtml(repair.attemptsUsed) + ' / ' + escapeHtml(repair.attemptLimit) +
+      '회 · 기존 ' + escapeHtml(repair.previousAttempts) + '회 기록 유지</dd></div>' : '') +
+    '</dl></section>';
+}
+
+function renderObservationRequirements(plan, evolution) {
+  const requirements = plan.observationRequirements;
+  if (!requirements) return '<p>이전 실험에는 입력 보존 명세가 없습니다. 과거 결과를 재현 가능한 실험으로 취급하지 않습니다.</p>';
+  const coverage = evolution.dataReadiness?.requirements || [];
+  const summary = evolution.dataSummary || {};
+  return '<details class="experiment-observation-requirements" open><summary>실험에 필요한 자료</summary><dl>' +
+    requirements.inputs.map(row => {
+      const observed = coverage.find(item => item.metric === row.metric && item.lookbackMinutes === row.lookbackMinutes);
+      return '<div><dt>' + escapeHtml(row.label) + '</dt><dd>' +
+        escapeHtml(row.lookbackMinutes ? '직전 ' + row.lookbackMinutes + '분' : '판단 시점') +
+        ' · 최소 ' + escapeHtml(row.minimumSamples) + '건 · 관측 간격 ' + escapeHtml(row.cadenceSeconds) + '초' +
+        ' · ' + escapeHtml(observed ? dataStates[observed.state] || "확인 필요" : "입력 고정 시 확인") + '</dd></div>';
+    }).join('') +
+    '<div><dt>원본 입력이 보존된 비교 시점</dt><dd>' + escapeHtml(summary.capturedInputs ?? 0) + '건</dd></div>' +
+    '<div><dt>입력 복구 불가 / 결과 대기</dt><dd>' + escapeHtml(summary.unavailableInputs ?? 0) + ' / ' + escapeHtml(summary.pendingOutcomes ?? 0) + '건</dd></div>' +
+    (summary.inferenceCoverage ? '<div><dt>최근 추론 / 실험 조건 성립</dt><dd>' +
+      escapeHtml(summary.inferenceCoverage.sampledCases ?? 0) + ' / ' + escapeHtml(summary.inferenceCoverage.candidateMatches ?? 0) +
+      '건' + (summary.inferenceCoverage.sampleTruncated ? ' · 최근 표본만 확인' : '') + '</dd></div>' : '') +
+    '<div><dt>실험 종료 후 자료 보관</dt><dd>' + escapeHtml(plan.policy?.experimentEvidenceRetentionDays ?? 7) + '일</dd></div></dl></details>';
+}
+
+export function renderOntologyEvolution(evolution = {}, formatClock = value => String(value || "")) {
+  const plan = evolution.plan;
+  if (!plan) return "";
+  const policy = plan.policy || {};
+  const assessment = evolution.monitoring || evolution.assessment || {};
+  const pendingReview = (plan.validationRequirements || []).some(row => row.check === "review");
+  const mode = { automatic: "검증 후 자동 반영", shadow: "실험만 실행", disabled: "중지" }[policy.mode] || "확인 필요";
+  return '<section class="hypothesis-development-retry ontology-evolution-status" aria-label="온톨로지 진화 상태">' +
+    '<header><strong>독립 결과 검증</strong><span>' + escapeHtml(mode) + '</span></header>' +
+    '<p>' + escapeHtml(reasons[evolution.reason] || "실험 결과를 확인하고 있습니다.") + '</p>' +
+    '<dl>' +
+    '<div><dt>기존 버전</dt><dd>' + escapeHtml(plan.baseline?.deploymentId || "-") + '</dd></div>' +
+    '<div><dt>실험 버전</dt><dd>' + escapeHtml(evolution.deployment?.deploymentId || "준비 중") + '</dd></div>' +
+    '<div><dt>예측 결과 확인 시점</dt><dd>' + escapeHtml(plan.baseline?.comparisonHorizonMinutes ?? "-") + '분 후</dd></div>' +
+    '<div><dt>비교 가능한 독립 관측</dt><dd>' + escapeHtml(assessment.independentPairCount ?? 0) + ' / ' + escapeHtml(policy.minimumIndependentPairs ?? "-") + '건</dd></div>' +
+    '<div><dt>관측일</dt><dd>' + escapeHtml(assessment.distinctDayCount ?? 0) + ' / ' + escapeHtml(policy.minimumDistinctDays ?? "-") + '일</dd></div>' +
+    '<div><dt>새 가설 우세 / 기존 가설 우세</dt><dd>' + escapeHtml(assessment.pairedGainCount ?? "-") + ' / ' + escapeHtml(assessment.pairedLossCount ?? "-") + '</dd></div>' +
+    '<div><dt>비교에서 제외한 자료</dt><dd>' + escapeHtml(assessment.excludedCount ?? 0) + '건</dd></div>' +
+    '<div><dt>후보 고정 시각</dt><dd>' + escapeHtml(formatClock(plan.createdAt)) + '</dd></div>' +
+    '<div><dt>운영 반영 시각</dt><dd>' + escapeHtml(evolution.adoptedAt ? formatClock(evolution.adoptedAt) : "반영 전") + '</dd></div>' +
+    (evolution.details?.observationDeadline ? '<div><dt>관측 종료 예정</dt><dd>' + escapeHtml(formatClock(evolution.details.observationDeadline)) + '</dd></div>' : '') +
+    '</dl>' +
+    renderObservationRequirements(plan, evolution) +
+    (pendingReview ? '<p class="form-error">자동 결과 비교로 검증할 수 없는 별도 연구 조건이 남아 있습니다.</p>' : '') +
+    '<details><summary>검증 기준과 추적</summary><p>정책 ' + escapeHtml(policy.version || "-") +
+    ' · 최대 관측 기간 ' + escapeHtml(policy.maximumShadowDays ?? "-") + '일</p>' +
+    '<p>비교 기준 ' + escapeHtml(plan.baseline?.comparisonRuleId || "-") + '</p>' +
+    '<p>변경 식별자 ' + escapeHtml(plan.fingerprint || "-") + '</p>' +
+    (evolution.details?.error ? '<p class="form-error">' + escapeHtml(evolution.details.error) + '</p>' : '') +
+    '</details></section>';
+}

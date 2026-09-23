@@ -24,7 +24,7 @@ from digital_twin.modules.reasoning.domain.fact_changes import scope_families_fo
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v17-derived-signal-routing"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v18-rule-dependency-closure"
 LEGACY_DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v3"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v4-packed"
 DYNAMIC_INFERENCE_PREFLIGHT_VERSION = "dynamic-inference-preflight-v1"
@@ -778,6 +778,25 @@ def rule_dependency_profile(rule: object) -> Dict[str, object]:
         for key in item.get("dependencyKeys") or []
         if _clean(key)
     })
+    derivations = (
+        rule.get("derivations") or []
+        if isinstance(rule, Mapping)
+        else getattr(rule, "derivations", []) or []
+    )
+    derived_output_dependency_keys: Set[str] = set()
+    for derivation in derivations:
+        relation_type = _condition_value(
+            derivation, "relation_type", "relationType",
+        )
+        target_kind = _condition_value(
+            derivation, "target_kind", "targetKind",
+        )
+        relation_token = _dependency_token(relation_type)
+        target_token = _dependency_token(target_kind)
+        if relation_token:
+            derived_output_dependency_keys.add("relation:" + relation_token)
+        if target_token:
+            derived_output_dependency_keys.add("kind:" + target_token)
     return {
         "ruleId": rule_id,
         "enabled": enabled,
@@ -787,6 +806,7 @@ def rule_dependency_profile(rule: object) -> Dict[str, object]:
         "derivedScopeFamilies": derived_families,
         "derivedDependencyKeys": derived_dependency_keys,
         "derivedConditionProfiles": derived_condition_profiles,
+        "derivedOutputDependencyKeys": sorted(derived_output_dependency_keys),
         "conservative": conservative,
     }
 
@@ -797,6 +817,85 @@ def rule_dependency_profiles(rules: Iterable[object]) -> List[Dict[str, object]]
         for profile in (rule_dependency_profile(rule) for rule in rules or [])
         if profile.get("ruleId")
     ]
+
+
+def expand_rule_dependency_closure(
+    profiles: Iterable[Mapping[str, object]],
+    candidate_rule_ids: Iterable[object],
+) -> Dict[str, object]:
+    """Include rules that consume outputs produced by changed rules.
+
+    This is structural routing only. It does not assert that a derivation
+    exists or that a downstream rule matches. TypeDB evaluates both rules
+    against the complete active ABox. The transitive closure prevents an
+    incremental pass from refreshing a producer while accidentally reusing a
+    stale consumer result from the previous generation.
+    """
+
+    rows = [dict(profile) for profile in profiles or [] if isinstance(profile, Mapping)]
+    by_rule_id = {
+        _clean(profile.get("ruleId")): profile
+        for profile in rows
+        if _clean(profile.get("ruleId"))
+    }
+    selected = {
+        _clean(rule_id)
+        for rule_id in candidate_rule_ids or []
+        if _clean(rule_id) in by_rule_id
+    }
+    direct_candidates = set(selected)
+    pending = list(selected)
+    edges: Dict[str, Set[str]] = defaultdict(set)
+    for producer_id, producer in by_rule_id.items():
+        output_keys = {
+            _lower(value)
+            for value in producer.get("derivedOutputDependencyKeys") or []
+            if _clean(value)
+        }
+        if not output_keys:
+            continue
+        for consumer_id, consumer in by_rule_id.items():
+            if producer_id == consumer_id:
+                continue
+            consumer_keys = {
+                _lower(value)
+                for item in list(consumer.get("conditionProfiles") or [])
+                + list(consumer.get("derivedConditionProfiles") or [])
+                if isinstance(item, Mapping)
+                for value in item.get("dependencyKeys") or []
+                if _clean(value)
+            }
+            if any(
+                _dependency_key_matches(output_key, consumer_key)
+                for output_key in output_keys
+                for consumer_key in consumer_keys
+            ):
+                edges[producer_id].add(consumer_id)
+    while pending:
+        producer_id = pending.pop()
+        for consumer_id in edges.get(producer_id, set()):
+            if consumer_id in selected:
+                continue
+            selected.add(consumer_id)
+            pending.append(consumer_id)
+    closure_ids = selected - direct_candidates
+    return {
+        "candidateRuleIds": [
+            rule_id for rule_id in by_rule_id if rule_id in selected
+        ],
+        "directCandidateRuleIds": [
+            rule_id for rule_id in by_rule_id if rule_id in direct_candidates
+        ],
+        "dependencyClosureRuleIds": [
+            rule_id for rule_id in by_rule_id if rule_id in closure_ids
+        ],
+        "dependencyClosureRuleCount": len(closure_ids),
+        "dependencyEdges": {
+            rule_id: sorted(edges.get(rule_id, set()))
+            for rule_id in sorted(edges)
+            if edges.get(rule_id)
+        },
+    }
 
 
 def _scope_plan_index(scope_plan: Iterable[object]) -> Dict[str, Dict[str, object]]:
@@ -2009,9 +2108,23 @@ def build_inference_impact_plan(
     invalidation_rule_ids = {
         str(profile.get("ruleId") or "") for profile in invalidation_profiles
     }
-    candidate_profiles = [
+    direct_candidate_profiles = [
         profile for profile in enabled_profiles
         if str(profile.get("ruleId") or "") in trigger_rule_ids | invalidation_rule_ids
+    ]
+    dependency_closure = expand_rule_dependency_closure(
+        enabled_profiles,
+        [profile.get("ruleId") for profile in direct_candidate_profiles],
+    )
+    dependency_closure_rule_ids = set(
+        dependency_closure.get("dependencyClosureRuleIds") or []
+    )
+    candidate_rule_ids = set(
+        dependency_closure.get("candidateRuleIds") or []
+    )
+    candidate_profiles = [
+        profile for profile in enabled_profiles
+        if str(profile.get("ruleId") or "") in candidate_rule_ids
     ]
     deferred_profiles = [
         profile for profile in enabled_profiles
@@ -2070,6 +2183,15 @@ def build_inference_impact_plan(
         diagnostics["reasonCodes"] = list(diagnostics.get("reasonCodes") or []) + [
             "synchronous-derived-signal-routing"
         ]
+    if dependency_closure_rule_ids:
+        diagnostics.update({
+            "dependencyClosureApplied": True,
+            "dependencyClosureRuleCount": len(dependency_closure_rule_ids),
+            "dependencyClosureRuleIds": sorted(dependency_closure_rule_ids),
+        })
+        diagnostics["reasonCodes"] = list(diagnostics.get("reasonCodes") or []) + [
+            "transitive-rule-dependency-closure"
+        ]
     impact_domains: List[str] = []
     if target_symbols or explicit_symbols:
         impact_domains.append("SUBJECT")
@@ -2105,6 +2227,16 @@ def build_inference_impact_plan(
         "explicitTargetSymbols": explicit_symbols,
         "inferenceTargetSymbols": target_symbols,
         "candidateRuleIds": [str(profile.get("ruleId") or "") for profile in candidate_profiles],
+        "directCandidateRuleIds": [
+            str(profile.get("ruleId") or "")
+            for profile in direct_candidate_profiles
+        ],
+        "dependencyClosureRuleIds": [
+            str(profile.get("ruleId") or "")
+            for profile in enabled_profiles
+            if str(profile.get("ruleId") or "") in dependency_closure_rule_ids
+        ],
+        "dependencyClosureRuleCount": len(dependency_closure_rule_ids),
         "triggerRuleIds": [str(profile.get("ruleId") or "") for profile in trigger_profiles],
         "invalidationRuleIds": [str(profile.get("ruleId") or "") for profile in invalidation_profiles],
         "deferredRuleIds": [str(profile.get("ruleId") or "") for profile in deferred_profiles],
@@ -2207,6 +2339,10 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
     diagnostics = dict(diagnostics or {}) if isinstance(diagnostics, Mapping) else {}
     bounded = max(1, int(limit or 80))
     candidate_rule_ids = list(values.get("candidateRuleIds") or [])
+    direct_candidate_rule_ids = list(values.get("directCandidateRuleIds") or [])
+    dependency_closure_rule_ids = list(
+        values.get("dependencyClosureRuleIds") or []
+    )
     trigger_rule_ids = list(values.get("triggerRuleIds") or [])
     invalidation_rule_ids = list(values.get("invalidationRuleIds") or [])
     deferred_rule_ids = list(values.get("deferredRuleIds") or [])
@@ -2247,6 +2383,11 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         # These lists are executable routing contracts, not presentation
         # diagnostics. Truncating one can silently omit a TypeDB function.
         "candidateRuleIds": candidate_rule_ids,
+        "directCandidateRuleIds": direct_candidate_rule_ids,
+        "dependencyClosureRuleIds": dependency_closure_rule_ids,
+        "dependencyClosureRuleCount": int(
+            values.get("dependencyClosureRuleCount") or 0
+        ),
         "triggerRuleIds": trigger_rule_ids,
         "invalidationRuleIds": invalidation_rule_ids,
         "deferredRuleIds": deferred_rule_ids,

@@ -362,6 +362,9 @@ TEXT_SETTING_KEYS = [
     "typedbNativeRuleAdaptiveTargetShardingParallelism",
     "typedbNativeRuleSelectionEnabled",
     "typedbIncrementalEquivalenceAuditSamplePct",
+    "typedbIncrementalEquivalenceRecoveryFullRuns",
+    "typedbIncrementalEquivalenceHealthLookback",
+    "typedbIncrementalEquivalenceHealthCacheSeconds",
     "kisRealtimeWebSocketIncludeConfiguredInReasoning",
     "typedbABoxNodeBatchSize",
     "typedbABoxCurrentStateInventoryBatchSize",
@@ -1977,7 +1980,22 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbIncrementalEquivalenceAuditSamplePct": value(
             "typedbIncrementalEquivalenceAuditSamplePct",
             "TYPEDB_INCREMENTAL_EQUIVALENCE_AUDIT_SAMPLE_PCT",
-            "1",
+            "5",
+        ),
+        "typedbIncrementalEquivalenceRecoveryFullRuns": value(
+            "typedbIncrementalEquivalenceRecoveryFullRuns",
+            "TYPEDB_INCREMENTAL_EQUIVALENCE_RECOVERY_FULL_RUNS",
+            "3",
+        ),
+        "typedbIncrementalEquivalenceHealthLookback": value(
+            "typedbIncrementalEquivalenceHealthLookback",
+            "TYPEDB_INCREMENTAL_EQUIVALENCE_HEALTH_LOOKBACK",
+            "20",
+        ),
+        "typedbIncrementalEquivalenceHealthCacheSeconds": value(
+            "typedbIncrementalEquivalenceHealthCacheSeconds",
+            "TYPEDB_INCREMENTAL_EQUIVALENCE_HEALTH_CACHE_SECONDS",
+            "0",
         ),
         "kisRealtimeWebSocketIncludeConfiguredInReasoning": value("kisRealtimeWebSocketIncludeConfiguredInReasoning", "KIS_REALTIME_WEBSOCKET_INCLUDE_CONFIGURED_IN_REASONING", "0"),
         "typedbABoxNodeBatchSize": value("typedbABoxNodeBatchSize", "TYPEDB_ABOX_NODE_BATCH_SIZE", "10"),

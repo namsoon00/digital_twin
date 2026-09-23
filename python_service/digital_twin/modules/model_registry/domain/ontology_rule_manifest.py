@@ -13,9 +13,9 @@ from digital_twin.modules.model_registry.domain.ontology_rule_ownership import v
 from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract, statistical_signal_reverse_index
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v8-execution-unit"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v9-dependency-closure"
 RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v3"
-RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v2"
+RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v3-closure"
 
 ASSESSMENT_SCOPES = (
     "evidence-quality",
@@ -229,6 +229,15 @@ def rule_derived_outputs(rule: object) -> List[Dict[str, object]]:
     for item in _items(_value(rule, "derivations")):
         relation_type = str(_value(item, "relation_type", "relationType") or "").strip()
         target_kind = str(_value(item, "target_kind", "targetKind") or "").strip()
+        dependency_keys = []
+        if relation_type:
+            dependency_keys.append(
+                "relation:" + relation_type.lower().replace("_", "-")
+            )
+        if target_kind:
+            dependency_keys.append(
+                "kind:" + target_kind.lower().replace("_", "-")
+            )
         rows.append({
             "relationType": relation_type,
             "targetKind": target_kind,
@@ -240,6 +249,7 @@ def rule_derived_outputs(rule: object) -> List[Dict[str, object]]:
                 if relation_type
                 else ""
             ),
+            "dependencyKeys": dependency_keys,
         })
     return rows
 
@@ -439,6 +449,10 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         or not item.get("requiredContext")
         or not item.get("invalidationContract")
         or not item.get("derivedOutputs")
+        or any(
+            not output.get("dependencyKeys")
+            for output in item.get("derivedOutputs") or []
+        )
         or item.get("executionUnitVersion") != RULE_EXECUTION_UNIT_VERSION
         or item.get("evaluationGrain") not in EXECUTION_GRAINS
         or not item.get("ownerWorld")
@@ -491,6 +505,9 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
         "contextByFamily": {},
         "triggerByEventClass": {},
         "rulesByEvaluationGrain": {},
+        "producersByDependencyKey": {},
+        "downstreamByRuleId": {},
+        "downstreamClosureByRuleId": {},
     }
 
     def add(index_name: str, key: object, rule_id: str) -> None:
@@ -526,6 +543,67 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
                     add("invalidationByDependencyKey", key, rule_id)
                 for family in families:
                     add("invalidationByFamily", family, rule_id)
+        for output in manifest.get("derivedOutputs") or []:
+            for key in output.get("dependencyKeys") or [output.get("dependencyKey")]:
+                add("producersByDependencyKey", key, rule_id)
+
+    def dependency_matches(left: object, right: object) -> bool:
+        left_value = str(left or "").strip().lower()
+        right_value = str(right or "").strip().lower()
+        return bool(
+            left_value
+            and right_value
+            and (
+                left_value == right_value
+                or left_value.startswith(right_value + ":")
+                or right_value.startswith(left_value + ":")
+            )
+        )
+
+    dependencies_by_rule = {
+        str(manifest.get("ruleId") or ""): {
+            str(key or "").strip()
+            for condition in manifest.get("requiredContext") or []
+            for key in condition.get("dependencyKeys") or []
+            if str(key or "").strip()
+        }
+        for manifest in manifests
+        if str(manifest.get("ruleId") or "").strip()
+    }
+    outputs_by_rule = {
+        str(manifest.get("ruleId") or ""): {
+            str(key or "").strip()
+            for output in manifest.get("derivedOutputs") or []
+            for key in output.get("dependencyKeys") or [output.get("dependencyKey")]
+            if str(key or "").strip()
+        }
+        for manifest in manifests
+        if str(manifest.get("ruleId") or "").strip()
+    }
+    for producer_id, output_keys in outputs_by_rule.items():
+        downstream = sorted({
+            consumer_id
+            for consumer_id, dependency_keys in dependencies_by_rule.items()
+            if consumer_id != producer_id
+            and any(
+                dependency_matches(output_key, dependency_key)
+                for output_key in output_keys
+                for dependency_key in dependency_keys
+            )
+        })
+        if downstream:
+            indexes["downstreamByRuleId"][producer_id] = downstream
+    for producer_id in outputs_by_rule:
+        closure = set()
+        pending = list(indexes["downstreamByRuleId"].get(producer_id, []))
+        while pending:
+            rule_id = pending.pop()
+            if rule_id in closure:
+                continue
+            closure.add(rule_id)
+            pending.extend(indexes["downstreamByRuleId"].get(rule_id, []))
+        if closure:
+            indexes["downstreamClosureByRuleId"][producer_id] = sorted(closure)
     for values in indexes.values():
         for key in list(values):
             values[key] = sorted(values[key])

@@ -3,10 +3,130 @@
 from __future__ import annotations
 from .selection_ports import SelectionPort
 from copy import deepcopy
+import time
 from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_rule_adaptive_target_sharding_policy, native_rule_adaptive_target_sharding_profile
+from digital_twin.modules.reasoning.domain.incremental_inference_equivalence import incremental_selection_safety_state
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.reasoning.domain.projection_facts import rule_id_from_payload
 from typing import Dict, List
+
+
+def _bounded_integer_setting(
+    settings: object,
+    key: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        raw = settings.get(key, default) if hasattr(settings, "get") else default
+        return max(minimum, min(maximum, int(float(str(raw)))))
+    except (TypeError, ValueError):
+        return default
+
+
+def incremental_selection_safety_context(
+    _store: SelectionPort,
+    snapshot: AccountSnapshot,
+    *,
+    world_id: str,
+    rulebox_rules_hash: str,
+    tbox_fingerprint: str,
+) -> Dict[str, object]:
+    """Read a bounded, cached fail-closed health view for this release."""
+
+    if not _store.projection_run_store or not hasattr(
+        _store.projection_run_store, "latest"
+    ):
+        return {
+            "status": "unavailable",
+            "selectionAllowed": False,
+            "reason": "projection audit history is unavailable",
+        }
+    settings = _store.settings
+    required = _bounded_integer_setting(
+        settings,
+        "typedbIncrementalEquivalenceRecoveryFullRuns",
+        3,
+        1,
+        20,
+    )
+    lookback = _bounded_integer_setting(
+        settings,
+        "typedbIncrementalEquivalenceHealthLookback",
+        20,
+        required + 1,
+        100,
+    )
+    cache_seconds = _bounded_integer_setting(
+        settings,
+        "typedbIncrementalEquivalenceHealthCacheSeconds",
+        0,
+        0,
+        300,
+    )
+    namespace = _store.execution_namespace()
+    cache_key = "|".join([
+        str(snapshot.account_id or ""),
+        str(world_id or ""),
+        str(rulebox_rules_hash or ""),
+        str(tbox_fingerprint or ""),
+        str(namespace.get("executionNamespaceId") or ""),
+        str(namespace.get("engineDeploymentId") or ""),
+        str(namespace.get("graphDatabase") or ""),
+    ])
+    now = time.monotonic()
+    cache = getattr(_store, "_incremental_selection_safety_cache", {})
+    cached = cache.get(cache_key) if isinstance(cache, dict) else None
+    if (
+        isinstance(cached, dict)
+        and cache_seconds > 0
+        and now - float(cached.get("cachedAt") or 0) < cache_seconds
+    ):
+        return dict(cached.get("value") or {})
+    try:
+        rows = _store.projection_run_store.latest(
+            account_id=str(snapshot.account_id or ""),
+            limit=lookback,
+            world_id=world_id,
+            execution_namespace_id=str(namespace.get("executionNamespaceId") or ""),
+            engine_deployment_id=str(namespace.get("engineDeploymentId") or ""),
+            graph_database=str(namespace.get("graphDatabase") or ""),
+            release_fingerprint="",
+        )
+    except Exception:
+        return {
+            "status": "unavailable",
+            "selectionAllowed": False,
+            "reason": "projection equivalence audit history could not be read",
+        }
+    compatible = [
+        row
+        for row in rows or []
+        if isinstance(row, dict)
+        and str(row.get("graphStore") or "") == "typedb"
+        and (
+            not rulebox_rules_hash
+            or str(row.get("ruleboxRulesHash") or "") == rulebox_rules_hash
+        )
+        and (
+            not tbox_fingerprint
+            or str(row.get("tboxFingerprint") or "") == tbox_fingerprint
+        )
+    ]
+    value = incremental_selection_safety_state(
+        compatible,
+        required_full_recovery_runs=required,
+    )
+    value.update({
+        "source": "projection-equivalence-audit",
+        "compatibleRunCount": len(compatible),
+    })
+    if not isinstance(cache, dict):
+        cache = {}
+    cache[cache_key] = {"cachedAt": now, "value": dict(value)}
+    setattr(_store, "_incremental_selection_safety_cache", cache)
+    return value
 
 
 def prior_rule_selection_context(
@@ -207,7 +327,23 @@ def audited_prior_rule_selection_context(
         except Exception:
             slot_context = {}
         if bool((slot_context or {}).get("reusable")):
-            return dict(slot_context)
+            safety = incremental_selection_safety_context(
+                _store,
+                snapshot,
+                world_id=world_id,
+                rulebox_rules_hash=rulebox_rules_hash,
+                tbox_fingerprint=tbox_fingerprint,
+            )
+            if not bool(safety.get("selectionAllowed")):
+                return {
+                    "reusable": False,
+                    "proofSource": "",
+                    "matchedRuleIds": [],
+                    "matchedRuleCount": 0,
+                    "fallbackReason": "incremental-equivalence-safety-circuit-open",
+                    "selectionSafety": safety,
+                }
+            return {**dict(slot_context), "selectionSafety": safety}
     # Old projection rows retained only matched IDs and could not prove
     # the state of every non-matching rule from one generation. Never use
     # that partial history as an incremental execution proof.

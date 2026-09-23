@@ -2,6 +2,7 @@ import unittest
 
 from digital_twin.modules.reasoning.domain.incremental_inference_equivalence import (
     compare_incremental_rule_states,
+    incremental_selection_safety_state,
 )
 
 
@@ -45,6 +46,44 @@ class IncrementalInferenceEquivalenceTests(unittest.TestCase):
         self.assertTrue(result["reconciledByFullEvaluation"])
         self.assertEqual("matched", result["mismatches"][0]["priorState"])
         self.assertEqual("not-matched", result["mismatches"][0]["fullEvaluationState"])
+
+        mismatch = {
+            "runId": "run:mismatch",
+            "result": {
+                "status": "ok",
+                "incrementalEquivalenceAudit": {
+                    "status": "mismatch-reconciled",
+                    "mismatchCount": 1,
+                },
+            },
+        }
+        full = {
+            "result": {
+                "status": "ok",
+                "nativeReplayValidation": {
+                    "verified": True,
+                    "selectionApplied": False,
+                    "nativeEvaluationComplete": True,
+                    "coverageComplete": True,
+                },
+            },
+        }
+        suspended = incremental_selection_safety_state(
+            [{**full, "runId": "run:full-1"}, mismatch],
+            required_full_recovery_runs=2,
+        )
+        recovered = incremental_selection_safety_state(
+            [
+                {**full, "runId": "run:full-2"},
+                {**full, "runId": "run:full-1"},
+                mismatch,
+            ],
+            required_full_recovery_runs=2,
+        )
+        self.assertEqual("suspended", suspended["status"])
+        self.assertFalse(suspended["selectionAllowed"])
+        self.assertEqual("healthy", recovered["status"])
+        self.assertTrue(recovered["selectionAllowed"])
 
     def test_selected_execution_cannot_claim_equivalence(self):
         execution = self.execution([])

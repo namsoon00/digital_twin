@@ -1961,9 +1961,9 @@ class PortfolioOntologyProjectionRecorder:
     def incremental_equivalence_audit_sample_pct(self) -> int:
         return self.integer_setting(
             "typedbIncrementalEquivalenceAuditSamplePct",
-            1,
+            5,
             0,
-            20,
+            25,
         )
 
     def incremental_equivalence_audit_selected(

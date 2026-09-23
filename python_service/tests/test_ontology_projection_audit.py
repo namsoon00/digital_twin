@@ -339,6 +339,10 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 self.request = dict(kwargs)
                 return {"reusable": True, "coverageComplete": True}
 
+            @staticmethod
+            def latest(**_kwargs):
+                return []
+
         slot_store = SlotStore()
         recorder = PortfolioOntologyProjectionRecorder(
             Repository(),

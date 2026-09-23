@@ -685,6 +685,9 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         values.get("inferenceReuseProof") if isinstance(values.get("inferenceReuseProof"), dict) else {}
     )
     prior_inference_reuse = dict(values.get("priorInferenceReuse") or {})
+    selection_safety = dict(
+        prior_inference_reuse.get("selectionSafety") or {}
+    )
     inference_detail_outbox = dict(values.get("inferenceDetailOutbox") or {})
     native_stage_timings = dict(execution.get("typedbNativeStageTimings") or {})
     model_signal_bridge_execution = dict(
@@ -815,6 +818,19 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "fallbackReason": str(prior_inference_reuse.get("fallbackReason") or "")[:220],
             "recomputedCandidateRuleCount": int(prior_inference_reuse.get("recomputedCandidateRuleCount") or 0),
             "recomputedChangedScopeCount": int(prior_inference_reuse.get("recomputedChangedScopeCount") or 0),
+            "selectionSafety": {
+                "version": str(selection_safety.get("version") or ""),
+                "status": str(selection_safety.get("status") or ""),
+                "selectionAllowed": bool(selection_safety.get("selectionAllowed")),
+                "reason": str(selection_safety.get("reason") or "")[:300],
+                "mismatchRunId": str(selection_safety.get("mismatchRunId") or ""),
+                "fullRecoveryRunCount": int(
+                    selection_safety.get("fullRecoveryRunCount") or 0
+                ),
+                "requiredFullRecoveryRunCount": int(
+                    selection_safety.get("requiredFullRecoveryRunCount") or 0
+                ),
+            },
         },
         "inferenceReuseProof": inference_reuse_proof,
         "nativeReplayValidation": {

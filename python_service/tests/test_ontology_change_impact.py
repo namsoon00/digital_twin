@@ -7,6 +7,7 @@ from digital_twin.modules.reasoning.domain.ontology_change_impact import (
     build_dynamic_inference_preflight,
     build_inference_impact_plan,
     compact_inference_impact_plan,
+    expand_rule_dependency_closure,
     family_for_entity,
     family_for_relation,
     rule_condition_dependency_profile,
@@ -131,6 +132,22 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("REUSE_SHARED", plan["route"])
         self.assertTrue(plan["sharedReuseEligible"])
         self.assertEqual([], plan["candidateRuleIds"])
+
+        profiles = [
+            rule_dependency_profile(rule)
+            for rule in default_graph_inference_rules()
+        ]
+        closure = expand_rule_dependency_closure(
+            profiles,
+            ["graph.company.governance.coverage_gap.v1"],
+        )
+        self.assertEqual(
+            {
+                "graph.coverage.gap.validation_state.v1",
+                "graph.security_line.coverage_gap.v1",
+            },
+            set(closure["dependencyClosureRuleIds"]),
+        )
 
     def test_dynamic_preflight_fails_closed_without_authoritative_provenance(self):
         plan = build_dynamic_inference_preflight(

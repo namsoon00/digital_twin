@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, Mapping
 
 
-INCREMENTAL_EQUIVALENCE_VERSION = "incremental-inference-equivalence-v1"
+INCREMENTAL_EQUIVALENCE_VERSION = "incremental-inference-equivalence-v2-safety-circuit"
 
 
 def _clean(value: object) -> str:
@@ -143,4 +143,71 @@ def compare_incremental_rule_states(
         "missingComparisonCount": len(missing),
         "mismatchCount": len(mismatches),
         "mismatches": mismatches[:20],
+    }
+
+
+def incremental_selection_safety_state(
+    audit_rows: Iterable[Mapping[str, object]],
+    required_full_recovery_runs: int = 3,
+) -> Dict[str, object]:
+    """Derive a fail-closed selection circuit from persisted run audits.
+
+    Rows are expected newest first. A sampled mismatch is already reconciled
+    by that run's full TypeDB result, but it also proves that the dependency
+    selector cannot be trusted immediately. Selection remains suspended until
+    a bounded number of subsequent complete full evaluations have succeeded.
+    A RuleBox/TBox release boundary is applied by the caller before rows reach
+    this function.
+    """
+
+    required = max(1, min(20, int(required_full_recovery_runs or 3)))
+    clean_full_runs = 0
+    inspected = 0
+    for row in audit_rows or []:
+        if not isinstance(row, Mapping):
+            continue
+        inspected += 1
+        result = row.get("result")
+        result = dict(result or {}) if isinstance(result, Mapping) else {}
+        audit = result.get("incrementalEquivalenceAudit")
+        audit = dict(audit or {}) if isinstance(audit, Mapping) else {}
+        audit_status = _clean(audit.get("status")).lower()
+        if audit_status == "mismatch-reconciled" or int(
+            audit.get("mismatchCount") or 0
+        ) > 0:
+            recovered = clean_full_runs >= required
+            return {
+                "version": INCREMENTAL_EQUIVALENCE_VERSION,
+                "status": "healthy" if recovered else "suspended",
+                "selectionAllowed": recovered,
+                "reason": (
+                    "required full-evaluation recovery evidence is complete"
+                    if recovered
+                    else "a sampled incremental result differed from the full TypeDB result"
+                ),
+                "mismatchRunId": _clean(row.get("runId")),
+                "fullRecoveryRunCount": clean_full_runs,
+                "requiredFullRecoveryRunCount": required,
+                "inspectedRunCount": inspected,
+            }
+        replay = result.get("nativeReplayValidation")
+        replay = dict(replay or {}) if isinstance(replay, Mapping) else {}
+        full_verified = bool(
+            str(result.get("status") or "").lower() in {"ok", "completed"}
+            and replay.get("verified")
+            and not replay.get("selectionApplied")
+            and replay.get("nativeEvaluationComplete")
+            and replay.get("coverageComplete")
+        )
+        if full_verified:
+            clean_full_runs += 1
+    return {
+        "version": INCREMENTAL_EQUIVALENCE_VERSION,
+        "status": "healthy",
+        "selectionAllowed": True,
+        "reason": "no unresolved incremental equivalence mismatch was found",
+        "mismatchRunId": "",
+        "fullRecoveryRunCount": clean_full_runs,
+        "requiredFullRecoveryRunCount": required,
+        "inspectedRunCount": inspected,
     }

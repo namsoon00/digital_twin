@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 from digital_twin.modules.news_intelligence.domain.company_knowledge import (
@@ -297,7 +298,9 @@ class FinancialNarrativeContractTests(unittest.TestCase):
         self.assertEqual("2026-03-31", by_id["financial:operatingIncome:previous"]["sourceAsOf"])
 
     def test_same_financials_are_background_not_a_new_filing(self):
-        from digital_twin.modules.notifications.domain.financial_evidence_presentation import financial_evidence_links, financial_evidence_rows
+        from digital_twin.modules.notifications.domain.financial_evidence_presentation import (
+            financial_evidence_links, financial_evidence_rows, financial_evidence_title,
+        )
         context = self.context()
         first = financial_evidence_rows(context)
         self.assertIn("전분기 대비 +30.00%", " ".join(first))
@@ -309,6 +312,18 @@ class FinancialNarrativeContractTests(unittest.TestCase):
         self.assertNotIn("전분기 대비 +30.00%", reused[0])
         self.assertEqual((), financial_evidence_links(context))
 
+        current = self.company()["financialEvidence"]
+        before_lineage_contract = copy.deepcopy(current)
+        before_lineage_contract.pop("report", None)
+        before_lineage_contract.pop("decisionFingerprint", None)
+        before_lineage_contract["fingerprint"] = "legacy-packet-before-report-lineage"
+        context = self.context()
+        context["previousDeliveredInvestmentAIInsightEpisode"] = {"financialEvidence": before_lineage_contract}
+        self.assertEqual("기존 전제 · 재무", financial_evidence_title(context))
+        lineage_only = financial_evidence_rows(context)
+        self.assertEqual(1, len(lineage_only))
+        self.assertIn("새로 반영된 재무 변화는 없", lineage_only[0])
+
     def test_source_correction_can_notify_once_but_cannot_publish_invalid_insight(self):
         from digital_twin.modules.decisions.domain.investment_insight_assessment import investment_insight_delivery_transition
         context = self.context()
@@ -318,6 +333,26 @@ class FinancialNarrativeContractTests(unittest.TestCase):
         context["previousInvestmentAIInsightEpisode"]["financialEvidence"] = self.company()["financialEvidence"]
         self.assertFalse(investment_insight_delivery_transition(context, assessment)["material"])
         self.assertFalse(investment_insight_delivery_transition(context, {"publishable": False})["material"])
+        from digital_twin.modules.news_intelligence.domain.financial_reporting import financial_evidence_use
+
+        current = self.company()["financialEvidence"]
+        previous = copy.deepcopy(current)
+        previous.pop("report", None)
+        previous.pop("decisionFingerprint", None)
+        previous["fingerprint"] = "legacy-packet-before-report-lineage"
+        self.assertNotEqual(previous["fingerprint"], current["fingerprint"])
+        self.assertEqual("reused", financial_evidence_use(current, previous)["state"])
+
+        assessment = {"publishable": True, "direction": "positive", "thesisKey": "recovery"}
+        context = self.context()
+        context["previousInvestmentAIInsightEpisode"] = {
+            "episodeId": "old",
+            "insightAssessment": assessment,
+            "financialEvidence": previous,
+        }
+        transition = investment_insight_delivery_transition(context, assessment)
+        self.assertFalse(transition["material"])
+        self.assertNotIn("financial-evidence-changed", transition["changes"])
 
     def test_price_below_average_is_recovery_not_maintenance(self):
         from digital_twin.modules.notifications.application.notification_ai_gate_message import _price_confirmation_check

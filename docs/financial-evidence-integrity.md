@@ -59,6 +59,13 @@ rendering, with an equality check at the fitting boundary.
 - A financial evidence revision can trigger one fresh insight, even when its
   directional label is unchanged. Reused evidence is background, not a newly
   published filing. Invalid AI output cannot use this novelty path to publish.
+- Financial packets keep separate audit and decision fingerprints. The audit
+  fingerprint includes report contracts and immutable collection lineage. The
+  decision fingerprint includes the reporting period, comparisons, ratios,
+  quality issues and earnings-quality assessment, but excludes report lineage.
+  Adding a filing ID, source revision or collection timestamp without changing
+  those financial facts must not relabel old evidence as revised, bypass alert
+  cooldown or expand old metrics in a market-change notification.
 - Both TypeDB and AI customer documents show the reporting period, comparison,
   source and available original links when the evidence is first observed,
   revised or moves to a new period. Compact web details retain these rows.
@@ -149,6 +156,8 @@ threshold, active engine release, or action permission is silently promoted.
   Replay retained execution briefs without rewriting old decisions or sending
   historical investment messages as new alerts.
 - Evidence corrections notify once; repeated identical evidence does not.
+- Audit-lineage enrichment with identical periods, values and comparison states
+  remains a reused premise and cannot create `financial-evidence-changed`.
 - Financial wording remains idempotent and respects above/below-average facts.
 - Repair preview is read-only; repeated current-state rebuilds are idempotent.
 - Existing positive BUY/ADD authorization tests continue to pass; shadow

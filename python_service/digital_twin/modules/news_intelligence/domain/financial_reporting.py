@@ -327,8 +327,25 @@ def compact_financial_evidence(company: Mapping):
         "cashConversionAvailable": "cashConversionPct" in ratios,
     }
     material["fingerprint"] = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:24]
+    material["decisionFingerprint"] = _financial_decision_fingerprint(material)
     material["eventSemantics"] = "reporting-period-evidence-not-new-filing"
     return material
+
+
+def _financial_decision_fingerprint(packet: Mapping) -> str:
+    """Hash financial meaning while excluding collection and audit lineage."""
+    if not isinstance(packet, Mapping):
+        return ""
+    payload = {
+        key: packet.get(key)
+        for key in ("period", "comparisons", "issues", "ratios", "earningsQuality")
+        if key in packet
+    }
+    if not any(payload.get(key) for key in ("comparisons", "issues", "ratios", "earningsQuality")):
+        return ""
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()
+    ).hexdigest()[:24]
 
 
 def financial_evidence_use(packet: Mapping, previous: Mapping = None):
@@ -338,8 +355,8 @@ def financial_evidence_use(packet: Mapping, previous: Mapping = None):
     previous = previous or {}
     period = reporting_period_end(packet.get("period"))
     prior_period = reporting_period_end(previous.get("period"))
-    fingerprint = packet.get("fingerprint")
-    prior_fingerprint = previous.get("fingerprint")
+    fingerprint = _financial_decision_fingerprint(packet) or packet.get("fingerprint")
+    prior_fingerprint = _financial_decision_fingerprint(previous) or previous.get("fingerprint")
     if fingerprint and prior_fingerprint and fingerprint == prior_fingerprint:
         state = "reused"
     elif not prior_fingerprint:

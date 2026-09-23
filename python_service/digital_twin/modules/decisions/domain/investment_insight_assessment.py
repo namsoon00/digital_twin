@@ -691,11 +691,12 @@ def investment_insight_delivery_transition(
     transition = investment_insight_transition(previous, current_assessment)
     relation = _mapping(values.get("ontologyRelationContext"))
     if previous and "graph.company." in str(relation.get("activeRules") or []):
-        from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
+        from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence, financial_evidence_use
         current_packet = compact_financial_evidence(_mapping(relation.get("facts")).get("companyContext") or {})
         prior = _mapping(previous)
         old_packet = _mapping(prior.get("financialEvidence") or _mapping(prior.get("insight")).get("financialEvidence"))
-        if (current_packet.get("comparisons") and current_packet.get("fingerprint") != old_packet.get("fingerprint")
+        financial_use = financial_evidence_use(current_packet, old_packet)
+        if (current_packet.get("comparisons") and financial_use.get("state") != "reused"
                 and _mapping(current_assessment).get("publishable") is True):
             transition.update({"kind": "material-insight-change", "material": True,
                 "changes": [*transition.get("changes", []), "financial-evidence-changed"],

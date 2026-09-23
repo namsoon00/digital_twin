@@ -62,6 +62,22 @@ rendering, with an equality check at the fitting boundary.
 - Both TypeDB and AI customer documents show the reporting period, comparison,
   source and available original links when the evidence is first observed,
   revised or moves to a new period. Compact web details retain these rows.
+- Every normalized financial period carries a `financial-report-observation-v1`
+  contract. It preserves period start/end, annual/quarterly/YTD basis,
+  consolidated/separate scope, currency, fiscal year, accounting standard,
+  publication time, filing ID and the exact immutable external-data revision.
+  Unknown publication or correction state remains unknown; collection time is
+  never presented as a filing time. Exact lineage remains in fact/audit
+  revisions, while a lineage-only vendor payload change does not create a new
+  material company-fact reasoning turn when normalized statement values and
+  report semantics are unchanged.
+- Consensus snapshots retain their target horizon, exact observation time,
+  sample state and immutable analyst-dataset revision. A missing analyst count,
+  low/high estimate or 30-day revision is absent rather than zero. Negative EPS
+  estimates remain valid observations but cannot enter a positive-PER valuation.
+  A range reported by one provider is labelled `reported-consensus-range`;
+  dispersion between independent point estimates is only an
+  `observed-point-range` and is not presented as a provider-reported band.
 - The v29 prompt carries `financialEvidenceUse` through final compression:
   reused, first-observed, revised and new-period are evidence-continuity
   states, never proof of a newly published filing. The captured delivered

@@ -561,6 +561,22 @@ END:VCALENDAR
         self.assertNotIn("KIS", message)
 
     def test_yfinance_missing_fundamentals_keeps_quote_without_error_status(self):
+        estimates = normalized_yfinance_earnings_estimates({
+            "earningsEstimate": [
+                {"period": "0y", "avg": -2.5},
+                {"period": "+1y", "avg": 3.0, "low": 0.0, "high": 5.0, "numberOfAnalysts": 0},
+            ],
+            "epsTrend": [{"period": "0y"}, {"period": "+1y", "30daysAgo": -1.0}],
+        }, "2026-09-23T00:00:00Z")
+        self.assertEqual(-2.5, estimates[0]["base"])
+        self.assertNotIn("analystCount", estimates[0])
+        self.assertNotIn("revision30dPct", estimates[0])
+        self.assertEqual("not-provided", estimates[0]["sampleState"])
+        self.assertEqual(0.0, estimates[1]["low"])
+        self.assertEqual(0, estimates[1]["analystCount"])
+        self.assertEqual("reported-zero", estimates[1]["sampleState"])
+        self.assertNotEqual(estimates[0]["observationId"], estimates[1]["observationId"])
+
         class FakeRecordsFrame:
             def __init__(self, rows):
                 self.rows = list(rows)

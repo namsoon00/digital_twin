@@ -1,4 +1,6 @@
 import io
+import hashlib
+import json
 import logging
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import date, datetime, timezone
@@ -179,29 +181,57 @@ def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_a
         if not period:
             continue
         base = optional_number(item.get("avg"))
-        if base is None or base <= 0:
+        if base is None:
             continue
         trend = trends.get(raw_period) if isinstance(trends.get(raw_period), dict) else {}
         revision = revisions.get(raw_period) if isinstance(revisions.get(raw_period), dict) else {}
         thirty_days_ago = optional_number(trend.get("30daysAgo"))
-        revision_pct = ((base / thirty_days_ago) - 1.0) * 100.0 if thirty_days_ago and thirty_days_ago > 0 else 0.0
-        result.append({
-            "observationId": "yfinance:earnings-estimate:" + raw_period,
+        revision_pct = (
+            ((base / thirty_days_ago) - 1.0) * 100.0
+            if thirty_days_ago not in (None, 0) and base * thirty_days_ago > 0
+            else None
+        )
+        low = optional_number(item.get("low"))
+        high = optional_number(item.get("high"))
+        analyst_count = optional_number(item.get("numberOfAnalysts"))
+        growth = optional_number(item.get("growth"))
+        revision_up = optional_number(revision.get("upLast30days"))
+        revision_down = optional_number(revision.get("downLast30days"))
+        snapshot = {
+            "provider": "yfinance", "rawPeriod": raw_period, "period": period,
+            "asOf": fetched_at, "low": low, "base": base, "high": high,
+            "analystCount": int(analyst_count) if analyst_count is not None else None,
+            "growth": growth, "thirtyDaysAgo": thirty_days_ago,
+            "revisionUp30d": int(revision_up) if revision_up is not None else None,
+            "revisionDown30d": int(revision_down) if revision_down is not None else None,
+        }
+        observation_id = "yfinance:earnings-estimate:" + hashlib.sha256(
+            json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()[:20]
+        row = {
+            "observationId": observation_id,
             "provider": "yfinance",
             "source": "earnings_estimate",
             "sourceType": "external-consensus",
             "period": period,
+            "providerPeriod": raw_period,
             "asOf": fetched_at,
             "isEstimate": True,
-            "low": optional_number(item.get("low")) or 0.0,
             "base": base,
-            "high": optional_number(item.get("high")) or 0.0,
-            "analystCount": int(optional_number(item.get("numberOfAnalysts")) or 0),
-            "growthPct": round((optional_number(item.get("growth")) or 0.0) * 100.0, 4),
-            "revision30dPct": round(revision_pct, 4),
-            "revisionUp30d": int(optional_number(revision.get("upLast30days")) or 0),
-            "revisionDown30d": int(optional_number(revision.get("downLast30days")) or 0),
-        })
+            "consensusBasis": "annual-eps",
+            "sampleState": "reported" if analyst_count and analyst_count > 0 else "reported-zero" if analyst_count == 0 else "not-provided",
+        }
+        optional = {
+            "low": low,
+            "high": high,
+            "analystCount": int(analyst_count) if analyst_count is not None else None,
+            "growthPct": round(growth * 100.0, 4) if growth is not None else None,
+            "revision30dPct": round(revision_pct, 4) if revision_pct is not None else None,
+            "revisionUp30d": int(revision_up) if revision_up is not None else None,
+            "revisionDown30d": int(revision_down) if revision_down is not None else None,
+        }
+        row.update({key: value for key, value in optional.items() if value is not None})
+        result.append(row)
     return result
 
 

@@ -74,35 +74,48 @@ def _observation(
     source_text = _text(raw.get("source") or source)
     if not base:
         return {}
-    return {
+    analyst_count = number(raw.get("analystCount") if "analystCount" in raw else raw.get("numberOfAnalysts"))
+    result = {
         "observationId": _text(raw.get("observationId") or raw.get("id")),
         "metric": "earnings-per-share",
         "value": round(base, 6),
-        "low": round(low, 6) if low else 0.0,
         "base": round(base, 6),
-        "high": round(high, 6) if high else 0.0,
         "period": period,
         "asOf": _text(raw.get("asOf") or raw.get("fiscalDateEnding") or default_as_of),
         "provider": provider_text,
         "source": source_text,
         "sourceType": _source_type(provider_text, raw.get("sourceType")),
-        "analystCount": int(_positive(raw.get("analystCount") or raw.get("numberOfAnalysts"))),
         "isEstimate": bool(raw.get("isEstimate", default_estimate)),
-        "revision30dPct": number(raw.get("revision30dPct")),
-        "growthPct": number(raw.get("growthPct")),
     }
+    if low:
+        result["low"] = round(low, 6)
+    if high:
+        result["high"] = round(high, 6)
+    if analyst_count >= 0 and ("analystCount" in raw or "numberOfAnalysts" in raw):
+        result["analystCount"] = int(analyst_count)
+    for field in ("revision30dPct", "growthPct"):
+        if raw.get(field) is not None:
+            result[field] = number(raw.get(field))
+    if raw.get("sampleState"):
+        result["sampleState"] = _text(raw.get("sampleState"))
+    references = [dict(item) for item in raw.get("sourceReferences", []) if isinstance(item, Mapping)]
+    if references:
+        result["sourceReferences"] = references
+    return result
 
 
 def collect_earnings_observations(
     overview: Mapping[str, object],
     report: Mapping[str, object],
     company_knowledge: Mapping[str, object] = None,
+    source_references: Iterable[Mapping[str, object]] = (),
 ) -> List[Dict[str, object]]:
     """Return de-duplicated annual-compatible EPS observations with provenance."""
 
     overview = dict(overview or {}) if isinstance(overview, Mapping) else {}
     report = dict(report or {}) if isinstance(report, Mapping) else {}
     company = dict(company_knowledge or {}) if isinstance(company_knowledge, Mapping) else {}
+    references = [dict(item) for item in source_references or [] if isinstance(item, Mapping)]
     result: List[Dict[str, object]] = []
 
     for owner, default_source in ((overview, "company-overview"), (report, "earnings-report")):
@@ -110,8 +123,13 @@ def collect_earnings_observations(
         for raw in rows:
             if not isinstance(raw, Mapping):
                 continue
+            provider = _text(raw.get("provider") or owner.get("provider")).casefold()
+            consensus_refs = [
+                reference for reference in references
+                if _text(reference.get("datasetId")) == "yfinance.analyst" and "yfinance" in provider
+            ]
             item = _observation(
-                raw,
+                {**dict(raw), **({"sourceReferences": consensus_refs} if consensus_refs else {})},
                 provider=owner.get("provider"),
                 source=default_source,
                 default_as_of=owner.get("fetchedAt"),
@@ -153,7 +171,7 @@ def collect_earnings_observations(
         scalar_candidates.append((
             company_valuation.get("trailingEPS"),
             "ttm",
-            {"provider": provider, "fetchedAt": as_of},
+            {"provider": provider, "fetchedAt": as_of, "sourceReferences": company.get("sourceReferences") or []},
             "companyKnowledge.trailingEPS",
             False,
         ))
@@ -171,23 +189,30 @@ def collect_earnings_observations(
                 "observationId": "eps:company-knowledge:" + _text(latest_annual.get("period")),
                 "metric": "earnings-per-share",
                 "value": round(net_income / shares, 6),
-                "low": 0.0,
                 "base": round(net_income / shares, 6),
-                "high": 0.0,
                 "period": "annual",
                 "asOf": _text(latest_annual.get("period")),
                 "provider": provider,
                 "source": "companyKnowledge.netIncome/sharesOutstanding",
                 "sourceType": _source_type(provider),
-                "analystCount": 0,
                 "isEstimate": False,
-                "revision30dPct": 0.0,
                 "growthPct": number(latest_annual.get("netIncomeGrowthPct")),
+                "sourceReferences": list((latest_annual.get("reportContract") or {}).get("sourceReferences") or []),
             })
 
     for raw_value, period, owner, source, is_estimate in scalar_candidates:
+        provider = _text(owner.get("provider")).casefold()
+        owner_references = [dict(item) for item in owner.get("sourceReferences", []) if isinstance(item, Mapping)]
+        if "yfinance" in provider:
+            owner_references.extend(
+                reference for reference in references
+                if _text(reference.get("datasetId")) == "yfinance.fundamental"
+            )
         item = _observation(
-            {"value": raw_value, "period": period, "isEstimate": is_estimate},
+            {
+                "value": raw_value, "period": period, "isEstimate": is_estimate,
+                **({"sourceReferences": owner_references} if owner_references else {}),
+            },
             provider=owner.get("provider"),
             source=source,
             default_as_of=owner.get("fetchedAt") or owner.get("latestQuarter"),
@@ -265,16 +290,27 @@ def earnings_scenario(observations: Iterable[Mapping[str, object]]) -> Dict[str,
     low = _weighted_median(lows) if lows else (min(value for value, _weight in weighted_bases) if len(weighted_bases) >= 2 else base)
     high = _weighted_median(highs) if highs else (max(value for value, _weight in weighted_bases) if len(weighted_bases) >= 2 else base)
     low, base, high = sorted([low, base, high])
-    analyst_count = max((int(number(item.get("analystCount"))) for item in selected), default=0)
+    provided_counts = [int(number(item.get("analystCount"))) for item in selected if item.get("analystCount") is not None]
+    analyst_count = max(provided_counts, default=0)
     providers = sorted({_text(item.get("provider")) for item in selected if _text(item.get("provider"))})
+    source_references = {
+        (_text(reference.get("datasetId")), _text(reference.get("revisionId"))): dict(reference)
+        for item in selected
+        for reference in item.get("sourceReferences", [])
+        if isinstance(reference, Mapping) and reference.get("datasetId") and reference.get("revisionId")
+    }
     scenario_complete = bool(low > 0 and high > low)
+    reported_range = any(
+        _positive(item.get("low")) and _positive(item.get("high")) > _positive(item.get("low"))
+        for item in selected
+    )
     if len(providers) >= 2 and scenario_complete:
         confidence = "high"
     elif scenario_complete or analyst_count >= 3:
         confidence = "medium"
     else:
         confidence = "low"
-    return {
+    result = {
         "low": round(low, 6),
         "base": round(base, 6),
         "high": round(high, 6),
@@ -282,13 +318,17 @@ def earnings_scenario(observations: Iterable[Mapping[str, object]]) -> Dict[str,
         "asOf": max((_text(item.get("asOf")) for item in selected), default=""),
         "sourceCount": len(providers),
         "observationCount": len(selected),
-        "analystCount": analyst_count,
+        "analystCountState": "reported" if provided_counts else "not-provided",
         "providers": providers,
         "scenarioComplete": scenario_complete,
         "confidence": confidence,
-        "method": "reported-consensus-range" if scenario_complete else "single-point-estimate",
+        "method": "reported-consensus-range" if scenario_complete and reported_range else "observed-point-range" if scenario_complete else "single-point-estimate",
         "observationIds": [str(item.get("observationId") or "") for item in selected if item.get("observationId")],
+        "sourceReferences": [source_references[key] for key in sorted(source_references)],
     }
+    if provided_counts:
+        result["analystCount"] = analyst_count
+    return result
 
 
 def _multiple_observation(

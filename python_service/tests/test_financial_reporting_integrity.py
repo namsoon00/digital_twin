@@ -2,7 +2,7 @@ import unittest
 
 from digital_twin.modules.news_intelligence.domain.company_knowledge import (
     build_company_knowledge, dart_statement_periods, enrich_financial_periods,
-    merge_company_knowledge_rows, statement_periods,
+    merge_company_knowledge_rows, statement_periods, company_knowledge_by_symbol,
 )
 from digital_twin.modules.news_intelligence.domain.financial_reporting import (
     current_financial_state, financial_period_sort_key, reporting_period_end, compact_financial_evidence,
@@ -32,6 +32,18 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual("2026-01-01", fact["start"])
         self.assertEqual("CY2026Q2YTD", fact["frame"])
 
+        sec_facts = {
+            "entityName": "NVIDIA Corporation",
+            "revenue": {
+                "tag": "Revenues", "value": 70, "start": "2026-01-01",
+                "end": "2026-06-30", "filed": "2026-08-01",
+                "form": "10-Q", "fp": "Q2", "fy": "2026", "unit": "USD",
+            },
+            "totalDebt": {
+                "tag": "LongTermDebt", "value": 5, "end": "2020-06-30",
+                "filed": "2020-08-01", "form": "10-Q", "fp": "Q2", "unit": "USD",
+            },
+        }
         knowledge = build_company_knowledge(
             "NVDA",
             yfinance={
@@ -40,19 +52,15 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
             },
             sec_filing={
                 "provider": "SEC EDGAR",
-                "facts": {
-                    "entityName": "NVIDIA Corporation",
-                    "revenue": {
-                        "tag": "Revenues", "value": 70, "start": "2026-01-01",
-                        "end": "2026-06-30", "filed": "2026-08-01",
-                        "form": "10-Q", "fp": "Q2", "unit": "USD",
-                    },
-                    "totalDebt": {
-                        "tag": "LongTermDebt", "value": 5, "end": "2020-06-30",
-                        "filed": "2020-08-01", "form": "10-Q", "fp": "Q2", "unit": "USD",
-                    },
-                },
+                "facts": sec_facts,
             },
+            source_references=[{
+                "datasetId": "sec.company_facts", "providerId": "sec-edgar", "subjectKey": "NVDA",
+                "revisionId": "immutable-sec-revision", "providerRevision": "2026-08-01",
+                "payloadHash": "abc", "sourceSchemaVersion": "sec.company_facts-source-v1",
+                "sourceAsOf": "2026-08-01", "fetchedAt": "2026-08-02T00:00:00Z",
+                "availability": "observed",
+            }],
         )
 
         self.assertEqual(100, knowledge["financials"]["annual"][0]["revenue"])
@@ -63,6 +71,37 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual(
             "year-to-date",
             knowledge["financials"]["interim"][0]["metricProvenance"]["revenue"]["durationBasis"],
+        )
+        report = knowledge["financials"]["interim"][0]["reportContract"]
+        self.assertEqual("financial-report-observation-v1", report["contractVersion"])
+        self.assertEqual("2026-01-01", report["periodStart"])
+        self.assertEqual("2026-06-30", report["periodEnd"])
+        self.assertEqual("2026-08-01", report["publishedAt"])
+        self.assertEqual(["US-GAAP"], report["accountingStandards"])
+        self.assertEqual("immutable-sec-revision", report["sourceReferences"][0]["revisionId"])
+        packet = compact_financial_evidence(knowledge)
+        self.assertEqual(report["observationId"], packet["report"]["observationId"])
+
+        revised_lineage = [dict(report["sourceReferences"][0], revisionId="different-raw-revision", payloadHash="def")]
+        same_financials_new_lineage = build_company_knowledge(
+            "NVDA",
+            yfinance={
+                "info": {"financialCurrency": "USD"},
+                "incomeStatement": [{"metric": "Total Revenue", "values": {"2025-12-31": 100}}],
+            },
+            sec_filing={"provider": "SEC EDGAR", "facts": sec_facts},
+            source_references=revised_lineage,
+        )
+        self.assertNotEqual(knowledge["factRevision"], same_financials_new_lineage["factRevision"])
+        self.assertEqual(knowledge["materialRevision"], same_financials_new_lineage["materialRevision"])
+
+        rebuilt = company_knowledge_by_symbol({
+            "secFilings": {"NVDA": {"provider": "SEC EDGAR", "facts": sec_facts}},
+            "externalDataLineage": {"sec.company_facts:NVDA": report["sourceReferences"][0]},
+        }, ["NVDA"])
+        self.assertEqual(
+            "immutable-sec-revision",
+            rebuilt["NVDA"]["financials"]["interim"][0]["reportContract"]["sourceReferences"][0]["revisionId"],
         )
 
     def test_valid_paired_vendor_ratio_survives_partial_official_override(self):

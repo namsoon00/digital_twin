@@ -12,6 +12,7 @@ from typing import Mapping
 
 
 FINANCIAL_REPORTING_VERSION = "financial-reporting-v2"
+FINANCIAL_REPORT_CONTRACT_VERSION = "financial-report-observation-v1"
 GROWTH_FIELDS = {
     "revenueGrowthPct": "revenue",
     "operatingIncomeGrowthPct": "operatingIncome",
@@ -64,6 +65,99 @@ def reporting_period_end(value: object):
 def financial_period_sort_key(value: object):
     parsed = reporting_period_end(value)
     return (parsed.toordinal() if parsed else 0, str(value or ""))
+
+
+def _source_reference_rows(values):
+    fields = (
+        "contractVersion", "datasetId", "providerId", "subjectKey", "revisionId",
+        "providerRevision", "payloadHash", "sourceSchemaVersion", "sourceAsOf",
+        "fetchedAt", "availability", "freshnessState",
+    )
+    result = []
+    seen = set()
+    for value in values or []:
+        if not isinstance(value, Mapping):
+            continue
+        row = {field: value.get(field) for field in fields if value.get(field) not in (None, "")}
+        identity = (str(row.get("datasetId") or ""), str(row.get("revisionId") or ""))
+        if not identity[0] or identity in seen:
+            continue
+        seen.add(identity)
+        result.append(row)
+    return sorted(result, key=lambda row: (str(row.get("datasetId") or ""), str(row.get("revisionId") or "")))
+
+
+def bind_financial_report_contract(row: Mapping, source_references=()):
+    """Bind a normalized financial period to exact immutable source revisions.
+
+    This contract describes the report observation only. It does not make a
+    valuation or investment claim, and an absent provider timestamp remains
+    absent rather than being replaced with the collection clock.
+    """
+    result = dict(row or {})
+    metric_sources = [
+        dict(value)
+        for value in (result.get("metricProvenance") or {}).values()
+        if isinstance(value, Mapping)
+    ]
+    provider = str(result.get("provider") or next((item.get("provider") for item in metric_sources if item.get("provider")), ""))
+    provider_key = provider.lower()
+    dataset_ids = (
+        {"opendart.company_facts"} if "dart" in provider_key else
+        {"sec.company_facts"} if "sec" in provider_key else
+        {"yfinance.fundamental"} if "yfinance" in provider_key else set()
+    )
+    references = _source_reference_rows([
+        item for item in source_references or []
+        if not dataset_ids or str(item.get("datasetId") or "") in dataset_ids
+    ])
+    starts = [reporting_period_end(item.get("periodStart") or item.get("start")) for item in metric_sources]
+    starts = [item for item in starts if item]
+    end = reporting_period_end(result.get("periodEnd") or result.get("period"))
+    filing_ids = sorted({
+        str(item.get("receiptNo") or item.get("accessionNumber") or "").strip()
+        for item in metric_sources
+        if str(item.get("receiptNo") or item.get("accessionNumber") or "").strip()
+    })
+    published = sorted({
+        str(item.get("publishedAt") or item.get("filed") or "").strip()
+        for item in metric_sources
+        if str(item.get("publishedAt") or item.get("filed") or "").strip()
+    })
+    currencies = sorted({str(item.get("currency") or "").strip() for item in metric_sources if str(item.get("currency") or "").strip()})
+    scopes = sorted({str(item.get("scope") or "").strip() for item in metric_sources if str(item.get("scope") or "").strip()})
+    duration_bases = sorted({str(item.get("durationBasis") or "").strip() for item in metric_sources if str(item.get("durationBasis") or "").strip()})
+    fiscal_years = sorted({str(item.get("fiscalYear") or "").strip() for item in metric_sources if str(item.get("fiscalYear") or "").strip()})
+    accounting_standards = sorted({str(item.get("accountingStandard") or "").strip() for item in metric_sources if str(item.get("accountingStandard") or "").strip()})
+    material = {
+        "contractVersion": FINANCIAL_REPORT_CONTRACT_VERSION,
+        "provider": provider,
+        "periodStart": min(starts).isoformat() if starts else "",
+        "periodEnd": end.isoformat() if end else "",
+        "frequency": str(result.get("frequency") or ""),
+        "durationBases": duration_bases,
+        "scope": scopes,
+        "currencies": currencies,
+        "fiscalYears": fiscal_years,
+        "accountingStandards": accounting_standards,
+        "publishedAt": published[-1] if published else "",
+        "filingIds": filing_ids,
+        "sourceReferences": references,
+        "revisionState": "immutable-source-bound" if references else "provider-row-only",
+        "correctionState": "not-indicated",
+    }
+    fingerprint_input = {
+        **material,
+        "reportedValues": {
+            key: value for key, value in result.items()
+            if key not in {"metricProvenance", "comparisonEvidence", "qualityIssues", "derivedMetricEvidence", "reportContract"}
+        },
+    }
+    material["observationId"] = hashlib.sha256(
+        json.dumps(fingerprint_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()[:24]
+    result["reportContract"] = material
+    return result
 
 
 def dart_reporting_date(year: object, code: object, *, prior: int = 0, balance: bool = False):
@@ -220,6 +314,9 @@ def compact_financial_evidence(company: Mapping):
     material = {"version": current.get("financialReportingVersion") or "legacy-unverified",
                 "period": current.get("period"), "comparisons": comparisons,
                 "issues": list(current.get("qualityIssues") or [])[:6]}
+    report_contract = current.get("reportContract") if isinstance(current.get("reportContract"), Mapping) else {}
+    if report_contract:
+        material["report"] = dict(report_contract)
     ratios = current.get("derivedMetricEvidence") or {}
     material["ratios"] = [dict(ratios[key]) for key in ("freeCashFlowMarginPct", "cashConversionPct", "operatingMarginPct") if key in ratios]
     material["earningsQuality"] = {

@@ -18,7 +18,7 @@ from digital_twin.modules.portfolio.contracts import normalize_dividend_yield
 from digital_twin.modules.news_intelligence.domain.financial_reporting import (
     FINANCIAL_REPORTING_VERSION, GROWTH_FIELDS, current_financial_state,
     dart_reporting_date, financial_comparison, financial_period_sort_key,
-    reporting_period_end, compact_financial_evidence,
+    reporting_period_end, compact_financial_evidence, bind_financial_report_contract,
 )
 
 
@@ -332,6 +332,9 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
                         "currency": row.get("currency") or "", "scope": basis.get("scope") or row.get("fs_div") or "unspecified",
                         "metric": row.get("account_id") or row.get("account_nm"), "amountField": amount_field,
                         "reportCode": code, "receiptNo": receipt,
+                        "fiscalYear": str(year or ""),
+                        "accountingStandard": "K-IFRS" if str(row.get("account_id") or "").startswith("ifrs") else "",
+                        "publishedAt": str(basis.get("publishedAt") or basis.get("receiptDate") or ""),
                         "sourceUrl": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + receipt if receipt else "",
                         "durationBasis": "instant" if balance else "quarterly" if interim and income else "year-to-date" if interim else "annual",
                     }
@@ -524,8 +527,12 @@ def _sec_fact_periods(
                 "filed": _clean(value.get("filed")),
                 "form": form,
                 "fiscalPeriod": fiscal_period,
+                "fiscalYear": _clean(value.get("fy")),
                 "frame": _clean(value.get("frame")),
                 "accessionNumber": _clean(value.get("accessionNumber")),
+                "periodStart": _clean(value.get("start")),
+                "publishedAt": _clean(value.get("filed")),
+                "accountingStandard": "US-GAAP",
                 "currency": _clean(value.get("unit")),
                 "scope": "official-filing",
                 "official": True,
@@ -689,6 +696,7 @@ def build_company_knowledge(
     yfinance: Mapping[str, object] = None,
     sec_filing: Mapping[str, object] = None,
     dart_disclosure: Mapping[str, object] = None,
+    source_references=(),
 ) -> Dict[str, object]:
     symbol = _clean(symbol).upper()
     overview = dict(overview or {}) if isinstance(overview, Mapping) else {}
@@ -719,6 +727,9 @@ def build_company_knowledge(
     annual = enrich_financial_periods(annual, info)
     quarterly = enrich_financial_periods(quarterly, info)
     interim = enrich_financial_periods(interim)
+    annual = [bind_financial_report_contract(row, source_references) for row in annual]
+    quarterly = [bind_financial_report_contract(row, source_references) for row in quarterly]
+    interim = [bind_financial_report_contract(row, source_references) for row in interim]
     executives = _compact_executives(yfinance, dart_disclosure)
     company = dart_disclosure.get("company") if isinstance(dart_disclosure.get("company"), Mapping) else {}
     company_name = _clean(
@@ -824,6 +835,7 @@ def build_company_knowledge(
             "dividendYieldSourceUnit": dividend_source_unit,
         } if dividend_yield is not None else {},
         "provenance": sources,
+        "sourceReferences": [dict(item) for item in source_references if isinstance(item, Mapping)],
         "coverage": {
             **coverage_fields,
             "officialCoverage": official_coverage,
@@ -862,6 +874,26 @@ def _material_revision_payload(payload: Mapping[str, object]) -> Dict[str, objec
     """Return the normalized company facts used by material-change routing."""
 
     result = _revision_payload(payload)
+    # Exact raw-revision lineage belongs in factRevision and audit views. A
+    # vendor can revise unrelated fields in the same payload without changing
+    # the normalized statement, so lineage-only changes must not schedule a
+    # fresh investment reasoning turn.
+    result.pop("sourceReferences", None)
+    financials = result.get("financials") if isinstance(result.get("financials"), Mapping) else {}
+    result["financials"] = {
+        frequency: [
+            {
+                **dict(item),
+                **({"reportContract": {
+                    key: value for key, value in item["reportContract"].items()
+                    if key not in {"sourceReferences", "observationId", "revisionState"}
+                }} if isinstance(item, Mapping) and isinstance(item.get("reportContract"), Mapping) else {}),
+            }
+            for item in rows if isinstance(item, Mapping)
+        ]
+        for frequency, rows in financials.items()
+        if isinstance(rows, list)
+    }
     profile = dict(result.get("profile") or {}) if isinstance(result.get("profile"), Mapping) else {}
     # Market capitalization follows the quote and is already represented by
     # MarketWorld. It must not create a second company-fact reasoning turn.
@@ -1018,6 +1050,16 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
             if _clean(item.get("asOf")) >= _clean(previous.get("asOf")):
                 provenance_by_key[key] = dict(item)
     result["provenance"] = list(provenance_by_key.values())
+    source_references = {}
+    for row in valid:
+        for item in row.get("sourceReferences", []) if isinstance(row.get("sourceReferences"), list) else []:
+            if not isinstance(item, Mapping):
+                continue
+            key = (_clean(item.get("datasetId")), _clean(item.get("revisionId")))
+            if key[0] and key[1]:
+                source_references[key] = dict(item)
+    if source_references:
+        result["sourceReferences"] = [source_references[key] for key in sorted(source_references)]
 
     financials = result.get("financials") if isinstance(result.get("financials"), Mapping) else {}
     executives = (result.get("governance") or {}).get("executives") if isinstance(result.get("governance"), Mapping) else []
@@ -1070,12 +1112,23 @@ def company_knowledge_by_symbol(
         symbol = _clean(raw_symbol).upper()
         if not symbol:
             continue
+        lineage = source.get("externalDataLineage") if isinstance(source.get("externalDataLineage"), Mapping) else {}
+        financial_references = [
+            dict(item) for item in lineage.values()
+            if isinstance(item, Mapping)
+            and _clean(item.get("subjectKey")).upper() == symbol
+            and _clean(item.get("datasetId")) in {
+                "opendart.company_facts", "sec.company_facts",
+                "yfinance.fundamental", "yfinance.analyst",
+            }
+        ]
         payload = build_company_knowledge(
             symbol,
             overview=(source.get("companyOverviews") or {}).get(symbol, {}) if isinstance(source.get("companyOverviews"), Mapping) else {},
             yfinance=(source.get("yfinanceData") or {}).get(symbol, {}) if isinstance(source.get("yfinanceData"), Mapping) else {},
             sec_filing=(source.get("secFilings") or {}).get(symbol, {}) if isinstance(source.get("secFilings"), Mapping) else {},
             dart_disclosure=(source.get("dartDisclosures") or {}).get(symbol, {}) if isinstance(source.get("dartDisclosures"), Mapping) else {},
+            source_references=financial_references,
         )
         if payload:
             result[symbol] = payload
@@ -1119,7 +1172,7 @@ def company_prompt_context(
     financial_fields = (
         "period",
         "periodEnd", "frequency", "comparisonBasis", "provider", "officialSource",
-        "metricProvenance", "comparisonEvidence", "derivedMetricEvidence", "qualityIssues", "financialReportingVersion",
+        "metricProvenance", "comparisonEvidence", "derivedMetricEvidence", "qualityIssues", "financialReportingVersion", "reportContract",
         "revenue",
         "revenueGrowthPct",
         "grossProfit",

@@ -167,6 +167,7 @@ class ValuationContractTests(unittest.TestCase):
                 "base": 1000,
                 "high": 1150,
                 "analystCount": 18,
+                "sourceReferences": [{"datasetId": "yfinance.analyst", "revisionId": "consensus-r1"}],
             }
         ])
 
@@ -175,6 +176,14 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(1150, scenario["high"])
         self.assertEqual("reported-consensus-range", scenario["method"])
         self.assertTrue(scenario["scenarioComplete"])
+        self.assertEqual("consensus-r1", scenario["sourceReferences"][0]["revisionId"])
+        point_range = earnings_scenario([
+            {"observationId": "vendor:a", "provider": "a", "period": "fy1", "base": 900},
+            {"observationId": "vendor:b", "provider": "b", "period": "fy1", "base": 1100},
+        ])
+        self.assertEqual("observed-point-range", point_range["method"])
+        self.assertEqual("not-provided", point_range["analystCountState"])
+        self.assertNotIn("analystCount", point_range)
 
     def test_target_multiple_band_requires_historical_or_peer_evidence(self):
         observations = [
@@ -220,6 +229,8 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(1200, observations[0]["base"])
         self.assertEqual("official", observations[0]["sourceType"])
         self.assertEqual("companyKnowledge.netIncome/sharesOutstanding", observations[0]["source"])
+        self.assertNotIn("analystCount", observations[0])
+        self.assertNotIn("revision30dPct", observations[0])
         self._assert_dividend_yield_requires_an_explicit_and_valid_unit()
         self._assert_company_knowledge_preserves_canonical_dividend_yield_units()
 

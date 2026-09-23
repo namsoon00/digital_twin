@@ -287,7 +287,14 @@ def _fundamental_context(
             overview = overviews.get(source_symbol) if isinstance(overviews.get(source_symbol), dict) else {}
             report = earnings.get(source_symbol) if isinstance(earnings.get(source_symbol), dict) else {}
             company = companies.get(source_symbol) if isinstance(companies.get(source_symbol), dict) else {}
-    eps_observations = collect_earnings_observations(overview, report, company)
+    lineage = external_signals.get("externalDataLineage") if isinstance(external_signals.get("externalDataLineage"), dict) else {}
+    source_references = [
+        dict(item) for item in lineage.values()
+        if isinstance(item, dict) and str(item.get("subjectKey") or "").upper().strip() == source_symbol
+    ]
+    eps_observations = collect_earnings_observations(
+        overview, report, company, source_references=source_references,
+    )
     eps = earnings_scenario(eps_observations)
     multiple_observations = collect_multiple_observations(overview, report, company)
     provider = str(overview.get("provider") or report.get("provider") or "")

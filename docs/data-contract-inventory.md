@@ -101,6 +101,19 @@ evidence만 reasoning snapshot/ABox 후보 → AI와 상세 화면의 provenance
 evidence → issuer/listing identity로 대상 확인 → reasoning source snapshot → AI와
 상세 화면. `yfinance.price`는 가격 보조 원천이며 SEC 공식 재무의 대체물이 아니다.
 
+### Financial reports and consensus
+
+`opendart.company_facts`, `sec.company_facts`, `yfinance.fundamental`의 재무 기간은
+`financial-report-observation-v1`로 정규화한다. 보고기간, annual/quarterly/YTD,
+연결 범위, 통화, 회계 기준, 공표 시각, 신고 ID와 exact source revision을 함께
+보존한다. 재무 보고서에는 `yfinance.analyst` revision을 붙이지 않는다.
+
+`yfinance.analyst`의 EPS 전망은 별도 consensus observation이다. 목표 기간,
+관측 시각, 표본 제공 여부, 상하단, 수정값과 exact analyst revision을 보존한다.
+미제공 필드는 0으로 채우지 않고, 음수 EPS는 관측값으로 보존하되 양수 PER
+가치평가에는 사용할 수 없다. 동일 수치라도 기간·표본·revision이 다르면 다른
+원천 관측이며, 실제 투자 추론 재실행 여부는 정규화된 material change가 결정한다.
+
 ## Known Gaps
 
 - 실제 운영 데이터셋별 row count, 보존 기간, 최근 성공 시각은 로컬 DB 상태라 이

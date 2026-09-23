@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
+from digital_twin.modules.market_data.contracts import canonical_payload_hash
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.market_data.domain.events import external_provider_health_changed_event
 from ..mysql_operational_connection import MySQLOperationalConnection
@@ -34,19 +35,7 @@ def parse_iso(value: object):
 
 
 def payload_hash(payload: Dict[str, object]) -> str:
-    def stable(value: object):
-        if isinstance(value, dict):
-            return {
-                str(key): stable(item)
-                for key, item in value.items()
-                if str(key) not in {"fetchedAt", "collectedAt", "checkedAt", "cryptoLastAttemptAt"}
-            }
-        if isinstance(value, list):
-            return [stable(item) for item in value]
-        return value
-
-    raw = json.dumps(stable(payload if isinstance(payload, dict) else {}), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return canonical_payload_hash(payload)
 
 
 EMPTY_DOCUMENT_HASH = hashlib.sha256(b"").hexdigest()
@@ -594,6 +583,18 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             ).fetchone() or {}
         return self._fact_row(row)
 
+    def fact_revision(self, revision_id: str) -> Dict[str, object]:
+        """Read one immutable source observation by its internal revision ID."""
+        revision = str(revision_id or "").strip()
+        if not revision:
+            return {}
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM external_fact_revision WHERE revision_id = %s LIMIT 1",
+                (revision,),
+            ).fetchone() or {}
+        return self._fact_row(row)
+
     def official_document_fact(self, dataset_id: str, subject_key: str, source_revision: str = "") -> Dict[str, object]:
         """Read the event's document, retaining recovery provenance across restarts."""
         if dataset_id not in RETRYABLE_DOCUMENT_DATASETS:
@@ -643,25 +644,41 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         content_hash = payload_hash(payload)
         fetched = parse_iso(fetched_at) or utc_now()
         expires_at = iso(fetched + timedelta(seconds=max(10, int(freshness_seconds or 60))))
+        observation_quality = dict(quality or {"dataUsable": True, "migration": "legacy-external-signals"})
+        observation = SourceObservation(
+            dataset_id=str(dataset_id or ""),
+            provider_id=str(provider_id or ""),
+            subject_key=str(subject_key or "global"),
+            source_revision=str(source_revision or content_hash),
+            source_as_of=str(source_as_of or ""),
+            fetched_at=iso(fetched),
+            payload=dict(payload or {}),
+            quality=observation_quality,
+        )
+        source_ref = observation.source_reference()
         with self.transaction() as connection:
             cursor = connection.execute(
                 """
                 INSERT IGNORE INTO external_fact_current (
-                    dataset_id, subject_key, provider_id, source_revision, payload_hash,
-                    source_as_of, fetched_at, expires_at, payload_json, quality_json, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    dataset_id, subject_key, provider_id, revision_id, source_revision, payload_hash,
+                    source_schema_version, availability, source_as_of, fetched_at, expires_at,
+                    payload_json, quality_json, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     str(dataset_id or "")[:191],
                     str(subject_key or "global")[:191],
                     str(provider_id or "")[:96],
+                    source_ref.revision_id,
                     str(source_revision or content_hash)[:191],
                     content_hash,
+                    source_ref.source_schema_version[:96],
+                    source_ref.availability[:32],
                     str(source_as_of or "")[:80],
                     iso(fetched),
                     expires_at,
                     json_dumps(payload),
-                    json_dumps(quality or {"dataUsable": True, "migration": "legacy-external-signals"}),
+                    json_dumps(observation_quality),
                     stamp,
                 ),
             )
@@ -705,29 +722,44 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         observation: SourceObservation,
         next_due_at: str,
         event: DomainEvent = None,
+        events: Iterable[DomainEvent] = None,
     ) -> Dict[str, object]:
         stamp = iso(utc_now())
-        content_hash = payload_hash(observation.payload)
+        source_ref = observation.source_reference(descriptor.source_schema_version)
+        content_hash = source_ref.payload_hash
         expires_at = iso(utc_now() + timedelta(seconds=descriptor.resolved_freshness_seconds(self.runtime_settings)))
 
         def mutation(connection):
             previous = connection.execute(
                 """
-                SELECT payload_hash, source_revision FROM external_fact_current
+                SELECT revision_id, payload_hash, source_revision, source_as_of FROM external_fact_current
                 WHERE dataset_id = %s AND subject_key = %s
                 FOR UPDATE
                 """,
                 (observation.dataset_id, observation.subject_key),
             ).fetchone() or {}
-            changed = str(previous.get("payload_hash") or "") != content_hash
+            previous_revision_id = str(previous.get("revision_id") or "")
+            if previous and not previous_revision_id:
+                # Additive migration: adopting the new identity must not turn
+                # an unchanged legacy current row into a new investment fact.
+                changed = not (
+                    str(previous.get("payload_hash") or "") == content_hash
+                    and str(previous.get("source_revision") or "") == str(observation.source_revision or content_hash)[:191]
+                    and str(previous.get("source_as_of") or "") == str(observation.source_as_of or "")[:80]
+                )
+            else:
+                changed = previous_revision_id != source_ref.revision_id
             connection.execute(
                 """
                 INSERT INTO external_fact_current (
-                    dataset_id, subject_key, provider_id, source_revision, payload_hash,
-                    source_as_of, fetched_at, expires_at, payload_json, quality_json, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    dataset_id, subject_key, provider_id, revision_id, source_revision, payload_hash,
+                    source_schema_version, availability, source_as_of, fetched_at, expires_at,
+                    payload_json, quality_json, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE provider_id = VALUES(provider_id),
+                    revision_id = VALUES(revision_id),
                     source_revision = VALUES(source_revision), payload_hash = VALUES(payload_hash),
+                    source_schema_version = VALUES(source_schema_version), availability = VALUES(availability),
                     source_as_of = VALUES(source_as_of), fetched_at = VALUES(fetched_at),
                     expires_at = VALUES(expires_at), payload_json = VALUES(payload_json),
                     quality_json = VALUES(quality_json), updated_at = VALUES(updated_at)
@@ -736,8 +768,11 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                     observation.dataset_id,
                     observation.subject_key,
                     observation.provider_id,
+                    source_ref.revision_id,
                     str(observation.source_revision or content_hash)[:191],
                     content_hash,
+                    source_ref.source_schema_version[:96],
+                    source_ref.availability[:32],
                     str(observation.source_as_of or "")[:80],
                     observation.fetched_at,
                     expires_at,
@@ -747,16 +782,16 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 ),
             )
             revision_inserted = False
-            if changed and descriptor.revision_mode != "none":
-                revision_id = hashlib.sha256(
-                    (observation.dataset_id + "\n" + observation.subject_key + "\n" + str(observation.source_revision or content_hash)).encode("utf-8")
-                ).hexdigest()
+            retained_events = list(events or ([event] if event else []))
+            if changed and (descriptor.revision_mode != "none" or retained_events):
+                revision_id = source_ref.revision_id
                 cursor = connection.execute(
                     """
                     INSERT IGNORE INTO external_fact_revision (
                         revision_id, dataset_id, subject_key, provider_id, source_revision,
-                        payload_hash, source_as_of, fetched_at, payload_json, quality_json, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        payload_hash, source_schema_version, availability, source_as_of, fetched_at,
+                        payload_json, quality_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         revision_id,
@@ -765,6 +800,8 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                         observation.provider_id,
                         str(observation.source_revision or content_hash)[:191],
                         content_hash,
+                        source_ref.source_schema_version[:96],
+                        source_ref.availability[:32],
                         str(observation.source_as_of or "")[:80],
                         observation.fetched_at,
                         json_dumps(observation.payload),
@@ -773,8 +810,9 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                     ),
                 )
                 revision_inserted = bool(cursor.rowcount)
-            if changed and event:
-                insert_domain_event_with_connection(connection, event)
+            if changed:
+                for recorded_event in retained_events:
+                    insert_domain_event_with_connection(connection, recorded_event)
             completed_once = descriptor.completion_mode == "once"
             connection.execute(
                 """
@@ -797,7 +835,13 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                     job.lease_owner,
                 ),
             )
-            return {"changed": changed, "revisionInserted": revision_inserted, "payloadHash": content_hash}
+            return {
+                "changed": changed,
+                "revisionInserted": revision_inserted,
+                "revisionId": source_ref.revision_id,
+                "payloadHash": content_hash,
+                "availability": source_ref.availability,
+            }
 
         return dict(self.transaction_with_deadlock_retry("external-data-complete-observation", mutation) or {})
 
@@ -1222,8 +1266,11 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             "datasetId": str(row.get("dataset_id") or ""),
             "subjectKey": str(row.get("subject_key") or ""),
             "providerId": str(row.get("provider_id") or ""),
+            "revisionId": str(row.get("revision_id") or ""),
             "sourceRevision": str(row.get("source_revision") or ""),
             "payloadHash": str(row.get("payload_hash") or ""),
+            "sourceSchemaVersion": str(row.get("source_schema_version") or ""),
+            "availability": str(row.get("availability") or "unknown"),
             "sourceAsOf": str(row.get("source_as_of") or ""),
             "fetchedAt": str(row.get("fetched_at") or ""),
             "expiresAt": expires_at,

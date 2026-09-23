@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
+from digital_twin.modules.market_data.domain.external_data_contracts import canonical_payload_hash
+
 
 def number(value: object):
     try:
@@ -38,8 +40,11 @@ def changed_fields(previous: Dict[str, object], current: Dict[str, object], limi
 
 
 def numeric_pairs(previous: Dict[str, object], current: Dict[str, object]) -> Iterable[Tuple[str, float, float]]:
-    before = flattened_values(previous)
-    after = flattened_values(current)
+    # Market payloads are bounded, but relevant quote fields can sort after
+    # compatibility metadata. The display-oriented 120-field summary must not
+    # decide whether a market movement is material.
+    before = flattened_values(previous, limit=2000)
+    after = flattened_values(current, limit=2000)
     for key in sorted(set(before).intersection(after)):
         left = number(before.get(key))
         right = number(after.get(key))
@@ -91,7 +96,10 @@ class ExternalFactTransitionService:
         if not previous_fact:
             return FactTransition(True, False, "bootstrap", [], "initial source baseline")
         fields = changed_fields(previous, current_payload)
-        changed = bool(fields) or previous_revision != str(source_revision or "")
+        changed = (
+            canonical_payload_hash(previous) != canonical_payload_hash(current_payload)
+            or previous_revision != str(source_revision or "")
+        )
         if not changed:
             return FactTransition(False, False, "unchanged", [], "same source revision")
         if dataset_id in {"official.bls-release", "official.fomc-release", "official.bok-release", "official.bls-statistics"}:

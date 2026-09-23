@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.application.external_data.contracts import CollectionPartition, ExternalDatasetAdapter, ExternalSubject, FollowupCollectionRequest, SourceObservation
+from digital_twin.modules.market_data.domain.external_dataset_catalog import external_dataset_semantics
 
 
 class ExternalDatasetRegistry:
@@ -8,6 +9,7 @@ class ExternalDatasetRegistry:
 
     def __init__(self, adapters: Iterable[ExternalDatasetAdapter] = None):
         self._adapters: Dict[str, ExternalDatasetAdapter] = {}
+        self._semantics = {}
         for adapter in adapters or []:
             self.register(adapter)
 
@@ -18,6 +20,12 @@ class ExternalDatasetRegistry:
         if dataset_id in self._adapters:
             raise ValueError("Duplicate external dataset: " + dataset_id)
         self._adapters[dataset_id] = adapter
+        try:
+            self._semantics[dataset_id] = external_dataset_semantics(dataset_id)
+        except KeyError:
+            # Test and extension registries may use local fixture datasets. They
+            # remain transport-only until explicit semantics are registered.
+            self._semantics[dataset_id] = None
 
     def adapter(self, dataset_id: str) -> ExternalDatasetAdapter:
         adapter = self._adapters.get(str(dataset_id or ""))
@@ -90,8 +98,11 @@ class ExternalDatasetRegistry:
 
     def descriptors(self, settings: Dict[str, object] = None) -> List[Dict[str, object]]:
         configured = dict(settings or {})
-        return [
-            {
+        rows = []
+        for adapter in self.adapters():
+            descriptor = adapter.descriptor
+            semantics = self._semantics.get(descriptor.dataset_id)
+            row = {
                 "datasetId": adapter.descriptor.dataset_id,
                 "providerId": adapter.descriptor.provider_id,
                 "capability": adapter.descriptor.capability,
@@ -103,6 +114,27 @@ class ExternalDatasetRegistry:
                 "cadenceSeconds": adapter.descriptor.resolved_cadence_seconds(configured),
                 "freshnessSeconds": adapter.descriptor.resolved_freshness_seconds(configured),
                 "maxPartitions": adapter.descriptor.resolved_max_partitions(configured),
+                "revisionMode": descriptor.revision_mode,
+                "sourceSchemaVersion": descriptor.source_schema_version or (
+                    semantics.source_schema_version if semantics else "external-source-legacy-v1"
+                ),
             }
-            for adapter in self.adapters()
-        ]
+            if semantics:
+                row.update(semantics.to_dict())
+            else:
+                row.update({
+                    "categoryIds": [],
+                    "outputContract": "unregistered",
+                    "purposeIds": [],
+                    "supportedMarkets": [],
+                    "assetKinds": [],
+                    "evidenceBasis": "reported",
+                    "normalizerId": "unregistered",
+                    "normalizerVersion": "",
+                    "emptyResultSemantics": "unknown",
+                })
+            rows.append(row)
+        return rows
+
+    def semantics(self, dataset_id: str):
+        return self._semantics.get(str(dataset_id or ""))

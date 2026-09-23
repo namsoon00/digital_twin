@@ -21,12 +21,22 @@ _EXPORTS['MarketDataProvider'] = ('digital_twin.modules.market_data.domain.repos
 
 _EXPORTS['MarketDataProviderFactory'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketDataProviderFactory')
 
+_EXPORTS.update({
+    'DatasetSemantics': ('digital_twin.modules.market_data.domain.external_data_contracts', 'DatasetSemantics'),
+    'SourceObservation': ('digital_twin.modules.market_data.domain.external_data_contracts', 'SourceObservation'),
+    'SourceReference': ('digital_twin.modules.market_data.domain.external_data_contracts', 'SourceReference'),
+    'canonical_payload_hash': ('digital_twin.modules.market_data.domain.external_data_contracts', 'canonical_payload_hash'),
+    'external_dataset_catalog': ('digital_twin.modules.market_data.domain.external_dataset_catalog', 'external_dataset_catalog'),
+    'external_dataset_semantics': ('digital_twin.modules.market_data.domain.external_dataset_catalog', 'external_dataset_semantics'),
+})
+
 
 _EXPORTS.update({
     'CAPABILITY_LABELS': ('digital_twin.modules.market_data.domain.market_evidence_profiles', 'CAPABILITY_LABELS'),
     'COMPLETION_MODE_VERIFIED_LATER_BOUNDARY': ('digital_twin.modules.market_data.domain.market_observation_reasoning', 'COMPLETION_MODE_VERIFIED_LATER_BOUNDARY'),
     'CRYPTO_TRANSITION_BASELINE_METADATA_KEY': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'CRYPTO_TRANSITION_BASELINE_METADATA_KEY'),
     'EXTERNAL_FACT_CHANGED': ('digital_twin.modules.market_data.domain.event_types', 'EXTERNAL_FACT_CHANGED'),
+    'EXTERNAL_OBSERVATION_RECORDED': ('digital_twin.modules.market_data.domain.event_types', 'EXTERNAL_OBSERVATION_RECORDED'),
     'INVESTOR_PARTY_FIELDS': ('digital_twin.modules.market_data.domain.investor_flow_psychology', 'INVESTOR_PARTY_FIELDS'),
     'MARKET_OBSERVATION_REASONING_RECEIPT_VERSION': ('digital_twin.modules.market_data.domain.market_observation_reasoning', 'MARKET_OBSERVATION_REASONING_RECEIPT_VERSION'),
     'MARKET_SIGNAL_TRANSITION_RESULTS_KEY': ('digital_twin.modules.market_data.domain.market_signal_transitions', 'MARKET_SIGNAL_TRANSITION_RESULTS_KEY'),
@@ -61,6 +71,7 @@ _EXPORTS.update({
     'evaluate_market_hours': ('digital_twin.modules.market_data.domain.market_hours', 'evaluate_market_hours'),
     'evaluate_notification_data_freshness': ('digital_twin.modules.market_data.domain.data_freshness', 'evaluate_notification_data_freshness'),
     'external_api_source_line': ('digital_twin.modules.market_data.domain.external_api_sources', 'external_api_source_line'),
+    'external_observation_recorded_event': ('digital_twin.modules.market_data.domain.events', 'external_observation_recorded_event'),
     'first_number': ('digital_twin.modules.market_data.domain.market_data', 'first_number'),
     'freshness_from_snapshot_subject': ('digital_twin.modules.market_data.domain.data_freshness', 'freshness_from_snapshot_subject'),
     'freshness_record': ('digital_twin.modules.market_data.domain.data_freshness', 'freshness_record'),

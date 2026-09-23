@@ -9,6 +9,7 @@ from digital_twin.modules.reasoning.infrastructure import (
 )
 import copy
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
@@ -1452,6 +1453,135 @@ class MySQLEventLog(MySQLOperationalConnection):
                 (EXTERNAL_FACT_CHANGED, after_time, after_time, after_id, bounded),
             ).fetchall()
         return [domain_event_from_row(row) for row in rows]
+
+    def claim_external_fact_projection_events(
+        self,
+        consumer_id: str,
+        projector_version: str,
+        worker_id: str,
+        limit: int = 100,
+        lease_seconds: int = 120,
+    ) -> List[Dict[str, object]]:
+        """Lease durable external-fact deliveries without a timestamp cursor."""
+
+        bounded = max(1, min(500, int(limit or 100)))
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        lease_until = (now + timedelta(seconds=max(15, int(lease_seconds or 120)))).isoformat().replace("+00:00", "Z")
+        owner = str(worker_id or "external-fact-projector")[:191]
+        claimed = []
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT delivery.event_id, events.name, events.aggregate_id,
+                       events.occurred_at, events.correlation_id,
+                       events.payload_json, events.event_json
+                FROM external_fact_projection_deliveries delivery
+                INNER JOIN domain_events events ON events.event_id = delivery.event_id
+                WHERE delivery.consumer_id = %s
+                  AND delivery.projector_version = %s
+                  AND (
+                    delivery.delivery_status IN ('pending', 'failed')
+                    OR (
+                      delivery.delivery_status = 'processing'
+                      AND delivery.lease_until < %s
+                    )
+                  )
+                ORDER BY delivery.created_at, delivery.event_id
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+                """,
+                (str(consumer_id or "")[:96], str(projector_version or "")[:96], stamp, bounded),
+            ).fetchall()
+            for row in rows:
+                lease_token = uuid.uuid4().hex
+                cursor = connection.execute(
+                    """
+                    UPDATE external_fact_projection_deliveries
+                    SET delivery_status = 'processing', lease_owner = %s,
+                        lease_token = %s, lease_until = %s,
+                        attempt_count = attempt_count + 1, updated_at = %s
+                    WHERE consumer_id = %s AND projector_version = %s
+                      AND event_id = %s
+                      AND (
+                        delivery_status IN ('pending', 'failed')
+                        OR (delivery_status = 'processing' AND lease_until < %s)
+                      )
+                    """,
+                    (
+                        owner,
+                        lease_token,
+                        lease_until,
+                        stamp,
+                        str(consumer_id or "")[:96],
+                        str(projector_version or "")[:96],
+                        row.get("event_id"),
+                        stamp,
+                    ),
+                )
+                if int(cursor.rowcount or 0) == 1:
+                    claimed.append({
+                        "event": domain_event_from_row(row),
+                        "leaseToken": lease_token,
+                    })
+        return claimed
+
+    def complete_external_fact_projection_event(
+        self,
+        consumer_id: str,
+        projector_version: str,
+        event_id: str,
+        lease_token: str,
+    ) -> bool:
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE external_fact_projection_deliveries
+                SET delivery_status = 'completed', lease_owner = '', lease_token = '',
+                    lease_until = '', last_error = '', completed_at = %s, updated_at = %s
+                WHERE consumer_id = %s AND projector_version = %s AND event_id = %s
+                  AND delivery_status = 'processing' AND lease_token = %s
+                """,
+                (
+                    stamp,
+                    stamp,
+                    str(consumer_id or "")[:96],
+                    str(projector_version or "")[:96],
+                    str(event_id or "")[:191],
+                    str(lease_token or "")[:64],
+                ),
+            )
+        return int(cursor.rowcount or 0) == 1
+
+    def fail_external_fact_projection_event(
+        self,
+        consumer_id: str,
+        projector_version: str,
+        event_id: str,
+        lease_token: str,
+        error: object,
+    ) -> bool:
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE external_fact_projection_deliveries
+                SET delivery_status = 'failed', lease_owner = '', lease_token = '',
+                    lease_until = '', last_error = %s, updated_at = %s
+                WHERE consumer_id = %s AND projector_version = %s AND event_id = %s
+                  AND delivery_status = 'processing' AND lease_token = %s
+                """,
+                (
+                    str(error or "")[:500],
+                    stamp,
+                    str(consumer_id or "")[:96],
+                    str(projector_version or "")[:96],
+                    str(event_id or "")[:191],
+                    str(lease_token or "")[:64],
+                ),
+            )
+        return int(cursor.rowcount or 0) == 1
 
     def unmaterialized_reasoning_events(self, limit: int = 0) -> List[DomainEvent]:
         """Read only legacy reasoning events missing a mailbox ingress row.

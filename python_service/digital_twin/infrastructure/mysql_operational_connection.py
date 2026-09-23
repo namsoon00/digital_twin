@@ -608,8 +608,11 @@ MYSQL_SCHEMA = [
         dataset_id VARCHAR(191) NOT NULL,
         subject_key VARCHAR(191) NOT NULL,
         provider_id VARCHAR(96) NOT NULL,
+        revision_id VARCHAR(191) NOT NULL DEFAULT '',
         source_revision VARCHAR(191) NOT NULL,
         payload_hash CHAR(64) NOT NULL,
+        source_schema_version VARCHAR(96) NOT NULL DEFAULT 'external-source-legacy-v1',
+        availability VARCHAR(32) NOT NULL DEFAULT 'unknown',
         source_as_of VARCHAR(80) NOT NULL DEFAULT '',
         fetched_at VARCHAR(40) NOT NULL,
         expires_at VARCHAR(40) NOT NULL,
@@ -629,13 +632,35 @@ MYSQL_SCHEMA = [
         provider_id VARCHAR(96) NOT NULL,
         source_revision VARCHAR(191) NOT NULL,
         payload_hash CHAR(64) NOT NULL,
+        source_schema_version VARCHAR(96) NOT NULL DEFAULT 'external-source-legacy-v1',
+        availability VARCHAR(32) NOT NULL DEFAULT 'unknown',
         source_as_of VARCHAR(80) NOT NULL DEFAULT '',
         fetched_at VARCHAR(40) NOT NULL,
         payload_json LONGTEXT NOT NULL,
         quality_json TEXT NOT NULL,
         created_at VARCHAR(40) NOT NULL,
-        UNIQUE KEY uq_external_fact_source_revision (dataset_id, subject_key, source_revision),
+        KEY idx_external_fact_source_revision (dataset_id, subject_key, source_revision),
         KEY idx_external_fact_revision_subject (subject_key, dataset_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS external_fact_projection_deliveries (
+        consumer_id VARCHAR(96) NOT NULL,
+        projector_version VARCHAR(96) NOT NULL,
+        event_id VARCHAR(191) NOT NULL,
+        delivery_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_token VARCHAR(64) NOT NULL DEFAULT '',
+        lease_until VARCHAR(40) NOT NULL DEFAULT '',
+        attempt_count INT NOT NULL DEFAULT 0,
+        last_error VARCHAR(500) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        PRIMARY KEY (consumer_id, projector_version, event_id),
+        KEY idx_external_projection_claim (
+            consumer_id, projector_version, delivery_status, lease_until, created_at
+        )
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

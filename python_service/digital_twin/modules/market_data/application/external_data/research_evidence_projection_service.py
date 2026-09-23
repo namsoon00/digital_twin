@@ -5,6 +5,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.domain.event_types import EXTERNAL_FACT_CHANGED
+from digital_twin.modules.market_data.domain.external_data_contracts import (
+    OFFICIAL_EVIDENCE_CONSUMER_ID,
+    OFFICIAL_EVIDENCE_DATASET_IDS,
+    OFFICIAL_EVIDENCE_PROJECTOR_VERSION,
+)
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
 from digital_twin.modules.news_intelligence.contracts import research_evidence_collected_event
@@ -15,16 +20,11 @@ from digital_twin.modules.news_intelligence.contracts import evidence_materialit
 from digital_twin.modules.decisions.contracts import assess_prompt_evidence, attach_prompt_evidence_admission
 
 
-OFFICIAL_DATASET_IDS = {
-    "opendart.disclosures",
-    "opendart.document",
-    "sec.submissions",
-    "sec.document",
-}
+OFFICIAL_DATASET_IDS = set(OFFICIAL_EVIDENCE_DATASET_IDS)
 OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing"}
 DEFAULT_INITIAL_LOOKBACK_MINUTES = 10
 DEFAULT_MAX_REPLAY_AGE_MINUTES = 180
-CURRENT_FACT_BACKFILL_VERSION = "official-evidence-projection-v3"
+CURRENT_FACT_BACKFILL_VERSION = OFFICIAL_EVIDENCE_PROJECTOR_VERSION
 
 
 def _text(value: object) -> str:
@@ -94,11 +94,29 @@ class ExternalOfficialEvidenceProjectionService:
         if dataset_id not in OFFICIAL_DATASET_IDS:
             return {"status": "ignored", "reason": "non-official-dataset", "writtenCount": 0}
         source_revision = _text(payload.get("sourceRevision"))
+        source_ref = dict(payload.get("sourceRef") or {}) if isinstance(payload.get("sourceRef"), dict) else {}
+        revision_id = _text(source_ref.get("revisionId"))
+        revision_reader = getattr(self.fact_store, "fact_revision", None)
         document_reader = getattr(self.fact_store, "official_document_fact", None)
-        if dataset_id in {"opendart.document", "sec.document"} and callable(document_reader):
+        if revision_id:
+            if not callable(revision_reader):
+                raise RuntimeError("exact external fact reader is unavailable: " + revision_id)
+            row = revision_reader(revision_id)
+        elif dataset_id in {"opendart.document", "sec.document"} and callable(document_reader):
             row = document_reader(dataset_id, subject_key, source_revision)
         else:
             row = self.fact_store.current_fact(dataset_id, subject_key)
+        if revision_id and (
+            not row
+            or _text(row.get("revisionId")) != revision_id
+            or _text(row.get("datasetId")) != dataset_id
+            or _text(row.get("subjectKey")) != subject_key
+            or (
+                _text(source_ref.get("payloadHash"))
+                and _text(row.get("payloadHash")) != _text(source_ref.get("payloadHash"))
+            )
+        ):
+            raise RuntimeError("external fact revision does not match source event: " + revision_id)
         if dataset_id in {"opendart.document", "sec.document"} and source_revision and row and row.get("sourceRevision") != source_revision:
             raise RuntimeError("official document revision does not match source event: " + source_revision)
         if not row:
@@ -351,6 +369,7 @@ class ExternalFactResearchEvidenceReconciler:
         initial_lookback_minutes: int = DEFAULT_INITIAL_LOOKBACK_MINUTES,
         max_replay_age_minutes: int = DEFAULT_MAX_REPLAY_AGE_MINUTES,
         now_provider=None,
+        worker_id: str = "external-official-evidence-projector",
     ):
         self.event_reader = event_reader
         self.projector = projector
@@ -359,6 +378,7 @@ class ExternalFactResearchEvidenceReconciler:
         self.initial_lookback_minutes = max(1, int(initial_lookback_minutes or DEFAULT_INITIAL_LOOKBACK_MINUTES))
         self.max_replay_age_minutes = max(self.initial_lookback_minutes, int(max_replay_age_minutes or DEFAULT_MAX_REPLAY_AGE_MINUTES))
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self.worker_id = _text(worker_id) or "external-official-evidence-projector"
         self.last_result: Dict[str, object] = {}
 
     def status(self) -> Dict[str, object]:
@@ -380,6 +400,7 @@ class ExternalFactResearchEvidenceReconciler:
             "hasMore": bool(state.get("lastHasMore")),
             "currentFactBackfillVersion": _text(state.get("currentFactBackfillVersion")),
             "currentFactBackfillCompleted": bool(state.get("currentFactBackfillCompleted")),
+            "deliveryMode": _text(state.get("deliveryMode") or "timestamp-cursor"),
             "durable": True,
         }
 
@@ -435,8 +456,9 @@ class ExternalFactResearchEvidenceReconciler:
         }
 
     def run_once(self) -> Dict[str, object]:
-        reader = getattr(self.event_reader, "external_fact_events_after", None)
-        if not callable(reader):
+        claim = getattr(self.event_reader, "claim_external_fact_projection_events", None)
+        legacy_reader = getattr(self.event_reader, "external_fact_events_after", None)
+        if not callable(claim) and not callable(legacy_reader):
             return {"status": "unsupported", "processedCount": 0, "projectedCount": 0}
         state = dict(self.cursor_store.load() or {}) if self.cursor_store else {}
         now = self.now_provider()
@@ -454,18 +476,50 @@ class ExternalFactResearchEvidenceReconciler:
             after_at, after_id = replay_floor, ""
         else:
             after_at, after_id = stored_at, _text(state.get("lastEventId"))
-        events = list(reader(
-            after_occurred_at=_timestamp(after_at),
-            after_event_id=after_id,
-            limit=self.batch_size,
-        ) or [])
+        delivery_mode = "leased-membership" if callable(claim) else "timestamp-cursor"
+        if callable(claim):
+            deliveries = list(claim(
+                OFFICIAL_EVIDENCE_CONSUMER_ID,
+                OFFICIAL_EVIDENCE_PROJECTOR_VERSION,
+                self.worker_id,
+                limit=self.batch_size,
+                lease_seconds=120,
+            ) or [])
+        else:
+            deliveries = [{"event": event, "leaseToken": ""} for event in list(legacy_reader(
+                after_occurred_at=_timestamp(after_at),
+                after_event_id=after_id,
+                limit=self.batch_size,
+            ) or [])]
         processed = 0
         projected = 0
         written = 0
         last_at = _timestamp(after_at)
         last_id = after_id
-        for event in events:
-            result = self.projector.project_event(event, allow_alert=True)
+        for delivery in deliveries:
+            event = delivery.get("event")
+            lease_token = _text(delivery.get("leaseToken"))
+            try:
+                result = self.projector.project_event(event, allow_alert=True)
+                if delivery_mode == "leased-membership":
+                    completed = self.event_reader.complete_external_fact_projection_event(
+                        OFFICIAL_EVIDENCE_CONSUMER_ID,
+                        OFFICIAL_EVIDENCE_PROJECTOR_VERSION,
+                        event.event_id,
+                        lease_token,
+                    )
+                    if not completed:
+                        raise RuntimeError("External fact projection lease was lost before completion")
+            except Exception as error:
+                if delivery_mode == "leased-membership":
+                    self.event_reader.fail_external_fact_projection_event(
+                        OFFICIAL_EVIDENCE_CONSUMER_ID,
+                        OFFICIAL_EVIDENCE_PROJECTOR_VERSION,
+                        event.event_id,
+                        lease_token,
+                        error,
+                    )
+                raise
             processed += 1
             projected += int(result.get("status") not in {"ignored", "empty"})
             written += int(result.get("writtenCount") or 0)
@@ -484,7 +538,8 @@ class ExternalFactResearchEvidenceReconciler:
                 "lastAttemptAt": _timestamp(now),
                 "lastSuccessAt": _timestamp(now),
                 "lastError": "",
-                "lastHasMore": len(events) >= self.batch_size,
+                "lastHasMore": len(deliveries) >= self.batch_size,
+                "deliveryMode": delivery_mode,
                 "updatedAt": _timestamp(now),
             }
             self.cursor_store.replace(next_state)
@@ -495,7 +550,8 @@ class ExternalFactResearchEvidenceReconciler:
             "writtenCount": written,
             "cursorOccurredAt": last_at,
             "cursorEventId": last_id,
-            "hasMore": len(events) >= self.batch_size,
+            "hasMore": len(deliveries) >= self.batch_size,
+            "deliveryMode": delivery_mode,
             "currentFactBackfill": backfill,
         }
         return dict(self.last_result)

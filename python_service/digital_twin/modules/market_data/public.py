@@ -33,7 +33,7 @@ _EXPORTS = {'verified_bls_statistics': ('digital_twin.modules.market_data.domain
  'MarketDataCollectionRunner': ('digital_twin.modules.market_data.application.market_data_collection_service',
                                 'MarketDataCollectionRunner'),
  'MonitorRunner': ('digital_twin.modules.market_data.application.monitoring_service', 'MonitorRunner'),
- 'SourceObservation': ('digital_twin.modules.market_data.application.external_data.contracts',
+ 'SourceObservation': ('digital_twin.modules.market_data.domain.external_data_contracts',
                        'SourceObservation'),
  'TemporalFeatureSnapshotService': ('digital_twin.modules.market_data.application.time_series_platform',
                                     'TemporalFeatureSnapshotService'),

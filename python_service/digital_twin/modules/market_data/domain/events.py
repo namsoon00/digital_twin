@@ -1,4 +1,4 @@
-from digital_twin.modules.market_data.domain.event_types import MONITORING_SNAPSHOT_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MARKET_DATA_COLLECTED, EXTERNAL_FACT_CHANGED, EXTERNAL_PROVIDER_HEALTH_CHANGED
+from digital_twin.modules.market_data.domain.event_types import MONITORING_SNAPSHOT_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MARKET_DATA_COLLECTED, EXTERNAL_FACT_CHANGED, EXTERNAL_OBSERVATION_RECORDED, EXTERNAL_PROVIDER_HEALTH_CHANGED
 from dataclasses import asdict, dataclass, field
 from digital_twin.modules.portfolio.contracts import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.modules.reasoning.contracts import compact_snapshot_event_metadata
@@ -27,13 +27,16 @@ def external_fact_changed_event(
     change_type: str,
     changed_fields: Iterable[str] = None,
     reason: str = "",
+    source_reference: Mapping[str, object] = None,
 ) -> DomainEvent:
     dataset = str(dataset_id or "external").strip()
     subject = str(subject_key or "global").strip()
+    source_ref = dict(source_reference or {})
     return DomainEvent(
         name=EXTERNAL_FACT_CHANGED,
         aggregate_id=(dataset + ":" + subject)[:191],
         payload={
+            "eventContract": "external-fact-change-v2" if source_ref else "external-fact-change-v1",
             "datasetId": dataset[:191],
             "subjectKey": subject[:191],
             "providerId": str(provider_id or "")[:96],
@@ -42,8 +45,39 @@ def external_fact_changed_event(
             "changeType": str(change_type or "revision")[:64],
             "changedFields": [str(item or "")[:120] for item in list(changed_fields or [])[:40] if str(item or "")],
             "reason": str(reason or "")[:500],
+            **({"sourceRef": source_ref} if source_ref else {}),
         },
         correlation_id=("external-fact:" + dataset + ":" + subject)[:191],
+    )
+
+
+def external_observation_recorded_event(
+    source_reference: Mapping[str, object],
+    *,
+    category_ids: Iterable[str] = None,
+    output_contract: str = "",
+    change_type: str = "revision",
+) -> DomainEvent:
+    source_ref = dict(source_reference or {})
+    dataset = str(source_ref.get("datasetId") or "external").strip()
+    subject = str(source_ref.get("subjectKey") or "global").strip()
+    return DomainEvent(
+        name=EXTERNAL_OBSERVATION_RECORDED,
+        aggregate_id=(dataset + ":" + subject)[:191],
+        payload={
+            "eventContract": "external-observation-recorded-v1",
+            "datasetId": dataset[:191],
+            "subjectKey": subject[:191],
+            "categoryIds": [
+                str(item or "")[:64]
+                for item in list(category_ids or [])[:12]
+                if str(item or "").strip()
+            ],
+            "outputContract": str(output_contract or "")[:96],
+            "changeType": str(change_type or "revision")[:64],
+            "sourceRef": source_ref,
+        },
+        correlation_id=("external-observation:" + dataset + ":" + subject)[:191],
     )
 
 

@@ -850,6 +850,44 @@ def _compact_market_indices(value: object) -> Dict[str, object]:
     return result
 
 
+def _compact_external_data_lineage(
+    value: object,
+    *,
+    allowed_symbols: Set[str] = None,
+    global_only: bool = False,
+) -> Dict[str, object]:
+    """Retain exact immutable refs while dropping unrelated provider rows."""
+
+    source = value if isinstance(value, Mapping) else {}
+    selected = {}
+    allowed = {str(item or "").upper().strip() for item in allowed_symbols or set() if str(item or "").strip()}
+    for key in sorted(source, key=lambda item: str(item)):
+        item = source.get(key)
+        if not isinstance(item, Mapping):
+            continue
+        subject = str(item.get("subjectKey") or "").upper().strip()
+        is_global = subject in {"", "GLOBAL"}
+        if global_only and not is_global:
+            continue
+        if not global_only and (is_global or (allowed and subject not in allowed)):
+            continue
+        compact = _selected(
+            item,
+            [
+                "datasetId", "subjectKey", "revisionId", "providerRevision",
+                "payloadHash", "sourceSchemaVersion", "sourceAsOf", "fetchedAt",
+                "availability", "freshnessState",
+            ],
+            text_limit=220,
+            depth=1,
+        )
+        if compact:
+            selected[str(key)[:320]] = compact
+        if len(selected) >= 80:
+            break
+    return selected
+
+
 def _compact_global_external_signals_for_ontology(
     external_signals: Mapping[str, object] = None,
 ) -> Dict[str, object]:
@@ -885,6 +923,12 @@ def _compact_global_external_signals_for_ontology(
                 map_limit=60,
                 depth=4,
             )
+    lineage = _compact_external_data_lineage(
+        source.get("externalDataLineage"),
+        global_only=True,
+    )
+    if lineage:
+        result["externalDataLineage"] = lineage
     if source.get("fetchedAt") not in (None, ""):
         result["fetchedAt"] = _text(source.get("fetchedAt"), 120)
     if source.get("cryptoFetchedAt") not in (None, ""):
@@ -926,6 +970,12 @@ def compact_symbol_external_signals_for_ontology(
         company_knowledge[symbol] = merge_company_knowledge_rows(existing, candidate)
     if company_knowledge:
         result["companyKnowledge"] = company_knowledge
+    lineage = _compact_external_data_lineage(
+        source.get("externalDataLineage"),
+        allowed_symbols=allowed_symbols,
+    )
+    if lineage:
+        result["externalDataLineage"] = lineage
     return result
 
 
@@ -943,14 +993,21 @@ def compact_external_signals_for_ontology(
     values from the source payload.
     """
 
-    return {
-        **_compact_global_external_signals_for_ontology(external_signals),
-        **compact_symbol_external_signals_for_ontology(
-            external_signals,
-            target_symbols=target_symbols,
-            settings=settings,
-        ),
-    }
+    result = _compact_global_external_signals_for_ontology(external_signals)
+    symbol_result = compact_symbol_external_signals_for_ontology(
+        external_signals,
+        target_symbols=target_symbols,
+        settings=settings,
+    )
+    global_lineage = result.get("externalDataLineage")
+    symbol_lineage = symbol_result.get("externalDataLineage")
+    result.update(symbol_result)
+    if isinstance(global_lineage, Mapping) or isinstance(symbol_lineage, Mapping):
+        result["externalDataLineage"] = {
+            **dict(global_lineage or {}),
+            **dict(symbol_lineage or {}),
+        }
+    return result
 
 
 def compact_monitor_runtime_metadata_for_ontology(value: object) -> Dict[str, object]:
@@ -1102,7 +1159,15 @@ def frozen_monitor_state_for_reasoning(
         settings=settings,
     )
     if symbol_signals:
-        result.setdefault("externalSignals", {}).update(symbol_signals)
+        external = result.setdefault("externalSignals", {})
+        global_lineage = external.get("externalDataLineage")
+        symbol_lineage = symbol_signals.get("externalDataLineage")
+        external.update(symbol_signals)
+        if isinstance(global_lineage, Mapping) or isinstance(symbol_lineage, Mapping):
+            external["externalDataLineage"] = {
+                **dict(global_lineage or {}),
+                **dict(symbol_lineage or {}),
+            }
     source_metadata = source.get("metadata") if isinstance(source.get("metadata"), Mapping) else {}
     metadata = result.setdefault("metadata", {})
     for key in ("previousMonitorState", "monitorStateHistory"):

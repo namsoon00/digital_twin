@@ -233,6 +233,7 @@ def build_external_data_collection_runner(settings=None) -> ExternalDataCollecti
             batch_size=int(number(configured_settings.get("externalEvidenceProjectionBatchSize")) or 100),
             initial_lookback_minutes=int(number(configured_settings.get("externalEvidenceProjectionInitialLookbackMinutes")) or 10),
             max_replay_age_minutes=int(number(configured_settings.get("externalEvidenceProjectionMaxReplayAgeMinutes")) or 180),
+            worker_id="external-data-" + str(os.getpid()),
         ),
         worker_id="external-data-" + str(os.getpid()),
         document_recovery=OfficialDocumentRecoveryService(

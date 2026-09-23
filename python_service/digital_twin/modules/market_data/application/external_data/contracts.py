@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Protocol
 
+from digital_twin.modules.market_data.domain.external_data_contracts import SourceObservation
+
 
 def bounded_int(value: object, fallback: int, minimum: int, maximum: int) -> int:
     try:
@@ -74,6 +76,7 @@ class DatasetDescriptor:
     materiality_policy: str = "revision"
     partition_strategy: str = "subjects"
     completion_mode: str = "recurring"
+    source_schema_version: str = ""
 
     def enabled(self, settings: Dict[str, object]) -> bool:
         return setting_enabled(settings, self.enabled_setting, True) if self.enabled_setting else True
@@ -160,21 +163,6 @@ class FollowupCollectionRequest:
     subject: ExternalSubject
     watermark: Dict[str, object] = field(default_factory=dict)
     priority: int = 50
-
-
-@dataclass(frozen=True)
-class SourceObservation:
-    dataset_id: str
-    provider_id: str
-    subject_key: str
-    source_revision: str
-    source_as_of: str
-    fetched_at: str
-    payload: Dict[str, object]
-    quality: Dict[str, object] = field(default_factory=dict)
-    watermark: Dict[str, object] = field(default_factory=dict)
-    empty_result: bool = False
-    retain_previous: bool = False
 
 
 class ExternalDatasetAdapter(Protocol):

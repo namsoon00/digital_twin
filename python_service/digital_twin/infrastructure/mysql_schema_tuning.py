@@ -1,8 +1,17 @@
+import json
 import os
 import re
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Sequence
+
+from digital_twin.modules.market_data.domain.external_data_contracts import (
+    SOURCE_SCHEMA_LEGACY_VERSION,
+    canonical_payload_hash,
+    normalized_availability,
+    source_revision_id,
+)
+from digital_twin.modules.market_data.domain.external_dataset_catalog import external_dataset_semantics
 
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
@@ -120,6 +129,13 @@ class MySQLKeyPartitionDefinition:
 
 
 MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "external_fact_revision": (
+        MySQLIndexDefinition(
+            "external_fact_revision",
+            "idx_external_fact_source_revision",
+            "`dataset_id`, `subject_key`, `source_revision`",
+        ),
+    ),
     "account_watchlist_symbols": (
         MySQLIndexDefinition(
             "account_watchlist_symbols",
@@ -623,10 +639,31 @@ MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS: Sequence[MySQLUniqueIndexRetirementD
         "news_article_enrichment_revisions",
         "idx_news_enrichment_subject",
     ),
+    MySQLUniqueIndexRetirementDefinition(
+        "external_fact_revision",
+        "uq_external_fact_source_revision",
+    ),
 )
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "external_fact_current": (
+        MySQLColumnDefinition("external_fact_current", "revision_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition(
+            "external_fact_current",
+            "source_schema_version",
+            "VARCHAR(96) NOT NULL DEFAULT 'external-source-legacy-v1'",
+        ),
+        MySQLColumnDefinition("external_fact_current", "availability", "VARCHAR(32) NOT NULL DEFAULT 'unknown'"),
+    ),
+    "external_fact_revision": (
+        MySQLColumnDefinition(
+            "external_fact_revision",
+            "source_schema_version",
+            "VARCHAR(96) NOT NULL DEFAULT 'external-source-legacy-v1'",
+        ),
+        MySQLColumnDefinition("external_fact_revision", "availability", "VARCHAR(32) NOT NULL DEFAULT 'unknown'"),
+    ),
     "hypothesis_development_cases": (
         MySQLColumnDefinition("hypothesis_development_cases", "next_check_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("hypothesis_development_cases", "last_checked_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
@@ -1408,11 +1445,117 @@ def ensure_mysql_key_partitions(
     return partitioned
 
 
+def backfill_external_fact_revision_identities(connection, batch_size: int = 500) -> int:
+    """Adopt exact source identities without manufacturing change events."""
+
+    total = 0
+    bounded = max(1, min(2000, int(batch_size or 500)))
+    while True:
+        rows = _execute(
+            connection,
+            """
+            SELECT dataset_id, subject_key, provider_id, source_revision,
+                   source_as_of, fetched_at, payload_json, quality_json, updated_at
+            FROM external_fact_current
+            WHERE revision_id = ''
+            ORDER BY dataset_id, subject_key
+            LIMIT %s
+            """,
+            (bounded,),
+        ).fetchall()
+        if not rows:
+            return total
+        for row in rows:
+            try:
+                payload = json.loads(row.get("payload_json") or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            try:
+                quality = json.loads(row.get("quality_json") or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                quality = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            if not isinstance(quality, dict):
+                quality = {}
+            dataset_id = str(row.get("dataset_id") or "")
+            subject_key = str(row.get("subject_key") or "")
+            provider_id = str(row.get("provider_id") or "")
+            provider_revision = str(row.get("source_revision") or "")
+            source_as_of = str(row.get("source_as_of") or "")
+            try:
+                schema_version = external_dataset_semantics(dataset_id).source_schema_version
+            except KeyError:
+                schema_version = SOURCE_SCHEMA_LEGACY_VERSION
+            content_hash = canonical_payload_hash(payload)
+            availability = normalized_availability(
+                quality.get("availability"),
+                empty_result=bool(quality.get("emptyResult")),
+                quality=quality,
+            )
+            revision_id = source_revision_id(
+                dataset_id=dataset_id,
+                provider_id=provider_id,
+                subject_key=subject_key,
+                provider_revision=provider_revision or content_hash,
+                source_as_of=source_as_of,
+                payload_hash=content_hash,
+                source_schema_version=schema_version,
+                availability=availability,
+                quality=quality,
+            )
+            _execute(
+                connection,
+                """
+                INSERT IGNORE INTO external_fact_revision (
+                    revision_id, dataset_id, subject_key, provider_id, source_revision,
+                    payload_hash, source_schema_version, availability, source_as_of,
+                    fetched_at, payload_json, quality_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    revision_id,
+                    dataset_id,
+                    subject_key,
+                    provider_id,
+                    provider_revision or content_hash,
+                    content_hash,
+                    schema_version,
+                    availability,
+                    source_as_of,
+                    str(row.get("fetched_at") or ""),
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                    json.dumps(quality, ensure_ascii=False, separators=(",", ":"), default=str),
+                    str(row.get("updated_at") or row.get("fetched_at") or ""),
+                ),
+            )
+            cursor = _execute(
+                connection,
+                """
+                UPDATE external_fact_current
+                SET revision_id = %s, payload_hash = %s, source_schema_version = %s,
+                    availability = %s
+                WHERE dataset_id = %s AND subject_key = %s AND revision_id = ''
+                """,
+                (
+                    revision_id,
+                    content_hash,
+                    schema_version,
+                    availability,
+                    dataset_id,
+                    subject_key,
+                ),
+            )
+            total += int(cursor.rowcount or 0)
+
+
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, object]:
     columns = ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS)
     comparison_identity_backfill_count = backfill_reasoning_comparison_identity(connection)
     primary_keys = ensure_reasoning_rule_slot_namespace_primary_key(connection)
+    indexes = ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES)
     retired_unique_indexes = retire_mysql_unique_indexes(connection, MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS)
+    external_fact_revision_backfill_count = backfill_external_fact_revision_identities(connection)
     return {
         "columns": columns,
         "comparisonIdentityBackfillCount": comparison_identity_backfill_count,
@@ -1421,7 +1564,8 @@ def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, ob
         "widenedColumns": ensure_mysql_column_widths(connection, MYSQL_OPERATIONAL_COLUMN_WIDTHS),
         "retiredColumns": retire_mysql_columns(connection, MYSQL_OPERATIONAL_RETIRED_COLUMNS),
         "retiredUniqueIndexes": retired_unique_indexes,
-        "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),
+        "externalFactRevisionBackfillCount": external_fact_revision_backfill_count,
+        "indexes": indexes,
         "partitions": ensure_mysql_key_partitions(connection, MYSQL_OPERATIONAL_KEY_PARTITIONS, settings),
     }
 

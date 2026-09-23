@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
-from digital_twin.modules.market_data.domain.events import external_fact_changed_event
+from digital_twin.modules.market_data.domain.events import external_fact_changed_event, external_observation_recorded_event
 from digital_twin.modules.market_data.application.external_data.contracts import DatasetDescriptor, ExternalSubject, setting_enabled
 from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService, FactTransition
 from digital_twin.modules.market_data.domain.external_call import ExternalCallDeferred
@@ -347,6 +347,14 @@ class ExternalDataCollectionService:
             }
         try:
             observation = adapter.fetch(job, self.settings)
+            semantics = self.registry.semantics(observation.dataset_id)
+            source_schema_version = str(
+                descriptor.source_schema_version
+                or (semantics.source_schema_version if semantics else "")
+                or observation.source_schema_version
+            )
+            if observation.source_schema_version != source_schema_version:
+                observation = replace(observation, source_schema_version=source_schema_version)
             if job.dataset_id in {"opendart.document", "sec.document"}:
                 # Recovery is a durable collection purpose, not a local replay flag.
                 observation = replace(observation, quality={**(observation.quality or {}), "collectionSource": job.subject.source})
@@ -378,9 +386,17 @@ class ExternalDataCollectionService:
                     observation.source_revision,
                 )
             )
-            event = None
+            source_ref = observation.source_reference().to_dict()
+            events = []
+            if descriptor.revision_mode != "none":
+                events.append(external_observation_recorded_event(
+                    source_ref,
+                    category_ids=semantics.category_ids if semantics else (),
+                    output_contract=semantics.output_contract if semantics else "unregistered",
+                    change_type=transition.change_type,
+                ))
             if transition.material:
-                event = external_fact_changed_event(
+                events.append(external_fact_changed_event(
                     observation.dataset_id,
                     observation.subject_key,
                     observation.provider_id,
@@ -389,7 +405,8 @@ class ExternalDataCollectionService:
                     transition.change_type,
                     transition.changed_fields,
                     transition.reason,
-                )
+                    source_reference=source_ref,
+                ))
             due_at = next_due_at(descriptor, self.settings, job.partition_key)
             if no_data and observation.retain_previous:
                 committed = self.store.complete_empty_observation(job, observation, due_at)
@@ -399,7 +416,7 @@ class ExternalDataCollectionService:
                     descriptor,
                     observation,
                     due_at,
-                    event=event,
+                    events=events,
                 )
             followup_plans = [] if no_data else self.registry.followups(job.dataset_id, observation, self.settings)
             followup_count = (
@@ -429,6 +446,7 @@ class ExternalDataCollectionService:
                 "durationMs": duration_ms,
                 "responseBytes": response_bytes,
                 "sourceAsOf": observation.source_as_of,
+                "sourceRevisionId": source_ref.get("revisionId"),
                 "changed": bool(committed.get("changed")),
                 "materialChange": bool(transition.material and committed.get("changed")),
                 "nextDueAt": "" if descriptor.completion_mode == "once" else due_at,

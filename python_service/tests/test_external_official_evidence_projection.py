@@ -1,5 +1,7 @@
 import copy
+import json
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -7,21 +9,28 @@ from digital_twin.modules.market_data.application.external_data.research_evidenc
 from digital_twin.modules.news_intelligence.domain.disclosure_analysis import DisclosureAnalysisResult
 from digital_twin.modules.news_intelligence.domain.disclosure_quality import disclosure_reasoning_eligibility
 from digital_twin.modules.market_data.domain.event_types import EXTERNAL_FACT_CHANGED
+from digital_twin.modules.market_data.domain.external_data_contracts import OFFICIAL_EVIDENCE_PROJECTOR_VERSION
 from digital_twin.modules.news_intelligence.domain.event_types import RESEARCH_EVIDENCE_COLLECTED
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology, entity_id
 from digital_twin.modules.reasoning.domain.ontology_external_abox import add_symbol_external_signal_concepts
 from digital_twin.infrastructure.mysql_research_evidence import merge_derived_evidence_payload
+from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
+from digital_twin.infrastructure.transactions.monitoring import MySQLEventLog
 
 
 class MemoryFactStore:
     def __init__(self, row):
         self.row = dict(row)
+        self.revisions = {}
 
     def current_fact(self, dataset_id, subject_key):
         if dataset_id == self.row.get("datasetId") and subject_key == self.row.get("subjectKey"):
             return dict(self.row)
         return {}
+
+    def fact_revision(self, revision_id):
+        return dict(self.revisions.get(revision_id) or {})
 
     def list_current(self):
         return [dict(self.row)]
@@ -91,6 +100,46 @@ class MemoryEventReader:
         ][:limit]
 
 
+class MemoryDurableEventReader:
+    def __init__(self, events):
+        self.pending = {event.event_id: event for event in events}
+        self.processing = {}
+        self.completed = set()
+        self.failed = set()
+
+    def claim_external_fact_projection_events(
+        self, consumer_id, projector_version, worker_id, limit=100, lease_seconds=120,
+    ):
+        del consumer_id, projector_version, worker_id, lease_seconds
+        rows = []
+        for event_id in sorted(self.pending)[:limit]:
+            event = self.pending.pop(event_id)
+            token = "lease:" + event_id
+            self.processing[event_id] = token
+            rows.append({"event": event, "leaseToken": token})
+        return rows
+
+    def complete_external_fact_projection_event(
+        self, consumer_id, projector_version, event_id, lease_token,
+    ):
+        del consumer_id, projector_version
+        if self.processing.get(event_id) != lease_token:
+            return False
+        self.processing.pop(event_id, None)
+        self.completed.add(event_id)
+        return True
+
+    def fail_external_fact_projection_event(
+        self, consumer_id, projector_version, event_id, lease_token, error,
+    ):
+        del consumer_id, projector_version, error
+        if self.processing.get(event_id) != lease_token:
+            return False
+        self.processing.pop(event_id, None)
+        self.failed.add(event_id)
+        return True
+
+
 class MemoryCursor:
     def __init__(self):
         self.state = {}
@@ -100,6 +149,48 @@ class MemoryCursor:
 
     def replace(self, payload):
         self.state = dict(payload)
+
+
+class RecordingEventConnection:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, sql, params=()):
+        self.calls.append((str(sql), tuple(params or ())))
+        return SimpleNamespace(rowcount=1)
+
+
+class ProjectionDeliveryConnection(RecordingEventConnection):
+    def __init__(self, event):
+        super().__init__()
+        self.event = event
+
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        self.calls.append((rendered, tuple(params or ())))
+        if "FROM external_fact_projection_deliveries delivery" in rendered:
+            event = self.event
+            return SimpleNamespace(fetchall=lambda: [{
+                "event_id": event.event_id,
+                "name": event.name,
+                "aggregate_id": event.aggregate_id,
+                "occurred_at": event.occurred_at,
+                "correlation_id": event.correlation_id,
+                "payload_json": json.dumps(event.payload),
+                "event_json": json.dumps({
+                    key: value for key, value in event.to_dict().items() if key != "payload"
+                }),
+            }])
+        return SimpleNamespace(rowcount=1)
+
+
+class ProjectionDeliveryEventLog(MySQLEventLog):
+    def __init__(self, connection):
+        self.connection = connection
+
+    @contextmanager
+    def transaction(self):
+        yield self.connection
 
 
 def dart_fact(dataset_id="opendart.document"):
@@ -262,6 +353,45 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
             self.projector.project_event(event)
         self.assertEqual({}, self.evidence_store.items)
         self.assertEqual([], self.publisher.events)
+        self.setUp()
+        self._assert_v2_event_reads_internal_revision_and_rejects_current_substitution()
+        self.setUp()
+        self._assert_v2_event_fails_closed_when_internal_revision_is_missing()
+
+    def _assert_v2_event_reads_internal_revision_and_rejects_current_substitution(self):
+        exact = dart_fact()
+        exact["revisionId"] = "internal-revision-1"
+        exact["payloadHash"] = "exact-payload-hash"
+        self.fact_store.revisions["internal-revision-1"] = exact
+        self.fact_store.row = {**dart_fact(), "sourceRevision": "newer-current"}
+        event = self.event()
+        event.payload.update({
+            "eventContract": "external-fact-change-v2",
+            "sourceRevision": exact["sourceRevision"],
+            "sourceRef": {
+                "revisionId": "internal-revision-1",
+                "datasetId": exact["datasetId"],
+                "subjectKey": exact["subjectKey"],
+                "payloadHash": exact["payloadHash"],
+            },
+        })
+
+        self.assertEqual(1, self.projector.project_event(event)["writtenCount"])
+        evidence = self.evidence_store.items["research:005930:dart:202608250001"]
+        self.assertEqual("dart-batch-20260825", evidence.raw_payload["externalFactSourceRevision"])
+
+    def _assert_v2_event_fails_closed_when_internal_revision_is_missing(self):
+        event = self.event()
+        event.payload["sourceRef"] = {
+            "revisionId": "missing-internal-revision",
+            "datasetId": "opendart.document",
+            "subjectKey": "005930",
+            "payloadHash": "missing-hash",
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "revision does not match"):
+            self.projector.project_event(event)
+        self.assertEqual({}, self.evidence_store.items)
 
     def test_metadata_refresh_preserves_verified_document_provenance(self):
         previous = {
@@ -406,7 +536,7 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertEqual(1, first["currentFactBackfill"]["processedCount"])
         self.assertEqual(0, second["currentFactBackfill"]["processedCount"])
         self.assertTrue(cursor.state["currentFactBackfillCompleted"])
-        self.assertEqual("official-evidence-projection-v3", cursor.state["currentFactBackfillVersion"])
+        self.assertEqual(OFFICIAL_EVIDENCE_PROJECTOR_VERSION, cursor.state["currentFactBackfillVersion"])
         collected = next(event for event in self.publisher.events if event.name == RESEARCH_EVIDENCE_COLLECTED)
         self.assertEqual(0, collected.payload["alertEligibleCount"])
 
@@ -436,6 +566,67 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertTrue(status["durable"])
         self.assertEqual("ok", status["status"])
         self.assertEqual("event-dart-1", status["cursorEventId"])
+        self.setUp()
+        self._assert_reconciler_prefers_leased_membership_and_completes_once()
+        self.setUp()
+        self._assert_official_fact_event_registers_delivery_in_same_connection()
+        self.setUp()
+        self._assert_non_official_fact_event_does_not_register_official_delivery()
+        self.setUp()
+        self._assert_mysql_delivery_claim_returns_lease_and_exact_event()
+
+    def _assert_reconciler_prefers_leased_membership_and_completes_once(self):
+        cursor = MemoryCursor()
+        event_reader = MemoryDurableEventReader([self.event()])
+        reconciler = ExternalFactResearchEvidenceReconciler(
+            event_reader,
+            self.projector,
+            cursor,
+            initial_lookback_minutes=120,
+            now_provider=lambda: self.now,
+        )
+
+        first = reconciler.run_once()
+        second = reconciler.run_once()
+
+        self.assertEqual("leased-membership", first["deliveryMode"])
+        self.assertEqual(1, first["processedCount"])
+        self.assertEqual(0, second["processedCount"])
+        self.assertEqual({"event-dart-1"}, event_reader.completed)
+
+    def _assert_official_fact_event_registers_delivery_in_same_connection(self):
+        connection = RecordingEventConnection()
+
+        insert_domain_event_with_connection(connection, self.event())
+
+        self.assertEqual(2, len(connection.calls))
+        self.assertIn("INSERT IGNORE INTO domain_events", connection.calls[0][0])
+        self.assertIn("external_fact_projection_deliveries", connection.calls[1][0])
+
+    def _assert_non_official_fact_event_does_not_register_official_delivery(self):
+        connection = RecordingEventConnection()
+        event = self.event()
+        event.payload["datasetId"] = "yfinance.price"
+
+        insert_domain_event_with_connection(connection, event)
+
+        self.assertEqual(1, len(connection.calls))
+
+    def _assert_mysql_delivery_claim_returns_lease_and_exact_event(self):
+        event = self.event()
+        connection = ProjectionDeliveryConnection(event)
+        event_log = ProjectionDeliveryEventLog(connection)
+
+        claimed = event_log.claim_external_fact_projection_events(
+            "external-official-evidence",
+            OFFICIAL_EVIDENCE_PROJECTOR_VERSION,
+            "worker:test",
+            limit=1,
+        )
+
+        self.assertEqual(1, len(claimed))
+        self.assertEqual(event.event_id, claimed[0]["event"].event_id)
+        self.assertTrue(claimed[0]["leaseToken"])
 
 
 if __name__ == "__main__":

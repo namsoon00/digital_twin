@@ -21,6 +21,7 @@ EXTERNAL_SIGNAL_MAP_FIELDS = {
     "yfinanceData",
     "researchEvidence",
     "companyKnowledge",
+    "externalDataLineage",
 }
 
 EXTERNAL_SIGNAL_ARCHIVE_FIELDS = {"sourceArchive"}
@@ -124,6 +125,7 @@ class ExternalSignalsReadModelService:
             "yfinanceData": {},
             "researchEvidence": {},
             "statuses": [],
+            "externalDataLineage": {},
             "externalDataPlatform": {
                 "enabled": True,
                 "factCount": 0,
@@ -149,8 +151,22 @@ class ExternalSignalsReadModelService:
                 elif key not in {"fetchedAt", "externalDataPlatform", *EXTERNAL_SIGNAL_ARCHIVE_FIELDS}:
                     result[key] = value
             dataset_id = str(row.get("datasetId") or "")
+            subject_key = str(row.get("subjectKey") or "").upper().strip()
             if dataset_id:
                 datasets.add(dataset_id)
+                lineage_key = dataset_id + ":" + subject_key
+                result["externalDataLineage"][lineage_key] = {
+                    "datasetId": dataset_id,
+                    "subjectKey": subject_key,
+                    "revisionId": str(row.get("revisionId") or ""),
+                    "providerRevision": str(row.get("sourceRevision") or ""),
+                    "payloadHash": str(row.get("payloadHash") or ""),
+                    "sourceSchemaVersion": str(row.get("sourceSchemaVersion") or ""),
+                    "sourceAsOf": str(row.get("sourceAsOf") or ""),
+                    "fetchedAt": str(row.get("fetchedAt") or ""),
+                    "availability": str(row.get("availability") or "unknown"),
+                    "freshnessState": str(row.get("freshnessState") or "unknown"),
+                }
             if str(row.get("freshnessState") or "") == "stale":
                 stale.add(dataset_id)
             result["fetchedAt"] = max_timestamp(result.get("fetchedAt"), row.get("fetchedAt"))

@@ -12,6 +12,9 @@ from digital_twin.modules.market_data.application.external_data.contracts import
 from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService
 from digital_twin.modules.market_data.application.external_data.read_model_service import ExternalSignalsReadModelService, merge_external_signal_read_models
 from digital_twin.modules.market_data.application.external_data.registry import ExternalDatasetRegistry
+from digital_twin.modules.market_data.domain.event_types import EXTERNAL_OBSERVATION_RECORDED
+from digital_twin.modules.market_data.domain.external_data_contracts import normalized_availability
+from digital_twin.modules.market_data.domain.external_dataset_catalog import external_dataset_catalog
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.domain.knowledge_world_projection import build_knowledge_world_graph
 from digital_twin.modules.reasoning.domain.market_world_projection import build_market_world_graph
@@ -29,6 +32,7 @@ from digital_twin.modules.reasoning.domain.portfolio_ontology_reference_concepts
 )
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
 from digital_twin.infrastructure.external_api.adapters.base import empty_signals, legacy_provider, position_for
+from digital_twin.infrastructure.external_api.adapters import default_external_dataset_registry
 from digital_twin.infrastructure.external_api.adapters.opendart import (
     OpenDartCompanyFactsAdapter,
     OpenDartDisclosureAdapter,
@@ -231,10 +235,9 @@ class MemoryCollectionStore:
         del job, descriptor, error, next_due_at
         return {"state": self.failure_state}
 
-    def complete_observation(self, job, descriptor, observation, due_at, event=None):
+    def complete_observation(self, job, descriptor, observation, due_at, event=None, events=None):
         self.completed.append((job, descriptor, observation, due_at))
-        if event:
-            self.events.append(event)
+        self.events.extend(list(events or ([event] if event else [])))
         return {"changed": True}
 
     def complete_empty_observation(self, job, observation, due_at):
@@ -268,6 +271,11 @@ class MemoryFactStore:
                 "fetchedAt": "2026-08-16T00:00:00Z",
                 "updatedAt": "2026-08-16T00:00:01Z",
                 "freshnessState": "fresh",
+                "revisionId": "revision-crypto-1",
+                "sourceRevision": "provider-crypto-1",
+                "payloadHash": "crypto-hash",
+                "sourceSchemaVersion": "coingecko-market-source-v1",
+                "availability": "observed",
             },
             {
                 "datasetId": "yfinance.price",
@@ -276,6 +284,11 @@ class MemoryFactStore:
                 "fetchedAt": "2026-08-16T00:01:00Z",
                 "updatedAt": "2026-08-16T00:01:01Z",
                 "freshnessState": "stale",
+                "revisionId": "revision-nvda-1",
+                "sourceRevision": "provider-nvda-1",
+                "payloadHash": "nvda-hash",
+                "sourceSchemaVersion": "yfinance-price-source-v1",
+                "availability": "observed",
             },
         ]
 
@@ -801,6 +814,61 @@ class ExternalDataPlatformTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Unknown external datasets"):
             registry.validate_dataset_ids(["missing.dataset"])
+        self._assert_registered_dataset_catalog_exposes_owned_semantics()
+        self._assert_every_default_dataset_has_owned_semantics()
+        self._assert_source_reference_distinguishes_provider_correction_without_using_fetch_clock()
+        self._assert_source_observation_keeps_zero_separate_from_missing_and_unsupported()
+        self._assert_transition_detects_correction_beyond_display_field_limit()
+
+    def _assert_registered_dataset_catalog_exposes_owned_semantics(self):
+        catalog = external_dataset_catalog()
+
+        self.assertIn("price_trade", catalog["yfinance.price"].category_ids)
+        self.assertIn("financial", catalog["sec.company_facts"].category_ids)
+        self.assertIn("company_event", catalog["opendart.document"].category_ids)
+        self.assertEqual("unsupported", catalog["yfinance.options"].empty_result_semantics)
+
+    def _assert_every_default_dataset_has_owned_semantics(self):
+        registry = default_external_dataset_registry({})
+
+        self.assertEqual(
+            set(external_dataset_catalog()),
+            {row["datasetId"] for row in registry.descriptors({})},
+        )
+        self.assertTrue(all(row["categoryIds"] for row in registry.descriptors({})))
+
+    def _assert_source_reference_distinguishes_provider_correction_without_using_fetch_clock(self):
+        base = SourceObservation(
+            dataset_id="opendart.document",
+            provider_id="opendart",
+            subject_key="005930",
+            source_revision="receipt-1",
+            source_as_of="2026-08-16T00:00:00Z",
+            fetched_at="2026-08-16T00:00:01Z",
+            payload={"document": {"amount": 100}, "fetchedAt": "first"},
+            quality={"dataUsable": True},
+        )
+        repeated = replace(
+            base,
+            fetched_at="2026-08-16T00:05:01Z",
+            payload={"document": {"amount": 100}, "fetchedAt": "second"},
+        )
+        corrected = replace(base, payload={"document": {"amount": 120}})
+
+        self.assertEqual(base.source_reference().revision_id, repeated.source_reference().revision_id)
+        self.assertNotEqual(base.source_reference().revision_id, corrected.source_reference().revision_id)
+        self.assertEqual("observed", base.source_reference().availability)
+
+    def _assert_source_observation_keeps_zero_separate_from_missing_and_unsupported(self):
+        observed_zero = SourceObservation(
+            "test.market", "test", "NVDA", "r1", "2026-08-16", "2026-08-16T00:00:00Z",
+            {"price": 0}, quality={"dataUsable": True},
+        )
+        missing = replace(observed_zero, payload={}, empty_result=True)
+
+        self.assertEqual("observed", observed_zero.source_reference().availability)
+        self.assertEqual("missing", missing.source_reference().availability)
+        self.assertEqual("unsupported", normalized_availability("unsupported", quality={"dataUsable": False}))
 
     def test_followup_document_work_is_durable_and_not_a_static_partition(self):
         store = MemoryCollectionStore()
@@ -961,7 +1029,9 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, result["processedCount"])
         self.assertEqual(1, len(store.completed))
-        self.assertEqual([], store.events, "initial baselines must not fan out reasoning events")
+        self.assertEqual([EXTERNAL_OBSERVATION_RECORDED], [event.name for event in store.events])
+        self.assertEqual("external-observation-recorded-v1", store.events[0].payload["eventContract"])
+        self.assertTrue(store.events[0].payload["sourceRef"]["revisionId"])
 
         scoped = service.run_once(
             dataset_ids=["test.market"],
@@ -1054,6 +1124,22 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertTrue(small.changed)
         self.assertFalse(small.material)
         self.assertTrue(material.material)
+
+    def _assert_transition_detects_correction_beyond_display_field_limit(self):
+        before = {"field" + str(index).zfill(3): index for index in range(180)}
+        after = dict(before)
+        after["field179"] = 999
+
+        transition = ExternalFactTransitionService().assess(
+            "opendart.document",
+            {"sourceRevision": "same-provider-revision", "payload": before},
+            after,
+            "same-provider-revision",
+        )
+
+        self.assertTrue(transition.changed)
+        self.assertTrue(transition.material)
+        self.assertEqual("source-revision", transition.change_type)
 
     def _assert_company_facts_collect_without_recent_disclosure(self):
         settings = {
@@ -1328,6 +1414,19 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(65000, signals["cryptoMarkets"]["bitcoin"]["priceUsd"])
         self.assertEqual(2, signals["externalDataPlatform"]["factCount"])
         self.assertEqual(["yfinance.price"], signals["externalDataPlatform"]["staleDatasets"])
+        self.assertEqual(
+            "revision-nvda-1",
+            signals["externalDataLineage"]["yfinance.price:NVDA"]["revisionId"],
+        )
+        compact = compact_external_signals_for_ontology(signals, target_symbols=["NVDA"])
+        self.assertEqual(
+            "revision-nvda-1",
+            compact["externalDataLineage"]["yfinance.price:NVDA"]["revisionId"],
+        )
+        self.assertEqual(
+            "revision-crypto-1",
+            compact["externalDataLineage"]["coingecko.market:GLOBAL"]["revisionId"],
+        )
         self.assertTrue(any(item.get("datasetId") == "fred.macro" and not item.get("ok") for item in signals["statuses"]))
         fitness = signals["externalDataPlatform"]["fitness"]
         self.assertEqual("stale", fitness["subjects"]["NVDA"]["purposes"]["market-price"]["state"])

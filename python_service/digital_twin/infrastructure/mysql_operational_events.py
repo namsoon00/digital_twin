@@ -7,6 +7,12 @@ from digital_twin.modules.accounts.domain.accounts import AccountConfig, split_s
 from digital_twin.modules.market_data.domain.data_freshness import evaluate_notification_data_freshness
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.market_data.domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
+from digital_twin.modules.market_data.domain.event_types import EXTERNAL_FACT_CHANGED
+from digital_twin.modules.market_data.domain.external_data_contracts import (
+    OFFICIAL_EVIDENCE_CONSUMER_ID,
+    OFFICIAL_EVIDENCE_DATASET_IDS,
+    OFFICIAL_EVIDENCE_PROJECTOR_VERSION,
+)
 from digital_twin.platform.domain.events import domain_event_storage_payload
 from digital_twin.modules.reasoning.domain.fact_changes import fact_signature, research_evidence_fact_payload
 from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence
@@ -65,6 +71,23 @@ def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
             json_dumps(event_metadata),
         ),
     )
+    dataset_id = str((event.payload or {}).get("datasetId") or "").strip()
+    if event.name == EXTERNAL_FACT_CHANGED and dataset_id in OFFICIAL_EVIDENCE_DATASET_IDS:
+        connection.execute(
+            """
+            INSERT IGNORE INTO external_fact_projection_deliveries (
+                consumer_id, projector_version, event_id, delivery_status,
+                created_at, updated_at
+            ) VALUES (%s, %s, %s, 'pending', %s, %s)
+            """,
+            (
+                OFFICIAL_EVIDENCE_CONSUMER_ID,
+                OFFICIAL_EVIDENCE_PROJECTOR_VERSION,
+                event.event_id,
+                event.occurred_at,
+                event.occurred_at,
+            ),
+        )
 
 
 def domain_event_from_row(row) -> DomainEvent:

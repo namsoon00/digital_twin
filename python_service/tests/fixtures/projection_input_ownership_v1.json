@@ -1,5 +1,5 @@
 {
-  "sourceRevision": "15c8168f95fd",
+  "sourceRevision": "bounded-parallel-context-and-crypto-scope-v1",
   "members": {
     "graph_assembly_cache_enabled": {
       "path": "digital_twin/modules/reasoning/domain/projection_input_policy.py",
@@ -124,7 +124,7 @@
     "graph_assembly_cache_key": {
       "path": "digital_twin/modules/reasoning/domain/projection_cache_identity.py",
       "owner": "ProjectionCacheKeys",
-      "bodyHash": "cb0a51511189eeb9d5791afb027d23945455ae7e7d8b2ca19224bc2453d474cd",
+      "bodyHash": "0e27a121fdd24dddffebcefe100599f8061851e2103a2a532ace7411ec05ffa7",
       "restore": {}
     },
     "rule_id_from_payload": {
@@ -172,7 +172,7 @@
     "hypothesis_proposal_context": {
       "path": "digital_twin/modules/reasoning/application/projection_input/hypotheses.py",
       "owner": "",
-      "bodyHash": "b88d5797efa0b3e5fdeff75774c1c0bf56311aa250f95db5c5ba5cc1b085c6e2",
+      "bodyHash": "201ec4a920eb64783b1a7b7faea40bef136209be8110d1a0c6df8747a4284d13",
       "restore": {
         "_inputs": "self",
         "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
@@ -182,7 +182,7 @@
     "hypothesis_lifecycle_context": {
       "path": "digital_twin/modules/reasoning/application/projection_input/hypotheses.py",
       "owner": "",
-      "bodyHash": "595d9541d91013b54b431ceec3c3acfd71b727ee998e775cee218e92687fa6ae",
+      "bodyHash": "59b476db2f06d22abe5ea06cf203926659078f57b03932d6160ef657dc0d30bb",
       "restore": {
         "_inputs": "self",
         "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
@@ -192,7 +192,7 @@
     "temporal_observation_windows": {
       "path": "digital_twin/modules/reasoning/application/projection_input/temporal.py",
       "owner": "",
-      "bodyHash": "40c9fa93f4ebee4b98a4072a1300751491acdf40320f507f9f5bdb7402441b95",
+      "bodyHash": "a1357d3b3f8c8fe9294cc0508f5a16959ee5d0208a727097c8fdb974ceac3027",
       "restore": {
         "_inputs": "self",
         "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",
@@ -202,7 +202,7 @@
     "runtime_context": {
       "path": "digital_twin/modules/reasoning/application/projection_input/context.py",
       "owner": "",
-      "bodyHash": "85f7a5e5cef9f3b403d9a8f272579abf95a48db11c41ca451d68e7250afc5a72",
+      "bodyHash": "c16fcdcb24e9d257e321cd4a1da7e5f4f2b7d06801c67ecf32548404cbf81ae1",
       "restore": {
         "_inputs": "self",
         "_inputs.runtime_cache": "SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE",

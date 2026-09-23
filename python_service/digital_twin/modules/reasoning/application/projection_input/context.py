@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from digital_twin.modules.outcomes.contracts import evaluate_decision_performance
 from digital_twin.modules.model_registry.contracts import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
@@ -79,10 +80,11 @@ def runtime_context(
         for symbol in target_symbols or []
         if str(symbol or "").strip()
     }
+    projection_input = snapshot.projection_observation_input()
     available_symbols = {
-        str(getattr(position, "symbol", "") or "").upper().strip()
-        for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-        if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
+        str(symbol or "").upper().strip()
+        for symbol in projection_input.get("availableSymbols") or []
+        if str(symbol or "").strip()
     }
     selected_symbols.intersection_update(available_symbols)
     decision_memory_symbols = selected_symbols or available_symbols
@@ -98,44 +100,41 @@ def runtime_context(
         episodeCount=len(decision_episodes),
         outcomeHistoryEpisodeCount=len(decision_outcome_history),
     )
-    emit("metadata.start")
-    metadata = _inputs.factual_runtime_metadata(
-        snapshot.metadata,
-        target_symbols=selected_symbols or available_symbols,
-        settings=_inputs.settings,
-    )
-    emit("metadata.done", metadataKeyCount=len(metadata))
-    # Projection output is derived state, not a new market observation.
-    # Feeding the previous ABox result back into the next ABox makes an
-    # otherwise unchanged snapshot look materially different.
-    metadata.pop("ontology", None)
-    account_context = (
-        metadata.get("accountContext")
-        if isinstance(metadata.get("accountContext"), dict)
-        else {}
-    )
-    emit("decision_performance.start")
-    decision_performance = {}
-    if hasattr(_inputs.decision_episode_store, "performance"):
-        try:
-            decision_performance = _inputs.decision_episode_store.performance(
-                account_id=snapshot.account_id,
-                limit=2000,
-                as_of=as_of,
-            )
-        except TypeError:
-            # Compatibility stores may not yet expose the point-in-time
-            # parameter. Their bounded result remains diagnostic only.
-            decision_performance = _inputs.decision_episode_store.performance(
-                account_id=snapshot.account_id,
-                limit=2000,
-            )
-        except (
-            Exception
-        ):  # noqa: BLE001 - calibration history still supports the current subject.
-            decision_performance = {}
-    if not decision_performance:
-        decision_performance = evaluate_decision_performance(
+    context_symbols = selected_symbols or available_symbols
+
+    def load_metadata():
+        values = _inputs.factual_runtime_metadata(
+            snapshot.metadata,
+            target_symbols=context_symbols,
+            settings=_inputs.settings,
+        )
+        # Projection output is derived state, not a new market observation.
+        # Feeding the previous ABox result back into the next ABox makes an
+        # otherwise unchanged snapshot look materially different.
+        values.pop("ontology", None)
+        return values
+
+    def load_decision_performance():
+        values = {}
+        if hasattr(_inputs.decision_episode_store, "performance"):
+            try:
+                values = _inputs.decision_episode_store.performance(
+                    account_id=snapshot.account_id,
+                    limit=2000,
+                    as_of=as_of,
+                )
+            except TypeError:
+                # Compatibility stores may not yet expose the point-in-time
+                # parameter. Their bounded result remains diagnostic only.
+                values = _inputs.decision_episode_store.performance(
+                    account_id=snapshot.account_id,
+                    limit=2000,
+                )
+            except (
+                Exception
+            ):  # noqa: BLE001 - subject calibration remains independently usable.
+                values = {}
+        return values or evaluate_decision_performance(
             decision_outcome_history or decision_episodes,
             minimum_sample_count=int(
                 _inputs.performance_setting(
@@ -143,14 +142,30 @@ def runtime_context(
                 )
             ),
         )
-    emit("decision_performance.done")
-    emit("hypothesis_proposals.start")
-    hypothesis_proposals = _inputs.hypothesis_proposal_context(
-        snapshot,
-        target_symbols=selected_symbols,
-    )
-    emit("hypothesis_proposals.done", proposalCount=len(hypothesis_proposals))
-    lifecycle_projection_started = time.perf_counter()
+
+    def load_portfolio_lifecycle():
+        if not (
+            _inputs.investment_domain_store
+            and hasattr(
+                _inputs.investment_domain_store,
+                "ontology_portfolio_lifecycle_context",
+            )
+        ):
+            return {}
+        try:
+            return _inputs.investment_domain_store.ontology_portfolio_lifecycle_context(
+                "portfolio:" + str(snapshot.account_id or "default")
+            )
+        except (
+            Exception
+        ):  # noqa: BLE001 - lifecycle enrichment must not invalidate market inference.
+            return {}
+
+    def timed_read(reader):
+        started = time.perf_counter()
+        value = reader()
+        return value, int((time.perf_counter() - started) * 1000)
+
     lifecycle_projection = {
         "mode": "excluded-from-live-abox",
         "enabled": False,
@@ -158,13 +173,101 @@ def runtime_context(
         "payloadBytesRead": 0,
         "keyPrefix": HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
     }
+    lifecycle_enabled = _inputs.hypothesis_lifecycle_abox_projection_enabled()
+
+    emit("metadata.start")
+    emit("decision_performance.start")
+    emit("hypothesis_proposals.start")
     emit("hypothesis_lifecycles.start", mode=lifecycle_projection["mode"])
-    hypothesis_lifecycles = []
-    if _inputs.hypothesis_lifecycle_abox_projection_enabled():
-        hypothesis_lifecycles = _inputs.hypothesis_lifecycle_context(
-            snapshot,
-            target_symbols=selected_symbols,
+    emit("pipeline_health.start")
+    emit("temporal_windows.start")
+    emit("portfolio_lifecycle.start")
+    # These reads share the immutable source timestamp but not mutable state.
+    # Running a small, bounded fan-out removes additive database latency while
+    # retaining every factual input and its point-in-time boundary.
+    with ThreadPoolExecutor(
+        max_workers=4,
+        thread_name_prefix="ontology-input",
+    ) as executor:
+        futures = {
+            "metadata": executor.submit(timed_read, load_metadata),
+            "decisionPerformance": executor.submit(
+                timed_read,
+                load_decision_performance,
+            ),
+            "hypothesisProposals": executor.submit(
+                timed_read,
+                lambda: _inputs.hypothesis_proposal_context(
+                    snapshot,
+                    target_symbols=selected_symbols,
+                ),
+            ),
+            "dataPipelineHealth": executor.submit(
+                timed_read,
+                lambda: _inputs.data_pipeline_health_context(snapshot),
+            ),
+            "temporalWindows": executor.submit(
+                timed_read,
+                lambda: _inputs.temporal_observation_windows(
+                    snapshot,
+                    target_symbols=selected_symbols,
+                ),
+            ),
+            "portfolioLifecycle": executor.submit(
+                timed_read,
+                load_portfolio_lifecycle,
+            ),
+        }
+        if lifecycle_enabled:
+            futures["hypothesisLifecycles"] = executor.submit(
+                timed_read,
+                lambda: _inputs.hypothesis_lifecycle_context(
+                    snapshot,
+                    target_symbols=selected_symbols,
+                ),
+            )
+
+        metadata, metadata_ms = futures["metadata"].result()
+        emit(
+            "metadata.done",
+            metadataKeyCount=len(metadata),
+            runtimeMs=metadata_ms,
         )
+        decision_performance, decision_performance_ms = futures[
+            "decisionPerformance"
+        ].result()
+        emit("decision_performance.done", runtimeMs=decision_performance_ms)
+        hypothesis_proposals, hypothesis_proposals_ms = futures[
+            "hypothesisProposals"
+        ].result()
+        emit(
+            "hypothesis_proposals.done",
+            proposalCount=len(hypothesis_proposals),
+            runtimeMs=hypothesis_proposals_ms,
+        )
+        hypothesis_lifecycle_result = (
+            futures["hypothesisLifecycles"].result()
+            if lifecycle_enabled
+            else ([], 0)
+        )
+        hypothesis_lifecycles, hypothesis_lifecycle_ms = (
+            hypothesis_lifecycle_result
+        )
+        data_pipeline_health, pipeline_health_ms = futures[
+            "dataPipelineHealth"
+        ].result()
+        emit("pipeline_health.done", runtimeMs=pipeline_health_ms)
+        temporal_windows, temporal_windows_ms = futures["temporalWindows"].result()
+        emit(
+            "temporal_windows.done",
+            symbolCount=len(temporal_windows),
+            runtimeMs=temporal_windows_ms,
+        )
+        portfolio_lifecycle, portfolio_lifecycle_ms = futures[
+            "portfolioLifecycle"
+        ].result()
+
+    if lifecycle_enabled:
         lifecycle_projection.update(
             {
                 "mode": "compact-opt-in-audit",
@@ -172,24 +275,23 @@ def runtime_context(
                 "recordCount": len(hypothesis_lifecycles),
             }
         )
-    lifecycle_projection["readMs"] = int(
-        (time.perf_counter() - lifecycle_projection_started) * 1000
-    )
+    lifecycle_projection["readMs"] = hypothesis_lifecycle_ms
     emit(
         "hypothesis_lifecycles.done",
         lifecycleCount=len(hypothesis_lifecycles),
         mode=lifecycle_projection["mode"],
-        runtimeMs=lifecycle_projection["readMs"],
+        runtimeMs=hypothesis_lifecycle_ms,
     )
-    emit("pipeline_health.start")
-    data_pipeline_health = _inputs.data_pipeline_health_context(snapshot)
-    emit("pipeline_health.done")
-    emit("temporal_windows.start")
-    temporal_windows = _inputs.temporal_observation_windows(
-        snapshot,
-        target_symbols=selected_symbols,
+    emit(
+        "portfolio_lifecycle.done",
+        status=str(portfolio_lifecycle.get("status") or "unavailable"),
+        runtimeMs=portfolio_lifecycle_ms,
     )
-    emit("temporal_windows.done", symbolCount=len(temporal_windows))
+    account_context = (
+        metadata.get("accountContext")
+        if isinstance(metadata.get("accountContext"), dict)
+        else {}
+    )
     # Model scoring runs after the factual ABox is complete. This lets all
     # six model families inspect the exact company, valuation, event,
     # cross-asset, price and flow facts that TypeDB will receive.
@@ -202,25 +304,6 @@ def runtime_context(
         if _inputs.statistical_signal_service
         else {}
     )
-    portfolio_lifecycle = {}
-    if _inputs.investment_domain_store and hasattr(
-        _inputs.investment_domain_store, "ontology_portfolio_lifecycle_context"
-    ):
-        emit("portfolio_lifecycle.start")
-        try:
-            portfolio_lifecycle = (
-                _inputs.investment_domain_store.ontology_portfolio_lifecycle_context(
-                    "portfolio:" + str(snapshot.account_id or "default")
-                )
-            )
-        except (
-            Exception
-        ):  # noqa: BLE001 - lifecycle enrichment must not invalidate market inference.
-            portfolio_lifecycle = {}
-        emit(
-            "portfolio_lifecycle.done",
-            status=str(portfolio_lifecycle.get("status") or "unavailable"),
-        )
     result = {
         "settings": dict(_inputs.settings),
         "snapshotId": "abox-snapshot:"

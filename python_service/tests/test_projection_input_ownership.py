@@ -28,6 +28,9 @@ from digital_twin.modules.reasoning.application.projection_input import (
 from digital_twin.modules.reasoning.domain.projection_input_policy import (
     ProjectionInputPolicy,
 )
+from digital_twin.modules.reasoning.domain.reasoning_shadow import (
+    pack_projection_runtime_contexts,
+)
 from projection_input_fixture import (
     AS_OF,
     RULES,
@@ -267,6 +270,49 @@ for name in sys.modules:
         self.assertEqual(
             ["included"], [row["proposalId"] for row in result["hypothesisProposals"]]
         )
+        self._assert_crypto_projection_context_is_subject_scoped()
+
+    def _assert_crypto_projection_context_is_subject_scoped(self):
+        snapshot = source_snapshot()
+        snapshot.external_signals["cryptoMarkets"] = {
+            "ethereum": {
+                "symbol": "ETH",
+                "price": 4200,
+                "source": "fixture",
+                "asOf": AS_OF,
+            }
+        }
+        instance = recorder(api, snapshot, cache=False, overrides=False)
+        calls = []
+        instance.decision_episode_store = SimpleNamespace(
+            list_for_symbols=lambda symbols, **kw: calls.append(
+                ("episodes", sorted(symbols))
+            )
+            or [],
+            outcome_history_for_symbols=lambda symbols, **kw: calls.append(
+                ("outcomes", sorted(symbols))
+            )
+            or [],
+            performance=lambda **_kw: {"status": "insufficient"},
+        )
+        instance.market_time_series_store = SimpleNamespace(
+            load_temporal_windows=lambda _account, symbols, _definitions, **_kw: calls.append(
+                ("temporal", sorted(symbols))
+            )
+            or {symbol: {} for symbol in symbols}
+        )
+
+        result = instance.runtime_context(snapshot, target_symbols=["ETH"])
+
+        self.assertEqual(
+            [
+                ("episodes", ["ETH"]),
+                ("outcomes", ["ETH"]),
+                ("temporal", ["ETH"]),
+            ],
+            calls,
+        )
+        self.assertEqual(["ETH"], sorted(result["temporalObservationWindows"]))
 
     def test_projection_optional_source_failures_do_not_manufacture_memory(self):
         instance = recorder(api, overrides=False)
@@ -346,6 +392,46 @@ for name in sys.modules:
         variations.append(key())
         for variation in variations:
             self.assertNotEqual(original, variation)
+
+        runtime_context = {
+            "asOf": AS_OF,
+            "account": {"accountId": snapshot.account_id},
+            "settings": {},
+        }
+        packet = pack_projection_runtime_contexts(
+            {snapshot.account_id: runtime_context}
+        )
+        with_packet = instance.graph_assembly_cache_key(
+            snapshot,
+            RULES,
+            TBOX,
+            runtime_context,
+            runtime_context_packet=packet,
+        )
+        repeated = instance.graph_assembly_cache_key(
+            snapshot,
+            RULES,
+            TBOX,
+            runtime_context,
+            runtime_context_packet=packet,
+        )
+        changed_packet = pack_projection_runtime_contexts(
+            {
+                snapshot.account_id: {
+                    **runtime_context,
+                    "asOf": "2026-07-20T00:02:00Z",
+                }
+            }
+        )
+        changed_packet_key = instance.graph_assembly_cache_key(
+            snapshot,
+            RULES,
+            TBOX,
+            runtime_context,
+            runtime_context_packet=changed_packet,
+        )
+        self.assertEqual(with_packet, repeated)
+        self.assertNotEqual(with_packet, changed_packet_key)
 
     def test_projection_lineage_failure_never_populates_cache_or_reaches_writer(self):
         persistent = PersistentCache()

@@ -21,9 +21,9 @@ def hypothesis_proposal_context(
     ):
         return []
     symbols = {
-        str(getattr(position, "symbol", "") or "").upper().strip()
-        for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-        if str(getattr(position, "symbol", "") or "").strip()
+        str(symbol or "").upper().strip()
+        for symbol in snapshot.projection_observation_input().get("availableSymbols") or []
+        if str(symbol or "").strip()
     }
     requested = {
         str(symbol or "").upper().strip()
@@ -53,9 +53,9 @@ def hypothesis_lifecycle_context(
     if not _inputs.hypothesis_lifecycle_store:
         return []
     symbols = {
-        str(getattr(position, "symbol", "") or "").upper().strip()
-        for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-        if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
+        str(symbol or "").upper().strip()
+        for symbol in snapshot.projection_observation_input().get("availableSymbols") or []
+        if str(symbol or "").strip()
     }
     requested = {
         str(symbol or "").upper().strip()

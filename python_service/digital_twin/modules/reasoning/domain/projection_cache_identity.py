@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 
 PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = (
-    "portfolio-graph-assembly-cache-v17-comparable-financial-ratios"
+    "portfolio-graph-assembly-cache-v18-packed-runtime-context"
 )
 
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = (
@@ -77,6 +77,7 @@ class ProjectionCacheKeys:
         runtime_context: Dict[str, object],
         target_symbols: List[str] = None,
         input_mode: str = "full",
+        runtime_context_packet: Dict[str, object] = None,
     ) -> str:
         """Hash only source inputs; no graph result or credentials are persisted."""
         source_snapshot = projection_source_snapshot(snapshot)
@@ -92,6 +93,18 @@ class ProjectionCacheKeys:
             metadata.pop("investmentBrain", None)
         source_snapshot["metadata"] = metadata
         frozen_runtime_context = frozen_projection_runtime_context(runtime_context)
+        packet_hash = str(
+            (runtime_context_packet or {}).get("sha256") or ""
+        ).strip()
+        runtime_context_hash = packet_hash or hashlib.sha256(
+            json.dumps(
+                frozen_runtime_context,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
         payload = {
             # Bump this contract whenever graph-builder behavior changes. The
             # durable cache can outlive a worker restart, so source equality
@@ -107,15 +120,7 @@ class ProjectionCacheKeys:
             "sourceSnapshot": source_snapshot,
             "settings": stable_value(self.settings),
             "activeTBox": stable_value(active_tbox),
-            "runtimeContextHash": hashlib.sha256(
-                json.dumps(
-                    frozen_runtime_context,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ).encode("utf-8")
-            ).hexdigest(),
+            "runtimeContextHash": runtime_context_hash,
             "ruleboxRulesHash": str((rule_catalog or {}).get("ruleboxRulesHash") or ""),
             "targetSymbols": sorted(
                 {

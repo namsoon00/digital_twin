@@ -1592,6 +1592,7 @@ class PortfolioOntologyProjectionRecorder:
         runtime_context: Dict[str, object],
         target_symbols: List[str] = None,
         input_mode: str = "full",
+        runtime_context_packet: Dict[str, object] = None,
     ) -> str:
         return ProjectionCacheKeys(
             self.settings, self.graph_assembly_cache_namespace()
@@ -1602,6 +1603,7 @@ class PortfolioOntologyProjectionRecorder:
             runtime_context,
             target_symbols,
             input_mode,
+            runtime_context_packet,
         )
 
     def build_graph_assembly(

@@ -198,7 +198,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "v17-comparable-financial-ratios",
+            "v18-packed-runtime-context",
             PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
         )
         self.assertEqual(

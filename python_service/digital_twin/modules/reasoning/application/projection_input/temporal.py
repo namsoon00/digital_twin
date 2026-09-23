@@ -52,11 +52,20 @@ def temporal_observation_windows(
         _inputs.market_time_series_store, "load_temporal_windows"
     ):
         return {}
-    symbols = {
-        str(getattr(position, "symbol", "") or "").upper().strip()
-        for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
-        if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
-    }
+    projection_input = getattr(snapshot, "projection_observation_input", None)
+    if callable(projection_input):
+        symbols = {
+            str(symbol or "").upper().strip()
+            for symbol in projection_input().get("availableSymbols") or []
+            if str(symbol or "").strip()
+        }
+    else:
+        symbols = {
+            str(getattr(position, "symbol", "") or "").upper().strip()
+            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if str(getattr(position, "symbol", "") or "").strip()
+            and not position.is_cash()
+        }
     requested = {
         str(symbol or "").upper().strip()
         for symbol in target_symbols or []

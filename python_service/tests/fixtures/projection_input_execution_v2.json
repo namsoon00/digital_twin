@@ -1,12 +1,12 @@
 {
-  "sourceRevision": "temporal-input-identity-v1",
+  "sourceRevision": "bounded-parallel-context-and-crypto-scope-v1",
   "contractVersion": "projection-input-execution-v2",
-  "reason": "Projection receipts retain immutable temporal identity and the normalized official company-event evidence included in each graph assembly.",
+  "reason": "Projection receipts retain immutable temporal identity while bounded parallel reads and crypto target routing preserve the exact factual input set.",
   "scenarios": {
     "full": "8b8e6ab7a119e44e51bf88ec39b9cb745a8f7c5fd9cff314064989031299c922",
     "target": "1dc288ff7bb3ee79d62f72322beef0231e4287ecb974cdf55c8351674f9b40f8",
     "source-facts": "1b7199b95d221a9a909737714332901ea49ae9b28370d2b33143724e11099ec8",
-    "live-context": "1bf9e99ab0075858b893d5e2da2e47fb1222d4427c39529cc032ac208840651c",
+    "live-context": "0dba1757cd5bf5564f7dbd936a650deb10be35a5e59a682c10a791bf67ce78f1",
     "memory-hit": "b32b26e37c96e11e4c340a807ec3365558e9d3a2da2585eacbf85331968d89ca",
     "persistent-hit": "aa016efe0dd3f8b45b08e6c26fbbd06e2fbaf1b49c0188ed99c6f60ab30b21cf",
     "cache-errors": "217fd4531c50d0a5055cd11da736bea9944de0789b7fd03f4027f0246ae7f0c5",

@@ -63,6 +63,7 @@ def build_graph_assembly(
             runtime_context,
             target_symbols=input_symbols,
             input_mode=input_mode,
+            runtime_context_packet=prepared.runtime_context_packet,
         )
         if cache_enabled
         else ""

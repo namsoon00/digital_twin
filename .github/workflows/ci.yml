@@ -45,8 +45,13 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: Install Python dependencies
         run: python3 -m pip install --user pymysql typedb-driver==3.12.0 websockets==15.0.1

@@ -97,7 +97,17 @@ class OntologyRuleManifestTests(unittest.TestCase):
         }
 
         index = rule_dependency_reverse_index([rule])
+        manifest = validate_rule_domain_manifests([rule])["manifests"][0]
 
+        self.assertNotIn("dependencyKeys", manifest["derivedOutputs"][0])
+        self.assertEqual(
+            ["graph.test.routed.v1"],
+            index["producersByDependencyKey"]["relation:has-test-result"],
+        )
+        self.assertEqual(
+            ["graph.test.routed.v1"],
+            index["producersByDependencyKey"]["kind:reasoning-insight"],
+        )
         self.assertEqual([], index["triggerByDependencyKey"].get("kind:stock:field:targetpositionrole", []))
         self.assertEqual(
             ["graph.test.routed.v1"],

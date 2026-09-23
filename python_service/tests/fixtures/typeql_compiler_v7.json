@@ -1,7 +1,7 @@
 {
-  "sourceRevision": "rule dependency closure manifest v9",
+  "sourceRevision": "d6c80ec85 + native account-policy reference fix; RuleBox payload unchanged by routing index v3",
   "engineVersion": "typedb-direct-typeql-rule-engine-v7",
-  "semanticChange": "Preserve account-policy semantics and include value-free producer-consumer dependency closure in the RuleBox manifest.",
+  "semanticChange": "Compare account strategy fields in TypeDB; default only when absent. Producer-consumer closure remains an execution-routing index and does not alter compiled RuleBox semantics.",
   "changedCases": [
     "condition",
     "governed",
@@ -23,8 +23,8 @@
     },
     "catalog": {
       "count": 1,
-      "bytes": 2547149,
-      "sha256": "8f3c38e02c60de6dee2d1ba08a8a27bab70c01db41fa2127e4bdd8f79c939845"
+      "bytes": 2534194,
+      "sha256": "2e07b33214ca87e4d4a73836c0547edfa5cf6d184d18c80791d3e468d1b51bdb"
     },
     "condition": {
       "count": 281,

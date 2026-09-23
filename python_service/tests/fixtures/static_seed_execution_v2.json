@@ -1,5 +1,5 @@
 {
-  "sourceRevision": "rule dependency closure manifest v9",
+  "sourceRevision": "d6c80ec85 + rule RHS capabilities v2; RuleBox payload unchanged by routing index v3",
   "changedCases": [
     "schema",
     "schemaIdentity",
@@ -9,15 +9,15 @@
   "scenarios": {
     "schema": "a520d81d058ea352ff9024299cb4f6ba5190906e3ac38278a81d3c01aedbdda3",
     "schemaIdentity": "5d3be51ae8a6c28ad60093cc340eab16f107f9d290600e33e9de847847359eee",
-    "manifestIdentity": "8eb5c71fdb48348c41055c25e91cc20680f806b604085597dec8e3690bd2e905",
-    "generatedRows": "78577c8abe47cdabf21063cf0dead28af5bbcb4e3611175e46603993322cb2a7",
-    "sentinels": "34fdd58c61329bbe635cd87b46631f053234145a49c1c8163bd14b9e1f4c6fab",
-    "restore:ok": "68174a109c5fe88941176ef73bc513bddb61a803980d634bc0df81e8d1ba615b",
+    "manifestIdentity": "c4e684448fe67b16a4b9f2c1ccdd6c0d933703f0827c2b52f1acb8d5ff234bd3",
+    "generatedRows": "33acc2c468674ccfd610ea43b75859419614bc5716d2c5a28f9828ce0c92889f",
+    "sentinels": "1424613eb9594be38d89ac4c49a85dde81a2b156ac4364972216e5a422f70597",
+    "restore:ok": "078650b8e6f9794578a85421d92e049d87e0a40623cf67efe1e17706e10579e9",
     "restore:schema-error": "efd028dcb469055af5f90d9c970a48c41097c4239a89577fe86dea9a9063c6c4",
-    "restore:static-error": "9286bb03ab9718a863aa6f53ce1804715c929c87e6b91189f817ec9cd1278e0d",
-    "restore:manifest-error": "ec28dfd3aab6b51408273844b579cc86f76a5f512edc9c69736351d4534858a9",
-    "restore:readback-error": "afc923fdfbd1f49f8f29c4c777d51066e4d6802fa52091a1b970fa6aa006d60f",
-    "restore:hash-error": "dadbebe87a1e4f17e4588099237a57c6e1f9f47910b0a79eca5bbb3bf672aa66",
+    "restore:static-error": "e16dbc36106d181b8e722fe532fdebac6f6875d012e9748060d79808bb6b2943",
+    "restore:manifest-error": "e76f9ed27e69aac5e3fefdb6d78f7d264ac55afe262981c99bc815f2fc79f647",
+    "restore:readback-error": "e8211c6fa9dd766b84cf1a2bc16356e014540e4c4910d31655a5456e939efd9b",
+    "restore:hash-error": "9bcf9cbcc6164ac7a29d4b2080eeb5c69b57e97aedc3a5edbb528f5bde3995df",
     "restore:contract-error": "fccca9db4148a8be1964036f491a51f4f17e6a69c40413eb2ca9905637c14cfe",
     "restore:missing-box": "0ccfdc6e478a56a911fc2a4d27092fba6473a8d96a5c7c0bd65068ef1611a373"
   }

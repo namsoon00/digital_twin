@@ -13,7 +13,7 @@ from digital_twin.modules.model_registry.domain.ontology_rule_ownership import v
 from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract, statistical_signal_reverse_index
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v9-dependency-closure"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v8-execution-unit"
 RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v3"
 RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v3-closure"
 
@@ -229,15 +229,6 @@ def rule_derived_outputs(rule: object) -> List[Dict[str, object]]:
     for item in _items(_value(rule, "derivations")):
         relation_type = str(_value(item, "relation_type", "relationType") or "").strip()
         target_kind = str(_value(item, "target_kind", "targetKind") or "").strip()
-        dependency_keys = []
-        if relation_type:
-            dependency_keys.append(
-                "relation:" + relation_type.lower().replace("_", "-")
-            )
-        if target_kind:
-            dependency_keys.append(
-                "kind:" + target_kind.lower().replace("_", "-")
-            )
         rows.append({
             "relationType": relation_type,
             "targetKind": target_kind,
@@ -249,7 +240,6 @@ def rule_derived_outputs(rule: object) -> List[Dict[str, object]]:
                 if relation_type
                 else ""
             ),
-            "dependencyKeys": dependency_keys,
         })
     return rows
 
@@ -449,10 +439,6 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         or not item.get("requiredContext")
         or not item.get("invalidationContract")
         or not item.get("derivedOutputs")
-        or any(
-            not output.get("dependencyKeys")
-            for output in item.get("derivedOutputs") or []
-        )
         or item.get("executionUnitVersion") != RULE_EXECUTION_UNIT_VERSION
         or item.get("evaluationGrain") not in EXECUTION_GRAINS
         or not item.get("ownerWorld")
@@ -518,6 +504,22 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
         if rule_id not in values:
             values.append(rule_id)
 
+    def output_dependency_keys(output: Dict[str, object]) -> List[str]:
+        """Derive routing keys without changing the frozen RuleBox payload."""
+
+        keys = {
+            str(value or "").strip()
+            for value in output.get("dependencyKeys") or [output.get("dependencyKey")]
+            if str(value or "").strip()
+        }
+        relation_type = str(output.get("relationType") or "").strip()
+        target_kind = str(output.get("targetKind") or "").strip()
+        if relation_type:
+            keys.add("relation:" + relation_type.lower().replace("_", "-"))
+        if target_kind:
+            keys.add("kind:" + target_kind.lower().replace("_", "-"))
+        return sorted(keys)
+
     for manifest in manifests:
         rule_id = str(manifest.get("ruleId") or "").strip()
         for event_class in manifest.get("triggerEventClasses") or []:
@@ -544,7 +546,7 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
                 for family in families:
                     add("invalidationByFamily", family, rule_id)
         for output in manifest.get("derivedOutputs") or []:
-            for key in output.get("dependencyKeys") or [output.get("dependencyKey")]:
+            for key in output_dependency_keys(output):
                 add("producersByDependencyKey", key, rule_id)
 
     def dependency_matches(left: object, right: object) -> bool:
@@ -574,7 +576,7 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
         str(manifest.get("ruleId") or ""): {
             str(key or "").strip()
             for output in manifest.get("derivedOutputs") or []
-            for key in output.get("dependencyKeys") or [output.get("dependencyKey")]
+            for key in output_dependency_keys(output)
             if str(key or "").strip()
         }
         for manifest in manifests
@@ -608,8 +610,8 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
         for key in list(values):
             values[key] = sorted(values[key])
     statistical_signals = statistical_signal_reverse_index(manifests)
-    # Predictive model-input routing is part of the release fingerprint. It
-    # selects which contracts are rescored but never evaluates their values.
+    # Predictive model-input routing has its own fingerprint. It selects which
+    # contracts are rescored but must not alter the immutable RuleBox artifact.
     fingerprint_payload = {
         "version": RULE_DEPENDENCY_INDEX_VERSION,
         "manifestVersion": ONTOLOGY_RULE_MANIFEST_VERSION,

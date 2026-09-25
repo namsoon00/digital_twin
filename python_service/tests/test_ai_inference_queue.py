@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -322,6 +323,17 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("prompt-contract-budget", diagnostic["category"])
         self.assertFalse(diagnostic["retryable"])
         self.assertIn("6145 bytes", diagnostic["safeDetail"])
+        categories = {
+            ai_failure_diagnostic(RuntimeError("HTTP 429 rate limit exceeded"))["category"],
+            ai_failure_diagnostic(json.JSONDecodeError("expecting value", "", 0))["category"],
+            ai_failure_diagnostic(TimeoutError("model deadline exceeded"))["category"],
+            ai_failure_diagnostic(ValueError("publication contract failed"))["category"],
+            ai_failure_diagnostic(RuntimeError("unknown model failure"))["category"],
+        }
+        self.assertEqual(
+            {"usage-limit", "response-format", "timeout", "contract-invalid", "execution"},
+            categories,
+        )
 
     def test_ai_watch_registration_is_atomic_durable_and_independent_of_trade_decisions(self):
         from digital_twin.infrastructure.transactions.decision_history_parts.follow_ups import evaluate_follow_up_observation, acknowledge_follow_up_reasoning
@@ -552,6 +564,52 @@ class AIInferenceQueueTests(unittest.TestCase):
             notification_ai_material_fingerprint(lifecycle),
             notification_ai_material_fingerprint(invalidated),
         )
+
+        semantic = json.loads(json.dumps(baseline))
+        semantic["title"] = "표현 A"
+        relation = semantic["ontologyRelationContext"]
+        relation.setdefault("facts", {})
+        relation["facts"]["companyContext"] = {
+            "materialRevision": "company:revision:1",
+            "financialEvidence": {"decisionFingerprint": "financial:1", "period": "2025-12-31"},
+        }
+        relation["facts"].update({
+            "valuationModelVersion": "valuation:1",
+            "valuationDecisionEligible": True,
+            "valuationFairValue": 120,
+            "valuationExpectedEPS": 6,
+            "valuationTargetPER": 20,
+        })
+        relation["investmentBrain"] = {"hypothesisSet": {"hypotheses": [{
+            "familyId": "growth",
+            "templateId": "growth-v1",
+            "candidateAction": "HOLD",
+            "assumptionIds": ["assumption:margin-stable"],
+            "invalidationConditions": [{
+                "conditionId": "margin-floor", "field": "operatingMarginPct",
+                "operator": "<", "threshold": 20,
+            }],
+        }]}}
+        presentation_only = json.loads(json.dumps(semantic))
+        presentation_only["title"] = "같은 뜻의 표현 B"
+        presentation_only["referenceDate"] = "2026-09-09 09:01 KST"
+        self.assertEqual(
+            notification_ai_material_fingerprint(semantic),
+            notification_ai_material_fingerprint(presentation_only),
+        )
+        for field, mutate in (
+            ("company-revision", lambda item: item["ontologyRelationContext"]["facts"]["companyContext"].update({"materialRevision": "company:revision:2"})),
+            ("valuation-input", lambda item: item["ontologyRelationContext"]["facts"].update({"valuationExpectedEPS": 5})),
+            ("assumption", lambda item: item["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0].update({"assumptionIds": ["assumption:margin-down"]})),
+            ("invalidation", lambda item: item["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0]["invalidationConditions"][0].update({"threshold": 18})),
+        ):
+            with self.subTest(material_change=field):
+                changed_semantic = json.loads(json.dumps(semantic))
+                mutate(changed_semantic)
+                self.assertNotEqual(
+                    notification_ai_material_fingerprint(semantic),
+                    notification_ai_material_fingerprint(changed_semantic),
+                )
 
     def assert_review_only_subject_queues_narrative_without_action_transition(self):
         class Queue:
@@ -1252,14 +1310,38 @@ class AIInferenceQueueTests(unittest.TestCase):
         first = AIInferenceRequest.create(first_job, first_job.context)
         self.queue.enqueue(first_job, first)
 
-        second_job = self.create_job()
-        second = AIInferenceRequest.create(second_job, second_job.context)
-        outcome = self.queue.enqueue(second_job, second)
-
-        self.assertEqual("coalesced-identical", outcome["status"])
-        self.assertEqual("superseded", self.notifications.get(second_job.job_id).status)
+        repeated_jobs = []
+        for _index in range(19):
+            repeated_job = self.create_job()
+            repeated = AIInferenceRequest.create(repeated_job, repeated_job.context)
+            outcome = self.queue.enqueue(repeated_job, repeated)
+            self.assertEqual("coalesced-identical", outcome["status"])
+            repeated_jobs.append(repeated_job)
+        self.assertTrue(all(
+            self.notifications.get(job.job_id).status == "superseded"
+            for job in repeated_jobs
+        ))
         row = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_requests")
         self.assertEqual(1, int(row[0]))
+
+        entered = threading.Event()
+        release = threading.Event()
+        holder_result = []
+        def hold_subject_lock():
+            with self.notifications.delivery_subject_lock("main", "005930") as acquired:
+                holder_result.append(acquired)
+                entered.set()
+                release.wait(5)
+        holder = threading.Thread(target=hold_subject_lock)
+        holder.start()
+        self.assertTrue(entered.wait(5))
+        with self.notifications.delivery_subject_lock("main", "005930") as acquired:
+            self.assertFalse(acquired)
+        release.set()
+        holder.join(5)
+        self.assertEqual([True], holder_result)
+        with self.notifications.delivery_subject_lock("main", "005930") as acquired:
+            self.assertTrue(acquired)
 
     def test_superseding_request_reports_the_replaced_reasoning_case(self):
         first_job = self.create_job(100, "generation-case-1")

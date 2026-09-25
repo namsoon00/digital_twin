@@ -85,6 +85,29 @@ def ai_failure_diagnostic(error: object, stage: str = "model-execution") -> Dict
         category = "prompt-contract-budget"
         retryable = False
         summary = "AI prompt could not preserve its minimum decision contract within the configured budget."
+    elif any(
+        token in lowered
+        for token in (
+            "usage limit", "rate limit", "rate-limit", "quota", "credit exhausted",
+            "too many requests", "resource exhausted", "status 429", "http 429",
+        )
+    ):
+        category = "usage-limit"
+        retryable = True
+        summary = "AI execution was deferred because the provider usage limit was reached."
+    elif not isinstance(error, NotificationAIContractError) and (
+        error_type == "JSONDecodeError"
+        or any(
+            token in lowered
+            for token in (
+                "invalid json", "malformed json", "json decode", "jsondecodeerror",
+                "response parse", "could not parse", "unexpected response format",
+            )
+        )
+    ):
+        category = "response-format"
+        retryable = False
+        summary = "AI returned a response that could not be parsed into the required format."
     elif isinstance(error, NotificationAIContractError) or any(
         token in lowered
         for token in ("contract", "hypothesis", "candidate fingerprint", "publication")

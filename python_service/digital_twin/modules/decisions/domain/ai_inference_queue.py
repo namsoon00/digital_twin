@@ -153,6 +153,83 @@ def _first_mapping(value: object) -> Dict[str, object]:
     return {}
 
 
+def _selected_material(value: object, fields: Iterable[str]) -> Dict[str, object]:
+    source = _mapping(value)
+    return {
+        key: source.get(key)
+        for key in fields
+        if key in source and source.get(key) not in (None, "", [], {})
+    }
+
+
+def _condition_material(values: object) -> list:
+    rows = []
+    for item in _items(values):
+        row = _mapping(item)
+        if row:
+            selected = _selected_material(row, (
+                "conditionId", "sourceConditionId", "field", "operator", "threshold",
+                "purpose", "status", "observable", "onSatisfied",
+            ))
+        else:
+            selected = _clean(item)
+        if selected not in (None, "", [], {}) and selected not in rows:
+            rows.append(selected)
+    return sorted(rows, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def _company_material_contract(facts: Mapping[str, object]) -> Dict[str, object]:
+    company = _mapping(_mapping(facts).get("companyContext"))
+    financial = _mapping(company.get("financialEvidence"))
+    integrity = _mapping(company.get("financialIntegrity"))
+    payload = {
+        **_selected_material(company, ("materialRevision", "materialSectionRevisions")),
+        "financialDecisionFingerprint": _clean(financial.get("decisionFingerprint")),
+        "financialPeriod": _clean(financial.get("period")),
+        "financialIntegrity": _selected_material(
+            integrity,
+            ("status", "selectionVersion", "excludedPeriodCount", "issueScope"),
+        ),
+    }
+    return {key: value for key, value in payload.items() if value not in (None, "", [], {})}
+
+
+def _valuation_material_contract(facts: Mapping[str, object]) -> Dict[str, object]:
+    source = _mapping(facts)
+    valuation = _selected_material(source, (
+        "valuationMethod", "valuationModelVersion", "valuationDecisionEligible",
+        "valuationReferenceOnly", "valuationQualityStatus", "valuationConsensusStatus",
+        "valuationFairValueLow", "valuationFairValue", "valuationFairValueHigh",
+        "valuationExpectedEPSLow", "valuationExpectedEPS", "valuationExpectedEPSHigh",
+        "valuationEpsPeriod", "valuationTargetPERLow", "valuationTargetPER",
+        "valuationTargetPERHigh", "valuationMultiplePeriod", "valuationEpsScenario",
+        "valuationMultipleBand", "valuationFormulaTrace", "valuationModelExclusionReasons",
+        "valuationAnalystTargetLowPrice", "valuationAnalystTargetPrice",
+        "valuationAnalystTargetHighPrice", "valuationAnalystOpinionCount",
+    ))
+    meaningful = any(
+        valuation.get(key) not in (None, "", 0, 0.0, False, [], {})
+        for key in valuation
+    )
+    return valuation if meaningful else {}
+
+
+def _assessment_material_contract(value: object) -> Dict[str, object]:
+    bundle = _mapping(value)
+    payload = _selected_material(bundle, ("version", "source"))
+    for key in (
+        "evidenceQuality", "investmentOpinion", "portfolioFit",
+        "executionReadiness", "recommendedPlan", "monitoringPlan",
+    ):
+        selected = _selected_material(
+            bundle.get(key),
+            ("status", "state", "decision", "reasonCode", "blockedReasons", "warnings"),
+        )
+        if selected:
+            payload[key] = selected
+    return payload
+
+
 def _material_reasoning_trigger(values: Mapping[str, object]) -> Dict[str, object]:
     payload = dict(values or {})
     trigger = _first_mapping(payload.get("reasoningDeliveryTrigger")) or _first_mapping(
@@ -225,6 +302,7 @@ def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str
 
     values = dict(context or {})
     relation = _mapping(values.get("ontologyRelationContext"))
+    facts = _mapping(relation.get("facts"))
     insight = _mapping(values.get("ontologyInsight"))
     relation_diff = _mapping(values.get("ontologyRelationDiff"))
     transition = (
@@ -264,7 +342,7 @@ def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str
         )
         if not family_key:
             continue
-        hypothesis_families.append({
+        family = {
             "family": family_key,
             "template": _clean(row.get("templateId")),
             "action": _clean(row.get("candidateAction")).upper(),
@@ -274,7 +352,16 @@ def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str
             # in the comparison shape without treating polling IDs as meaning.
             "supportingEvidenceCount": len(_texts(row.get("supportingEvidenceIds") or [])),
             "counterEvidenceCount": len(_texts(row.get("counterEvidenceIds") or [])),
-        })
+        }
+        assumptions = _texts(row.get("assumptionIds") or row.get("assumptions") or [])
+        invalidations = _condition_material(
+            row.get("invalidationConditions") or row.get("followUpConditions") or []
+        )
+        if assumptions:
+            family["assumptions"] = assumptions
+        if invalidations:
+            family["invalidationConditions"] = invalidations
+        hypothesis_families.append(family)
     hypothesis_families.sort(
         key=lambda item: (item["family"], item["template"], item["action"])
     )
@@ -287,7 +374,10 @@ def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str
     )
     reasoning_trigger = _material_reasoning_trigger(values)
     lifecycle_transition = _material_lifecycle_contract(values, relation)
-    return {
+    company_material = _company_material_contract(facts)
+    valuation_material = _valuation_material_contract(facts)
+    assessment_material = _assessment_material_contract(relation.get("assessmentBundle"))
+    payload = {
         "reviewMode": notification_ai_review_mode(values),
         "targetRole": _clean(relation.get("targetRole")),
         "reviewLevel": _clean(relation.get("reviewLevel")),
@@ -330,6 +420,13 @@ def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str
             "judgementBlocked": bool(transition.get("currentJudgementBlocked")),
         } if bool(transition.get("material")) else {},
     }
+    if company_material:
+        payload["companyEvidence"] = company_material
+    if valuation_material:
+        payload["valuation"] = valuation_material
+    if assessment_material:
+        payload["assessmentBundle"] = assessment_material
+    return payload
 
 
 def notification_ai_material_fingerprint(context: Mapping[str, object]) -> str:

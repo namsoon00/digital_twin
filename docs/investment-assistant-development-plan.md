@@ -17,7 +17,11 @@
   cutoff 이전 indexed 조회, clock/조회 실패 진단, 최종 prompt의 이전 판단 ID·시각 보존을 구현했다.
   운영 이력 migration이나 release 승격은 수행하지 않았다. 상세 결과는
   [IN-03 판단 연속성 보고서](investment-assistant-in03-continuity.md)에 기록했다.
-- IN-04 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
+- IN-04: AI 작업의 의미 지문을 회사 재무 revision·평가 입력·가정·무효화 조건까지 확장하고,
+  성공 transport receipt 재확인과 종목별 발송 잠금의 20회 반복/2-worker 경계를 검증했다.
+  AI 사용량 한도·timeout·응답 형식·계약·일반 실행 실패도 별도 진단한다. 상세 결과는
+  [IN-04 의미 변화와 전달 보고서](investment-assistant-in04-semantic-delivery.md)에 기록했다.
+- IN-05 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
 
 ## 1. 제품 목표와 개발 원칙
 

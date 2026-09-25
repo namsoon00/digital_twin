@@ -78,5 +78,9 @@
   {
     "reason": "Present every TypeDB relation linked to candidate hypotheses and reserve selected state for the AI-selected hypothesis.",
     "functions": ["renderNotificationReverseReasoning"]
+  },
+  {
+    "reason": "Label driver DCF separately and translate causal, macro-exposure and reproducibility gaps into user-facing Korean in the shared valuation view.",
+    "functions": ["instrumentValuationModelLabel", "instrumentValuationMissingLabel"]
   }
 ]

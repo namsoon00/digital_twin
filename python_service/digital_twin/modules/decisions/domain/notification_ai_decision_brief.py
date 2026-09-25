@@ -739,6 +739,8 @@ RELATION_FACT_PRIORITY = (
     "usdKrw", "macroDgs2", "macroDgs10", "macroDff", "btcPrice", "btcChange24h",
     "btcChange7d", "valuationDecisionEligible", "valuationCurrentPrice",
     "valuationFairValue", "valuationFairValueLow", "valuationFairValueHigh",
+    "valuationBundleId", "valuationAssessmentId", "valuationMaterialFingerprint",
+    "valuationReproducibilityState", "valuationReproducibilityGaps",
 )
 
 

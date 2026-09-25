@@ -7,6 +7,7 @@ import { evidenceSummary, evidenceResolutionLabel } from "../../public/modules/d
 import { notificationEventSummary } from "../../public/modules/notifications/summary.mjs";
 import { renderSecondaryDisclosure } from "../../public/modules/shared/disclosure.mjs";
 import { renderNotificationCustomerDocument } from "../../public/modules/notifications/customer-document.mjs";
+import { renderInstrumentInvestmentAnalysis } from "../../public/modules/instruments/valuation-presentation.mjs";
 
 test("both notification lanes show financial dates, comparisons and sources in compact web details", () => {
   for (const role of ["typedb-observation", "ai-research-insight"]) {
@@ -18,6 +19,25 @@ test("both notification lanes show financial dates, comparisons and sources in c
     assert.match(html, /yfinance/);
     assert.match(html, /https:\/\/dart.fss.or.kr\/test/);
   }
+});
+
+test("instrument valuation separates verified changes, price-cause limits and reference models", () => {
+  const html = renderInstrumentInvestmentAnalysis({
+      currentVerifiedFacts: [{label: "영업이익률", value: 24, unit: "percent", period: "2025-12-31"}],
+      newlyConfirmedFacts: [],
+      changeFromPrevious: {state: "unchanged", materialChange: false},
+      priceExplanation: {claimStrength: "supported-mechanism", blockingReasons: ["precise-event-clock-missing"]},
+      valuationModels: [{modelId: "growth-quality-earnings", fairValue: 40, currency: "USD", decisionEligible: false}],
+      nextChecks: ["company-currency-exposure-missing"]
+  }, "USD");
+  assert.match(html, /회사 상태와 이전 판단/);
+  assert.match(html, /현재 검증 계약과 source revision/);
+  assert.match(html, /영업이익률/);
+  assert.match(html, /기업가치 영향 경로만 확인/);
+  assert.match(html, /사건이 공개된 정확한 시각/);
+  assert.match(html, /참고용/);
+  assert.match(html, /기업의 매출·비용 통화 노출/);
+  assert.doesNotMatch(html, /causal-hypothesis|company-currency-exposure-missing/);
 });
 
 test("compact financial reviews keep all source-labelled facts separate from the new market change", () => {

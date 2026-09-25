@@ -137,6 +137,18 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertTrue(payload["valuation"]["multipleBand"]["evidenceBacked"])
         self.assertEqual(4, payload["valuation"]["multipleBand"]["sampleCount"])
         self.assertFalse(payload["valuation"]["quality"]["decisionEligible"])
+        self.assertTrue(payload["valuation"]["identity"]["valuationBundleId"])
+        self.assertTrue(payload["valuation"]["identity"]["valuationAssessmentId"])
+        self.assertIn(payload["valuation"]["inputSnapshot"]["reproducibilityState"], {"partial", "reproducible"})
+        self.assertEqual("unresolved", payload["investmentAnalysis"]["priceExplanation"]["claimStrength"])
+        self.assertFalse(payload["investmentAnalysis"]["customerMessageEligible"])
+        self.assertIn("currentVerifiedFacts", payload["investmentAnalysis"])
+        self.assertEqual([], payload["investmentAnalysis"]["newlyConfirmedFacts"])
+        self.assertTrue(payload["investmentAnalysis"]["valuationModels"])
+        self.assertEqual(
+            "do-not-average-model-values",
+            payload["investmentAnalysis"]["valuationModels"][0]["comparisonPolicy"],
+        )
         for action_key in ("action", "decision", "recommendedAction"):
             self.assertNotIn(action_key, payload)
             self.assertNotIn(action_key, payload["valuation"])

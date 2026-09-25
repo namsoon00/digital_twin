@@ -2126,6 +2126,8 @@ def build_notification_ai_gate_prompt(
         "회사 재무·밸류에이션·경영진·자본 구조 원시값도 같은 원칙을 적용한다. activeRules에 회사 상태와 시장 반응을 결합한 규칙이 있을 때만 행동 판단 근거로 사용하고, 단일 PER·PBR·ROE나 CEO 이름만으로 매수·매도 결론을 만들지 않는다. 회사 규칙이 성립하면 currentActionPlan에는 현재 대응을, changeAnalysis에는 새로 바뀐 회사 사실 또는 시장 확인을, nextActionPlan에는 다음 보고 기간과 무효화 조건을 서로 다르게 쓴다.",
         "relationshipDatabaseInference.companyValuationContext는 알림에 결정론적으로 표시되는 회사 가치 지표다. decisionRole=reference이면 참고 정보로만 설명하고 action 근거로 사용하지 않는다. decisionRole=decision-evidence이면 activeCompanyValuationRuleIds에 실제 성립한 TypeDB 회사·시장 규칙이 있으므로 해당 규칙의 재무 기준 기간, 가격 확인과 반대 근거를 함께 설명한다.",
         "valuationReferenceOnly=true인 애널리스트 목표가는 참고값이다. 세부 산식이 공개된 적정가나 안전마진으로 부르지 말고 매수·매도 행동의 직접 근거로 사용하지 않는다. valuationDecisionEligible=true인 재현 가능한 가치 계산만 행동 근거 후보로 다룬다.",
+        "가치 계산을 설명할 때 valuationBundleId와 valuationAssessmentId가 있으면 같은 ID의 수치·기간·가정만 사용한다. valuationReproducibilityState가 reproducible이 아니거나 valuationReproducibilityGaps가 남아 있으면 목표가를 확정값 또는 행동 근거로 표현하지 않는다. DCF와 PER 결과가 다르면 평균을 내지 말고 각 모델의 가정 차이와 reference-only 상태를 분리해 설명한다.",
+        "가격 원인은 검증된 사건 시각, 조정된 반응 구간, 시장·업종 대안 설명을 모두 확인한 causal-hypothesis만 가설로 표현한다. supported-mechanism은 기업가치에 영향을 줄 수 있는 경로일 뿐 실제 주가 움직임의 원인 증명이 아니며, unresolved이면 원인을 지어내지 않는다.",
         "가치 계산과 가격·수급 확인에 필요한 공개 데이터는 시스템 수집기가 갱신 시 자동 재판단한다. 사용자에게 공개 재무·시세·거래·수급 데이터를 직접 찾으라고 요구하지 말고, 개인 손실 허용선이나 선택적인 가치 가정처럼 개인 정책이 필요한 경우만 사용자 확인으로 구분한다.",
         "실행계획의 strengthenConditions, weakenConditions, nextChecks, counterSignals와 경쟁 가설을 비교해 어떤 조건이 현재 의견을 지지하거나 약화하는지 설명한다. TypeDB 관계가 없는 단일 사실은 다음 확인 또는 부족 데이터로만 다룬다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",

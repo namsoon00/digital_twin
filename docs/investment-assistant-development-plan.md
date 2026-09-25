@@ -2,7 +2,7 @@
 
 - 작성일: 2026-09-25, Asia/Seoul
 - 코드 조사 기준: `e1869648ac473585ef722e5bea185e2da3769fbc` (`main`)
-- 상태: **개발 계획**. 이 문서 작성으로 데이터 복구, 모델 배포, 투자 알림 정책 변경을 수행한 것은 아니다.
+- 상태: **IN-00~16 구현 완료, 운영 실증 대기**. 계산·검증·표시·격리 배포 계약까지 구현했으며, 데이터가 부족한 모델은 reference/shadow에 남는다. 개발 완료는 투자 모델 승격을 뜻하지 않는다.
 - 사용법: 담당 모델은 [17개 작업 명세](#6-작업-명세)의 티켓 중 지정받은 범위만 수행한다. 최초 착수 지시는 [위임 프롬프트](#10-다른-모델에-전달할-프롬프트)를 사용한다.
 
 ## 실행 현황
@@ -33,7 +33,14 @@
   가격/이익 기준 시각·upstream의 비교 가능성을 표본별 포함·제외 ledger로 검증한다.
   중복·충돌·stale·bootstrap-only 및 정상화 근거 없는 경기순환 입력은 판단용 평가에서 차단한다.
   상세 결과는 [IN-07 비교 배수 보고서](investment-assistant-in07-comparable-multiples.md)에 기록했다.
-- IN-08 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
+- IN-08: 원본 revision과 평가 시계를 고정한 `valuation-input-bundle-v1`, 결과 ID, audit/material fingerprint 및 이전 평가 delta를 구현했다. UI·ABox·AI 작업 지문이 같은 bundle/assessment를 사용한다.
+- IN-09: 검증된 연간 재무에서 최대 3개 회사 driver를 만들고, 금리·환율은 명시적 기업 노출 revision이 있을 때만 연결한다. 현재 운영 데이터에 노출 정보가 없으면 unresolved로 남는다.
+- IN-10: 사건 시각, 조정 가격 반응, 시장·업종 비교, 독립 출처와 대안 설명을 확인하는 인과 주장 계약을 구현했다. 원인 미확인은 고객 메시지 근거로 승격되지 않는다.
+- IN-11~12: 순수 FCFF driver DCF와 동일 코어 기반 reverse DCF를 구현했다. 명시적 입력 bundle이 없는 종목에는 자동 적용하지 않으며, PER와 DCF를 평균내지 않는다.
+- IN-13~14: 평가 snapshot을 그래프·reasoning facts·실제 AI prompt에 연결하고 기존 종목 평가 API와 화면에 새 사실, 이전 판단 차이, 인과 상태, 모델별 평가, 다음 확인 항목을 추가했다.
+- IN-15: 후보 runtime 격리, 동일 frozen input 비교, 전달 capability 0, resource budget, rollback receipt를 fail-closed 계약으로 구현했다. 실제 운영 후보 승격은 수행하지 않았다.
+- IN-16: 독립 episode 단위 품질 평가와 미래 정보·불완전 replay 제외 계약을 구현했다. 독립 미래 관측이 아직 없으므로 확대 자격은 미완료다.
+- 상세 구현과 남은 데이터 제약은 [IN-08~16 통합 보고서](investment-assistant-in08-in16-integration.md)에 기록했다.
 
 ## 1. 제품 목표와 개발 원칙
 

@@ -579,6 +579,10 @@ class AIInferenceQueueTests(unittest.TestCase):
             "valuationFairValue": 120,
             "valuationExpectedEPS": 6,
             "valuationTargetPER": 20,
+            "valuationBundleId": "valuation-input-bundle:one",
+            "valuationAssessmentId": "valuation-assessment:one",
+            "valuationMaterialFingerprint": "valuation-material:one",
+            "valuationReproducibilityState": "reproducible",
         })
         relation["investmentBrain"] = {"hypothesisSet": {"hypotheses": [{
             "familyId": "growth",
@@ -600,6 +604,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         for field, mutate in (
             ("company-revision", lambda item: item["ontologyRelationContext"]["facts"]["companyContext"].update({"materialRevision": "company:revision:2"})),
             ("valuation-input", lambda item: item["ontologyRelationContext"]["facts"].update({"valuationExpectedEPS": 5})),
+            ("valuation-assessment", lambda item: item["ontologyRelationContext"]["facts"].update({"valuationAssessmentId": "valuation-assessment:two"})),
             ("assumption", lambda item: item["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0].update({"assumptionIds": ["assumption:margin-down"]})),
             ("invalidation", lambda item: item["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0]["invalidationConditions"][0].update({"threshold": 18})),
         ):

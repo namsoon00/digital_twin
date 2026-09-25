@@ -27982,13 +27982,91 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 .instrument-valuation-band,
 .instrument-valuation-quality,
-.instrument-valuation-sources {
+.instrument-valuation-sources,
+.instrument-investment-analysis {
   display: grid;
   gap: 14px;
   min-width: 0;
   padding: 16px 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+}
+
+.instrument-investment-facts,
+.instrument-investment-analysis-grid {
+  display: grid;
+  gap: 1px;
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--line);
+}
+
+.instrument-investment-facts {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.instrument-investment-facts p,
+.instrument-investment-analysis-grid > section {
+  margin: 0;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.instrument-investment-facts p {
+  display: grid;
+  gap: 5px;
+}
+
+.instrument-investment-facts span,
+.instrument-investment-analysis-grid b {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.instrument-investment-facts em,
+.instrument-investment-analysis-grid em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.instrument-investment-analysis-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.instrument-investment-analysis-grid > section > strong,
+.instrument-investment-next > strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.instrument-investment-analysis-grid p {
+  margin: 6px 0;
+}
+
+.instrument-investment-analysis-grid section > div p {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+}
+
+.instrument-investment-analysis-grid section > div em {
+  grid-column: 1 / -1;
+}
+
+.instrument-investment-analysis-grid ul,
+.instrument-investment-next ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.instrument-investment-next {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
 .instrument-valuation-section-head {
@@ -39273,6 +39351,11 @@ html[data-theme="dark"] :where(
 
 @media (max-width: 860px) {
   .instrument-valuation-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .instrument-investment-facts,
+  .instrument-investment-analysis-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

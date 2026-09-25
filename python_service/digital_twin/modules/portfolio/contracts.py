@@ -69,6 +69,8 @@ _EXPORTS.update({
     'preferred_instrument_name': ('digital_twin.modules.portfolio.domain.position_identity', 'preferred_instrument_name'),
     'quality_checked_valuation_row': ('digital_twin.modules.portfolio.domain.valuation.projection', 'quality_checked_valuation_row'),
     'runtime_fx_currencies_from_external_signals': ('digital_twin.modules.portfolio.domain.portfolio_calculations', 'runtime_fx_currencies_from_external_signals'),
+    'solve_implied_revenue_growth': ('digital_twin.modules.portfolio.domain.valuation.reverse_dcf', 'solve_implied_revenue_growth'),
+    'valuation_snapshot_delta': ('digital_twin.modules.portfolio.domain.valuation.snapshot', 'valuation_snapshot_delta'),
     'serialize_dataclass': ('digital_twin.modules.portfolio.domain.portfolio_calculations', 'serialize_dataclass'),
     'status_has_account_data_failure': ('digital_twin.modules.portfolio.domain.portfolio', 'status_has_account_data_failure'),
     'utc_now_iso': ('digital_twin.modules.portfolio.domain.portfolio', 'utc_now_iso'),

@@ -486,6 +486,12 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "multipleBandBasis": str(multiple_band.get("basis") or ""),
         "multipleSampleCount": int(number(multiple_band.get("sampleCount"))),
         "multipleEvidenceBacked": bool(multiple_band.get("evidenceBacked")),
+        "valuationBundleId": str(row.get("valuationBundleId") or ""),
+        "valuationAssessmentId": str(row.get("valuationAssessmentId") or ""),
+        "valuationAuditFingerprint": str(row.get("valuationAuditFingerprint") or ""),
+        "valuationMaterialFingerprint": str(row.get("valuationMaterialFingerprint") or ""),
+        "valuationReproducibilityState": str(row.get("valuationReproducibilityState") or ""),
+        "valuationReproducibilityGaps": list(row.get("valuationReproducibilityGaps") or []),
     }
 
 
@@ -507,7 +513,7 @@ def add_valuation_row_concepts(
     tbox_classes = ["ValuationAssumption", "StrategySignal", "ValuationSignal"]
     if is_ai_proposal:
         tbox_classes.append("AIValuationProposal")
-    heavy_trace_fields = {"payload", "inputObservations", "formulaTrace", "epsScenario", "multipleBand", "familyEvidence"}
+    heavy_trace_fields = {"payload", "inputObservations", "formulaTrace", "epsScenario", "multipleBand", "familyEvidence", "valuationBundle", "valuationAssessment", "dcfAssessment"}
     base_props = {
         "symbol": symbol,
         "provider": str(row.get("provider") or ""),
@@ -521,6 +527,12 @@ def add_valuation_row_concepts(
         "autoApplied": bool(row.get("autoApplied")),
         "reviewStatus": str(row.get("reviewStatus") or row.get("approvalStatus") or ""),
         "userReviewNote": str(row.get("userReviewNote") or ""),
+        "valuationBundleId": str(row.get("valuationBundleId") or ""),
+        "valuationAssessmentId": str(row.get("valuationAssessmentId") or ""),
+        "valuationAuditFingerprint": str(row.get("valuationAuditFingerprint") or ""),
+        "valuationMaterialFingerprint": str(row.get("valuationMaterialFingerprint") or ""),
+        "valuationReproducibilityState": str(row.get("valuationReproducibilityState") or ""),
+        "valuationReproducibilityGaps": list(row.get("valuationReproducibilityGaps") or []),
         **static_observation,
         **values,
     }
@@ -544,6 +556,41 @@ def add_valuation_row_concepts(
     add_relation(graph, stock_id, assumption_id, "HAS_VALUATION", weight=0.88, properties=props)
     add_relation(graph, stock_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
     add_relation(graph, assumption_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
+    bundle = row.get("valuationBundle") if isinstance(row.get("valuationBundle"), dict) else {}
+    assessment = row.get("valuationAssessment") if isinstance(row.get("valuationAssessment"), dict) else {}
+    if bundle:
+        bundle_id = add_entity(graph, "valuation-input-bundle", str(bundle.get("bundleId") or (symbol + ":" + key)), (position.name or symbol) + " 평가 입력 snapshot", {
+            "tboxClass": "ValuationInputObservation",
+            "tboxClasses": ["Observation", "ValuationEvidence", "ValuationInputObservation", "ValuationSignal"],
+            "symbol": symbol,
+            "valuationBundleId": str(bundle.get("bundleId") or ""),
+            "valuationAuditFingerprint": str(bundle.get("auditFingerprint") or ""),
+            "valuationMaterialFingerprint": str(bundle.get("materialFingerprint") or ""),
+            "valuationAt": str(bundle.get("valuationAt") or ""),
+            "knowledgeCutoffAt": str(bundle.get("knowledgeCutoffAt") or ""),
+            "sourceSnapshotId": str(bundle.get("sourceSnapshotId") or ""),
+            "valuationReproducibilityState": str(bundle.get("reproducibilityState") or ""),
+            "valuationReproducibilityGaps": list(bundle.get("reproducibilityGaps") or []),
+            "source": "valuation-input-bundle",
+            "payload": dict(bundle),
+        })
+        add_relation(graph, assumption_id, bundle_id, "USES_VALUATION_INPUT", weight=1.0, properties=props)
+        add_relation(graph, model_id, bundle_id, "USES_VALUATION_INPUT", weight=1.0, properties=props)
+    if assessment:
+        assessment_id = add_entity(graph, "valuation-assessment", str(assessment.get("assessmentId") or (symbol + ":" + key)), (position.name or symbol) + " 평가 결과", {
+            "tboxClass": "FairValueEstimate",
+            "tboxClasses": ["ValuationAssumption", "FairValueEstimate", "ValuationSignal"],
+            "symbol": symbol,
+            "valuationAssessmentId": str(assessment.get("assessmentId") or ""),
+            "valuationBundleId": str(assessment.get("bundleId") or ""),
+            "valuationDecisionEligible": bool(assessment.get("valuationDecisionEligible")),
+            "calculationStatus": str(assessment.get("calculationStatus") or ""),
+            "blockedReasons": list(assessment.get("blockedReasons") or []),
+            "source": "valuation-assessment",
+            "payload": dict(assessment),
+        })
+        add_relation(graph, stock_id, assessment_id, "HAS_VALUATION", weight=1.0, properties=props)
+        add_relation(graph, assessment_id, assumption_id, "DERIVED_FROM_VALUATION_ASSUMPTION", weight=1.0, properties=props)
     for index, observation in enumerate(row.get("inputObservations") or []):
         if not isinstance(observation, dict):
             continue

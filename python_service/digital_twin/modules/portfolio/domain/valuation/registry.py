@@ -7,6 +7,7 @@ from digital_twin.modules.instruments.contracts import instrument_profile_for_po
 from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.portfolio.domain.portfolio import Position
 from digital_twin.modules.portfolio.domain.valuation.models import apply_review_override, bitcoin_proxy_ai_valuation_row, current_price_anchor_ai_valuation_row, external_fundamental_ai_valuation_row, growth_quality_ai_valuation_row, preferred_income_ai_valuation_row, semiconductor_cycle_ai_valuation_row, truthy
+from digital_twin.modules.portfolio.domain.valuation.dcf import driver_dcf_valuation_row
 
 
 ValuationEvaluator = Callable[[Position, Dict[str, object], Dict[str, object]], Dict[str, object]]
@@ -69,6 +70,10 @@ def registered_valuation_model_rows(
     profile = instrument_profile_for_position(position, settings)
     archetypes = frozenset(profile.archetypes or [])
     rows: List[Dict[str, object]] = []
+    dcf_row = driver_dcf_valuation_row(position, external_signals or {}, settings)
+    pending_dcf_row = dcf_row if dcf_row and not number(dcf_row.get("fairValue")) else {}
+    if dcf_row and number(dcf_row.get("fairValue")):
+        rows.append(dcf_row)
     for definition in sorted(DEFAULT_VALUATION_MODEL_REGISTRY, key=lambda item: item.priority):
         if not definition.supports(archetypes):
             continue
@@ -76,7 +81,7 @@ def registered_valuation_model_rows(
         if row:
             rows.append(_tag_model(row, definition))
             break
-    if not rows:
+    if not any(str(row.get("valuationModelFamily") or "") != "driver-dcf" for row in rows):
         row = external_fundamental_ai_valuation_row(position, external_signals or {}, settings)
         if row and number(row.get("expectedEPS")):
             rows.append(_tag_fallback(row, "generic-fundamental-earnings", "fundamental", 90))
@@ -84,6 +89,8 @@ def registered_valuation_model_rows(
         row = current_price_anchor_ai_valuation_row(position, settings)
         if row:
             rows.append(_tag_fallback(row, "current-price-reference", "reference-only", 100))
+    if pending_dcf_row:
+        rows.append(pending_dcf_row)
     reviewed = [apply_review_override(row, settings) for row in rows]
     return [row for row in reviewed if str(row.get("activeStatus") or "").strip() != "rejected"]
 

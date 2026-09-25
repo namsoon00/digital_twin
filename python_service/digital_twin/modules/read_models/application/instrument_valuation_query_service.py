@@ -5,10 +5,10 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, Mapping, Optional
 
-from digital_twin.modules.news_intelligence.contracts import company_prompt_context, company_valuation_context, latest_source_as_of
+from digital_twin.modules.news_intelligence.contracts import build_company_driver_map, company_prompt_context, company_valuation_context, evaluate_causal_attribution, latest_source_as_of
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state, utc_now_iso
-from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService
+from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService, solve_implied_revenue_growth, valuation_snapshot_delta
 
 
 READ_MODEL_VERSION = "instrument-valuation-read-model-v1"
@@ -79,6 +79,8 @@ class InstrumentValuationQueryService:
             position=position,
             external_signals=external_signals,
             settings=self.settings,
+            valuation_at=position.updated_at or snapshot.generated_at,
+            source_snapshot_id=position.valuation_snapshot_id or snapshot.portfolio.valuation_snapshot_id,
         ))
         primary = dict(result.rows[0]) if result.rows else {}
         source_symbol = _text(primary.get("sourceSymbol") or position.symbol).upper()
@@ -122,6 +124,59 @@ class InstrumentValuationQueryService:
             if isinstance(item, Mapping)
         ]
         sources = self._sources(company_detail, primary, company)
+        stored_company = (
+            (external_signals.get("companyKnowledge") or {}).get(source_symbol, {})
+            if isinstance(external_signals.get("companyKnowledge"), Mapping)
+            else {}
+        )
+        driver_map = build_company_driver_map(
+            source_symbol,
+            stored_company if isinstance(stored_company, Mapping) else {},
+            macro_context=external_signals.get("macro") if isinstance(external_signals.get("macro"), Mapping) else {},
+            fx_rates=external_signals.get("fxRates") if isinstance(external_signals.get("fxRates"), Mapping) else {},
+        )
+        causal_attribution = self._causal_attribution(external_signals, source_symbol, driver_map)
+        previous_assessment = self._previous_assessment(external_signals, source_symbol)
+        current_identity = {
+            "valuationBundleId": _text(primary.get("valuationBundleId")),
+            "valuationAssessmentId": _text(primary.get("valuationAssessmentId")),
+            "auditFingerprint": _text(primary.get("valuationAuditFingerprint")),
+            "materialFingerprint": _text(primary.get("valuationMaterialFingerprint")),
+        }
+        change = valuation_snapshot_delta(previous_assessment, primary) if previous_assessment else {
+            "contractVersion": "valuation-snapshot-delta-v1",
+            "state": "no-prior-assessment",
+            "materialChange": False,
+            "auditChange": False,
+            "previousAssessmentId": "",
+            "currentAssessmentId": current_identity["valuationAssessmentId"],
+        }
+        model_comparison = self._model_comparison(result.rows)
+        implied_expectations = self._implied_expectations(external_signals, source_symbol, position.current_price)
+        current_verified = [
+            {
+                "driverId": _text(item.get("driverId")),
+                "label": _text(item.get("label")),
+                "value": _number(item.get("value")),
+                "unit": _text(item.get("unit")),
+                "period": _text(item.get("period")),
+                "evidenceId": _text(item.get("observationId")),
+            }
+            for item in driver_map.get("drivers") or []
+            if isinstance(item, Mapping)
+        ]
+        previous_driver_map = self._previous_driver_map(external_signals, source_symbol)
+        driver_material_changed = bool(
+            previous_driver_map
+            and _text(previous_driver_map.get("materialFingerprint"))
+            and _text(previous_driver_map.get("materialFingerprint")) != _text(driver_map.get("materialFingerprint"))
+        )
+        newly_confirmed = current_verified if driver_material_changed else []
+        next_checks = _unique_text([
+            *missing,
+            *(item.get("reason") for item in driver_map.get("unresolved") or [] if isinstance(item, Mapping)),
+            *(causal_attribution.get("blockingReasons") or []),
+        ])
 
         return {
             "contract": READ_MODEL_VERSION,
@@ -150,10 +205,7 @@ class InstrumentValuationQueryService:
                 "pbr": pbr,
                 "pegRatio": peg,
                 "trailingEPS": trailing_eps,
-                "trailingEPSPeriod": _text(
-                    primary.get("epsPeriod")
-                    or "ttm"
-                ) if trailing_eps is not None else "",
+                "trailingEPSPeriod": _text(company_metrics.get("trailingEPSPeriod") or "ttm") if trailing_eps is not None else "",
                 "expectedEPS": expected_eps,
                 "returnOnEquityPct": _number(company_metrics.get("returnOnEquityPct")),
                 "returnOnAssetsPct": _number(company_metrics.get("returnOnAssetsPct")),
@@ -213,6 +265,17 @@ class InstrumentValuationQueryService:
                 "sourceReason": _text(primary.get("sourceReason")),
                 "preferredMetric": _text(primary.get("preferredValuationMetric")),
                 "reviewStatus": _text(primary.get("approvalStatus")),
+                "identity": current_identity,
+                "inputSnapshot": {
+                    "contractVersion": _text((primary.get("valuationBundle") or {}).get("contractVersion")),
+                    "valuationAt": _text((primary.get("valuationBundle") or {}).get("valuationAt")),
+                    "knowledgeCutoffAt": _text((primary.get("valuationBundle") or {}).get("knowledgeCutoffAt")),
+                    "reproducibilityState": _text(primary.get("valuationReproducibilityState")),
+                    "reproducibilityGaps": list(primary.get("valuationReproducibilityGaps") or []),
+                    "sourceRevisionCount": len((primary.get("valuationBundle") or {}).get("sourceRevisionVector") or []),
+                },
+                "models": model_comparison,
+                "impliedExpectations": implied_expectations,
             },
             "companyData": {
                 "state": _text(company.get("dataState") or "unavailable"),
@@ -222,7 +285,102 @@ class InstrumentValuationQueryService:
             },
             "missingData": missing,
             "sources": sources,
+            "investmentAnalysis": {
+                "contractVersion": "instrument-investment-analysis-v1",
+                "currentVerifiedFacts": current_verified,
+                "newlyConfirmedFacts": newly_confirmed,
+                "companyDriverMaterialChanged": driver_material_changed,
+                "changeFromPrevious": change,
+                "companyDrivers": driver_map,
+                "priceExplanation": causal_attribution,
+                "valuationModels": model_comparison,
+                "nextChecks": next_checks,
+                "customerMessageEligible": bool(
+                    change.get("materialChange")
+                    or causal_attribution.get("priceCauseClaimEligible")
+                ),
+            },
         }
+
+    @staticmethod
+    def _previous_assessment(external_signals: Mapping[str, object], symbol: str) -> Dict[str, object]:
+        history = external_signals.get("valuationAssessmentHistory")
+        row = history.get(symbol) if isinstance(history, Mapping) and isinstance(history.get(symbol), Mapping) else {}
+        previous = row.get("previous") if isinstance(row.get("previous"), Mapping) else row
+        return dict(previous) if isinstance(previous, Mapping) else {}
+
+    @staticmethod
+    def _previous_driver_map(external_signals: Mapping[str, object], symbol: str) -> Dict[str, object]:
+        history = external_signals.get("companyDriverHistory")
+        row = history.get(symbol) if isinstance(history, Mapping) and isinstance(history.get(symbol), Mapping) else {}
+        previous = row.get("previous") if isinstance(row.get("previous"), Mapping) else row
+        return dict(previous) if isinstance(previous, Mapping) else {}
+
+    @staticmethod
+    def _causal_attribution(external_signals: Mapping[str, object], symbol: str, driver_map: Mapping[str, object]) -> Dict[str, object]:
+        events = external_signals.get("companyEvents")
+        raw_events = events.get(symbol) if isinstance(events, Mapping) else []
+        event_rows = raw_events if isinstance(raw_events, list) else [raw_events] if isinstance(raw_events, Mapping) else []
+        if not event_rows:
+            return {
+                "contractVersion": "causal-attribution-v1",
+                "claimStrength": "unresolved",
+                "priceCauseClaimEligible": False,
+                "blockingReasons": ["verified-event-missing"],
+                "valuationImpactSeparateFromPriceCause": True,
+            }
+        reactions = external_signals.get("eventPriceReactions")
+        reaction_rows = reactions.get(symbol) if isinstance(reactions, Mapping) else {}
+        latest = next((dict(item) for item in event_rows if isinstance(item, Mapping)), {})
+        contract = latest.get("companyEventContract") if isinstance(latest.get("companyEventContract"), Mapping) else latest
+        event_id = _text(contract.get("eventId") or contract.get("observationId"))
+        reaction = (
+            reaction_rows.get(event_id)
+            if isinstance(reaction_rows, Mapping) and isinstance(reaction_rows.get(event_id), Mapping)
+            else reaction_rows if isinstance(reaction_rows, Mapping) and "windowStart" in reaction_rows
+            else {}
+        )
+        alternatives = reaction.get("alternativeExplanations") if isinstance(reaction, Mapping) else []
+        return evaluate_causal_attribution(
+            latest,
+            reaction if isinstance(reaction, Mapping) else {},
+            driver_map=driver_map,
+            alternative_explanations=alternatives if isinstance(alternatives, list) else [],
+        )
+
+    @staticmethod
+    def _model_comparison(rows) -> list[Dict[str, object]]:
+        result = []
+        for row in rows or []:
+            if not isinstance(row, Mapping):
+                continue
+            assessment = row.get("valuationAssessment") if isinstance(row.get("valuationAssessment"), Mapping) else {}
+            result.append({
+                "modelId": _text(row.get("valuationModelId") or row.get("valuationMethod")),
+                "family": _text(row.get("valuationModelFamily")),
+                "assessmentId": _text(row.get("valuationAssessmentId")),
+                "bundleId": _text(row.get("valuationBundleId")),
+                "status": _text(assessment.get("calculationStatus") or ("calculated" if _number(row.get("fairValue"), positive=True) else "blocked")),
+                "fairValue": _number(row.get("fairValue"), positive=True),
+                "currency": _text(row.get("valuationCurrency")),
+                "decisionEligible": bool(row.get("valuationDecisionEligible")),
+                "referenceOnly": bool(row.get("valuationReferenceOnly")) or not bool(row.get("valuationDecisionEligible")),
+                "blockedReasons": list(assessment.get("blockedReasons") or row.get("modelExclusionReasons") or []),
+                "comparisonPolicy": "do-not-average-model-values",
+            })
+        return result
+
+    @staticmethod
+    def _implied_expectations(external_signals: Mapping[str, object], symbol: str, current_price: object) -> Dict[str, object]:
+        inputs = external_signals.get("driverDcfInputs")
+        source = inputs.get(symbol) if isinstance(inputs, Mapping) and isinstance(inputs.get(symbol), Mapping) else {}
+        if not source:
+            return {
+                "contractVersion": "reverse-dcf-growth-solver-v1",
+                "status": "unavailable",
+                "blockedReasons": ["driver-dcf-inputs-missing"],
+            }
+        return solve_implied_revenue_growth(source, target_price=current_price)
 
     def _account_state(self, requested_account_id: str):
         states = self.monitor_store.previous if self.monitor_store is not None else {}

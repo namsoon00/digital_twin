@@ -10,10 +10,17 @@ from digital_twin.modules.portfolio.domain.valuation.evidence import FUNDAMENTAL
 from digital_twin.modules.portfolio.domain.valuation.service import VALUATION_MODEL_SERVICE_VERSION, ValuationModelRequest, ValuationModelResult, ValuationModelService, evaluate_valuation_models
 from digital_twin.modules.portfolio.domain.valuation.quality import NormalizedDividendYield, ValuationQualityIssue, apply_valuation_quality_gate, normalize_dividend_yield, valuation_quality_issues
 from digital_twin.modules.portfolio.domain.valuation.registry import DEFAULT_VALUATION_MODEL_REGISTRY, ValuationModelDefinition, registered_valuation_model_rows
+from digital_twin.modules.portfolio.domain.valuation.snapshot import VALUATION_ASSESSMENT_VERSION, VALUATION_INPUT_BUNDLE_VERSION, bind_valuation_snapshot, valuation_snapshot_delta
+from digital_twin.modules.portfolio.domain.valuation.dcf import DRIVER_DCF_VERSION, calculate_driver_dcf
+from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import REVERSE_DCF_VERSION, solve_implied_revenue_growth
 
 __all__ = [
     "FUNDAMENTAL_MODEL_VERSION",
     "VALUATION_MODEL_SERVICE_VERSION",
+    "VALUATION_ASSESSMENT_VERSION",
+    "VALUATION_INPUT_BUNDLE_VERSION",
+    "DRIVER_DCF_VERSION",
+    "REVERSE_DCF_VERSION",
     "ValuationModelRequest",
     "ValuationModelResult",
     "ValuationModelService",
@@ -22,6 +29,8 @@ __all__ = [
     "NormalizedDividendYield",
     "ValuationQualityIssue",
     "apply_valuation_quality_gate",
+    "bind_valuation_snapshot",
+    "calculate_driver_dcf",
     "annual_eps_observation",
     "bootstrap_multiple_band",
     "collect_earnings_observations",
@@ -36,6 +45,7 @@ __all__ = [
     "period_is_annual_per_share",
     "registered_valuation_model_rows",
     "scenario_margins",
+    "solve_implied_revenue_growth",
     "unique_missing",
     "valuation_decision_eligible",
     "valuation_freshness_status",
@@ -43,4 +53,5 @@ __all__ = [
     "valuation_quality_issues",
     "valuation_reliability_label",
     "valuation_reliability_state",
+    "valuation_snapshot_delta",
 ]

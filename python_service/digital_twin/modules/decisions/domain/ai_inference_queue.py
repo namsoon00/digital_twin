@@ -206,6 +206,9 @@ def _valuation_material_contract(facts: Mapping[str, object]) -> Dict[str, objec
         "valuationMultipleBand", "valuationFormulaTrace", "valuationModelExclusionReasons",
         "valuationAnalystTargetLowPrice", "valuationAnalystTargetPrice",
         "valuationAnalystTargetHighPrice", "valuationAnalystOpinionCount",
+        "valuationBundleId", "valuationAssessmentId", "valuationAuditFingerprint",
+        "valuationMaterialFingerprint", "valuationReproducibilityState",
+        "valuationReproducibilityGaps",
     ))
     meaningful = any(
         valuation.get(key) not in (None, "", 0, 0.0, False, [], {})

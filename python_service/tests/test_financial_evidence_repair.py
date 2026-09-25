@@ -6,14 +6,34 @@ from digital_twin.modules.news_intelligence.application.financial_evidence_repai
 )
 from digital_twin.modules.outcomes.infrastructure.financial_input_correction import quarantine_financial_input
 from digital_twin.modules.market_data.application.external_data.read_model_service import ExternalSignalsReadModelService
-from digital_twin.infrastructure.financial_evidence_maintenance import retire_legacy_financial_requests
+from digital_twin.infrastructure.financial_evidence_maintenance import (
+    _reassessment_events,
+    build_financial_repair_manifest,
+    retire_legacy_financial_requests,
+)
 from unittest.mock import Mock
 
 
 class FinancialEvidenceRepairTests(unittest.TestCase):
     def test_pending_legacy_financial_ai_is_superseded_through_queue_owner(self):
-        def request(identifier, rule, version=None):
-            company = {"financialEvidence": {"version": version}} if version else {"latestFinancials": {"quarterly": [{"period": "2026-03-31"}]}}
+        valid_evidence = {
+            "version": "financial-reporting-v2",
+            "period": "2026-06-30",
+            "comparisons": [{"metric": "revenue", "currentValue": 100}],
+            "report": {
+                "contractVersion": "financial-report-observation-v1",
+                "provider": "yfinance",
+                "periodEnd": "2026-06-30",
+                "frequency": "quarterly",
+                "durationBases": ["quarterly"],
+                "sourceReferences": [{"datasetId": "yfinance.fundamental", "revisionId": "valid-revision"}],
+                "revisionState": "immutable-source-bound",
+                "observationId": "valid-observation",
+            },
+        }
+
+        def request(identifier, rule, version=None, evidence=None):
+            company = {"financialEvidence": evidence or {"version": version}} if (version or evidence) else {"latestFinancials": {"quarterly": [{"period": "2026-03-31"}]}}
             return {"request_id": identifier, "context_json": json.dumps({"ontologyRelationContext": {
                 "facts": {"companyContext": company}, "activeRules": [{"rule_id": rule}]}})}
         connection, queue = Mock(), Mock()
@@ -21,17 +41,22 @@ class FinancialEvidenceRepairTests(unittest.TestCase):
             request("legacy", "graph.company.capital.dilution.risk.v1"),
             request("price", "graph.price.recovery.v1"),
             request("corrected", "graph.company.capital.dilution.risk.v1", "financial-reporting-v2"),
+            request("verified", "graph.company.capital.dilution.risk.v1", evidence=valid_evidence),
         ]
-        self.assertEqual(["legacy"], retire_legacy_financial_requests(connection, queue, "repair", "now"))
+        self.assertEqual(["legacy", "corrected"], retire_legacy_financial_requests(connection, queue, "repair", "now"))
         queue.supersede_request_with_connection.assert_not_called()
-        self.assertEqual(["legacy"], retire_legacy_financial_requests(connection, queue, "repair", "now", apply=True))
+        self.assertEqual(["legacy", "corrected"], retire_legacy_financial_requests(connection, queue, "repair", "now", apply=True))
         self.assertIn("FOR UPDATE", connection.execute.call_args.args[0])
-        queue.supersede_request_with_connection.assert_called_once()
-        self.assertEqual("legacy", queue.supersede_request_with_connection.call_args.args[1]["request_id"])
+        self.assertEqual(2, queue.supersede_request_with_connection.call_count)
+        self.assertEqual("corrected", queue.supersede_request_with_connection.call_args.args[1]["request_id"])
 
     def test_legacy_financial_case_needs_revalidation_but_price_only_does_not(self):
         company = {"latestFinancials": {"quarterly": [{"period": "2026-03-31", "operatingIncomeGrowthPct": -10}]}}
         self.assertTrue(financial_input_requires_revalidation(company, [{"ruleId": "graph.company.capital.dilution.risk.v1"}]))
+        self.assertTrue(financial_input_requires_revalidation(
+            {"financialEvidence": {"version": "financial-reporting-v2"}},
+            [{"ruleId": "graph.company.capital.dilution.risk.v1"}],
+        ))
         self.assertFalse(financial_input_requires_revalidation(company, [{"ruleId": "graph.price.recovery.v1"}]))
 
     def test_repair_is_idempotent_and_does_not_write_history(self):
@@ -45,11 +70,48 @@ class FinancialEvidenceRepairTests(unittest.TestCase):
                 "availability": "observed",
             }},
         }
-        first, changes = financial_repair_plan({}, source)
-        second, repeated = financial_repair_plan(first, source)
+        untouched = {"companyName": "Safe Corp", "customField": {"keep": True}}
+        cache = {
+            "schemaVersion": "company-knowledge-cache-v3-financial-periods",
+            "symbols": {"TEST": {}, "SAFE": untouched},
+        }
+        first, changes = financial_repair_plan(cache, source, ["TEST"])
+        second, repeated = financial_repair_plan(first, source, ["TEST"])
         self.assertTrue(changes)
         self.assertEqual(first, second)
         self.assertEqual([], repeated)
+        revised_lineage = json.loads(json.dumps(source))
+        revised_lineage["externalDataLineage"]["yfinance.fundamental:TEST"]["revisionId"] = "same-values-new-revision"
+        _lineage_replacement, lineage_changes = financial_repair_plan(first, revised_lineage, ["TEST"])
+        self.assertEqual([], lineage_changes)
+        self.assertEqual(untouched, first["symbols"]["SAFE"])
+        self.assertEqual("company-knowledge-cache-v3-financial-periods", first["schemaVersion"])
+        manifest = build_financial_repair_manifest(cache, first, changes, [{
+            "datasetId": "yfinance.fundamental", "subjectKey": "TEST",
+            "revisionId": "immutable-repair-fixture", "payloadHash": "hash",
+        }], ["TEST"], 50)
+        repeated_manifest = build_financial_repair_manifest(cache, first, changes, [{
+            "datasetId": "yfinance.fundamental", "subjectKey": "TEST",
+            "revisionId": "immutable-repair-fixture", "payloadHash": "hash",
+        }], ["TEST"], 50)
+        self.assertEqual(manifest, repeated_manifest)
+        changed_source_manifest = build_financial_repair_manifest(cache, first, changes, [{
+            "datasetId": "yfinance.fundamental", "subjectKey": "TEST",
+            "revisionId": "concurrent-revision", "payloadHash": "new-hash",
+        }], ["TEST"], 50)
+        self.assertNotEqual(manifest["manifestId"], changed_source_manifest["manifestId"])
+        concurrent_cache = {**cache, "symbols": {**cache["symbols"], "SAFE": {"customField": {"keep": False}}}}
+        changed_cache_manifest = build_financial_repair_manifest(concurrent_cache, first, changes, [{
+            "datasetId": "yfinance.fundamental", "subjectKey": "TEST",
+            "revisionId": "immutable-repair-fixture", "payloadHash": "hash",
+        }], ["TEST"], 50)
+        self.assertNotEqual(manifest["manifestId"], changed_cache_manifest["manifestId"])
+        correction_event, reassessment_event = _reassessment_events(
+            manifest, changes, "2026-09-16T00:00:00Z",
+        )
+        self.assertEqual("financial-input-correction:" + manifest["manifestId"], correction_event.event_id)
+        self.assertEqual("financial-reassessment:" + manifest["manifestId"], reassessment_event.event_id)
+        self.assertEqual(["FinancialFact"], reassessment_event.payload["factTypes"])
 
     def test_older_document_cannot_replace_current_official_statements(self):
         class Store:

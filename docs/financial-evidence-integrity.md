@@ -123,14 +123,23 @@ https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS003&apiId=2019020
 Preview (no vendor calls or writes):
 
 ```bash
-python3 python_service/service.py maintenance financial-evidence --limit 3000
+python3 python_service/service.py maintenance financial-evidence --symbols PLTR,NVDA --limit 3000
 ```
 
-Apply during a controlled worker restart:
+Copy the exact `manifest.manifestId` from preview. Apply accepts the same symbol
+scope and history bound only when the source revisions and complete company
+cache still match that manifest:
 
 ```bash
-python3 python_service/service.py maintenance financial-evidence --limit 3000 --apply
+python3 python_service/service.py maintenance financial-evidence \
+  --symbols PLTR,NVDA --limit 3000 \
+  --manifest <preview-manifest-id> --apply
 ```
+
+`--limit` bounds retained historical case inspection; it never selects
+symbols. Apply without an explicit symbol scope or preview manifest is rejected.
+Reapplying a completed manifest returns `already-applied` with zero effective
+changes, zero reassessment requests and zero source refreshes.
 
 The operation reconstructs current company facts from stored provider inputs.
 It uses retained compressed AI execution artifacts to identify legacy
@@ -144,7 +153,12 @@ outcomes ineligible. Original decisions, AI text, observations and directional
 outcome labels remain unchanged. Correction metadata preserves the prior
 calibration eligibility. A separate durable audit record lists affected cases.
 Concurrent source/cache updates abort the repair instead of being overwritten.
-An official-data refresh is queued through the existing rate-limited collector.
+The same transaction emits one bounded ontology reassessment request for the
+changed symbols. Only the financial datasets named by their selected immutable
+report contracts are made due through the existing rate-limited collector.
+Already delivered messages and their original text are retained. Missing AI
+execution artifacts are counted as unknown historical impact, never as a
+successful repair or as confirmed impact.
 
 The audit also reports 24-hour graph entry candidates, permitted BUY/ADD cases
 and cases with execution-qualified hypotheses. These distinguish a broken

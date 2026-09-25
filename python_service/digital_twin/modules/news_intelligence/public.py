@@ -52,6 +52,8 @@ _EXPORTS = {'HypothesisResearchPlanningService': ('digital_twin.modules.news_int
 _EXPORTS['build_information_brief'] = ('digital_twin.modules.news_intelligence.domain.information_brief', 'build_information_brief')
 _EXPORTS['financial_repair_plan'] = ('digital_twin.modules.news_intelligence.application.financial_evidence_repair_service', 'financial_repair_plan')
 _EXPORTS['financial_input_requires_revalidation'] = ('digital_twin.modules.news_intelligence.application.financial_evidence_repair_service', 'financial_input_requires_revalidation')
+_EXPORTS['financial_input_revalidation_assessment'] = ('digital_twin.modules.news_intelligence.application.financial_evidence_repair_service', 'financial_input_revalidation_assessment')
+_EXPORTS['normalized_repair_symbols'] = ('digital_twin.modules.news_intelligence.application.financial_evidence_repair_service', 'normalized_repair_symbols')
 
 __all__ = list(_EXPORTS)
 

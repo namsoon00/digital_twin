@@ -1911,7 +1911,14 @@ def maintenance_command(args) -> int:
     settings = dict(runtime_settings())
     if args.maintenance_action == "financial-evidence":
         from digital_twin.infrastructure.financial_evidence_maintenance import run_financial_evidence_maintenance
-        result = run_financial_evidence_maintenance(settings, apply=args.apply, limit=args.limit)
+        symbols = [item.strip() for item in str(args.symbols or "").split(",") if item.strip()]
+        result = run_financial_evidence_maintenance(
+            settings,
+            apply=args.apply,
+            limit=args.limit,
+            symbols=symbols,
+            manifest_id=args.manifest,
+        )
         print(json.dumps(result, ensure_ascii=False))
         return 0
     if args.maintenance_action == "mysql-minimal-retention":
@@ -2713,6 +2720,16 @@ def build_parser() -> argparse.ArgumentParser:
     financial_evidence = maintenance_actions.add_parser("financial-evidence")
     financial_evidence.add_argument("--apply", action="store_true")
     financial_evidence.add_argument("--limit", type=int, default=2000)
+    financial_evidence.add_argument(
+        "--symbols",
+        default="",
+        help="Comma-separated symbol scope; required for apply",
+    )
+    financial_evidence.add_argument(
+        "--manifest",
+        default="",
+        help="Exact manifest ID produced by preview; required for apply",
+    )
     mysql_cleanup = maintenance_actions.add_parser("mysql-cleanup")
     mysql_cleanup.add_argument("--optimize", action="store_true")
     mysql_cleanup.add_argument("--drop-ephemeral-databases", action="store_true")

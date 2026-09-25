@@ -9,7 +9,11 @@
 
 - IN-00: [기준선·데이터 준비도 보고서](investment-assistant-in00-baseline.md)에 2026-09-25 읽기 전용 감사 결과를 기록했다. PLTR/NVDA는 검증 후보이며 현재 valuation decision에는 둘 다 부적격이다.
 - IN-01: report contract가 없는 재무 기간을 현재 사실, ABox, AI 근거에서 제외하는 `financial-period-selection-v1`을 구현했다. 운영 cache 적용은 IN-02 범위로 남긴다.
-- IN-02 이후: 미착수. `maintenance --apply`, release 승격, 후보 shadow 실행은 하지 않았다.
+- IN-02: 종목·source revision·cache fingerprint를 고정하는 preview manifest,
+  최신 표지만 있고 출처 계약이 없는 입력 검출, confirmed/unknown 영향 분리,
+  queue owner 기반 차단, 현재 cache 정정과 bounded reasoning 재평가를 구현하고
+  PLTR·NVDA 운영 적용 및 재실행 0건 검증을 완료했다.
+- IN-03 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
 
 ## 1. 제품 목표와 개발 원칙
 

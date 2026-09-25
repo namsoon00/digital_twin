@@ -85,6 +85,11 @@ STATEMENT_ALIASES = {
     "grossProfit": ("gross profit",),
     "operatingIncome": ("operating income", "operating profit"),
     "netIncome": ("net income common stockholders", "net income", "net income loss"),
+    "netIncomeCommon": ("net income common stockholders",),
+    "basicEPS": ("basic eps", "basic earnings per share"),
+    "dilutedEPS": ("diluted eps", "diluted earnings per share"),
+    "weightedAverageSharesBasic": ("basic average shares", "weighted average shares basic"),
+    "weightedAverageSharesDiluted": ("diluted average shares", "weighted average shares diluted"),
     "totalAssets": ("total assets", "assets"),
     "totalLiabilities": ("total liabilities net minority interest", "total liabilities", "liabilities"),
     "equity": ("stockholders equity", "total equity gross minority interest", "stockholders' equity", "equity"),
@@ -236,7 +241,10 @@ def statement_periods(rows_by_statement: Mapping[str, object], *, frequency: str
     values_by_field: Dict[str, Mapping[str, object]] = {}
     metric_names = {}
     for field, aliases in STATEMENT_ALIASES.items():
-        statements = ("incomeStatement",) if field in {"revenue", "grossProfit", "operatingIncome", "netIncome"} else (
+        statements = ("incomeStatement",) if field in {
+            "revenue", "grossProfit", "operatingIncome", "netIncome", "netIncomeCommon",
+            "basicEPS", "dilutedEPS", "weightedAverageSharesBasic", "weightedAverageSharesDiluted",
+        } else (
             ("cashFlow",) if field in {"operatingCashFlow", "capitalExpenditure", "freeCashFlow"} else ("balanceSheet",)
         )
         for statement in statements:
@@ -264,10 +272,22 @@ def statement_periods(rows_by_statement: Mapping[str, object], *, frequency: str
             period_metric_names = dict(metric_names)
             sources = {field: {
                 "provider": "yfinance", "metric": period_metric_names.get(field, field),
-                "period": period, "currency": currency if field not in {"sharesOutstanding", "issuedShares", "treasuryShares"} else "shares",
+                "period": period, "currency": currency if field not in {
+                    "sharesOutstanding", "issuedShares", "treasuryShares",
+                    "weightedAverageSharesBasic", "weightedAverageSharesDiluted",
+                } else "shares",
                 "scope": "provider-reported", "official": False,
-                "durationBasis": (frequency if field in {"revenue", "grossProfit", "operatingIncome", "netIncome", "operatingCashFlow", "capitalExpenditure", "freeCashFlow"} else "instant"),
+                "durationBasis": (frequency if field in {
+                    "revenue", "grossProfit", "operatingIncome", "netIncome", "netIncomeCommon",
+                    "basicEPS", "dilutedEPS", "weightedAverageSharesBasic", "weightedAverageSharesDiluted",
+                    "operatingCashFlow", "capitalExpenditure", "freeCashFlow",
+                } else "instant"),
                 **({"shareCountBasis": "issued" if period_metric_names.get(field) == "shareissued" else "ordinary-outstanding"} if field == "sharesOutstanding" else {}),
+                **({"shareCountBasis": "weighted-average-basic"} if field == "weightedAverageSharesBasic" else {}),
+                **({"shareCountBasis": "weighted-average-diluted"} if field == "weightedAverageSharesDiluted" else {}),
+                **({"perShareBasis": "basic"} if field == "basicEPS" else {}),
+                **({"perShareBasis": "diluted"} if field == "dilutedEPS" else {}),
+                **({"attributionScope": "common-stockholders"} if field == "netIncomeCommon" else {}),
             } for field in facts}
             result.append({"period": period, "periodEnd": reporting_period_end(period).isoformat(),
                            "provider": "yfinance", "frequency": frequency,
@@ -542,6 +562,11 @@ def _sec_fact_periods(
                     if frequency == "annual"
                     else interim_duration_basis
                 ),
+                **({"shareCountBasis": "weighted-average-basic"} if field == "weightedAverageSharesBasic" else {}),
+                **({"shareCountBasis": "weighted-average-diluted"} if field == "weightedAverageSharesDiluted" else {}),
+                **({"perShareBasis": "basic"} if field == "basicEPS" else {}),
+                **({"perShareBasis": "diluted"} if field == "dilutedEPS" else {}),
+                **({"attributionScope": "common-stockholders"} if field == "netIncomeCommon" else {}),
             }
     # ``sec_company_facts_summary`` contains one latest value per metric, not
     # a historical statement series. Older metric-specific endpoints must not
@@ -1231,6 +1256,8 @@ def company_prompt_context(
         "operatingIncomeGrowthPct",
         "operatingMarginPct",
         "netIncome",
+        "netIncomeCommon", "basicEPS", "dilutedEPS",
+        "weightedAverageSharesBasic", "weightedAverageSharesDiluted",
         "netIncomeGrowthPct",
         "netMarginPct",
         "totalAssets",

@@ -1,3 +1,4 @@
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -33,6 +34,7 @@ from digital_twin.modules.portfolio.domain.valuation import (
     apply_valuation_quality_gate,
     normalize_dividend_yield,
 )
+from digital_twin.modules.portfolio.domain.valuation.models import convert_cross_listed_valuation_inputs
 from digital_twin.modules.portfolio.domain.valuation.projection import add_valuation_row_concepts, quality_checked_valuation_row
 
 
@@ -228,13 +230,156 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(1, len(observations))
         self.assertEqual(1200, observations[0]["base"])
         self.assertEqual("official", observations[0]["sourceType"])
-        self.assertEqual("companyKnowledge.netIncome/sharesOutstanding", observations[0]["source"])
+        self.assertEqual("companyKnowledge.netIncome/currentSharesOutstanding", observations[0]["source"])
+        self.assertEqual("approximate-current-share-count", observations[0]["calculationMethod"])
+        self.assertEqual("reference-only", observations[0]["validationState"])
+        self.assertFalse(observations[0]["positivePerEligible"])
+        self.assertIn("current-share-count-is-not-weighted-average", observations[0]["excludedReasons"])
+        self.assertEqual({}, earnings_scenario(observations))
         self.assertNotIn("analystCount", observations[0])
         self.assertNotIn("revision30dPct", observations[0])
+        self._assert_verified_reported_and_reconstructed_eps_are_distinct()
         self._assert_dividend_yield_requires_an_explicit_and_valid_unit()
         self._assert_company_knowledge_preserves_canonical_dividend_yield_units()
         self._assert_legacy_consensus_without_exact_revision_remains_unverified()
         self._assert_same_upstream_consensus_is_not_counted_as_independent_evidence()
+
+    def _assert_verified_reported_and_reconstructed_eps_are_distinct(self):
+        reference = {
+            "contractVersion": "external-source-reference-v1",
+            "datasetId": "sec.company_facts",
+            "revisionId": "sec-r1",
+        }
+        common_source = {
+            "provider": "SEC EDGAR", "period": "2025-12-31", "scope": "consolidated",
+            "durationBasis": "annual", "official": True,
+            "securityLine": "issuer-common", "splitAdjustmentState": "source-adjusted", "adrRatio": 1,
+        }
+        annual = {
+            "period": "2025-12-31", "periodEnd": "2025-12-31", "frequency": "annual",
+            "provider": "SEC EDGAR", "netIncomeCommon": 1200000,
+            "weightedAverageSharesDiluted": 1000, "dilutedEPS": 1200,
+            "metricProvenance": {
+                "netIncomeCommon": {
+                    **common_source, "currency": "USD", "attributionScope": "common-stockholders",
+                },
+                "weightedAverageSharesDiluted": {
+                    **common_source, "currency": "shares", "shareCountBasis": "weighted-average-diluted",
+                },
+                "dilutedEPS": {
+                    **common_source, "currency": "USD/shares", "perShareBasis": "diluted",
+                },
+            },
+            "reportContract": {
+                "contractVersion": "financial-report-observation-v1", "frequency": "annual",
+                "periodEnd": "2025-12-31", "revisionState": "immutable-source-bound",
+                "sourceReferences": [reference],
+            },
+        }
+        company = {
+            "financials": {"annual": [annual]},
+            "capital": {"sharesOutstanding": 700},
+            "provenance": [{"provider": "SEC EDGAR", "asOf": "2026-02-01"}],
+        }
+        observations = collect_earnings_observations({}, {}, company)
+        by_method = {item["calculationMethod"]: item for item in observations}
+        self.assertEqual({"reported", "derived-reported-components"}, set(by_method))
+        self.assertEqual("diluted", by_method["reported"]["epsBasis"])
+        self.assertEqual("verified-reported", by_method["reported"]["validationState"])
+        self.assertEqual("verified-reconstruction", by_method["derived-reported-components"]["validationState"])
+        self.assertEqual("reconciled", by_method["derived-reported-components"]["reportedComparison"]["status"])
+        self.assertEqual("netIncomeCommon / weightedAverageSharesDiluted", by_method["derived-reported-components"]["formula"])
+        self.assertEqual("sec-r1", by_method["reported"]["sourceReferences"][0]["revisionId"])
+        self.assertEqual(1200, earnings_scenario(observations)["base"])
+
+        legacy_report = collect_earnings_observations({}, {
+            "provider": "Alpha Vantage",
+            "sourceReferences": [reference],
+            "latestAnnual": {"reportedEPS": 5, "epsPeriod": "annual", "fiscalDateEnding": "2025-12-31"},
+        })
+        self.assertEqual("reference-only", legacy_report[0]["validationState"])
+        self.assertIn("unverified-per-share-basis", legacy_report[0]["excludedReasons"])
+        self.assertEqual({}, earnings_scenario(legacy_report))
+        qualified_report = collect_earnings_observations({}, {
+            "provider": "Alpha Vantage",
+            "sourceReferences": [reference],
+            "latestAnnual": {
+                "reportedEPS": 5, "epsPeriod": "annual", "epsBasis": "diluted",
+                "fiscalDateEnding": "2025-12-31",
+            },
+        })
+        self.assertEqual("verified-reported", qualified_report[0]["validationState"])
+        self.assertTrue(qualified_report[0]["positivePerEligible"])
+
+        for label, mutate, expected_reason in (
+            (
+                "scope", lambda row: row["metricProvenance"]["weightedAverageSharesDiluted"].update({"scope": "parent-only"}),
+                "incompatible-scope",
+            ),
+            (
+                "adr", lambda row: row["metricProvenance"]["weightedAverageSharesDiluted"].update({"adrRatio": 2}),
+                "incompatible-adrRatio",
+            ),
+            (
+                "split", lambda row: row["metricProvenance"]["weightedAverageSharesDiluted"].update({"splitAdjustmentState": "unadjusted"}),
+                "incompatible-splitAdjustmentState",
+            ),
+        ):
+            with self.subTest(component_mismatch=label):
+                invalid = copy.deepcopy(company)
+                mutate(invalid["financials"]["annual"][0])
+                derived = next(
+                    item for item in collect_earnings_observations({}, {}, invalid)
+                    if item.get("calculationMethod") == "derived-reported-components"
+                )
+                self.assertEqual("reference-only", derived["validationState"])
+                self.assertFalse(derived["positivePerEligible"])
+                self.assertIn(expected_reason, derived["excludedReasons"])
+
+        mismatch = copy.deepcopy(company)
+        mismatch["financials"]["annual"][0]["dilutedEPS"] = 1000
+        derived = next(
+            item for item in collect_earnings_observations({}, {}, mismatch)
+            if item.get("calculationMethod") == "derived-reported-components"
+        )
+        self.assertEqual("mismatch", derived["reportedComparison"]["status"])
+        self.assertIn("reported-eps-mismatch", derived["excludedReasons"])
+
+        negative = copy.deepcopy(company)
+        negative["financials"]["annual"][0]["netIncomeCommon"] = -1200000
+        negative["financials"]["annual"][0]["dilutedEPS"] = -1200
+        negative_rows = collect_earnings_observations({}, {}, negative)
+        self.assertTrue(all(item["base"] == -1200 for item in negative_rows))
+        self.assertTrue(all(not item["positivePerEligible"] for item in negative_rows))
+        self.assertTrue(all("non-positive-eps-for-per" in item["excludedReasons"] for item in negative_rows))
+
+        converted = convert_cross_listed_valuation_inputs(
+            {"fairValueLow": 180000, "fairValue": 200000, "fairValueHigh": 220000},
+            {"low": 9000, "base": 10000, "high": 11000, "currency": "KRW"},
+            source_symbol="000660", target_symbol="SKHY", source_currency="KRW",
+            target_currency="USD", adr_ratio=0.1, fx_rate=1000,
+        )
+        self.assertEqual("applied", converted["status"])
+        self.assertEqual(20, converted["scenarios"]["fairValue"])
+        self.assertEqual(1, converted["eps"]["base"])
+        self.assertEqual("localValue * adrRatio / usdkrw", converted["trace"]["formula"])
+        self.assertEqual("applied", converted["eps"]["securityAdjustmentState"])
+
+        for label, eps, source_currency, target_currency, reason in (
+            ("double", {"base": 1, "securityAdjustmentState": "applied"}, "KRW", "USD", "security-adjustment-already-applied"),
+            ("direction", {"base": 1}, "USD", "KRW", "unsupported-currency-direction"),
+            ("split", {"base": 1, "splitAdjustmentState": "requires-adjustment"}, "KRW", "USD", "split-adjustment-unresolved"),
+        ):
+            with self.subTest(security_conversion=label):
+                blocked = convert_cross_listed_valuation_inputs(
+                    {"fairValue": 20}, eps,
+                    source_symbol="000660", target_symbol="SKHY",
+                    source_currency=source_currency, target_currency=target_currency,
+                    adr_ratio=0.1, fx_rate=1000,
+                )
+                self.assertEqual("blocked", blocked["status"])
+                self.assertEqual({}, blocked["scenarios"])
+                self.assertIn(reason, blocked["blockedReasons"])
 
     def _assert_legacy_consensus_without_exact_revision_remains_unverified(self):
         observations = collect_earnings_observations(

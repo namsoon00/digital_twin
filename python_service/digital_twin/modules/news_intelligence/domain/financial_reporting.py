@@ -210,7 +210,8 @@ def financial_report_contract_assessment(row: Mapping, expected_frequency: objec
         if str(value or "").strip()
     }
     duration_fields = {
-        "revenue", "grossProfit", "operatingIncome", "netIncome",
+        "revenue", "grossProfit", "operatingIncome", "netIncome", "netIncomeCommon",
+        "basicEPS", "dilutedEPS", "weightedAverageSharesBasic", "weightedAverageSharesDiluted",
         "operatingCashFlow", "capitalExpenditure", "freeCashFlow",
     }
     has_duration_value = any(row.get(field) is not None for field in duration_fields)

@@ -332,6 +332,18 @@ class ExternalSignalSecMixin:
                 "SalesRevenueNet",
             ]),
             "netIncome": self.latest_sec_fact(facts, ["NetIncomeLoss", "ProfitLoss"]),
+            "netIncomeCommon": self.latest_sec_fact(facts, [
+                "NetIncomeLossAvailableToCommonStockholdersBasic",
+                "NetIncomeLossAvailableToCommonStockholdersBasicAndDiluted",
+            ]),
+            "basicEPS": self.latest_sec_fact(facts, ["EarningsPerShareBasic"], units=("USD/shares", "USD / shares")),
+            "dilutedEPS": self.latest_sec_fact(facts, ["EarningsPerShareDiluted"], units=("USD/shares", "USD / shares")),
+            "weightedAverageSharesBasic": self.latest_sec_fact(
+                facts, ["WeightedAverageNumberOfSharesOutstandingBasic"], units=("shares",),
+            ),
+            "weightedAverageSharesDiluted": self.latest_sec_fact(
+                facts, ["WeightedAverageNumberOfDilutedSharesOutstanding"], units=("shares",),
+            ),
             "grossProfit": self.latest_sec_fact(facts, ["GrossProfit"]),
             "operatingIncome": self.latest_sec_fact(facts, ["OperatingIncomeLoss"]),
             "assets": self.latest_sec_fact(facts, ["Assets"]),

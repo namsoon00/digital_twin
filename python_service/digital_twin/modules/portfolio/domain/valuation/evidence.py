@@ -116,7 +116,8 @@ def _observation(
         "contractVersion", "normalizationVersion", "upstreamOrigin", "providerPeriod",
         "horizon", "targetPeriodStart", "targetPeriodEnd", "currency", "perShareBasis",
         "accountingBasis", "estimateBasis", "rangeKind", "revisionKind", "revisionFrom",
-        "revisionTo", "fetchedAt",
+        "revisionTo", "fetchedAt", "epsBasis", "securityLine", "splitAdjustmentState",
+        "securityAdjustmentState", "calculationMethod", "formula",
     ):
         if raw.get(field) not in (None, ""):
             result[field] = raw.get(field)
@@ -128,15 +129,225 @@ def _observation(
     elif default_estimate or raw.get("isEstimate"):
         result["validationState"] = "legacy-unverified"
         result["revisionState"] = "missing-source-revision"
-    eligible = bool(base > 0 and period_is_annual_per_share(period))
+    eligible = (
+        bool(raw.get("positivePerEligible"))
+        if "positivePerEligible" in raw
+        else bool(base > 0 and period_is_annual_per_share(period))
+    )
     result["positivePerEligible"] = eligible
-    excluded = []
+    excluded = [_text(item) for item in raw.get("excludedReasons") or [] if _text(item)]
     if base <= 0:
         excluded.append("non-positive-eps")
     if not period_is_annual_per_share(period):
         excluded.append("unsupported-per-horizon")
     if excluded:
         result["excludedReasons"] = excluded
+    return result
+
+
+def _exact_financial_report_references(row: Mapping[str, object]) -> List[Dict[str, object]]:
+    report = row.get("reportContract") if isinstance(row.get("reportContract"), Mapping) else {}
+    references = [
+        dict(item) for item in report.get("sourceReferences") or []
+        if isinstance(item, Mapping) and item.get("datasetId") and item.get("revisionId")
+    ]
+    row_period = _text(row.get("periodEnd") or row.get("period"))
+    report_period = _text(report.get("periodEnd"))
+    if (
+        _text(row.get("frequency")).lower() != "annual"
+        or _text(report.get("frequency")).lower() != "annual"
+        or report.get("contractVersion") != "financial-report-observation-v1"
+        or report.get("revisionState") != "immutable-source-bound"
+        or not references
+        or not row_period
+        or not report_period
+        or not (row_period.endswith(report_period) or report_period.endswith(row_period))
+    ):
+        return []
+    return references
+
+
+def _same_report_component(
+    row: Mapping[str, object],
+    left_field: str,
+    right_field: str,
+    right_basis: str,
+) -> List[str]:
+    provenance = row.get("metricProvenance") if isinstance(row.get("metricProvenance"), Mapping) else {}
+    left = provenance.get(left_field) if isinstance(provenance.get(left_field), Mapping) else {}
+    right = provenance.get(right_field) if isinstance(provenance.get(right_field), Mapping) else {}
+    reasons = []
+    if not _exact_financial_report_references(row):
+        reasons.append("missing-exact-financial-report-revision")
+    if not left or _text(left.get("attributionScope")).lower() != "common-stockholders":
+        reasons.append("unverified-common-stockholder-attribution")
+    if not right or _text(right.get("shareCountBasis")).lower() != right_basis:
+        reasons.append("unverified-weighted-average-share-basis")
+    for field in ("provider", "scope"):
+        if not _text(left.get(field)) or not _text(right.get(field)) or _text(left.get(field)) != _text(right.get(field)):
+            reasons.append("incompatible-" + field)
+    for source in (left, right):
+        if _text(source.get("durationBasis")).lower() != "annual":
+            reasons.append("non-annual-component")
+        source_period = _text(source.get("period"))
+        row_period = _text(row.get("periodEnd") or row.get("period"))
+        if not source_period or not row_period or not (source_period.endswith(row_period) or row_period.endswith(source_period)):
+            reasons.append("component-period-mismatch")
+    if _text(left.get("currency")) in {"", "shares"} or _text(right.get("currency")).lower() != "shares":
+        reasons.append("component-unit-mismatch")
+    for field in ("securityLine", "splitAdjustmentState", "adrRatio"):
+        left_value, right_value = left.get(field), right.get(field)
+        if (left_value not in (None, "") or right_value not in (None, "")) and left_value != right_value:
+            reasons.append("incompatible-" + field)
+    return sorted(set(reasons))
+
+
+def _company_eps_observations(
+    company: Mapping[str, object],
+    annual_row: Mapping[str, object],
+) -> List[Dict[str, object]]:
+    row = dict(annual_row or {})
+    provider = _text(row.get("provider")) or "+".join(
+        _text(item.get("provider"))
+        for item in company.get("provenance") or []
+        if isinstance(item, Mapping) and item.get("provider")
+    )
+    references = _exact_financial_report_references(row)
+    provenance = row.get("metricProvenance") if isinstance(row.get("metricProvenance"), Mapping) else {}
+    period = _text(row.get("periodEnd") or row.get("period"))
+    result: List[Dict[str, object]] = []
+    reported_by_basis = {}
+    for basis, field in (("diluted", "dilutedEPS"), ("basic", "basicEPS")):
+        value = _optional_number(row.get(field))
+        source = provenance.get(field) if isinstance(provenance.get(field), Mapping) else {}
+        reasons = []
+        if value is None:
+            continue
+        if not references:
+            reasons.append("missing-exact-financial-report-revision")
+        if _text(source.get("perShareBasis")).lower() != basis:
+            reasons.append("unverified-per-share-basis")
+        if _text(source.get("durationBasis")).lower() != "annual":
+            reasons.append("non-annual-reported-eps")
+        if not _text(source.get("provider")) or not _text(source.get("scope")):
+            reasons.append("missing-reported-eps-lineage")
+        observation = {
+            "observationId": "eps:company-reported:" + basis + ":" + period,
+            "metric": "earnings-per-share",
+            "value": round(value, 6),
+            "base": round(value, 6),
+            "period": "annual",
+            "asOf": period,
+            "provider": _text(source.get("provider")) or provider,
+            "source": "companyKnowledge." + field,
+            "sourceType": _source_type(source.get("provider") or provider),
+            "isEstimate": False,
+            "epsBasis": basis,
+            "currency": _text(source.get("currency")),
+            "securityLine": _text(source.get("securityLine")),
+            "splitAdjustmentState": _text(source.get("splitAdjustmentState")),
+            "calculationMethod": "reported",
+            "validationState": "verified-reported" if not reasons else "reference-only",
+            "positivePerEligible": bool(value > 0 and not reasons),
+            "sourceReferences": references,
+        }
+        exclusions = list(reasons)
+        if value <= 0:
+            exclusions.append("non-positive-eps-for-per")
+        if exclusions:
+            observation["excludedReasons"] = sorted(set(exclusions))
+        result.append(observation)
+        reported_by_basis[basis] = observation
+
+    for basis, shares_field, shares_basis in (
+        ("diluted", "weightedAverageSharesDiluted", "weighted-average-diluted"),
+        ("basic", "weightedAverageSharesBasic", "weighted-average-basic"),
+    ):
+        numerator = _optional_number(row.get("netIncomeCommon"))
+        denominator = _optional_number(row.get(shares_field))
+        if numerator is None or denominator is None:
+            continue
+        reasons = _same_report_component(row, "netIncomeCommon", shares_field, shares_basis)
+        if denominator <= 0:
+            reasons.append("non-positive-weighted-average-shares")
+        value = numerator / denominator if denominator > 0 else 0.0
+        reported = reported_by_basis.get(basis)
+        comparison = {}
+        if reported and reported.get("validationState") == "verified-reported" and not reasons:
+            reported_value = float(reported["base"])
+            tolerance = max(0.000001, abs(reported_value) * 0.01)
+            difference = abs(value - reported_value)
+            comparison = {
+                "reportedObservationId": reported["observationId"],
+                "difference": round(difference, 6),
+                "tolerance": round(tolerance, 6),
+                "status": "reconciled" if difference <= tolerance else "mismatch",
+            }
+            if difference > tolerance:
+                reasons.append("reported-eps-mismatch")
+        observation = {
+            "observationId": "eps:company-derived:" + basis + ":" + period,
+            "metric": "earnings-per-share",
+            "value": round(value, 6),
+            "base": round(value, 6),
+            "period": "annual",
+            "asOf": period,
+            "provider": provider,
+            "source": "companyKnowledge.netIncomeCommon/" + shares_field,
+            "sourceType": _source_type(provider),
+            "isEstimate": False,
+            "epsBasis": basis,
+            "currency": _text((provenance.get("netIncomeCommon") or {}).get("currency")),
+            "securityLine": _text((provenance.get("netIncomeCommon") or {}).get("securityLine")),
+            "splitAdjustmentState": _text((provenance.get("netIncomeCommon") or {}).get("splitAdjustmentState")),
+            "calculationMethod": "derived-reported-components",
+            "formula": "netIncomeCommon / " + shares_field,
+            "calculationInputs": {
+                "numerator": {"metric": "netIncomeCommon", "value": numerator},
+                "denominator": {"metric": shares_field, "value": denominator},
+            },
+            "validationState": "verified-reconstruction" if not reasons else "reference-only",
+            "positivePerEligible": bool(value > 0 and not reasons),
+            "sourceReferences": references,
+        }
+        if comparison:
+            observation["reportedComparison"] = comparison
+        exclusions = list(reasons)
+        if value <= 0:
+            exclusions.append("non-positive-eps-for-per")
+        if exclusions:
+            observation["excludedReasons"] = sorted(set(exclusions))
+        result.append(observation)
+
+    if not any(item.get("calculationMethod") == "derived-reported-components" for item in result):
+        capital = company.get("capital") if isinstance(company.get("capital"), Mapping) else {}
+        numerator = _optional_number(row.get("netIncomeCommon"), row.get("netIncome"))
+        denominator = _optional_number(row.get("sharesOutstanding"), capital.get("sharesOutstanding"))
+        if numerator is not None and denominator is not None and denominator > 0:
+            reasons = ["current-share-count-is-not-weighted-average"]
+            if row.get("netIncomeCommon") is None:
+                reasons.append("unverified-common-stockholder-attribution")
+            if not references:
+                reasons.append("missing-exact-financial-report-revision")
+            result.append({
+                "observationId": "eps:company-reference:" + period,
+                "metric": "earnings-per-share",
+                "value": round(numerator / denominator, 6),
+                "base": round(numerator / denominator, 6),
+                "period": "annual",
+                "asOf": period,
+                "provider": provider,
+                "source": "companyKnowledge.netIncome/currentSharesOutstanding",
+                "sourceType": _source_type(provider),
+                "isEstimate": False,
+                "epsBasis": "unknown",
+                "calculationMethod": "approximate-current-share-count",
+                "formula": "netIncome / currentSharesOutstanding",
+                "validationState": "reference-only",
+                "positivePerEligible": False,
+                "excludedReasons": sorted(set(reasons)),
+                "sourceReferences": references,
+            })
     return result
 
 
@@ -215,28 +426,9 @@ def collect_earnings_observations(
         ))
     company_financials = company.get("financials") if isinstance(company.get("financials"), Mapping) else {}
     annual_periods = company_financials.get("annual") if isinstance(company_financials.get("annual"), list) else []
-    capital = company.get("capital") if isinstance(company.get("capital"), Mapping) else {}
     if annual_periods:
         latest_annual = annual_periods[0] if isinstance(annual_periods[0], Mapping) else {}
-        shares = _positive(latest_annual.get("sharesOutstanding") or capital.get("sharesOutstanding"))
-        net_income = number(latest_annual.get("netIncome"))
-        if net_income > 0 and shares:
-            provenance = company.get("provenance") if isinstance(company.get("provenance"), list) else []
-            provider = "+".join(_text(item.get("provider")) for item in provenance if isinstance(item, Mapping) and item.get("provider"))
-            result.append({
-                "observationId": "eps:company-knowledge:" + _text(latest_annual.get("period")),
-                "metric": "earnings-per-share",
-                "value": round(net_income / shares, 6),
-                "base": round(net_income / shares, 6),
-                "period": "annual",
-                "asOf": _text(latest_annual.get("period")),
-                "provider": provider,
-                "source": "companyKnowledge.netIncome/sharesOutstanding",
-                "sourceType": _source_type(provider),
-                "isEstimate": False,
-                "growthPct": number(latest_annual.get("netIncomeGrowthPct")),
-                "sourceReferences": list((latest_annual.get("reportContract") or {}).get("sourceReferences") or []),
-            })
+        result.extend(_company_eps_observations(company, latest_annual))
 
     for raw_value, period, owner, source, is_estimate in scalar_candidates:
         provider = _text(owner.get("provider")).casefold()
@@ -246,11 +438,29 @@ def collect_earnings_observations(
                 reference for reference in references
                 if _text(reference.get("datasetId")) == "yfinance.fundamental"
             )
-        item = _observation(
-            {
+        raw_observation = {
                 "value": raw_value, "period": period, "isEstimate": is_estimate,
+                "currency": owner.get("currency"),
+                "securityLine": owner.get("securityLine"),
+                "splitAdjustmentState": owner.get("splitAdjustmentState"),
+                "securityAdjustmentState": owner.get("securityAdjustmentState"),
                 **({"sourceReferences": owner_references} if owner_references else {}),
-            },
+            }
+        if source in {"annualEPS", "latestQuarter.annualEPS"} and not is_estimate:
+            basis = _text(owner.get("epsBasis") or owner.get("perShareBasis")).lower()
+            exact_revision = bool(owner_references)
+            raw_observation.update({
+                "epsBasis": basis or "unknown",
+                "calculationMethod": "reported",
+                "validationState": "verified-reported" if basis in {"basic", "diluted"} and exact_revision else "reference-only",
+                "positivePerEligible": bool(number(raw_value) > 0 and basis in {"basic", "diluted"} and exact_revision),
+                "excludedReasons": [
+                    *([] if basis in {"basic", "diluted"} else ["unverified-per-share-basis"]),
+                    *([] if exact_revision else ["missing-exact-financial-report-revision"]),
+                ],
+            })
+        item = _observation(
+            raw_observation,
             provider=owner.get("provider"),
             source=source,
             default_as_of=owner.get("fetchedAt") or owner.get("latestQuarter"),
@@ -269,6 +479,8 @@ def collect_earnings_observations(
             round(number(item.get("high")), 6),
             _text(item.get("provider")).casefold(),
             _text(item.get("asOf")),
+            _text(item.get("calculationMethod")),
+            _text(item.get("epsBasis")),
         )
         if key in seen:
             continue
@@ -397,6 +609,10 @@ def earnings_scenario(observations: Iterable[Mapping[str, object]]) -> Dict[str,
         "observationIds": [str(item.get("observationId") or "") for item in selected if item.get("observationId")],
         "sourceReferences": [source_references[key] for key in sorted(source_references)],
     }
+    for field in ("currency", "epsBasis", "securityLine", "splitAdjustmentState", "securityAdjustmentState"):
+        values = {_text(item.get(field)) for item in selected if _text(item.get(field))}
+        if len(values) == 1:
+            result[field] = next(iter(values))
     if provided_counts:
         result["analystCount"] = analyst_count
     return result

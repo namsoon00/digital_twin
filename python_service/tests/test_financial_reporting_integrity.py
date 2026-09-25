@@ -360,6 +360,22 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual(120, rows[0]["issuedShares"])
         self.assertNotIn("sharesOutstanding", rows[0])
 
+        annual = statement_periods({"incomeStatement": [
+            {"metric": "Net Income Common Stockholders", "values": {"2025-12-31": 1200}},
+            {"metric": "Basic Average Shares", "values": {"2025-12-31": 110}},
+            {"metric": "Diluted Average Shares", "values": {"2025-12-31": 120}},
+            {"metric": "Basic EPS", "values": {"2025-12-31": 10.909091}},
+            {"metric": "Diluted EPS", "values": {"2025-12-31": 10}},
+        ]}, frequency="annual", currency="USD")
+        self.assertEqual(1200, annual[0]["netIncomeCommon"])
+        self.assertEqual(110, annual[0]["weightedAverageSharesBasic"])
+        self.assertEqual(120, annual[0]["weightedAverageSharesDiluted"])
+        self.assertEqual("common-stockholders", annual[0]["metricProvenance"]["netIncomeCommon"]["attributionScope"])
+        self.assertEqual("weighted-average-basic", annual[0]["metricProvenance"]["weightedAverageSharesBasic"]["shareCountBasis"])
+        self.assertEqual("weighted-average-diluted", annual[0]["metricProvenance"]["weightedAverageSharesDiluted"]["shareCountBasis"])
+        self.assertEqual("basic", annual[0]["metricProvenance"]["basicEPS"]["perShareBasis"])
+        self.assertEqual("diluted", annual[0]["metricProvenance"]["dilutedEPS"]["perShareBasis"])
+
     def test_unattributed_legacy_comparison_is_not_verified(self):
         rows = enrich_financial_periods([{"period": "2026-06-30", "frequency": "quarterly", "revenue": 100},
                                         {"period": "2026-03-31", "frequency": "quarterly", "revenue": 80}])

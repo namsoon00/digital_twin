@@ -167,6 +167,75 @@ def adr_security_line_for_position(position: Position, settings: Dict[str, objec
     return None
 
 
+def convert_cross_listed_valuation_inputs(
+    scenarios: Dict[str, object],
+    eps: Dict[str, object],
+    *,
+    source_symbol: object,
+    target_symbol: object,
+    source_currency: object,
+    target_currency: object,
+    adr_ratio: object,
+    fx_rate: object,
+) -> Dict[str, object]:
+    """Convert local-share values to one ADR exactly once with an audit trace."""
+
+    source = str(source_symbol or "").upper().strip()
+    target = str(target_symbol or "").upper().strip()
+    source_ccy = str(source_currency or "").upper().strip()
+    target_ccy = str(target_currency or "").upper().strip()
+    ratio = number(adr_ratio)
+    fx = number(fx_rate)
+    reasons = []
+    if not source or not target or source == target:
+        reasons.append("cross-listed-symbol-direction-missing")
+    if source_ccy != "KRW" or target_ccy != "USD":
+        reasons.append("unsupported-currency-direction")
+    if ratio <= 0:
+        reasons.append("invalid-adr-ratio")
+    if fx <= 0:
+        reasons.append("invalid-fx-rate")
+    if str(eps.get("securityAdjustmentState") or "").lower() in {"applied", "adr-adjusted", "target-security"}:
+        reasons.append("security-adjustment-already-applied")
+    if str(eps.get("securityLine") or "").upper().strip() == target:
+        reasons.append("eps-already-on-target-security-line")
+    if str(eps.get("splitAdjustmentState") or "").lower() in {"requires-adjustment", "unadjusted-conflict"}:
+        reasons.append("split-adjustment-unresolved")
+    if reasons:
+        return {"status": "blocked", "blockedReasons": sorted(set(reasons)), "scenarios": {}, "eps": dict(eps or {})}
+    factor = ratio / fx
+    converted_scenarios = dict(scenarios or {})
+    converted_eps = dict(eps or {})
+    for field in ("fairValueLow", "fairValue", "fairValueBase", "fairValueHigh"):
+        if field in converted_scenarios:
+            converted_scenarios[field] = round(number(converted_scenarios.get(field)) * factor, 4)
+    for field in ("low", "base", "high"):
+        if field in converted_eps:
+            converted_eps[field] = round(number(converted_eps.get(field)) * factor, 6)
+    trace = {
+        "status": "applied",
+        "direction": "local-share-to-adr",
+        "sourceSymbol": source,
+        "targetSymbol": target,
+        "sourceCurrency": source_ccy,
+        "targetCurrency": target_ccy,
+        "adrRatio": round(ratio, 8),
+        "fxPair": "USD/KRW",
+        "fxRate": round(fx, 8),
+        "formula": "localValue * adrRatio / usdkrw",
+        "factor": round(factor, 12),
+    }
+    converted_eps.update({
+        "sourceCurrency": source_ccy,
+        "valuationCurrency": target_ccy,
+        "adrRatio": round(ratio, 8),
+        "fxRate": round(fx, 8),
+        "securityAdjustmentState": "applied",
+        "securityConversion": trace,
+    })
+    return {"status": "applied", "blockedReasons": [], "scenarios": converted_scenarios, "eps": converted_eps, "trace": trace}
+
+
 def bitcoin_proxy_ai_valuation_row(
     position: Position,
     external_signals: Dict[str, object],
@@ -406,21 +475,23 @@ def _fundamental_scenario_row(
     if source_symbol != str(position.symbol or "").upper() and scenarios:
         adr_ratio = number(getattr(adr_line, "adr_ratio", 0.0)) if adr_line else 0.0
         fx_rate = usdkrw_rate_for_position(position, external_signals)
-        if adr_ratio and fx_rate:
-            for field in ("fairValueLow", "fairValue", "fairValueBase", "fairValueHigh"):
-                scenarios[field] = round(number(scenarios.get(field)) * adr_ratio / fx_rate, 4)
-            for field in ("low", "base", "high"):
-                valuation_eps[field] = round(number(valuation_eps.get(field)) * adr_ratio / fx_rate, 6)
-            valuation_eps["sourceCurrency"] = "KRW"
-            valuation_eps["valuationCurrency"] = str(position.currency or "USD")
-            valuation_eps["adrRatio"] = round(adr_ratio, 6)
-            valuation_eps["fxRate"] = round(fx_rate, 6)
+        overview = context.get("overview") if isinstance(context.get("overview"), dict) else {}
+        conversion = convert_cross_listed_valuation_inputs(
+            scenarios,
+            valuation_eps,
+            source_symbol=source_symbol,
+            target_symbol=position.symbol,
+            source_currency=valuation_eps.get("currency") or overview.get("currency"),
+            target_currency=position.currency,
+            adr_ratio=adr_ratio,
+            fx_rate=fx_rate,
+        )
+        if conversion.get("status") == "applied":
+            scenarios = conversion["scenarios"]
+            valuation_eps = conversion["eps"]
         else:
             scenarios = {}
-            if not adr_ratio:
-                missing.append("ADR 비율")
-            if not fx_rate:
-                missing.append("USD/KRW 환율")
+            missing.extend(conversion.get("blockedReasons") or ["ADR/환율 변환 계약"])
     required = ["annualEPS", "targetMultipleBand"]
     available = ["annualEPS"] if eps_value else []
     if bool(multiple_band.get("evidenceBacked")):

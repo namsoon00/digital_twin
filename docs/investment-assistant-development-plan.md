@@ -25,7 +25,11 @@
   analyst/fundamental 병합 순서와 무관한 필드 소유권, exact source revision 연결,
   음수·0·FY2 관측 보존 및 양수 PER 적격성 분리를 구현했다. 상세 결과는
   [IN-05 컨센서스 보존 보고서](investment-assistant-in05-consensus.md)에 기록했다.
-- IN-06 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
+- IN-06: reported basic/diluted EPS와 same-report 재구성 EPS를 분리하고,
+  현재 발행주식 수 fallback을 reference-only로 낮췄다. 동일 기간·scope·보통주 귀속 범위·
+  가중평균 주식 수·exact revision을 검증하며 ADR/환율 변환의 방향과 중복 적용도 차단한다.
+  상세 결과는 [IN-06 EPS basis 보고서](investment-assistant-in06-eps-basis.md)에 기록했다.
+- IN-07 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
 
 ## 1. 제품 목표와 개발 원칙
 

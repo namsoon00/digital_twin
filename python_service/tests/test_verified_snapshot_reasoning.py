@@ -14,6 +14,10 @@ from digital_twin.modules.reasoning.domain.events import ontology_reasoning_requ
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.market_data.domain.event_types import MARKET_DATA_COLLECTED
 from digital_twin.modules.news_intelligence.domain.integration_events import research_evidence_collected_event
+from digital_twin.modules.news_intelligence.domain.financial_reporting import (
+    FINANCIAL_REPORTING_VERSION,
+    bind_financial_report_contract,
+)
 from digital_twin.modules.market_data.domain.crypto_market_signals import (
     CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
     crypto_transition_baseline,
@@ -528,6 +532,28 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["ValuationObservation"], event.payload["factTypesBySymbol"]["AAPL"])
 
     def test_company_knowledge_section_revision_routes_only_changed_fact_family(self):
+        def financial_row(revenue, revision):
+            return bind_financial_report_contract({
+                "period": "2025-09-30",
+                "periodEnd": "2025-09-30",
+                "frequency": "annual",
+                "provider": "SEC EDGAR",
+                "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+                "revenue": revenue,
+                "metricProvenance": {"revenue": {
+                    "provider": "SEC EDGAR",
+                    "period": "2025-09-30",
+                    "currency": "USD",
+                    "scope": "consolidated",
+                    "durationBasis": "annual",
+                }},
+            }, [{
+                "datasetId": "sec.company_facts",
+                "revisionId": revision,
+                "subjectKey": "AAPL",
+                "availability": "observed",
+            }])
+
         base_company = {
             "AAPL": {
                 "schemaVersion": "company-knowledge-v1",
@@ -543,14 +569,16 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
                     "capital": "capital-a",
                     "coverage": "coverage-a",
                 },
-                "financials": {"annual": [{"period": "2025-09-30", "revenue": 105.0}]},
+                "financials": {"annual": [financial_row(105.0, "financial-revision-a")]},
             },
         }
         changed_company = copy.deepcopy(base_company)
         changed_company["AAPL"]["factRevision"] = "revision-b"
         changed_company["AAPL"]["materialRevision"] = "material-b"
         changed_company["AAPL"]["materialSectionRevisions"]["financials"] = "financials-b"
-        changed_company["AAPL"]["financials"]["annual"][0]["revenue"] = 108.0
+        changed_company["AAPL"]["financials"]["annual"] = [
+            financial_row(108.0, "financial-revision-b")
+        ]
 
         event = verified_monitor_snapshot_reasoning_event(
             snapshot(external_signals={"companyKnowledge": changed_company}),

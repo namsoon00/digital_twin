@@ -13,6 +13,7 @@ from typing import Mapping
 
 FINANCIAL_REPORTING_VERSION = "financial-reporting-v2"
 FINANCIAL_REPORT_CONTRACT_VERSION = "financial-report-observation-v1"
+FINANCIAL_PERIOD_SELECTION_VERSION = "financial-period-selection-v1"
 GROWTH_FIELDS = {
     "revenueGrowthPct": "revenue",
     "operatingIncomeGrowthPct": "operatingIncome",
@@ -158,6 +159,77 @@ def bind_financial_report_contract(row: Mapping, source_references=()):
     ).hexdigest()[:24]
     result["reportContract"] = material
     return result
+
+
+def financial_report_contract_assessment(row: Mapping, expected_frequency: object = ""):
+    """Validate whether a cached report row may participate in current facts.
+
+    A version marker by itself is not evidence that a legacy row was rebuilt
+    from a real report.  Current-state merging therefore requires the report
+    contract emitted at the source-normalization boundary and checks its
+    period, frequency and duration semantics.  The original row remains in
+    its immutable source/cache history when this assessment excludes it.
+    """
+
+    if not isinstance(row, Mapping):
+        return {"eligible": False, "reason": "invalid-financial-period-row"}
+    frequency = str(expected_frequency or row.get("frequency") or "").strip().lower()
+    row_frequency = str(row.get("frequency") or "").strip().lower()
+    if row.get("financialReportingVersion") != FINANCIAL_REPORTING_VERSION:
+        return {"eligible": False, "reason": "unverified-financial-reporting-version"}
+    report = row.get("reportContract") if isinstance(row.get("reportContract"), Mapping) else {}
+    if not report:
+        return {"eligible": False, "reason": "missing-financial-report-contract"}
+    if report.get("contractVersion") != FINANCIAL_REPORT_CONTRACT_VERSION:
+        return {"eligible": False, "reason": "unsupported-financial-report-contract"}
+    references = [
+        item for item in report.get("sourceReferences") or []
+        if isinstance(item, Mapping)
+        and str(item.get("datasetId") or "").strip()
+        and str(item.get("revisionId") or "").strip()
+    ]
+    if report.get("revisionState") != "immutable-source-bound" or not references:
+        return {"eligible": False, "reason": "missing-financial-report-source-revision"}
+    if not str(report.get("observationId") or "").strip():
+        return {"eligible": False, "reason": "missing-financial-report-observation-id"}
+    contract_frequency = str(report.get("frequency") or "").strip().lower()
+    if not frequency or row_frequency != frequency or contract_frequency != frequency:
+        return {"eligible": False, "reason": "financial-report-frequency-mismatch"}
+    period = reporting_period_end(row.get("periodEnd") or row.get("period"))
+    contract_period = reporting_period_end(report.get("periodEnd"))
+    if not period or not contract_period:
+        return {"eligible": False, "reason": "invalid-financial-report-period"}
+    if period != contract_period:
+        return {"eligible": False, "reason": "financial-report-period-mismatch"}
+    if not str(report.get("provider") or row.get("provider") or "").strip():
+        return {"eligible": False, "reason": "missing-financial-report-provider"}
+
+    duration_bases = {
+        str(value or "").strip().lower()
+        for value in report.get("durationBases") or []
+        if str(value or "").strip()
+    }
+    duration_fields = {
+        "revenue", "grossProfit", "operatingIncome", "netIncome",
+        "operatingCashFlow", "capitalExpenditure", "freeCashFlow",
+    }
+    has_duration_value = any(row.get(field) is not None for field in duration_fields)
+    supported = {
+        "annual": {"annual"},
+        "interim": {"quarterly", "year-to-date"},
+        "quarterly": {"quarterly"},
+    }.get(frequency, set())
+    observed_durations = duration_bases - {"instant"}
+    if has_duration_value and (not observed_durations or not observed_durations.issubset(supported)):
+        return {"eligible": False, "reason": "financial-report-duration-mismatch"}
+    return {
+        "eligible": True,
+        "reason": "",
+        "period": period.isoformat(),
+        "frequency": frequency,
+        "observationId": str(report.get("observationId") or ""),
+        "revisionState": str(report.get("revisionState") or "unknown"),
+    }
 
 
 def dart_reporting_date(year: object, code: object, *, prior: int = 0, balance: bool = False):

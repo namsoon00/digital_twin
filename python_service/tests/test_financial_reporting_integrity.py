@@ -6,12 +6,50 @@ from digital_twin.modules.news_intelligence.domain.company_knowledge import (
     merge_company_knowledge_rows, statement_periods, company_knowledge_by_symbol,
 )
 from digital_twin.modules.news_intelligence.domain.financial_reporting import (
-    current_financial_state, financial_period_sort_key, reporting_period_end, compact_financial_evidence,
+    FINANCIAL_REPORTING_VERSION, bind_financial_report_contract, compact_financial_evidence,
+    current_financial_state, financial_period_sort_key, reporting_period_end,
 )
 from digital_twin.modules.reasoning.domain.portfolio_ontology_company_concepts import _period_rank
 
 
 class FinancialReportingIntegrityTests(unittest.TestCase):
+    def contracted_period(
+        self,
+        period,
+        *,
+        frequency="annual",
+        provider="SEC EDGAR",
+        revision="revision-1",
+        duration_basis="annual",
+        **values,
+    ):
+        metric_provenance = {
+            field: {
+                "provider": provider,
+                "period": period,
+                "currency": "USD",
+                "scope": "consolidated",
+                "durationBasis": duration_basis,
+            }
+            for field, value in values.items()
+            if value is not None
+        }
+        row = {
+            "period": period,
+            "periodEnd": period,
+            "provider": provider,
+            "frequency": frequency,
+            "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+            "metricProvenance": metric_provenance,
+            **values,
+        }
+        return bind_financial_report_contract(row, [{
+            "datasetId": "sec.company_facts",
+            "revisionId": revision,
+            "subjectKey": "TEST",
+            "availability": "observed",
+        }])
+
     def _assert_sec_period_contracts(self):
         from digital_twin.infrastructure.external_api.adapters.base import legacy_provider
 
@@ -218,9 +256,101 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual("OpenDART", state["metricProvenance"]["revenue"]["provider"])
 
     def test_newer_shorter_history_replaces_stale_long_history(self):
-        old = {"financials": {"quarterly": [{"period": "2026-03-31"}, {"period": "2025-12-31"}]}}
-        new = {"financials": {"quarterly": [{"period": "2026-06-30"}]}}
+        old = {"financials": {"quarterly": [
+            self.contracted_period("2026-03-31", frequency="quarterly", duration_basis="quarterly", revenue=90),
+            self.contracted_period("2025-12-31", frequency="quarterly", duration_basis="quarterly", revenue=80),
+        ]}}
+        new = {"financials": {"quarterly": [
+            self.contracted_period("2026-06-30", frequency="quarterly", duration_basis="quarterly", revenue=100),
+        ]}}
         self.assertEqual("2026-06-30", merge_company_knowledge_rows(old, new)["financials"]["quarterly"][0]["period"])
+
+        valid = self.contracted_period("2025-12-31", revenue=100, netIncome=-4)
+        legacy = {
+            "period": "2026-06-30",
+            "frequency": "annual",
+            "provider": "SEC EDGAR",
+            "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+            "revenue": 600,
+            "netIncome": 60,
+        }
+        merged = merge_company_knowledge_rows(
+            {"symbol": "TEST", "financials": {"annual": [valid]}},
+            {"symbol": "TEST", "financials": {"annual": [legacy]}},
+        )
+        self.assertEqual("2025-12-31", merged["financials"]["annual"][0]["period"])
+        self.assertEqual(-4, merged["financials"]["annual"][0]["netIncome"])
+        exclusion = merged["financialIntegrity"]["excludedPeriods"][0]
+        self.assertEqual("missing-financial-report-contract", exclusion["reason"])
+        self.assertEqual("2026-06-30", exclusion["period"])
+        self.assertEqual("checked-with-exclusions", merged["financialIntegrity"]["status"])
+
+        merged = merge_company_knowledge_rows({
+            "symbol": "TEST",
+            "financials": {"annual": [{
+                "period": "2026-06-30",
+                "frequency": "annual",
+                "provider": "SEC EDGAR",
+                "revenue": 600,
+            }]},
+        })
+        self.assertEqual([], merged["financials"].get("annual", []))
+        self.assertEqual(0, merged["coverage"]["financialPeriods"])
+        self.assertIn("financial-statements", merged["coverage"]["missing"])
+        self.assertEqual("error", merged["financialIntegrity"]["status"])
+        self.assertEqual({}, current_financial_state(merged["financials"]))
+
+        from digital_twin.modules.news_intelligence.domain.company_knowledge import company_prompt_context
+        prompt_company = company_prompt_context(
+            {"companyKnowledge": {"TEST": merged}},
+            "TEST",
+        )
+        self.assertNotIn("currentFinancialState", prompt_company)
+        self.assertNotIn("financialEvidence", prompt_company)
+        self.assertNotIn("latestFinancials", prompt_company)
+
+        from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+        from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+        from digital_twin.modules.reasoning.domain.portfolio_ontology_company_concepts import add_company_knowledge_concepts
+        graph = PortfolioOntology("excluded-financial-regression")
+        stock_id = add_entity(graph, "stock", "TEST", "TEST", {"symbol": "TEST", "tboxClass": "Stock"})
+        add_company_knowledge_concepts(
+            graph,
+            stock_id,
+            "TEST",
+            {"companyKnowledge": {"TEST": merged}},
+        )
+        self.assertEqual(
+            [],
+            [relation for relation in graph.relations if relation.relation_type == "HAS_FINANCIAL_STATE"],
+        )
+
+        non_december = self.contracted_period("2025-09-30", revenue=100)
+        mismatched = self.contracted_period(
+            "2026-06-30",
+            duration_basis="year-to-date",
+            revenue=60,
+        )
+        merged = merge_company_knowledge_rows(
+            {"symbol": "TEST", "financials": {"annual": [non_december]}},
+            {"symbol": "TEST", "financials": {"annual": [mismatched]}},
+        )
+        self.assertEqual("2025-09-30", merged["financials"]["annual"][0]["period"])
+        self.assertEqual(
+            "financial-report-duration-mismatch",
+            merged["financialIntegrity"]["excludedPeriods"][0]["reason"],
+        )
+
+        original = self.contracted_period("2025-12-31", revision="original", revenue=90, netIncome=2)
+        correction = self.contracted_period("2025-12-31", revision="correction", revenue=0, netIncome=-3)
+        merged = merge_company_knowledge_rows(
+            {"symbol": "TEST", "financials": {"annual": [original]}},
+            {"symbol": "TEST", "financials": {"annual": [correction]}},
+        )
+        latest = merged["financials"]["annual"][0]
+        self.assertEqual(0, latest["revenue"])
+        self.assertEqual(-3, latest["netIncome"])
+        self.assertEqual("correction", latest["reportContract"]["sourceReferences"][0]["revisionId"])
 
     def test_issued_and_weighted_shares_never_substitute_outstanding(self):
         rows = statement_periods({"balanceSheet": [
@@ -256,11 +386,20 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
 
 
 class FinancialNarrativeContractTests(unittest.TestCase):
+    def source_references(self):
+        return [{
+            "datasetId": "yfinance.fundamental",
+            "revisionId": "immutable-yfinance-fixture",
+            "subjectKey": "TEST",
+            "availability": "observed",
+        }]
+
     def test_historical_source_anomaly_is_not_a_current_financial_warning(self):
         from digital_twin.modules.news_intelligence.domain.company_knowledge import company_prompt_context
         row = build_company_knowledge("TEST", yfinance={"provider": "yfinance", "info": {"financialCurrency": "KRW"},
             "quarterlyBalanceSheet": [{"metric": "Ordinary Shares Number", "values": {
-                "2026-06-30": 4401, "2026-03-31": 4400, "2025-12-31": 2800}}]})
+                "2026-06-30": 4401, "2026-03-31": 4400, "2025-12-31": 2800}}]},
+            source_references=self.source_references())
         self.assertTrue(row["financialIntegrity"]["issues"])
         context = company_prompt_context({"companyKnowledge": {"TEST": row}}, "TEST")
         self.assertEqual([], context["financialIntegrity"]["issues"])
@@ -274,7 +413,8 @@ class FinancialNarrativeContractTests(unittest.TestCase):
         from digital_twin.modules.news_intelligence.domain.company_knowledge import company_prompt_context
         row = build_company_knowledge("TEST", yfinance={"provider": "yfinance", "info": {"financialCurrency": "KRW"},
             "quarterlyIncomeStatement": [{"metric": "Operating Income", "values": {"2026-06-30": 130, "2026-03-31": 100}}],
-            "quarterlyBalanceSheet": [{"metric": "Ordinary Shares Number", "values": {"2026-06-30": 1001, "2026-03-31": 1000}}]})
+            "quarterlyBalanceSheet": [{"metric": "Ordinary Shares Number", "values": {"2026-06-30": 1001, "2026-03-31": 1000}}]},
+            source_references=self.source_references())
         return company_prompt_context({"companyKnowledge": {"TEST": row}}, "TEST")
 
     def context(self):

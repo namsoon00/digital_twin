@@ -78,6 +78,15 @@ rendering, with an equality check at the fitting boundary.
   revisions, while a lineage-only vendor payload change does not create a new
   material company-fact reasoning turn when normalized statement values and
   report semantics are unchanged.
+- Current-state merging uses `financial-period-selection-v1`. A
+  `financial-reporting-v2` marker by itself does not qualify a cached row. The
+  row must carry a `financial-report-observation-v1` bound to an immutable
+  dataset revision and whose reporting frequency, period end and duration basis
+  agree with the row. Invalid legacy rows remain
+  in their source/cache history, while the merged projection records them in
+  `financialIntegrity.excludedPeriods`; they do not enter current financial
+  state, TypeDB financial facts or AI financial evidence. This selection change
+  is tracked by `company-knowledge-cache-v4-contract-qualified-periods`.
 - Consensus snapshots retain their target horizon, exact observation time,
   sample state and immutable analyst-dataset revision. A missing analyst count,
   low/high estimate or 30-day revision is absent rather than zero. Negative EPS

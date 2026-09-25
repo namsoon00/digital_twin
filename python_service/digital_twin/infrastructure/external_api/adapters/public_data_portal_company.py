@@ -15,6 +15,11 @@ from zoneinfo import ZoneInfo
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
 from digital_twin.modules.news_intelligence.domain.company_knowledge import enrich_financial_periods, merge_company_knowledge_rows
+from digital_twin.modules.news_intelligence.domain.financial_reporting import (
+    FINANCIAL_REPORTING_VERSION,
+    bind_financial_report_contract,
+    reporting_period_end,
+)
 from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from ...external_signal_utils import default_json_fetcher
 from .base import observation
@@ -283,7 +288,7 @@ class PublicDataPortalCompanyProfileAdapter:
             "affiliates": affiliate_rows,
             "subsidiaries": subsidiary_rows,
         }
-        fetched_at = utc_now_iso()
+        fallback_source_as_of = utc_now_iso()
         return observation(
             self.descriptor,
             symbol,
@@ -401,15 +406,33 @@ class PublicDataPortalCompanyFinancialAdapter:
                 "no-company-financials",
             )
         statement_facts = _statement_values([*groups["balanceSheet"], *groups["incomeStatement"]])
+        base_date = _latest_date(summaries)
+        source_as_of = source_as_of_for_base_date(base_date)
+        fetched_at = utc_now_iso()
+        source_revision = stable_revision({"dataset": self.descriptor.dataset_id, **groups})
+        source_reference = {
+            "datasetId": self.descriptor.dataset_id,
+            "providerId": self.descriptor.provider_id,
+            "subjectKey": symbol,
+            "revisionId": source_revision,
+            "sourceAsOf": source_as_of,
+            "availability": "observed",
+        }
         periods = []
         for row in summaries:
             period = _text(row.get("basDt") or row.get("bizYear"))
+            period_end = reporting_period_end(period)
+            currency = _text(row.get("curCd") or "KRW")
+            scope = _text(row.get("fnclDcdNm") or row.get("fnclDcd") or "official-filing")
             facts = {
                 "period": period,
+                "periodEnd": period_end.isoformat() if period_end else "",
+                "frequency": "annual",
+                "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
                 "businessYear": _text(row.get("bizYear")),
-                "currency": _text(row.get("curCd") or "KRW"),
+                "currency": currency,
                 "accountingScopeCode": _text(row.get("fnclDcd")),
-                "accountingScope": _text(row.get("fnclDcdNm")),
+                "accountingScope": scope,
                 "provider": PUBLIC_DATA_PROVIDER_LABEL,
                 "revenue": numeric_value(row.get("enpSaleAmt")),
                 "operatingIncome": numeric_value(row.get("enpBzopPft")),
@@ -421,10 +444,24 @@ class PublicDataPortalCompanyFinancialAdapter:
                 "debtToEquityPct": numeric_value(row.get("fnclDebtRto")),
                 **statement_facts.get(period, {}),
             }
-            periods.append({key: value for key, value in facts.items() if value not in (None, "")})
+            facts = {key: value for key, value in facts.items() if value not in (None, "")}
+            duration_fields = {"revenue", "operatingIncome", "netIncome"}
+            instant_fields = {"totalAssets", "totalLiabilities", "equity", "paidInCapital", "cash"}
+            facts["metricProvenance"] = {
+                field: {
+                    "provider": PUBLIC_DATA_PROVIDER_LABEL,
+                    "period": facts.get("periodEnd") or period,
+                    "currency": currency,
+                    "scope": scope,
+                    "official": True,
+                    "durationBasis": "annual" if field in duration_fields else "instant",
+                }
+                for field in duration_fields | instant_fields
+                if facts.get(field) is not None
+            }
+            periods.append(facts)
         periods = enrich_financial_periods(periods)
-        base_date = _latest_date(summaries)
-        source_as_of = source_as_of_for_base_date(base_date)
+        periods = [bind_financial_report_contract(row, [source_reference]) for row in periods]
         latest = periods[0] if periods else {}
         fragment = {
             "symbol": symbol,
@@ -442,13 +479,12 @@ class PublicDataPortalCompanyFinancialAdapter:
             "provenance": [_source("official-financial-statements", source_as_of, FINANCIAL_PAGE)],
         }
         knowledge = merge_company_knowledge_rows(fragment)
-        fetched_at = utc_now_iso()
         return observation(
             self.descriptor,
             symbol,
             {"companyKnowledge": {symbol: knowledge}, "sourceArchive": {"dataset": self.descriptor.dataset_id, **groups}},
-            preferred_revision=knowledge.get("materialRevision") or stable_revision(fragment),
-            preferred_source_as_of=source_as_of or fetched_at,
+            preferred_revision=source_revision,
+            preferred_source_as_of=source_as_of or fallback_source_as_of,
             watermark={"symbol": symbol, "crno": crno, "baseDate": base_date},
             quality={
                 "dataUsable": bool(periods),

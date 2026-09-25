@@ -35,8 +35,16 @@ class FinancialEvidenceRepairTests(unittest.TestCase):
         self.assertFalse(financial_input_requires_revalidation(company, [{"ruleId": "graph.price.recovery.v1"}]))
 
     def test_repair_is_idempotent_and_does_not_write_history(self):
-        source = {"yfinanceData": {"TEST": {"quarterlyIncomeStatement": [{"metric": "Operating Income", "values": {
-            "2026-06-30": 130, "2026-03-31": 100}}]}}}
+        source = {
+            "yfinanceData": {"TEST": {"quarterlyIncomeStatement": [{"metric": "Operating Income", "values": {
+                "2026-06-30": 130, "2026-03-31": 100}}]}},
+            "externalDataLineage": {"yfinance.fundamental:TEST": {
+                "datasetId": "yfinance.fundamental",
+                "revisionId": "immutable-repair-fixture",
+                "subjectKey": "TEST",
+                "availability": "observed",
+            }},
+        }
         first, changes = financial_repair_plan({}, source)
         second, repeated = financial_repair_plan(first, source)
         self.assertTrue(changes)

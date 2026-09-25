@@ -633,6 +633,13 @@ def _compact_company_knowledge(value: object) -> Dict[str, object]:
         text_limit=240,
         depth=1,
     )
+    section_revisions = source.get("materialSectionRevisions")
+    if isinstance(section_revisions, Mapping):
+        result["materialSectionRevisions"] = {
+            str(key): _text(item, 120)
+            for key, item in section_revisions.items()
+            if str(key).strip() and str(item or "").strip()
+        }
     for section in ("identifiers", "profile", "listing", "relationships", "valuation", "ownership", "capital", "coverage"):
         compact = _bounded_value(
             source.get(section),
@@ -648,17 +655,49 @@ def _compact_company_knowledge(value: object) -> Dict[str, object]:
     compact_financials = {}
     for frequency in ("annual", "interim", "quarterly"):
         periods = financials.get(frequency) if isinstance(financials.get(frequency), list) else []
-        compact_periods = [
-            _bounded_value(
+        compact_periods = []
+        for period in periods[:4]:
+            if not isinstance(period, Mapping):
+                continue
+            compact_period = _bounded_value(
                 period,
                 text_limit=240,
                 list_limit=6,
                 map_limit=50,
                 depth=3,
             )
-            for period in periods[:4]
-            if isinstance(period, Mapping)
-        ]
+            report = period.get("reportContract") if isinstance(period.get("reportContract"), Mapping) else {}
+            if report:
+                compact_report = _selected(
+                    report,
+                    [
+                        "contractVersion", "provider", "periodStart", "periodEnd",
+                        "frequency", "durationBases", "scope", "currencies",
+                        "fiscalYears", "accountingStandards", "publishedAt",
+                        "filingIds", "revisionState", "correctionState", "observationId",
+                    ],
+                    text_limit=240,
+                    list_limit=12,
+                    depth=2,
+                )
+                references = [
+                    _selected(
+                        item,
+                        [
+                            "datasetId", "providerId", "subjectKey", "revisionId",
+                            "providerRevision", "payloadHash", "sourceSchemaVersion",
+                            "sourceAsOf", "fetchedAt", "availability",
+                        ],
+                        text_limit=240,
+                        depth=1,
+                    )
+                    for item in report.get("sourceReferences") or []
+                    if isinstance(item, Mapping)
+                ]
+                if references:
+                    compact_report["sourceReferences"] = references[:8]
+                compact_period["reportContract"] = compact_report
+            compact_periods.append(compact_period)
         if compact_periods:
             compact_financials[frequency] = compact_periods
     if compact_financials:

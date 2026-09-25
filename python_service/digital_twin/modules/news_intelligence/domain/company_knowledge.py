@@ -16,14 +16,15 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from digital_twin.modules.portfolio.contracts import normalize_dividend_yield
 from digital_twin.modules.news_intelligence.domain.financial_reporting import (
-    FINANCIAL_REPORTING_VERSION, GROWTH_FIELDS, current_financial_state,
+    FINANCIAL_PERIOD_SELECTION_VERSION, FINANCIAL_REPORTING_VERSION, GROWTH_FIELDS, current_financial_state,
     dart_reporting_date, financial_comparison, financial_period_sort_key,
     reporting_period_end, compact_financial_evidence, bind_financial_report_contract,
+    financial_report_contract_assessment,
 )
 
 
 COMPANY_KNOWLEDGE_VERSION = "company-knowledge-v1"
-COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v3-financial-periods"
+COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v4-contract-qualified-periods"
 COMPANY_VALUATION_CONTEXT_VERSION = "company-valuation-context-v1"
 
 # Operational revision precision only. These values suppress a new company
@@ -970,7 +971,8 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
         "schemaVersion": COMPANY_KNOWLEDGE_VERSION,
         "symbol": _clean(next((row.get("symbol") for row in reversed(valid) if row.get("symbol")), "")).upper(),
     }
-    for row in valid:
+    excluded_financial_periods: List[Dict[str, object]] = []
+    for source_index, row in enumerate(valid):
         if _nonempty(row.get("companyName")):
             result["companyName"] = row.get("companyName")
         for section in ("identifiers", "profile", "listing", "valuation", "ownership", "capital"):
@@ -992,12 +994,34 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
             incoming_periods = incoming_financials.get(frequency) if isinstance(incoming_financials.get(frequency), list) else []
             current_periods = financials.get(frequency) if isinstance(financials.get(frequency), list) else []
             if incoming_periods:
+                eligible_periods = []
+                for item in incoming_periods:
+                    assessment = financial_report_contract_assessment(item, frequency)
+                    if assessment.get("eligible"):
+                        eligible_periods.append(dict(item))
+                        continue
+                    if not isinstance(item, Mapping):
+                        continue
+                    report = item.get("reportContract") if isinstance(item.get("reportContract"), Mapping) else {}
+                    excluded_financial_periods.append({
+                        "frequency": frequency,
+                        "period": _clean(item.get("periodEnd") or item.get("period")),
+                        "provider": _clean(report.get("provider") or item.get("provider")),
+                        "reason": str(assessment.get("reason") or "invalid-financial-period"),
+                        "financialReportingVersion": _clean(item.get("financialReportingVersion")),
+                        "observationId": _clean(report.get("observationId")),
+                        "sourceRowIndex": source_index,
+                    })
+                if not eligible_periods:
+                    continue
+
                 def recency(values):
                     return max((_period_sort_key(item.get("period")) for item in values if isinstance(item, Mapping)), default=(0, ""))
-                incoming_checked = all(item.get("financialReportingVersion") == FINANCIAL_REPORTING_VERSION for item in incoming_periods)
-                current_checked = bool(current_periods) and all(item.get("financialReportingVersion") == FINANCIAL_REPORTING_VERSION for item in current_periods)
-                if not current_periods or recency(incoming_periods) > recency(current_periods) or (recency(incoming_periods) == recency(current_periods) and (incoming_checked or not current_checked)):
-                    financials[frequency] = enrich_financial_periods([{**dict(item), "frequency": item.get("frequency") or frequency} for item in incoming_periods if isinstance(item, Mapping)])
+                if not current_periods or recency(eligible_periods) >= recency(current_periods):
+                    financials[frequency] = enrich_financial_periods([
+                        {**item, "frequency": item.get("frequency") or frequency}
+                        for item in eligible_periods
+                    ])
         result["financials"] = financials
         if row.get("financialIntegrity"):
             result["financialIntegrity"] = dict(row["financialIntegrity"])
@@ -1037,6 +1061,33 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
                     reverse=True,
                 )[:20]
         result["relationships"] = relationships
+
+    financial_integrity = dict(result.get("financialIntegrity") or {})
+    if excluded_financial_periods:
+        unique_exclusions = {}
+        for item in excluded_financial_periods:
+            key = (
+                item.get("frequency"), item.get("period"), item.get("provider"),
+                item.get("reason"), item.get("observationId"), item.get("sourceRowIndex"),
+            )
+            unique_exclusions[key] = item
+        exclusions = [unique_exclusions[key] for key in sorted(unique_exclusions, key=lambda value: tuple(str(part) for part in value))]
+        issues = list(financial_integrity.get("issues") or [])
+        if "financial-period-contract-invalid" not in issues:
+            issues.append("financial-period-contract-invalid")
+        financial_integrity.update({
+            "selectionVersion": FINANCIAL_PERIOD_SELECTION_VERSION,
+            "excludedPeriods": exclusions,
+            "issues": issues,
+            "status": "checked-with-exclusions" if any(
+                result.get("financials", {}).get(frequency)
+                for frequency in ("annual", "interim", "quarterly")
+            ) else "error",
+        })
+    elif financial_integrity:
+        financial_integrity["selectionVersion"] = FINANCIAL_PERIOD_SELECTION_VERSION
+    if financial_integrity:
+        result["financialIntegrity"] = financial_integrity
 
     provenance_by_key = {}
     for row in valid:

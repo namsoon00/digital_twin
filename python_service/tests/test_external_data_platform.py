@@ -645,6 +645,11 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(3000.0, annual[0]["revenue"])
         self.assertEqual(700.0, annual[0]["cash"])
         self.assertEqual("연결재무제표", annual[0]["accountingScope"])
+        self.assertEqual("financial-report-observation-v1", annual[0]["reportContract"]["contractVersion"])
+        self.assertEqual(
+            observation.source_revision,
+            annual[0]["reportContract"]["sourceReferences"][0]["revisionId"],
+        )
         self.assertIn("sourceArchive", observation.payload)
 
         visible = merge_external_signal_read_models({}, observation.payload)

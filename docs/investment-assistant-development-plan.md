@@ -29,7 +29,11 @@
   현재 발행주식 수 fallback을 reference-only로 낮췄다. 동일 기간·scope·보통주 귀속 범위·
   가중평균 주식 수·exact revision을 검증하며 ADR/환율 변환의 방향과 중복 적용도 차단한다.
   상세 결과는 [IN-06 EPS basis 보고서](investment-assistant-in06-eps-basis.md)에 기록했다.
-- IN-07 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
+- IN-07: peer와 historical 배수 분포를 분리하고, issuer/security·horizon·회계/EPS basis·
+  가격/이익 기준 시각·upstream의 비교 가능성을 표본별 포함·제외 ledger로 검증한다.
+  중복·충돌·stale·bootstrap-only 및 정상화 근거 없는 경기순환 입력은 판단용 평가에서 차단한다.
+  상세 결과는 [IN-07 비교 배수 보고서](investment-assistant-in07-comparable-multiples.md)에 기록했다.
+- IN-08 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
 
 ## 1. 제품 목표와 개발 원칙
 

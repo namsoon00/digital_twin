@@ -452,10 +452,12 @@ def _fundamental_scenario_row(
     eps_period = str(eps.get("period") or "")
     as_of = eps.get("asOf")
     freshness = valuation_freshness_status(as_of)
-    multiple_band = multiple_evidence_band(context.get("multipleObservations") or [], archetypes)
+    family_evidence = _family_evidence(context, model_family)
+    multiple_band = multiple_evidence_band(
+        context.get("multipleObservations") or [], archetypes, earnings=eps,
+    )
     multiples = [number(multiple_band.get(key)) for key in ("low", "base", "high")]
     scenarios = fair_value_from_evidence(eps, multiple_band)
-    family_evidence = _family_evidence(context, model_family)
     source_symbol = str(context.get("sourceSymbol") or position.symbol).upper()
     adr_line = context.get("adrLine")
     valuation_eps = dict(eps)
@@ -471,7 +473,10 @@ def _fundamental_scenario_row(
         if not family_evidence:
             missing.append("매출 성장률·영업이익률 전망")
     if not bool(multiple_band.get("evidenceBacked")):
-        missing.append("피어 또는 과거 PER 표본 3개 이상")
+        if "missing-cyclical-earnings-normalization" in (multiple_band.get("bandBlockReasons") or []):
+            missing.append("경기순환 기업의 정상화 기간·마진 근거")
+        else:
+            missing.append("동일 horizon·EPS basis의 피어 또는 과거 PER 표본 3개 이상")
     if source_symbol != str(position.symbol or "").upper() and scenarios:
         adr_ratio = number(getattr(adr_line, "adr_ratio", 0.0)) if adr_line else 0.0
         fx_rate = usdkrw_rate_for_position(position, external_signals)
@@ -515,6 +520,11 @@ def _fundamental_scenario_row(
         if bool(multiple_band.get("evidenceBacked"))
         else set()
     )
+    multiple_exclusion_reasons = {
+        str(item.get("observationId") or ""): list(item.get("reasons") or [])
+        for item in multiple_band.get("selectionLedger") or []
+        if isinstance(item, dict) and str(item.get("state") or "") == "excluded"
+    }
     all_observations = list(context.get("epsObservations") or []) + list(context.get("multipleObservations") or [])
     input_observations = [
         dict(item)
@@ -534,9 +544,8 @@ def _fundamental_scenario_row(
             "reason": (
                 "lower-priority-earnings-horizon"
                 if str(item.get("metric") or "") == "earnings-per-share"
-                else "target-multiple-basis-not-eligible"
-                if str(item.get("basis") or "") not in {"historical", "peer"}
-                else "target-multiple-sample-count-below-minimum"
+                else ",".join(multiple_exclusion_reasons.get(observation_id) or [])
+                or "target-multiple-sample-count-below-minimum"
             ),
         })
     reliability_state = valuation_reliability_state(
@@ -559,8 +568,11 @@ def _fundamental_scenario_row(
         "targetPER": multiples[1] if len(multiples) >= 2 else 0.0,
         "targetPERHigh": multiples[2] if len(multiples) >= 3 else 0.0,
         "epsPeriod": eps_period,
-        "multiplePeriod": "annual-compatible",
-        "periodCompatible": period_is_annual_per_share(eps_period),
+        "multiplePeriod": str(multiple_band.get("targetEarningsHorizon") or ""),
+        "periodCompatible": bool(
+            period_is_annual_per_share(eps_period)
+            and multiple_band.get("comparabilityState") == "comparable"
+        ),
         "valuationAsOf": str(as_of or ""),
         "valuationFreshnessStatus": freshness,
         "valuationInputState": input_state,
@@ -587,6 +599,11 @@ def _fundamental_scenario_row(
         "valuationConfidence": valuation_confidence,
         "epsScenario": dict(valuation_eps),
         "multipleBand": dict(multiple_band),
+        "valuationReferenceOnly": not bool(multiple_band.get("evidenceBacked")),
+        "valuationReferenceReason": (
+            "비교 가능한 동일 horizon·EPS basis의 배수 표본이 부족하여 bootstrap 계산은 참고용입니다."
+            if not bool(multiple_band.get("evidenceBacked")) else ""
+        ),
         "familyEvidence": family_evidence,
         "inputObservations": input_observations,
         "formulaTrace": {

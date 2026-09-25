@@ -71,6 +71,20 @@ def valuation_quality_issues(row: Dict[str, object]) -> List[ValuationQualityIss
     if low and base and high and not low <= base <= high:
         issues.append(ValuationQualityIssue("invalid-scenario-order", "보수·기준·낙관 적정가의 순서가 올바르지 않습니다."))
     if bool(row.get("valuationDecisionEligible")):
+        multiple_band = row.get("multipleBand") if isinstance(row.get("multipleBand"), dict) else {}
+        if multiple_band and (
+            not bool(multiple_band.get("evidenceBacked"))
+            or str(multiple_band.get("comparabilityState") or "").strip().lower() != "comparable"
+        ):
+            issues.append(ValuationQualityIssue(
+                "unverified-target-multiple",
+                "비교 가능성이 검증되지 않은 목표 배수는 투자 판단에 사용할 수 없습니다.",
+            ))
+        if bool(row.get("valuationReferenceOnly")):
+            issues.append(ValuationQualityIssue(
+                "reference-only-valuation",
+                "참고용 평가는 투자 판단에 사용할 수 없습니다.",
+            ))
         if str(row.get("valuationInputState") or "").strip().lower() != "sufficient":
             issues.append(ValuationQualityIssue("incomplete-inputs", "입력 자료가 충분하지 않은데 투자 판단 사용 가능으로 표시됐습니다."))
         if str(row.get("valuationFreshnessStatus") or "").strip().lower() in {"stale", "unknown", ""}:

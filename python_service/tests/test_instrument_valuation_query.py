@@ -48,7 +48,22 @@ class InstrumentValuationQueryTests(unittest.TestCase):
                     "pbr": 1.35,
                     "trailingEPS": 1110.0,
                     "epsPeriod": "ttm",
-                    "historicalPERs": [20.0, 24.0, 28.0, 32.0],
+                    "epsBasis": "diluted",
+                    "accountingBasis": "K-IFRS",
+                    "securityLine": "035720",
+                    "currency": "KRW",
+                    "multipleObservations": [
+                        {
+                            "observationId": f"kis:historical-per:{year}",
+                            "issuer": "035720", "securityLine": "035720", "multipleMetric": "per",
+                            "basis": "historical", "value": value, "earningsHorizon": "ttm",
+                            "accountingBasis": "K-IFRS", "epsBasis": "diluted", "currency": "KRW",
+                            "priceAsOf": f"{year}-12-31", "earningsAsOf": f"{year}-12-31",
+                            "provider": "KIS Open API", "upstreamOrigin": "kis.historical-per",
+                            "comparabilityState": "verified", "freshnessState": "historical-valid",
+                        }
+                        for year, value in ((2022, 20.0), (2023, 24.0), (2024, 28.0), (2025, 32.0))
+                    ],
                 }
             },
             "yfinanceData": {

@@ -23,6 +23,7 @@ from digital_twin.modules.portfolio.domain.valuation_contracts import (
 from digital_twin.modules.portfolio.domain.valuation_model_evidence import (
     FUNDAMENTAL_MODEL_VERSION,
     collect_earnings_observations,
+    collect_multiple_observations,
     earnings_scenario,
     fair_value_from_evidence,
     multiple_evidence_band,
@@ -83,6 +84,25 @@ class ValuationContractTests(unittest.TestCase):
         self.assertIn(
             "invalid-scenario-order",
             {issue["code"] for issue in checked["valuationQualityIssues"]},
+        )
+        bootstrap = apply_valuation_quality_gate({
+            "currentPrice": 100,
+            "fairValueLow": 80,
+            "fairValue": 120,
+            "fairValueHigh": 160,
+            "valuationInputState": "sufficient",
+            "valuationFreshnessStatus": "fresh",
+            "valuationDecisionEligible": True,
+            "valuationReferenceOnly": True,
+            "multipleBand": {
+                "basis": "bootstrap-prior", "evidenceBacked": False,
+                "comparabilityState": "insufficient-comparable-samples",
+            },
+        })
+        self.assertFalse(bootstrap["valuationDecisionEligible"])
+        self.assertEqual(
+            {"unverified-target-multiple", "reference-only-valuation"},
+            {issue["code"] for issue in bootstrap["valuationQualityIssues"]},
         )
 
     def _assert_projection_quality_gate_blocks_stale_eligible_valuation(self):
@@ -189,21 +209,101 @@ class ValuationContractTests(unittest.TestCase):
 
     def test_target_multiple_band_requires_historical_or_peer_evidence(self):
         observations = [
-            {"observationId": f"per:{value}", "provider": "KIS Open API", "basis": "historical", "value": value}
-            for value in (8, 10, 12, 16)
+            {
+                "observationId": f"per:{value}", "provider": "Primary Research", "basis": "peer", "value": value,
+                "issuer": f"PEER{index}", "securityLine": "common", "multipleMetric": "per",
+                "earningsHorizon": "fy1", "accountingBasis": "US-GAAP", "epsBasis": "diluted",
+                "priceAsOf": "2026-09-24", "earningsAsOf": "2026-12-31",
+                "upstreamOrigin": f"peer-dataset:{index}", "comparabilityState": "verified",
+                "freshnessState": "fresh", "currency": "USD",
+                "comparisonFactors": {"revenueGrowthPct": 20 + index, "operatingMarginPct": 18 + index},
+            }
+            for index, value in enumerate((8, 10, 12, 16), start=1)
         ]
-        band = multiple_evidence_band(observations, {"SemiconductorHBM"})
+        earnings = {
+            "period": "fy1", "epsBasis": "diluted", "accountingBasis": "US-GAAP",
+            "securityLine": "common", "currency": "USD",
+        }
+        historical = [
+            {
+                **copy.deepcopy(observations[index]),
+                "observationId": f"historical:{index}", "basis": "historical",
+                "issuer": "TARGET", "value": value,
+                "priceAsOf": f"202{index + 2}-12-31", "earningsAsOf": f"202{index + 2}-12-31",
+                "upstreamOrigin": f"historical-dataset:{index}",
+            }
+            for index, value in enumerate((6, 7, 9))
+        ]
+        band = multiple_evidence_band(observations + historical, {"SemiconductorHBM"}, earnings=earnings)
 
         self.assertEqual(9.5, band["low"])
         self.assertEqual(11, band["base"])
         self.assertEqual(13, band["high"])
         self.assertEqual(4, band["sampleCount"])
+        self.assertEqual("peer", band["basis"])
+        self.assertEqual("comparable", band["comparabilityState"])
+        self.assertEqual(4, band["componentBands"]["peer"]["sampleCount"])
+        self.assertEqual(3, band["componentBands"]["historical"]["sampleCount"])
+        self.assertEqual(["peer", "historical"], band["selectionAssumption"]["priority"])
+        self.assertTrue(all(item["state"] == "included" for item in band["selectionLedger"]))
         self.assertTrue(band["evidenceBacked"])
 
-        prior = multiple_evidence_band([], {"SemiconductorHBM"})
+        incompatible = copy.deepcopy(observations)
+        incompatible[0]["earningsHorizon"] = "ttm"
+        incompatible[0]["priceAsOf"] = "not-a-date"
+        incompatible[1]["freshnessState"] = "stale"
+        incompatible[2]["epsBasis"] = "basic"
+        incompatible[2]["freshnessState"] = "unknown"
+        incompatible.append({**copy.deepcopy(observations[3]), "observationId": "duplicate", "provider": "Mirror API"})
+        blocked = multiple_evidence_band(incompatible, {"SemiconductorHBM"}, earnings=earnings)
+        self.assertFalse(blocked["evidenceBacked"])
+        exclusion_reasons = {
+            reason for item in blocked["selectionLedger"] for reason in item["reasons"]
+        }
+        self.assertIn("incompatible-earnings-horizon", exclusion_reasons)
+        self.assertIn("invalid-price-as-of", exclusion_reasons)
+        self.assertIn("stale-multiple-observation", exclusion_reasons)
+        self.assertIn("incompatible-eps-basis", exclusion_reasons)
+        self.assertIn("unverified-freshness", exclusion_reasons)
+        self.assertIn("duplicate-observation", exclusion_reasons)
+
+        conflict = copy.deepcopy(observations)
+        conflict.append({**copy.deepcopy(observations[0]), "observationId": "conflict", "value": 99})
+        conflict_band = multiple_evidence_band(conflict, {"SemiconductorHBM"}, earnings=earnings)
+        self.assertTrue(conflict_band["evidenceBacked"])
+        self.assertEqual(3, conflict_band["sampleCount"])
+        self.assertEqual(
+            2,
+            sum(
+                "conflicting-duplicate-observation" in item["reasons"]
+                for item in conflict_band["selectionLedger"]
+            ),
+        )
+        raw_conflicts = collect_multiple_observations({
+            "provider": "Primary Research", "symbol": "PEER1", "securityLine": "common",
+            "multipleObservations": [
+                {key: value for key, value in observations[0].items() if key != "observationId"},
+                {
+                    **{key: value for key, value in observations[0].items() if key != "observationId"},
+                    "value": 99,
+                },
+            ],
+        }, {})
+        self.assertEqual(2, len(raw_conflicts))
+        raw_conflict_band = multiple_evidence_band(raw_conflicts, {"SemiconductorHBM"}, earnings=earnings)
+        self.assertEqual(
+            2,
+            sum(
+                "conflicting-duplicate-observation" in item["reasons"]
+                for item in raw_conflict_band["selectionLedger"]
+            ),
+        )
+
+        prior = multiple_evidence_band([], {"SemiconductorHBM"}, earnings=earnings)
         self.assertEqual([8, 12, 16], [prior["low"], prior["base"], prior["high"]])
         self.assertEqual("bootstrap-prior", prior["basis"])
         self.assertFalse(prior["evidenceBacked"])
+        self.assertTrue(prior["referenceOnly"])
         self.assertEqual("insufficient", prior["confidence"])
 
     def test_evidence_model_multiplies_observed_eps_and_per_bounds(self):
@@ -215,6 +315,12 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(18000, values["fairValueLow"])
         self.assertEqual(25000, values["fairValue"])
         self.assertEqual(33000, values["fairValueHigh"])
+        self.assertEqual(
+            ["bear", "base", "bull"],
+            [item["scenario"] for item in values["scenarioAssumptions"]],
+        )
+        self.assertEqual(900, values["scenarioAssumptions"][0]["eps"])
+        self.assertEqual(20, values["scenarioAssumptions"][0]["multiple"])
 
     def test_official_company_knowledge_can_derive_annual_eps(self):
         observations = collect_earnings_observations(

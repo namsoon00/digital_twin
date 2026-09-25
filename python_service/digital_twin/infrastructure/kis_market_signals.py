@@ -2123,12 +2123,23 @@ def normalize_estimate_perform(
         if number(row["per"]) > 0:
             multiple_observations.append({
                 "observationId": "kis:estimate-perform:per:" + period,
+                "issuer": clean_symbol(metadata_rows[0].get("sht_cd") if metadata_rows else symbol),
+                "securityLine": clean_symbol(metadata_rows[0].get("sht_cd") if metadata_rows else symbol),
                 "provider": "KIS Open API",
+                "upstreamOrigin": "kis.estimate-perform.output3",
                 "source": "estimate-perform.output3",
                 "sourceType": "broker-estimate" if is_estimate else "broker-history",
                 "basis": "current-market" if is_estimate else "historical",
+                "multipleMetric": "per",
+                "earningsHorizon": "fy1" if is_estimate else "annual",
+                "accountingBasis": "provider-reported",
+                "epsBasis": "unknown",
+                "comparabilityState": "verified",
+                "freshnessState": "current" if is_estimate else "historical-valid",
                 "period": period,
                 "asOf": source_as_of or fetched_at,
+                "priceAsOf": source_as_of or fetched_at,
+                "earningsAsOf": period,
                 "value": row["per"],
             })
         cycle_data.append({

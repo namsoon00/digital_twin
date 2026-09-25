@@ -9,6 +9,7 @@ valuation governance gate.
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from statistics import median
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
@@ -16,7 +17,8 @@ from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.portfolio.domain.valuation.contracts import normalize_valuation_period, period_is_annual_per_share
 
 
-FUNDAMENTAL_MODEL_VERSION = "fundamental-evidence-per-v3"
+FUNDAMENTAL_MODEL_VERSION = "fundamental-evidence-per-v4"
+MULTIPLE_SELECTION_POLICY_VERSION = "multiple-comparability-v2"
 SUPPORTED_TARGET_MULTIPLE_BASES = {"historical", "peer"}
 
 
@@ -40,6 +42,17 @@ def _optional_number(*values: object):
         if math.isfinite(parsed):
             return parsed
     return None
+
+
+def _valid_observation_date(value: object) -> bool:
+    text = _text(value)
+    if not text:
+        return False
+    try:
+        datetime.fromisoformat(text[:10])
+    except ValueError:
+        return False
+    return True
 
 
 def _source_type(provider: object, explicit: object = "") -> str:
@@ -441,6 +454,8 @@ def collect_earnings_observations(
         raw_observation = {
                 "value": raw_value, "period": period, "isEstimate": is_estimate,
                 "currency": owner.get("currency"),
+                "epsBasis": owner.get("epsBasis") or owner.get("perShareBasis"),
+                "accountingBasis": owner.get("accountingBasis"),
                 "securityLine": owner.get("securityLine"),
                 "splitAdjustmentState": owner.get("splitAdjustmentState"),
                 "securityAdjustmentState": owner.get("securityAdjustmentState"),
@@ -609,7 +624,10 @@ def earnings_scenario(observations: Iterable[Mapping[str, object]]) -> Dict[str,
         "observationIds": [str(item.get("observationId") or "") for item in selected if item.get("observationId")],
         "sourceReferences": [source_references[key] for key in sorted(source_references)],
     }
-    for field in ("currency", "epsBasis", "securityLine", "splitAdjustmentState", "securityAdjustmentState"):
+    for field in (
+        "currency", "epsBasis", "accountingBasis", "securityLine",
+        "splitAdjustmentState", "securityAdjustmentState",
+    ):
         values = {_text(item.get(field)) for item in selected if _text(item.get(field))}
         if len(values) == 1:
             result[field] = next(iter(values))
@@ -639,17 +657,37 @@ def _multiple_observation(
     }
     basis = aliases.get(basis, basis)
     provider_text = _text(raw.get("provider") or provider)
+    horizon = _horizon(raw.get("earningsHorizon") or raw.get("horizon"))
+    source_references = [
+        dict(item) for item in raw.get("sourceReferences") or []
+        if isinstance(item, Mapping) and item.get("datasetId") and item.get("revisionId")
+    ]
+    comparison_factors = raw.get("comparisonFactors") if isinstance(raw.get("comparisonFactors"), Mapping) else {}
     return {
         "observationId": _text(raw.get("observationId") or raw.get("id")),
         "metric": "price-earnings-multiple",
+        "multipleMetric": _text(raw.get("multipleMetric") or raw.get("metric") or "per").lower(),
         "value": round(value, 6),
         "basis": basis,
         "period": _text(raw.get("period")),
         "asOf": _text(raw.get("asOf") or default_as_of),
+        "priceAsOf": _text(raw.get("priceAsOf") or raw.get("marketAsOf") or raw.get("asOf") or default_as_of),
+        "earningsAsOf": _text(raw.get("earningsAsOf") or raw.get("periodEnd")),
+        "earningsHorizon": horizon,
+        "accountingBasis": _text(raw.get("accountingBasis")),
+        "epsBasis": _text(raw.get("epsBasis") or raw.get("perShareBasis")).lower(),
+        "currency": _text(raw.get("currency")).upper(),
+        "issuer": _text(raw.get("issuer") or raw.get("symbol")).upper(),
+        "securityLine": _text(raw.get("securityLine")),
         "provider": provider_text,
+        "upstreamOrigin": _text(raw.get("upstreamOrigin") or raw.get("datasetId") or provider_text).casefold(),
         "source": _text(raw.get("source") or source),
         "sourceType": _source_type(provider_text, raw.get("sourceType")),
         "peerSymbol": _text(raw.get("peerSymbol")),
+        "freshnessState": _text(raw.get("freshnessState") or "unknown").lower(),
+        "comparabilityState": _text(raw.get("comparabilityState") or "unverified").lower(),
+        "comparisonFactors": dict(comparison_factors),
+        "sourceReferences": source_references,
     }
 
 
@@ -673,6 +711,10 @@ def collect_multiple_observations(
                     default_as_of=owner.get("fetchedAt"),
                 )
                 if item:
+                    if not item.get("issuer"):
+                        item["issuer"] = _text(owner.get("symbol")).upper()
+                    if not item.get("securityLine"):
+                        item["securityLine"] = _text(owner.get("securityLine"))
                     result.append(item)
 
     for field, basis in (("peRatio", "current-market"), ("forwardPE", "current-market")):
@@ -683,27 +725,23 @@ def collect_multiple_observations(
             default_as_of=overview.get("fetchedAt"),
         )
         if item:
+            item["issuer"] = _text(overview.get("symbol")).upper()
+            item["securityLine"] = _text(overview.get("securityLine"))
             result.append(item)
 
-    unique: List[Dict[str, object]] = []
-    seen = set()
+    normalized: List[Dict[str, object]] = []
     for item in result:
         key = item.get("observationId") or (
-            item.get("basis"),
+            item.get("basis"), item.get("issuer"), item.get("securityLine"),
+            item.get("multipleMetric"), item.get("earningsHorizon"),
+            item.get("priceAsOf"), item.get("earningsAsOf"), item.get("upstreamOrigin"),
             round(number(item.get("value")), 6),
-            item.get("period"),
-            _text(item.get("provider")).casefold(),
-            item.get("peerSymbol"),
-            item.get("asOf"),
         )
-        if key in seen:
-            continue
-        seen.add(key)
         item = dict(item)
         if not item.get("observationId"):
-            item["observationId"] = "per:" + ":".join(str(part) for part in key[:5])
-        unique.append(item)
-    return unique
+            item["observationId"] = "per:" + ":".join(str(part) for part in key)
+        normalized.append(item)
+    return normalized
 
 
 def _percentile(values: Sequence[float], ratio: float) -> float:
@@ -740,52 +778,192 @@ def multiple_evidence_band(
     observations: Iterable[Mapping[str, object]],
     archetypes: Iterable[str],
     minimum_samples: int = 3,
+    earnings: Mapping[str, object] = None,
 ) -> Dict[str, object]:
+    archetype_set = set(archetypes or [])
     all_rows = [dict(item) for item in observations or [] if isinstance(item, Mapping)]
-    eligible = [
-        item
-        for item in all_rows
-        if _text(item.get("basis")).lower() in SUPPORTED_TARGET_MULTIPLE_BASES
-        and 0.5 <= _positive(item.get("value")) <= 150.0
+    target = dict(earnings or {}) if isinstance(earnings, Mapping) else {}
+    target_horizon = _horizon(target.get("horizon") or target.get("period"))
+    target_eps_basis = _text(target.get("epsBasis")).lower()
+    target_accounting_basis = _text(target.get("accountingBasis")).lower()
+    target_security = _text(target.get("securityLine"))
+    target_currency = _text(target.get("currency")).upper()
+    ledger: List[Dict[str, object]] = []
+    candidates: List[Dict[str, object]] = []
+    identity_values: Dict[Tuple[object, ...], set] = {}
+    for item in all_rows:
+        identity = (
+            _text(item.get("basis")).lower(), _text(item.get("issuer")).upper(),
+            _text(item.get("securityLine")), _text(item.get("multipleMetric")).lower(),
+            _horizon(item.get("earningsHorizon")), _text(item.get("priceAsOf")),
+            _text(item.get("earningsAsOf")), _text(item.get("upstreamOrigin")).casefold(),
+        )
+        identity_values.setdefault(identity, set()).add(round(number(item.get("value")), 6))
+    seen_identities = set()
+    for item in all_rows:
+        reasons = []
+        basis = _text(item.get("basis")).lower()
+        value = _positive(item.get("value"))
+        row_horizon = _horizon(item.get("earningsHorizon"))
+        identity = (
+            basis, _text(item.get("issuer")).upper(), _text(item.get("securityLine")),
+            _text(item.get("multipleMetric")).lower(), row_horizon,
+            _text(item.get("priceAsOf")), _text(item.get("earningsAsOf")),
+            _text(item.get("upstreamOrigin")).casefold(),
+        )
+        if basis not in SUPPORTED_TARGET_MULTIPLE_BASES:
+            reasons.append("unsupported-multiple-basis")
+        if not 0.5 <= value <= 150.0:
+            reasons.append("multiple-out-of-range")
+        for field, reason in (
+            ("issuer", "missing-issuer"), ("securityLine", "missing-security-line"),
+            ("multipleMetric", "missing-multiple-metric"), ("priceAsOf", "missing-price-as-of"),
+            ("earningsAsOf", "missing-earnings-as-of"), ("upstreamOrigin", "missing-upstream-origin"),
+            ("provider", "missing-provider"), ("accountingBasis", "missing-accounting-basis"),
+            ("epsBasis", "missing-eps-basis"), ("currency", "missing-currency"),
+        ):
+            if not _text(item.get(field)):
+                reasons.append(reason)
+        if row_horizon == "unknown":
+            reasons.append("missing-earnings-horizon")
+        if item.get("priceAsOf") and not _valid_observation_date(item.get("priceAsOf")):
+            reasons.append("invalid-price-as-of")
+        if item.get("earningsAsOf") and not _valid_observation_date(item.get("earningsAsOf")):
+            reasons.append("invalid-earnings-as-of")
+        if target_horizon != "unknown" and row_horizon != target_horizon:
+            reasons.append("incompatible-earnings-horizon")
+        row_eps_basis = _text(item.get("epsBasis")).lower()
+        if not target_eps_basis or target_eps_basis == "unknown":
+            reasons.append("target-eps-basis-unknown")
+        elif row_eps_basis != target_eps_basis:
+            reasons.append("incompatible-eps-basis")
+        row_accounting_basis = _text(item.get("accountingBasis")).lower()
+        if not target_accounting_basis:
+            reasons.append("target-accounting-basis-unknown")
+        elif row_accounting_basis != target_accounting_basis:
+            reasons.append("incompatible-accounting-basis")
+        if not target_security:
+            reasons.append("target-security-line-unknown")
+        elif _text(item.get("securityLine")) != target_security:
+            reasons.append("incompatible-security-line")
+        row_currency = _text(item.get("currency")).upper()
+        if target_currency and row_currency and row_currency != target_currency:
+            reasons.append("incompatible-currency")
+        freshness_state = _text(item.get("freshnessState")).lower()
+        if freshness_state in {"stale", "expired", "invalid"}:
+            reasons.append("stale-multiple-observation")
+        elif freshness_state not in {"fresh", "historical-valid"}:
+            reasons.append("unverified-freshness")
+        if _text(item.get("comparabilityState")).lower() != "verified":
+            reasons.append("unverified-comparability")
+        if len(identity_values.get(identity) or set()) > 1:
+            reasons.append("conflicting-duplicate-observation")
+        elif identity in seen_identities:
+            reasons.append("duplicate-observation")
+        seen_identities.add(identity)
+        decision = {
+            "observationId": _text(item.get("observationId")),
+            "basis": basis,
+            "value": round(value, 6),
+            "issuer": _text(item.get("issuer")).upper(),
+            "securityLine": _text(item.get("securityLine")),
+            "earningsHorizon": row_horizon,
+            "epsBasis": row_eps_basis,
+            "accountingBasis": _text(item.get("accountingBasis")),
+            "priceAsOf": _text(item.get("priceAsOf")),
+            "earningsAsOf": _text(item.get("earningsAsOf")),
+            "provider": _text(item.get("provider")),
+            "upstreamOrigin": _text(item.get("upstreamOrigin")),
+            "comparisonFactors": dict(item.get("comparisonFactors") or {}),
+            "state": "included" if not reasons else "excluded",
+            "reasons": sorted(set(reasons)),
+        }
+        ledger.append(decision)
+        if not reasons:
+            candidates.append(item)
+
+    by_basis = {
+        basis: [item for item in candidates if _text(item.get("basis")).lower() == basis]
+        for basis in ("peer", "historical")
+    }
+    component_bands = {}
+    threshold = max(1, int(minimum_samples))
+    for basis, rows in by_basis.items():
+        values = [_positive(item.get("value")) for item in rows]
+        if values:
+            component_bands[basis] = {
+                "low": round(_percentile(values, 0.25), 4),
+                "base": round(_percentile(values, 0.50), 4),
+                "high": round(_percentile(values, 0.75), 4),
+                "sampleCount": len(values),
+                "providerCount": len({_text(item.get("provider")) for item in rows if _text(item.get("provider"))}),
+                "observationIds": [_text(item.get("observationId")) for item in rows if _text(item.get("observationId"))],
+            }
+    band_block_reasons = []
+    if "SemiconductorCyclical" in archetype_set and _text(target.get("normalizationState")).lower() != "verified":
+        band_block_reasons.append("missing-cyclical-earnings-normalization")
+    selectable = [
+        basis for basis in ("peer", "historical")
+        if len(by_basis[basis]) >= threshold and not band_block_reasons
     ]
+    selected_basis = selectable[0] if selectable else ""
+    eligible = by_basis.get(selected_basis) or []
     values = [_positive(item.get("value")) for item in eligible]
-    if len(values) >= max(1, int(minimum_samples)):
-        low = _percentile(values, 0.25)
-        base = _percentile(values, 0.50)
-        high = _percentile(values, 0.75)
-        bases = sorted({_text(item.get("basis")) for item in eligible if _text(item.get("basis"))})
+    if selected_basis:
+        band = component_bands[selected_basis]
         providers = sorted({_text(item.get("provider")) for item in eligible if _text(item.get("provider"))})
         return {
-            "low": round(low, 4),
-            "base": round(base, 4),
-            "high": round(high, 4),
-            "basis": "+".join(bases),
+            "low": band["low"],
+            "base": band["base"],
+            "high": band["high"],
+            "basis": selected_basis,
             "sampleCount": len(values),
             "providerCount": len(providers),
             "providers": providers,
             "evidenceBacked": True,
+            "comparabilityState": "comparable",
             "confidence": "high" if len(values) >= 8 and len(providers) >= 2 else "medium",
             "observationIds": [str(item.get("observationId") or "") for item in eligible if item.get("observationId")],
+            "selectionPolicyVersion": MULTIPLE_SELECTION_POLICY_VERSION,
+            "targetEarningsHorizon": target_horizon,
+            "componentBands": component_bands,
+            "selectionLedger": ledger,
+            "selectionAssumption": {
+                "type": "basis-priority", "priority": ["peer", "historical"],
+                "version": MULTIPLE_SELECTION_POLICY_VERSION,
+            },
+            "bandBlockReasons": [],
         }
-    prior = bootstrap_multiple_band(archetypes)
+    prior = bootstrap_multiple_band(archetype_set)
     return {
         "low": prior[0],
         "base": prior[1],
         "high": prior[2],
         "basis": "bootstrap-prior",
-        "sampleCount": len(values),
-        "providerCount": len({_text(item.get("provider")) for item in eligible if _text(item.get("provider"))}),
-        "providers": sorted({_text(item.get("provider")) for item in eligible if _text(item.get("provider"))}),
+        "sampleCount": len(candidates),
+        "providerCount": len({_text(item.get("provider")) for item in candidates if _text(item.get("provider"))}),
+        "providers": sorted({_text(item.get("provider")) for item in candidates if _text(item.get("provider"))}),
         "evidenceBacked": False,
+        "comparabilityState": "insufficient-comparable-samples",
+        "referenceOnly": True,
         "confidence": "insufficient",
-        "observationIds": [str(item.get("observationId") or "") for item in eligible if item.get("observationId")],
+        "observationIds": [],
+        "selectionPolicyVersion": MULTIPLE_SELECTION_POLICY_VERSION,
+        "targetEarningsHorizon": target_horizon,
+        "componentBands": component_bands,
+        "selectionLedger": ledger,
+        "selectionAssumption": {
+            "type": "basis-priority", "priority": ["peer", "historical"],
+            "version": MULTIPLE_SELECTION_POLICY_VERSION,
+        },
+        "bandBlockReasons": band_block_reasons,
     }
 
 
 def fair_value_from_evidence(
     earnings: Mapping[str, object],
     multiples: Mapping[str, object],
-) -> Dict[str, float]:
+) -> Dict[str, object]:
     eps_low = _positive((earnings or {}).get("low"))
     eps_base = _positive((earnings or {}).get("base"))
     eps_high = _positive((earnings or {}).get("high"))
@@ -794,7 +972,7 @@ def fair_value_from_evidence(
     per_high = _positive((multiples or {}).get("high"))
     if not all([eps_low, eps_base, eps_high, per_low, per_base, per_high]):
         return {}
-    values = sorted([eps_low * per_low, eps_base * per_base, eps_high * per_high])
+    values = [eps_low * per_low, eps_base * per_base, eps_high * per_high]
     return {
         "fairValueLow": round(values[0], 4),
         "fairValue": round(values[1], 4),
@@ -803,4 +981,9 @@ def fair_value_from_evidence(
         "bearTargetPER": round(per_low, 4),
         "targetPER": round(per_base, 4),
         "bullTargetPER": round(per_high, 4),
+        "scenarioAssumptions": [
+            {"scenario": "bear", "eps": eps_low, "multiple": per_low, "fairValue": round(values[0], 4)},
+            {"scenario": "base", "eps": eps_base, "multiple": per_base, "fairValue": round(values[1], 4)},
+            {"scenario": "bull", "eps": eps_high, "multiple": per_high, "fairValue": round(values[2], 4)},
+        ],
     }

@@ -9,6 +9,7 @@ import { escapeHtml } from "../shared/text.mjs";
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";
 import { instrumentsState } from "../state/instruments.mjs";
 import { shellState } from "../state/shell.mjs";
+import { instrumentValuationMissingLabel, instrumentValuationModelLabel, renderInstrumentInvestmentAnalysis } from "./valuation-presentation.mjs";
 
 function renderInstrumentWorkspaceLink(symbol, label) {
   var normalized = String(symbol || "").toUpperCase().trim();
@@ -129,19 +130,6 @@ function instrumentValuationQualityMeta(quality, valuationStatus) {
   return { label: "자료 부족", tone: "hold" };
 }
 
-function instrumentValuationModelLabel(model) {
-  var id = String((model || {}).id || "");
-  var labels = {
-    "semiconductor-cycle-earnings": "반도체 이익·업황 방식",
-    "growth-quality-earnings": "성장주 이익 방식",
-    "bitcoin-treasury-nav": "비트코인 보유가치 방식",
-    "preferred-income-yield": "배당수익률 방식",
-    "generic-fundamental-earnings": "기업 이익 방식",
-    "current-price-reference": "현재가 참고 방식"
-  };
-  return labels[id] || "적정가 계산 자료 없음";
-}
-
 function instrumentValuationPeriodLabel(value) {
   var labels = {
     "ttm": "최근 12개월",
@@ -199,16 +187,6 @@ function instrumentValuationSourceScopeLabel(value) {
   return labels[String(value || "").toLowerCase()] || String(value || "기업 자료");
 }
 
-function instrumentValuationMissingLabel(value) {
-  var labels = {
-    "financial-statements": "재무제표 기간 자료",
-    "executive-governance": "경영진·지배구조 자료",
-    "valuation-metrics": "PER·PBR 등 시장 평가 지표",
-    "capital-structure": "발행주식수·부채 등 자본구조 자료"
-  };
-  return labels[String(value || "")] || String(value || "");
-}
-
 function renderInstrumentValuationMetric(label, value, detail, tone) {
   return '<div class="instrument-valuation-metric ' + escapeHtml(tone || "hold") + '"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value || "-") + '</strong><em>' + escapeHtml(detail || "") + '</em></div>';
 }
@@ -241,6 +219,7 @@ function renderInstrumentValuation(row, view) {
   var earnings = valuation.earningsScenario || {};
   var multiple = valuation.multipleBand || {};
   var company = payload.companyData || {};
+  var investmentAnalysis = payload.investmentAnalysis || {};
   var qualityMeta = instrumentValuationQualityMeta(quality, valuation.status);
   var currency = fairValue.currency || instrument.currency || row.currency;
   var currentPrice = instrument.currentPrice || row.currentPrice;
@@ -272,6 +251,7 @@ function renderInstrumentValuation(row, view) {
     ].join("") + '</div>' : '<div class="instrument-valuation-unavailable"><strong>적정가 계산 보류</strong><p>' + escapeHtml(valuation.sourceReason || "필수 입력값이 부족해 현재가를 적정가로 대신하지 않았습니다.") + '</p></div>',
     modelHasFairValue ? '<p class="instrument-valuation-explanation">' + escapeHtml(valuation.sourceReason || "확인된 EPS와 PER 범위를 조합해 계산했습니다.") + '</p>' : '',
     '</section>',
+    renderInstrumentInvestmentAnalysis(investmentAnalysis, currency),
     '<div class="instrument-valuation-detail-grid">',
     '<section class="instrument-valuation-band"><div class="instrument-valuation-section-head"><div><span class="label">EARNINGS</span><h4>계산에 쓴 이익</h4></div><span>' + escapeHtml(instrumentValuationPeriodLabel(earnings.period)) + '</span></div>',
     '<div class="instrument-valuation-inline-values"><span><b>낮음</b><strong>' + escapeHtml(instrumentValuationPrice(earnings.low, currency)) + '</strong></span><span><b>기준</b><strong>' + escapeHtml(instrumentValuationPrice(earnings.base, currency)) + '</strong></span><span><b>높음</b><strong>' + escapeHtml(instrumentValuationPrice(earnings.high, currency)) + '</strong></span></div>',

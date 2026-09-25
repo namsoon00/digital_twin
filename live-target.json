@@ -2,7 +2,7 @@
   "version": 1,
   "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "https://exotic-toolbox-cad-production.trycloudflare.com",
-  "revision": "9dec5c166d6c",
-  "updatedAt": "2026-09-25T11:39:55.987Z"
+  "baseUrl": "https://polar-members-writes-protected.trycloudflare.com",
+  "revision": "8f12a3792e4f",
+  "updatedAt": "2026-09-25T17:40:00.232Z"
 }

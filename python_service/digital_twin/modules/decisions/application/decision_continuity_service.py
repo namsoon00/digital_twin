@@ -2,24 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Dict, Mapping
 
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
 from digital_twin.modules.decisions.domain.investment_decision_history import (
     compact_decision_episode_memory, decision_memory_matches_scope,
 )
-from digital_twin.modules.model_registry.contracts import parse_timestamp
+from digital_twin.modules.decisions.contracts import (
+    canonical_investment_timestamp,
+    parse_investment_timestamp,
+)
 
 
 def _mapping(value: object) -> Dict[str, object]:
     if hasattr(value, "to_dict") and callable(value.to_dict):
         return dict(value.to_dict() or {})
     return dict(value or {}) if isinstance(value, Mapping) else {}
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _latest_feedback(value: object, keys) -> Dict[str, object]:
@@ -45,13 +43,15 @@ class DecisionContinuityService:
         symbol: str,
         exclude_episode_id: str = "",
         captured_at: str = "",
+        cutoff_source: str = "",
         existing_previous: object = None,
         current_position: object = None,
     ) -> Dict[str, object]:
         account_key = str(account_id or "").strip()
         symbol_key = str(symbol or "").upper().strip()
         excluded = str(exclude_episode_id or "").strip()
-        cutoff = parse_timestamp(captured_at or _utc_now())
+        cutoff = parse_investment_timestamp(captured_at)
+        cutoff_iso = canonical_investment_timestamp(captured_at)
 
         def known_by_cutoff(value, *keys):
             row = _mapping(value)
@@ -59,7 +59,7 @@ class DecisionContinuityService:
                 return False
             for key in keys:
                 if row.get(key):
-                    timestamp = parse_timestamp(row[key])
+                    timestamp = parse_investment_timestamp(row[key])
                     if timestamp is None or timestamp > cutoff:
                         return False
             return True
@@ -70,6 +70,8 @@ class DecisionContinuityService:
 
         previous_memory = compact_decision_episode_memory(existing_previous) if in_scope(existing_previous) else {}
         source_status = {
+            "cutoffClock": "valid" if cutoff else "missing" if not str(captured_at or "").strip() else "invalid",
+            "cutoffSource": str(cutoff_source or "unspecified"),
             "decisionEpisode": "unavailable",
             "followUpAndOutcome": "unavailable",
             "outcomeSchedule": "unavailable",
@@ -79,7 +81,7 @@ class DecisionContinuityService:
         }
         episode = None
 
-        if self.decision_episode_store and account_key and symbol_key:
+        if cutoff and self.decision_episode_store and account_key and symbol_key:
             try:
                 previous_id = str(previous_memory.get("episodeId") or "")
                 if not previous_id and hasattr(
@@ -91,6 +93,7 @@ class DecisionContinuityService:
                             account_key,
                             symbol_key,
                             exclude_episode_id=excluded,
+                            cutoff_at=cutoff_iso,
                         )
                     )
                     if not in_scope(previous_memory):
@@ -108,15 +111,21 @@ class DecisionContinuityService:
                     rows = self.decision_episode_store.list(
                         account_id=account_key,
                         symbol=symbol_key,
-                        limit=3,
+                        limit=12,
                     )
                     episode = next((
                         item for item in rows or []
                         if in_scope(item) and compact_decision_episode_memory(item)
                     ), None)
-                source_status["decisionEpisode"] = "available" if episode or previous_memory else "not-found"
+                source_status["decisionEpisode"] = (
+                    "available" if episode or previous_memory else "not-found-before-cutoff"
+                )
             except Exception:  # noqa: BLE001 - continuity is advisory and must not block a live alert.
                 source_status["decisionEpisode"] = "error"
+        elif not cutoff:
+            source_status["decisionEpisode"] = "not-read-invalid-cutoff"
+        elif not self.decision_episode_store:
+            source_status["decisionEpisode"] = "unavailable"
 
         episode_payload = _mapping(episode)
         if episode_payload:
@@ -211,7 +220,7 @@ class DecisionContinuityService:
         return build_decision_continuity_packet(
             account_id=account_key,
             symbol=symbol_key,
-            captured_at=captured_at or _utc_now(),
+            captured_at=cutoff_iso,
             previous_decision=episode_payload or previous_memory,
             selected_hypothesis=selected_hypothesis,
             follow_up_conditions=[row for row in episode_payload.get("followUpConditions") or []

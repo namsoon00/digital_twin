@@ -185,6 +185,7 @@ def latest_decision_memory(
     account_id: str,
     symbol: str,
     exclude_episode_id: str = "",
+    cutoff_at: str = "",
     *,
     _connect: ConnectionFactory,
 ) -> Dict[str, object]:
@@ -208,6 +209,12 @@ def latest_decision_memory(
     if str(exclude_episode_id or "").strip():
         where.append("episode_id <> %s")
         params.append(str(exclude_episode_id).strip())
+    normalized_cutoff = canonical_investment_timestamp(cutoff_at)
+    if str(cutoff_at or "").strip() and not normalized_cutoff:
+        return {}
+    if normalized_cutoff:
+        where.append("decided_at <= %s")
+        params.append(normalized_cutoff)
     with _connect() as connection:
         rows = connection.execute(
             "SELECT episode_id, account_id, symbol, subject_name, selected_hypothesis_id, "

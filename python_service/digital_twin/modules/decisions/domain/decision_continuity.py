@@ -15,7 +15,8 @@ from typing import Dict, Iterable, Mapping, Tuple
 from digital_twin.modules.decisions.domain.investment_decision_history import compact_decision_episode_memory
 
 
-DECISION_CONTINUITY_PACKET_VERSION = "decision-continuity-packet-v3"
+DECISION_CONTINUITY_PACKET_VERSION = "decision-continuity-packet-v4-cutoff-bound"
+LEGACY_DECISION_CONTINUITY_PACKET_VERSIONS = {"decision-continuity-packet-v3"}
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -192,7 +193,10 @@ class DecisionContinuityPacket:
     def to_dict(self) -> Dict[str, object]:
         previous = compact_decision_episode_memory(self.previous_decision)
         statuses = dict(self.source_status or {})
-        errors = sorted(key for key, value in statuses.items() if str(value).lower() == "error")
+        errors = sorted(
+            key for key, value in statuses.items()
+            if str(value).lower() in {"error", "invalid"}
+        )
         has_previous = bool(previous)
         action_rows = [dict(item) for item in self.action_observations]
         outcome_rows = [dict(item) for item in self.observed_outcomes]
@@ -209,9 +213,7 @@ class DecisionContinuityPacket:
             "accountId": _text(self.account_id, 120),
             "symbol": _text(self.symbol, 64).upper(),
             "capturedAt": _text(self.captured_at, 64),
-            "status": (
-                "partial" if errors else "available" if has_previous else "no-prior-decision"
-            ),
+            "status": self._status(statuses, errors, has_previous),
             "previousDecision": previous,
             "selectedHypothesis": dict(self.selected_hypothesis or {}),
             "followUpConditions": follow_up_rows,
@@ -256,6 +258,22 @@ class DecisionContinuityPacket:
         payload["materialFingerprint"] = fingerprint
         payload["packetId"] = "decision-continuity:" + fingerprint[:24]
         return payload
+
+    @staticmethod
+    def _status(statuses, errors, has_previous):
+        clock = str(statuses.get("cutoffClock") or "").lower()
+        history = str(statuses.get("decisionEpisode") or "").lower()
+        if clock in {"missing", "invalid"}:
+            return "invalid-cutoff"
+        if history == "error":
+            return "history-read-error"
+        if errors:
+            return "partial"
+        if has_previous:
+            return "available"
+        if history == "not-found-before-cutoff":
+            return "no-prior-before-cutoff"
+        return "no-prior-decision"
 
 
 def build_decision_continuity_packet(
@@ -324,7 +342,10 @@ def compact_decision_continuity_packet(value: object) -> Dict[str, object]:
     """Normalize an already captured packet without changing its identity."""
 
     packet = _mapping(value)
-    if packet.get("contractVersion") != DECISION_CONTINUITY_PACKET_VERSION:
+    if packet.get("contractVersion") not in {
+        DECISION_CONTINUITY_PACKET_VERSION,
+        *LEGACY_DECISION_CONTINUITY_PACKET_VERSIONS,
+    }:
         return {}
     return {
         key: packet.get(key)

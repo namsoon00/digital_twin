@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, Mapping
 
 from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_subject
@@ -12,11 +13,74 @@ from digital_twin.modules.decisions.domain.investment_decision_history import (
     compact_decision_episode_memory, decision_memory_matches_scope,
 )
 from digital_twin.modules.decisions.domain.investment_insight_assessment import compact_previous_investment_insight_episode
-from digital_twin.modules.decisions.domain.investment_brain import parse_investment_timestamp
+from digital_twin.modules.decisions.contracts import (
+    canonical_investment_timestamp,
+    parse_investment_timestamp,
+)
 
 
 def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, Mapping) else {}
+
+
+def _canonical_machine_timestamp(value: object) -> str:
+    text = str(value or "").strip()
+    if "T" not in text or not (text.endswith("Z") or re.search(r"[+-]\d{2}:\d{2}$", text)):
+        return ""
+    return canonical_investment_timestamp(text)
+
+
+def decision_continuity_cutoff(context: Mapping[str, object]) -> Dict[str, object]:
+    """Resolve one source-bound clock, retaining KST only as legacy input."""
+
+    values = _mapping(context)
+    relation = _mapping(values.get("ontologyRelationContext"))
+    verified = _mapping(relation.get("verifiedSourceSnapshot"))
+    captured = _mapping(values.get("decisionContinuityPacket"))
+    existing_clock = _mapping(values.get("decisionContinuityClock"))
+    explicit_cutoff = _canonical_machine_timestamp(values.get("decisionContinuityCutoffAt"))
+    if (
+        explicit_cutoff
+        and existing_clock.get("status") == "valid"
+        and _canonical_machine_timestamp(existing_clock.get("cutoffAt")) == explicit_cutoff
+    ):
+        return {
+            "status": "valid",
+            "source": str(existing_clock.get("source") or "captured-machine-cutoff"),
+            "raw": str(existing_clock.get("raw") or explicit_cutoff),
+            "cutoffAt": explicit_cutoff,
+            **({"compatibilityParser": True} if existing_clock.get("compatibilityParser") else {}),
+        }
+    candidates = (
+        ("captured-machine-cutoff", values.get("decisionContinuityCutoffAt")),
+        ("captured-continuity-packet", captured.get("capturedAt")),
+        ("inference-generation", relation.get("inferenceGenerationAt")),
+        ("verified-source-snapshot", verified.get("generatedAt")),
+        ("source-observation", relation.get("sourceObservedAt")),
+        ("event-generation", values.get("eventGeneratedAt")),
+    )
+    for source, raw in candidates:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        canonical = _canonical_machine_timestamp(text)
+        return {
+            "status": "valid" if canonical else "invalid",
+            "source": source,
+            "raw": text,
+            "cutoffAt": canonical,
+        }
+    legacy = str(values.get("referenceDate") or relation.get("referenceDate") or "").strip()
+    if legacy:
+        canonical = canonical_investment_timestamp(legacy)
+        return {
+            "status": "valid" if canonical else "invalid",
+            "source": "legacy-reference-date",
+            "raw": legacy,
+            "cutoffAt": canonical,
+            "compatibilityParser": True,
+        }
+    return {"status": "missing", "source": "none", "raw": "", "cutoffAt": ""}
 
 
 def frozen_current_position(context, symbol):
@@ -24,7 +88,8 @@ def frozen_current_position(context, symbol):
     facts = _mapping(relation.get("facts"))
     subject = _mapping(relation.get("subject"))
     declared = str(subject.get("symbol") or context.get("rawSymbol") or "").upper()
-    as_of = str(context.get("referenceDate") or relation.get("referenceDate") or "")
+    clock = decision_continuity_cutoff(context)
+    as_of = str(clock.get("cutoffAt") or "")
     snapshot_id = str(relation.get("sourceAboxSnapshotId") or "")
     if declared != symbol or not facts or not as_of or not snapshot_id:
         return {}
@@ -52,9 +117,15 @@ def context_with_previous_investment_decision(
     resolved_account = str(account_id or enriched.get("accountId") or "").strip()
     resolved_symbol = str(symbol or subject.get("symbol") or "").strip().upper()
     current_episode_id = str(enriched.get("investmentDecisionEpisodeId") or "").strip()
+    cutoff = decision_continuity_cutoff(enriched)
+    if cutoff.get("status") == "valid":
+        enriched["decisionContinuityCutoffAt"] = cutoff["cutoffAt"]
+    enriched["decisionContinuityClock"] = cutoff
+    request_cutoff = parse_investment_timestamp(cutoff.get("cutoffAt"))
 
-    def in_scope(value):
-        return decision_memory_matches_scope(
+    def in_scope(value, boundary=request_cutoff):
+        decided_at = parse_investment_timestamp(_mapping(value).get("decidedAt"))
+        return bool(boundary and decided_at and decided_at <= boundary) and decision_memory_matches_scope(
             value, resolved_account, resolved_symbol, exclude_episode_id=current_episode_id,
         )
 
@@ -65,11 +136,13 @@ def context_with_previous_investment_decision(
     captured_packet = compact_decision_continuity_packet(enriched.get("decisionContinuityPacket"))
     # This is a frozen historical summary, not an executable opinion to reauthorize.
     packet_previous = _mapping(captured_packet.get("previousDecision"))
+    packet_cutoff = parse_investment_timestamp(captured_packet.get("capturedAt"))
     if (
         captured_packet
         and str(captured_packet.get("accountId") or "") == resolved_account
         and str(captured_packet.get("symbol") or "").upper() == resolved_symbol
-        and (not captured_packet.get("previousDecision") or in_scope(captured_packet["previousDecision"]))
+        and (not captured_packet.get("previousDecision") or in_scope(captured_packet["previousDecision"], packet_cutoff))
+        and (not request_cutoff or (packet_cutoff and packet_cutoff <= request_cutoff))
     ):
         enriched["decisionContinuityPacket"] = captured_packet
         if packet_previous:
@@ -92,7 +165,8 @@ def context_with_previous_investment_decision(
                 account_id=resolved_account,
                 symbol=resolved_symbol,
                 exclude_episode_id=str(enriched.get("investmentDecisionEpisodeId") or "").strip(),
-                captured_at=str(enriched.get("referenceDate") or ""),
+                captured_at=str(cutoff.get("cutoffAt") or ""),
+                cutoff_source=str(cutoff.get("source") or ""),
                 existing_previous=existing,
                 current_position=frozen_current_position(enriched, resolved_symbol),
             )
@@ -118,6 +192,8 @@ def context_with_previous_investment_decision(
                 "previousAction": packet_previous.get("action") or "",
                 "continuityPacketId": packet.get("packetId") or "",
                 "materialFingerprint": packet.get("materialFingerprint") or "",
+                "cutoffAt": packet.get("capturedAt") or "",
+                "cutoffSource": cutoff.get("source") or "",
             }
             return enriched
         if continuity_error:
@@ -148,7 +224,14 @@ def context_with_previous_investment_decision(
         "source": "investment-decision-episodes",
         "accountId": resolved_account,
         "symbol": resolved_symbol,
+        "cutoffStatus": cutoff.get("status") or "missing",
+        "cutoffAt": cutoff.get("cutoffAt") or "",
+        "cutoffSource": cutoff.get("source") or "none",
     }
+    if cutoff.get("status") != "valid":
+        audit["status"] = "invalid-cutoff"
+        enriched["investmentDecisionHistory"] = audit
+        return enriched
     if not decision_episode_store or not resolved_account or not resolved_symbol:
         enriched["investmentDecisionHistory"] = audit
         return enriched
@@ -159,12 +242,13 @@ def context_with_previous_investment_decision(
                 resolved_account,
                 resolved_symbol,
                 exclude_episode_id=current_episode_id,
+                cutoff_at=cutoff.get("cutoffAt") or "",
             )
         elif hasattr(decision_episode_store, "list"):
             rows = decision_episode_store.list(
                 account_id=resolved_account,
                 symbol=resolved_symbol,
-                limit=4,
+                limit=12,
             )
             previous = next((
                 item for item in rows or []
@@ -179,7 +263,7 @@ def context_with_previous_investment_decision(
 
     memory = compact_decision_episode_memory(previous)
     if not memory or not in_scope(memory):
-        audit["status"] = "not-found"
+        audit["status"] = "not-found-before-cutoff"
         enriched["investmentDecisionHistory"] = audit
         return enriched
     enriched["previousInvestmentDecisionEpisode"] = memory

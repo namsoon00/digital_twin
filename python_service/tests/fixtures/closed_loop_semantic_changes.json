@@ -223,8 +223,8 @@
     },
     "modules/decisions/domain/investment_reasoning/ai_insight.py::AIInsightEpisode": {"hash": "ce11ba4b85d1d79cdd9f1a2a720d00eca9226a1ae595905e01a547400a9e54d3", "reason": "Preserve comparable financial reporting periods, metric source lineage and corrections through ABox, compressed AI inputs and customer documents without changing graph action authority; test_financial_reporting_integrity and test_financial_evidence_repair; docs/financial-evidence-integrity.md."},
     "modules/decisions/domain/notification_ai_context_router.py::_continuity_delta": {
-      "hash": "9b47c71b489ac740798008b39ac4192e5d999bf7cac5de1240ca2811e4838bf8",
-      "reason": "Preserve eligibility and verified transitions in AI context; test_hypothesis_closed_loop."
+      "hash": "2cd4e841018fd210db88eb783b2f73f8a75a8ad75a7c1e8229e27019b8989e3b",
+      "reason": "Preserve eligibility and verified transitions in AI context, plus the prior episode ID and decided-at clock required to audit cutoff-bound continuity. test_hypothesis_closed_loop and test_decision_continuity; docs/investment-assistant-in03-continuity.md."
     },
     "modules/decisions/domain/notification_ai_context_router.py::fit_notification_ai_decision_core": {"hash": "aa20c5287c83d9773e76165d64ae2d3ea9e52fbba55ea4a1bb77c301af106047", "reason": "Reviewed evidence-flow repair: preserve numeric/source-window inputs and hypothesis-specific roles; reject unsupported causal assertions and observable-free triggers. test_insight_evidence_flow, test_financial_prompt_retention, test_notification_ai_inference_packet; docs/insight-evidence-flow-remediation.md."},
     "modules/decisions/domain/notification_ai_decision_brief.py::build_notification_ai_prompt_bundle": {
@@ -313,7 +313,7 @@
       "hash": "3b44f3e909503b35c73a9447db7ccb1f9e698bb4851531beb2a717e8654f3a85",
       "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
-    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {"hash": "1b73c2606e2cad8e75aab3ad54d3cc3007026262b0fefebe19f0efd2d1ab5b24", "reason": "Preserve scoped follow-up writes and add bounded read-only candidate coverage and actual outcome schedule diagnostics. test_ai_follow_up_tracking, test_experiment_observations; docs/runtime-flow-remediation-2026-09-16.md."},
+    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {"hash": "1675f812f2f380e7befe99f94edd5373ff8d587795f484d7345d82003cdecc90", "reason": "Preserve scoped follow-up writes and bounded diagnostics, and extend the prior-decision read with an additive cutoff parameter so indexed storage selects the latest episode known at the frozen source clock. test_ai_follow_up_tracking, test_experiment_observations, and test_decision_continuity; docs/runtime-flow-remediation-2026-09-16.md and docs/investment-assistant-in03-continuity.md."},
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineComparisonStore": {
       "hash": "89db57c5d5b3b8cc04f86a371e3c4a2ef7f9c7798354e2b038599b36fc0dac12",
       "reason": "Persist comparison job identities and contract version as indexed columns so reconciliation never scans JSON payloads; preserve deterministic comparison IDs and payload audit history. test_reasoning_engine_versions."

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.modules.decisions.application.decision_continuity_service import DecisionContinuityService
 from digital_twin.modules.decisions.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
 from digital_twin.modules.notifications.application.notification_ai_gate_message import decision_continuity_rows
-from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight, context_with_previous_delivered_investment_insight, frozen_current_position
+from digital_twin.modules.decisions.application.notification_decision_memory import context_with_previous_investment_decision, context_with_previous_investment_insight, context_with_previous_delivered_investment_insight, decision_continuity_cutoff, frozen_current_position
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
 from digital_twin.modules.decisions.domain.investment_decision_actionability import (
     investment_decision_actionability,
@@ -197,7 +197,9 @@ class DecisionContinuityTests(unittest.TestCase):
                 previous["outcomes"] = []
                 episodes = EpisodeStore(previous)
                 episodes.decision_outcome_schedule = lambda **kwargs: schedule
-                packet = DecisionContinuityService(episodes).build(account_id="main", symbol="005930")
+                packet = DecisionContinuityService(episodes).build(
+                    account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+                )
                 self.assertEqual(expected, packet["reviewSummary"]["state"])
         for eligibility, expected in (("eligible", "evaluated"), ("excluded-contract-data-gap", "data-gap")):
             with self.subTest(eligibility=eligibility):
@@ -207,7 +209,9 @@ class DecisionContinuityTests(unittest.TestCase):
                 episodes.decision_outcome_schedule = lambda **kwargs: {
                     "readStatus": "available", "targetCount": 1, "states": {"observed": 1},
                 }
-                packet = DecisionContinuityService(episodes).build(account_id="main", symbol="005930")
+                packet = DecisionContinuityService(episodes).build(
+                    account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+                )
                 self.assertEqual(expected, packet["reviewSummary"]["state"])
                 self.assertIn("관측은 완료", packet["reviewSummary"]["scheduleExplanation"])
                 self.assertNotIn("확인하지 못", packet["reviewSummary"]["scheduleExplanation"])
@@ -221,6 +225,7 @@ class DecisionContinuityTests(unittest.TestCase):
                 domain = DomainStore()
                 packet = DecisionContinuityService(store, domain).build(
                     account_id="main", symbol="005930", existing_previous=foreign,
+                    captured_at="2026-09-14T00:00:00Z",
                 )
                 self.assertFalse(packet["previousDecision"])
                 self.assertFalse(packet["observedOutcomes"])
@@ -242,7 +247,9 @@ class DecisionContinuityTests(unittest.TestCase):
         self.assertNotIn("previousInvestmentDecisionEpisode", context)
 
     def test_captured_action_and_packet_survive_without_reloading_or_reauthorizing_history(self):
-        packet = DecisionContinuityService(EpisodeStore(prior_episode())).build(account_id="main", symbol="005930")
+        packet = DecisionContinuityService(EpisodeStore(prior_episode())).build(
+            account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+        )
         original = deepcopy(packet)
         context = context_with_previous_investment_decision({
             "accountId": "main", "symbol": "005930", "decisionContinuityPacket": packet,
@@ -258,20 +265,74 @@ class DecisionContinuityTests(unittest.TestCase):
             def latest_decision_memory(self, *_args, **_kwargs):
                 return {**prior_episode(), "accountId": "other"}
 
-        packet = DecisionContinuityService(IndexedStore()).build(account_id="main", symbol="005930")
+        packet = DecisionContinuityService(IndexedStore()).build(
+            account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+        )
         self.assertFalse(packet["previousDecision"])
         class HydrationStore:
             def get(self, _episode_id):
                 return {**prior_episode(), "symbol": "MSTR"}
         packet = DecisionContinuityService(HydrationStore()).build(
             account_id="main", symbol="005930", existing_previous=prior_episode(),
+            captured_at="2026-09-14T00:00:00Z",
         )
         self.assertFalse(packet["observedOutcomes"])
         self.assertFalse(packet["selectedHypothesis"])
         packet = DecisionContinuityService(EpisodeStore(prior_episode())).build(
             account_id="main", symbol="005930", exclude_episode_id="decision:previous",
+            captured_at="2026-09-14T00:00:00Z",
         )
         self.assertFalse(packet["previousDecision"])
+
+        older = prior_episode()
+        future = {**prior_episode(), "episodeId": "decision:future", "decidedAt": "2026-09-15T00:00:00Z"}
+        class CutoffStore:
+            cutoff_at = ""
+
+            def latest_decision_memory(self, *_args, cutoff_at="", **_kwargs):
+                self.cutoff_at = cutoff_at
+                return future
+
+            def list(self, **_kwargs):
+                return [future, older]
+
+        cutoff_store = CutoffStore()
+        packet = DecisionContinuityService(cutoff_store).build(
+            account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+        )
+        self.assertEqual("2026-09-14T00:00:00Z", cutoff_store.cutoff_at)
+        self.assertEqual("decision:previous", packet["previousDecision"]["episodeId"])
+
+        from digital_twin.infrastructure.transactions.decision_history_parts import episode_queries
+        class EmptyCursor:
+            sql = ""
+            params = ()
+
+            def execute(self, sql, params):
+                self.sql = sql
+                self.params = params
+                return self
+
+            def fetchall(self):
+                return []
+
+        class QueryConnection:
+            def __init__(self, cursor):
+                self.cursor = cursor
+
+            def __enter__(self):
+                return self.cursor
+
+            def __exit__(self, *_args):
+                return None
+
+        cursor = EmptyCursor()
+        self.assertEqual({}, episode_queries.latest_decision_memory(
+            "main", "005930", cutoff_at="2026-09-14 09:00 KST",
+            _connect=lambda: QueryConnection(cursor),
+        ))
+        self.assertIn("decided_at <= %s", cursor.sql)
+        self.assertEqual("2026-09-14T00:00:00Z", cursor.params[-1])
 
     def test_schedule_reader_failure_is_visible_without_losing_valid_previous_decision(self):
         class FailingStore(EpisodeStore):
@@ -279,10 +340,20 @@ class DecisionContinuityTests(unittest.TestCase):
                 raise TimeoutError("unavailable")
         previous = prior_episode()
         previous["outcomes"] = []
-        packet = DecisionContinuityService(FailingStore(previous)).build(account_id="main", symbol="005930")
+        packet = DecisionContinuityService(FailingStore(previous)).build(
+            account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+        )
         self.assertTrue(packet["previousDecision"])
         self.assertEqual("unavailable", packet["reviewSummary"]["state"])
         self.assertIn("outcomeSchedule", packet["sourceErrors"])
+        class HistoryFailure:
+            def latest_decision_memory(self, *_args, **_kwargs):
+                raise TimeoutError("history unavailable")
+        failed = DecisionContinuityService(HistoryFailure()).build(
+            account_id="main", symbol="005930", captured_at="2026-09-14T00:00:00Z",
+        )
+        self.assertEqual("history-read-error", failed["status"])
+        self.assertFalse(failed["previousDecision"])
 
     def test_foreign_insights_are_removed_even_when_readers_are_unavailable(self):
         for field, value in (("accountId", "other"), ("symbol", "MSTR"), ("accountId", "")):
@@ -353,8 +424,9 @@ class DecisionContinuityTests(unittest.TestCase):
     def test_frozen_current_values_are_not_replaced_by_ledger_valuation(self):
         previous = prior_episode()
         previous["hypothesisSet"]["hypotheses"][0]["claim"] = "다른 회사의 과거 설명"
-        context = {"accountId": "main", "rawSymbol": "005930", "referenceDate": "2026-09-16T00:00:00Z",
+        context = {"accountId": "main", "rawSymbol": "005930", "referenceDate": "invalid-display-clock",
                    "ontologyRelationContext": {"subject": {"symbol": "005930"}, "sourceAboxSnapshotId": "frozen:1",
+                                               "inferenceGenerationAt": "2026-09-16T00:00:00Z",
                                                "facts": {"currentPrice": 127.92, "profitLossRate": -6.48, "quantity": 10}}}
         domain = DomainStore()
         packet = context_with_previous_investment_decision(
@@ -365,6 +437,7 @@ class DecisionContinuityTests(unittest.TestCase):
         self.assertEqual("2026-08-16T01:00:00Z", packet["historicalPosition"]["observedAt"])
         self.assertNotIn("claim", packet["selectedHypothesis"])
         self.assertEqual("withheld-unverified-scope", packet["sourceStatus"]["hypothesisDescription"])
+        self.assertEqual("inference-generation", decision_continuity_cutoff(context)["source"])
 
     def test_captured_packet_is_reused_without_second_database_read(self):
         episodes = EpisodeStore(prior_episode())
@@ -420,6 +493,29 @@ class DecisionContinuityTests(unittest.TestCase):
         )
         self.assertEqual({}, packet["previousDecision"])
         self.assertEqual({}, packet["historicalPosition"])
+        self.assertEqual("invalid-cutoff", packet["status"])
+        self.assertEqual("invalid", packet["sourceStatus"]["cutoffClock"])
+        missing = DecisionContinuityService(EpisodeStore(prior_episode())).build(
+            account_id="main", symbol="005930", captured_at="",
+        )
+        self.assertEqual("invalid-cutoff", missing["status"])
+        self.assertEqual("missing", missing["sourceStatus"]["cutoffClock"])
+        legacy = decision_continuity_cutoff({"referenceDate": "2026-08-16 10:05 KST"})
+        machine = decision_continuity_cutoff({
+            "ontologyRelationContext": {"inferenceGenerationAt": "2026-08-16T01:05:00Z"},
+        })
+        self.assertEqual(machine["cutoffAt"], legacy["cutoffAt"])
+        self.assertTrue(legacy["compatibilityParser"])
+        self.assertEqual("invalid", decision_continuity_cutoff({"referenceDate": "2026-08-16 10:05 PST"})["status"])
+        self.assertEqual("invalid", decision_continuity_cutoff({
+            "ontologyRelationContext": {"inferenceGenerationAt": "2026-08-16 10:05 KST"},
+        })["status"])
+        frozen = decision_continuity_cutoff({
+            "decisionContinuityPacket": {"capturedAt": "2026-08-16T01:05:00Z"},
+            "ontologyRelationContext": {"inferenceGenerationAt": "2026-08-16T01:06:00Z"},
+        })
+        self.assertEqual("captured-continuity-packet", frozen["source"])
+        self.assertEqual("2026-08-16T01:05:00Z", frozen["cutoffAt"])
 
     def test_unbound_current_facts_are_not_presented_as_frozen(self):
         context = {"rawSymbol": "005930", "referenceDate": "2026-09-16T00:00:00Z",
@@ -542,7 +638,7 @@ class DecisionContinuityTests(unittest.TestCase):
 
         self.assertEqual("queued", outcome["status"])
         self.assertEqual(
-            "decision-continuity-packet-v3",
+            "decision-continuity-packet-v4-cutoff-bound",
             queue.request.context["decisionContinuityPacket"]["contractVersion"],
         )
         self.assertEqual(
@@ -579,8 +675,10 @@ class DecisionContinuityTests(unittest.TestCase):
         prompt = build_notification_ai_decision_prompt(context, {}, decision_brief=brief)
         prompt_payload = json.loads(prompt.split("DecisionCore:\n", 1)[1])
 
-        self.assertEqual("decision-continuity-packet-v3", brief["decisionContinuity"]["contractVersion"])
+        self.assertEqual("decision-continuity-packet-v4-cutoff-bound", brief["decisionContinuity"]["contractVersion"])
         self.assertEqual("ADD", prompt_payload["continuityDelta"]["previousDecision"]["action"])
+        self.assertEqual("decision:previous", prompt_payload["continuityDelta"]["previousDecision"]["episodeId"])
+        self.assertEqual("2026-08-16T00:00:00Z", prompt_payload["continuityDelta"]["previousDecision"]["decidedAt"])
         self.assertEqual("excluded", prompt_payload["continuityDelta"]["reviewSummary"]["state"])
         self.assertIn("평가 대상에서 제외", prompt_payload["continuityDelta"]["reviewSummary"]["scheduleExplanation"])
         self.assertIn("continuityDelta", prompt)

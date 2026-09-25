@@ -1391,7 +1391,7 @@ def _continuity_delta(value: object) -> Dict[str, object]:
         if row.get("onSatisfied"):
             row["onSatisfied"] = _sentence_text(row.get("onSatisfied"), 120)
         followups.append(row)
-    previous_payload = _selected(previous, ("action", "decisionReadiness", "decidedAt"))
+    previous_payload = _selected(previous, ("episodeId", "action", "decisionReadiness", "decidedAt"))
     previous_summary = _sentence_text(previous.get("decisionSummary"), 180)
     if previous_summary:
         previous_payload["summary"] = previous_summary
@@ -2010,7 +2010,7 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
         "reviewSummary": continuity.get("reviewSummary"),
         "observationState": continuity.get("observationState"),
         "previousDecision": {
-            **_selected(previous, ("action", "decisionReadiness", "decidedAt")),
+            **_selected(previous, ("episodeId", "action", "decisionReadiness", "decidedAt")),
             "summary": _sentence_text(previous.get("summary"), 96),
         },
         "previousSelectedHypothesisId": continuity.get("previousSelectedHypothesisId"),

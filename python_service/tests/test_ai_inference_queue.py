@@ -1887,8 +1887,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         class DecisionMemoryStore:
             calls = []
 
-            def latest_decision_memory(self, account_id, symbol, exclude_episode_id=""):
-                self.calls.append((account_id, symbol, exclude_episode_id))
+            def latest_decision_memory(self, account_id, symbol, exclude_episode_id="", cutoff_at=""):
+                self.calls.append((account_id, symbol, exclude_episode_id, cutoff_at))
                 return {
                     "episodeId": "decision-episode:previous",
                     "accountId": account_id,
@@ -1922,7 +1922,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(1, runner.run_once(limit=1))
 
         delivered = self.notifications.get(job.job_id)
-        self.assertEqual([("main", "005930", "")], store.calls)
+        self.assertEqual([("main", "005930", "", "2026-08-04T01:00:00Z")], store.calls)
         self.assertEqual("HOLD", reviewer.received_context["previousInvestmentDecisionEpisode"]["action"])
         self.assertEqual("unchanged", delivered.context["aiDecisionTransition"]["kind"])
         self.assertFalse(delivered.context["investmentNotificationTransition"]["changed"])

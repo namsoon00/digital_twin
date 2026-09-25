@@ -13,7 +13,11 @@
   최신 표지만 있고 출처 계약이 없는 입력 검출, confirmed/unknown 영향 분리,
   queue owner 기반 차단, 현재 cache 정정과 bounded reasoning 재평가를 구현하고
   PLTR·NVDA 운영 적용 및 재실행 0건 검증을 완료했다.
-- IN-03 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
+- IN-03: source/case machine timestamp를 기준으로 이전 판단을 연결하고, legacy KST 호환 파싱,
+  cutoff 이전 indexed 조회, clock/조회 실패 진단, 최종 prompt의 이전 판단 ID·시각 보존을 구현했다.
+  운영 이력 migration이나 release 승격은 수행하지 않았다. 상세 결과는
+  [IN-03 판단 연속성 보고서](investment-assistant-in03-continuity.md)에 기록했다.
+- IN-04 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
 
 ## 1. 제품 목표와 개발 원칙
 

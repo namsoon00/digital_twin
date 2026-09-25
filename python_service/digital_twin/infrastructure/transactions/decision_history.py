@@ -420,11 +420,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         account_id: str,
         symbol: str,
         exclude_episode_id: str = "",
+        cutoff_at: str = "",
     ) -> Dict[str, object]:
         return episode_queries.latest_decision_memory(
             account_id,
             symbol,
             exclude_episode_id,
+            cutoff_at,
             _connect=self.connect,
         )
 

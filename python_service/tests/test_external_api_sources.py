@@ -576,6 +576,19 @@ END:VCALENDAR
         self.assertEqual(0, estimates[1]["analystCount"])
         self.assertEqual("reported-zero", estimates[1]["sampleState"])
         self.assertNotEqual(estimates[0]["observationId"], estimates[1]["observationId"])
+        self.assertEqual("earnings-estimate-observation-v2", estimates[0]["contractVersion"])
+        self.assertEqual("fy1", estimates[0]["horizon"])
+        self.assertEqual("fy2", estimates[1]["horizon"])
+        self.assertEqual("observed-unbound-revision", estimates[0]["validationState"])
+
+        sign_transition = normalized_yfinance_earnings_estimates({
+            "earningsEstimate": [{"period": "0y", "avg": 1.0}],
+            "epsTrend": [{"period": "0y", "30daysAgo": -0.5}],
+        }, "2026-09-23T00:00:00Z")[0]
+        self.assertEqual("sign-transition-negative-to-positive", sign_transition["revisionKind"])
+        self.assertEqual(-0.5, sign_transition["revisionFrom"])
+        self.assertEqual(1.0, sign_transition["revisionTo"])
+        self.assertNotIn("revision30dPct", sign_transition)
 
         class FakeRecordsFrame:
             def __init__(self, rows):

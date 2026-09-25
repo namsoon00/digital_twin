@@ -160,6 +160,9 @@ def earnings_date_rows(frame, limit: int = 40) -> List[Dict[str, object]]:
     return rows[:max(1, int(limit or 1))]
 
 
+EARNINGS_ESTIMATE_NORMALIZATION_VERSION = "earnings-estimate-observation-v2"
+
+
 def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_at: str) -> List[Dict[str, object]]:
     estimates = payload.get("earningsEstimate") if isinstance(payload.get("earningsEstimate"), list) else []
     trends = {
@@ -197,9 +200,13 @@ def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_a
         growth = optional_number(item.get("growth"))
         revision_up = optional_number(revision.get("upLast30days"))
         revision_down = optional_number(revision.get("downLast30days"))
+        source_as_of = str(item.get("sourceAsOf") or payload.get("sourceAsOf") or "").strip()
+        target_period_start = str(item.get("targetPeriodStart") or "").strip()
+        target_period_end = str(item.get("targetPeriodEnd") or item.get("endDate") or "").strip()
+        currency = str(item.get("currency") or (payload.get("info") or {}).get("currency") or "").strip()
         snapshot = {
             "provider": "yfinance", "rawPeriod": raw_period, "period": period,
-            "asOf": fetched_at, "low": low, "base": base, "high": high,
+            "sourceAsOf": source_as_of, "low": low, "base": base, "high": high,
             "analystCount": int(analyst_count) if analyst_count is not None else None,
             "growth": growth, "thirtyDaysAgo": thirty_days_ago,
             "revisionUp30d": int(revision_up) if revision_up is not None else None,
@@ -209,18 +216,55 @@ def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_a
             json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str).encode()
         ).hexdigest()[:20]
         row = {
+            "contractVersion": EARNINGS_ESTIMATE_NORMALIZATION_VERSION,
+            "normalizationVersion": EARNINGS_ESTIMATE_NORMALIZATION_VERSION,
             "observationId": observation_id,
             "provider": "yfinance",
+            "upstreamOrigin": "Yahoo Finance analyst consensus",
             "source": "earnings_estimate",
             "sourceType": "external-consensus",
             "period": period,
+            "horizon": period,
             "providerPeriod": raw_period,
-            "asOf": fetched_at,
+            "sourceAsOf": source_as_of,
+            "fetchedAt": fetched_at,
+            "currency": currency,
+            "perShareBasis": "provider-reported-unspecified",
+            "accountingBasis": "provider-reported-unspecified",
+            "estimateBasis": "provider-consensus",
             "isEstimate": True,
             "base": base,
             "consensusBasis": "annual-eps",
+            "rangeKind": (
+                "reported-range"
+                if low is not None and high is not None and high != low
+                else "single-point"
+                if low is None and high is None
+                else "partial-range"
+            ),
             "sampleState": "reported" if analyst_count and analyst_count > 0 else "reported-zero" if analyst_count == 0 else "not-provided",
+            "validationState": "observed-unbound-revision",
+            "revisionState": "unbound-source-revision",
         }
+        if target_period_start:
+            row["targetPeriodStart"] = target_period_start
+        if target_period_end:
+            row["targetPeriodEnd"] = target_period_end
+        if thirty_days_ago is not None:
+            row["revisionFrom"] = thirty_days_ago
+            row["revisionTo"] = base
+            if thirty_days_ago < 0 < base:
+                row["revisionKind"] = "sign-transition-negative-to-positive"
+            elif thirty_days_ago < 0 and base == 0:
+                row["revisionKind"] = "sign-transition-negative-to-zero"
+            elif thirty_days_ago == 0 < base:
+                row["revisionKind"] = "sign-transition-zero-to-positive"
+            elif thirty_days_ago > 0 >= base:
+                row["revisionKind"] = "sign-transition-positive-to-nonpositive"
+            elif thirty_days_ago == 0 and base == 0:
+                row["revisionKind"] = "unchanged-zero"
+            else:
+                row["revisionKind"] = "same-sign-change"
         optional = {
             "low": low,
             "high": high,
@@ -361,8 +405,8 @@ def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str,
         "profitMargin": optional_number(info.get("profitMargins")),
         "operatingMarginTTM": optional_number(info.get("operatingMargins")),
         "trailingEPS": optional_number(info.get("trailingEps")),
-        "forwardEPS": optional_number(fy1.get("base")) or optional_number(info.get("forwardEps")),
-        "epsPeriod": "forward-12m" if number(fy1.get("base")) or number(info.get("forwardEps")) else "ttm" if number(info.get("trailingEps")) else "",
+        "forwardEPS": optional_number(fy1.get("base")) if fy1 else optional_number(info.get("forwardEps")),
+        "epsPeriod": "fy1" if fy1 else "forward-12m" if optional_number(info.get("forwardEps")) is not None else "ttm" if optional_number(info.get("trailingEps")) is not None else "",
         "peRatio": optional_number(info.get("trailingPE")),
         "pegRatio": optional_number(info.get("pegRatio")),
         "forwardPE": optional_number(info.get("forwardPE")),
@@ -416,18 +460,19 @@ def earnings_report_from_yfinance(symbol: str, payload: Dict[str, object]) -> Di
         "provider": "yfinance",
         "symbol": symbol,
         "fetchedAt": fetched_at,
-        "forwardEPS": number(fy1.get("base")) or (number((payload.get("info") or {}).get("forwardEps")) if isinstance(payload.get("info"), dict) else 0.0),
-        "trailingEPS": number((payload.get("info") or {}).get("trailingEps")) if isinstance(payload.get("info"), dict) else 0.0,
+        "forwardEPS": optional_number(fy1.get("base")) if fy1 else (optional_number((payload.get("info") or {}).get("forwardEps")) if isinstance(payload.get("info"), dict) else None),
+        "epsPeriod": "fy1" if fy1 else "forward-12m" if isinstance(payload.get("info"), dict) and optional_number((payload.get("info") or {}).get("forwardEps")) is not None else "",
+        "trailingEPS": optional_number((payload.get("info") or {}).get("trailingEps")) if isinstance(payload.get("info"), dict) else None,
         "earningsEstimates": estimates,
         "growthData": normalized_yfinance_growth_data(payload, fetched_at),
         "latestQuarter": {
             "fiscalDateEnding": str(latest.get("Earnings Date") or latest.get("index") or latest.get("Date") or ""),
             "reportedDate": str(latest.get("Earnings Date") or latest.get("index") or latest.get("Date") or ""),
-            "reportedEPS": number(latest.get("Reported EPS")),
-            "estimatedEPS": number(latest.get("EPS Estimate")),
+            "reportedEPS": optional_number(latest.get("Reported EPS")),
+            "estimatedEPS": optional_number(latest.get("EPS Estimate")),
             "epsPeriod": "quarterly",
-            "surprise": number(latest.get("Surprise(%)")),
-            "surprisePercentage": number(latest.get("Surprise(%)")),
+            "surprise": optional_number(latest.get("Surprise(%)")),
+            "surprisePercentage": optional_number(latest.get("Surprise(%)")),
         },
     }
 

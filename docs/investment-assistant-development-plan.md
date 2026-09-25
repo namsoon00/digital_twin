@@ -21,7 +21,11 @@
   성공 transport receipt 재확인과 종목별 발송 잠금의 20회 반복/2-worker 경계를 검증했다.
   AI 사용량 한도·timeout·응답 형식·계약·일반 실행 실패도 별도 진단한다. 상세 결과는
   [IN-04 의미 변화와 전달 보고서](investment-assistant-in04-semantic-delivery.md)에 기록했다.
-- IN-05 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
+- IN-05: 컨센서스 정규화 v2로 horizon·범위·표본·revision 시계를 분리하고,
+  analyst/fundamental 병합 순서와 무관한 필드 소유권, exact source revision 연결,
+  음수·0·FY2 관측 보존 및 양수 PER 적격성 분리를 구현했다. 상세 결과는
+  [IN-05 컨센서스 보존 보고서](investment-assistant-in05-consensus.md)에 기록했다.
+- IN-06 이후: 미착수. release 승격과 후보 shadow 실행은 하지 않았다.
 
 ## 1. 제품 목표와 개발 원칙
 

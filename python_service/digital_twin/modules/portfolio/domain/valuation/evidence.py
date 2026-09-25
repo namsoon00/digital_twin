@@ -8,6 +8,7 @@ valuation governance gate.
 
 from __future__ import annotations
 
+import math
 from statistics import median
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
@@ -26,6 +27,19 @@ def _text(value: object) -> str:
 def _positive(value: object) -> float:
     parsed = number(value)
     return parsed if parsed > 0 else 0.0
+
+
+def _optional_number(*values: object):
+    for value in values:
+        if value in (None, "") or isinstance(value, bool):
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed):
+            return parsed
+    return None
 
 
 def _source_type(provider: object, explicit: object = "") -> str:
@@ -66,13 +80,13 @@ def _observation(
     default_as_of: object = "",
     default_estimate: bool = False,
 ) -> Dict[str, object]:
-    base = _positive(raw.get("base") or raw.get("average") or raw.get("avg") or raw.get("value") or raw.get("eps"))
-    low = _positive(raw.get("low") or raw.get("minimum"))
-    high = _positive(raw.get("high") or raw.get("maximum"))
+    base = _optional_number(raw.get("base"), raw.get("average"), raw.get("avg"), raw.get("value"), raw.get("eps"))
+    low = _optional_number(raw.get("low"), raw.get("minimum"))
+    high = _optional_number(raw.get("high"), raw.get("maximum"))
     period = _horizon(raw.get("horizon") or raw.get("period") or default_period)
     provider_text = _text(raw.get("provider") or provider)
     source_text = _text(raw.get("source") or source)
-    if not base:
+    if base is None:
         return {}
     analyst_count = number(raw.get("analystCount") if "analystCount" in raw else raw.get("numberOfAnalysts"))
     result = {
@@ -81,15 +95,15 @@ def _observation(
         "value": round(base, 6),
         "base": round(base, 6),
         "period": period,
-        "asOf": _text(raw.get("asOf") or raw.get("fiscalDateEnding") or default_as_of),
+        "asOf": _text(raw.get("sourceAsOf") or raw.get("asOf") or raw.get("fiscalDateEnding") or raw.get("fetchedAt") or default_as_of),
         "provider": provider_text,
         "source": source_text,
         "sourceType": _source_type(provider_text, raw.get("sourceType")),
         "isEstimate": bool(raw.get("isEstimate", default_estimate)),
     }
-    if low:
+    if low is not None:
         result["low"] = round(low, 6)
-    if high:
+    if high is not None:
         result["high"] = round(high, 6)
     if analyst_count >= 0 and ("analystCount" in raw or "numberOfAnalysts" in raw):
         result["analystCount"] = int(analyst_count)
@@ -98,9 +112,31 @@ def _observation(
             result[field] = number(raw.get(field))
     if raw.get("sampleState"):
         result["sampleState"] = _text(raw.get("sampleState"))
+    for field in (
+        "contractVersion", "normalizationVersion", "upstreamOrigin", "providerPeriod",
+        "horizon", "targetPeriodStart", "targetPeriodEnd", "currency", "perShareBasis",
+        "accountingBasis", "estimateBasis", "rangeKind", "revisionKind", "revisionFrom",
+        "revisionTo", "fetchedAt",
+    ):
+        if raw.get(field) not in (None, ""):
+            result[field] = raw.get(field)
     references = [dict(item) for item in raw.get("sourceReferences", []) if isinstance(item, Mapping)]
     if references:
         result["sourceReferences"] = references
+        result["validationState"] = _text(raw.get("validationState") or "observed")
+        result["revisionState"] = _text(raw.get("revisionState") or "exact-source-revision")
+    elif default_estimate or raw.get("isEstimate"):
+        result["validationState"] = "legacy-unverified"
+        result["revisionState"] = "missing-source-revision"
+    eligible = bool(base > 0 and period_is_annual_per_share(period))
+    result["positivePerEligible"] = eligible
+    excluded = []
+    if base <= 0:
+        excluded.append("non-positive-eps")
+    if not period_is_annual_per_share(period):
+        excluded.append("unsupported-per-horizon")
+    if excluded:
+        result["excludedReasons"] = excluded
     return result
 
 
@@ -135,15 +171,17 @@ def collect_earnings_observations(
                 default_as_of=owner.get("fetchedAt"),
                 default_estimate=True,
             )
-            if item and period_is_annual_per_share(item.get("period")):
+            if item and item.get("period") in {"annual", "annualized", "ttm", "trailing-12m", "forward-12m", "fy1", "fy2"}:
                 result.append(item)
 
     scalar_candidates = [
-        (overview.get("forwardEPS"), "forward-12m", overview, "forwardEPS", True),
-        (report.get("forwardEPS"), "forward-12m", report, "forwardEPS", True),
         (overview.get("trailingEPS") or overview.get("dilutedEPSTTM"), "ttm", overview, "trailingEPS", False),
         (report.get("trailingEPS"), "ttm", report, "trailingEPS", False),
     ]
+    if not isinstance(overview.get("earningsEstimates"), list) or not overview.get("earningsEstimates"):
+        scalar_candidates.append((overview.get("forwardEPS"), overview.get("epsPeriod") or "forward-12m", overview, "forwardEPS", True))
+    if not isinstance(report.get("earningsEstimates"), list) or not report.get("earningsEstimates"):
+        scalar_candidates.append((report.get("forwardEPS"), report.get("epsPeriod") or "forward-12m", report, "forwardEPS", True))
     annual = report.get("latestAnnual") if isinstance(report.get("latestAnnual"), Mapping) else {}
     if annual:
         scalar_candidates.append((
@@ -255,17 +293,50 @@ def _weighted_median(values: Sequence[Tuple[float, float]]) -> float:
     return rows[-1][0]
 
 
+def _consensus_upstream_identity(value: Mapping[str, object]) -> tuple:
+    row = dict(value or {})
+    upstream = _text(row.get("upstreamOrigin")) or _text(row.get("provider"))
+    return (
+        upstream.casefold(),
+        _horizon(row.get("period")),
+        _text(row.get("targetPeriodEnd")),
+    )
+
+
+def _deduplicate_consensus_upstreams(values: Iterable[Mapping[str, object]]) -> List[Dict[str, object]]:
+    selected = {}
+    for raw in values or []:
+        row = dict(raw)
+        key = _consensus_upstream_identity(row)
+        current = selected.get(key)
+        clock = (_text(row.get("sourceAsOf")), _text(row.get("fetchedAt") or row.get("asOf")), _text(row.get("observationId")))
+        current_clock = (
+            _text(current.get("sourceAsOf")),
+            _text(current.get("fetchedAt") or current.get("asOf")),
+            _text(current.get("observationId")),
+        ) if current else ()
+        if current is None or clock >= current_clock:
+            selected[key] = row
+    return [selected[key] for key in sorted(selected)]
+
+
 def earnings_scenario(observations: Iterable[Mapping[str, object]]) -> Dict[str, object]:
-    rows = [dict(item) for item in observations or [] if isinstance(item, Mapping) and _positive(item.get("base"))]
+    rows = [
+        dict(item) for item in observations or []
+        if isinstance(item, Mapping)
+        and _positive(item.get("base"))
+        and period_is_annual_per_share(item.get("period"))
+        and item.get("positivePerEligible") is not False
+    ]
     if not rows:
         return {}
-    horizon_priority = ("fy1", "forward-12m", "fy2", "ttm", "annual", "annualized")
+    horizon_priority = ("fy1", "forward-12m", "ttm", "annual", "annualized")
     selected: List[Dict[str, object]] = []
     selected_horizon = ""
     for horizon in horizon_priority:
         candidates = [item for item in rows if _horizon(item.get("period")) == horizon]
         if candidates:
-            selected = candidates
+            selected = _deduplicate_consensus_upstreams(candidates)
             selected_horizon = horizon
             break
     if not selected:

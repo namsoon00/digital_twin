@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.news_intelligence.contracts import (
     bind_company_event_contract,
@@ -166,6 +166,127 @@ def merge_dict(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str
     return result
 
 
+def _estimate_identity(value: Mapping[str, object]) -> tuple:
+    row = dict(value or {})
+    return (
+        str(row.get("upstreamOrigin") or row.get("provider") or "").casefold().strip(),
+        str(row.get("horizon") or row.get("period") or "").casefold().strip(),
+        str(row.get("targetPeriodEnd") or "").strip(),
+    )
+
+
+def _estimate_clock(value: Mapping[str, object]) -> tuple:
+    row = dict(value or {})
+    return (
+        str(row.get("sourceAsOf") or "").strip(),
+        str(row.get("fetchedAt") or row.get("asOf") or "").strip(),
+        str(row.get("observationId") or "").strip(),
+    )
+
+
+def merge_earnings_estimates(base: object, incoming: object) -> list:
+    """Select one complete revision per upstream/horizon without field splicing."""
+
+    selected = {}
+    for raw in [*(base if isinstance(base, list) else []), *(incoming if isinstance(incoming, list) else [])]:
+        if not isinstance(raw, Mapping):
+            continue
+        row = dict(raw)
+        identity = _estimate_identity(row)
+        if not identity[0] or not identity[1]:
+            continue
+        current = selected.get(identity)
+        if current is None or _estimate_clock(row) >= _estimate_clock(current):
+            selected[identity] = row
+    return [selected[key] for key in sorted(selected)]
+
+
+def _merge_non_empty(base: Mapping[str, object], incoming: Mapping[str, object]) -> Dict[str, object]:
+    result = dict(base or {})
+    for key, value in dict(incoming or {}).items():
+        if isinstance(value, Mapping) and isinstance(result.get(key), Mapping):
+            result[key] = _merge_non_empty(result[key], value)
+        elif value in (None, "", [], {}) and result.get(key) not in (None, "", [], {}):
+            continue
+        else:
+            result[key] = value
+    return result
+
+
+def merge_financial_summary(base: Mapping[str, object], incoming: Mapping[str, object]) -> Dict[str, object]:
+    """Merge provider summaries while consensus owns its structured estimate fields."""
+
+    result = _merge_non_empty(dict(base or {}), dict(incoming or {}))
+    estimates = merge_earnings_estimates(
+        dict(base or {}).get("earningsEstimates"),
+        dict(incoming or {}).get("earningsEstimates"),
+    )
+    if estimates:
+        result["earningsEstimates"] = estimates
+        fy1 = next((row for row in estimates if str(row.get("horizon") or row.get("period") or "") == "fy1"), None)
+        if fy1 is not None and fy1.get("base") is not None:
+            result["forwardEPS"] = fy1.get("base")
+            result["epsPeriod"] = "fy1"
+    elif "earningsEstimates" in result:
+        result["earningsEstimates"] = []
+    result["fetchedAt"] = max_timestamp(
+        str(dict(base or {}).get("fetchedAt") or ""),
+        str(dict(incoming or {}).get("fetchedAt") or ""),
+    )
+    return result
+
+
+def merge_financial_summary_maps(base: Mapping[str, object], incoming: Mapping[str, object]) -> Dict[str, object]:
+    result = {
+        str(symbol or "").upper().strip(): dict(row)
+        for symbol, row in dict(base or {}).items()
+        if str(symbol or "").strip() and isinstance(row, Mapping)
+    }
+    for symbol, row in dict(incoming or {}).items():
+        normalized = str(symbol or "").upper().strip()
+        if normalized and isinstance(row, Mapping):
+            result[normalized] = merge_financial_summary(result.get(normalized, {}), row)
+    return result
+
+
+def bind_consensus_lineage(fragment: Dict[str, object], fact_row: Mapping[str, object]) -> Dict[str, object]:
+    if str(fact_row.get("datasetId") or "") != "yfinance.analyst":
+        return dict(fragment or {})
+    reference = source_reference_from_fact_row(fact_row)
+    if not reference:
+        return dict(fragment or {})
+    result = dict(fragment or {})
+    for group_name in ("companyOverviews", "earningsReports"):
+        group = {
+            str(symbol): dict(summary) if isinstance(summary, Mapping) else summary
+            for symbol, summary in dict(result.get(group_name) or {}).items()
+        }
+        for symbol, summary in list(group.items()):
+            if not isinstance(summary, dict):
+                continue
+            rows = []
+            for raw in summary.get("earningsEstimates") or []:
+                if not isinstance(raw, Mapping):
+                    continue
+                row = dict(raw)
+                references = {
+                    (str(item.get("datasetId") or ""), str(item.get("revisionId") or "")): dict(item)
+                    for item in row.get("sourceReferences") or []
+                    if isinstance(item, Mapping) and item.get("datasetId") and item.get("revisionId")
+                }
+                references[(reference["datasetId"], reference["revisionId"])] = reference
+                row["sourceReferences"] = [references[key] for key in sorted(references)]
+                row["validationState"] = (
+                    "observed" if row.get("targetPeriodEnd") else "observed-partial-period"
+                )
+                row["revisionState"] = "exact-source-revision"
+                rows.append(row)
+            summary["earningsEstimates"] = rows
+            group[symbol] = summary
+        result[group_name] = group
+    return result
+
+
 def merge_company_knowledge_maps(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
     result = {
         str(symbol or "").upper().strip(): dict(row)
@@ -215,6 +336,8 @@ def merge_external_signal_read_models(
             result["statuses"] = existing + [dict(item) for item in value if isinstance(item, dict)]
         elif key == "companyKnowledge" and isinstance(value, dict):
             result[key] = merge_company_knowledge_maps(result.get(key) or {}, value)
+        elif key in {"companyOverviews", "earningsReports"} and isinstance(value, dict):
+            result[key] = merge_financial_summary_maps(result.get(key) or {}, value)
         elif key in EXTERNAL_SIGNAL_MAP_FIELDS and isinstance(value, dict):
             result[key] = merge_dict(result.get(key) or {}, value)
         elif key == "macro" and isinstance(value, dict):
@@ -268,11 +391,14 @@ class ExternalSignalsReadModelService:
         for row in rows:
             fragment = row.get("payload") if isinstance(row.get("payload"), dict) else {}
             fragment = bind_external_event_lineage(fragment, row)
+            fragment = bind_consensus_lineage(fragment, row)
             for key, value in fragment.items():
                 if key == "statuses" and isinstance(value, list):
                     result["statuses"].extend([dict(item) for item in value if isinstance(item, dict)])
                 elif key == "companyKnowledge" and isinstance(value, dict):
                     result[key] = merge_company_knowledge_maps(result.get(key) or {}, value)
+                elif key in {"companyOverviews", "earningsReports"} and isinstance(value, dict):
+                    result[key] = merge_financial_summary_maps(result.get(key) or {}, value)
                 elif key in EXTERNAL_SIGNAL_MAP_FIELDS and isinstance(value, dict):
                     result[key] = merge_dict(result.get(key) or {}, value)
                 elif key == "macro" and isinstance(value, dict):

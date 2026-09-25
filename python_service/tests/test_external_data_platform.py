@@ -56,7 +56,15 @@ from digital_twin.infrastructure.external_api.mysql_stores import (
     completed_followup_needs_retry,
     external_subject_from_market_quote,
 )
-from digital_twin.infrastructure.external_signal_provider_yfinance import ExternalSignalYFinanceMixin
+from digital_twin.infrastructure.external_signal_provider_yfinance import (
+    ExternalSignalYFinanceMixin,
+    earnings_report_from_yfinance,
+    overview_from_yfinance,
+)
+from digital_twin.modules.portfolio.domain.valuation.evidence import (
+    collect_earnings_observations,
+    earnings_scenario,
+)
 from digital_twin.infrastructure.external_signal_utils import dart_document_permanently_unavailable
 from digital_twin.infrastructure.schedulers import external_data_failure_requires_alert
 
@@ -1439,6 +1447,100 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("fresh", fitness["subjects"]["GLOBAL"]["purposes"]["crypto-market"]["state"])
         self.assertEqual("failed", fitness["subjects"]["GLOBAL"]["purposes"]["macro-regime"]["state"])
         self._assert_read_model_binds_company_event_to_exact_fact_revision()
+        self._assert_consensus_revision_survives_both_dataset_orders_into_valuation_evidence()
+
+    def _assert_consensus_revision_survives_both_dataset_orders_into_valuation_evidence(self):
+        def fact(dataset_id, revision_id, payload, fetched_at):
+            return {
+                "datasetId": dataset_id,
+                "providerId": "yfinance",
+                "subjectKey": "PLTR",
+                "payload": payload,
+                "fetchedAt": fetched_at,
+                "updatedAt": fetched_at,
+                "freshnessState": "fresh",
+                "revisionId": revision_id,
+                "sourceRevision": "provider-" + revision_id,
+                "payloadHash": "hash-" + revision_id,
+                "sourceSchemaVersion": "yfinance-source-v2",
+                "sourceAsOf": "",
+                "availability": "observed",
+            }
+
+        def fragment(payload):
+            return {
+                "companyOverviews": {"PLTR": overview_from_yfinance("PLTR", payload)},
+                "earningsReports": {"PLTR": earnings_report_from_yfinance("PLTR", payload)},
+            }
+
+        analyst_payload = {
+            "collectedAt": "2026-09-25T01:00:00Z",
+            "earningsEstimate": [
+                {"period": "0y", "low": 1.8, "avg": 2.0, "high": 2.2, "numberOfAnalysts": 12},
+                {"period": "+1y", "avg": 2.6, "numberOfAnalysts": 10},
+            ],
+            "epsTrend": [{"period": "0y", "30daysAgo": 1.9}],
+        }
+        fundamental_payload = {
+            "collectedAt": "2026-09-25T02:00:00Z",
+            "info": {"currency": "USD", "forwardEps": 9.9, "trailingEps": 0.8},
+        }
+        analyst = fact("yfinance.analyst", "analyst-r2", fragment(analyst_payload), "2026-09-25T01:00:00Z")
+        fundamental = fact("yfinance.fundamental", "fundamental-r3", fragment(fundamental_payload), "2026-09-25T02:00:00Z")
+
+        class ConsensusStore:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def list_current(self, _subject_keys):
+                return list(self.rows)
+
+            def provider_statuses(self):
+                return []
+
+        projections = []
+        for rows in ([analyst, fundamental], [fundamental, analyst]):
+            signals = ExternalSignalsReadModelService(ConsensusStore(rows)).signals_for_subjects(["PLTR"])
+            overview = signals["companyOverviews"]["PLTR"]
+            report = signals["earningsReports"]["PLTR"]
+            estimates = overview["earningsEstimates"]
+            self.assertEqual(["fy1", "fy2"], [item["horizon"] for item in estimates])
+            self.assertEqual([1.8, 2.0, 2.2, 12], [estimates[0]["low"], estimates[0]["base"], estimates[0]["high"], estimates[0]["analystCount"]])
+            self.assertEqual(2.6, estimates[1]["base"])
+            self.assertEqual("analyst-r2", estimates[0]["sourceReferences"][0]["revisionId"])
+            self.assertEqual("exact-source-revision", estimates[0]["revisionState"])
+            self.assertEqual("observed-partial-period", estimates[0]["validationState"])
+            self.assertEqual(2.0, overview["forwardEPS"])
+            self.assertEqual("fy1", overview["epsPeriod"])
+            observations = collect_earnings_observations(overview, report)
+            self.assertEqual({"fy1", "fy2", "ttm"}, {item["period"] for item in observations})
+            scenario = earnings_scenario(observations)
+            self.assertEqual([1.8, 2.0, 2.2], [scenario["low"], scenario["base"], scenario["high"]])
+            self.assertEqual(12, scenario["analystCount"])
+            projections.append({"overview": overview, "report": report, "scenario": scenario})
+        self.assertEqual(projections[0], projections[1])
+
+        negative_payload = {
+            "collectedAt": "2026-09-25T03:00:00Z",
+            "earningsEstimate": [
+                {"period": "0y", "avg": -1.0, "numberOfAnalysts": 4},
+                {"period": "+1y", "avg": 2.0, "numberOfAnalysts": 4},
+            ],
+        }
+        negative = fact("yfinance.analyst", "analyst-negative-r1", fragment(negative_payload), "2026-09-25T03:00:00Z")
+        signals = ExternalSignalsReadModelService(ConsensusStore([negative])).signals_for_subjects(["PLTR"])
+        observations = collect_earnings_observations(
+            signals["companyOverviews"]["PLTR"],
+            signals["earningsReports"]["PLTR"],
+        )
+        by_period = {item["period"]: item for item in observations}
+        self.assertEqual(-1.0, by_period["fy1"]["base"])
+        self.assertEqual(2.0, by_period["fy2"]["base"])
+        self.assertFalse(by_period["fy1"]["positivePerEligible"])
+        self.assertIn("non-positive-eps", by_period["fy1"]["excludedReasons"])
+        self.assertFalse(by_period["fy2"]["positivePerEligible"])
+        self.assertIn("unsupported-per-horizon", by_period["fy2"]["excludedReasons"])
+        self.assertEqual({}, earnings_scenario(observations))
 
     def _assert_read_model_binds_company_event_to_exact_fact_revision(self):
         class EventFactStore:

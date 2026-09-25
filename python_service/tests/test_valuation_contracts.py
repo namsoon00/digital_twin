@@ -233,6 +233,39 @@ class ValuationContractTests(unittest.TestCase):
         self.assertNotIn("revision30dPct", observations[0])
         self._assert_dividend_yield_requires_an_explicit_and_valid_unit()
         self._assert_company_knowledge_preserves_canonical_dividend_yield_units()
+        self._assert_legacy_consensus_without_exact_revision_remains_unverified()
+        self._assert_same_upstream_consensus_is_not_counted_as_independent_evidence()
+
+    def _assert_legacy_consensus_without_exact_revision_remains_unverified(self):
+        observations = collect_earnings_observations(
+            {
+                "provider": "yfinance",
+                "earningsEstimates": [{"period": "fy1", "base": 2.0, "isEstimate": True}],
+            },
+            {},
+        )
+
+        self.assertEqual(1, len(observations))
+        self.assertEqual("legacy-unverified", observations[0]["validationState"])
+        self.assertEqual("missing-source-revision", observations[0]["revisionState"])
+
+    def _assert_same_upstream_consensus_is_not_counted_as_independent_evidence(self):
+        scenario = earnings_scenario([
+            {
+                "observationId": "api-a", "provider": "api-a", "upstreamOrigin": "same consensus",
+                "period": "fy1", "base": 2.0, "analystCount": 12,
+                "sourceReferences": [{"datasetId": "api.a", "revisionId": "r1", "providerRevision": "upstream-r1"}],
+            },
+            {
+                "observationId": "api-b", "provider": "api-b", "upstreamOrigin": "same consensus",
+                "period": "fy1", "base": 2.0, "analystCount": 12,
+                "sourceReferences": [{"datasetId": "api.b", "revisionId": "r2", "providerRevision": "upstream-r1"}],
+            },
+        ])
+
+        self.assertEqual(1, scenario["observationCount"])
+        self.assertEqual(1, scenario["sourceCount"])
+        self.assertEqual(2.0, scenario["base"])
 
     def test_semiconductor_ai_valuation_uses_eps_not_moving_average(self):
         position = Position(

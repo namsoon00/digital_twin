@@ -71,6 +71,60 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual("2026-01-01", fact["start"])
         self.assertEqual("CY2026Q2YTD", fact["frame"])
 
+        def annual_concept(value, *, unit="USD", instant=False):
+            return {"units": {unit: [{
+                "val": value,
+                **({} if instant else {"start": "2025-01-01"}),
+                "end": "2025-12-31", "filed": "2026-02-15", "fy": 2025,
+                "fp": "FY", "form": "10-K", "frame": "CY2025",
+                "accn": "0001-26-annual",
+            }]}}
+
+        raw_facts = {
+            "Revenues": annual_concept(1000),
+            "OperatingIncomeLoss": annual_concept(250),
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": annual_concept(230),
+            "IncomeTaxExpenseBenefit": annual_concept(46),
+            "InterestExpenseNonoperating": annual_concept(10),
+            "DepreciationDepletionAndAmortization": annual_concept(40),
+            "PaymentsToAcquireProductiveAssets": annual_concept(60),
+            "ShareBasedCompensation": annual_concept(15),
+            "CashAndCashEquivalentsAtCarryingValue": annual_concept(100, instant=True),
+            "WeightedAverageNumberOfDilutedSharesOutstanding": annual_concept(100, unit="shares"),
+            "LongTermDebtCurrent": annual_concept(20, instant=True),
+            "LongTermDebtNoncurrent": annual_concept(60, instant=True),
+            "IncreaseDecreaseInAccountsReceivable": annual_concept(10),
+            "IncreaseDecreaseInInventories": annual_concept(5),
+            "IncreaseDecreaseInPrepaidDeferredExpenseAndOtherAssets": annual_concept(2),
+            "IncreaseDecreaseInAccountsPayable": annual_concept(3),
+            "IncreaseDecreaseInAccruedLiabilitiesAndOtherOperatingLiabilities": annual_concept(4),
+        }
+        annual_summary = provider.sec_company_facts_summary({
+            "entityName": "Test Inc.", "facts": {"us-gaap": raw_facts},
+        })
+        annual_knowledge = build_company_knowledge(
+            "TEST",
+            sec_filing={"provider": "SEC EDGAR", "facts": annual_summary},
+            source_references=[{
+                "datasetId": "sec.company_facts", "subjectKey": "TEST",
+                "revisionId": "sec-annual-r1", "availability": "observed",
+            }],
+        )
+        annual_row = annual_knowledge["financials"]["annual"][0]
+        required = {
+            "revenue", "operatingIncome", "pretaxIncome", "taxProvision", "interestExpense",
+            "depreciationAmortization", "capitalExpenditure", "changeInWorkingCapital",
+            "stockBasedCompensation", "cash", "totalDebt", "weightedAverageSharesDiluted",
+        }
+        self.assertEqual(required, required.intersection(annual_row))
+        self.assertEqual(-10, annual_row["changeInWorkingCapital"])
+        self.assertEqual(80, annual_row["totalDebt"])
+        self.assertEqual(
+            {"0001-26-annual"},
+            {annual_row["metricProvenance"][field]["accessionNumber"] for field in required},
+        )
+        self.assertTrue(all(annual_row["metricProvenance"][field]["official"] for field in required))
+
         sec_facts = {
             "entityName": "NVIDIA Corporation",
             "revenue": {
@@ -176,9 +230,10 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         disclosure = {}
         provider.attach_opendart_company_facts(empty_signals(), disclosure, "000001", "00000001", "test-only", datetime(2026, 9, 16, tzinfo=timezone.utc))
         saved = disclosure["financialStatements"]
-        self.assertEqual(201, len(saved))
+        self.assertEqual(402, len(saved))
         self.assertEqual("100", saved[-1]["frmtrm_q_amount"])
         self.assertEqual("210", saved[-1]["frmtrm_add_amount"])
+        self.assertEqual(2, len(disclosure["financialStatementBases"]))
 
     def test_iso_quarter_order_uses_year_and_month_not_day_and_time(self):
         periods = ["2026-03-31T00:00:00", "2025-12-31T00:00:00", "2026-06-30T00:00:00"]
@@ -229,9 +284,23 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual("frmtrm_q_amount", rows[1]["metricProvenance"]["operatingIncome"]["amountField"])
 
     def test_dart_balance_prior_is_previous_year_end(self):
-        rows = dart_statement_periods([{"bsns_year": "2026", "reprt_code": "11012", "sj_div": "BS",
-            "account_nm": "자산총계", "thstrm_amount": "120", "frmtrm_amount": "100"}])
+        source = [{"bsns_year": "2026", "reprt_code": "11012", "sj_div": "BS",
+            "account_nm": "자산총계", "thstrm_amount": "120", "frmtrm_amount": "100"}]
+        for account_id, current, previous in (
+            ("ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings", "10", "8"),
+            ("ifrs-full_LongtermBorrowings", "30", "25"),
+            ("ifrs-full_CurrentLeaseLiabilities", "2", "1"),
+            ("ifrs-full_NoncurrentLeaseLiabilities", "6", "5"),
+        ):
+            source.append({
+                "bsns_year": "2026", "reprt_code": "11012", "sj_div": "BS",
+                "account_id": account_id, "account_nm": account_id,
+                "thstrm_amount": current, "frmtrm_amount": previous,
+            })
+        rows = dart_statement_periods(source)
         self.assertEqual(["2026-06-30", "2025-12-31"], [row["period"] for row in rows])
+        self.assertEqual(48, rows[0]["totalDebt"])
+        self.assertTrue(rows[0]["metricProvenance"]["totalDebt"]["derived"])
 
     def test_dart_cashflow_ytd_does_not_divide_quarterly_revenue(self):
         periods = [{"period": "2026-06-30", "operatingCashFlow": 20, "netIncome": 10,
@@ -351,6 +420,32 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual(0, latest["revenue"])
         self.assertEqual(-3, latest["netIncome"])
         self.assertEqual("correction", latest["reportContract"]["sourceReferences"][0]["revisionId"])
+
+        official = self.contracted_period(
+            "2025-12-31", revision="official-r1", revenue=100,
+        )
+        secondary = self.contracted_period(
+            "2025-12-31", revision="secondary-r1", revenue=101,
+        )
+
+        merged = merge_company_knowledge_rows(
+            {
+                "symbol": "TEST",
+                "financials": {"annual": [official]},
+                "valuationFinancialCandidates": [official, secondary],
+            },
+            {
+                "symbol": "TEST",
+                "financials": {"annual": [official]},
+                "valuationFinancialCandidates": [secondary],
+            },
+        )
+
+        self.assertEqual(2, len(merged["valuationFinancialCandidates"]))
+        self.assertEqual(
+            {100, 101},
+            {item["revenue"] for item in merged["valuationFinancialCandidates"]},
+        )
 
     def test_issued_and_weighted_shares_never_substitute_outstanding(self):
         rows = statement_periods({"balanceSheet": [

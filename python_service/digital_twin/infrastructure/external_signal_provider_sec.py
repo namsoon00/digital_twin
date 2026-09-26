@@ -1,5 +1,6 @@
 import html
 import re
+from datetime import datetime
 from html.parser import HTMLParser
 from typing import Dict, List
 
@@ -25,6 +26,29 @@ SEC_CONTACT_EMAIL_PATTERN = re.compile(
     r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,63})",
     re.IGNORECASE,
 )
+
+SEC_ANNUAL_DIRECT_FACTS = {
+    "revenue": (("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet"), ("USD",), True),
+    "operatingIncome": (("OperatingIncomeLoss",), ("USD",), True),
+    "pretaxIncome": (("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"), ("USD",), True),
+    "taxProvision": (("IncomeTaxExpenseBenefit",), ("USD",), True),
+    "interestExpense": (("InterestExpenseNonoperating", "InterestExpenseNonOperating", "InterestAndDebtExpense"), ("USD",), True),
+    "depreciationAmortization": (("DepreciationDepletionAndAmortization", "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment"), ("USD",), True),
+    "capitalExpenditure": (("PaymentsToAcquireProductiveAssets", "PaymentsToAcquirePropertyPlantAndEquipment"), ("USD",), True),
+    "stockBasedCompensation": (("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"), ("USD",), True),
+    "cash": (("CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"), ("USD",), False),
+    "weightedAverageSharesDiluted": (("WeightedAverageNumberOfDilutedSharesOutstanding",), ("shares",), True),
+}
+
+SEC_ANNUAL_COMPONENT_FACTS = {
+    "debtCurrent": (("LongTermDebtAndFinanceLeaseObligationsCurrent", "LongTermDebtCurrent", "DebtCurrent"), ("USD",), False),
+    "debtNoncurrent": (("LongTermDebtAndFinanceLeaseObligationsNoncurrent", "LongTermDebtNoncurrent"), ("USD",), False),
+    "workingCapitalReceivables": (("IncreaseDecreaseInAccountsReceivable",), ("USD",), True),
+    "workingCapitalInventory": (("IncreaseDecreaseInInventories",), ("USD",), True),
+    "workingCapitalOtherAssets": (("IncreaseDecreaseInPrepaidDeferredExpenseAndOtherAssets", "IncreaseDecreaseInOtherOperatingAssets"), ("USD",), True),
+    "workingCapitalPayables": (("IncreaseDecreaseInAccountsPayable",), ("USD",), True),
+    "workingCapitalOtherLiabilities": (("IncreaseDecreaseInAccruedLiabilitiesAndOtherOperatingLiabilities", "IncreaseDecreaseInAccruedLiabilities", "IncreaseDecreaseInOtherOperatingLiabilities"), ("USD",), True),
+}
 
 
 class SecDocumentTextParser(HTMLParser):
@@ -324,7 +348,7 @@ class ExternalSignalSecMixin:
         facts = payload.get("facts", {}).get("us-gaap", {}) if isinstance(payload.get("facts"), dict) else {}
         if not isinstance(facts, dict):
             facts = {}
-        return {
+        result = {
             "entityName": str(payload.get("entityName") or ""),
             "revenue": self.latest_sec_fact(facts, [
                 "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -361,6 +385,72 @@ class ExternalSignalSecMixin:
             "stockBasedCompensation": self.latest_sec_fact(facts, ["ShareBasedCompensation"]),
             "sharesOutstanding": self.latest_sec_fact(facts, ["EntityCommonStockSharesOutstanding"], units=("shares",)),
         }
+        result["annualSeries"] = {
+            field: self.annual_sec_fact_series(facts, list(tags), units=units, duration=duration)
+            for field, (tags, units, duration) in SEC_ANNUAL_DIRECT_FACTS.items()
+        }
+        result["annualComponents"] = {
+            field: self.annual_sec_fact_series(facts, list(tags), units=units, duration=duration)
+            for field, (tags, units, duration) in SEC_ANNUAL_COMPONENT_FACTS.items()
+        }
+        return result
+
+    def annual_sec_fact_series(
+        self,
+        facts: Dict[str, object],
+        tags: List[str],
+        *,
+        units: tuple = ("USD",),
+        duration: bool,
+        limit: int = 4,
+    ) -> List[Dict[str, object]]:
+        """Return bounded, filing-coherent annual SEC facts for one metric."""
+
+        annual_forms = {"10-K", "20-F", "40-F"}
+        candidates = []
+        for priority, tag in enumerate(tags):
+            concept = facts.get(tag)
+            unit_rows = concept.get("units") if isinstance(concept, dict) else {}
+            if not isinstance(unit_rows, dict):
+                continue
+            for unit in units:
+                for item in unit_rows.get(unit) if isinstance(unit_rows.get(unit), list) else []:
+                    if not isinstance(item, dict) or str(item.get("form") or "").upper() not in annual_forms:
+                        continue
+                    if str(item.get("fp") or "").upper() not in {"", "FY"}:
+                        continue
+                    end = str(item.get("end") or "")
+                    value = number(item.get("val"))
+                    if not end or value is None:
+                        continue
+                    if duration:
+                        try:
+                            days = (datetime.fromisoformat(end) - datetime.fromisoformat(str(item.get("start") or ""))).days
+                        except ValueError:
+                            continue
+                        if days < 270 or days > 430:
+                            continue
+                    candidates.append((priority, tag, unit, item, value))
+        selected = {}
+        for priority, tag, unit, item, value in candidates:
+            end = str(item.get("end") or "")
+            rank = (str(item.get("filed") or ""), -priority, str(item.get("accn") or ""))
+            if end in selected and selected[end][0] >= rank:
+                continue
+            selected[end] = (rank, {
+                "tag": tag,
+                "value": value,
+                "start": str(item.get("start") or ""),
+                "end": end,
+                "filed": str(item.get("filed") or ""),
+                "fy": str(item.get("fy") or ""),
+                "fp": str(item.get("fp") or ""),
+                "form": str(item.get("form") or ""),
+                "frame": str(item.get("frame") or ""),
+                "accessionNumber": str(item.get("accn") or ""),
+                "unit": unit,
+            })
+        return [selected[end][1] for end in sorted(selected, reverse=True)[:max(1, int(limit or 4))]]
 
     def latest_sec_fact(
         self,

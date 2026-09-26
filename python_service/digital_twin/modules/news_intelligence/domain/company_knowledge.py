@@ -117,12 +117,19 @@ DART_ACCOUNT_ALIASES = {
     "revenue": ("매출액", "영업수익", "수익(매출액)"),
     "grossProfit": ("매출총이익",),
     "operatingIncome": ("영업이익", "영업이익(손실)"),
+    "pretaxIncome": ("법인세차감전순이익", "법인세비용차감전순이익", "세전이익"),
+    "taxProvision": ("법인세비용", "법인세비용(수익)"),
+    "interestExpense": ("이자비용",),
     "netIncome": ("당기순이익", "당기순이익(손실)"),
     "totalAssets": ("자산총계",),
     "totalLiabilities": ("부채총계",),
     "equity": ("자본총계",),
     "cash": ("현금및현금성자산",),
     "operatingCashFlow": ("영업활동으로인한현금흐름", "영업활동 현금흐름"),
+    "capitalExpenditure": ("유형자산의취득", "유형자산 취득"),
+    "depreciationAmortization": ("감가상각비", "감가상각비및무형자산상각비"),
+    "stockBasedCompensation": ("주식기준보상비용", "주식보상비용"),
+    "weightedAverageSharesDiluted": ("희석가중평균유통보통주식수", "희석가중평균주식수"),
 }
 
 
@@ -319,9 +326,20 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
     account_ids = {
         "ifrs-full_Revenue": "revenue", "ifrs-full_GrossProfit": "grossProfit",
         "dart_OperatingIncomeLoss": "operatingIncome", "ifrs-full_ProfitLoss": "netIncome",
+        "ifrs-full_ProfitLossBeforeTax": "pretaxIncome",
+        "ifrs-full_IncomeTaxExpenseContinuingOperations": "taxProvision",
+        "ifrs-full_InterestExpense": "interestExpense", "dart_InterestExpense": "interestExpense",
         "ifrs-full_Assets": "totalAssets", "ifrs-full_Liabilities": "totalLiabilities",
         "ifrs-full_Equity": "equity", "ifrs-full_CashAndCashEquivalents": "cash",
         "ifrs-full_CashFlowsFromUsedInOperatingActivities": "operatingCashFlow",
+        "ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities": "capitalExpenditure",
+        "ifrs-full_DepreciationAndAmortisationExpense": "depreciationAmortization",
+        "ifrs-full_SharebasedPaymentTransactionExpense": "stockBasedCompensation",
+        "ifrs-full_WeightedAverageNumberOfSharesOutstandingDiluted": "weightedAverageSharesDiluted",
+        "ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings": "debtCurrentBorrowings",
+        "ifrs-full_LongtermBorrowings": "debtNoncurrentBorrowings",
+        "ifrs-full_CurrentLeaseLiabilities": "debtCurrentLease",
+        "ifrs-full_NoncurrentLeaseLiabilities": "debtNoncurrentLease",
     }
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, Mapping):
@@ -331,55 +349,88 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
         account = _key(row.get("account_nm") or row.get("accountName"))
         if not account:
             continue
-        for field, aliases in DART_ACCOUNT_ALIASES.items():
-            if account_ids.get(row.get("account_id")) != field and account not in {_key(alias) for alias in aliases}:
-                continue
-            code = _clean(row.get("reprt_code") or basis.get("reportCode"))
-            year = row.get("bsns_year") or basis.get("businessYear")
-            balance = row.get("sj_div") == "BS" or field in {"totalAssets", "totalLiabilities", "equity", "cash", "totalDebt"}
-            interim = code not in {"", "11011"}
-            income = row.get("sj_div") in {"IS", "CIS"}
-            # The full-statement API has no *_dt fields. IS/CIS interim
-            # amounts are three-month values; CF amounts are cumulative.
-            periods = [("thstrm_dt", "thstrm_amount", 0), ("frmtrm_dt", "frmtrm_q_amount" if interim and income else "frmtrm_amount", 1)]
-            if not interim:
-                periods.append(("bfefrmtrm_dt", "bfefrmtrm_amount", 2))
-            for period_field, amount_field, prior in periods:
-                if interim and row.get("sj_div") == "CF" and prior:
-                    if optional_number(row.get("frmtrm_add_amount")) is not None:
-                        amount_field = "frmtrm_add_amount"
-                    elif not any(label in _clean(row.get("frmtrm_nm")) for label in ("분기", "반기")):
-                        # A prior full-year cash-flow total is not prior YTD.
-                        continue
-                period = _clean(row.get(period_field)) or dart_reporting_date(year, code, prior=prior, balance=balance)
-                value = optional_number(row.get(amount_field))
-                if period and value is not None:
-                    parsed = reporting_period_end(period)
-                    if not parsed:
-                        continue
-                    key = parsed.isoformat()
-                    target = grouped.setdefault(key, {"period": key, "periodEnd": key, "provider": "OpenDART",
-                        "officialSource": True, "frequency": "interim" if interim else "annual",
-                        "comparisonBasis": "year-over-year", "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
-                        "metricProvenance": {}})
-                    target[field] = value
-                    receipt = _clean(row.get("rcept_no"))
-                    target["metricProvenance"][field] = {
-                        "provider": "OpenDART", "official": True, "period": key,
-                        "currency": row.get("currency") or "", "scope": basis.get("scope") or row.get("fs_div") or "unspecified",
-                        "metric": row.get("account_id") or row.get("account_nm"), "amountField": amount_field,
-                        "reportCode": code, "receiptNo": receipt,
-                        "fiscalYear": str(year or ""),
-                        "accountingStandard": "K-IFRS" if str(row.get("account_id") or "").startswith("ifrs") else "",
-                        "publishedAt": str(basis.get("publishedAt") or basis.get("receiptDate") or ""),
-                        "sourceUrl": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + receipt if receipt else "",
-                        "durationBasis": "instant" if balance else "quarterly" if interim and income else "year-to-date" if interim else "annual",
-                    }
-    return [
-        grouped[period]
-        for period in sorted(grouped, key=_period_sort_key, reverse=True)[:4]
-        if len(grouped[period]) > 1
-    ]
+        field = account_ids.get(row.get("account_id"))
+        if not field:
+            field = next((
+                candidate for candidate, aliases in DART_ACCOUNT_ALIASES.items()
+                if account in {_key(alias) for alias in aliases}
+            ), "")
+        if not field:
+            continue
+        code = _clean(row.get("reprt_code") or basis.get("reportCode"))
+        year = row.get("bsns_year") or basis.get("businessYear")
+        balance = row.get("sj_div") == "BS" or field in {
+            "totalAssets", "totalLiabilities", "equity", "cash", "totalDebt",
+            "debtCurrentBorrowings", "debtNoncurrentBorrowings", "debtCurrentLease", "debtNoncurrentLease",
+        }
+        interim = code not in {"", "11011"}
+        income = row.get("sj_div") in {"IS", "CIS"}
+        # The full-statement API has no *_dt fields. IS/CIS interim
+        # amounts are three-month values; CF amounts are cumulative.
+        periods = [("thstrm_dt", "thstrm_amount", 0), ("frmtrm_dt", "frmtrm_q_amount" if interim and income else "frmtrm_amount", 1)]
+        if not interim:
+            periods.append(("bfefrmtrm_dt", "bfefrmtrm_amount", 2))
+        for period_field, amount_field, prior in periods:
+            if interim and row.get("sj_div") == "CF" and prior:
+                if optional_number(row.get("frmtrm_add_amount")) is not None:
+                    amount_field = "frmtrm_add_amount"
+                elif not any(label in _clean(row.get("frmtrm_nm")) for label in ("분기", "반기")):
+                    # A prior full-year cash-flow total is not prior YTD.
+                    continue
+            period = _clean(row.get(period_field)) or dart_reporting_date(year, code, prior=prior, balance=balance)
+            value = optional_number(row.get(amount_field))
+            if period and value is not None:
+                parsed = reporting_period_end(period)
+                if not parsed:
+                    continue
+                period_key = parsed.isoformat()
+                frequency = "interim" if interim else "annual"
+                group_key = period_key + "|" + frequency
+                target = grouped.setdefault(group_key, {"period": period_key, "periodEnd": period_key, "provider": "OpenDART",
+                    "officialSource": True, "frequency": frequency,
+                    "comparisonBasis": "year-over-year", "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+                    "metricProvenance": {}})
+                target[field] = value
+                receipt = _clean(row.get("rcept_no"))
+                target["metricProvenance"][field] = {
+                    "provider": "OpenDART", "official": True, "period": period_key,
+                    "currency": row.get("currency") or "", "scope": basis.get("scope") or row.get("fs_div") or "unspecified",
+                    "metric": row.get("account_id") or row.get("account_nm"), "amountField": amount_field,
+                    "reportCode": code, "receiptNo": receipt,
+                    "fiscalYear": str(year or ""),
+                    "accountingStandard": "K-IFRS" if str(row.get("account_id") or "").startswith("ifrs") else "",
+                    "publishedAt": str(basis.get("publishedAt") or basis.get("receiptDate") or ""),
+                    "sourceUrl": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + receipt if receipt else "",
+                    "durationBasis": "instant" if balance else "quarterly" if interim and income else "year-to-date" if interim else "annual",
+                }
+    for target in grouped.values():
+        provenance = target.get("metricProvenance") if isinstance(target.get("metricProvenance"), Mapping) else {}
+        required_debt = ("debtCurrentBorrowings", "debtNoncurrentBorrowings")
+        if all(optional_number(target.get(field)) is not None for field in required_debt):
+            debt_fields = [
+                field for field in (*required_debt, "debtCurrentLease", "debtNoncurrentLease")
+                if optional_number(target.get(field)) is not None
+            ]
+            values = [optional_number(target.get(field)) for field in debt_fields]
+            target["totalDebt"] = sum(values)
+            first = dict(provenance.get(debt_fields[0]) or {})
+            provenance["totalDebt"] = {
+                **first,
+                "metric": " + ".join(_clean((provenance.get(field) or {}).get("metric") or field) for field in debt_fields),
+                "derived": True,
+                "calculation": "sum official current/noncurrent borrowings and reported lease liabilities",
+                "componentMetrics": [_clean((provenance.get(field) or {}).get("metric") or field) for field in debt_fields],
+                "componentValues": values,
+            }
+        for field in ("debtCurrentBorrowings", "debtNoncurrentBorrowings", "debtCurrentLease", "debtNoncurrentLease"):
+            target.pop(field, None)
+            provenance.pop(field, None)
+        target["metricProvenance"] = provenance
+    return sorted(
+        (row for row in grouped.values() if len(row) > 1),
+        key=lambda row: (_period_sort_key(row.get("period")), row.get("frequency") == "annual"),
+        reverse=True,
+    )[:6]
 
 
 def _safe_ratio(numerator: object, denominator: object, scale: float = 1.0) -> Optional[float]:
@@ -518,6 +569,119 @@ def _sec_fact_periods(
     *,
     frequency: str,
 ) -> List[Dict[str, object]]:
+    annual_series = facts.get("annualSeries") if isinstance(facts.get("annualSeries"), Mapping) else {}
+    annual_components = facts.get("annualComponents") if isinstance(facts.get("annualComponents"), Mapping) else {}
+    if frequency == "annual" and annual_series:
+        anchors = annual_series.get("revenue") if isinstance(annual_series.get("revenue"), list) else []
+        result = []
+
+        def matching_fact(values: object, period: str, accession: str):
+            return next((
+                item for item in values if isinstance(item, Mapping)
+                and _clean(item.get("end")) == period
+                and _clean(item.get("accessionNumber")) == accession
+            ), None) if isinstance(values, list) else None
+
+        def provenance(field: str, value: Mapping[str, object], *, derived=None, duration_basis="annual"):
+            return {
+                "provider": "SEC EDGAR",
+                "metric": _clean(value.get("tag") or field),
+                "period": _clean(value.get("end")),
+                "filed": _clean(value.get("filed")),
+                "form": _clean(value.get("form")).upper(),
+                "fiscalPeriod": _clean(value.get("fp")).upper(),
+                "fiscalYear": _clean(value.get("fy")),
+                "frame": _clean(value.get("frame")),
+                "accessionNumber": _clean(value.get("accessionNumber")),
+                "periodStart": _clean(value.get("start")),
+                "publishedAt": _clean(value.get("filed")),
+                "accountingStandard": "US-GAAP",
+                "currency": _clean(value.get("unit")),
+                "scope": "official-filing",
+                "official": True,
+                "durationBasis": duration_basis,
+                **({"shareCountBasis": "weighted-average-diluted"} if field == "weightedAverageSharesDiluted" else {}),
+                **({"derived": True, **dict(derived)} if isinstance(derived, Mapping) else {}),
+            }
+
+        for anchor in anchors:
+            if not isinstance(anchor, Mapping):
+                continue
+            period = _clean(anchor.get("end"))
+            accession = _clean(anchor.get("accessionNumber"))
+            if not period or not accession:
+                continue
+            row = {
+                "period": period,
+                "periodEnd": period,
+                "provider": "SEC EDGAR",
+                "frequency": "annual",
+                "comparisonBasis": "year-over-year",
+                "officialSource": True,
+                "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+                "metricProvenance": {},
+            }
+            for field, values in annual_series.items():
+                fact = matching_fact(values, period, accession)
+                amount = optional_number(fact.get("value")) if isinstance(fact, Mapping) else None
+                if amount is None:
+                    continue
+                row[field] = amount
+                duration_basis = "instant" if field in {"cash", "totalDebt"} else "annual"
+                row["metricProvenance"][field] = provenance(field, fact, duration_basis=duration_basis)
+
+            debt_current = matching_fact(annual_components.get("debtCurrent"), period, accession)
+            debt_noncurrent = matching_fact(annual_components.get("debtNoncurrent"), period, accession)
+            if isinstance(debt_current, Mapping) and isinstance(debt_noncurrent, Mapping):
+                current = optional_number(debt_current.get("value"))
+                noncurrent = optional_number(debt_noncurrent.get("value"))
+                if current is not None and noncurrent is not None:
+                    row["totalDebt"] = current + noncurrent
+                    row["metricProvenance"]["totalDebt"] = provenance(
+                        "totalDebt",
+                        debt_current,
+                        duration_basis="instant",
+                        derived={
+                            "calculation": "current-debt + noncurrent-debt",
+                            "componentMetrics": [debt_current.get("tag"), debt_noncurrent.get("tag")],
+                            "componentValues": [current, noncurrent],
+                        },
+                    )
+
+            working_capital_fields = (
+                "workingCapitalReceivables", "workingCapitalInventory", "workingCapitalOtherAssets",
+                "workingCapitalPayables", "workingCapitalOtherLiabilities",
+            )
+            working_capital = {
+                field: matching_fact(annual_components.get(field), period, accession)
+                for field in working_capital_fields
+            }
+            if all(isinstance(working_capital[field], Mapping) for field in working_capital_fields):
+                values = {field: optional_number(working_capital[field].get("value")) for field in working_capital_fields}
+                if all(value is not None for value in values.values()):
+                    cash_contribution = (
+                        -values["workingCapitalReceivables"]
+                        -values["workingCapitalInventory"]
+                        -values["workingCapitalOtherAssets"]
+                        +values["workingCapitalPayables"]
+                        +values["workingCapitalOtherLiabilities"]
+                    )
+                    first = working_capital["workingCapitalReceivables"]
+                    row["changeInWorkingCapital"] = cash_contribution
+                    row["metricProvenance"]["changeInWorkingCapital"] = provenance(
+                        "changeInWorkingCapital",
+                        first,
+                        derived={
+                            "calculation": "-(receivables + inventory + other-operating-assets) + payables + other-operating-liabilities",
+                            "cashFlowSignConvention": "cash-contribution-positive",
+                            "componentMetrics": [working_capital[field].get("tag") for field in working_capital_fields],
+                            "componentValues": [values[field] for field in working_capital_fields],
+                        },
+                    )
+            result.append(row)
+        if result:
+            return result[:4]
+
     rows: Dict[str, Dict[str, object]] = {}
     for field, value in dict(facts or {}).items():
         if field == "entityName" or not isinstance(value, Mapping):
@@ -748,18 +912,20 @@ def build_company_knowledge(
     info = yfinance.get("info") if isinstance(yfinance.get("info"), Mapping) else {}
 
     dart_basis = dart_disclosure.get("financialStatementBasis") if isinstance(dart_disclosure.get("financialStatementBasis"), Mapping) else {}
-    annual = statement_periods(yfinance, currency=_clean(info.get("financialCurrency")))
+    secondary_annual = statement_periods(yfinance, currency=_clean(info.get("financialCurrency")))
+    annual = list(secondary_annual)
     quarterly = statement_periods({
         "incomeStatement": yfinance.get("quarterlyIncomeStatement"),
         "balanceSheet": yfinance.get("quarterlyBalanceSheet"),
         "cashFlow": yfinance.get("quarterlyCashFlow"),
     }, frequency="quarterly", currency=_clean(info.get("financialCurrency")))
     official_periods = dart_statement_periods(dart_disclosure.get("financialStatements"), dart_basis)
-    report_code = _clean(dart_basis.get("reportCode"))
-    interim = official_periods if official_periods and report_code not in {"", "11011"} else []
-    if official_periods and not interim:
-        annual = official_periods
-    elif sec_filing.get("facts"):
+    official_annual = [row for row in official_periods if _clean(row.get("frequency")) == "annual"]
+    official_interim = [row for row in official_periods if _clean(row.get("frequency")) == "interim"]
+    interim = official_interim
+    if official_annual:
+        annual = official_annual
+    if sec_filing.get("facts"):
         sec_annual = _sec_fact_periods(sec_filing.get("facts") or {}, frequency="annual")
         sec_interim = _sec_fact_periods(sec_filing.get("facts") or {}, frequency="interim")
         if sec_annual:
@@ -770,8 +936,19 @@ def build_company_knowledge(
     quarterly = enrich_financial_periods(quarterly, info)
     interim = enrich_financial_periods(interim)
     annual = [bind_financial_report_contract(row, source_references) for row in annual]
+    secondary_annual = [
+        bind_financial_report_contract(row, source_references)
+        for row in enrich_financial_periods(secondary_annual, info)
+    ]
     quarterly = [bind_financial_report_contract(row, source_references) for row in quarterly]
     interim = [bind_financial_report_contract(row, source_references) for row in interim]
+    valuation_candidates = {}
+    for row in [*annual, *secondary_annual]:
+        report = row.get("reportContract") if isinstance(row.get("reportContract"), Mapping) else {}
+        identity = _clean(report.get("observationId")) or hashlib.sha256(
+            json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()[:24]
+        valuation_candidates[identity] = row
     executives = _compact_executives(yfinance, dart_disclosure)
     company = dart_disclosure.get("company") if isinstance(dart_disclosure.get("company"), Mapping) else {}
     company_name = _clean(
@@ -860,6 +1037,7 @@ def build_company_knowledge(
         "profile": {key: value for key, value in profile.items() if _nonempty(value)},
         "valuation": {key: value for key, value in valuation.items() if value is not None},
         "financials": {"annual": annual, "interim": interim, "quarterly": quarterly},
+        "valuationFinancialCandidates": list(valuation_candidates.values()),
         "financialIntegrity": {
             "version": FINANCIAL_REPORTING_VERSION,
             "officialInputRows": len(dart_disclosure.get("financialStatements") or []),
@@ -1076,6 +1254,32 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
                         for item in eligible_periods
                     ])
         result["financials"] = financials
+        incoming_candidates = (
+            row.get("valuationFinancialCandidates")
+            if isinstance(row.get("valuationFinancialCandidates"), list)
+            else []
+        )
+        current_candidates = (
+            result.get("valuationFinancialCandidates")
+            if isinstance(result.get("valuationFinancialCandidates"), list)
+            else []
+        )
+        if incoming_candidates:
+            candidates_by_identity = {}
+            for item in [*current_candidates, *incoming_candidates]:
+                if not isinstance(item, Mapping):
+                    continue
+                candidate = {**dict(item), "frequency": item.get("frequency") or "annual"}
+                if not financial_report_contract_assessment(candidate, "annual").get("eligible"):
+                    continue
+                report = candidate.get("reportContract") if isinstance(candidate.get("reportContract"), Mapping) else {}
+                identity = _clean(report.get("observationId")) or hashlib.sha256(
+                    json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
+                ).hexdigest()[:20]
+                candidates_by_identity[identity] = candidate
+            result["valuationFinancialCandidates"] = [
+                candidates_by_identity[key] for key in sorted(candidates_by_identity)
+            ]
         if row.get("financialIntegrity"):
             result["financialIntegrity"] = dict(row["financialIntegrity"])
         incoming_governance = row.get("governance") if isinstance(row.get("governance"), Mapping) else {}
@@ -1223,6 +1427,7 @@ def company_knowledge_by_symbol(
             and _clean(item.get("subjectKey")).upper() == symbol
             and _clean(item.get("datasetId")) in {
                 "opendart.company_facts", "sec.company_facts",
+                "public-data.kr-company-financials",
                 "yfinance.fundamental", "yfinance.analyst",
             }
         ]

@@ -348,11 +348,23 @@ class OpenDartCompanyFactsAdapter:
             row = require_payload(signals, "dartDisclosures", job.subject.symbol)
         corp_code = self.corp_codes.remember(job.subject.symbol, row)
         basis = row.get("financialStatementBasis") if isinstance(row.get("financialStatementBasis"), dict) else {}
-        revision = ":".join([
+        bases = row.get("financialStatementBases") if isinstance(row.get("financialStatementBases"), list) else [basis]
+        basis_revision = "|".join(sorted(
+            str(item.get("businessYear") or "") + ":" + str(item.get("reportCode") or "")
+            for item in bases if isinstance(item, dict)
+        ))
+        statement_receipts = "|".join(sorted({
+            str(item.get("rcept_no") or "")
+            for item in row.get("financialStatements") or [] if isinstance(item, dict) and item.get("rcept_no")
+        }))
+        revision_material = ":".join([
             str(basis.get("businessYear") or ""),
             str(basis.get("reportCode") or ""),
             str(row.get("receiptNo") or ""),
+            basis_revision,
+            statement_receipts,
         ]).strip(":")
+        revision = revision_material + ":" + hashlib.sha256(revision_material.encode("utf-8")).hexdigest()[:16]
         as_of = source_as_of(row, signals.get("fetchedAt"))
         return observation(
             self.descriptor,

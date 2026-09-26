@@ -141,6 +141,25 @@ def _latest_verified_annual(company: Mapping[str, object]):
     ]
     if complete:
         row = complete[0]
+        latest_period = _timestamp(row.get("periodEnd") or row.get("period"))
+        official_complete = []
+        for candidate in complete:
+            provenance = candidate.get("metricProvenance") if isinstance(candidate.get("metricProvenance"), Mapping) else {}
+            if all(
+                isinstance(provenance.get(metric), Mapping) and bool(provenance[metric].get("official"))
+                for metric in FINANCIAL_INPUT_METRICS
+            ):
+                official_complete.append(candidate)
+        if official_complete:
+            official = official_complete[0]
+            official_period = _timestamp(official.get("periodEnd") or official.get("period"))
+            if (
+                latest_period is None
+                or official_period is None
+                or official_period >= latest_period
+                or (latest_period - official_period).days <= 62
+            ):
+                row = official
         return row, dict(financial_report_contract_assessment(row, "annual"))
     if candidates:
         row = candidates[0]

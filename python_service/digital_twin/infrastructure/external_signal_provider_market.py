@@ -748,7 +748,9 @@ class ExternalSignalMarketMixin:
         elif now.month >= 5:
             report_candidates.append((str(now.year), "11013"))
         report_candidates.append((str(now.year - 1), "11011"))
-        for business_year, report_code in report_candidates:
+        statement_rows = []
+        statement_bases = []
+        for business_year, report_code in dict.fromkeys(report_candidates):
             try:
                 statements = self.guarded_call(
                     "OpenDART",
@@ -761,7 +763,7 @@ class ExternalSignalMarketMixin:
                 )
                 rows = statements.get("list") if isinstance(statements, dict) and isinstance(statements.get("list"), list) else []
                 if rows:
-                    disclosure["financialStatements"] = [
+                    normalized_rows = [
                         {
                             key: row.get(key)
                             for key in (
@@ -779,15 +781,20 @@ class ExternalSignalMarketMixin:
                         for row in rows
                         if isinstance(row, dict)
                     ]
-                    disclosure["financialStatementBasis"] = {
+                    basis = {
                         "businessYear": business_year,
                         "reportCode": report_code,
                         "scope": "CFS",
                     }
-                    break
+                    statement_rows.extend(normalized_rows)
+                    statement_bases.append(basis)
             except Exception as error:  # noqa: BLE001 - try the annual fallback.
                 if (business_year, report_code) == report_candidates[-1]:
                     self.status_for_error(signals, "OpenDART", symbol + " financials ", error)
+        if statement_rows:
+            disclosure["financialStatements"] = statement_rows
+            disclosure["financialStatementBases"] = statement_bases
+            disclosure["financialStatementBasis"] = statement_bases[0]
 
         executive_year = str(now.year - 1)
         try:

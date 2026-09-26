@@ -136,6 +136,11 @@ class DriverDcfEvidenceService:
                 financial_candidates.extend(
                     dict(item) for item in financials.get("annual") or [] if isinstance(item, Mapping)
                 )
+                financial_candidates.extend(
+                    dict(item)
+                    for item in source_company.get("valuationFinancialCandidates") or []
+                    if isinstance(item, Mapping)
+                )
             driver_map = build_company_driver_map(
                 symbol,
                 company,

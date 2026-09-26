@@ -158,13 +158,47 @@ class DriverDcfTests(unittest.TestCase):
         self.assertEqual("calculated", result["status"])
         self.assertFalse(result["valuationDecisionEligible"])
         self.assertIn("official-financial-evidence-incomplete", result["warnings"])
+
+        source = self.evidence_inputs()
+        secondary = source["company"]["financials"]["annual"][0]
+        official = {
+            key: value for key, value in secondary.items()
+            if key not in {
+                "interestExpense", "depreciationAmortization", "changeInWorkingCapital",
+                "stockBasedCompensation", "weightedAverageSharesDiluted", "reportContract",
+            }
+        }
+        official["provider"] = "OpenDART"
+        official["officialSource"] = True
+        official["metricProvenance"] = {
+            key: {**dict(value), "provider": "OpenDART", "official": True}
+            for key, value in secondary["metricProvenance"].items()
+            if key in official
+        }
+        official = bind_financial_report_contract(official, [{
+            "datasetId": "opendart.company_facts", "subjectKey": "TEST",
+            "revisionId": "dart-r1", "payloadHash": "dart-h1",
+        }])
+        source["company"]["financials"]["annual"] = [official]
+        source["company"]["valuationFinancialCandidates"] = [official, secondary]
+
+        built = build_driver_dcf_input_bundle(**source)
+
+        self.assertEqual("ready-for-shadow", built["status"])
+        self.assertEqual("yfinance", built["observedInputs"]["annualProvider"])
+        self.assertEqual("secondary-aggregator", built["financialEvidence"]["sourceClass"])
+        self.assertEqual(7, built["financialEvidence"]["officialAlternatives"][0]["officialMetricCount"])
+        self.assertEqual([], built["financialEvidence"]["missingMetrics"])
+
         source = self.evidence_inputs()
         original = source["company"]["financials"]["annual"][0]
         official = dict(original)
         official["provider"] = "SEC EDGAR"
         official["officialSource"] = True
+        official["period"] = "2025-12-25"
+        official["periodEnd"] = "2025-12-25"
         official["metricProvenance"] = {
-            key: {**dict(value), "provider": "SEC EDGAR", "official": True}
+            key: {**dict(value), "provider": "SEC EDGAR", "period": "2025-12-25", "official": True}
             for key, value in original["metricProvenance"].items()
         }
         official.pop("reportContract", None)
@@ -172,7 +206,7 @@ class DriverDcfTests(unittest.TestCase):
             "datasetId": "sec.company_facts", "subjectKey": "TEST",
             "revisionId": "sec-r1", "payloadHash": "sec-h1",
         }])
-        source["company"]["financials"]["annual"] = [official]
+        source["company"]["financials"]["annual"] = [original, official]
         source["lineage"]["sec"] = {
             "datasetId": "sec.company_facts", "subjectKey": "TEST",
             "revisionId": "sec-r1", "payloadHash": "sec-h1",
@@ -183,6 +217,7 @@ class DriverDcfTests(unittest.TestCase):
 
         self.assertEqual("official-filing", built["financialEvidence"]["sourceClass"])
         self.assertTrue(built["financialEvidence"]["officialDecisionReady"])
+        self.assertEqual("SEC EDGAR", built["observedInputs"]["annualProvider"])
         self.assertEqual(12, built["financialEvidence"]["officialMetricCount"])
         self.assertIn("sec.company_facts", {item["datasetId"] for item in built["sourceReferences"]})
         self.assertNotIn("yfinance.fundamental", {item["datasetId"] for item in built["sourceReferences"]})

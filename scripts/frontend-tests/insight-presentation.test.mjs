@@ -49,6 +49,25 @@ test("instrument valuation separates verified changes, price-cause limits and re
   }, "USD");
   assert.match(pendingReview, /모델 검토 대기/);
   assert.doesNotMatch(pendingReview, /<em>참고용<\/em>/);
+
+  const shadowDcf = renderInstrumentInvestmentAnalysis({
+    priceExplanation: {claimStrength: "unresolved"},
+    valuationModels: [{
+      modelId: "driver-fcff-dcf", fairValue: 125.78, currency: "USD",
+      decisionEligible: false, sourceBacked: true, assumptionReviewState: "required"
+    }],
+    dcfReadiness: {status: "ready-for-shadow", assumptionReviewState: "required"},
+    impliedExpectations: {
+      status: "solved", impliedRevenueGrowthPct: 62.5, assumptionReviewState: "required",
+      fixedAssumptions: {waccPct: 16.2, terminalGrowthPct: 2.5},
+      interpretation: "고정 가정 아래의 조건부 역산값입니다."
+    }
+  }, "USD");
+  assert.match(shadowDcf, /사업 변수 현금흐름 방식/);
+  assert.match(shadowDcf, /가정 검토 필요/);
+  assert.match(shadowDcf, /5년 일정 매출 성장률/);
+  assert.match(shadowDcf, /62.5%/);
+  assert.match(shadowDcf, /시장 기대를 관측한 값이 아님/);
 });
 
 test("compact financial reviews keep all source-labelled facts separate from the new market change", () => {

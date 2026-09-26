@@ -72,8 +72,10 @@ def registered_valuation_model_rows(
     rows: List[Dict[str, object]] = []
     dcf_row = driver_dcf_valuation_row(position, external_signals or {}, settings)
     pending_dcf_row = dcf_row if dcf_row and not number(dcf_row.get("fairValue")) else {}
-    if dcf_row and number(dcf_row.get("fairValue")):
-        rows.append(dcf_row)
+    eligible_dcf_row = dcf_row if dcf_row and number(dcf_row.get("fairValue")) and dcf_row.get("valuationDecisionEligible") else {}
+    reference_dcf_row = dcf_row if dcf_row and number(dcf_row.get("fairValue")) and not dcf_row.get("valuationDecisionEligible") else {}
+    if eligible_dcf_row:
+        rows.append(eligible_dcf_row)
     for definition in sorted(DEFAULT_VALUATION_MODEL_REGISTRY, key=lambda item: item.priority):
         if not definition.supports(archetypes):
             continue
@@ -89,6 +91,10 @@ def registered_valuation_model_rows(
         row = current_price_anchor_ai_valuation_row(position, settings)
         if row:
             rows.append(_tag_fallback(row, "current-price-reference", "reference-only", 100))
+    # A shadow DCF must not displace a source-backed approved primary model.
+    # It remains visible for assumption review and reverse-expectation work.
+    if reference_dcf_row:
+        rows.append(reference_dcf_row)
     if pending_dcf_row:
         rows.append(pending_dcf_row)
     reviewed = [apply_review_override(row, settings) for row in rows]

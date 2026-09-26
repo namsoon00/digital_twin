@@ -84,6 +84,9 @@ STATEMENT_ALIASES = {
     "revenue": ("total revenue", "operating revenue", "revenue"),
     "grossProfit": ("gross profit",),
     "operatingIncome": ("operating income", "operating profit"),
+    "pretaxIncome": ("pretax income", "income before tax"),
+    "taxProvision": ("tax provision", "income tax expense"),
+    "interestExpense": ("interest expense non operating", "interest expense"),
     "netIncome": ("net income common stockholders", "net income", "net income loss"),
     "netIncomeCommon": ("net income common stockholders",),
     "basicEPS": ("basic eps", "basic earnings per share"),
@@ -97,6 +100,13 @@ STATEMENT_ALIASES = {
     "totalDebt": ("total debt",),
     "operatingCashFlow": ("operating cash flow", "cash flow from continuing operating activities"),
     "capitalExpenditure": ("capital expenditure", "capital expenditures"),
+    "depreciationAmortization": (
+        "depreciation and amortization",
+        "depreciation amortization depletion",
+        "reconciled depreciation",
+    ),
+    "changeInWorkingCapital": ("change in working capital",),
+    "stockBasedCompensation": ("stock based compensation",),
     "freeCashFlow": ("free cash flow",),
     "sharesOutstanding": ("ordinary shares number",),
     "issuedShares": ("share issued", "shares issued"),
@@ -243,9 +253,13 @@ def statement_periods(rows_by_statement: Mapping[str, object], *, frequency: str
     for field, aliases in STATEMENT_ALIASES.items():
         statements = ("incomeStatement",) if field in {
             "revenue", "grossProfit", "operatingIncome", "netIncome", "netIncomeCommon",
+            "pretaxIncome", "taxProvision", "interestExpense",
             "basicEPS", "dilutedEPS", "weightedAverageSharesBasic", "weightedAverageSharesDiluted",
         } else (
-            ("cashFlow",) if field in {"operatingCashFlow", "capitalExpenditure", "freeCashFlow"} else ("balanceSheet",)
+            ("cashFlow",) if field in {
+                "operatingCashFlow", "capitalExpenditure", "freeCashFlow",
+                "depreciationAmortization", "changeInWorkingCapital", "stockBasedCompensation",
+            } else ("balanceSheet",)
         )
         for statement in statements:
             metrics = metric_sets.get(statement, {})
@@ -279,8 +293,10 @@ def statement_periods(rows_by_statement: Mapping[str, object], *, frequency: str
                 "scope": "provider-reported", "official": False,
                 "durationBasis": (frequency if field in {
                     "revenue", "grossProfit", "operatingIncome", "netIncome", "netIncomeCommon",
+                    "pretaxIncome", "taxProvision", "interestExpense",
                     "basicEPS", "dilutedEPS", "weightedAverageSharesBasic", "weightedAverageSharesDiluted",
                     "operatingCashFlow", "capitalExpenditure", "freeCashFlow",
+                    "depreciationAmortization", "changeInWorkingCapital", "stockBasedCompensation",
                 } else "instant"),
                 **({"shareCountBasis": "issued" if period_metric_names.get(field) == "shareissued" else "ordinary-outstanding"} if field == "sharesOutstanding" else {}),
                 **({"shareCountBasis": "weighted-average-basic"} if field == "weightedAverageSharesBasic" else {}),
@@ -1253,6 +1269,7 @@ def company_prompt_context(
         "revenueGrowthPct",
         "grossProfit",
         "operatingIncome",
+        "pretaxIncome", "taxProvision", "interestExpense",
         "operatingIncomeGrowthPct",
         "operatingMarginPct",
         "netIncome",
@@ -1268,6 +1285,7 @@ def company_prompt_context(
         "totalDebt",
         "operatingCashFlow",
         "capitalExpenditure",
+        "depreciationAmortization", "changeInWorkingCapital", "stockBasedCompensation",
         "freeCashFlow",
         "freeCashFlowGrowthPct",
         "freeCashFlowMarginPct",

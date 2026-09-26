@@ -53,6 +53,16 @@ function instrumentValuationMissingLabel(value) {
     "alternative-explanations-not-checked": "시장·업종 등 다른 원인 점검",
     "independent-source-family-missing": "독립적으로 확인할 원문 출처",
     "event-after-price-reaction": "가격 움직임보다 앞선 사건"
+    ,"dcf-assumption-review-required": "DCF 장기 가정 검토"
+    ,"depreciation-amortization-missing": "감가상각비"
+    ,"working-capital-change-missing": "운전자본 투자 변화"
+    ,"stock-based-compensation-missing": "주식보상비용"
+    ,"pretax-income-missing": "세전이익"
+    ,"tax-provision-missing": "법인세 비용"
+    ,"interest-expense-missing": "이자비용"
+    ,"fy1-revenue-consensus-missing": "다음 회계연도 매출 컨센서스"
+    ,"fy2-revenue-consensus-missing": "차차기 회계연도 매출 컨센서스"
+    ,"matching-risk-free-rate-missing": "평가 통화와 일치하는 무위험금리"
   };
   return labels[String(value || "")] || String(value || "");
 }
@@ -87,6 +97,10 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
   var nextChecks = Array.isArray(analysis.nextChecks) ? analysis.nextChecks : [];
   var models = Array.isArray(analysis.valuationModels) ? analysis.valuationModels : [];
   var causeLimitations = Array.isArray(explanation.blockingReasons) ? explanation.blockingReasons : [];
+  var implied = analysis.impliedExpectations || {};
+  var readiness = analysis.dcfReadiness || {};
+  var impliedSolved = implied.status === "solved" && valuationHasNumericValue(implied.impliedRevenueGrowthPct);
+  var impliedAssumptions = implied.fixedAssumptions || {};
   return [
     '<section class="instrument-investment-analysis">',
     '<div class="instrument-valuation-section-head"><div><span class="label">COMPANY STATE</span><h4>회사 상태와 이전 판단</h4></div><span class="tone-chip ' + (change.materialChange ? 'watch' : 'hold') + '">' + escapeHtml(instrumentValuationChangeLabel(change)) + '</span></div>',
@@ -99,9 +113,13 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
     '<section><strong>가격이 움직인 이유</strong><p>' + escapeHtml(instrumentPriceExplanationLabel(explanation)) + '</p>' + (causeLimitations.length ? '<ul>' + causeLimitations.slice(0, 4).map(function (item) { return '<li>' + escapeHtml(instrumentValuationMissingLabel(item)) + '</li>'; }).join("") + '</ul>' : '') + '</section>',
     '<section><strong>평가 모델</strong>' + (models.length ? '<div>' + models.map(function (model) {
       var reviewPending = model.evidenceBacked && model.inputState === "sufficient" && model.reliabilityState === "sufficient" && ["ai_applied_pending_review", "pending_review", "pending-review"].indexOf(model.reviewStatus) >= 0;
-      return '<p><span>' + escapeHtml(instrumentValuationModelLabel({ id: model.modelId })) + '</span><b>' + escapeHtml(valuationHasNumericValue(model.fairValue) ? valuationPrice(model.fairValue, model.currency || currency) : "계산 보류") + '</b><em>' + escapeHtml(model.decisionEligible ? "판단 입력 가능" : reviewPending ? "모델 검토 대기" : "참고용") + '</em></p>';
+      var assumptionPending = model.sourceBacked && model.assumptionReviewState === "required";
+      return '<p><span>' + escapeHtml(instrumentValuationModelLabel({ id: model.modelId })) + '</span><b>' + escapeHtml(valuationHasNumericValue(model.fairValue) ? valuationPrice(model.fairValue, model.currency || currency) : "계산 보류") + '</b><em>' + escapeHtml(model.decisionEligible ? "판단 입력 가능" : reviewPending ? "모델 검토 대기" : assumptionPending ? "가정 검토 필요" : "참고용") + '</em></p>';
     }).join("") + '</div>' : '<p>비교할 평가 모델이 없습니다.</p>') + '</section>',
     '</div>',
+    (impliedSolved || readiness.status) ? '<section class="instrument-investment-next"><div class="instrument-valuation-section-head"><div><strong>현재 가격의 내재 기대</strong><p>다른 가정을 고정했을 때 현재 가격과 일치하는 조건을 역산합니다.</p></div><span class="tone-chip caution">' + escapeHtml(implied.assumptionReviewState === "required" ? "가정 검토 필요" : "조건부 계산") + '</span></div>' + (impliedSolved
+      ? '<div class="instrument-investment-facts"><p><strong>5년 일정 매출 성장률</strong><span>' + escapeHtml(valuationDecimal(implied.impliedRevenueGrowthPct, "%", 2)) + '</span><em>시장 기대를 관측한 값이 아님</em></p><p><strong>고정 WACC</strong><span>' + escapeHtml(valuationDecimal(impliedAssumptions.waccPct, "%", 2)) + '</span><em>장기성장률 ' + escapeHtml(valuationDecimal(impliedAssumptions.terminalGrowthPct, "%", 2)) + '</em></p></div><p class="instrument-valuation-explanation">' + escapeHtml(implied.interpretation || "고정 가정 아래의 조건부 역산값입니다.") + '</p>'
+      : '<p class="instrument-valuation-explanation">필수 입력이 충족되지 않아 내재 성장률을 계산하지 않았습니다.</p>') + '</section>' : '',
     '<div class="instrument-investment-next"><strong>다음 확인</strong>' + (nextChecks.length ? '<ul>' + nextChecks.slice(0, 6).map(function (item) { return '<li>' + escapeHtml(instrumentValuationMissingLabel(item)) + '</li>'; }).join("") + '</ul>' : '<p>현재 등록된 추가 확인 항목이 없습니다.</p>') + '</div>',
     '</section>'
   ].join("");

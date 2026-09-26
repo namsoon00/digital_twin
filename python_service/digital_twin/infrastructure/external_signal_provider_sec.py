@@ -346,6 +346,9 @@ class ExternalSignalSecMixin:
             ),
             "grossProfit": self.latest_sec_fact(facts, ["GrossProfit"]),
             "operatingIncome": self.latest_sec_fact(facts, ["OperatingIncomeLoss"]),
+            "pretaxIncome": self.latest_sec_fact(facts, ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"]),
+            "taxProvision": self.latest_sec_fact(facts, ["IncomeTaxExpenseBenefit"]),
+            "interestExpense": self.latest_sec_fact(facts, ["InterestExpenseNonOperating", "InterestAndDebtExpense"]),
             "assets": self.latest_sec_fact(facts, ["Assets"]),
             "liabilities": self.latest_sec_fact(facts, ["Liabilities"]),
             "equity": self.latest_sec_fact(facts, ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]),
@@ -353,6 +356,9 @@ class ExternalSignalSecMixin:
             "totalDebt": self.latest_sec_fact(facts, ["LongTermDebtAndFinanceLeaseObligationsCurrent", "LongTermDebtCurrent", "LongTermDebt"]),
             "operatingCashFlow": self.latest_sec_fact(facts, ["NetCashProvidedByUsedInOperatingActivities"]),
             "capitalExpenditure": self.latest_sec_fact(facts, ["PaymentsToAcquirePropertyPlantAndEquipment"]),
+            "depreciationAmortization": self.latest_sec_fact(facts, ["DepreciationDepletionAndAmortization", "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment"]),
+            "changeInWorkingCapital": self.latest_sec_fact(facts, ["IncreaseDecreaseInOperatingCapital", "IncreaseDecreaseInOperatingAssets", "IncreaseDecreaseInOperatingLiabilities"]),
+            "stockBasedCompensation": self.latest_sec_fact(facts, ["ShareBasedCompensation"]),
             "sharesOutstanding": self.latest_sec_fact(facts, ["EntityCommonStockSharesOutstanding"], units=("shares",)),
         }
 

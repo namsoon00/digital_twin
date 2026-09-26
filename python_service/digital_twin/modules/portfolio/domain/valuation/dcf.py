@@ -333,6 +333,10 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         "valuationReferenceOnly": not bool(result["valuationDecisionEligible"]),
         "valuationReferenceReason": "" if result["valuationDecisionEligible"] else "DCF 입력 또는 모델 승격 조건이 충족되지 않아 참고용입니다.",
         "approvalStatus": result.get("modelApprovalState"),
+        "assumptionReviewState": "complete" if result["valuationDecisionEligible"] else "required",
+        "sourceBacked": bool(result.get("sourceReferences")),
+        "inputBundleId": source.get("inputBundleId"),
+        "modelWarnings": list(result.get("warnings") or []),
         "periodCompatible": True,
         "perShare": True,
         "inputObservations": [

@@ -36,7 +36,7 @@
 - IN-08: 원본 revision과 평가 시계를 고정한 `valuation-input-bundle-v1`, 결과 ID, audit/material fingerprint 및 이전 평가 delta를 구현했다. UI·ABox·AI 작업 지문이 같은 bundle/assessment를 사용한다.
 - IN-09: 검증된 연간 재무에서 최대 3개 회사 driver를 만들고, 금리·환율은 명시적 기업 노출 revision이 있을 때만 연결한다. 현재 운영 데이터에 노출 정보가 없으면 unresolved로 남는다.
 - IN-10: 사건 시각, 조정 가격 반응, 시장·업종 비교, 독립 출처와 대안 설명을 확인하는 인과 주장 계약을 구현했다. 원인 미확인은 고객 메시지 근거로 승격되지 않는다.
-- IN-11~12: 순수 FCFF driver DCF와 동일 코어 기반 reverse DCF를 구현했다. 명시적 입력 bundle이 없는 종목에는 자동 적용하지 않으며, PER와 DCF를 평균내지 않는다.
+- IN-11~12: 순수 FCFF driver DCF와 동일 코어 기반 reverse DCF를 구현했다. NVDA 한 종목에는 시점 고정 재무·컨센서스·USD 금리 revision으로 shadow 입력 bundle을 공급하고 가정 검토 상태를 표시한다. 명시적 입력 bundle이 없는 종목에는 자동 적용하지 않으며, 검토 전 DCF가 근거 기반 PER를 밀어내거나 두 값을 평균내지 않는다.
 - IN-13~14: 평가 snapshot을 그래프·reasoning facts·실제 AI prompt에 연결하고 기존 종목 평가 API와 화면에 새 사실, 이전 판단 차이, 인과 상태, 모델별 평가, 다음 확인 항목을 추가했다.
 - IN-15: 후보 runtime 격리, 동일 frozen input 비교, 전달 capability 0, resource budget, rollback receipt를 fail-closed 계약으로 구현했다. 실제 운영 후보 승격은 수행하지 않았다.
 - IN-16: 독립 episode 단위 품질 평가와 미래 정보·불완전 replay 제외 계약을 구현했다. 독립 미래 관측이 아직 없으므로 확대 자격은 미완료다.

@@ -6,6 +6,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.portfolio.domain.valuation.dcf import calculate_driver_dcf
+from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
+from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import solve_implied_revenue_growth
+from digital_twin.modules.news_intelligence.domain.financial_reporting import FINANCIAL_REPORTING_VERSION, bind_financial_report_contract
 
 
 class DriverDcfTests(unittest.TestCase):
@@ -78,6 +81,73 @@ class DriverDcfTests(unittest.TestCase):
         self.assertEqual("calculated", result["status"])
         self.assertFalse(result["valuationDecisionEligible"])
         self.assertIn("unapproved-assumptions-present", result["warnings"])
+
+    def evidence_inputs(self):
+        row = bind_financial_report_contract({
+            "period": "2025-12-31", "periodEnd": "2025-12-31", "frequency": "annual",
+            "provider": "yfinance", "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+            "revenue": 1000, "operatingIncome": 250, "pretaxIncome": 230, "taxProvision": 46,
+            "interestExpense": 10, "depreciationAmortization": 40, "capitalExpenditure": -60,
+            "changeInWorkingCapital": -20, "stockBasedCompensation": 15, "cash": 100,
+            "totalDebt": 80, "weightedAverageSharesDiluted": 100,
+            "metricProvenance": {
+                metric: {"provider": "yfinance", "currency": "USD", "scope": "consolidated", "durationBasis": "annual"}
+                for metric in (
+                    "revenue", "operatingIncome", "pretaxIncome", "taxProvision", "interestExpense",
+                    "depreciationAmortization", "capitalExpenditure", "changeInWorkingCapital",
+                    "stockBasedCompensation", "cash", "totalDebt", "weightedAverageSharesDiluted",
+                )
+            },
+        }, [{"datasetId": "yfinance.fundamental", "subjectKey": "TEST", "revisionId": "fund-r1", "payloadHash": "fund-h1"}])
+        lineage = {
+            "fund": {"datasetId": "yfinance.fundamental", "subjectKey": "TEST", "revisionId": "fund-r1", "payloadHash": "fund-h1", "fetchedAt": "2026-01-02T00:00:00Z"},
+            "analyst": {"datasetId": "yfinance.analyst", "subjectKey": "TEST", "revisionId": "analyst-r1", "payloadHash": "analyst-h1", "fetchedAt": "2026-01-03T00:00:00Z"},
+            "macro": {"datasetId": "fred.macro", "subjectKey": "GLOBAL", "revisionId": "macro-r1", "payloadHash": "macro-h1", "fetchedAt": "2026-01-04T00:00:00Z"},
+        }
+        return {
+            "symbol": "TEST", "company": {"financials": {"annual": [row]}},
+            "overview": {"marketCapitalization": 5000, "beta": 1.2, "fetchedAt": "2026-01-03T00:00:00Z"},
+            "yfinance": {"revenueEstimate": [
+                {"period": "0y", "avg": 1100, "numberOfAnalysts": 10},
+                {"period": "+1y", "avg": 1210, "numberOfAnalysts": 11},
+            ]},
+            "macro": {"series": {"DGS10": {"value": 4.0}}}, "lineage": lineage,
+        }
+
+    def test_operational_input_builder_preserves_sources_and_requires_assumption_review(self):
+        source = self.evidence_inputs()
+        built = build_driver_dcf_input_bundle(**source, valuation_at="2026-01-04T00:00:00Z")
+
+        self.assertEqual("ready-for-shadow", built["status"])
+        self.assertEqual(3, len(built["sourceReferences"]))
+        self.assertEqual("required", built["assumptionReviewState"])
+        self.assertEqual(22, built["input"]["projectionYears"][0]["changeInWorkingCapital"])
+        result = calculate_driver_dcf(built["input"])
+        self.assertEqual("calculated", result["status"])
+        self.assertFalse(result["valuationDecisionEligible"])
+
+    def test_operational_input_builder_fails_closed_on_missing_working_capital(self):
+        source = self.evidence_inputs()
+        source["company"]["financials"]["annual"][0].pop("changeInWorkingCapital")
+        built = build_driver_dcf_input_bundle(**source)
+
+        self.assertEqual("blocked", built["status"])
+        self.assertIn("working-capital-change-missing", built["missingInputs"])
+        self.assertNotIn("input", built)
+
+    def test_shadow_input_can_reverse_solve_a_known_constant_growth_price(self):
+        source = self.evidence_inputs()
+        built = build_driver_dcf_input_bundle(**source)
+        inputs = copy.deepcopy(built["input"])
+        for year, row in enumerate(inputs["projectionYears"], start=1):
+            row["revenue"] = inputs["baseRevenue"] * (1.1 ** year)
+        target = calculate_driver_dcf(inputs)["valuePerShare"]
+        solved = solve_implied_revenue_growth(
+            built["input"], target_price=target, lower_growth_pct=0, upper_growth_pct=100,
+        )
+
+        self.assertEqual("solved", solved["status"])
+        self.assertAlmostEqual(10.0, solved["impliedRevenueGrowthPct"], places=4)
 
 
 if __name__ == "__main__":

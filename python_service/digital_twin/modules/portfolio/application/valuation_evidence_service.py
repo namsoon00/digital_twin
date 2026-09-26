@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
+from digital_twin.modules.news_intelligence.contracts import company_knowledge_by_symbol, merge_company_knowledge_rows
+from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
 from digital_twin.modules.portfolio.domain.valuation.historical_multiples import (
     build_historical_forward_multiple_observations,
     normalize_current_consensus_contract,
@@ -66,4 +68,64 @@ class HistoricalMultipleEvidenceService:
             }
         result["companyOverviews"] = overviews
         result["valuationEvidenceFeeds"] = audit
+        return result
+
+
+class DriverDcfEvidenceService:
+    """Create a source-backed shadow DCF bundle for a bounded pilot set."""
+
+    def __init__(self, settings: Mapping[str, object] = None):
+        self.settings = dict(settings or {})
+
+    def _pilot_symbols(self) -> set[str]:
+        configured = self.settings.get("valuationDriverDcfPilotSymbols")
+        if isinstance(configured, (list, tuple, set)):
+            values = configured
+        else:
+            values = str(configured or "NVDA").split(",")
+        return {str(item or "").upper().strip() for item in values if str(item or "").strip()}
+
+    def enrich(self, signals: Dict[str, object], symbols: Iterable[object]) -> Dict[str, object]:
+        result = dict(signals or {})
+        requested = sorted({str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()})
+        selected = [symbol for symbol in requested if symbol in self._pilot_symbols()]
+        if not selected:
+            return result
+
+        generated = company_knowledge_by_symbol(result, selected)
+        existing = result.get("companyKnowledge") if isinstance(result.get("companyKnowledge"), Mapping) else {}
+        company_knowledge = {str(key): value for key, value in existing.items()}
+        for symbol in selected:
+            merged = merge_company_knowledge_rows(
+                company_knowledge.get(symbol) if isinstance(company_knowledge.get(symbol), Mapping) else {},
+                generated.get(symbol) if isinstance(generated.get(symbol), Mapping) else {},
+            )
+            if merged:
+                company_knowledge[symbol] = merged
+        if company_knowledge:
+            result["companyKnowledge"] = company_knowledge
+
+        overviews = result.get("companyOverviews") if isinstance(result.get("companyOverviews"), Mapping) else {}
+        yfinance_data = result.get("yfinanceData") if isinstance(result.get("yfinanceData"), Mapping) else {}
+        lineage = result.get("externalDataLineage") if isinstance(result.get("externalDataLineage"), Mapping) else {}
+        macro = result.get("macro") if isinstance(result.get("macro"), Mapping) else {}
+        bundles = dict(result.get("driverDcfInputs") or {}) if isinstance(result.get("driverDcfInputs"), Mapping) else {}
+        readiness = dict(result.get("driverDcfReadiness") or {}) if isinstance(result.get("driverDcfReadiness"), Mapping) else {}
+        for symbol in selected:
+            built = build_driver_dcf_input_bundle(
+                symbol,
+                company_knowledge.get(symbol) if isinstance(company_knowledge.get(symbol), Mapping) else {},
+                overview=overviews.get(symbol) if isinstance(overviews.get(symbol), Mapping) else {},
+                yfinance=yfinance_data.get(symbol) if isinstance(yfinance_data.get(symbol), Mapping) else {},
+                macro=macro,
+                lineage=lineage,
+                valuation_at=result.get("fetchedAt"),
+                equity_risk_premium_pct=float(self.settings.get("valuationDriverDcfEquityRiskPremiumPct") or 5.0),
+                terminal_growth_pct=float(self.settings.get("valuationDriverDcfTerminalGrowthPct") or 2.5),
+            )
+            readiness[symbol] = {key: value for key, value in built.items() if key != "input"}
+            if isinstance(built.get("input"), Mapping):
+                bundles[symbol] = dict(built["input"])
+        result["driverDcfInputs"] = bundles
+        result["driverDcfReadiness"] = readiness
         return result

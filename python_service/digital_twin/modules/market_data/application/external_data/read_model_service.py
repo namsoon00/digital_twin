@@ -352,9 +352,10 @@ def merge_external_signal_read_models(
 class ExternalSignalsReadModelService:
     """Build the compact legacy read model from independently stored facts."""
 
-    def __init__(self, fact_store, valuation_evidence_service=None):
+    def __init__(self, fact_store, valuation_evidence_service=None, driver_dcf_evidence_service=None):
         self.fact_store = fact_store
         self.valuation_evidence_service = valuation_evidence_service
+        self.driver_dcf_evidence_service = driver_dcf_evidence_service
 
     def signals_for_subjects(self, subject_keys: Iterable[str]) -> Dict[str, object]:
         result: Dict[str, object] = {
@@ -465,6 +466,8 @@ class ExternalSignalsReadModelService:
             })
         if self.valuation_evidence_service is not None:
             result = self.valuation_evidence_service.enrich(result, requested_subjects)
+        if self.driver_dcf_evidence_service is not None:
+            result = self.driver_dcf_evidence_service.enrich(result, requested_subjects)
         result["externalDataPlatform"] = {
             "enabled": True,
             "factCount": len(rows),

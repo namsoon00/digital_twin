@@ -187,7 +187,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # protect the new accuracy-first investment-assistant boundary.
         # Three point-in-time historical multiple regressions protect look-ahead,
         # stale-consensus and comparable-sample admission boundaries.
-        self.assertLessEqual(total, 1801)
+        # Three operational DCF input regressions protect exact source lineage,
+        # missing-driver fail-closed behavior and conditional reverse solving.
+        self.assertLessEqual(total, 1804)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

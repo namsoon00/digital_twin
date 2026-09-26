@@ -153,6 +153,12 @@ class InstrumentValuationQueryService:
         }
         model_comparison = self._model_comparison(result.rows)
         implied_expectations = self._implied_expectations(external_signals, source_symbol, position.current_price)
+        readiness_rows = external_signals.get("driverDcfReadiness")
+        dcf_readiness = (
+            dict(readiness_rows.get(source_symbol))
+            if isinstance(readiness_rows, Mapping) and isinstance(readiness_rows.get(source_symbol), Mapping)
+            else {}
+        )
         current_verified = [
             {
                 "driverId": _text(item.get("driverId")),
@@ -176,6 +182,8 @@ class InstrumentValuationQueryService:
             *missing,
             *(item.get("reason") for item in driver_map.get("unresolved") or [] if isinstance(item, Mapping)),
             *(causal_attribution.get("blockingReasons") or []),
+            *(dcf_readiness.get("missingInputs") or []),
+            *(["dcf-assumption-review-required"] if dcf_readiness.get("assumptionReviewState") == "required" else []),
         ])
 
         return {
@@ -276,6 +284,7 @@ class InstrumentValuationQueryService:
                 },
                 "models": model_comparison,
                 "impliedExpectations": implied_expectations,
+                "dcfReadiness": dcf_readiness,
             },
             "companyData": {
                 "state": _text(company.get("dataState") or "unavailable"),
@@ -294,6 +303,8 @@ class InstrumentValuationQueryService:
                 "companyDrivers": driver_map,
                 "priceExplanation": causal_attribution,
                 "valuationModels": model_comparison,
+                "dcfReadiness": dcf_readiness,
+                "impliedExpectations": implied_expectations,
                 "nextChecks": next_checks,
                 "customerMessageEligible": bool(
                     change.get("materialChange")
@@ -369,6 +380,9 @@ class InstrumentValuationQueryService:
                 "inputState": _text(row.get("valuationInputState")),
                 "reliabilityState": _text(row.get("valuationReliabilityState")),
                 "evidenceBacked": bool((row.get("multipleBand") or {}).get("evidenceBacked")),
+                "sourceBacked": bool(row.get("sourceBacked") or row.get("sourceReferences")),
+                "assumptionReviewState": _text(row.get("assumptionReviewState")),
+                "warnings": list(row.get("modelWarnings") or []),
                 "blockedReasons": list(assessment.get("blockedReasons") or row.get("modelExclusionReasons") or []),
                 "comparisonPolicy": "do-not-average-model-values",
             })
@@ -384,7 +398,26 @@ class InstrumentValuationQueryService:
                 "status": "unavailable",
                 "blockedReasons": ["driver-dcf-inputs-missing"],
             }
-        return solve_implied_revenue_growth(source, target_price=current_price)
+        bracket = source.get("reverseGrowthSearchBracketPct")
+        lower = bracket[0] if isinstance(bracket, list) and len(bracket) == 2 else -50.0
+        upper = bracket[1] if isinstance(bracket, list) and len(bracket) == 2 else 100.0
+        solved = solve_implied_revenue_growth(
+            source,
+            target_price=current_price,
+            lower_growth_pct=lower,
+            upper_growth_pct=upper,
+        )
+        return {
+            **solved,
+            "inputBundleId": _text(source.get("inputBundleId")),
+            "modelApprovalState": _text(source.get("modelApprovalState")),
+            "assumptionReviewState": "required" if any(
+                _text(item.get("status")).lower() not in {"observed", "verified", "approved", "user-approved"}
+                for item in source.get("assumptions") or []
+                if isinstance(item, Mapping)
+            ) else "complete",
+            "sourceBacked": bool(source.get("sourceReferences")),
+        }
 
     def _account_state(self, requested_account_id: str):
         states = self.monitor_store.previous if self.monitor_store is not None else {}

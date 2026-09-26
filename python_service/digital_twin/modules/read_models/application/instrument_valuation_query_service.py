@@ -183,6 +183,7 @@ class InstrumentValuationQueryService:
             *(item.get("reason") for item in driver_map.get("unresolved") or [] if isinstance(item, Mapping)),
             *(causal_attribution.get("blockingReasons") or []),
             *(dcf_readiness.get("missingInputs") or []),
+            *((dcf_readiness.get("financialEvidence") or {}).get("blockingReasons") or []),
             *(["dcf-assumption-review-required"] if dcf_readiness.get("assumptionReviewState") == "required" else []),
         ])
 
@@ -382,12 +383,19 @@ class InstrumentValuationQueryService:
                 "evidenceBacked": bool((row.get("multipleBand") or {}).get("evidenceBacked")),
                 "sourceBacked": bool(row.get("sourceBacked") or row.get("sourceReferences")),
                 "assumptionReviewState": _text(row.get("assumptionReviewState")),
+                "assumptionReview": dict(row.get("assumptionReview")) if isinstance(row.get("assumptionReview"), Mapping) else {},
+                "financialEvidence": dict(row.get("financialEvidence")) if isinstance(row.get("financialEvidence"), Mapping) else {},
+                "exposureReadiness": dict(row.get("exposureReadiness")) if isinstance(row.get("exposureReadiness"), Mapping) else {},
+                "officialFinancialsReady": bool(row.get("officialFinancialsReady")),
                 "assumptions": [
                     {
                         "id": _text(item.get("id")),
                         "value": item.get("value"),
                         "unit": _text(item.get("unit")),
                         "status": _text(item.get("status")),
+                        "reviewState": _text(item.get("reviewState")),
+                        "evidenceClass": _text(item.get("evidenceClass")),
+                        "materiality": _text(item.get("materiality")),
                     }
                     for item in row.get("assumptions") or []
                     if isinstance(item, Mapping)

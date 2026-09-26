@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.modules.portfolio.domain.valuation.dcf import calculate_driver_dcf, calculate_driver_dcf_sensitivity
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
 from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import solve_implied_revenue_growth
+from digital_twin.modules.portfolio.domain.valuation.models import apply_review_override
 from digital_twin.modules.news_intelligence.domain.financial_reporting import FINANCIAL_REPORTING_VERSION, bind_financial_report_contract
 
 
@@ -30,6 +31,7 @@ class DriverDcfTests(unittest.TestCase):
             "dilutedShares": 10,
             "sbcPolicy": "expense-remains-in-ebit-and-existing-dilution-in-share-count",
             "sourceReferences": [{"datasetId": "sec.company_facts", "revisionId": "r1", "payloadHash": "h1"}],
+            "financialEvidence": {"officialDecisionReady": True, "sourceClass": "official-filing"},
             "assumptions": [
                 {"id": "wacc", "value": 10, "unit": "percent", "status": "approved"},
                 {"id": "terminal-growth", "value": 0, "unit": "percent", "status": "approved"},
@@ -90,6 +92,19 @@ class DriverDcfTests(unittest.TestCase):
         self.assertEqual("calculated", result["status"])
         self.assertFalse(result["valuationDecisionEligible"])
         self.assertIn("unapproved-assumptions-present", result["warnings"])
+        row = {
+            "symbol": "TEST", "valuationModelFamily": "driver-dcf",
+            "approvalStatus": "shadow", "valuationDecisionEligible": False,
+            "valuationInputState": "sufficient", "fairValue": 11,
+        }
+
+        reviewed = apply_review_override(
+            row,
+            {"valuationReviewOverrides": "TEST,user_approved,legacy symbol review"},
+        )
+
+        self.assertEqual("shadow", reviewed["approvalStatus"])
+        self.assertFalse(reviewed["valuationDecisionEligible"])
 
     def evidence_inputs(self):
         row = bind_financial_report_contract({
@@ -130,10 +145,44 @@ class DriverDcfTests(unittest.TestCase):
         self.assertEqual("ready-for-shadow", built["status"])
         self.assertEqual(3, len(built["sourceReferences"]))
         self.assertEqual("required", built["assumptionReviewState"])
+        self.assertEqual("secondary-aggregator", built["financialEvidence"]["sourceClass"])
+        self.assertFalse(built["financialEvidence"]["officialDecisionReady"])
+        self.assertEqual("exact-input-bundle-and-assumption-version", built["assumptionReview"]["approvalScope"])
+        self.assertFalse(built["assumptionReview"]["automaticApprovalAllowed"])
+        self.assertEqual(8, built["assumptionReview"]["pendingCount"])
         self.assertEqual(22, built["input"]["projectionYears"][0]["changeInWorkingCapital"])
         result = calculate_driver_dcf(built["input"])
         self.assertEqual("calculated", result["status"])
         self.assertFalse(result["valuationDecisionEligible"])
+        self.assertIn("official-financial-evidence-incomplete", result["warnings"])
+        source = self.evidence_inputs()
+        original = source["company"]["financials"]["annual"][0]
+        official = dict(original)
+        official["provider"] = "SEC EDGAR"
+        official["officialSource"] = True
+        official["metricProvenance"] = {
+            key: {**dict(value), "provider": "SEC EDGAR", "official": True}
+            for key, value in original["metricProvenance"].items()
+        }
+        official.pop("reportContract", None)
+        official = bind_financial_report_contract(official, [{
+            "datasetId": "sec.company_facts", "subjectKey": "TEST",
+            "revisionId": "sec-r1", "payloadHash": "sec-h1",
+        }])
+        source["company"]["financials"]["annual"] = [official]
+        source["lineage"]["sec"] = {
+            "datasetId": "sec.company_facts", "subjectKey": "TEST",
+            "revisionId": "sec-r1", "payloadHash": "sec-h1",
+            "fetchedAt": "2026-01-02T00:00:00Z",
+        }
+
+        built = build_driver_dcf_input_bundle(**source)
+
+        self.assertEqual("official-filing", built["financialEvidence"]["sourceClass"])
+        self.assertTrue(built["financialEvidence"]["officialDecisionReady"])
+        self.assertEqual(12, built["financialEvidence"]["officialMetricCount"])
+        self.assertIn("sec.company_facts", {item["datasetId"] for item in built["sourceReferences"]})
+        self.assertNotIn("yfinance.fundamental", {item["datasetId"] for item in built["sourceReferences"]})
 
     def test_operational_input_builder_fails_closed_on_missing_working_capital(self):
         source = self.evidence_inputs()

@@ -106,6 +106,11 @@ def review_overrides(settings: Dict[str, object]) -> Dict[str, Dict[str, str]]:
 
 
 def apply_review_override(row: Dict[str, object], settings: Dict[str, object]) -> Dict[str, object]:
+    # DCF approval is bound to an exact input bundle and assumption version.
+    # The legacy symbol-level override cannot prove either identity and must
+    # never promote a shadow DCF into a decision input.
+    if str(row.get("valuationModelFamily") or "").strip() == "driver-dcf":
+        return row
     symbol = str(row.get("symbol") or "").upper().strip()
     override = review_overrides(settings).get(symbol)
     if not override:

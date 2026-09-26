@@ -628,7 +628,13 @@ def add_valuation_row_concepts(
                     "value": assumption.get("value"),
                     "unit": str(assumption.get("unit") or ""),
                     "status": status,
-                    "reviewRequired": status not in {"observed", "verified", "approved", "user-approved"},
+                    "reviewState": str(assumption.get("reviewState") or ""),
+                    "evidenceClass": str(assumption.get("evidenceClass") or ""),
+                    "materiality": str(assumption.get("materiality") or ""),
+                    "reviewRequired": (
+                        str(assumption.get("reviewState") or "") == "pending"
+                        or status not in {"observed", "verified", "approved", "user-approved"}
+                    ),
                     "assumptionVersion": str(row.get("assumptionVersion") or ""),
                     "source": "driver-dcf-assumption",
                 },
@@ -644,6 +650,35 @@ def add_valuation_row_concepts(
             }
             add_relation(graph, stock_id, detail_id, "HAS_VALUATION", weight=0.82, properties=detail_props)
             add_relation(graph, parent_id, detail_id, "DERIVED_FROM_VALUATION_ASSUMPTION", weight=1.0, properties=detail_props)
+        review = row.get("assumptionReview") if isinstance(row.get("assumptionReview"), dict) else {}
+        if review:
+            review_id = add_entity(
+                graph,
+                "valuation-review",
+                str(review.get("reviewId") or (symbol + ":" + key + ":dcf-review")),
+                (position.name or symbol) + " DCF 가정 검토",
+                {
+                    "tboxClass": "UserValuationReview",
+                    "tboxClasses": ["UserValuationReview", "ValuationAssumption", "DCFValuation", "ValuationSignal"],
+                    "symbol": symbol,
+                    "reviewStatus": str(review.get("state") or "required"),
+                    "approvalScope": str(review.get("approvalScope") or ""),
+                    "subjectInputBundleId": str(review.get("subjectInputBundleId") or ""),
+                    "assumptionVersion": str(review.get("assumptionVersion") or ""),
+                    "pendingCount": int(number(review.get("pendingCount"))),
+                    "automaticApprovalAllowed": bool(review.get("automaticApprovalAllowed")),
+                    "promotionBlockers": list(review.get("promotionBlockers") or []),
+                    "requiresUserApproval": str(review.get("state") or "") != "complete",
+                    "source": "driver-dcf-assumption-review",
+                    "payload": dict(review),
+                },
+            )
+            add_relation(graph, parent_id, review_id, "AWAITS_USER_REVIEW", weight=1.0, properties={
+                **props,
+                "source": "driver-dcf-assumption-review",
+                "reviewStatus": str(review.get("state") or "required"),
+                "aiInfluenceLabel": "DCF 입력 bundle에 고정된 가정 검토",
+            })
     for index, observation in enumerate(row.get("inputObservations") or []):
         if not isinstance(observation, dict):
             continue

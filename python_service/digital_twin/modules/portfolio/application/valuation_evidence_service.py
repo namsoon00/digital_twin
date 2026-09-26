@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.modules.news_intelligence.contracts import company_knowledge_by_symbol, merge_company_knowledge_rows
+from digital_twin.modules.news_intelligence.contracts import (
+    build_company_driver_map,
+    company_knowledge_by_symbol,
+    merge_company_knowledge_rows,
+)
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
 from digital_twin.modules.portfolio.domain.valuation.historical_multiples import (
     build_historical_forward_multiple_observations,
@@ -112,13 +116,31 @@ class DriverDcfEvidenceService:
         bundles = dict(result.get("driverDcfInputs") or {}) if isinstance(result.get("driverDcfInputs"), Mapping) else {}
         readiness = dict(result.get("driverDcfReadiness") or {}) if isinstance(result.get("driverDcfReadiness"), Mapping) else {}
         for symbol in selected:
+            company = company_knowledge.get(symbol) if isinstance(company_knowledge.get(symbol), Mapping) else {}
+            financial_candidates = []
+            for source_company in (
+                existing.get(symbol) if isinstance(existing.get(symbol), Mapping) else {},
+                generated.get(symbol) if isinstance(generated.get(symbol), Mapping) else {},
+                company,
+            ):
+                financials = source_company.get("financials") if isinstance(source_company.get("financials"), Mapping) else {}
+                financial_candidates.extend(
+                    dict(item) for item in financials.get("annual") or [] if isinstance(item, Mapping)
+                )
+            driver_map = build_company_driver_map(
+                symbol,
+                company,
+                macro_context=macro,
+                fx_rates=result.get("fxRates") if isinstance(result.get("fxRates"), Mapping) else {},
+            )
             built = build_driver_dcf_input_bundle(
                 symbol,
-                company_knowledge.get(symbol) if isinstance(company_knowledge.get(symbol), Mapping) else {},
+                {**company, "valuationFinancialCandidates": financial_candidates},
                 overview=overviews.get(symbol) if isinstance(overviews.get(symbol), Mapping) else {},
                 yfinance=yfinance_data.get(symbol) if isinstance(yfinance_data.get(symbol), Mapping) else {},
                 macro=macro,
                 lineage=lineage,
+                exposure_readiness=driver_map.get("exposureReadiness") if isinstance(driver_map, Mapping) else {},
                 valuation_at=result.get("fetchedAt"),
                 equity_risk_premium_pct=float(self.settings.get("valuationDriverDcfEquityRiskPremiumPct") or 5.0),
                 terminal_growth_pct=float(self.settings.get("valuationDriverDcfTerminalGrowthPct") or 2.5),

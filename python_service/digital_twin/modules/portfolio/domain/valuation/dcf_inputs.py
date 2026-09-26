@@ -17,8 +17,17 @@ from typing import Dict, Mapping
 from digital_twin.modules.news_intelligence.contracts import financial_report_contract_assessment
 
 
-DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v1"
-DRIVER_DCF_ASSUMPTION_VERSION = "driver-dcf-shadow-assumptions-v1"
+DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v2"
+DRIVER_DCF_ASSUMPTION_VERSION = "driver-dcf-shadow-assumptions-v2"
+DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION = "driver-dcf-financial-evidence-v1"
+DRIVER_DCF_ASSUMPTION_REVIEW_VERSION = "driver-dcf-assumption-review-v1"
+
+FINANCIAL_INPUT_METRICS = (
+    "revenue", "operatingIncome", "pretaxIncome", "taxProvision", "interestExpense",
+    "depreciationAmortization", "capitalExpenditure", "changeInWorkingCapital",
+    "stockBasedCompensation", "cash", "totalDebt", "weightedAverageSharesDiluted",
+)
+OFFICIAL_FINANCIAL_DATASETS = {"sec.company_facts", "opendart.company_facts"}
 
 
 def _text(value: object) -> str:
@@ -58,7 +67,10 @@ def _latest_timestamp(values) -> str:
 
 
 def _source_references(lineage: Mapping[str, object], symbol: str) -> list[Dict[str, object]]:
-    accepted = {"yfinance.fundamental", "yfinance.analyst", "fred.macro"}
+    accepted = {
+        "sec.company_facts", "opendart.company_facts",
+        "yfinance.fundamental", "yfinance.analyst", "fred.macro",
+    }
     result = {}
     for item in (lineage or {}).values():
         if not isinstance(item, Mapping):
@@ -84,15 +96,116 @@ def _source_references(lineage: Mapping[str, object], symbol: str) -> list[Dict[
     return [result[key] for key in sorted(result)]
 
 
-def _latest_verified_annual(company: Mapping[str, object]):
+def _annual_candidates(company: Mapping[str, object]) -> list[Dict[str, object]]:
     financials = company.get("financials") if isinstance(company.get("financials"), Mapping) else {}
-    for row in financials.get("annual") or []:
+    values = [
+        *(financials.get("annual") or []),
+        *(company.get("valuationFinancialCandidates") or []),
+    ]
+    result = {}
+    for row in values:
         if not isinstance(row, Mapping):
             continue
         assessment = financial_report_contract_assessment(row, "annual")
         if assessment.get("eligible"):
-            return dict(row), dict(assessment)
+            report = row.get("reportContract") if isinstance(row.get("reportContract"), Mapping) else {}
+            identity = _text(report.get("observationId")) or _digest(row)
+            result[identity] = dict(row)
+    return sorted(
+        result.values(),
+        key=lambda item: _text(item.get("periodEnd") or item.get("period")),
+        reverse=True,
+    )
+
+
+def _latest_verified_annual(company: Mapping[str, object]):
+    candidates = _annual_candidates(company)
+    complete = [
+        row for row in candidates
+        if all(_finite(row.get(metric)) is not None for metric in FINANCIAL_INPUT_METRICS)
+    ]
+    if complete:
+        row = complete[0]
+        return row, dict(financial_report_contract_assessment(row, "annual"))
+    if candidates:
+        row = candidates[0]
+        return row, dict(financial_report_contract_assessment(row, "annual"))
     return {}, {"eligible": False, "reason": "verified-annual-report-missing"}
+
+
+def _row_source_references(row: Mapping[str, object]) -> list[Dict[str, object]]:
+    report = row.get("reportContract") if isinstance(row.get("reportContract"), Mapping) else {}
+    provider = _text(report.get("provider") or row.get("provider")).casefold()
+    allowed = (
+        OFFICIAL_FINANCIAL_DATASETS
+        if bool(row.get("officialSource")) or "sec" in provider or "dart" in provider
+        else {"yfinance.fundamental"}
+    )
+    return [
+        dict(item) for item in report.get("sourceReferences") or []
+        if isinstance(item, Mapping) and _text(item.get("datasetId")) in allowed
+        and _text(item.get("revisionId"))
+    ]
+
+
+def _financial_evidence_contract(
+    row: Mapping[str, object],
+    assessment: Mapping[str, object],
+    candidates: list[Mapping[str, object]],
+) -> Dict[str, object]:
+    provenance = row.get("metricProvenance") if isinstance(row.get("metricProvenance"), Mapping) else {}
+    official_metrics = sorted(
+        metric for metric in FINANCIAL_INPUT_METRICS
+        if isinstance(provenance.get(metric), Mapping) and bool(provenance[metric].get("official"))
+    )
+    missing_metrics = sorted(metric for metric in FINANCIAL_INPUT_METRICS if _finite(row.get(metric)) is None)
+    missing_official = sorted(set(FINANCIAL_INPUT_METRICS) - set(official_metrics))
+    references = _row_source_references(row)
+    official_references = [item for item in references if item.get("datasetId") in OFFICIAL_FINANCIAL_DATASETS]
+    if len(official_metrics) == len(FINANCIAL_INPUT_METRICS) and official_references:
+        source_class = "official-filing"
+    elif official_metrics:
+        source_class = "mixed"
+    else:
+        source_class = "secondary-aggregator"
+    alternatives = []
+    for candidate in candidates:
+        candidate_provenance = candidate.get("metricProvenance") if isinstance(candidate.get("metricProvenance"), Mapping) else {}
+        count = sum(
+            1 for metric in FINANCIAL_INPUT_METRICS
+            if isinstance(candidate_provenance.get(metric), Mapping) and candidate_provenance[metric].get("official")
+        )
+        if count:
+            alternatives.append({
+                "period": _text(candidate.get("periodEnd") or candidate.get("period")),
+                "provider": _text(candidate.get("provider")),
+                "officialMetricCount": count,
+                "requiredMetricCount": len(FINANCIAL_INPUT_METRICS),
+            })
+    blockers = []
+    if missing_metrics:
+        blockers.append("financial-input-metrics-missing")
+    if missing_official:
+        blockers.append("official-financial-metric-coverage-incomplete")
+    if not official_references:
+        blockers.append("official-financial-source-revision-missing")
+    material = {
+        "contractVersion": DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION,
+        "status": "official-ready" if not blockers else "reference-only",
+        "period": _text(assessment.get("period") or row.get("periodEnd") or row.get("period")),
+        "provider": _text(row.get("provider")),
+        "sourceClass": source_class,
+        "requiredMetricCount": len(FINANCIAL_INPUT_METRICS),
+        "officialMetricCount": len(official_metrics),
+        "officialMetrics": official_metrics,
+        "missingMetrics": missing_metrics,
+        "missingOfficialMetrics": missing_official,
+        "sourceReferences": references,
+        "officialAlternatives": alternatives,
+        "officialDecisionReady": not blockers,
+        "blockingReasons": blockers,
+    }
+    return {**material, "evidenceId": "driver-dcf-financial-evidence:" + _digest(material)[:32]}
 
 
 def _annual_currency(row: Mapping[str, object]) -> str:
@@ -119,7 +232,15 @@ def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, ob
     return result
 
 
-def _blocked(symbol: str, reasons, *, observed=None, references=None) -> Dict[str, object]:
+def _blocked(
+    symbol: str,
+    reasons,
+    *,
+    observed=None,
+    references=None,
+    financial_evidence=None,
+    exposure_readiness=None,
+) -> Dict[str, object]:
     material = {
         "contractVersion": DRIVER_DCF_INPUT_VERSION,
         "status": "blocked",
@@ -127,6 +248,8 @@ def _blocked(symbol: str, reasons, *, observed=None, references=None) -> Dict[st
         "missingInputs": sorted(set(reasons)),
         "observedInputs": dict(observed or {}),
         "sourceReferences": list(references or []),
+        "financialEvidence": dict(financial_evidence or {}),
+        "exposureReadiness": dict(exposure_readiness or {}),
         "modelApprovalState": "not-registered",
         "decisionEligible": False,
     }
@@ -141,6 +264,7 @@ def build_driver_dcf_input_bundle(
     yfinance: Mapping[str, object] = None,
     macro: Mapping[str, object] = None,
     lineage: Mapping[str, object] = None,
+    exposure_readiness: Mapping[str, object] = None,
     valuation_at: object = "",
     equity_risk_premium_pct: float = 5.0,
     terminal_growth_pct: float = 2.5,
@@ -152,7 +276,20 @@ def build_driver_dcf_input_bundle(
     yfinance = dict(yfinance or {})
     macro = dict(macro or {})
     annual, annual_assessment = _latest_verified_annual(company or {})
-    references = _source_references(lineage or {}, normalized_symbol)
+    candidates = _annual_candidates(company or {})
+    financial_evidence = _financial_evidence_contract(annual, annual_assessment, candidates)
+    lineage_references = _source_references(lineage or {}, normalized_symbol)
+    financial_references = list(financial_evidence.get("sourceReferences") or [])
+    auxiliary_references = [
+        item for item in lineage_references
+        if item.get("datasetId") in {"yfinance.analyst", "fred.macro"}
+    ]
+    references = {
+        (_text(item.get("datasetId")), _text(item.get("revisionId"))): dict(item)
+        for item in [*financial_references, *auxiliary_references]
+        if _text(item.get("datasetId")) and _text(item.get("revisionId"))
+    }
+    references = [references[key] for key in sorted(references)]
     estimates = _revenue_estimates(yfinance)
     series = macro.get("series") if isinstance(macro.get("series"), Mapping) else {}
     dgs10 = series.get("DGS10") if isinstance(series.get("DGS10"), Mapping) else {}
@@ -203,8 +340,8 @@ def build_driver_dcf_input_bundle(
         reasons.append(_text(annual_assessment.get("reason")) or "verified-annual-report-missing")
     if observed["currency"] != "USD":
         reasons.append("pilot-valuation-currency-not-supported")
-    if not any(item.get("datasetId") == "yfinance.fundamental" for item in references):
-        reasons.append("fundamental-source-revision-missing")
+    if not any(item.get("datasetId") in {"yfinance.fundamental", *OFFICIAL_FINANCIAL_DATASETS} for item in references):
+        reasons.append("financial-source-revision-missing")
     if not any(item.get("datasetId") == "yfinance.analyst" for item in references):
         reasons.append("analyst-source-revision-missing")
     if not any(item.get("datasetId") == "fred.macro" for item in references):
@@ -214,15 +351,18 @@ def build_driver_dcf_input_bundle(
         if value is None or (key in {"revenue", "dilutedShares", "marketCapitalization", "beta", "riskFreeRatePct", "fy1RevenueConsensus", "fy2RevenueConsensus"} and value <= 0):
             reasons.append(reason)
     if reasons:
-        return _blocked(normalized_symbol, reasons, observed=observed, references=references)
+        return _blocked(normalized_symbol, reasons, observed=observed, references=references,
+                        financial_evidence=financial_evidence, exposure_readiness=exposure_readiness)
 
     revenue = observed["revenue"]
     operating_margin_pct = observed["operatingIncome"] / revenue * 100.0
     if observed["pretaxIncome"] <= 0:
-        return _blocked(normalized_symbol, ["non-positive-pretax-income"], observed=observed, references=references)
+        return _blocked(normalized_symbol, ["non-positive-pretax-income"], observed=observed, references=references,
+                        financial_evidence=financial_evidence, exposure_readiness=exposure_readiness)
     tax_rate_pct = observed["taxProvision"] / observed["pretaxIncome"] * 100.0
     if tax_rate_pct < 0 or tax_rate_pct > 100:
-        return _blocked(normalized_symbol, ["effective-tax-rate-out-of-range"], observed=observed, references=references)
+        return _blocked(normalized_symbol, ["effective-tax-rate-out-of-range"], observed=observed, references=references,
+                        financial_evidence=financial_evidence, exposure_readiness=exposure_readiness)
 
     depreciation_ratio = observed["depreciationAmortization"] / revenue
     capex_ratio = abs(observed["capitalExpenditureReported"]) / revenue
@@ -266,16 +406,16 @@ def build_driver_dcf_input_bundle(
         })
 
     assumptions = [
-        {"id": "fy1-revenue-consensus", "value": fy1, "unit": observed["currency"], "status": "observed"},
-        {"id": "fy2-revenue-consensus", "value": fy2, "unit": observed["currency"], "status": "observed"},
-        {"id": "equity-risk-premium", "value": float(equity_risk_premium_pct), "unit": "percent", "status": "candidate"},
-        {"id": "wacc", "value": round(wacc_pct, 8), "unit": "percent", "status": "candidate"},
-        {"id": "terminal-growth", "value": float(terminal_growth_pct), "unit": "percent", "status": "candidate"},
-        {"id": "years-3-to-5-growth-fade", "value": fy2_growth_pct, "unit": "percent-start", "status": "candidate"},
-        {"id": "constant-operating-margin", "value": round(operating_margin_pct, 8), "unit": "percent", "status": "candidate"},
-        {"id": "constant-reinvestment-ratios", "value": True, "unit": "policy", "status": "candidate"},
-        {"id": "preferred-equity-zero", "value": 0, "unit": observed["currency"], "status": "candidate"},
-        {"id": "non-controlling-interest-zero", "value": 0, "unit": observed["currency"], "status": "candidate"},
+        {"id": "fy1-revenue-consensus", "value": fy1, "unit": observed["currency"], "status": "observed", "reviewState": "not-required", "evidenceClass": "analyst-consensus", "materiality": "high"},
+        {"id": "fy2-revenue-consensus", "value": fy2, "unit": observed["currency"], "status": "observed", "reviewState": "not-required", "evidenceClass": "analyst-consensus", "materiality": "high"},
+        {"id": "equity-risk-premium", "value": float(equity_risk_premium_pct), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "policy-assumption", "materiality": "high"},
+        {"id": "wacc", "value": round(wacc_pct, 8), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "derived-with-policy-input", "materiality": "high"},
+        {"id": "terminal-growth", "value": float(terminal_growth_pct), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "policy-assumption", "materiality": "high"},
+        {"id": "years-3-to-5-growth-fade", "value": fy2_growth_pct, "unit": "percent-start", "status": "candidate", "reviewState": "pending", "evidenceClass": "forecast-policy", "materiality": "high"},
+        {"id": "constant-operating-margin", "value": round(operating_margin_pct, 8), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "forecast-policy", "materiality": "high"},
+        {"id": "constant-reinvestment-ratios", "value": True, "unit": "policy", "status": "candidate", "reviewState": "pending", "evidenceClass": "forecast-policy", "materiality": "high"},
+        {"id": "preferred-equity-zero", "value": 0, "unit": observed["currency"], "status": "candidate", "reviewState": "pending", "evidenceClass": "unverified-zero-balance", "materiality": "medium"},
+        {"id": "non-controlling-interest-zero", "value": 0, "unit": observed["currency"], "status": "candidate", "reviewState": "pending", "evidenceClass": "unverified-zero-balance", "materiality": "medium"},
     ]
     source_dates = [item.get("fetchedAt") or item.get("sourceAsOf") for item in references]
     effective_valuation_at = _text(valuation_at) or _latest_timestamp(source_dates)
@@ -302,6 +442,8 @@ def build_driver_dcf_input_bundle(
         "maxTerminalValueSharePct": 85.0,
         "reverseGrowthSearchBracketPct": [0.0, 100.0],
         "sourceReferences": references,
+        "financialEvidence": financial_evidence,
+        "exposureReadiness": dict(exposure_readiness or {}),
         "assumptions": assumptions,
         "projectionYears": projection_years,
         "observedInputs": observed,
@@ -312,14 +454,41 @@ def build_driver_dcf_input_bundle(
             "futureYears": "FY1/FY2 consensus followed by a versioned fade to terminal growth",
         },
     }
+    input_bundle_id = "driver-dcf-input:" + _digest(input_bundle)[:32]
+    pending_assumptions = [item for item in assumptions if item.get("reviewState") == "pending"]
+    review_material = {
+        "contractVersion": DRIVER_DCF_ASSUMPTION_REVIEW_VERSION,
+        "subjectInputBundleId": input_bundle_id,
+        "state": "required" if pending_assumptions else "complete",
+        "approvalScope": "exact-input-bundle-and-assumption-version",
+        "automaticApprovalAllowed": False,
+        "assumptionVersion": DRIVER_DCF_ASSUMPTION_VERSION,
+        "pendingCount": len(pending_assumptions),
+        "requiredAssumptionIds": [item["id"] for item in pending_assumptions],
+        "promotionBlockers": [
+            *(["official-financial-evidence-incomplete"] if not financial_evidence.get("officialDecisionReady") else []),
+            *(["assumptions-not-reviewed"] if pending_assumptions else []),
+            "model-release-not-approved",
+        ],
+        "items": assumptions,
+    }
+    assumption_review = {
+        **review_material,
+        "reviewId": "driver-dcf-assumption-review:" + _digest(review_material)[:32],
+    }
+    input_bundle["assumptionReview"] = assumption_review
+    input_bundle["inputBundleId"] = input_bundle_id
     material = {
         "contractVersion": DRIVER_DCF_INPUT_VERSION,
         "status": "ready-for-shadow",
         "symbol": normalized_symbol,
-        "inputBundleId": "driver-dcf-input:" + _digest(input_bundle)[:32],
+        "inputBundleId": input_bundle_id,
         "missingInputs": [],
         "observedInputs": observed,
         "sourceReferences": references,
+        "financialEvidence": financial_evidence,
+        "exposureReadiness": dict(exposure_readiness or {}),
+        "assumptionReview": assumption_review,
         "assumptionReviewState": "required",
         "modelApprovalState": "shadow",
         "decisionEligible": False,
@@ -327,12 +496,14 @@ def build_driver_dcf_input_bundle(
     return {
         **material,
         "readinessId": "driver-dcf-readiness:" + _digest(material)[:32],
-        "input": {**input_bundle, "inputBundleId": material["inputBundleId"]},
+        "input": input_bundle,
     }
 
 
 __all__ = [
     "DRIVER_DCF_ASSUMPTION_VERSION",
+    "DRIVER_DCF_ASSUMPTION_REVIEW_VERSION",
+    "DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION",
     "DRIVER_DCF_INPUT_VERSION",
     "build_driver_dcf_input_bundle",
 ]

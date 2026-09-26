@@ -55,6 +55,9 @@ test("instrument valuation separates verified changes, price-cause limits and re
     valuationModels: [{
       modelId: "driver-fcff-dcf", fairValue: 125.78, currency: "USD",
       decisionEligible: false, sourceBacked: true, assumptionReviewState: "required",
+      financialEvidence: {sourceClass: "secondary-aggregator", officialDecisionReady: false, officialMetricCount: 0, requiredMetricCount: 12},
+      exposureReadiness: {currency: {status: "unresolved"}, debtRate: {status: "unresolved"}},
+      assumptionReview: {state: "required", pendingCount: 2},
       assumptions: [
         {id: "fy1-revenue-consensus", value: 100, unit: "USD", status: "observed"},
         {id: "wacc", value: 16.2, unit: "percent", status: "candidate"},
@@ -65,7 +68,12 @@ test("instrument valuation separates verified changes, price-cause limits and re
         rows: [{isBase: true, terminalValueSharePct: 66.4}]
       }
     }],
-    dcfReadiness: {status: "ready-for-shadow", assumptionReviewState: "required"},
+    dcfReadiness: {
+      status: "ready-for-shadow", assumptionReviewState: "required",
+      financialEvidence: {sourceClass: "secondary-aggregator", officialDecisionReady: false, officialMetricCount: 0, requiredMetricCount: 12},
+      exposureReadiness: {currency: {status: "unresolved"}, debtRate: {status: "unresolved"}},
+      assumptionReview: {state: "required", pendingCount: 2}
+    },
     impliedExpectations: {
       status: "solved", impliedRevenueGrowthPct: 62.5, assumptionReviewState: "required",
       fixedAssumptions: {waccPct: 16.2, terminalGrowthPct: 2.5},
@@ -73,6 +81,11 @@ test("instrument valuation separates verified changes, price-cause limits and re
     }
   }, "USD");
   assert.match(shadowDcf, /사업 변수 현금흐름 방식/);
+  assert.match(shadowDcf, /DCF 신뢰도 점검/);
+  assert.match(shadowDcf, /집계 재무/);
+  assert.match(shadowDcf, /0\/12개 필수 항목 공식 확인/);
+  assert.match(shadowDcf, /기업별 노출 자료 없음/);
+  assert.match(shadowDcf, /현재 입력 bundle에만 유효/);
   assert.match(shadowDcf, /가정 검토 필요/);
   assert.match(shadowDcf, /5년 일정 매출 성장률/);
   assert.match(shadowDcf, /62.5%/);

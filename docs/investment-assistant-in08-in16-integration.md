@@ -205,3 +205,22 @@ FY1·FY2 consensus와 검토가 필요한 ERP, WACC, terminal growth, 성장 fad
 화면은 조건별 가치 범위, terminal value 비중과 검토 대기 가정을 함께 표시하므로 숫자 하나만 보고
 정확한 적정가로 오해하지 않게 한다.
 승인되지 않은 shadow DCF는 `HAS_VALUATION` 참고 관계에는 남지만 `ActiveValuation`으로 투영하지 않는다.
+
+### 2026-09-26 DCF 근거 준비도와 bundle 고정 검토 계약
+
+DCF 계산 가능 상태와 투자 판단 사용 가능 상태를 분리했다. 연간 재무 report contract가 유효해도
+집계 공급자 자료이면 `secondary-aggregator`로 표시한다. DCF에 필요한 12개 재무 항목이 동일한
+공식 SEC/OpenDART report revision에서 확인되고 정확한 source revision이 연결된 경우에만
+`officialDecisionReady=true`가 된다. 더 최근의 집계 재무와 더 오래된 공식 재무가 함께 있으면 두
+후보를 보존해 평가하되 서로 다른 기간의 값을 한 행으로 합치지 않는다. 계산은 완전한 최신 행으로
+참고값을 만들 수 있지만, 공식 근거 미충족 경고와 판단 차단은 유지한다.
+
+기업 환율 노출과 부채 금리 구조는 각각 `company-macro-exposure-readiness-v1` 계약으로 분리한다.
+공식 revision이 있는 기업 노출과 해당 시장 지표가 모두 연결돼야 `verified-linked`가 된다. 환율이나
+금리 시계열만 존재하면 기업 영향으로 바꾸지 않고 `unresolved`로 남긴다. 화면은 재무 입력의 공식
+확인 수, 환율 노출, 금리 노출, 검토 대기 가정 수를 한 구역에서 보여준다.
+
+DCF 후보 가정은 `driver-dcf-assumption-review-v1`로 현재 `inputBundleId`와 assumption version에
+고정된다. 검토는 자동 승인할 수 없고, 과거의 종목 단위 `valuationReviewOverrides`는 DCF를 승격시키지
+못한다. 각 가정의 evidence class, materiality, review state와 승격 차단 사유를 UI read model과 ABox의
+`UserValuationReview`에 같은 identity로 투영한다. 이 계약은 승인 절차의 입력이며 승인 자체는 아니다.

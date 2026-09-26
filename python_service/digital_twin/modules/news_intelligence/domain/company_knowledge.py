@@ -1023,6 +1023,18 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
                 **current,
                 **{key: value for key, value in incoming.items() if _nonempty(value)},
             }
+        incoming_exposures = row.get("businessExposures") if isinstance(row.get("businessExposures"), list) else []
+        current_exposures = result.get("businessExposures") if isinstance(result.get("businessExposures"), list) else []
+        if incoming_exposures:
+            by_identity = {}
+            for item in [*current_exposures, *incoming_exposures]:
+                if not isinstance(item, Mapping):
+                    continue
+                identity = _clean(item.get("exposureId")) or hashlib.sha256(
+                    json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
+                ).hexdigest()[:20]
+                by_identity[identity] = dict(item)
+            result["businessExposures"] = [by_identity[key] for key in sorted(by_identity)]
         incoming_units = row.get("valuationUnits") if isinstance(row.get("valuationUnits"), Mapping) else {}
         if incoming_units:
             result["valuationUnits"] = {

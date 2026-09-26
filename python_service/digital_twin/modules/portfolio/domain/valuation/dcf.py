@@ -12,8 +12,8 @@ import math
 from typing import Dict, Mapping
 
 
-DRIVER_DCF_VERSION = "driver-fcff-dcf-v1"
-DRIVER_DCF_SENSITIVITY_VERSION = "driver-fcff-dcf-sensitivity-v1"
+DRIVER_DCF_VERSION = "driver-fcff-dcf-v2"
+DRIVER_DCF_SENSITIVITY_VERSION = "driver-fcff-dcf-sensitivity-v2"
 SUPPORTED_APPLICABILITY = {"non-financial-company", "operating-company"}
 
 
@@ -96,6 +96,9 @@ def calculate_driver_dcf(inputs: Mapping[str, object]) -> Dict[str, object]:
     sbc_policy = _text(source.get("sbcPolicy"))
     projection_rows = [dict(item) for item in source.get("projectionYears") or [] if isinstance(item, Mapping)]
     references = _source_references(source.get("sourceReferences") or [])
+    financial_evidence = dict(source.get("financialEvidence") or {}) if isinstance(source.get("financialEvidence"), Mapping) else {}
+    exposure_readiness = dict(source.get("exposureReadiness") or {}) if isinstance(source.get("exposureReadiness"), Mapping) else {}
+    assumption_review = dict(source.get("assumptionReview") or {}) if isinstance(source.get("assumptionReview"), Mapping) else {}
 
     if not symbol:
         reasons.append("symbol-missing")
@@ -119,6 +122,8 @@ def calculate_driver_dcf(inputs: Mapping[str, object]) -> Dict[str, object]:
         reasons.append("sbc-policy-missing")
     if not references:
         warnings.append("exact-source-revisions-missing")
+    if not financial_evidence.get("officialDecisionReady"):
+        warnings.append("official-financial-evidence-incomplete")
 
     normalized_rows = []
     for index, row in enumerate(projection_rows, start=1):
@@ -212,6 +217,7 @@ def calculate_driver_dcf(inputs: Mapping[str, object]) -> Dict[str, object]:
     decision_eligible = bool(
         not reasons
         and references
+        and financial_evidence.get("officialDecisionReady") is True
         and not unapproved_assumptions
         and approval in {"qualified", "approved", "limited-approved"}
         and terminal_share_pct <= max_terminal_share
@@ -246,6 +252,9 @@ def calculate_driver_dcf(inputs: Mapping[str, object]) -> Dict[str, object]:
         "valuePerShare": round(per_share, 8),
         "sbcPolicy": sbc_policy,
         "sourceReferences": references,
+        "financialEvidence": financial_evidence,
+        "exposureReadiness": exposure_readiness,
+        "assumptionReview": assumption_review,
         "assumptions": assumptions,
         "projectionYears": trace_rows,
         "blockedReasons": sorted(set(reasons)),
@@ -374,6 +383,9 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
             "valuationReferenceOnly": True,
             "missingInputs": list(result.get("blockedReasons") or []),
             "modelExclusionReasons": list(result.get("blockedReasons") or []),
+            "assumptionReview": dict(source.get("assumptionReview") or {}),
+            "financialEvidence": dict(source.get("financialEvidence") or {}),
+            "exposureReadiness": dict(source.get("exposureReadiness") or {}),
             "dcfAssessment": result,
         }
     value = float(result["valuePerShare"])
@@ -397,14 +409,19 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
             "status": "blocked",
             "blockedReasons": ["invalid-target-price"],
         }
-    assumption_review_state = "complete" if result["valuationDecisionEligible"] else "required"
+    assumption_review = dict(source.get("assumptionReview") or {}) if isinstance(source.get("assumptionReview"), Mapping) else {}
+    assumption_review_state = _text(assumption_review.get("state")) or ("complete" if result["valuationDecisionEligible"] else "required")
     implied_expectations = {
         **implied_expectations,
         "inputBundleId": source.get("inputBundleId"),
         "dcfAssessmentId": result.get("assessmentId"),
         "modelApprovalState": result.get("modelApprovalState"),
         "assumptionReviewState": assumption_review_state,
+        "assumptionReview": assumption_review,
+        "financialEvidence": dict(result.get("financialEvidence") or {}),
+        "exposureReadiness": dict(result.get("exposureReadiness") or {}),
         "sourceBacked": bool(result.get("sourceReferences")),
+        "officialFinancialsReady": bool((result.get("financialEvidence") or {}).get("officialDecisionReady")),
     }
     dcf_assessment = {
         **result,
@@ -439,6 +456,10 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         "approvalStatus": result.get("modelApprovalState"),
         "assumptionVersion": source.get("assumptionVersion"),
         "assumptionReviewState": assumption_review_state,
+        "assumptionReview": assumption_review,
+        "financialEvidence": dict(result.get("financialEvidence") or {}),
+        "exposureReadiness": dict(result.get("exposureReadiness") or {}),
+        "officialFinancialsReady": bool((result.get("financialEvidence") or {}).get("officialDecisionReady")),
         "sourceBacked": bool(result.get("sourceReferences")),
         "inputBundleId": source.get("inputBundleId"),
         "modelWarnings": list(result.get("warnings") or []),
@@ -452,7 +473,11 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
                 "period": str(item["year"]),
                 "currency": result["currency"],
                 "sourceReferences": result["sourceReferences"],
-                "validationState": "verified" if result["sourceReferences"] else "unverified",
+                "validationState": (
+                    "verified-official"
+                    if (result.get("financialEvidence") or {}).get("officialDecisionReady")
+                    else "verified-secondary" if result["sourceReferences"] else "unverified"
+                ),
             }
             for item in result["projectionYears"]
         ],

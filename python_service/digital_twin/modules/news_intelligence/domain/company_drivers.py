@@ -65,6 +65,13 @@ def _driver(
     report = row.get("reportContract") if isinstance(row.get("reportContract"), Mapping) else {}
     provenance = row.get("metricProvenance") if isinstance(row.get("metricProvenance"), Mapping) else {}
     metric_source = provenance.get(metric) if isinstance(provenance.get(metric), Mapping) else {}
+    report_references = [
+        item for item in report.get("sourceReferences") or [] if isinstance(item, Mapping)
+    ]
+    official = bool(
+        metric_source.get("official")
+        or any(item.get("datasetId") in {"sec.company_facts", "opendart.company_facts"} for item in report_references)
+    )
     reported_value = value
     if normalize_outflow:
         value = abs(value)
@@ -80,13 +87,15 @@ def _driver(
         "segment": _text(metric_source.get("segment")),
         "modelInput": model_input,
         "observationId": _text(report.get("observationId")),
-        "sourceReferences": [dict(item) for item in report.get("sourceReferences") or [] if isinstance(item, Mapping)],
+        "sourceReferences": [dict(item) for item in report_references],
         "sourceLocation": {
             key: metric_source.get(key)
             for key in ("statement", "tag", "field", "line", "section")
             if metric_source.get(key) not in (None, "")
         },
         "validationState": "verified",
+        "sourceClass": "official-filing" if official else "secondary-provider",
+        "evidenceTier": "official" if official else "aggregated-secondary",
         "dependencyKey": "company-driver:" + symbol + ":" + driver_id,
     }
     if normalize_outflow:
@@ -200,6 +209,46 @@ def build_company_driver_map(
             "availableMarketFacts": sorted(_text(key) for key in (macro.get("series") or {})),
         })
 
+    def exposure_state(kind: str, accepted_types: set[str]) -> Dict[str, object]:
+        relevant = [item for item in exposures if item.get("type") in accepted_types]
+        verified = [item for item in relevant if item.get("validationState") == "verified"]
+        relevant_ids = {item.get("exposureId") for item in relevant}
+        relevant_links = [item for item in links if item.get("exposureId") in relevant_ids]
+        linked = [item for item in relevant_links if item.get("state") == "linked"]
+        if verified and len(linked) == len(verified):
+            status = "verified-linked"
+            blockers = []
+        elif verified:
+            status = "verified-exposure-market-link-missing"
+            blockers = [kind + "-market-observation-missing"]
+        elif relevant:
+            status = "assumption-only"
+            blockers = [kind + "-official-source-missing"]
+        else:
+            status = "unresolved"
+            blockers = [
+                "company-currency-exposure-missing"
+                if kind == "currency" else "company-debt-rate-exposure-missing"
+            ]
+        return {
+            "status": status,
+            "exposureCount": len(relevant),
+            "verifiedExposureCount": len(verified),
+            "linkedExposureCount": len(linked),
+            "blockingReasons": blockers,
+            "decisionEligible": status == "verified-linked",
+        }
+
+    exposure_readiness = {
+        "contractVersion": "company-macro-exposure-readiness-v1",
+        "currency": exposure_state("currency", {"fx-revenue", "fx-cost", "fx-debt"}),
+        "debtRate": exposure_state("debt-rate", {"floating-rate-debt", "fixed-rate-debt"}),
+    }
+    exposure_readiness["macroImpactEligible"] = bool(
+        exposure_readiness["currency"]["decisionEligible"]
+        or exposure_readiness["debtRate"]["decisionEligible"]
+    )
+
     material = {
         "contractVersion": COMPANY_DRIVER_MAP_VERSION,
         "symbol": normalized_symbol,
@@ -207,7 +256,13 @@ def build_company_driver_map(
         "exposures": exposures,
         "macroLinks": links,
         "unresolved": unresolved,
+        "exposureReadiness": exposure_readiness,
         "annualReportState": "verified" if annual_assessment.get("eligible") else "unavailable",
+        "annualReportSourceClass": (
+            "official-filing"
+            if any(item.get("sourceClass") == "official-filing" for item in drivers)
+            else "secondary-provider" if annual_assessment.get("eligible") else "unavailable"
+        ),
         "annualReportReason": _text(annual_assessment.get("reason")),
     }
     return {

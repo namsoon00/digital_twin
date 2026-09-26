@@ -63,6 +63,10 @@ function instrumentValuationMissingLabel(value) {
     ,"fy1-revenue-consensus-missing": "다음 회계연도 매출 컨센서스"
     ,"fy2-revenue-consensus-missing": "차차기 회계연도 매출 컨센서스"
     ,"matching-risk-free-rate-missing": "평가 통화와 일치하는 무위험금리"
+    ,"official-financial-evidence-incomplete": "공식 공시 재무 입력 확인"
+    ,"official-financial-metric-coverage-incomplete": "공식 공시의 DCF 필수 재무 항목"
+    ,"official-financial-source-revision-missing": "공식 재무 원문의 정확한 revision"
+    ,"financial-input-metrics-missing": "DCF 필수 재무 항목"
   };
   return labels[String(value || "")] || String(value || "");
 }
@@ -90,6 +94,16 @@ function instrumentDcfAssumptionLabel(value) {
     "non-controlling-interest-zero": "비지배지분 0 가정"
   };
   return labels[String(value || "")] || String(value || "");
+}
+
+function instrumentExposureStateLabel(value) {
+  var labels = {
+    "verified-linked": "원문과 시장 지표 연결 완료",
+    "verified-exposure-market-link-missing": "기업 노출 확인 · 시장 지표 연결 대기",
+    "assumption-only": "가정만 있음 · 원문 확인 필요",
+    unresolved: "기업별 노출 자료 없음"
+  };
+  return labels[String(value || "")] || "확인 상태 없음";
 }
 
 function instrumentPriceExplanationLabel(explanation) {
@@ -121,6 +135,11 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
   var sensitivityRows = Array.isArray(sensitivity.rows) ? sensitivity.rows : [];
   var baseSensitivity = sensitivityRows.find(function (row) { return row && row.isBase; }) || {};
   var dcfAssumptions = Array.isArray(dcfModel.assumptions) ? dcfModel.assumptions : [];
+  var financialEvidence = readiness.financialEvidence || dcfModel.financialEvidence || {};
+  var exposureReadiness = readiness.exposureReadiness || dcfModel.exposureReadiness || {};
+  var currencyExposure = exposureReadiness.currency || {};
+  var debtRateExposure = exposureReadiness.debtRate || {};
+  var assumptionReview = readiness.assumptionReview || dcfModel.assumptionReview || {};
   var pendingDcfAssumptions = dcfAssumptions.filter(function (item) {
     return ["observed", "verified", "approved", "user-approved"].indexOf(String((item || {}).status || "").toLowerCase()) < 0;
   });
@@ -140,6 +159,7 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
       return '<p><span>' + escapeHtml(instrumentValuationModelLabel({ id: model.modelId })) + '</span><b>' + escapeHtml(valuationHasNumericValue(model.fairValue) ? valuationPrice(model.fairValue, model.currency || currency) : "계산 보류") + '</b><em>' + escapeHtml(model.decisionEligible ? "판단 입력 가능" : reviewPending ? "모델 검토 대기" : assumptionPending ? "가정 검토 필요" : "참고용") + '</em></p>';
     }).join("") + '</div>' : '<p>비교할 평가 모델이 없습니다.</p>') + '</section>',
     '</div>',
+    (readiness.status || dcfModel.modelId) ? '<section class="instrument-investment-next"><div class="instrument-valuation-section-head"><div><strong>DCF 신뢰도 점검</strong><p>계산 가능 여부와 투자 판단에 쓸 수 있는 근거를 구분합니다.</p></div><span class="tone-chip ' + (financialEvidence.officialDecisionReady ? 'hold' : 'caution') + '">' + escapeHtml(financialEvidence.officialDecisionReady ? "공식 재무 확인" : "참고 계산") + '</span></div><div class="instrument-investment-facts"><p><strong>재무 입력</strong><span>' + escapeHtml(financialEvidence.sourceClass === "official-filing" ? "공식 공시" : financialEvidence.sourceClass === "mixed" ? "공식·보조 혼합" : "집계 재무") + '</span><em>' + escapeHtml(String(financialEvidence.officialMetricCount == null ? 0 : financialEvidence.officialMetricCount) + "/" + String(financialEvidence.requiredMetricCount == null ? 0 : financialEvidence.requiredMetricCount) + "개 필수 항목 공식 확인") + '</em></p><p><strong>환율 노출</strong><span>' + escapeHtml(instrumentExposureStateLabel(currencyExposure.status)) + '</span><em>기업 매출·비용·부채 기준</em></p><p><strong>금리 노출</strong><span>' + escapeHtml(instrumentExposureStateLabel(debtRateExposure.status)) + '</span><em>고정·변동금리 부채 기준</em></p><p><strong>가정 검토</strong><span>' + escapeHtml(String(assumptionReview.pendingCount == null ? pendingDcfAssumptions.length : assumptionReview.pendingCount) + "개 대기") + '</span><em>현재 입력 bundle에만 유효</em></p></div><p class="instrument-valuation-explanation">공식 재무와 기업별 노출이 확인되지 않은 값은 계산에 표시되더라도 매수·매도 판단에는 사용하지 않습니다.</p></section>' : '',
     (impliedSolved || readiness.status) ? '<section class="instrument-investment-next"><div class="instrument-valuation-section-head"><div><strong>현재 가격의 내재 기대</strong><p>다른 가정을 고정했을 때 현재 가격과 일치하는 조건을 역산합니다.</p></div><span class="tone-chip caution">' + escapeHtml(implied.assumptionReviewState === "required" ? "가정 검토 필요" : "조건부 계산") + '</span></div>' + (impliedSolved
       ? '<div class="instrument-investment-facts"><p><strong>5년 일정 매출 성장률</strong><span>' + escapeHtml(valuationDecimal(implied.impliedRevenueGrowthPct, "%", 2)) + '</span><em>시장 기대를 관측한 값이 아님</em></p><p><strong>고정 WACC</strong><span>' + escapeHtml(valuationDecimal(impliedAssumptions.waccPct, "%", 2)) + '</span><em>장기성장률 ' + escapeHtml(valuationDecimal(impliedAssumptions.terminalGrowthPct, "%", 2)) + '</em></p></div><p class="instrument-valuation-explanation">' + escapeHtml(implied.interpretation || "고정 가정 아래의 조건부 역산값입니다.") + '</p>'
       : '<p class="instrument-valuation-explanation">필수 입력이 충족되지 않아 내재 성장률을 계산하지 않았습니다.</p>') + '</section>' : '',
@@ -149,4 +169,4 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
   ].join("");
 }
 
-export { instrumentDcfAssumptionLabel, instrumentValuationMissingLabel, instrumentValuationModelLabel, renderInstrumentInvestmentAnalysis };
+export { instrumentDcfAssumptionLabel, instrumentExposureStateLabel, instrumentValuationMissingLabel, instrumentValuationModelLabel, renderInstrumentInvestmentAnalysis };

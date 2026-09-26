@@ -46,6 +46,16 @@ class ValuationSnapshotTests(unittest.TestCase):
             "valuationModelFamily": "driver-dcf",
             "assumptionVersion": "driver-dcf-shadow-assumptions-v1",
             "assumptions": [{"id": "wacc", "value": 10, "unit": "percent", "status": "candidate"}],
+            "assumptionReview": {
+                "reviewId": "driver-dcf-assumption-review:one",
+                "state": "required",
+                "approvalScope": "exact-input-bundle-and-assumption-version",
+                "subjectInputBundleId": "driver-dcf-input:one",
+                "assumptionVersion": "driver-dcf-shadow-assumptions-v1",
+                "pendingCount": 1,
+                "automaticApprovalAllowed": False,
+                "promotionBlockers": ["assumptions-not-reviewed"],
+            },
             "sensitivity": {
                 "status": "calculated", "sensitivityId": "driver-dcf-sensitivity:one",
                 "valueRange": {"low": 35, "high": 47, "currency": "USD"},
@@ -140,6 +150,9 @@ class ValuationSnapshotTests(unittest.TestCase):
         assumption = next(item for item in graph.entities if item.kind == "valuation-assumption-detail")
         self.assertEqual("wacc", assumption.properties["assumptionId"])
         self.assertTrue(assumption.properties["reviewRequired"])
+        review = next(item for item in graph.entities if item.kind == "valuation-review")
+        self.assertEqual("driver-dcf-input:one", review.properties["subjectInputBundleId"])
+        self.assertFalse(review.properties["automaticApprovalAllowed"])
         self.assertFalse(any(item.kind == "active-valuation" for item in graph.entities))
         self.assertTrue(any(
             relation.relation_type == "USES_VALUATION_INPUT" and relation.target == bundle.entity_id

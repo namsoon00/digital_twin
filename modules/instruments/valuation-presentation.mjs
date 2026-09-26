@@ -78,6 +78,20 @@ function instrumentValuationChangeLabel(change) {
   return labels[String((change || {}).state || "")] || "이전 평가 확인 필요";
 }
 
+function instrumentDcfAssumptionLabel(value) {
+  var labels = {
+    "equity-risk-premium": "주식 위험 프리미엄",
+    wacc: "가중평균자본비용",
+    "terminal-growth": "영구성장률",
+    "years-3-to-5-growth-fade": "3~5년 성장률 둔화 경로",
+    "constant-operating-margin": "영업이익률 유지",
+    "constant-reinvestment-ratios": "재투자율 유지",
+    "preferred-equity-zero": "우선주 청구권 0 가정",
+    "non-controlling-interest-zero": "비지배지분 0 가정"
+  };
+  return labels[String(value || "")] || String(value || "");
+}
+
 function instrumentPriceExplanationLabel(explanation) {
   var labels = {
     "causal-hypothesis": "가격 원인 가설을 뒷받침하는 자료 있음",
@@ -101,6 +115,15 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
   var readiness = analysis.dcfReadiness || {};
   var impliedSolved = implied.status === "solved" && valuationHasNumericValue(implied.impliedRevenueGrowthPct);
   var impliedAssumptions = implied.fixedAssumptions || {};
+  var dcfModel = models.find(function (model) { return model.modelId === "driver-fcff-dcf"; }) || {};
+  var sensitivity = dcfModel.sensitivity || {};
+  var sensitivityRange = sensitivity.valueRange || {};
+  var sensitivityRows = Array.isArray(sensitivity.rows) ? sensitivity.rows : [];
+  var baseSensitivity = sensitivityRows.find(function (row) { return row && row.isBase; }) || {};
+  var dcfAssumptions = Array.isArray(dcfModel.assumptions) ? dcfModel.assumptions : [];
+  var pendingDcfAssumptions = dcfAssumptions.filter(function (item) {
+    return ["observed", "verified", "approved", "user-approved"].indexOf(String((item || {}).status || "").toLowerCase()) < 0;
+  });
   return [
     '<section class="instrument-investment-analysis">',
     '<div class="instrument-valuation-section-head"><div><span class="label">COMPANY STATE</span><h4>회사 상태와 이전 판단</h4></div><span class="tone-chip ' + (change.materialChange ? 'watch' : 'hold') + '">' + escapeHtml(instrumentValuationChangeLabel(change)) + '</span></div>',
@@ -120,9 +143,10 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
     (impliedSolved || readiness.status) ? '<section class="instrument-investment-next"><div class="instrument-valuation-section-head"><div><strong>현재 가격의 내재 기대</strong><p>다른 가정을 고정했을 때 현재 가격과 일치하는 조건을 역산합니다.</p></div><span class="tone-chip caution">' + escapeHtml(implied.assumptionReviewState === "required" ? "가정 검토 필요" : "조건부 계산") + '</span></div>' + (impliedSolved
       ? '<div class="instrument-investment-facts"><p><strong>5년 일정 매출 성장률</strong><span>' + escapeHtml(valuationDecimal(implied.impliedRevenueGrowthPct, "%", 2)) + '</span><em>시장 기대를 관측한 값이 아님</em></p><p><strong>고정 WACC</strong><span>' + escapeHtml(valuationDecimal(impliedAssumptions.waccPct, "%", 2)) + '</span><em>장기성장률 ' + escapeHtml(valuationDecimal(impliedAssumptions.terminalGrowthPct, "%", 2)) + '</em></p></div><p class="instrument-valuation-explanation">' + escapeHtml(implied.interpretation || "고정 가정 아래의 조건부 역산값입니다.") + '</p>'
       : '<p class="instrument-valuation-explanation">필수 입력이 충족되지 않아 내재 성장률을 계산하지 않았습니다.</p>') + '</section>' : '',
+    sensitivity.status === "calculated" ? '<section class="instrument-investment-next"><div class="instrument-valuation-section-head"><div><strong>DCF 가정 민감도</strong><p>WACC와 영구성장률을 각각 ±1%p 바꿔 적정가 변화를 확인합니다.</p></div><span class="tone-chip caution">조건부 범위</span></div><div class="instrument-investment-facts"><p><strong>조건별 적정가 범위</strong><span>' + escapeHtml(valuationPrice(sensitivityRange.low, sensitivityRange.currency || currency)) + ' ~ ' + escapeHtml(valuationPrice(sensitivityRange.high, sensitivityRange.currency || currency)) + '</span><em>독립적인 적정가 근거가 아님</em></p><p><strong>기준 terminal 비중</strong><span>' + escapeHtml(valuationDecimal(baseSensitivity.terminalValueSharePct, "%", 1)) + '</span><em>장기 가정 의존도</em></p></div>' + (pendingDcfAssumptions.length ? '<p class="instrument-valuation-explanation"><strong>검토 대기 가정</strong> · ' + pendingDcfAssumptions.slice(0, 8).map(function (item) { return escapeHtml(instrumentDcfAssumptionLabel(item.id)); }).join(" · ") + '</p>' : '') + '</section>' : '',
     '<div class="instrument-investment-next"><strong>다음 확인</strong>' + (nextChecks.length ? '<ul>' + nextChecks.slice(0, 6).map(function (item) { return '<li>' + escapeHtml(instrumentValuationMissingLabel(item)) + '</li>'; }).join("") + '</ul>' : '<p>현재 등록된 추가 확인 항목이 없습니다.</p>') + '</div>',
     '</section>'
   ].join("");
 }
 
-export { instrumentValuationMissingLabel, instrumentValuationModelLabel, renderInstrumentInvestmentAnalysis };
+export { instrumentDcfAssumptionLabel, instrumentValuationMissingLabel, instrumentValuationModelLabel, renderInstrumentInvestmentAnalysis };

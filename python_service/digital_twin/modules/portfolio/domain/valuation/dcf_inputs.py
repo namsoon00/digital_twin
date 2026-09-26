@@ -30,6 +30,7 @@ FINANCIAL_INPUT_METRICS = (
 OFFICIAL_FINANCIAL_DATASETS = {
     "sec.company_facts",
     "opendart.company_facts",
+    "opendart.xbrl_facts",
     "public-data.kr-company-financials",
 }
 RISK_FREE_SERIES_BY_CURRENCY = {

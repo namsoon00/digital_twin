@@ -49,6 +49,7 @@
 | `opendart.disclosures` | company_event | official-disclosure-index-v1 | disclosure | KR | missing |
 | `opendart.document` | company_event, financial | official-disclosure-document-v1 | disclosure, valuation | KR | missing |
 | `opendart.company_facts` | identity, financial | company-financial-facts-v1 | identity, valuation | KR | missing |
+| `opendart.xbrl_facts` | financial | official-xbrl-financial-facts-v1 | valuation | KR | missing |
 | `public-data.kr-stock-daily` | price_trade | daily-price-observation-v1 | market-price | KR | missing |
 | `public-data.kr-security-master` | identity | security-master-v1 | identity | KR | missing |
 | `public-data.kr-market-index-daily` | price_trade, market_context | market-index-observation-v1 | market-price | KR | missing |
@@ -103,10 +104,12 @@ evidence → issuer/listing identity로 대상 확인 → reasoning source snaps
 
 ### Financial reports and consensus
 
-`opendart.company_facts`, `sec.company_facts`, `yfinance.fundamental`의 재무 기간은
+`opendart.company_facts`, `opendart.xbrl_facts`, `sec.company_facts`, `yfinance.fundamental`의 재무 기간은
 `financial-report-observation-v1`로 정규화한다. 보고기간, annual/quarterly/YTD,
 연결 범위, 통화, 회계 기준, 공표 시각, 신고 ID와 exact source revision을 함께
-보존한다. 재무 보고서에는 `yfinance.analyst` revision을 붙이지 않는다.
+보존한다. OpenDART XBRL은 단일계정 사업보고서와 접수번호가 일치할 때만 누락 지표를 보충하며,
+원본·instance hash와 각 fact의 tag/context/unit을 보존한다. 재무 보고서에는 `yfinance.analyst`
+revision을 붙이지 않는다.
 
 `yfinance.analyst`의 EPS 전망은 별도 consensus observation이다. 목표 기간,
 관측 시각, 표본 제공 여부, 상하단, 수정값과 exact analyst revision을 보존한다.

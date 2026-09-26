@@ -104,7 +104,7 @@ def bind_financial_report_contract(row: Mapping, source_references=()):
     provider = str(result.get("provider") or next((item.get("provider") for item in metric_sources if item.get("provider")), ""))
     provider_key = provider.lower()
     dataset_ids = (
-        {"opendart.company_facts"} if "dart" in provider_key else
+        {"opendart.company_facts", "opendart.xbrl_facts"} if "dart" in provider_key else
         {"sec.company_facts"} if "sec" in provider_key else
         {"yfinance.fundamental"} if "yfinance" in provider_key else set()
     )

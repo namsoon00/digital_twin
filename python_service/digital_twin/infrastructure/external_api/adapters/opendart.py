@@ -11,6 +11,7 @@ from ...external_signal_utils import (
     symbol_assignments,
 )
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of
+from ..opendart_xbrl import opendart_xbrl_error_response, parse_opendart_xbrl_archive
 
 
 def is_korean_equity(subject: ExternalSubject) -> bool:
@@ -282,6 +283,94 @@ class OpenDartDocumentAdapter:
         )
 
 
+class OpenDartXbrlFactsAdapter:
+    descriptor = DatasetDescriptor(
+        dataset_id="opendart.xbrl_facts",
+        provider_id="opendart",
+        capability="official-xbrl-financial-facts",
+        cadence_seconds=365 * 86400,
+        freshness_seconds=540 * 86400,
+        priority=78,
+        rate_limit_seconds=1,
+        enabled_setting="externalDartCompanyFundamentalsEnabled",
+        max_partitions=1000,
+        revision_mode="immutable",
+        materiality_policy="document-hash",
+        partition_strategy="followup",
+        completion_mode="once",
+    )
+
+    def partitions(self, _subjects: Iterable[ExternalSubject], _settings: Dict[str, object]) -> List[CollectionPartition]:
+        return []
+
+    def fetch(self, job: CollectionJob, settings: Dict[str, object]):
+        api_key = str(settings.get("opendartApiKey") or "").strip()
+        receipt = str(job.watermark.get("receiptNo") or "").strip()
+        business_year = str(job.watermark.get("businessYear") or "").strip()
+        if not api_key or not receipt:
+            raise RuntimeError("OpenDART XBRL job is missing API key or receipt number")
+        provider = legacy_provider(settings, externalDartEnabled="1")
+        url = "https://opendart.fss.or.kr/api/fnlttXbrl.xml?" + urllib.parse.urlencode({
+            "crtfc_key": api_key,
+            "rcept_no": receipt,
+        })
+        raw = provider.guarded_call(
+            "OpenDART",
+            "xbrl:" + job.subject.symbol + ":" + receipt,
+            lambda: provider.fetch_bytes(url, {"Accept": "application/zip,application/xml"}),
+        )
+        error = opendart_xbrl_error_response(raw)
+        if error:
+            if error.get("status") in {"013", "014"}:
+                return observation(
+                    self.descriptor,
+                    job.subject.symbol,
+                    {},
+                    preferred_revision=receipt + ":official-xbrl-unavailable",
+                    preferred_source_as_of=str(job.watermark.get("receiptDate") or ""),
+                    watermark={
+                        "receiptNo": receipt,
+                        "terminalUnavailable": True,
+                        "unavailableReason": "official-xbrl-not-found",
+                    },
+                    quality={
+                        "dataUsable": False,
+                        "provider": "opendart",
+                        "documentState": "xbrl-unavailable",
+                        "terminalUnavailable": True,
+                    },
+                    empty_result=True,
+                    retain_previous=True,
+                )
+            raise RuntimeError("OpenDART XBRL " + str(error.get("status") or "error") + " " + str(error.get("message") or ""))
+        parsed = parse_opendart_xbrl_archive(
+            raw,
+            receipt_no=receipt,
+            symbol=job.subject.symbol,
+            business_year=business_year,
+        )
+        archive_hash = str(parsed.get("archiveHash") or "")
+        source_as_of_value = str(job.watermark.get("receiptDate") or "")
+        return observation(
+            self.descriptor,
+            job.subject.symbol,
+            {"dartXbrlFacts": {job.subject.symbol: parsed}},
+            preferred_revision=receipt + ":" + archive_hash,
+            preferred_source_as_of=source_as_of_value,
+            watermark={
+                "receiptNo": receipt,
+                "businessYear": business_year,
+                "archiveHash": archive_hash,
+                "candidateFactCount": int(parsed.get("candidateFactCount") or 0),
+            },
+            quality={
+                "dataUsable": bool(parsed.get("candidateFacts")),
+                "provider": "opendart",
+                "documentState": "xbrl-parsed" if parsed.get("candidateFacts") else "xbrl-no-dcf-candidates",
+            },
+        )
+
+
 class OpenDartCompanyFactsAdapter:
     descriptor = DatasetDescriptor(
         dataset_id="opendart.company_facts",
@@ -374,3 +463,42 @@ class OpenDartCompanyFactsAdapter:
             preferred_source_as_of=as_of,
             watermark={"financialStatementRevision": revision, "corpCode": corp_code},
         )
+
+    def followup_requests(
+        self,
+        source_observation: SourceObservation,
+        _settings: Dict[str, object],
+    ) -> List[FollowupCollectionRequest]:
+        symbol = str(source_observation.subject_key or "").upper().strip()
+        group = source_observation.payload.get("dartDisclosures") if isinstance(source_observation.payload, dict) else {}
+        row = group.get(symbol) if isinstance(group, dict) and isinstance(group.get(symbol), dict) else {}
+        receipts = {}
+        for statement in row.get("financialStatements") or []:
+            if not isinstance(statement, dict) or str(statement.get("reprt_code") or "") != "11011":
+                continue
+            receipt = str(statement.get("rcept_no") or "").strip()
+            if not receipt:
+                continue
+            receipts[receipt] = str(statement.get("bsns_year") or "").strip()
+        return [
+            FollowupCollectionRequest(
+                dataset_id="opendart.xbrl_facts",
+                partition_key=symbol + ":" + receipt + ":xbrl-v1",
+                subject=ExternalSubject(
+                    subject_key=symbol,
+                    symbol=symbol,
+                    name=str(row.get("corpName") or source_observation.subject_key or symbol),
+                    market="KR",
+                    currency="KRW",
+                    source="opendart-company-facts",
+                ),
+                watermark={
+                    "receiptNo": receipt,
+                    "receiptDate": receipt[:8],
+                    "businessYear": business_year,
+                    "corpCode": str(row.get("corpCode") or ""),
+                },
+                priority=78,
+            )
+            for receipt, business_year in sorted(receipts.items(), reverse=True)[:1]
+        ]

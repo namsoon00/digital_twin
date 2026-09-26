@@ -1,7 +1,9 @@
 import unittest
 import time
 import json
+import io
 import urllib.parse
+import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -41,7 +43,9 @@ from digital_twin.infrastructure.external_api.adapters.krx import KrxMarketIndex
 from digital_twin.infrastructure.external_api.adapters.opendart import (
     OpenDartCompanyFactsAdapter,
     OpenDartDisclosureAdapter,
+    OpenDartXbrlFactsAdapter,
 )
+from digital_twin.infrastructure.external_api.opendart_xbrl import parse_opendart_xbrl_archive
 from digital_twin.infrastructure.external_api.adapters.public_data_portal import (
     PublicDataPortalMarketIndexAdapter,
     PublicDataPortalSecurityMasterAdapter,
@@ -984,8 +988,29 @@ class ExternalDataPlatformTest(unittest.TestCase):
 
         self.assertIn("price_trade", catalog["yfinance.price"].category_ids)
         self.assertIn("financial", catalog["sec.company_facts"].category_ids)
+        self.assertIn("financial", catalog["opendart.xbrl_facts"].category_ids)
         self.assertIn("company_event", catalog["opendart.document"].category_ids)
         self.assertEqual("unsupported", catalog["yfinance.options"].empty_result_semantics)
+
+        xbrl = b"""<?xml version='1.0' encoding='UTF-8'?>
+        <xbrli:xbrl xmlns:xbrli='http://www.xbrl.org/2003/instance'
+          xmlns:xbrldi='http://xbrl.org/2006/xbrldi' xmlns:ifrs='urn:ifrs'>
+          <xbrli:context id='annual-consolidated'><xbrli:entity><xbrli:identifier scheme='test'>1</xbrli:identifier>
+          <xbrli:segment><xbrldi:explicitMember dimension='ifrs:ConsolidationAxis'>ifrs:ConsolidatedMember</xbrldi:explicitMember></xbrli:segment>
+          </xbrli:entity><xbrli:period><xbrli:startDate>2025-01-01</xbrli:startDate><xbrli:endDate>2025-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+          <xbrli:unit id='KRW'><xbrli:measure>iso4217:KRW</xbrli:measure></xbrli:unit>
+          <ifrs:AdjustmentsForInterestExpense contextRef='annual-consolidated' unitRef='KRW' decimals='-6'>923703000000</ifrs:AdjustmentsForInterestExpense>
+        </xbrli:xbrl>"""
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("report.xbrl", xbrl)
+        parsed = parse_opendart_xbrl_archive(
+            archive.getvalue(), receipt_no="20260317000635", symbol="000660", business_year="2025",
+        )
+        self.assertEqual(1, parsed["candidateFactCount"])
+        self.assertEqual("AdjustmentsForInterestExpense", parsed["candidateFacts"][0]["tag"])
+        self.assertEqual("20260317000635", parsed["receiptNo"])
+        self.assertEqual("opendart.xbrl_facts", OpenDartXbrlFactsAdapter.descriptor.dataset_id)
 
     def _assert_every_default_dataset_has_owned_semantics(self):
         registry = default_external_dataset_registry({})
@@ -1353,6 +1378,16 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertFalse(result.empty_result)
         self.assertIn("005930", result.payload["dartDisclosures"])
         self.assertTrue(result.source_revision.startswith("2026:11012"))
+        annual = replace(result, payload={"dartDisclosures": {"005930": {
+            "corpName": "삼성전자",
+            "financialStatements": [{
+                "bsns_year": "2025", "reprt_code": "11011", "rcept_no": "20260317000001",
+            }],
+        }}})
+        followups = OpenDartCompanyFactsAdapter().followup_requests(annual, settings)
+        self.assertEqual(1, len(followups))
+        self.assertEqual("opendart.xbrl_facts", followups[0].dataset_id)
+        self.assertEqual("20260317000001", followups[0].watermark["receiptNo"])
 
     def test_filing_metadata_only_schedules_documents_without_reasoning_event(self):
         self._assert_company_facts_collect_without_recent_disclosure()

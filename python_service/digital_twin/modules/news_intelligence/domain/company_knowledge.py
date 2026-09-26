@@ -132,6 +132,70 @@ DART_ACCOUNT_ALIASES = {
     "weightedAverageSharesDiluted": ("희석가중평균유통보통주식수", "희석가중평균주식수"),
 }
 
+OPEN_DART_XBRL_METRIC_TAGS = {
+    "interestExpense": (
+        "InterestExpenseFinanceExpense",
+        "AdjustmentsForInterestExpense",
+        "InterestExpense",
+    ),
+    "stockBasedCompensation": (
+        "ExpenseFromSharebasedPaymentTransactionsWithEmployees",
+        "AdjustmentsForShareBasedPayment",
+    ),
+    "weightedAverageSharesDiluted": (
+        "AdjustedWeightedAverageShares",
+        "WeightedAverageNumberOfSharesOutstandingDiluted",
+    ),
+}
+OPEN_DART_XBRL_DA_TAGS = {
+    "depreciation": (
+        "AdjustmentsForDepreciationExpense",
+        "DepreciationPropertyPlantAndEquipment",
+    ),
+    "amortization": (
+        "AdjustmentsForAmortisationExpense",
+        "AdjustmentsForAmortizationExpense",
+        "AmortisationIntangibleAssetsOtherThanGoodwill",
+    ),
+    "aggregate": (
+        "DepreciationAndAmortisationExpense",
+        "DepreciationAndAmortizationExpense",
+    ),
+}
+OPEN_DART_XBRL_WORKING_CAPITAL_TAGS = {
+    "receivables": (
+        "AdjustmentsForDecreaseIncreaseInTradeAccountReceivable",
+        "AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables",
+    ),
+    "inventory": (
+        "AdjustmentsForDecreaseIncreaseInInventories",
+        "AdjustmentsForDecreaseIncreaseInInventory",
+    ),
+    "otherReceivables": (
+        "AdjustmentsForDecreaseIncreaseInMiscellaneousReceivables",
+        "AdjustmentsForDecreaseIncreaseInOtherReceivables",
+    ),
+    "otherAssets": (
+        "AdjustmentsForDecreaseIncreaseInOtherAssets",
+        "AdjustmentsForDecreaseIncreaseInOtherOperatingAssets",
+    ),
+    "payables": (
+        "AdjustmentsForIncreaseDecreaseInTradeAccountPayable",
+        "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables",
+    ),
+    "otherPayables": (
+        "AdjustmentsForIncreaseDecreaseInOtherPayablesOfCashFlowsFromUsedInOperatingActivitiesLineItemsOfCashFlowsFromUsedInOperatingActivitiesTableOfItems",
+        "AdjustmentsForIncreaseDecreaseInOtherPayables",
+    ),
+    "otherLiabilities": (
+        "AdjustmentsForIncreaseDecreaseInOtherLiabilities",
+        "AdjustmentsForIncreaseDecreaseInOtherOperatingLiabilities",
+    ),
+    "additionalOtherPayables": (
+        "AdjustmentsForIncreasedecreaseInOtherPayables",
+    ),
+}
+
 
 def _clean(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
@@ -431,6 +495,179 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
         key=lambda row: (_period_sort_key(row.get("period")), row.get("frequency") == "annual"),
         reverse=True,
     )[:6]
+
+
+def dart_xbrl_statement_periods(payload: Mapping[str, object]) -> List[Dict[str, object]]:
+    """Normalize audited annual XBRL candidates without mixing report identities."""
+
+    source = dict(payload or {}) if isinstance(payload, Mapping) else {}
+    facts = [dict(item) for item in source.get("candidateFacts") or [] if isinstance(item, Mapping)]
+    receipt = _clean(source.get("receiptNo"))
+    archive_hash = _clean(source.get("archiveHash"))
+    instance_hash = _clean(source.get("instanceHash"))
+    business_year = _clean(source.get("businessYear"))
+    source_url = _clean(source.get("sourceUrl"))
+
+    def members(fact: Mapping[str, object]) -> List[str]:
+        return [
+            _clean(item.get("member")).rsplit(":", 1)[-1]
+            for item in fact.get("dimensions") or []
+            if isinstance(item, Mapping) and _clean(item.get("member"))
+        ]
+
+    def fact_score(fact: Mapping[str, object]):
+        values = members(fact)
+        return (
+            1 if "ReportedAmountMember" in values else 0,
+            1 if "OrdinarySharesMember" in values else 0,
+            -len(values),
+            _clean(fact.get("contextId")),
+        )
+
+    def select(tags, period: str):
+        by_tag = {
+            tag: sorted(
+                (
+                    fact for fact in facts
+                    if _clean(fact.get("tag")) == tag
+                    and _clean(fact.get("periodEnd")) == period
+                    and optional_number(fact.get("value")) is not None
+                ),
+                key=fact_score,
+                reverse=True,
+            )
+            for tag in tags
+        }
+        return next((by_tag[tag][0] for tag in tags if by_tag.get(tag)), None)
+
+    def fact_provenance(field: str, fact: Mapping[str, object], *, derived=None):
+        unit = _clean(fact.get("unitId"))
+        return {
+            "provider": "OpenDART XBRL",
+            "official": True,
+            "metric": _clean(fact.get("tag") or field),
+            "period": _clean(fact.get("periodEnd")),
+            "periodStart": _clean(fact.get("periodStart")),
+            "durationBasis": "annual",
+            "currency": "KRW" if unit.upper() in {"KRW", "KRWEPS"} else unit,
+            "scope": "CFS",
+            "receiptNo": receipt,
+            "fiscalYear": business_year,
+            "accountingStandard": "K-IFRS",
+            "sourceUrl": source_url,
+            "archiveHash": archive_hash,
+            "instanceHash": instance_hash,
+            "contextId": _clean(fact.get("contextId")),
+            "unitId": unit,
+            "decimals": _clean(fact.get("decimals")),
+            **({"shareCountBasis": "weighted-average-diluted"} if field == "weightedAverageSharesDiluted" else {}),
+            **({"derived": True, **dict(derived)} if isinstance(derived, Mapping) else {}),
+        }
+
+    result = []
+    for period in sorted({_clean(item.get("periodEnd")) for item in facts if _clean(item.get("periodEnd"))}, reverse=True):
+        row = {
+            "period": period,
+            "periodEnd": period,
+            "provider": "OpenDART",
+            "frequency": "annual",
+            "officialSource": True,
+            "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
+            "metricProvenance": {},
+            "xbrlReceiptNo": receipt,
+        }
+        for field, tags in OPEN_DART_XBRL_METRIC_TAGS.items():
+            fact = select(tags, period)
+            value = optional_number(fact.get("value")) if isinstance(fact, Mapping) else None
+            if value is None:
+                continue
+            row[field] = value
+            row["metricProvenance"][field] = fact_provenance(field, fact)
+
+        depreciation = select(OPEN_DART_XBRL_DA_TAGS["depreciation"], period)
+        amortization = select(OPEN_DART_XBRL_DA_TAGS["amortization"], period)
+        components = [item for item in (depreciation, amortization) if isinstance(item, Mapping)]
+        component_values = [optional_number(item.get("value")) for item in components]
+        if len(components) == 2 and all(value is not None for value in component_values):
+            row["depreciationAmortization"] = sum(component_values)
+            row["metricProvenance"]["depreciationAmortization"] = fact_provenance(
+                "depreciationAmortization",
+                components[0],
+                derived={
+                    "calculation": "official cash-flow depreciation adjustment + amortization adjustment",
+                    "componentMetrics": [_clean(item.get("tag")) for item in components],
+                    "componentValues": component_values,
+                    "componentContextIds": [_clean(item.get("contextId")) for item in components],
+                },
+            )
+        else:
+            aggregate = select(OPEN_DART_XBRL_DA_TAGS["aggregate"], period)
+            value = optional_number(aggregate.get("value")) if isinstance(aggregate, Mapping) else None
+            if value is not None:
+                row["depreciationAmortization"] = value
+                row["metricProvenance"]["depreciationAmortization"] = fact_provenance(
+                    "depreciationAmortization", aggregate,
+                )
+
+        working_capital = {
+            name: select(tags, period)
+            for name, tags in OPEN_DART_XBRL_WORKING_CAPITAL_TAGS.items()
+        }
+        required = ("receivables", "inventory", "payables")
+        if all(isinstance(working_capital.get(name), Mapping) for name in required):
+            wc_components = [item for item in working_capital.values() if isinstance(item, Mapping)]
+            wc_values = [optional_number(item.get("value")) for item in wc_components]
+            if all(value is not None for value in wc_values):
+                row["changeInWorkingCapital"] = sum(wc_values)
+                row["metricProvenance"]["changeInWorkingCapital"] = fact_provenance(
+                    "changeInWorkingCapital",
+                    working_capital["receivables"],
+                    derived={
+                        "calculation": "sum official operating cash-flow working-capital adjustments",
+                        "cashFlowSignConvention": "cash-contribution-positive",
+                        "componentMetrics": [_clean(item.get("tag")) for item in wc_components],
+                        "componentValues": wc_values,
+                        "componentContextIds": [_clean(item.get("contextId")) for item in wc_components],
+                    },
+                )
+        if row["metricProvenance"]:
+            result.append(row)
+    return result
+
+
+def merge_dart_xbrl_periods(
+    statement_periods: List[Dict[str, object]],
+    xbrl_periods: List[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    result = [dict(item) for item in statement_periods if isinstance(item, Mapping)]
+    for xbrl in xbrl_periods:
+        period = _clean(xbrl.get("periodEnd") or xbrl.get("period"))
+        receipt = _clean(xbrl.get("xbrlReceiptNo"))
+        target = next((
+            item for item in result
+            if _clean(item.get("frequency")) == "annual"
+            and _clean(item.get("periodEnd") or item.get("period")) == period
+            and receipt in {
+                _clean(value.get("receiptNo"))
+                for value in (item.get("metricProvenance") or {}).values()
+                if isinstance(value, Mapping) and _clean(value.get("receiptNo"))
+            }
+        ), None)
+        if not isinstance(target, dict):
+            continue
+        provenance = target.get("metricProvenance") if isinstance(target.get("metricProvenance"), Mapping) else {}
+        provenance = dict(provenance)
+        for field, value in xbrl.items():
+            if field in {
+                "period", "periodEnd", "provider", "frequency", "officialSource",
+                "financialReportingVersion", "metricProvenance", "xbrlReceiptNo",
+            } or value is None or target.get(field) is not None:
+                continue
+            target[field] = value
+            if isinstance((xbrl.get("metricProvenance") or {}).get(field), Mapping):
+                provenance[field] = dict(xbrl["metricProvenance"][field])
+        target["metricProvenance"] = provenance
+    return result
 
 
 def _safe_ratio(numerator: object, denominator: object, scale: float = 1.0) -> Optional[float]:
@@ -902,6 +1139,7 @@ def build_company_knowledge(
     yfinance: Mapping[str, object] = None,
     sec_filing: Mapping[str, object] = None,
     dart_disclosure: Mapping[str, object] = None,
+    dart_xbrl: Mapping[str, object] = None,
     source_references=(),
 ) -> Dict[str, object]:
     symbol = _clean(symbol).upper()
@@ -909,6 +1147,7 @@ def build_company_knowledge(
     yfinance = dict(yfinance or {}) if isinstance(yfinance, Mapping) else {}
     sec_filing = dict(sec_filing or {}) if isinstance(sec_filing, Mapping) else {}
     dart_disclosure = dict(dart_disclosure or {}) if isinstance(dart_disclosure, Mapping) else {}
+    dart_xbrl = dict(dart_xbrl or {}) if isinstance(dart_xbrl, Mapping) else {}
     info = yfinance.get("info") if isinstance(yfinance.get("info"), Mapping) else {}
 
     dart_basis = dart_disclosure.get("financialStatementBasis") if isinstance(dart_disclosure.get("financialStatementBasis"), Mapping) else {}
@@ -920,6 +1159,14 @@ def build_company_knowledge(
         "cashFlow": yfinance.get("quarterlyCashFlow"),
     }, frequency="quarterly", currency=_clean(info.get("financialCurrency")))
     official_periods = dart_statement_periods(dart_disclosure.get("financialStatements"), dart_basis)
+    xbrl_periods = dart_xbrl_statement_periods(dart_xbrl)
+    official_periods = merge_dart_xbrl_periods(official_periods, xbrl_periods)
+    xbrl_metrics_merged = any(
+        _clean(provenance.get("provider")) == "OpenDART XBRL"
+        for item in official_periods
+        for provenance in (item.get("metricProvenance") or {}).values()
+        if isinstance(provenance, Mapping)
+    )
     official_annual = [row for row in official_periods if _clean(row.get("frequency")) == "annual"]
     official_interim = [row for row in official_periods if _clean(row.get("frequency")) == "interim"]
     interim = official_interim
@@ -995,6 +1242,7 @@ def build_company_knowledge(
         ),
         (sec_filing.get("provider"), (sec_filing.get("latestFiling") or {}).get("filingDate") if isinstance(sec_filing.get("latestFiling"), Mapping) else "", "official-filing"),
         (dart_disclosure.get("provider"), dart_disclosure.get("receiptDate"), "official-filing-company"),
+        (dart_xbrl.get("provider"), str(dart_xbrl.get("receiptNo") or "")[:8], "official-filing-xbrl"),
     ):
         if _clean(provider):
             sources.append({"provider": _clean(provider), "asOf": _clean(as_of), "scope": scope})
@@ -1042,8 +1290,11 @@ def build_company_knowledge(
             "version": FINANCIAL_REPORTING_VERSION,
             "officialInputRows": len(dart_disclosure.get("financialStatements") or []),
             "officialParsedPeriods": len(official_periods),
+            "officialXbrlCandidateFacts": len(dart_xbrl.get("candidateFacts") or []),
+            "officialXbrlParsedPeriods": len(xbrl_periods),
             "status": "error" if dart_disclosure.get("financialStatements") and not official_periods else "checked",
             "issues": (["official-financial-statements-unparsed"] if dart_disclosure.get("financialStatements") and not official_periods else [])
+                      + (["official-xbrl-unmatched-report"] if xbrl_periods and not xbrl_metrics_merged else [])
                       + [issue for rows in (annual, interim, quarterly) for row in rows for issue in row.get("qualityIssues", [])],
         },
         "governance": {"executives": executives, "executiveCount": len(executives)},
@@ -1426,7 +1677,7 @@ def company_knowledge_by_symbol(
             if isinstance(item, Mapping)
             and _clean(item.get("subjectKey")).upper() == symbol
             and _clean(item.get("datasetId")) in {
-                "opendart.company_facts", "sec.company_facts",
+                "opendart.company_facts", "opendart.xbrl_facts", "sec.company_facts",
                 "public-data.kr-company-financials",
                 "yfinance.fundamental", "yfinance.analyst",
             }
@@ -1437,6 +1688,7 @@ def company_knowledge_by_symbol(
             yfinance=(source.get("yfinanceData") or {}).get(symbol, {}) if isinstance(source.get("yfinanceData"), Mapping) else {},
             sec_filing=(source.get("secFilings") or {}).get(symbol, {}) if isinstance(source.get("secFilings"), Mapping) else {},
             dart_disclosure=(source.get("dartDisclosures") or {}).get(symbol, {}) if isinstance(source.get("dartDisclosures"), Mapping) else {},
+            dart_xbrl=(source.get("dartXbrlFacts") or {}).get(symbol, {}) if isinstance(source.get("dartXbrlFacts"), Mapping) else {},
             source_references=financial_references,
         )
         if payload:

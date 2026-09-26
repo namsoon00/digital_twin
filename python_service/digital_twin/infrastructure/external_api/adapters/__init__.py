@@ -8,7 +8,12 @@ from .kosis import KosisIndustryIndicatorAdapter
 from .krx import KrxMarketIndexAdapter
 from .official_release import OfficialReleaseAdapter
 from .bls_statistics import BlsStatisticsAdapter
-from .opendart import OpenDartCompanyFactsAdapter, OpenDartDisclosureAdapter, OpenDartDocumentAdapter
+from .opendart import (
+    OpenDartCompanyFactsAdapter,
+    OpenDartDisclosureAdapter,
+    OpenDartDocumentAdapter,
+    OpenDartXbrlFactsAdapter,
+)
 from .public_data_portal import (
     PublicDataPortalMarketIndexAdapter,
     PublicDataPortalSecurityMasterAdapter,
@@ -44,6 +49,7 @@ def default_external_dataset_registry(
         OpenDartDisclosureAdapter(opendart_corp_code_lookup),
         OpenDartDocumentAdapter(),
         OpenDartCompanyFactsAdapter(opendart_corp_code_lookup),
+        OpenDartXbrlFactsAdapter(),
         PublicDataPortalStockPriceAdapter(),
         PublicDataPortalSecurityMasterAdapter(),
         PublicDataPortalMarketIndexAdapter(),

@@ -2,7 +2,8 @@ import copy
 import unittest
 
 from digital_twin.modules.news_intelligence.domain.company_knowledge import (
-    build_company_knowledge, dart_statement_periods, enrich_financial_periods,
+    build_company_knowledge, dart_statement_periods, dart_xbrl_statement_periods,
+    enrich_financial_periods, merge_dart_xbrl_periods,
     merge_company_knowledge_rows, statement_periods, company_knowledge_by_symbol,
 )
 from digital_twin.modules.news_intelligence.domain.financial_reporting import (
@@ -301,6 +302,83 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual(["2026-06-30", "2025-12-31"], [row["period"] for row in rows])
         self.assertEqual(48, rows[0]["totalDebt"])
         self.assertTrue(rows[0]["metricProvenance"]["totalDebt"]["derived"])
+
+        receipt = "20260317000635"
+        statement_rows = []
+        for account, amount, section in (
+            ("매출액", 1000, "IS"), ("영업이익", 250, "IS"),
+            ("법인세비용차감전순이익", 230, "IS"), ("법인세비용", 46, "IS"),
+            ("유형자산의취득", -60, "CF"), ("현금및현금성자산", 100, "BS"),
+        ):
+            statement_rows.append({
+                "bsns_year": "2025", "reprt_code": "11011", "sj_div": section,
+                "account_nm": account, "thstrm_amount": str(amount), "rcept_no": receipt,
+            })
+        for account_id, amount in (
+            ("ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings", 20),
+            ("ifrs-full_LongtermBorrowings", 60),
+        ):
+            statement_rows.append({
+                "bsns_year": "2025", "reprt_code": "11011", "sj_div": "BS",
+                "account_id": account_id, "account_nm": account_id,
+                "thstrm_amount": str(amount), "rcept_no": receipt,
+            })
+        def fact(tag, value, *, unit="KRW"):
+            return {
+                "tag": tag, "value": value, "unitId": unit,
+                "contextId": "annual-consolidated", "periodStart": "2025-01-01",
+                "periodEnd": "2025-12-31", "dimensions": [{"member": "ifrs:ConsolidatedMember"}],
+            }
+        xbrl_payload = {
+            "provider": "OpenDART XBRL", "receiptNo": receipt, "businessYear": "2025",
+            "archiveHash": "archive-1", "instanceHash": "instance-1",
+            "sourceUrl": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + receipt,
+            "candidateFacts": [
+                fact("AdjustmentsForInterestExpense", 10),
+                fact("AdjustmentsForDepreciationExpense", 30),
+                fact("AdjustmentsForAmortisationExpense", 10),
+                fact("ExpenseFromSharebasedPaymentTransactionsWithEmployees", 15),
+                fact("AdjustedWeightedAverageShares", 100, unit="shares"),
+                fact("AdjustmentsForDecreaseIncreaseInTradeAccountReceivable", -10),
+                fact("AdjustmentsForDecreaseIncreaseInInventories", -5),
+                fact("AdjustmentsForIncreaseDecreaseInTradeAccountPayable", 3),
+            ],
+        }
+        xbrl_periods = dart_xbrl_statement_periods(xbrl_payload)
+        merged = merge_dart_xbrl_periods(
+            dart_statement_periods(statement_rows, {"scope": "CFS"}), xbrl_periods,
+        )
+        required = {
+            "revenue", "operatingIncome", "pretaxIncome", "taxProvision", "interestExpense",
+            "depreciationAmortization", "capitalExpenditure", "changeInWorkingCapital",
+            "stockBasedCompensation", "cash", "totalDebt", "weightedAverageSharesDiluted",
+        }
+        self.assertEqual(required, required.intersection(merged[0]))
+        self.assertEqual(-12, merged[0]["changeInWorkingCapital"])
+        self.assertEqual("OpenDART XBRL", merged[0]["metricProvenance"]["interestExpense"]["provider"])
+        mismatched = merge_dart_xbrl_periods(
+            dart_statement_periods(statement_rows, {"scope": "CFS"}),
+            [{**xbrl_periods[0], "xbrlReceiptNo": "20260317009999"}],
+        )
+        self.assertNotIn("interestExpense", mismatched[0])
+        knowledge = build_company_knowledge(
+            "000660",
+            dart_disclosure={
+                "provider": "OpenDART", "receiptDate": "20260317",
+                "financialStatementBasis": {"scope": "CFS"},
+                "financialStatements": statement_rows,
+            },
+            dart_xbrl=xbrl_payload,
+            source_references=[
+                {"datasetId": "opendart.company_facts", "subjectKey": "000660", "revisionId": "base-r1", "availability": "observed"},
+                {"datasetId": "opendart.xbrl_facts", "subjectKey": "000660", "revisionId": "xbrl-r1", "availability": "observed"},
+            ],
+        )
+        self.assertEqual(required, required.intersection(knowledge["financials"]["annual"][0]))
+        self.assertEqual(
+            {"opendart.company_facts", "opendart.xbrl_facts"},
+            {item["datasetId"] for item in knowledge["financials"]["annual"][0]["reportContract"]["sourceReferences"]},
+        )
 
     def test_dart_cashflow_ytd_does_not_divide_quarterly_revenue(self):
         periods = [{"period": "2026-06-30", "operatingCashFlow": 20, "netIncome": 10,

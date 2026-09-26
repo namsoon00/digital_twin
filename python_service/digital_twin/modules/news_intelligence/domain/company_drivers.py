@@ -70,7 +70,7 @@ def _driver(
     ]
     official = bool(
         metric_source.get("official")
-        or any(item.get("datasetId") in {"sec.company_facts", "opendart.company_facts"} for item in report_references)
+        or any(item.get("datasetId") in {"sec.company_facts", "opendart.company_facts", "opendart.xbrl_facts"} for item in report_references)
     )
     reported_value = value
     if normalize_outflow:

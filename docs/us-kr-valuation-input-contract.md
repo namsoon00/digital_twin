@@ -13,7 +13,7 @@
 | 기준 통화 | USD | KRW |
 | 무위험금리 | FRED `DGS10` | ECOS `KRGB10Y` |
 | 무위험금리 데이터셋 | `fred.macro` | `ecos.macro` |
-| 공식 재무 후보 | `sec.company_facts` | `opendart.company_facts`, `public-data.kr-company-financials` |
+| 공식 재무 후보 | `sec.company_facts` | `opendart.company_facts`, `opendart.xbrl_facts`, `public-data.kr-company-financials` |
 | 보조 재무·컨센서스 | `yfinance.fundamental`, `yfinance.analyst` | `yfinance.fundamental`, `yfinance.analyst` |
 
 DCF 입력에는 무위험금리의 series ID, 데이터셋 ID, 관측일, 공급자와 revision을 함께 보존한다. USD
@@ -71,7 +71,11 @@ SEC Company Facts는 지표별 최신값 한 건만 고르지 않는다. 연간 
 
 OpenDART는 최신 분기·반기 보고서와 직전 사업연도 사업보고서를 함께 수집한다. 동일 날짜의 중간보고와
 연간보고는 frequency를 포함한 별도 관측으로 보존하며, 유동·비유동 차입금과 공시된 리스부채를 합산해
-총부채를 만든다. API가 반환하지 않는 지표를 0으로 채우거나 다른 공급자의 값을 공식값처럼 합치지 않는다.
+총부채를 만든다. 사업보고서 접수번호로 원본 XBRL을 후속 수집해 이자비용, 감가상각·상각, 운전자본
+조정, 주식보상, 희석가중평균주식 수 후보를 정규화한다. XBRL 값은 기간과 접수번호가 단일계정 재무행과
+모두 일치할 때만 그 행의 누락값을 채운다. 태그, context, 단위, 구성값, 원본 ZIP hash와 instance hash를
+provenance에 남기며 원본 ZIP 자체는 운영 fact에 저장하지 않는다. API가 반환하지 않는 지표를 0으로
+채우거나 다른 접수번호·공급자의 값을 공식값처럼 합치지 않는다.
 
 공식 행과 보조 행은 `valuationFinancialCandidates`에서 서로 다른 관측으로 유지한다. 완전한 공식 행이
 최신 완전 행과 62일 이내이면 공식 행을 우선한다. 공식 행이 불완전하면 완전한 보조 행으로 shadow DCF는
@@ -82,9 +86,10 @@ OpenDART는 최신 분기·반기 보고서와 직전 사업연도 사업보고�
 | 종목 | 계산 입력 | 공식 coverage | 상태 |
 | --- | --- | ---: | --- |
 | NVDA | SEC EDGAR 2026-01-25 연간보고 | 12/12 | `official-ready`, 가정 검토 전 shadow |
-| 000660 | yfinance 2025-12-31 연간행 | OpenDART 대안 7/12 | `reference-only` shadow |
+| 000660 | OpenDART 2025-12-31 사업보고서 | 12/12 | `official-ready`, 가정 검토 전 shadow |
 
-000660의 OpenDART 단일계정 전체 API에서 현재 확인되지 않은 항목은 이자비용, 감가상각·상각,
-운전자본 변화, 주식보상, 희석가중평균주식 수다. 이 다섯 항목을 공식화하려면 OpenDART 원문/XBRL
-주석 또는 동등한 공식 구조화 소스를 추가해야 한다. 그 전까지 계산값은 참고용이며, 공식 coverage가
-완전하다는 표시나 자동 투자 판단으로 승격하지 않는다.
+2026-09-27 운영 검증에서 000660 사업보고서 접수번호 `20260317000635`의 단일계정 재무와 XBRL을
+결합해 공식 12개 항목을 모두 확인했다. 이 상태는 재무 입력의 공식 출처가 완전하다는 뜻이며, DCF의
+ERP·영구성장률·마진·재투자율 등 미래 가정까지 정확하다는 뜻은 아니다. 가정 검토와 모델 release 전에는
+계속 shadow로 유지한다. 다른 한국 종목도 각 회사의 XBRL 태그와 context가 허용 계약에 맞아야 같은
+상태가 되며, 후보가 없거나 접수번호가 다르면 `reference-only`로 남는다.

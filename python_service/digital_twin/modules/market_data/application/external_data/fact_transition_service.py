@@ -69,6 +69,7 @@ class ExternalFactTransitionService:
         "sec.company_facts",
         "opendart.document",
         "opendart.company_facts",
+        "opendart.xbrl_facts",
         "yfinance.fundamental",
         "yfinance.analyst",
         "public-data.kr-company-profile",

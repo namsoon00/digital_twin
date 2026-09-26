@@ -51,6 +51,7 @@ _CATALOG = {
     "opendart.disclosures": _spec("opendart.disclosures", ("company_event",), "official-disclosure-index-v1", ("disclosure",), ("KR",), ("issuer",)),
     "opendart.document": _spec("opendart.document", ("company_event", "financial"), "official-disclosure-document-v1", ("disclosure", "valuation"), ("KR",), ("issuer",)),
     "opendart.company_facts": _spec("opendart.company_facts", ("identity", "financial"), "company-financial-facts-v1", ("issuer-identity", "valuation"), ("KR",), ("issuer",)),
+    "opendart.xbrl_facts": _spec("opendart.xbrl_facts", ("financial",), "official-xbrl-financial-facts-v1", ("valuation",), ("KR",), ("issuer",)),
     "public-data.kr-stock-daily": _spec("public-data.kr-stock-daily", ("price_trade",), "daily-price-observation-v1", ("market-price",), ("KR",), ("listing",)),
     "public-data.kr-security-master": _spec("public-data.kr-security-master", ("identity",), "security-master-v1", ("issuer-identity",), ("KR",), ("listing",)),
     "public-data.kr-market-index-daily": _spec("public-data.kr-market-index-daily", ("price_trade", "market_context"), "market-index-observation-v1", ("market-price",), ("KR",), ("market-index",)),

@@ -32,6 +32,7 @@ This boundary supplies source facts. It does not decide `BUY`, `SELL`, or `HOLD`
 | `sec.company_facts` | 6 h | 24 h | SEC company facts |
 | `opendart.disclosures` | 10 min | 30 min | Korean disclosure documents |
 | `opendart.company_facts` | 24 h | 48 h | Korean company and financial facts |
+| `opendart.xbrl_facts` | follow-up once | 540 d | Annual report XBRL candidates linked by receipt number |
 | `yfinance.price` | 30 min | 1 h | Price history and quote context |
 | `yfinance.options` | 1 h | 2 h | Options context |
 | `yfinance.news` | 24 h | 48 h | Vendor news metadata only |
@@ -71,10 +72,14 @@ npm run python:external-data:watch
 
 # Repair selected durable facts without disturbing other partitions.
 python3 python_service/service.py external-data refresh \
-  --datasets sec.company_facts,opendart.company_facts \
+  --datasets sec.company_facts,opendart.company_facts,opendart.xbrl_facts \
   --symbols NVDA,000660 \
   --max-batches 20
 ```
+
+`opendart.company_facts`가 최신 사업보고서 접수번호를 확인하면
+`opendart.xbrl_facts` 후속 partition을 만든다. 첫 refresh에서 partition이 새로 생성된 경우 같은
+명령을 한 번 더 실행하면 즉시 수집할 수 있고, 상시 worker는 다음 loop에서 자동 처리한다.
 
 The refresh command validates dataset and subject identifiers, marks only that
 scope due, and drains bounded batches through the normal rate-limit, retry, and

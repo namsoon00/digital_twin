@@ -20,6 +20,7 @@ EXTERNAL_SIGNAL_MAP_FIELDS = {
     "fxRates",
     "secFilings",
     "dartDisclosures",
+    "dartXbrlFacts",
     "newsHeadlines",
     "companyOverviews",
     "earningsReports",
@@ -442,7 +443,7 @@ class ExternalSignalsReadModelService:
                 continue
             for symbol, source in (row.get("payload", {}).get("dartDisclosures") or {}).items():
                 target = result["dartDisclosures"].setdefault(symbol, {})
-                for field in ("financialStatements", "financialStatementBasis"):
+                for field in ("financialStatements", "financialStatementBasis", "financialStatementBases"):
                     if field in source:
                         target[field] = source[field]
         for status in self.fact_store.provider_statuses():

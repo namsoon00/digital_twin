@@ -54,7 +54,16 @@ test("instrument valuation separates verified changes, price-cause limits and re
     priceExplanation: {claimStrength: "unresolved"},
     valuationModels: [{
       modelId: "driver-fcff-dcf", fairValue: 125.78, currency: "USD",
-      decisionEligible: false, sourceBacked: true, assumptionReviewState: "required"
+      decisionEligible: false, sourceBacked: true, assumptionReviewState: "required",
+      assumptions: [
+        {id: "fy1-revenue-consensus", value: 100, unit: "USD", status: "observed"},
+        {id: "wacc", value: 16.2, unit: "percent", status: "candidate"},
+        {id: "terminal-growth", value: 2.5, unit: "percent", status: "candidate"}
+      ],
+      sensitivity: {
+        status: "calculated", valueRange: {low: 108.2, high: 149.4, currency: "USD"},
+        rows: [{isBase: true, terminalValueSharePct: 66.4}]
+      }
     }],
     dcfReadiness: {status: "ready-for-shadow", assumptionReviewState: "required"},
     impliedExpectations: {
@@ -68,6 +77,11 @@ test("instrument valuation separates verified changes, price-cause limits and re
   assert.match(shadowDcf, /5년 일정 매출 성장률/);
   assert.match(shadowDcf, /62.5%/);
   assert.match(shadowDcf, /시장 기대를 관측한 값이 아님/);
+  assert.match(shadowDcf, /DCF 가정 민감도/);
+  assert.match(shadowDcf, /\$108.2 ~ \$149.4/);
+  assert.match(shadowDcf, /terminal 비중/);
+  assert.match(shadowDcf, /주식 위험 프리미엄|가중평균자본비용/);
+  assert.doesNotMatch(shadowDcf, /fy1-revenue-consensus/);
 });
 
 test("compact financial reviews keep all source-labelled facts separate from the new market change", () => {

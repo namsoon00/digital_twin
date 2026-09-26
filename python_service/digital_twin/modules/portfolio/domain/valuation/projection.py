@@ -509,7 +509,15 @@ def add_valuation_row_concepts(
     is_ai_proposal = str(row.get("source") or "").casefold() == "ai-valuation-proposal" or bool(row.get("aiGenerated"))
     static_observation = profile_for_domain(observation_profiles or {}, "static")
     quote_observation = profile_for_domain(observation_profiles or {}, "quote")
-    is_active = bool(values.get("fairValue")) and str(row.get("activeStatus") or "active").casefold() != "rejected"
+    is_shadow_dcf = (
+        str(row.get("valuationModelFamily") or "") == "driver-dcf"
+        and not bool(values.get("valuationDecisionEligible"))
+    )
+    is_active = (
+        bool(values.get("fairValue"))
+        and not is_shadow_dcf
+        and str(row.get("activeStatus") or "active").casefold() != "rejected"
+    )
     tbox_classes = ["ValuationAssumption", "StrategySignal", "ValuationSignal"]
     if is_ai_proposal:
         tbox_classes.append("AIValuationProposal")
@@ -577,6 +585,8 @@ def add_valuation_row_concepts(
         add_relation(graph, assumption_id, bundle_id, "USES_VALUATION_INPUT", weight=1.0, properties=props)
         add_relation(graph, model_id, bundle_id, "USES_VALUATION_INPUT", weight=1.0, properties=props)
     if assessment:
+        sensitivity = assessment.get("sensitivity") if isinstance(assessment.get("sensitivity"), dict) else {}
+        implied_expectations = assessment.get("impliedExpectations") if isinstance(assessment.get("impliedExpectations"), dict) else {}
         assessment_id = add_entity(graph, "valuation-assessment", str(assessment.get("assessmentId") or (symbol + ":" + key)), (position.name or symbol) + " 평가 결과", {
             "tboxClass": "FairValueEstimate",
             "tboxClasses": ["ValuationAssumption", "FairValueEstimate", "ValuationSignal"],
@@ -585,12 +595,55 @@ def add_valuation_row_concepts(
             "valuationBundleId": str(assessment.get("bundleId") or ""),
             "valuationDecisionEligible": bool(assessment.get("valuationDecisionEligible")),
             "calculationStatus": str(assessment.get("calculationStatus") or ""),
+            "modelApprovalState": str(assessment.get("modelApprovalState") or ""),
+            "assumptionVersion": str(assessment.get("assumptionVersion") or ""),
             "blockedReasons": list(assessment.get("blockedReasons") or []),
+            "sensitivityId": str(sensitivity.get("sensitivityId") or ""),
+            "impliedExpectationSolverId": str(implied_expectations.get("solverId") or ""),
+            "impliedExpectationStatus": str(implied_expectations.get("status") or ""),
             "source": "valuation-assessment",
             "payload": dict(assessment),
         })
         add_relation(graph, stock_id, assessment_id, "HAS_VALUATION", weight=1.0, properties=props)
         add_relation(graph, assessment_id, assumption_id, "DERIVED_FROM_VALUATION_ASSUMPTION", weight=1.0, properties=props)
+    if str(row.get("valuationModelFamily") or "") == "driver-dcf":
+        parent_id = assessment_id if assessment else assumption_id
+        for index, assumption in enumerate(row.get("assumptions") or []):
+            if not isinstance(assumption, dict):
+                continue
+            assumption_key = str(assumption.get("id") or index).strip()
+            if not assumption_key:
+                continue
+            status = str(assumption.get("status") or "unreviewed").strip().lower()
+            detail_id = add_entity(
+                graph,
+                "valuation-assumption-detail",
+                symbol + ":" + key + ":" + assumption_key,
+                (position.name or symbol) + " DCF 가정 " + assumption_key,
+                {
+                    "tboxClass": "ValuationAssumption",
+                    "tboxClasses": ["ValuationAssumption", "DCFValuation", "ValuationSignal"],
+                    "symbol": symbol,
+                    "assumptionId": assumption_key,
+                    "value": assumption.get("value"),
+                    "unit": str(assumption.get("unit") or ""),
+                    "status": status,
+                    "reviewRequired": status not in {"observed", "verified", "approved", "user-approved"},
+                    "assumptionVersion": str(row.get("assumptionVersion") or ""),
+                    "source": "driver-dcf-assumption",
+                },
+            )
+            detail_props = {
+                **props,
+                "source": "driver-dcf-assumption",
+                "assumptionId": assumption_key,
+                "assumptionStatus": status,
+                "evidenceRole": "context" if status in {"observed", "verified"} else "blocking",
+                "reviewLevel": "observe" if status in {"observed", "verified", "approved", "user-approved"} else "check",
+                "aiInfluenceLabel": "DCF 가정 " + assumption_key + " · " + status,
+            }
+            add_relation(graph, stock_id, detail_id, "HAS_VALUATION", weight=0.82, properties=detail_props)
+            add_relation(graph, parent_id, detail_id, "DERIVED_FROM_VALUATION_ASSUMPTION", weight=1.0, properties=detail_props)
     for index, observation in enumerate(row.get("inputObservations") or []):
         if not isinstance(observation, dict):
             continue

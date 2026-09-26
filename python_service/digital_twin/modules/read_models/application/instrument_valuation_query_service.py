@@ -8,7 +8,7 @@ from typing import Dict, Iterable, Mapping, Optional
 from digital_twin.modules.news_intelligence.contracts import build_company_driver_map, company_prompt_context, company_valuation_context, evaluate_causal_attribution, latest_source_as_of
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state, utc_now_iso
-from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService, solve_implied_revenue_growth, valuation_snapshot_delta
+from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService, valuation_snapshot_delta
 
 
 READ_MODEL_VERSION = "instrument-valuation-read-model-v1"
@@ -152,7 +152,7 @@ class InstrumentValuationQueryService:
             "currentAssessmentId": current_identity["valuationAssessmentId"],
         }
         model_comparison = self._model_comparison(result.rows)
-        implied_expectations = self._implied_expectations(external_signals, source_symbol, position.current_price)
+        implied_expectations = self._implied_expectations(result.rows, source_symbol)
         readiness_rows = external_signals.get("driverDcfReadiness")
         dcf_readiness = (
             dict(readiness_rows.get(source_symbol))
@@ -382,6 +382,17 @@ class InstrumentValuationQueryService:
                 "evidenceBacked": bool((row.get("multipleBand") or {}).get("evidenceBacked")),
                 "sourceBacked": bool(row.get("sourceBacked") or row.get("sourceReferences")),
                 "assumptionReviewState": _text(row.get("assumptionReviewState")),
+                "assumptions": [
+                    {
+                        "id": _text(item.get("id")),
+                        "value": item.get("value"),
+                        "unit": _text(item.get("unit")),
+                        "status": _text(item.get("status")),
+                    }
+                    for item in row.get("assumptions") or []
+                    if isinstance(item, Mapping)
+                ],
+                "sensitivity": dict(row.get("sensitivity")) if isinstance(row.get("sensitivity"), Mapping) else {},
                 "warnings": list(row.get("modelWarnings") or []),
                 "blockedReasons": list(assessment.get("blockedReasons") or row.get("modelExclusionReasons") or []),
                 "comparisonPolicy": "do-not-average-model-values",
@@ -389,34 +400,22 @@ class InstrumentValuationQueryService:
         return result
 
     @staticmethod
-    def _implied_expectations(external_signals: Mapping[str, object], symbol: str, current_price: object) -> Dict[str, object]:
-        inputs = external_signals.get("driverDcfInputs")
-        source = inputs.get(symbol) if isinstance(inputs, Mapping) and isinstance(inputs.get(symbol), Mapping) else {}
-        if not source:
-            return {
-                "contractVersion": "reverse-dcf-growth-solver-v1",
-                "status": "unavailable",
-                "blockedReasons": ["driver-dcf-inputs-missing"],
-            }
-        bracket = source.get("reverseGrowthSearchBracketPct")
-        lower = bracket[0] if isinstance(bracket, list) and len(bracket) == 2 else -50.0
-        upper = bracket[1] if isinstance(bracket, list) and len(bracket) == 2 else 100.0
-        solved = solve_implied_revenue_growth(
-            source,
-            target_price=current_price,
-            lower_growth_pct=lower,
-            upper_growth_pct=upper,
-        )
+    def _implied_expectations(rows, symbol: str) -> Dict[str, object]:
+        for row in rows or []:
+            if not isinstance(row, Mapping) or _text(row.get("valuationModelFamily")) != "driver-dcf":
+                continue
+            implied = row.get("impliedExpectations")
+            if isinstance(implied, Mapping):
+                return {
+                    **dict(implied),
+                    "valuationAssessmentId": _text(row.get("valuationAssessmentId")),
+                    "symbol": symbol,
+                }
         return {
-            **solved,
-            "inputBundleId": _text(source.get("inputBundleId")),
-            "modelApprovalState": _text(source.get("modelApprovalState")),
-            "assumptionReviewState": "required" if any(
-                _text(item.get("status")).lower() not in {"observed", "verified", "approved", "user-approved"}
-                for item in source.get("assumptions") or []
-                if isinstance(item, Mapping)
-            ) else "complete",
-            "sourceBacked": bool(source.get("sourceReferences")),
+            "contractVersion": "reverse-dcf-growth-solver-v1",
+            "status": "unavailable",
+            "blockedReasons": ["driver-dcf-assessment-missing"],
+            "symbol": symbol,
         }
 
     def _account_state(self, requested_account_id: str):

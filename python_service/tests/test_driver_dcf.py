@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.modules.portfolio.domain.valuation.dcf import calculate_driver_dcf
+from digital_twin.modules.portfolio.domain.valuation.dcf import calculate_driver_dcf, calculate_driver_dcf_sensitivity
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
 from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import solve_implied_revenue_growth
 from digital_twin.modules.news_intelligence.domain.financial_reporting import FINANCIAL_REPORTING_VERSION, bind_financial_report_contract
@@ -63,6 +63,15 @@ class DriverDcfTests(unittest.TestCase):
         self.assertLess(higher_wacc["valuePerShare"], baseline["valuePerShare"])
         self.assertAlmostEqual(1.0, more_cash["valuePerShare"] - baseline["valuePerShare"], places=6)
         self.assertAlmostEqual(baseline["enterpriseValue"], more_cash["enterpriseValue"], places=6)
+        sensitivity = calculate_driver_dcf_sensitivity(self.inputs())
+        self.assertEqual("calculated", sensitivity["status"])
+        self.assertEqual(9, len(sensitivity["rows"]))
+        self.assertEqual(9, sensitivity["validScenarioCount"])
+        base = next(item for item in sensitivity["rows"] if item["isBase"])
+        self.assertAlmostEqual(11.0, base["valuePerShare"], places=6)
+        self.assertLess(sensitivity["valueRange"]["low"], 11.0)
+        self.assertGreater(sensitivity["valueRange"]["high"], 11.0)
+        self.assertFalse(sensitivity["independentEvidence"])
 
     def test_invalid_terminal_and_currency_mismatch_are_blocked(self):
         terminal = self.inputs()

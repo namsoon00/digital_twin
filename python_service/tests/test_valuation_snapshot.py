@@ -43,6 +43,17 @@ class ValuationSnapshotTests(unittest.TestCase):
                 "sourceReferences": [reference],
             }],
             "sourceReferences": [reference],
+            "valuationModelFamily": "driver-dcf",
+            "assumptionVersion": "driver-dcf-shadow-assumptions-v1",
+            "assumptions": [{"id": "wacc", "value": 10, "unit": "percent", "status": "candidate"}],
+            "sensitivity": {
+                "status": "calculated", "sensitivityId": "driver-dcf-sensitivity:one",
+                "valueRange": {"low": 35, "high": 47, "currency": "USD"},
+            },
+            "impliedExpectations": {
+                "status": "solved", "solverId": "reverse-dcf:one", "impliedRevenueGrowthPct": 8,
+                "independentEvidence": False,
+            },
             "multipleBand": {"low": 18, "base": 20, "high": 22, "evidenceBacked": True, "basis": "peer"},
             "formulaTrace": {"formula": "EPS * P/E", "usedObservationIds": ["eps:fy1:r1"]},
         }
@@ -106,7 +117,11 @@ class ValuationSnapshotTests(unittest.TestCase):
         self.assertFalse(result["valuationDecisionEligible"])
 
     def test_graph_projects_the_same_bundle_and_assessment_identity(self):
-        row = self.bind()
+        source = self.row()
+        source["approvalStatus"] = "shadow"
+        source["valuationDecisionEligible"] = False
+        source["valuationReferenceOnly"] = True
+        row = self.bind(source)
         graph = PortfolioOntology("valuation-identity-test")
         add_valuation_row_concepts(
             graph,
@@ -120,6 +135,12 @@ class ValuationSnapshotTests(unittest.TestCase):
         self.assertEqual(row["valuationBundleId"], bundle.properties["valuationBundleId"])
         self.assertEqual(row["valuationAssessmentId"], assessment.properties["valuationAssessmentId"])
         self.assertEqual(row["valuationBundleId"], assessment.properties["valuationBundleId"])
+        self.assertEqual("driver-dcf-sensitivity:one", assessment.properties["sensitivityId"])
+        self.assertEqual("reverse-dcf:one", assessment.properties["impliedExpectationSolverId"])
+        assumption = next(item for item in graph.entities if item.kind == "valuation-assumption-detail")
+        self.assertEqual("wacc", assumption.properties["assumptionId"])
+        self.assertTrue(assumption.properties["reviewRequired"])
+        self.assertFalse(any(item.kind == "active-valuation" for item in graph.entities))
         self.assertTrue(any(
             relation.relation_type == "USES_VALUATION_INPUT" and relation.target == bundle.entity_id
             for relation in graph.relations

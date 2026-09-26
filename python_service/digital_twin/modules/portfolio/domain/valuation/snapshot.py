@@ -213,7 +213,7 @@ def bind_valuation_snapshot(
         "modelReleaseId": _text(model_release_id),
         "calculationVersion": _text(result.get("modelVersion")),
         "normalizationVersion": VALUATION_NORMALIZATION_VERSION,
-        "assumptionVersion": VALUATION_ASSUMPTION_VERSION,
+        "assumptionVersion": _text(result.get("assumptionVersion")) or VALUATION_ASSUMPTION_VERSION,
     }
     material_fingerprint = _fingerprint("valuation-material:", material)
     audit = {
@@ -253,7 +253,7 @@ def bind_valuation_snapshot(
         "bundleId": bundle_id,
         "modelId": _text(result.get("valuationModelId") or result.get("valuationMethod")),
         "modelVersion": _text(result.get("modelVersion")),
-        "assumptionVersion": VALUATION_ASSUMPTION_VERSION,
+        "assumptionVersion": material["assumptionVersion"],
         "calculationStatus": "calculated" if scenarios else "blocked",
         "inputEligibility": _text(result.get("valuationInputState")),
         "modelApprovalState": _text(result.get("approvalStatus")),
@@ -261,6 +261,8 @@ def bind_valuation_snapshot(
         "blockedReasons": blocked_reasons,
         "scenarios": scenarios,
         "formulaTrace": result.get("formulaTrace") if isinstance(result.get("formulaTrace"), Mapping) else {},
+        "sensitivity": result.get("sensitivity") if isinstance(result.get("sensitivity"), Mapping) else {},
+        "impliedExpectations": result.get("impliedExpectations") if isinstance(result.get("impliedExpectations"), Mapping) else {},
     }
     assessment_fingerprint = _fingerprint("valuation-assessment-material:", assessment_material)
     assessment = {

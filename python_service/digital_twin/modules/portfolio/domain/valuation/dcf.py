@@ -13,6 +13,7 @@ from typing import Dict, Mapping
 
 
 DRIVER_DCF_VERSION = "driver-fcff-dcf-v1"
+DRIVER_DCF_SENSITIVITY_VERSION = "driver-fcff-dcf-sensitivity-v1"
 SUPPORTED_APPLICABILITY = {"non-financial-company", "operating-company"}
 
 
@@ -273,6 +274,76 @@ def calculate_driver_dcf(inputs: Mapping[str, object]) -> Dict[str, object]:
     }
 
 
+def calculate_driver_dcf_sensitivity(
+    inputs: Mapping[str, object],
+    *,
+    wacc_deltas_pct=(-1.0, 0.0, 1.0),
+    terminal_growth_deltas_pct=(-1.0, 0.0, 1.0),
+) -> Dict[str, object]:
+    """Evaluate a bounded WACC/terminal-growth surface with the same DCF core."""
+
+    source = dict(inputs or {})
+    base_wacc = _finite(source.get("waccPct"))
+    base_terminal = _finite(source.get("terminalGrowthPct"))
+    rows = []
+    reasons = []
+    if base_wacc is None:
+        reasons.append("wacc-missing")
+    if base_terminal is None:
+        reasons.append("terminal-growth-missing")
+    if reasons:
+        material = {
+            "contractVersion": DRIVER_DCF_SENSITIVITY_VERSION,
+            "status": "blocked",
+            "blockedReasons": reasons,
+            "independentEvidence": False,
+        }
+        return {**material, "sensitivityId": "driver-dcf-sensitivity:" + _digest(material)[:32]}
+
+    for wacc_delta in wacc_deltas_pct:
+        for terminal_delta in terminal_growth_deltas_pct:
+            wacc = base_wacc + float(wacc_delta)
+            terminal_growth = base_terminal + float(terminal_delta)
+            result = calculate_driver_dcf({
+                **source,
+                "waccPct": wacc,
+                "terminalGrowthPct": terminal_growth,
+            })
+            rows.append({
+                "waccPct": round(wacc, 8),
+                "terminalGrowthPct": round(terminal_growth, 8),
+                "valuePerShare": result.get("valuePerShare") if result.get("status") == "calculated" else None,
+                "terminalValueSharePct": result.get("terminalValueSharePct") if result.get("status") == "calculated" else None,
+                "status": result.get("status"),
+                "blockedReasons": list(result.get("blockedReasons") or []),
+                "isBase": math.isclose(float(wacc_delta), 0.0) and math.isclose(float(terminal_delta), 0.0),
+            })
+    valid_values = [float(item["valuePerShare"]) for item in rows if item.get("valuePerShare") is not None]
+    material = {
+        "contractVersion": DRIVER_DCF_SENSITIVITY_VERSION,
+        "status": "calculated" if valid_values else "blocked",
+        "baseWaccPct": round(base_wacc, 8),
+        "baseTerminalGrowthPct": round(base_terminal, 8),
+        "waccDeltasPct": [float(item) for item in wacc_deltas_pct],
+        "terminalGrowthDeltasPct": [float(item) for item in terminal_growth_deltas_pct],
+        "rows": rows,
+        "validScenarioCount": len(valid_values),
+        "valueRange": {
+            "low": round(min(valid_values), 8) if valid_values else None,
+            "high": round(max(valid_values), 8) if valid_values else None,
+            "currency": _text(source.get("currency")).upper(),
+        },
+        "interpretation": "WACC와 장기성장률만 바꾼 조건부 민감도이며 독립적인 적정가 근거가 아닙니다.",
+        "independentEvidence": False,
+    }
+    digest = _digest(material)
+    return {
+        **material,
+        "sensitivityId": "driver-dcf-sensitivity:" + digest[:32],
+        "materialFingerprint": "driver-dcf-sensitivity-material:" + digest,
+    }
+
+
 def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], settings: Mapping[str, object]) -> Dict[str, object]:
     """Registry adapter; only emits a row for an explicit symbol input bundle."""
 
@@ -307,6 +378,39 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         }
     value = float(result["valuePerShare"])
     current = _finite(getattr(position, "current_price", 0.0)) or 0.0
+    sensitivity = calculate_driver_dcf_sensitivity(source)
+    if current > 0:
+        from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import solve_implied_revenue_growth
+
+        bracket = source.get("reverseGrowthSearchBracketPct")
+        lower = bracket[0] if isinstance(bracket, list) and len(bracket) == 2 else -50.0
+        upper = bracket[1] if isinstance(bracket, list) and len(bracket) == 2 else 100.0
+        implied_expectations = solve_implied_revenue_growth(
+            source,
+            target_price=current,
+            lower_growth_pct=lower,
+            upper_growth_pct=upper,
+        )
+    else:
+        implied_expectations = {
+            "contractVersion": "reverse-dcf-growth-solver-v1",
+            "status": "blocked",
+            "blockedReasons": ["invalid-target-price"],
+        }
+    assumption_review_state = "complete" if result["valuationDecisionEligible"] else "required"
+    implied_expectations = {
+        **implied_expectations,
+        "inputBundleId": source.get("inputBundleId"),
+        "dcfAssessmentId": result.get("assessmentId"),
+        "modelApprovalState": result.get("modelApprovalState"),
+        "assumptionReviewState": assumption_review_state,
+        "sourceBacked": bool(result.get("sourceReferences")),
+    }
+    dcf_assessment = {
+        **result,
+        "sensitivity": sensitivity,
+        "impliedExpectations": implied_expectations,
+    }
     return {
         "assumptionKey": symbol + ":driver-dcf",
         "symbol": symbol,
@@ -333,7 +437,8 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         "valuationReferenceOnly": not bool(result["valuationDecisionEligible"]),
         "valuationReferenceReason": "" if result["valuationDecisionEligible"] else "DCF 입력 또는 모델 승격 조건이 충족되지 않아 참고용입니다.",
         "approvalStatus": result.get("modelApprovalState"),
-        "assumptionReviewState": "complete" if result["valuationDecisionEligible"] else "required",
+        "assumptionVersion": source.get("assumptionVersion"),
+        "assumptionReviewState": assumption_review_state,
         "sourceBacked": bool(result.get("sourceReferences")),
         "inputBundleId": source.get("inputBundleId"),
         "modelWarnings": list(result.get("warnings") or []),
@@ -354,7 +459,9 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         "sourceReferences": result["sourceReferences"],
         "assumptions": result["assumptions"],
         "formulaTrace": result["formulaTrace"],
-        "dcfAssessment": result,
+        "sensitivity": sensitivity,
+        "impliedExpectations": implied_expectations,
+        "dcfAssessment": dcf_assessment,
         "sourceReason": "사업 변수에서 계산한 FCFF와 명시적 WACC·terminal 가정의 조건부 가치입니다.",
         "preferredValuationMetric": "사업 변수 FCFF DCF",
         "minimumMarginOfSafetyPct": 15.0,
@@ -362,4 +469,10 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
     }
 
 
-__all__ = ["DRIVER_DCF_VERSION", "calculate_driver_dcf", "driver_dcf_valuation_row"]
+__all__ = [
+    "DRIVER_DCF_SENSITIVITY_VERSION",
+    "DRIVER_DCF_VERSION",
+    "calculate_driver_dcf",
+    "calculate_driver_dcf_sensitivity",
+    "driver_dcf_valuation_row",
+]

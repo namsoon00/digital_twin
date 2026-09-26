@@ -190,3 +190,18 @@ terminal 성장률, 우선주와 비지배지분 0 가정은 모두 `candidate`�
 위한 민감도와 질문 생성용이다. 적정가 승인이나 시장 참여자의 실제 기대 관측으로 표현하지 않으며,
 화면은 별도 모델에 `가정 검토 필요`를 표시한다. 공식 공시 기반 DCF 재무 revision 확대, 장기 가정
 승인, terminal 의존도 검토와 독립 미래 관측이 끝나기 전에는 투자 행동 근거로 승격하지 않는다.
+
+### 2026-09-26 DCF 가정 검토 surface와 그래프 동일성
+
+DCF와 reverse DCF를 서로 다른 조회 계산으로 만들지 않도록 valuation model 실행 한 번에서 forward
+assessment, WACC·terminal growth 3×3 민감도, 현재가 역산 결과를 함께 고정한다. generic
+`ValuationAssessment`는 DCF assumption version, sensitivity ID, reverse solver ID를 포함하며 UI와
+ABox가 같은 `valuationAssessmentId`를 참조한다. 민감도 범위는 두 가정만 각각 ±1%p 움직인 조건부
+결과이고 독립 evidence나 신뢰구간으로 세지 않는다.
+
+각 DCF 가정은 기존 `ValuationAssumption` TBox 의미를 사용한 별도 ABox entity로 투영한다. 관측된
+FY1·FY2 consensus와 검토가 필요한 ERP, WACC, terminal growth, 성장 fade, 일정 margin·재투자,
+우선권 0 가정을 상태별로 구분한다. `candidate` 가정이 하나라도 남으면 DCF는 계속 reference-only다.
+화면은 조건별 가치 범위, terminal value 비중과 검토 대기 가정을 함께 표시하므로 숫자 하나만 보고
+정확한 적정가로 오해하지 않게 한다.
+승인되지 않은 shadow DCF는 `HAS_VALUATION` 참고 관계에는 남지만 `ActiveValuation`으로 투영하지 않는다.

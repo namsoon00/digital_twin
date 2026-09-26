@@ -547,6 +547,15 @@ eventId / eventRevision -> verifiedClaimIds -> affectedDriverIds
 
 **복구:** inverse 기능만 비활성화할 수 있어야 한다. 실패가 정상 forward DCF와 기존 평가를 손상시키지 않는다.
 
+**2026-09-26 구현 보강:** forward DCF, WACC·terminal growth 3×3 민감도와 현재가의 내재 매출
+성장률 역산을 한 valuation model 실행 결과에 묶었다. read model은 raw input으로 역산을 다시
+수행하지 않고 같은 `valuationAssessmentId`에 고정된 결과를 읽는다. ABox에는 assessment의
+sensitivity/reverse solver identity와 개별 DCF 가정 상태가 함께 투영된다. 화면은 조건별 가치 범위,
+terminal value 비중, 검토 대기 가정을 표시한다. 이 범위는 두 가정을 각각 ±1%p 움직인 조건부
+surface이며 독립 evidence, 확률 구간 또는 승인 적정가가 아니다. 후보 가정이 남은 동안 `shadow`와
+`valuationDecisionEligible=false`를 유지한다.
+승인되지 않은 shadow DCF는 `HAS_VALUATION` 참고 관계에는 남지만 `ActiveValuation`으로 투영하지 않는다.
+
 ### IN-13 — 평가·사업 변화가 그래프와 최종 AI까지 동일하게 연결
 
 **선행:** R1은 IN-02, 04, 08, 10. R2 확장은 IN-11, 12. **소유:** `model_registry`, `reasoning`, `decisions`.

@@ -228,6 +228,17 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         with patch.object(original.valuation_service, "evaluate", return_value=forecast):
             payload = original.query(InstrumentValuationQuery("035720", "default"))
         self.assertEqual("ttm", payload["marketMetrics"]["trailingEPSPeriod"])
+        implied = original._implied_expectations([{
+            "valuationModelFamily": "driver-dcf",
+            "valuationAssessmentId": "valuation-assessment:one",
+            "impliedExpectations": {
+                "status": "solved", "solverId": "reverse-dcf:one",
+                "impliedRevenueGrowthPct": 12.5, "independentEvidence": False,
+            },
+        }], "035720")
+        self.assertEqual("reverse-dcf:one", implied["solverId"])
+        self.assertEqual("valuation-assessment:one", implied["valuationAssessmentId"])
+        self.assertFalse(implied["independentEvidence"])
 
 
 if __name__ == "__main__":

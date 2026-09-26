@@ -608,6 +608,31 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(2, result.quality["indexCount"])
         self.assertEqual("sufficient", result.quality["coverageState"])
 
+        older = {"marketIndices": {"KOSPI": {
+            "close": 3400.0,
+            "baseDate": "20260826",
+            "sourceAsOf": "2026-08-26T15:30:00+09:00",
+            "provider": "금융위원회·공공데이터포털",
+        }}}
+        newer = {"marketIndices": {"KOSPI": {
+            "close": 3500.1,
+            "baseDate": "20260827",
+            "sourceAsOf": "2026-08-27T15:30:00+09:00",
+            "provider": "KRX OpenAPI",
+        }}}
+        for base, incoming in ((older, newer), (newer, older)):
+            merged = merge_external_signal_read_models(base, incoming)
+            self.assertEqual(3500.1, merged["marketIndices"]["KOSPI"]["close"])
+            self.assertEqual("KRX OpenAPI", merged["marketIndices"]["KOSPI"]["provider"])
+
+        same_date_public = {"marketIndices": {"KOSPI": {
+            **newer["marketIndices"]["KOSPI"],
+            "close": 3499.9,
+            "provider": "금융위원회·공공데이터포털",
+        }}}
+        merged = merge_external_signal_read_models(same_date_public, newer)
+        self.assertEqual("KRX OpenAPI", merged["marketIndices"]["KOSPI"]["provider"])
+
     def _assert_ecos_macro_adapter_normalizes_official_kr_rates_and_fx(self):
         requested = []
 
@@ -719,6 +744,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(3500.1, result.payload["marketIndices"]["KOSPI"]["close"])
         self.assertEqual("2026-08-26T15:30:00+09:00", result.source_as_of)
         self.assertEqual("official-daily-reference", adapter.descriptor.materiality_policy)
+        self.assertEqual({}, adapter._main_index([{"IDX_NM": "코스피 200"}], "KOSPI"))
 
     def test_public_data_financial_adapter_normalizes_official_periods_and_archives_provider_rows(self):
         def fetcher(url, _headers, _timeout):

@@ -118,7 +118,7 @@ class KrxMarketIndexAdapter:
             row for row in rows
             if str(row.get("IDX_NM") or "").strip().upper() in {name.upper() for name in expected}
         ]
-        return exact[0] if exact else (rows[0] if rows else {})
+        return exact[0] if exact else {}
 
     @staticmethod
     def _index_item(index_key: str, index_name: str, row: Mapping[str, object]) -> Dict[str, object]:

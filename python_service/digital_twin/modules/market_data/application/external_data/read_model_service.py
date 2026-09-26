@@ -7,6 +7,7 @@ from digital_twin.modules.news_intelligence.contracts import (
     source_reference_from_fact_row,
 )
 from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
+from digital_twin.modules.market_data.domain.market_index_observations import merge_market_index_maps
 
 
 EXTERNAL_SIGNAL_MAP_FIELDS = {
@@ -338,6 +339,8 @@ def merge_external_signal_read_models(
             result[key] = merge_company_knowledge_maps(result.get(key) or {}, value)
         elif key in {"companyOverviews", "earningsReports"} and isinstance(value, dict):
             result[key] = merge_financial_summary_maps(result.get(key) or {}, value)
+        elif key == "marketIndices" and isinstance(value, dict):
+            result[key] = merge_market_index_maps(result.get(key) or {}, value)
         elif key in EXTERNAL_SIGNAL_MAP_FIELDS and isinstance(value, dict):
             result[key] = merge_dict(result.get(key) or {}, value)
         elif key == "macro" and isinstance(value, dict):
@@ -401,6 +404,8 @@ class ExternalSignalsReadModelService:
                     result[key] = merge_company_knowledge_maps(result.get(key) or {}, value)
                 elif key in {"companyOverviews", "earningsReports"} and isinstance(value, dict):
                     result[key] = merge_financial_summary_maps(result.get(key) or {}, value)
+                elif key == "marketIndices" and isinstance(value, dict):
+                    result[key] = merge_market_index_maps(result.get(key) or {}, value)
                 elif key in EXTERNAL_SIGNAL_MAP_FIELDS and isinstance(value, dict):
                     result[key] = merge_dict(result.get(key) or {}, value)
                 elif key == "macro" and isinstance(value, dict):

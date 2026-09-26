@@ -185,7 +185,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eighteen valuation snapshot, company-driver causality, pure DCF,
         # reverse-DCF, isolated release and point-in-time quality regressions
         # protect the new accuracy-first investment-assistant boundary.
-        self.assertLessEqual(total, 1798)
+        # Three point-in-time historical multiple regressions protect look-ahead,
+        # stale-consensus and comparable-sample admission boundaries.
+        self.assertLessEqual(total, 1801)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

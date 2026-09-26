@@ -1115,6 +1115,33 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return [self._fact_row(row) for row in rows]
 
+    def list_revisions(
+        self,
+        dataset_ids: Iterable[str] = None,
+        subject_keys: Iterable[str] = None,
+        limit: int = 1000,
+    ) -> List[Dict[str, object]]:
+        """Read a bounded immutable fact history for point-in-time joins."""
+
+        datasets = sorted({str(item or "").strip() for item in dataset_ids or [] if str(item or "").strip()})
+        subjects = sorted({str(item or "").upper().strip() for item in subject_keys or [] if str(item or "").strip()})
+        clauses = []
+        params: List[object] = []
+        if datasets:
+            clauses.append("dataset_id IN (" + ", ".join(["%s"] * len(datasets)) + ")")
+            params.extend(datasets)
+        if subjects:
+            clauses.append("subject_key IN (" + ", ".join(["%s"] * len(subjects)) + ")")
+            params.extend(subjects)
+        sql = "SELECT * FROM external_fact_revision"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY subject_key, dataset_id, fetched_at ASC LIMIT %s"
+        params.append(max(1, min(10000, int(limit or 1000))))
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        return [self._revision_fact_row(row) for row in rows]
+
     def fact_fitness_rows(self, subject_keys: Iterable[str] = None) -> List[Dict[str, object]]:
         """Read only metadata needed by the status fitness model."""
 
@@ -1278,4 +1305,25 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             "payload": _json_loads(row.get("payload_json"), {}),
             "quality": _json_loads(row.get("quality_json"), {}),
             "updatedAt": str(row.get("updated_at") or ""),
+        }
+
+    @staticmethod
+    def _revision_fact_row(row: Dict[str, object]) -> Dict[str, object]:
+        if not row:
+            return {}
+        return {
+            "datasetId": str(row.get("dataset_id") or ""),
+            "subjectKey": str(row.get("subject_key") or ""),
+            "providerId": str(row.get("provider_id") or ""),
+            "revisionId": str(row.get("revision_id") or ""),
+            "sourceRevision": str(row.get("source_revision") or ""),
+            "payloadHash": str(row.get("payload_hash") or ""),
+            "sourceSchemaVersion": str(row.get("source_schema_version") or ""),
+            "availability": str(row.get("availability") or "unknown"),
+            "sourceAsOf": str(row.get("source_as_of") or ""),
+            "fetchedAt": str(row.get("fetched_at") or ""),
+            "freshnessState": "historical",
+            "payload": _json_loads(row.get("payload_json"), {}),
+            "quality": _json_loads(row.get("quality_json"), {}),
+            "createdAt": str(row.get("created_at") or ""),
         }

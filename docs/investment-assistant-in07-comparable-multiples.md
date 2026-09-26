@@ -82,3 +82,11 @@ mirror 중복, 같은 identity의 값 충돌을 각각 제외했다. bootstrap �
 현재 fact에는 peRatio/forwardPE가 있지만 issuer별 peer/historical 비교 ledger가 없어서 이를 새
 목표 배수 표본으로 간주하지 않았다. 이번 변경은 없는 비교 표본을 보충하거나 API 재수집을
 강제하지 않으며, 기존 reference 상태를 정확히 설명한다.
+
+2026-09-26 후속 작업에서는 별도 재수집 없이 immutable `yfinance.fundamental` 가격 snapshot과
+그 시점까지 알려진 `yfinance.analyst` FY1 EPS revision을 결합하는 운영 공급 경로를 추가했다.
+미래 컨센서스 제외, 최대 14일 age, 주 1개 표본, 두 원본 revision 보존 조건을 모두 통과한
+관측만 `historical` 표본이 된다. 현재 보존 이력이 충분한 AAPL, NVDA, 035720은 각각 7개
+표본으로 `evidenceBacked=true`가 됐다. 공급자가 EPS basis를 밝히지 않은 사실은
+`provider-reported-unspecified`로 유지되며 공식 또는 diluted EPS로 표현하지 않는다. 이 변화는
+배수 데이터 준비도를 높였고 모델 검토·그래프 행동 승인·성과 실증을 자동 통과시키지 않는다.

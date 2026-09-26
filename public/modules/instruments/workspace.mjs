@@ -228,7 +228,8 @@ function renderInstrumentValuation(row, view) {
   var evidenceBacked = Boolean(multiple.evidenceBacked);
   var sourceRows = Array.isArray(payload.sources) ? payload.sources : [];
   var missing = Array.isArray(payload.missingData) ? payload.missingData : [];
-  var decisionLabel = quality.decisionEligible ? "투자 판단에 사용 가능" : "투자 판단에는 참고만";
+  var reviewPending = evidenceBacked && quality.reliabilityState === "sufficient" && ["ai_applied_pending_review", "pending_review", "pending-review"].indexOf(valuation.reviewStatus) >= 0;
+  var decisionLabel = quality.decisionEligible ? "투자 판단에 사용 가능" : reviewPending ? "근거 확보 · 모델 검토 대기" : "투자 판단에는 참고만";
   var decisionTone = quality.decisionEligible ? "watch" : "caution";
 
   return [

@@ -148,3 +148,24 @@ paired comparison은 baseline과 candidate의 source bundle, observation clock, 
 로컬 운영 snapshot의 AAPL, 035720, NVDA를 새 valuation API로 읽었다. 세 종목 모두 exact input bundle로 계산 재현은 가능했지만 비교 PER 표본 수가 0인 bootstrap band여서 `valuationDecisionEligible=false`였다. 사건·조정 가격 반응 연결이 없어 가격 원인은 `unresolved`, 명시적 DCF driver bundle이 없어 reverse DCF는 `unavailable`, 과거 driver/assessment 비교 기록이 없어 `customerMessageEligible=false`였다.
 
 화면에서도 초기 가격 범위는 “투자 판단에는 참고만”, 원인은 “가격 원인 확인 불가”로 표시됐다. 최근 EPS 기간은 forecast horizon과 섞이지 않고 TTM으로 표시됐으며, 현금흐름표의 음수 capex는 AAPL `-12,715,000,000 USD`를 원본으로 보존하면서 화면과 DCF driver에서는 `12,715,000,000 USD` 현금유출로 표시했다. 이 확인은 데이터 준비도를 기록한 것이며 모델 승격이나 투자 정확도 실증이 아니다.
+
+### 2026-09-26 운영 과거 선행 PER 공급 경로
+
+운영 MySQL에 이미 보존된 `yfinance.fundamental`과 `yfinance.analyst`의 immutable revision을
+시점 기준으로 결합하는 공급기를 추가했다. 가격 snapshot보다 늦게 관측된 컨센서스는 사용하지
+않고, 컨센서스 관측 후 14일이 지난 가격도 제외한다. 같은 주의 반복 polling은 가장 늦은 완전
+관측 하나로 축약해 표본 수를 부풀리지 않는다. 각 관측은 가격 revision과 analyst revision을 모두
+`sourceReferences`에 보존하며, 계산식은 `price / point-in-time FY1 EPS consensus`다.
+
+공급자가 basic/diluted와 회계 기준을 명시하지 않은 값은
+`provider-reported-unspecified`로 기록한다. 이는 basis가 확인됐다는 주장이 아니다. 현재 FY1
+컨센서스와 과거 표본이 같은 공급자 계약, 통화, security line 및 이 명시적 unknown basis를
+공유할 때만 서로 비교한다. 서로 다른 명시적 basis와 섞이지 않으며 공급자 unknown을 공식
+공시 EPS로 승격하지 않는다.
+
+읽기 모델은 `valuationEvidenceFeeds[symbol]`에 표본 수, 최소 3개 충족 여부, 주간 sampling 및
+look-ahead 차단 상태를 노출한다. AAPL, NVDA, 035720의 현재 보존 데이터에는 각각 7개 주간
+표본이 있어 bootstrap 대신 historical 사분위 밴드를 계산했다. 세 종목의 valuation 입력과
+재현 상태는 `sufficient`가 됐지만 모델 상태는 여전히 `ai_applied_pending_review`다. 데이터가
+충분하다는 사실이 모델 승인이나 투자 행동 권한을 자동으로 만들지 않는다. DCF, 기업별 금리·환율
+노출, 사건별 조정 가격 반응은 각자의 입력 계약이 아직 필요하다.

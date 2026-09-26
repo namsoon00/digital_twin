@@ -38,6 +38,17 @@ test("instrument valuation separates verified changes, price-cause limits and re
   assert.match(html, /참고용/);
   assert.match(html, /기업의 매출·비용 통화 노출/);
   assert.doesNotMatch(html, /causal-hypothesis|company-currency-exposure-missing/);
+
+  const pendingReview = renderInstrumentInvestmentAnalysis({
+    priceExplanation: {claimStrength: "unresolved"},
+    valuationModels: [{
+      modelId: "growth-quality-earnings", fairValue: 40, currency: "USD",
+      decisionEligible: false, evidenceBacked: true, inputState: "sufficient",
+      reliabilityState: "sufficient", reviewStatus: "ai_applied_pending_review"
+    }]
+  }, "USD");
+  assert.match(pendingReview, /모델 검토 대기/);
+  assert.doesNotMatch(pendingReview, /<em>참고용<\/em>/);
 });
 
 test("compact financial reviews keep all source-labelled facts separate from the new market change", () => {

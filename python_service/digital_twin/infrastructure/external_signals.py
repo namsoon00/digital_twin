@@ -91,6 +91,11 @@ class ExternalSignalProvider(
             and legacy_collection in {"", "0", "false", "no", "off", "disabled"}
         ):
             from digital_twin.modules.market_data.public import ExternalSignalsReadModelService
+            from digital_twin.modules.portfolio.public import HistoricalMultipleEvidenceService
             from .operational_store import external_data_store
 
-            self.external_data_read_model = ExternalSignalsReadModelService(external_data_store(self.settings))
+            fact_store = external_data_store(self.settings)
+            self.external_data_read_model = ExternalSignalsReadModelService(
+                fact_store,
+                valuation_evidence_service=HistoricalMultipleEvidenceService(fact_store, self.settings),
+            )

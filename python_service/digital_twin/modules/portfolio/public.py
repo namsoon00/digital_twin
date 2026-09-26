@@ -5,6 +5,8 @@ from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {'DecisionActionPlanningService': ('digital_twin.modules.portfolio.application.portfolio_lifecycle_service',
                                    'DecisionActionPlanningService'),
+ 'HistoricalMultipleEvidenceService': ('digital_twin.modules.portfolio.application.valuation_evidence_service',
+                                        'HistoricalMultipleEvidenceService'),
  'InvestmentDomainService': ('digital_twin.modules.portfolio.application.investment_domain_service',
                              'InvestmentDomainService'),
  'PortfolioAccountingService': ('digital_twin.modules.portfolio.application.portfolio_lifecycle_service',

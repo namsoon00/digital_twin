@@ -44,6 +44,7 @@
     {"file": "test_decision_evidence_assertion.py", "tier": "unit", "core": true},
     {"file": "test_action_envelope_ai_gate.py", "tier": "unit", "core": true},
     {"file": "test_valuation_contracts.py", "tier": "unit", "core": true},
+    {"file": "test_historical_multiple_evidence.py", "tier": "unit", "core": true},
     {"file": "test_instrument_valuation_query.py", "tier": "unit", "core": true},
     {"file": "test_valuation_snapshot.py", "tier": "unit", "core": true},
     {"file": "test_company_driver_causality.py", "tier": "unit", "core": true},

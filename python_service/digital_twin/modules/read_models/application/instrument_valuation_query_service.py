@@ -365,6 +365,10 @@ class InstrumentValuationQueryService:
                 "currency": _text(row.get("valuationCurrency")),
                 "decisionEligible": bool(row.get("valuationDecisionEligible")),
                 "referenceOnly": bool(row.get("valuationReferenceOnly")) or not bool(row.get("valuationDecisionEligible")),
+                "reviewStatus": _text(row.get("approvalStatus")),
+                "inputState": _text(row.get("valuationInputState")),
+                "reliabilityState": _text(row.get("valuationReliabilityState")),
+                "evidenceBacked": bool((row.get("multipleBand") or {}).get("evidenceBacked")),
                 "blockedReasons": list(assessment.get("blockedReasons") or row.get("modelExclusionReasons") or []),
                 "comparisonPolicy": "do-not-average-model-values",
             })

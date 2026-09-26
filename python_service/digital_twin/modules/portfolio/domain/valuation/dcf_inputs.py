@@ -17,8 +17,8 @@ from typing import Dict, Mapping
 from digital_twin.modules.news_intelligence.contracts import financial_report_contract_assessment
 
 
-DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v2"
-DRIVER_DCF_ASSUMPTION_VERSION = "driver-dcf-shadow-assumptions-v2"
+DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v3-market-currency"
+DRIVER_DCF_ASSUMPTION_VERSION = "driver-dcf-shadow-assumptions-v3-market-currency"
 DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION = "driver-dcf-financial-evidence-v1"
 DRIVER_DCF_ASSUMPTION_REVIEW_VERSION = "driver-dcf-assumption-review-v1"
 
@@ -27,7 +27,15 @@ FINANCIAL_INPUT_METRICS = (
     "depreciationAmortization", "capitalExpenditure", "changeInWorkingCapital",
     "stockBasedCompensation", "cash", "totalDebt", "weightedAverageSharesDiluted",
 )
-OFFICIAL_FINANCIAL_DATASETS = {"sec.company_facts", "opendart.company_facts"}
+OFFICIAL_FINANCIAL_DATASETS = {
+    "sec.company_facts",
+    "opendart.company_facts",
+    "public-data.kr-company-financials",
+}
+RISK_FREE_SERIES_BY_CURRENCY = {
+    "USD": {"seriesId": "DGS10", "datasetId": "fred.macro", "label": "미국 10년 국채금리"},
+    "KRW": {"seriesId": "KRGB10Y", "datasetId": "ecos.macro", "label": "한국 10년 국고채금리"},
+}
 
 
 def _text(value: object) -> str:
@@ -66,11 +74,16 @@ def _latest_timestamp(values) -> str:
     return max(valid, key=lambda item: item[1])[0] if valid else ""
 
 
-def _source_references(lineage: Mapping[str, object], symbol: str) -> list[Dict[str, object]]:
+def _source_references(
+    lineage: Mapping[str, object],
+    symbol: str,
+    currency: str,
+) -> list[Dict[str, object]]:
     accepted = {
-        "sec.company_facts", "opendart.company_facts",
-        "yfinance.fundamental", "yfinance.analyst", "fred.macro",
+        *OFFICIAL_FINANCIAL_DATASETS,
+        "yfinance.fundamental", "yfinance.analyst", "fred.macro", "ecos.macro",
     }
+    macro_dataset = str((RISK_FREE_SERIES_BY_CURRENCY.get(currency) or {}).get("datasetId") or "")
     result = {}
     for item in (lineage or {}).values():
         if not isinstance(item, Mapping):
@@ -80,7 +93,9 @@ def _source_references(lineage: Mapping[str, object], symbol: str) -> list[Dict[
         revision_id = _text(item.get("revisionId"))
         if dataset_id not in accepted or not revision_id:
             continue
-        if dataset_id != "fred.macro" and subject != symbol:
+        if dataset_id in {"fred.macro", "ecos.macro"} and dataset_id != macro_dataset:
+            continue
+        if dataset_id not in {"fred.macro", "ecos.macro"} and subject != symbol:
             continue
         row = {
             "datasetId": dataset_id,
@@ -136,13 +151,24 @@ def _latest_verified_annual(company: Mapping[str, object]):
 def _row_source_references(row: Mapping[str, object]) -> list[Dict[str, object]]:
     report = row.get("reportContract") if isinstance(row.get("reportContract"), Mapping) else {}
     provider = _text(report.get("provider") or row.get("provider")).casefold()
+    provenance = row.get("metricProvenance") if isinstance(row.get("metricProvenance"), Mapping) else {}
+    reported_references = [item for item in report.get("sourceReferences") or [] if isinstance(item, Mapping)]
+    has_official_provenance = any(
+        isinstance(item, Mapping) and bool(item.get("official"))
+        for item in provenance.values()
+    )
+    has_official_reference = any(
+        _text(item.get("datasetId")) in OFFICIAL_FINANCIAL_DATASETS
+        for item in reported_references
+    )
     allowed = (
         OFFICIAL_FINANCIAL_DATASETS
-        if bool(row.get("officialSource")) or "sec" in provider or "dart" in provider
+        if bool(row.get("officialSource")) or has_official_provenance or has_official_reference
+        or "sec" in provider or "dart" in provider
         else {"yfinance.fundamental"}
     )
     return [
-        dict(item) for item in report.get("sourceReferences") or []
+        dict(item) for item in reported_references
         if isinstance(item, Mapping) and _text(item.get("datasetId")) in allowed
         and _text(item.get("revisionId"))
     ]
@@ -214,6 +240,35 @@ def _annual_currency(row: Mapping[str, object]) -> str:
     return _text(revenue.get("currency") or row.get("currency")).upper()
 
 
+def _risk_free_observation(
+    macro: Mapping[str, object],
+    currency: str,
+) -> Dict[str, object]:
+    specification = dict(RISK_FREE_SERIES_BY_CURRENCY.get(currency) or {})
+    series = macro.get("series") if isinstance(macro.get("series"), Mapping) else {}
+    series_id = _text(specification.get("seriesId"))
+    row = series.get(series_id) if isinstance(series.get(series_id), Mapping) else {}
+    return {
+        **specification,
+        "currency": currency,
+        "value": _finite(row.get("value")),
+        "date": _text(row.get("date") or row.get("observationDate") or row.get("sourceAsOf")),
+        "provider": _text(row.get("provider")),
+        "sourceSeriesCode": _text(row.get("sourceSeriesCode")),
+        "sourceItemCode": _text(row.get("sourceItemCode")),
+    }
+
+
+def _market_assumption(
+    currency: str,
+    values: Mapping[str, object] | None,
+    fallback: object,
+) -> float:
+    configured = _finite((values or {}).get(currency))
+    fallback_value = _finite(fallback)
+    return configured if configured is not None else float(fallback_value if fallback_value is not None else 0.0)
+
+
 def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, object]]:
     result = {}
     for row in yfinance.get("revenueEstimate") or []:
@@ -268,6 +323,8 @@ def build_driver_dcf_input_bundle(
     valuation_at: object = "",
     equity_risk_premium_pct: float = 5.0,
     terminal_growth_pct: float = 2.5,
+    equity_risk_premium_pct_by_currency: Mapping[str, object] = None,
+    terminal_growth_pct_by_currency: Mapping[str, object] = None,
 ) -> Dict[str, object]:
     """Return a shadow-only DCF bundle plus an explicit readiness contract."""
 
@@ -278,11 +335,20 @@ def build_driver_dcf_input_bundle(
     annual, annual_assessment = _latest_verified_annual(company or {})
     candidates = _annual_candidates(company or {})
     financial_evidence = _financial_evidence_contract(annual, annual_assessment, candidates)
-    lineage_references = _source_references(lineage or {}, normalized_symbol)
+    currency = _annual_currency(annual)
+    market_equity_risk_premium_pct = _market_assumption(
+        currency, equity_risk_premium_pct_by_currency, equity_risk_premium_pct,
+    )
+    market_terminal_growth_pct = _market_assumption(
+        currency, terminal_growth_pct_by_currency, terminal_growth_pct,
+    )
+    risk_free_observation = _risk_free_observation(macro, currency)
+    risk_free_dataset = _text(risk_free_observation.get("datasetId"))
+    lineage_references = _source_references(lineage or {}, normalized_symbol, currency)
     financial_references = list(financial_evidence.get("sourceReferences") or [])
     auxiliary_references = [
         item for item in lineage_references
-        if item.get("datasetId") in {"yfinance.analyst", "fred.macro"}
+        if item.get("datasetId") in {"yfinance.analyst", risk_free_dataset}
     ]
     references = {
         (_text(item.get("datasetId")), _text(item.get("revisionId"))): dict(item)
@@ -291,13 +357,11 @@ def build_driver_dcf_input_bundle(
     }
     references = [references[key] for key in sorted(references)]
     estimates = _revenue_estimates(yfinance)
-    series = macro.get("series") if isinstance(macro.get("series"), Mapping) else {}
-    dgs10 = series.get("DGS10") if isinstance(series.get("DGS10"), Mapping) else {}
 
     observed = {
         "annualPeriod": _text(annual_assessment.get("period") or annual.get("periodEnd") or annual.get("period")),
         "annualProvider": _text(annual.get("provider")),
-        "currency": _annual_currency(annual),
+        "currency": currency,
         "revenue": _finite(annual.get("revenue")),
         "operatingIncome": _finite(annual.get("operatingIncome")),
         "pretaxIncome": _finite(annual.get("pretaxIncome")),
@@ -312,7 +376,12 @@ def build_driver_dcf_input_bundle(
         "dilutedShares": _finite(annual.get("weightedAverageSharesDiluted")),
         "marketCapitalization": _finite(overview.get("marketCapitalization")),
         "beta": _finite(overview.get("beta")),
-        "riskFreeRatePct": _finite(dgs10.get("value")),
+        "riskFreeRatePct": risk_free_observation.get("value"),
+        "riskFreeSeriesId": risk_free_observation.get("seriesId"),
+        "riskFreeDatasetId": risk_free_dataset,
+        "riskFreeLabel": risk_free_observation.get("label"),
+        "riskFreeProvider": risk_free_observation.get("provider"),
+        "riskFreeObservationDate": risk_free_observation.get("date"),
         "fy1RevenueConsensus": (estimates.get("0y") or {}).get("value"),
         "fy2RevenueConsensus": (estimates.get("+1y") or {}).get("value"),
     }
@@ -338,13 +407,13 @@ def build_driver_dcf_input_bundle(
     reasons = []
     if not annual_assessment.get("eligible"):
         reasons.append(_text(annual_assessment.get("reason")) or "verified-annual-report-missing")
-    if observed["currency"] != "USD":
-        reasons.append("pilot-valuation-currency-not-supported")
+    if observed["currency"] not in RISK_FREE_SERIES_BY_CURRENCY:
+        reasons.append("valuation-currency-not-supported")
     if not any(item.get("datasetId") in {"yfinance.fundamental", *OFFICIAL_FINANCIAL_DATASETS} for item in references):
         reasons.append("financial-source-revision-missing")
     if not any(item.get("datasetId") == "yfinance.analyst" for item in references):
         reasons.append("analyst-source-revision-missing")
-    if not any(item.get("datasetId") == "fred.macro" for item in references):
+    if risk_free_dataset and not any(item.get("datasetId") == risk_free_dataset for item in references):
         reasons.append("macro-source-revision-missing")
     for key, reason in required.items():
         value = observed.get(key)
@@ -372,7 +441,7 @@ def build_driver_dcf_input_bundle(
     nwc_investment_ratio = -observed["changeInWorkingCapitalCashFlow"] / revenue
     risk_free = observed["riskFreeRatePct"]
     beta = observed["beta"]
-    cost_of_equity = risk_free + beta * float(equity_risk_premium_pct)
+    cost_of_equity = risk_free + beta * market_equity_risk_premium_pct
     debt_cost = abs(observed["interestExpense"]) / observed["debt"] * 100.0 if observed["debt"] > 0 else risk_free
     equity = observed["marketCapitalization"]
     debt = observed["debt"]
@@ -386,7 +455,7 @@ def build_driver_dcf_input_bundle(
     fade_steps = 3
     previous = fy2
     for step in range(1, fade_steps + 1):
-        growth = fy2_growth_pct + (float(terminal_growth_pct) - fy2_growth_pct) * step / fade_steps
+        growth = fy2_growth_pct + (market_terminal_growth_pct - fy2_growth_pct) * step / fade_steps
         previous *= 1.0 + growth / 100.0
         projection_revenues.append(previous)
 
@@ -408,9 +477,10 @@ def build_driver_dcf_input_bundle(
     assumptions = [
         {"id": "fy1-revenue-consensus", "value": fy1, "unit": observed["currency"], "status": "observed", "reviewState": "not-required", "evidenceClass": "analyst-consensus", "materiality": "high"},
         {"id": "fy2-revenue-consensus", "value": fy2, "unit": observed["currency"], "status": "observed", "reviewState": "not-required", "evidenceClass": "analyst-consensus", "materiality": "high"},
-        {"id": "equity-risk-premium", "value": float(equity_risk_premium_pct), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "policy-assumption", "materiality": "high"},
+        {"id": "risk-free-rate", "value": risk_free, "unit": "percent", "status": "observed", "reviewState": "not-required", "evidenceClass": "official-sovereign-yield", "materiality": "high", "seriesId": observed["riskFreeSeriesId"], "datasetId": observed["riskFreeDatasetId"], "observationDate": observed["riskFreeObservationDate"]},
+        {"id": "equity-risk-premium", "value": market_equity_risk_premium_pct, "unit": "percent", "currency": observed["currency"], "status": "candidate", "reviewState": "pending", "evidenceClass": "policy-assumption", "materiality": "high"},
         {"id": "wacc", "value": round(wacc_pct, 8), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "derived-with-policy-input", "materiality": "high"},
-        {"id": "terminal-growth", "value": float(terminal_growth_pct), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "policy-assumption", "materiality": "high"},
+        {"id": "terminal-growth", "value": market_terminal_growth_pct, "unit": "percent", "currency": observed["currency"], "status": "candidate", "reviewState": "pending", "evidenceClass": "policy-assumption", "materiality": "high"},
         {"id": "years-3-to-5-growth-fade", "value": fy2_growth_pct, "unit": "percent-start", "status": "candidate", "reviewState": "pending", "evidenceClass": "forecast-policy", "materiality": "high"},
         {"id": "constant-operating-margin", "value": round(operating_margin_pct, 8), "unit": "percent", "status": "candidate", "reviewState": "pending", "evidenceClass": "forecast-policy", "materiality": "high"},
         {"id": "constant-reinvestment-ratios", "value": True, "unit": "policy", "status": "candidate", "reviewState": "pending", "evidenceClass": "forecast-policy", "materiality": "high"},
@@ -431,7 +501,7 @@ def build_driver_dcf_input_bundle(
         "modelApprovalState": "shadow",
         "baseRevenue": revenue,
         "waccPct": round(wacc_pct, 8),
-        "terminalGrowthPct": float(terminal_growth_pct),
+        "terminalGrowthPct": market_terminal_growth_pct,
         "cash": observed["cash"],
         "debt": observed["debt"],
         "preferredEquity": 0.0,
@@ -450,7 +520,7 @@ def build_driver_dcf_input_bundle(
         "calculationNotes": {
             "workingCapitalNormalization": "economic investment = -provider cash-flow change in working capital",
             "waccFormula": "E/(D+E)*costOfEquity + D/(D+E)*costOfDebt*(1-taxRate)",
-            "costOfEquityFormula": "matching 10Y Treasury + beta * candidate equity risk premium",
+            "costOfEquityFormula": "matching-currency 10Y sovereign yield + beta * candidate equity risk premium",
             "futureYears": "FY1/FY2 consensus followed by a versioned fade to terminal growth",
         },
     }

@@ -573,6 +573,13 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "aiValuationPreferredRequiredYieldPct",
         "aiValuationPreferredMinimumMarginPct",
         "aiValuationBaselineMinimumMarginPct",
+        "valuationDriverDcfPilotSymbols",
+        "valuationDriverDcfEquityRiskPremiumPct",
+        "valuationDriverDcfTerminalGrowthPct",
+        "valuationDriverDcfUsEquityRiskPremiumPct",
+        "valuationDriverDcfKrEquityRiskPremiumPct",
+        "valuationDriverDcfUsTerminalGrowthPct",
+        "valuationDriverDcfKrTerminalGrowthPct",
     ]
     public = {key: settings.get(key, "") for key in public_keys}
     public.update({

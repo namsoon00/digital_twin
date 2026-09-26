@@ -16,6 +16,13 @@ from digital_twin.modules.portfolio.domain.valuation.historical_multiples import
 )
 
 
+def _float_setting(settings: Mapping[str, object], key: str, fallback: float) -> float:
+    try:
+        return float(settings.get(key))
+    except (TypeError, ValueError):
+        return fallback
+
+
 class HistoricalMultipleEvidenceService:
     def __init__(self, fact_store, settings: Mapping[str, object] = None):
         self.fact_store = fact_store
@@ -86,7 +93,7 @@ class DriverDcfEvidenceService:
         if isinstance(configured, (list, tuple, set)):
             values = configured
         else:
-            values = str(configured or "NVDA").split(",")
+            values = str(configured or "NVDA,000660").split(",")
         return {str(item or "").upper().strip() for item in values if str(item or "").strip()}
 
     def enrich(self, signals: Dict[str, object], symbols: Iterable[object]) -> Dict[str, object]:
@@ -115,6 +122,8 @@ class DriverDcfEvidenceService:
         macro = result.get("macro") if isinstance(result.get("macro"), Mapping) else {}
         bundles = dict(result.get("driverDcfInputs") or {}) if isinstance(result.get("driverDcfInputs"), Mapping) else {}
         readiness = dict(result.get("driverDcfReadiness") or {}) if isinstance(result.get("driverDcfReadiness"), Mapping) else {}
+        generic_erp = _float_setting(self.settings, "valuationDriverDcfEquityRiskPremiumPct", 5.0)
+        generic_terminal_growth = _float_setting(self.settings, "valuationDriverDcfTerminalGrowthPct", 2.5)
         for symbol in selected:
             company = company_knowledge.get(symbol) if isinstance(company_knowledge.get(symbol), Mapping) else {}
             financial_candidates = []
@@ -142,8 +151,16 @@ class DriverDcfEvidenceService:
                 lineage=lineage,
                 exposure_readiness=driver_map.get("exposureReadiness") if isinstance(driver_map, Mapping) else {},
                 valuation_at=result.get("fetchedAt"),
-                equity_risk_premium_pct=float(self.settings.get("valuationDriverDcfEquityRiskPremiumPct") or 5.0),
-                terminal_growth_pct=float(self.settings.get("valuationDriverDcfTerminalGrowthPct") or 2.5),
+                equity_risk_premium_pct=generic_erp,
+                terminal_growth_pct=generic_terminal_growth,
+                equity_risk_premium_pct_by_currency={
+                    "USD": _float_setting(self.settings, "valuationDriverDcfUsEquityRiskPremiumPct", generic_erp),
+                    "KRW": _float_setting(self.settings, "valuationDriverDcfKrEquityRiskPremiumPct", generic_erp),
+                },
+                terminal_growth_pct_by_currency={
+                    "USD": _float_setting(self.settings, "valuationDriverDcfUsTerminalGrowthPct", generic_terminal_growth),
+                    "KRW": _float_setting(self.settings, "valuationDriverDcfKrTerminalGrowthPct", generic_terminal_growth),
+                },
             )
             readiness[symbol] = {key: value for key, value in built.items() if key != "input"}
             if isinstance(built.get("input"), Mapping):

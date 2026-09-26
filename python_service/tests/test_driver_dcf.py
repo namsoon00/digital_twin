@@ -150,6 +150,9 @@ class DriverDcfTests(unittest.TestCase):
         self.assertEqual("exact-input-bundle-and-assumption-version", built["assumptionReview"]["approvalScope"])
         self.assertFalse(built["assumptionReview"]["automaticApprovalAllowed"])
         self.assertEqual(8, built["assumptionReview"]["pendingCount"])
+        self.assertEqual("USD", built["input"]["currency"])
+        self.assertEqual("DGS10", built["observedInputs"]["riskFreeSeriesId"])
+        self.assertEqual("fred.macro", built["observedInputs"]["riskFreeDatasetId"])
         self.assertEqual(22, built["input"]["projectionYears"][0]["changeInWorkingCapital"])
         result = calculate_driver_dcf(built["input"])
         self.assertEqual("calculated", result["status"])
@@ -183,6 +186,88 @@ class DriverDcfTests(unittest.TestCase):
         self.assertEqual(12, built["financialEvidence"]["officialMetricCount"])
         self.assertIn("sec.company_facts", {item["datasetId"] for item in built["sourceReferences"]})
         self.assertNotIn("yfinance.fundamental", {item["datasetId"] for item in built["sourceReferences"]})
+
+        source = self.evidence_inputs()
+        public_official = source["company"]["financials"]["annual"][0]
+        public_official["provider"] = "금융위원회 기업재무정보"
+        public_official["currency"] = "KRW"
+        public_official["metricProvenance"] = {
+            key: {**dict(value), "provider": "금융위원회 기업재무정보", "currency": "KRW", "official": True}
+            for key, value in public_official["metricProvenance"].items()
+        }
+        public_official.pop("reportContract", None)
+        source["company"]["financials"]["annual"] = [bind_financial_report_contract(public_official, [{
+            "datasetId": "public-data.kr-company-financials", "subjectKey": "TEST",
+            "revisionId": "public-r1", "payloadHash": "public-h1",
+        }])]
+        source["macro"] = {"series": {"KRGB10Y": {"value": 4.392}}}
+        source["lineage"]["macro"] = {
+            "datasetId": "ecos.macro", "subjectKey": "GLOBAL",
+            "revisionId": "ecos-r1", "payloadHash": "ecos-h1",
+            "fetchedAt": "2026-01-04T00:00:00Z",
+        }
+        built = build_driver_dcf_input_bundle(**source)
+
+        self.assertEqual("ready-for-shadow", built["status"])
+        self.assertEqual("official-filing", built["financialEvidence"]["sourceClass"])
+        self.assertTrue(built["financialEvidence"]["officialDecisionReady"])
+        self.assertIn(
+            "public-data.kr-company-financials",
+            {item["datasetId"] for item in built["sourceReferences"]},
+        )
+
+        source = self.evidence_inputs()
+        annual = source["company"]["financials"]["annual"][0]
+        annual["currency"] = "KRW"
+        annual["metricProvenance"] = {
+            key: {**dict(value), "currency": "KRW"}
+            for key, value in annual["metricProvenance"].items()
+        }
+        annual.pop("reportContract", None)
+        source["company"]["financials"]["annual"] = [bind_financial_report_contract(annual, [{
+            "datasetId": "yfinance.fundamental", "subjectKey": "TEST",
+            "revisionId": "fund-r1", "payloadHash": "fund-h1",
+        }])]
+        source["macro"] = {"series": {"KRGB10Y": {
+            "value": 4.392, "date": "2026-01-03", "provider": "ECOS",
+        }}}
+        source["lineage"]["macro"] = {
+            "datasetId": "ecos.macro", "subjectKey": "GLOBAL",
+            "revisionId": "ecos-r1", "payloadHash": "ecos-h1",
+            "fetchedAt": "2026-01-04T00:00:00Z",
+        }
+        built = build_driver_dcf_input_bundle(
+            **source,
+            equity_risk_premium_pct_by_currency={"USD": 5.0, "KRW": 6.0},
+            terminal_growth_pct_by_currency={"USD": 2.5, "KRW": 3.0},
+        )
+
+        self.assertEqual("ready-for-shadow", built["status"])
+        self.assertEqual("KRW", built["input"]["currency"])
+        self.assertEqual("KRGB10Y", built["observedInputs"]["riskFreeSeriesId"])
+        self.assertEqual("ecos.macro", built["observedInputs"]["riskFreeDatasetId"])
+        self.assertEqual(4.392, built["observedInputs"]["riskFreeRatePct"])
+        self.assertEqual(3.0, built["input"]["terminalGrowthPct"])
+        assumptions = {item["id"]: item for item in built["input"]["assumptions"]}
+        self.assertEqual(6.0, assumptions["equity-risk-premium"]["value"])
+        self.assertEqual("KRW", assumptions["equity-risk-premium"]["currency"])
+        source_ids = {item["datasetId"] for item in built["sourceReferences"]}
+        self.assertIn("ecos.macro", source_ids)
+        self.assertNotIn("fred.macro", source_ids)
+        self.assertFalse(calculate_driver_dcf(built["input"])["valuationDecisionEligible"])
+
+        annual["metricProvenance"] = {
+            key: {**dict(value), "currency": "EUR"}
+            for key, value in annual["metricProvenance"].items()
+        }
+        annual.pop("reportContract", None)
+        source["company"]["financials"]["annual"] = [bind_financial_report_contract(annual, [{
+            "datasetId": "yfinance.fundamental", "subjectKey": "TEST",
+            "revisionId": "fund-r1", "payloadHash": "fund-h1",
+        }])]
+        blocked = build_driver_dcf_input_bundle(**source)
+        self.assertEqual("blocked", blocked["status"])
+        self.assertIn("valuation-currency-not-supported", blocked["missingInputs"])
 
     def test_operational_input_builder_fails_closed_on_missing_working_capital(self):
         source = self.evidence_inputs()

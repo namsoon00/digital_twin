@@ -1,6 +1,7 @@
 import unittest
 import time
 import json
+import urllib.parse
 from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from digital_twin.modules.market_data.domain.event_types import EXTERNAL_OBSERVA
 from digital_twin.modules.market_data.domain.external_data_contracts import normalized_availability
 from digital_twin.modules.market_data.domain.external_dataset_catalog import external_dataset_catalog
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_external_abox import interest_rate_signal_ids
 from digital_twin.modules.reasoning.domain.knowledge_world_projection import build_knowledge_world_graph
 from digital_twin.modules.reasoning.domain.market_world_projection import build_market_world_graph
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology
@@ -33,6 +35,9 @@ from digital_twin.modules.reasoning.domain.portfolio_ontology_reference_concepts
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
 from digital_twin.infrastructure.external_api.adapters.base import empty_signals, legacy_provider, position_for
 from digital_twin.infrastructure.external_api.adapters import default_external_dataset_registry
+from digital_twin.infrastructure.external_api.adapters.ecos import EcosMacroAdapter
+from digital_twin.infrastructure.external_api.adapters.kosis import KosisIndustryIndicatorAdapter
+from digital_twin.infrastructure.external_api.adapters.krx import KrxMarketIndexAdapter
 from digital_twin.infrastructure.external_api.adapters.opendart import (
     OpenDartCompanyFactsAdapter,
     OpenDartDisclosureAdapter,
@@ -603,6 +608,118 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(2, result.quality["indexCount"])
         self.assertEqual("sufficient", result.quality["coverageState"])
 
+    def _assert_ecos_macro_adapter_normalizes_official_kr_rates_and_fx(self):
+        requested = []
+
+        def fetcher(url, _headers, _timeout):
+            requested.append(url)
+            is_fx = "/731Y001/" in url
+            return {
+                "StatisticSearch": {
+                    "row": [
+                        {
+                            "TIME": "20260825",
+                            "DATA_VALUE": "1381.2" if is_fx else "2.50",
+                            "UNIT_NAME": "원" if is_fx else "%",
+                        },
+                        {
+                            "TIME": "20260826",
+                            "DATA_VALUE": "1384.4" if is_fx else "2.55",
+                            "UNIT_NAME": "원" if is_fx else "%",
+                        },
+                    ]
+                }
+            }
+
+        adapter = EcosMacroAdapter(fetcher)
+        settings = {"ecosApiKey": "configured"}
+        partition = adapter.partitions([], settings)[0]
+        result = adapter.fetch(CollectionJob(
+            adapter.descriptor.dataset_id,
+            partition.partition_key,
+            adapter.descriptor.provider_id,
+            adapter.descriptor.priority,
+            partition.subject,
+        ), settings)
+
+        self.assertEqual(5, len(requested))
+        self.assertEqual(
+            {"KRGB3Y", "KRGB10Y", "KRCAA3Y", "KRBASE"},
+            set(result.payload["macro"]["series"]),
+        )
+        self.assertEqual(5.0, result.payload["macro"]["series"]["KRGB3Y"]["deltaBp"])
+        self.assertEqual(1384.4, result.payload["fxRates"]["USDKRW"]["rate"])
+        self.assertTrue(result.quality["dataUsable"])
+        self.assertEqual(
+            {"KRGB3Y", "KRGB10Y", "KRCAA3Y", "KRBASE"},
+            set(interest_rate_signal_ids(result.payload)),
+        )
+
+    def _assert_kosis_adapter_normalizes_selected_industry_indicators(self):
+        def fetcher(url, _headers, _timeout):
+            table_id = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["tblId"][0]
+            current = {
+                "DT_1JH20202": "112.5",
+                "DT_1C8015": "101.2",
+                "DT_1K41017": "108.4",
+            }[table_id]
+            return [
+                {"PRD_DE": "202607", "DT": "100.0", "UNIT_NM": "2020=100"},
+                {"PRD_DE": "202608", "DT": current, "UNIT_NM": "2020=100"},
+            ]
+
+        adapter = KosisIndustryIndicatorAdapter(fetcher)
+        settings = {"kosisApiKey": "configured"}
+        partition = adapter.partitions([], settings)[0]
+        result = adapter.fetch(CollectionJob(
+            adapter.descriptor.dataset_id,
+            partition.partition_key,
+            adapter.descriptor.provider_id,
+            adapter.descriptor.priority,
+            partition.subject,
+        ), settings)
+
+        self.assertEqual(
+            {"KR_ALL_INDUSTRY_PRODUCTION", "KR_LEADING_CYCLE", "KR_RETAIL_SALES"},
+            set(result.payload["macro"]["series"]),
+        )
+        self.assertEqual("2026-08", result.watermark["observationPeriod"])
+        self.assertEqual("2026-08-01T00:00:00+09:00", result.source_as_of)
+        self.assertEqual({}, interest_rate_signal_ids(result.payload))
+
+    def _assert_krx_adapter_normalizes_official_kospi_and_kosdaq_indices(self):
+        def fetcher(url, headers, _timeout):
+            self.assertEqual("configured", headers["AUTH_KEY"])
+            kosdaq = "kosdaq_dd_trd" in url
+            return {
+                "OutBlock_1": [{
+                    "BAS_DD": "20260826",
+                    "IDX_NM": "코스닥" if kosdaq else "코스피",
+                    "IDX_CLSS": "대표지수",
+                    "CLSPRC_IDX": "980.4" if kosdaq else "3500.1",
+                    "FLUC_RT": "1.2",
+                    "ACC_TRDVOL": "1000",
+                    "ACC_TRDVAL": "2000",
+                    "MKTCAP": "3000",
+                }]
+            }
+
+        adapter = KrxMarketIndexAdapter(fetcher)
+        settings = {"krxOpenApiKey": "configured"}
+        partition = adapter.partitions([], settings)[0]
+        result = adapter.fetch(CollectionJob(
+            adapter.descriptor.dataset_id,
+            partition.partition_key,
+            adapter.descriptor.provider_id,
+            adapter.descriptor.priority,
+            partition.subject,
+        ), settings)
+
+        self.assertEqual({"KOSPI", "KOSDAQ"}, set(result.payload["marketIndices"]))
+        self.assertEqual(3500.1, result.payload["marketIndices"]["KOSPI"]["close"])
+        self.assertEqual("2026-08-26T15:30:00+09:00", result.source_as_of)
+        self.assertEqual("official-daily-reference", adapter.descriptor.materiality_policy)
+
     def test_public_data_financial_adapter_normalizes_official_periods_and_archives_provider_rows(self):
         def fetcher(url, _headers, _timeout):
             if "getSummFinaStat" in url:
@@ -827,6 +944,9 @@ class ExternalDataPlatformTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Unknown external datasets"):
             registry.validate_dataset_ids(["missing.dataset"])
+        self._assert_ecos_macro_adapter_normalizes_official_kr_rates_and_fx()
+        self._assert_kosis_adapter_normalizes_selected_industry_indicators()
+        self._assert_krx_adapter_normalizes_official_kospi_and_kosdaq_indices()
         self._assert_registered_dataset_catalog_exposes_owned_semantics()
         self._assert_every_default_dataset_has_owned_semantics()
         self._assert_source_reference_distinguishes_provider_correction_without_using_fetch_clock()

@@ -114,9 +114,9 @@ class ExternalFactTransitionService:
             )
         if dataset_id in self.DOCUMENT_DATASETS:
             return FactTransition(True, True, "source-revision", fields, "new or revised source document")
-        if dataset_id == "fred.macro":
+        if dataset_id in {"fred.macro", "ecos.macro", "kosis.indicators"}:
             return FactTransition(True, True, "macro-observation", fields, "published macro observation changed")
-        if dataset_id in {"public-data.kr-stock-daily", "public-data.kr-market-index-daily"}:
+        if dataset_id in {"public-data.kr-stock-daily", "public-data.kr-market-index-daily", "krx.market-indices"}:
             return FactTransition(
                 True,
                 False,

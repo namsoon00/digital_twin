@@ -21,6 +21,16 @@ RATE_SERIES_LABELS = {
     "DGS10": "미국 10년 국채금리",
     "DGS2": "미국 2년 국채금리",
     "DFF": "미국 실효 연방기금금리",
+    "KRGB3Y": "한국 3년 국고채금리",
+    "KRGB10Y": "한국 10년 국고채금리",
+    "KRCAA3Y": "한국 3년 회사채 AA- 금리",
+    "KRBASE": "한국은행 기준금리",
+}
+
+MACRO_SERIES_LABELS = {
+    "KR_ALL_INDUSTRY_PRODUCTION": "한국 전산업생산지수",
+    "KR_LEADING_CYCLE": "한국 선행지수 순환변동치",
+    "KR_RETAIL_SALES": "한국 소매판매액지수",
 }
 
 
@@ -338,7 +348,7 @@ def first_fact(facts: Dict[str, object], keys: List[str]) -> Dict[str, object]:
 
 def rate_series_label(series_id: str) -> str:
     normalized = str(series_id or "").upper().strip()
-    return RATE_SERIES_LABELS.get(normalized, "FRED " + normalized)
+    return RATE_SERIES_LABELS.get(normalized, MACRO_SERIES_LABELS.get(normalized, normalized))
 
 
 def rate_series_kind(series_id: str) -> str:
@@ -440,7 +450,8 @@ def interest_rate_signal_ids(external_signals: Dict[str, object]) -> Dict[str, s
     series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
     ids = {}
     for series_id in series.keys():
-        ids[str(series_id).upper()] = entity_id(rate_series_kind(str(series_id)), str(series_id))
+        if rate_series_kind(str(series_id)) == "interest-rate":
+            ids[str(series_id).upper()] = entity_id("interest-rate", str(series_id))
     if "yieldSpread10y2y" in macro:
         ids["YIELDSPREAD10Y2Y"] = entity_id("yield-curve", "yieldSpread10y2y")
     return ids
@@ -872,6 +883,10 @@ def add_position_macro_context_concepts(
         return
     for series_id, rate_id in sorted(interest_rate_signal_ids(external_signals).items()):
         is_curve = series_id == "YIELDSPREAD10Y2Y"
+        if series_id.startswith("KR") and currency and currency != "KRW":
+            continue
+        if series_id in {"DGS10", "DGS2", "DFF"} and currency == "KRW":
+            continue
         props = external_evidence_properties(
             source="macro",
             label="금리 스프레드 민감도" if is_curve else rate_series_label(series_id) + " 민감도",

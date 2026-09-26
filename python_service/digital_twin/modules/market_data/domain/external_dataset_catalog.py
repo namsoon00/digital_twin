@@ -41,6 +41,9 @@ def _spec(
 _CATALOG = {
     "coingecko.market": _spec("coingecko.market", ("price_trade", "market_context"), "crypto-market-observation-v1", ("crypto-market",), ("GLOBAL",), ("crypto",)),
     "fred.macro": _spec("fred.macro", ("market_context",), "macro-series-observation-v1", ("macro-regime",), ("GLOBAL",), ("macro-series",)),
+    "ecos.macro": _spec("ecos.macro", ("market_context",), "macro-series-observation-v1", ("macro-regime",), ("KR",), ("macro-series",)),
+    "kosis.indicators": _spec("kosis.indicators", ("market_context",), "macro-series-observation-v1", ("macro-regime",), ("KR",), ("macro-series",)),
+    "krx.market-indices": _spec("krx.market-indices", ("price_trade", "market_context"), "market-index-observation-v1", ("market-price",), ("KR",), ("market-index",)),
     "official.bls-release": _spec("official.bls-release", ("calendar", "market_context"), "official-release-calendar-v1", (), ("GLOBAL",), ("economic-release",)),
     "official.fomc-release": _spec("official.fomc-release", ("calendar", "market_context"), "official-release-calendar-v1", (), ("GLOBAL",), ("economic-release",)),
     "official.bok-release": _spec("official.bok-release", ("calendar", "market_context"), "official-release-calendar-v1", (), ("GLOBAL",), ("economic-release",)),

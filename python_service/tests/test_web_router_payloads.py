@@ -138,7 +138,11 @@ class WebRouterPayloadTests(unittest.TestCase):
             self.assertEqual({"removed": True, "id": "account-1"}, accounts.remove_account_payload("account-1"))
 
     def test_settings_never_expose_synthetic_credentials_for_either_shared_role(self):
-        secrets = {key: "synthetic-private-value" for key in ["tossClientSecret", "tossAccountSeq", "kisAppKey", "telegramBotToken", "fredApiKey", "typedbPassword", "mysqlPassword"]}
+        secrets = {key: "synthetic-private-value" for key in [
+            "tossClientSecret", "tossAccountSeq", "kisAppKey", "telegramBotToken",
+            "fredApiKey", "ecosApiKey", "kosisApiKey", "krxOpenApiKey",
+            "typedbPassword", "mysqlPassword",
+        ]}
         prompt_release = SimpleNamespace(to_public_dict=lambda: {"releaseId": "fixture"})
         with patch.object(configuration, "runtime_settings", return_value={"appTheme": "dark", **secrets}), patch.object(configuration, "share_runtime_status_payload", return_value={}), patch.object(configuration, "runtime_identity", return_value={}), patch("digital_twin.modules.decisions.domain.notification_ai_prompt_release.active_notification_ai_prompt_release", return_value=prompt_release):
             for role, locked in [(SHARE_ROLE_OWNER, False), (SHARE_ROLE_VIEWER, True)]:

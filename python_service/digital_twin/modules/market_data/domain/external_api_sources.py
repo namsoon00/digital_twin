@@ -159,8 +159,12 @@ def _add_external_signal_payload_sources(rows: "OrderedDict[str, Dict[str, objec
     macro = signals.get("macro") if isinstance(signals.get("macro"), dict) else {}
     series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
     if series:
-        names = "/".join(str(key or "").upper() for key in series.keys() if str(key or "").strip())
-        _add_source(rows, "FRED", "미국 금리·거시 지표" + (" " + names if names else ""))
+        grouped = {}
+        for key, item in series.items():
+            provider = str(item.get("provider") or "unknown") if isinstance(item, dict) else "unknown"
+            grouped.setdefault(provider, []).append(str(key or "").upper())
+        for provider, names in sorted(grouped.items()):
+            _add_source(rows, provider, "금리·거시 지표 " + "/".join(sorted(names)))
 
     if _group_has_items(signals.get("secFilings")):
         _add_source(rows, "SEC EDGAR", "미국 공시·재무팩트(submissions/companyfacts)")

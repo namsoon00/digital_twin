@@ -116,7 +116,10 @@ PURPOSE_CONTRACTS = (
         "macro-regime",
         "거시 환경",
         ("GLOBAL",),
-        {"GLOBAL": ("fred.macro",)},
+        {
+            "GLOBAL": ("fred.macro", "ecos.macro", "kosis.indicators"),
+        },
+        ideal_sources=2,
     ),
     DataPurposeContract(
         "crypto-market",

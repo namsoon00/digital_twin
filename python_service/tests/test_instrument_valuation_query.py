@@ -167,6 +167,23 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertFalse(agreement["decisionEligible"])
         self.assertNotIn("average", agreement)
 
+    def test_release_audit_block_keeps_overall_data_readiness_limited(self):
+        state = self.snapshot_state()
+        state["externalSignals"]["driverDcfReadiness"] = {"035720": {
+            "status": "ready-for-shadow",
+            "releaseState": "blocked",
+            "financialEvidence": {
+                "status": "official-ready", "officialDecisionReady": True,
+                "officialMetricCount": 12, "requiredMetricCount": 12,
+            },
+            "consensusEvidence": {"status": "validated", "currency": "KRW", "rows": []},
+        }}
+        payload = InstrumentValuationQueryService(
+            monitor_store=StubMonitorStore({"default": state}), settings={},
+        ).query(InstrumentValuationQuery("035720", "default"))
+
+        self.assertEqual("limited", payload["valuation"]["dataReadiness"]["status"])
+
     def _assert_negative_eps_is_explained_as_non_meaningful_per(self):
         signals = {
             "companyKnowledge": {

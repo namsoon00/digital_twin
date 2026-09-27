@@ -509,6 +509,11 @@ def hypothesis_qualification(
         return_state in {"non-negative", "negative", "flat"}
         or (not return_state and "averageActionAdjustedReturnPct" in metrics)
     )
+    baseline_supported = policy.version != "hypothesis-auto-qualification-v2" or (
+        metrics.get("baselineComparisonState") == "qualified"
+        and metrics.get("baselineComparisonClaimFingerprint") == metrics.get("claimFingerprint")
+        and bool(metrics.get("claimFingerprint"))
+    )
     non_negative = (
         (return_available and adjusted_return >= 0)
         or not policy.require_non_negative_action_return
@@ -528,6 +533,7 @@ def hypothesis_qualification(
         and decisive >= policy.active_floor
         and rate >= policy.active_min_hit_rate
         and lower >= policy.active_min_lower_confidence
+        and baseline_supported
         and non_negative
     ):
         status = "active"
@@ -560,6 +566,8 @@ def hypothesis_qualification(
         "directionalHitRateConfidence95": {"lower": lower, "upper": upper},
         "averageActionAdjustedReturnPct": adjusted_return,
         "actionReturnAvailable": return_available,
+        "baselineComparisonRequired": policy.version == "hypothesis-auto-qualification-v2",
+        "baselineComparisonSatisfied": baseline_supported,
         "validationScope": "prediction-and-premise-continuity" if any(item.role == "cause" for item in contract.outcome_contract.criteria) else "prediction-performance-only",
         "causalAttribution": "not-established",
         "policy": policy.to_dict(),

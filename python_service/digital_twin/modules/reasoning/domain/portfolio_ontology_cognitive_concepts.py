@@ -5,6 +5,7 @@ from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, ad
 from digital_twin.modules.outcomes.contracts import outcome_assessments_from_episodes
 from digital_twin.modules.outcomes.contracts import outcome_contract_completeness
 from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint, claim_revision_identity
+from digital_twin.modules.outcomes.contracts import select_independent_observations
 from digital_twin.modules.outcomes.contracts import action_adjusted_return, action_return_state, binomial_confidence_interval, number
 
 
@@ -969,7 +970,6 @@ def add_hypothesis_calibration_concepts(
             item for item in episode.get("outcomes") or []
             if isinstance(item, dict)
             and isinstance(item.get("payload"), dict)
-            and str((item.get("payload") or {}).get("calibrationEligibility") or "") == "eligible"
             and outcome_contract_completeness(
                 (item.get("payload") or {}).get("hypothesisOutcomeContract")
                 if isinstance(
@@ -1004,8 +1004,6 @@ def add_hypothesis_calibration_concepts(
         ).strip()
         claim_fingerprint = claim_validation_fingerprint(claim_contract)
         frozen_fingerprint = str(episode_contract.get("claimContractFingerprint") or "")
-        if claim_fingerprint and frozen_fingerprint and claim_fingerprint != frozen_fingerprint:
-            continue
         claim_fingerprint = claim_fingerprint or frozen_fingerprint
         calibration_identity = claim_revision_identity(claim_contract_id, claim_fingerprint)
         if not calibration_identity:
@@ -1018,7 +1016,7 @@ def add_hypothesis_calibration_concepts(
             number(latest.get("priceChangeFromDecisionPct")),
         )
         independence_key = str(latest_payload.get("accountIndependenceKey") or episode_id).strip()
-        if not episode_id or not calibration_identity or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
+        if not episode_id or not calibration_identity:
             continue
         scope_key = symbol + "|" + calibration_identity_type + "|" + calibration_identity
         row = grouped.setdefault(scope_key, {
@@ -1033,37 +1031,27 @@ def add_hypothesis_calibration_concepts(
             "templateLabel": str(selected.get("templateLabel") or template_id),
             "episodeOutcomes": {},
             "episodeHorizonOutcomes": {},
+            "qualificationEvidence": dict(episode.get("qualificationEvidence") or {}),
+            "primaryHorizonMinutes": min((positive_int(value) for value in episode_contract.get("outcomeHorizonMinutes") or [] if positive_int(value)), default=0),
         })
-        previous = row["episodeOutcomes"].get(independence_key) or {}
-        if str(latest.get("observedAt") or "") >= str(previous.get("observedAt") or ""):
-            row["episodeOutcomes"][independence_key] = {
-                "status": status,
-                "observedAt": str(latest.get("observedAt") or ""),
-                "horizonMinutes": positive_int(latest_payload.get("horizonMinutes")),
-                "sourceEpisodeId": episode_id,
-                "independenceKey": independence_key,
-                "actionAdjustedReturnPct": latest_adjusted_return,
-            }
-        # Overall calibration uses one latest result per independent event. For
-        # each horizon, however, retain that horizon's latest result so a
-        # longer observation does not erase the shorter-horizon evidence.
         for outcome in outcomes:
             outcome_status = str(outcome.get("selectedHypothesisStatus") or "")
-            if outcome_status not in {
-                "directionally-corroborated",
-                "directionally-contradicted",
-                "inconclusive",
-            }:
-                continue
             horizon = positive_int((outcome.get("payload") or {}).get("horizonMinutes"))
             if not horizon:
                 continue
             outcome_payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
             horizon_independence_key = str(outcome_payload.get("accountIndependenceKey") or episode_id).strip()
             per_horizon = row["episodeHorizonOutcomes"].setdefault(horizon, {})
-            previous_horizon = per_horizon.get(horizon_independence_key) or {}
+            observation_key = horizon_independence_key + "|" + episode_id
+            previous_horizon = per_horizon.get(observation_key) or {}
             if str(outcome.get("observedAt") or "") >= str(previous_horizon.get("observedAt") or ""):
-                per_horizon[horizon_independence_key] = {
+                per_horizon[observation_key] = {
+                    "startedAt": str(episode_contract.get("effectiveAt") or episode.get("decidedAt") or ""),
+                    "accountId": portfolio_id, "symbol": symbol,
+                    "claimFingerprint": claim_fingerprint,
+                    "calibrationEligible": outcome_payload.get("calibrationEligibility") == "eligible" and bool(frozen_fingerprint) and frozen_fingerprint == claim_fingerprint,
+                    "sourceEventId": str(episode_contract.get("sourceFactIndependenceKey") or ""),
+                    "actionAdjustedReturnPct": action_adjusted_return(str(episode.get("action") or ""), number(outcome.get("priceChangeFromDecisionPct"))),
                     "status": outcome_status,
                     "observedAt": str(outcome.get("observedAt") or ""),
                     "horizonMinutes": horizon,
@@ -1072,6 +1060,11 @@ def add_hypothesis_calibration_concepts(
                 }
     portfolio_node_id = entity_id("portfolio", portfolio_id)
     for _, row in sorted(grouped.items()):
+        selections = {horizon: select_independent_observations(per_episode.values(), require_interval=True)
+                      for horizon, per_episode in row["episodeHorizonOutcomes"].items()}
+        row["episodeHorizonOutcomes"] = {horizon: {str(index): value for index, value in enumerate(selection["selected"]) if value.get("calibrationEligible")}
+                                         for horizon, selection in selections.items()}
+        row["episodeOutcomes"] = row["episodeHorizonOutcomes"].get(row["primaryHorizonMinutes"], {})
         template_id = str(row["templateId"])
         symbol = str(row["symbol"])
         statuses = [str(item.get("status") or "") for item in row["episodeOutcomes"].values()]
@@ -1105,7 +1098,7 @@ def add_hypothesis_calibration_concepts(
         calibration_identity_type = str(row["calibrationIdentityType"])
         calibration_id = add_entity(graph, "hypothesis-calibration", symbol + "|" + calibration_identity_type + "|" + calibration_identity, str(row["subjectName"]) + " " + str(row["templateLabel"]) + " 결과 보정", {
             "tboxClass": "HypothesisCalibration",
-            "calibrationScope": "account-symbol-template",
+            "calibrationScope": "account-symbol-claim-revision-horizon",
             "accountId": portfolio_id,
             "symbol": symbol,
             "templateId": template_id,
@@ -1135,6 +1128,10 @@ def add_hypothesis_calibration_concepts(
             "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-history",
             "minimumDecisiveOutcomes": 3,
             "automaticQualification": True,
+            **row.get("qualificationEvidence", {}),
+            "evaluationVersion": "hypothesis-evaluation-v2",
+            "primaryHorizonMinutes": row["primaryHorizonMinutes"],
+            "observationExclusions": [item for selection in selections.values() for item in selection["excluded"]],
             "automaticDeployment": False,
             "source": "investment-brain-feedback",
         })
@@ -1157,7 +1154,7 @@ def add_hypothesis_calibration_concepts(
             })
         add_relation(graph, stock_id, calibration_id, "HAS_HYPOTHESIS_CALIBRATION", weight=1.0, properties={
             "source": "investment-brain-feedback",
-            "calibrationScope": "account-symbol-template",
+            "calibrationScope": "account-symbol-claim-revision-horizon",
         })
         add_relation(graph, portfolio_node_id, calibration_id, "HAS_HYPOTHESIS_CALIBRATION", weight=1.0, properties={
             "source": "investment-brain-feedback",

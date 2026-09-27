@@ -250,8 +250,9 @@ class InvestmentOutcomeObservationService:
             })
             contract = target.get("hypothesisOutcomeContract") or {}
             facts.update(premise_observation_facts(contract.get("observationBaseline") or {}, facts))
-            if "fundamental" in (contract.get("requiredObservationDomains") or []):
-                evidence_requests.append({"requestId": request_id, "symbol": symbol, "observedAt": records[-1]["observedAt"]})
+            if {"fundamental", "valuation"}.intersection(contract.get("requiredObservationDomains") or []):
+                evidence_requests.append({"requestId": request_id, "symbol": symbol, "observedAt": records[-1]["observedAt"],
+                                          "includeValuation": "valuation" in (contract.get("requiredObservationDomains") or [])})
         evidence_loader = getattr(self.outcome_evidence_source, "load_outcome_evidence", None)
         evidence = evidence_loader(snapshot.account_id, evidence_requests) if evidence_requests and callable(evidence_loader) else {}
         for record in records:

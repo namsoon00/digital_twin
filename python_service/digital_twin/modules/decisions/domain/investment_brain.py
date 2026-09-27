@@ -2875,11 +2875,8 @@ def hypothesis_templates_from_rulebox_snapshot(
     performance: Dict[str, object] = None,
 ) -> List[Dict[str, object]]:
     rows = []
-    performance_by_rule = {
-        str(item.get("key") or ""): item
-        for item in (performance or {}).get("byRule") or []
-        if isinstance(item, dict) and str(item.get("key") or "")
-    }
+    from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint
+    revision_metrics = (performance or {}).get("byClaimRevision") or []
     for rule in (snapshot or {}).get("rules") or []:
         if not isinstance(rule, dict) or rule.get("enabled") is False:
             continue
@@ -2912,10 +2909,31 @@ def hypothesis_templates_from_rulebox_snapshot(
         ], 12)
         family_definition = hypothesis_family_definition(knowledge_basis.thesis_family)
         claim_contract = resolved_rule_claim_contract(rule, knowledge_basis)
+        fingerprint = claim_validation_fingerprint(claim_contract.to_dict())
+        horizons = claim_contract.outcome_contract.to_dict().get("outcomeHorizonMinutes") or []
+        primary_horizon = min((int(value) for value in horizons if int(value) > 0), default=0)
+        scopes = [item for item in revision_metrics if item.get("claimFingerprint") == fingerprint
+                  and item.get("horizonMinutes") == primary_horizon
+                  and item.get("evaluationVersion") == "hypothesis-evaluation-v2"]
         qualification = hypothesis_qualification(
             claim_contract,
-            performance_by_rule.get(rule_id),
+            scopes[0] if len(scopes) == 1 else {},
         )
+        qualification.update({
+            "evaluationVersion": "hypothesis-evaluation-v2", "claimFingerprint": fingerprint,
+            "primaryHorizonMinutes": primary_horizon,
+            "scope": "account-symbol-claim-revision-horizon",
+            "scopeSelectionRequired": len(scopes) > 1,
+            "excludedObservationCount": sum(len(item.get("exclusions") or []) for item in scopes),
+            "exclusions": [row for item in scopes for row in item.get("exclusions") or []][:40],
+            "catalogAdmission": "registered", "currentMatch": "not-evaluated-in-catalog",
+            "deployment": "separate-release-control",
+            "qualificationScopes": [
+                {"accountId": item.get("accountId"), "symbol": item.get("symbol"),
+                 "horizonMinutes": item.get("horizonMinutes"),
+                 **hypothesis_qualification(claim_contract, item)} for item in scopes
+            ],
+        })
         rows.append(HypothesisTemplate(
             template_id="hypothesis-template:" + rule_id,
             label=str(rule.get("label") or rule_id),

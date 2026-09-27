@@ -40,16 +40,20 @@ def capture_prediction(connection, episode, stamp):
     ).fetchall()
     if any(item["side"] == side for item in existing):
         return
-    # The candidate owns the first anchor, even when its inputs or comparator are missing.
+    # Selection studies anchor ALL baseline opportunities, including unknown
+    # selection receipts. This member is research metadata, never a decision.
+    selection_anchor = bool(plan.get("selectionContract") and side == "baseline"
+                            and not any(item["side"] == "candidate" for item in existing))
+    # The candidate owns the first anchor in the original paired contract.
     if side == "baseline":
         anchor = next((item for item in existing if item["side"] == "candidate"), None)
-        if not anchor or timestamp(_json_loads(anchor["episode_json"], {})["observedFromAt"]) != timestamp(episode.observed_from_at):
+        if not selection_anchor and (not anchor or timestamp(_json_loads(anchor["episode_json"], {})["observedFromAt"]) != timestamp(episode.observed_from_at)):
             return
     count = connection.execute(
         "SELECT COUNT(*) AS n FROM ontology_experiment_dataset_members "
         "WHERE plan_fingerprint = %s AND phase_at = %s AND side = 'candidate'", (plan_id, phase),
     ).fetchone()["n"]
-    if side == "candidate" and count >= plan["policy"]["minimumIndependentPairs"]:
+    if (side == "candidate" or selection_anchor) and count >= plan["policy"]["minimumIndependentPairs"]:
         return
     boundaries = [item for item in lineage.get("sourceBoundaries") or []
                   if item.get("accountId") == plan["accountId"] and item.get("snapshotId")]
@@ -76,6 +80,16 @@ def capture_prediction(connection, episode, stamp):
             )
         except ValueError as error:
             reason = str(error)[:240]
+    if selection_anchor:
+        anchor_payload = {**episode.to_dict(), "episodeKind": "selection-opportunity",
+                          "selectionState": "skipped" if lineage.get("selectionState") == "skipped" else "unknown"}
+        connection.execute(
+            "INSERT IGNORE INTO ontology_experiment_dataset_members "
+            "(plan_fingerprint, phase_at, bucket_key, side, episode_id, dataset_id, input_status, input_reason, "
+            "episode_json, outcome_json, created_at, expires_at) VALUES (%s, %s, %s, 'candidate', %s, %s, %s, %s, %s, '{}', %s, %s)",
+            (plan_id, phase, bucket, "selection:" + episode.episode_id, dataset_id, status, reason,
+             json_dumps(anchor_payload), stamp, row["expires_at"]),
+        )
     connection.execute(
         "INSERT IGNORE INTO ontology_experiment_dataset_members "
         "(plan_fingerprint, phase_at, bucket_key, side, episode_id, dataset_id, input_status, input_reason, "

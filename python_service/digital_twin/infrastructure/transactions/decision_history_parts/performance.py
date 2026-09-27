@@ -240,6 +240,9 @@ def performance_episodes(
             "SELECT outcomes.episode_id, outcomes.observed_at, outcomes.payload_json AS outcome_json, "
             "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
             "episodes.selected_hypothesis_id, episodes.decided_at, "
+            "JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.aiJudgment') AS ai_judgment_json, "
+            "JSON_EXTRACT(episodes.payload_json, '$.insightAssessment') AS insight_assessment_json, "
+            "JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.assistantQualityObservation') AS quality_observation_json, "
             "COALESCE(calibration.hypotheses_json, "
             "JSON_EXTRACT(episodes.payload_json, '$.hypothesisSet.hypotheses')) AS hypotheses_json "
             "FROM investment_decision_outcomes AS outcomes JOIN ("
@@ -335,7 +338,12 @@ def performance_episodes(
                         }
                     ],
                 },
-                "factsAtDecision": {"hypothesisOutcomeContract": contract},
+                "factsAtDecision": {
+                    "hypothesisOutcomeContract": contract,
+                    "aiJudgment": _json_loads(row.get("ai_judgment_json"), {}),
+                    "assistantQualityObservation": _json_loads(row.get("quality_observation_json"), {}),
+                },
+                "insightAssessment": _json_loads(row.get("insight_assessment_json"), {}),
                 "outcomes": [],
             },
         )
@@ -349,6 +357,21 @@ def performance_episodes(
             as_of=as_of,
         )
     )
+
+    v2_scopes = {(item.get("accountId"), item.get("symbol")) for item in combined
+                 if any((hypothesis.get("claimContract") or {}).get("qualificationPolicy", {}).get("version") == "hypothesis-auto-qualification-v2"
+                        for hypothesis in (item.get("hypothesisSet") or {}).get("hypotheses") or [])}
+    if v2_scopes:
+        from digital_twin.modules.model_registry.infrastructure.qualification_reads import qualification_receipts
+        from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint
+        from digital_twin.modules.portfolio.contracts import utc_now_iso
+        with _connect() as connection:
+            receipts = qualification_receipts(connection, v2_scopes, normalized_as_of or utc_now_iso())
+        for item in combined:
+            selected = next((hypothesis for hypothesis in (item.get("hypothesisSet") or {}).get("hypotheses") or []
+                             if hypothesis.get("hypothesisId") == item.get("selectedHypothesisId")), {})
+            identity = claim_validation_fingerprint(selected.get("claimContract") or {})
+            item["qualificationEvidence"] = receipts.get((item.get("accountId"), item.get("symbol"), identity), {})
 
     def latest_observation(item: Dict[str, object]) -> str:
         return max(

@@ -227,6 +227,21 @@ class EvolutionArtifactTests(unittest.TestCase):
         self.assertFalse(self.candidate["enabled"])
         self.assertGreater(len(combined["graph"]["relations"]), len(original["graph"]["relations"]))
 
+    def test_unrelated_new_vocabulary_does_not_migrate_a_frozen_release(self):
+        original = copy.deepcopy(self.artifact)
+        removed = "tbox-class:IssuerIRDocument"
+        original["graph"]["entities"] = [row for row in original["graph"]["entities"] if row["id"] != removed]
+        original["graph"]["relations"] = [row for row in original["graph"]["relations"] if removed not in (row["source"],row["target"])]
+        combined = append_rule_to_release_artifact(original, self.candidate)
+        self.assertNotIn(removed, {row["id"] for row in combined["graph"]["entities"]})
+        self.assertEqual(original["tboxFingerprint"], combined["tboxFingerprint"])
+        required = "tbox-class:RuleCondition"
+        broken = copy.deepcopy(original)
+        broken["graph"]["entities"] = [row for row in broken["graph"]["entities"] if row["id"] != required]
+        broken["graph"]["relations"] = [row for row in broken["graph"]["relations"] if required not in (row["source"],row["target"])]
+        with self.assertRaisesRegex(ValueError, "unbound"):
+            append_rule_to_release_artifact(broken, self.candidate)
+
     def test_existing_rule_id_cannot_be_rewritten(self):
         with self.assertRaises(ValueError):
             append_rule_to_release_artifact(self.artifact, self.rule.to_dict())

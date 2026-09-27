@@ -3,6 +3,7 @@ from typing import Callable, Dict, Iterable, List
 
 from digital_twin.modules.model_registry.domain.hypothesis_compilation import ranked_authoring_rules, rule_design_context
 from digital_twin.modules.model_registry.domain.hypothesis_authoring import authoring_catalog
+from .hypothesis_research_context import research_context
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 
 
@@ -69,6 +70,8 @@ class RuleChangeCandidateProposalService:
         if isinstance(hypothesis_proposal, dict) and hypothesis_proposal:
             context["hypothesisProposal"] = dict(hypothesis_proposal)
             context["modelAssessmentContext"] = self.model_assessment_context(context, account_id)
+            context["researchContext"] = research_context(self.ontology_repository, hypothesis_proposal,
+                account_id=account_id, symbol=clean_symbols[0] if len(clean_symbols) == 1 else "", world_id=world_id)
             context["authoringContract"] = authoring_catalog(
                 context, cadence_seconds=int_setting(self.settings, "monitorAccountIntervalSeconds", 180, 30, 86400),
             )
@@ -83,6 +86,7 @@ class RuleChangeCandidateProposalService:
             "capabilityIndexRuleCount": (design.get("capabilityIndex") or {}).get("includedRuleCount"),
             "modelAssessmentContext": context.get("modelAssessmentContext") or {},
             "authoringContract": (context.get("authoringContract") or {}).get("contract"),
+            "researchContext": context.get("researchContext") or {"status": "not-queried"},
             "recentEventCount": len(context.get("recentEvents") or []),
             "alertCount": len(context.get("alerts") or []),
             "ruleCount": (context.get("ruleBox") or {}).get("ruleCount", 0),

@@ -601,8 +601,8 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(2, result["outcomeCount"])
         self.assertEqual(1, result["independentEpisodeCount"])
         self.assertEqual(1, result["summary"]["decisiveOutcomeCount"])
-        self.assertEqual(1, result["summary"]["corroboratedCount"])
-        self.assertEqual(0, result["summary"]["contradictedCount"])
+        self.assertEqual(0, result["summary"]["corroboratedCount"])
+        self.assertEqual(1, result["summary"]["contradictedCount"])
 
     def test_ai_insight_direction_is_evaluated_at_1_5_and_20_days(self):
         episode = {
@@ -1513,6 +1513,14 @@ class InvestmentBrainTest(unittest.TestCase):
             }],
         })
 
+        # Original prediction clocks and horizon are required by v2 qualification.
+        for row in episodes:
+            observed = row["outcomes"][0]["observedAt"]
+            row["decidedAt"] = observed.replace("T01:00:00Z", "T00:00:00Z")
+            row["factsAtDecision"]["hypothesisOutcomeContract"]["claimContractFingerprint"] = claim_validation_fingerprint(selected["claimContract"])
+            for outcome in row["outcomes"]:
+                outcome["payload"]["horizonMinutes"] = 60
+
         graph = PortfolioOntology("account-1")
         add_investment_brain_concepts(graph, "account-1", episodes)
 
@@ -1614,6 +1622,14 @@ class InvestmentBrainTest(unittest.TestCase):
                 }],
             })
 
+        # Original prediction clocks and horizon are required by v2 qualification.
+        for row in history:
+            observed = row["outcomes"][0]["observedAt"]
+            row["decidedAt"] = observed.replace("T01:00:00Z", "T00:00:00Z")
+            row["factsAtDecision"]["hypothesisOutcomeContract"]["claimContractFingerprint"] = claim_validation_fingerprint(selected["claimContract"])
+            for outcome in row["outcomes"]:
+                outcome["payload"]["horizonMinutes"] = 60
+
         graph = PortfolioOntology("account-1")
         add_investment_brain_concepts(
             graph,
@@ -1636,6 +1652,7 @@ class InvestmentBrainTest(unittest.TestCase):
         snapshot = hypothesis_calibration_snapshot_from_abox_rows(
             [{
                 "id": "hypothesis-calibration:stable-claim",
+                "evaluationVersion": "hypothesis-evaluation-v2",
                 "kind": "hypothesis-calibration",
                 "tboxClass": "HypothesisCalibration",
                 "symbol": "005930",

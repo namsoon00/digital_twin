@@ -47,7 +47,7 @@ class RegisteredHypothesisAuthoringTests(unittest.TestCase):
         self.assertFalse(rule["enabled"])
         self.assertEqual(baseline["conditions"], rule["conditions"][:-1])
         self.assertEqual(baseline["claim_contract"]["outcomeContract"], rule["claim_contract"]["outcomeContract"])
-        self.assertEqual(baseline["claim_contract"]["qualificationPolicy"], rule["claim_contract"]["qualificationPolicy"])
+        self.assertEqual("hypothesis-auto-qualification-v2", rule["claim_contract"]["qualificationPolicy"]["version"])
         self.assertNotEqual(baseline["claim_contract"]["claimContractId"], rule["claim_contract"]["claimContractId"])
         self.assertEqual(baseline["derivations"][0]["candidate_action"], rule["derivations"][0]["candidate_action"])
         self.assertEqual([], rulebox_semantic_violations([GraphInferenceRule.from_dict({**rule, "enabled": True})]))

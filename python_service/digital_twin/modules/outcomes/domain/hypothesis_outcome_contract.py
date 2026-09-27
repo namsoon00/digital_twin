@@ -24,6 +24,7 @@ SUPPORTED_OBSERVATION_DOMAINS = (
     "portfolio",
     "static",
     "fundamental",
+    "valuation",
 )
 SUPPORTED_OUTCOME_CRITERION_ROLES = ("cause", "result", "invalidation", "context")
 SUPPORTED_OUTCOME_CRITERION_OPERATORS = (">", ">=", "<", "<=", "==", "!=")
@@ -63,6 +64,9 @@ SUPPORTED_OUTCOME_CRITERION_METRICS = (
     "smartMoneyNetVolume",
     "verifiedEventCount",
     "counterEvidenceCount",
+    "valuationGapReductionPp",
+    "valuationPriceContributionPp",
+    "valuationValueContributionPp",
 )
 
 
@@ -541,6 +545,7 @@ def observation_domain_status(
         "research": has_value("researchEvidence", "verifiedClaims", "disclosureIds"),
         "portfolio": has_value("profitLossRate", "quantity", "averagePrice"),
         "static": True,
+        "valuation": source.get("valuationMeasurementState") == "measured",
         "fundamental": has_value("financialPeriod") and source.get("newFinancialPeriod") is True,
     }
     missing = [domain for domain in required if not availability.get(domain, False)]

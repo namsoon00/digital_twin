@@ -8,7 +8,7 @@ import statistics
 from typing import Dict, Mapping, Sequence
 
 
-INVESTMENT_ASSISTANT_QUALITY_VERSION = "investment-assistant-quality-v1"
+INVESTMENT_ASSISTANT_QUALITY_VERSION = "investment-assistant-quality-v2"
 
 
 def _text(value: object) -> str:
@@ -73,8 +73,12 @@ def evaluate_investment_assistant_quality(
 
     metrics = {
         "independentEpisodeCount": count,
-        "sourceTraceRate": _rate(traceable, count),
-        "calculationReproducibilityRate": _rate(reproducible, count),
+        "sourceTraceRate": _rate(traceable, sum(item.get("sourceTraceComplete") is not None for item in episodes)),
+        "calculationReproducibilityRate": _rate(reproducible, sum(item.get("calculationReproducible") is not None for item in episodes)),
+        "measurementDenominators": {"sourceTrace": sum(item.get("sourceTraceComplete") is not None for item in episodes),
+                                    "reproducibility": sum(item.get("calculationReproducible") is not None for item in episodes),
+                                    "verifiableClaims": verifiable_claims, "deliveries": successful_deliveries,
+                                    "materialEvents": labelled_material_events, "aiAttempts": ai_attempts},
         "unsupportedClaimRate": _rate(unsupported_claims, verifiable_claims),
         "duplicateDeliveryRate": _rate(duplicate_deliveries, successful_deliveries),
         "materialEventCaptureRate": _rate(labelled_material_events - missed_material_events, labelled_material_events),

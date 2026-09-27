@@ -125,7 +125,7 @@ class OntologyEvolutionService:
             })
         except Exception as error:
             # Preserve plan, deployment and queued retry. Never turn an outage into no change.
-            return self.wait(case, persist, "evolution-dependency-error", {"error": str(error)[:500]})
+            return self.wait(case, persist, "evolution-dependency-error", {"error": str(error)[:500] or type(error).__name__, "errorType": type(error).__name__})
 
     def rollback(self, case, persist, assessment, reason):
         result = self.runtime.rollback(case.evolution["plan"], case.evolution["deployment"], assessment)

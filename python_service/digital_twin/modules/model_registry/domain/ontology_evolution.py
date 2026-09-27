@@ -88,6 +88,11 @@ def create_plan(case, rule, baseline, policy, created_at):
         "validationRequirements": list(case.validation_requirements),
         "policyFingerprint": fingerprint(policy),
     }
+    design = (rule.get("model_input_contract") or {}).get("researchDesign") or {}
+    if design.get("contract") == "registered-hypothesis-design-v2" and design.get("modelRuleId") == design.get("comparisonRuleId"):
+        plan["selectionContract"] = {"version": "conditional-selection-v1", "cohort": "first-baseline-opportunities",
+            "utility": "correct=1,incorrect=-1,abstain=0", "financialReturn": False,
+            "minimumSelected": 5, "missingSelection": "incomplete", "conditionFingerprint": fingerprint(rule.get("conditions"))}
     if baseline.get("observationRequirements"):
         plan["observationRequirements"] = baseline["observationRequirements"]
     plan["fingerprint"] = fingerprint(plan)
@@ -113,6 +118,9 @@ def evaluate_comparison(plan, evidence, *, now, observed_after=""):
     results, duplicated polling and old candidate revisions cannot be wins.
     """
     policy = validate_plan(plan)
+    if plan.get("selectionContract"):
+        from .hypothesis_selection import evaluate_selection
+        return evaluate_selection(plan, evidence, now=now, observed_after=observed_after)
     if evidence.get("status") != "ok":
         return {"status": "needs-data", "reason": evidence.get("reason") or "comparison-unavailable",
                 "independentPairCount": 0, "automaticDeployment": False}

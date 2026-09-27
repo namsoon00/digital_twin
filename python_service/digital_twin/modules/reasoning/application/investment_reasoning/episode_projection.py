@@ -365,7 +365,8 @@ def shadow_hypothesis_observation_episodes(
                         and claim_validation_fingerprint(hypothesis.claim_contract) == binding["validationFingerprint"]):
                     episodes.append(replace(episode,
                         episode_id=stable_id("experiment-observation", plan["fingerprint"], side, effective_at),
-                        input_provenance={**episode.input_provenance, "experimentPlanFingerprint": plan["fingerprint"], "experimentSide": side}))
+                        input_provenance={**episode.input_provenance, "experimentPlanFingerprint": plan["fingerprint"], "experimentSide": side,
+                            **(selection_provenance(plan, reasoning_case, subject_case) if plan.get("selectionContract") else {})}))
     # Freeze the first candidate anchor before attaching its unchanged comparator.
     return tuple(sorted(episodes, key=lambda item: {"candidate": 0, "baseline": 1}.get(item.input_provenance.get("experimentSide"), 2)))
 
@@ -571,6 +572,14 @@ def decision_episode_from_reasoning_case(
             "inferenceResult": inference.to_dict() if inference else {},
             "decisionSynthesis": synthesis.to_dict() if synthesis else {},
             "aiJudgment": judgment.to_dict() if judgment else {},
+            "assistantQualityObservation": {
+                "contract": "persisted-assistant-quality-v1", "recordedAt": decided_at,
+                "sourceTraceComplete": bool(inference and inference.trace_complete),
+                "aiAttemptCount": int(bool(judgment)),
+                "measurementBasis": {"inferenceGenerationId": inference_generation_id,
+                                     "sourceAboxSnapshotId": source_abox_id,
+                                     "inputFingerprint": reasoning_case.input_fingerprint},
+            },
             "finalDecision": final.to_dict() if final else {},
             "pointInTimeInputFingerprint": reasoning_case.input_fingerprint,
             **({"hypothesisOutcomeContract": outcome_contract} if outcome_contract else {}),
@@ -989,3 +998,21 @@ def hypothesis_gap_request_from_subject_case(
         episode,
         subject_case.synthesis,
     )
+
+
+def selection_provenance(plan, reasoning_case, subject_case):
+    """Absence of a candidate is not proof that its conditions failed."""
+    rows = getattr(reasoning_case.inference_result, "rule_evaluations", ()) if reasoning_case.inference_result else ()
+    matches = [row for row in rows if row.rule_id == plan["candidateRuleId"]
+               and row.account_id == subject_case.account_id
+               and row.source_abox_snapshot_id == subject_case.source_abox_snapshot_id
+               and row.inference_generation_id == subject_case.inference_generation_id
+               and row.proof.subject_id in {subject_case.symbol, "stock:" + subject_case.symbol}]
+    state = "unknown"
+    if len(matches) == 1:
+        row = matches[0]
+        if row.matched and row.proof.status == "available":
+            state = "selected"
+        elif not row.matched and row.proof.status == "available" and row.failure_reason == "condition-not-met":
+            state = "skipped"
+    return {"selectionState": state, "selectionEvaluationIds": [row.evaluation_id for row in matches]}

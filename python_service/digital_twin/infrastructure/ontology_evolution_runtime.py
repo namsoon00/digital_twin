@@ -8,7 +8,7 @@ from digital_twin.modules.outcomes.contracts import claim_validation_fingerprint
 from digital_twin.modules.reasoning.public import append_rule_to_release_artifact
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 from digital_twin.modules.portfolio.contracts import utc_now_iso
-from digital_twin.modules.model_registry.contracts import comparison_measurement
+from digital_twin.modules.model_registry.contracts import comparison_measurement, study_readiness
 
 
 def claim_binding(rule):
@@ -52,7 +52,10 @@ class OntologyEvolutionRuntime:
         minimum_window = max(horizon, policy["independenceMinutes"]) * policy["minimumIndependentPairs"]
         if minimum_window > policy["maximumShadowDays"] * 1440:
             raise ValueError("comparison-horizon-cannot-fit-configured-observation-window")
-        return {"deploymentId": control.active_deployment_id,
+        readiness = study_readiness(candidate, policy)
+        if readiness["gaps"]:
+            raise ValueError("hypothesis-study-not-ready:" + str(readiness["gaps"]))
+        return {"studyReadiness": readiness, "deploymentId": control.active_deployment_id,
                 "artifactFingerprint": saved["artifactFingerprint"],
                 "comparisonRuleId": comparable[0]["rule_id"],
                 "comparisonHorizonMinutes": horizon,

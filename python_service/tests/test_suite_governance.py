@@ -194,7 +194,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Nine evidence identity, timeline projection and calendar replay
         # regressions protect source-aware deduplication without merging distinct filings.
         # Two valuation regressions were added concurrently to the shared suite.
-        self.assertLessEqual(total, 1830)
+        # Hypothesis audit regressions cover interval/version isolation, graph
+        # research, immutable valuation inputs and whole-cohort experiment storage.
+        self.assertLessEqual(total, 1860)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

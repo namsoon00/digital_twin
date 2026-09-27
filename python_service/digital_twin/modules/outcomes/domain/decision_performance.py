@@ -3,6 +3,9 @@ import math
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import outcome_contract_completeness
+from digital_twin.modules.outcomes.domain.hypothesis_calibration_identity import claim_validation_fingerprint
+from digital_twin.modules.outcomes.domain.observation_independence import select_independent_observations
+from digital_twin.modules.outcomes.domain.investment_assistant_quality import evaluate_investment_assistant_quality
 
 
 POSITIVE_ACTIONS = {"BUY", "ADD", "HOLD", "KEEP", "WATCH"}
@@ -50,15 +53,7 @@ def action_adjusted_return(action: str, raw_return: float):
 
 
 def latest_independent_observations(observations: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
-    latest: Dict[str, Dict[str, object]] = {}
-    for item in observations or []:
-        independence_key = str(item.get("independentEpisodeKey") or item.get("episodeId") or "").strip()
-        if not independence_key:
-            continue
-        previous = latest.get(independence_key)
-        if previous is None or str(item.get("observedAt") or "") >= str(previous.get("observedAt") or ""):
-            latest[independence_key] = item
-    return list(latest.values())
+    return select_independent_observations(observations)["selected"]
 
 
 def performance_observations(episodes: Iterable[object]) -> List[Dict[str, object]]:
@@ -88,6 +83,12 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
             )
             observations.append({
                 "episodeId": str(episode.get("episodeId") or ""),
+                "startedAt": str(raw_contract.get("effectiveAt") or episode.get("decidedAt") or episode.get("observedFromAt") or ""),
+                "claimFingerprint": claim_validation_fingerprint(hypothesis.get("claimContract") or {}),
+                "frozenClaimFingerprint": str(raw_contract.get("claimContractFingerprint") or ""),
+                "sourceEventId": str(raw_contract.get("sourceFactIndependenceKey") or ""),
+                "qualificationEvidence": dict(episode.get("qualificationEvidence") or {}),
+                "marketIndependenceKey": str(payload.get("marketIndependenceKey") or raw_contract.get("marketIndependenceKey") or ""),
                 "independentEpisodeKey": str(payload.get("accountIndependenceKey") or episode.get("episodeId") or ""),
                 "accountId": str(episode.get("accountId") or ""),
                 "symbol": str(episode.get("symbol") or "").upper(),
@@ -271,7 +272,7 @@ def metric_slice(
 ) -> Dict[str, object]:
     rows = list(observations or [])
     independent_rows = latest_independent_observations(rows)
-    eligible_rows = latest_independent_observations(item for item in rows if item.get("calibrationEligible"))
+    eligible_rows = [item for item in independent_rows if item.get("calibrationEligible")]
     decisive = [item for item in eligible_rows if item.get("decisive")]
     corroborated = [item for item in decisive if item.get("corroborated")]
     contradicted = [item for item in decisive if not item.get("corroborated")]
@@ -295,6 +296,7 @@ def metric_slice(
         "key": str(key or "all"),
         "label": str(label or key or "전체"),
         "outcomeCount": len(rows),
+        "observationSelection": {key: value for key, value in select_independent_observations(rows).items() if key != "selected"},
         "independentEpisodeCount": len(independent_rows),
         "calibrationEligibleOutcomeCount": len(eligible_rows),
         "calibrationEligibleEpisodeCount": len(eligible_rows),
@@ -335,9 +337,7 @@ def investment_insight_metric_slice(
 ) -> Dict[str, object]:
     rows = list(observations or [])
     independent_rows = latest_independent_observations(rows)
-    eligible_rows = latest_independent_observations(
-        item for item in rows if item.get("calibrationEligible")
-    )
+    eligible_rows = [item for item in independent_rows if item.get("calibrationEligible")]
     decisive = [item for item in eligible_rows if item.get("decisive")]
     corroborated = [item for item in decisive if item.get("corroborated")]
     contradicted = [item for item in decisive if not item.get("corroborated")]
@@ -517,6 +517,56 @@ def contradiction_learning_candidates(
     return sorted(candidates, key=lambda item: (int(item["contradictedCount"]), item["latestObservedAt"]), reverse=True)
 
 
+def claim_revision_metrics(observations, minimum_sample_count=5):
+    """Qualification slices never pool symbols, versions or result horizons."""
+    grouped = {}
+    for row in observations:
+        fingerprint = row.get("claimFingerprint")
+        if not fingerprint:
+            continue
+        key = (fingerprint, row.get("accountId"), row.get("symbol"), row.get("horizonMinutes"))
+        grouped.setdefault(key, []).append(row)
+    results = []
+    for (fingerprint, account, symbol, horizon), rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        selection = select_independent_observations(rows, require_interval=True)
+        admitted = []
+        for row in selection["selected"]:
+            if row.get("frozenClaimFingerprint") != fingerprint:
+                selection["excluded"].append({"episodeId": row["episodeId"], "reason": "claim-revision-unverified"})
+                continue
+            if not row.get("calibrationEligible"):
+                selection["excluded"].append({"episodeId": row["episodeId"], "reason": "outcome-ineligible", "state": row.get("calibrationEligibility")})
+            admitted.append(row)
+        results.append({
+            **metric_slice(admitted, fingerprint, symbol, minimum_sample_count),
+            **next((row.get("qualificationEvidence") for row in admitted if (row.get("qualificationEvidence") or {}).get("baselineComparisonClaimFingerprint") == fingerprint), {}),
+            "evaluationVersion": "hypothesis-evaluation-v2", "claimFingerprint": fingerprint,
+            "accountId": account, "symbol": symbol, "horizonMinutes": horizon,
+            "scope": "account-symbol-claim-revision-horizon",
+            "sourceOutcomeCount": len(rows), "exclusions": selection["excluded"],
+        })
+    return results
+
+
+def assistant_quality_report(episodes, minimum_sample_count):
+    # Only persisted quality labels are eligible. Missing labels are not zero
+    # failures, and price direction is never a proxy for narrative accuracy.
+    observations = []
+    for episode in episodes:
+        label = (episode.get("factsAtDecision") or {}).get("assistantQualityObservation")
+        if isinstance(label, dict) and label:
+            observations.append({**label, "episodeId": episode.get("episodeId")})
+    report = evaluate_investment_assistant_quality(
+        observations, minimum_independent_episodes=minimum_sample_count,
+        maximum_unsupported_claim_rate=0, maximum_duplicate_delivery_rate=0,
+        minimum_reproducibility_rate=1,
+    )
+    return {**report, "labelledEpisodeCount": len(observations),
+            "unlabelledEpisodeCount": len(episodes) - len(observations),
+            "source": "persisted-assistant-quality-observations",
+            "pricePerformanceIsNotNarrativeQuality": True}
+
+
 def evaluate_decision_performance(
     episodes: Iterable[object],
     minimum_sample_count: int = 5,
@@ -525,7 +575,7 @@ def evaluate_decision_performance(
     observations = performance_observations(episode_rows)
     episodes_with_outcomes = {str(item.get("episodeId") or "") for item in observations if str(item.get("episodeId") or "")}
     independent_observations = latest_independent_observations(observations)
-    calibration_observations = latest_independent_observations(item for item in observations if item.get("calibrationEligible"))
+    calibration_observations = [item for item in independent_observations if item.get("calibrationEligible")]
     coverage = (len(episodes_with_outcomes) / len(episode_rows) * 100.0) if episode_rows else 0.0
     by_rule = grouped_metrics(observations, "ruleIds", minimum_sample_count, multi_value=True)
     insight_observations = investment_insight_performance_observations(episode_rows)
@@ -580,6 +630,16 @@ def evaluate_decision_performance(
         "byHorizon": grouped_metrics(observations, "horizonMinutes", minimum_sample_count),
         "byAction": grouped_metrics(observations, "action", minimum_sample_count),
         "byRule": by_rule,
+        "byClaimRevision": claim_revision_metrics(observations, minimum_sample_count),
+        "marketPredictionByClaimRevision": [
+            {**row, "scope": "market-symbol-claim-revision-horizon", "accountActionPerformance": False}
+            for row in claim_revision_metrics([
+                {**item, "accountId": "", "sourceEventId": item.get("marketIndependenceKey") or item.get("sourceEventId"),
+                 "actionAdjustedReturnPct": None} for item in observations
+            ], minimum_sample_count)
+        ],
+        "evaluationVersion": "hypothesis-evaluation-v2",
+        "assistantQuality": assistant_quality_report(episode_rows, minimum_sample_count),
         "byHypothesis": grouped_metrics(observations, "hypothesisTemplateId", minimum_sample_count),
         "byHypothesisFamily": grouped_metrics(observations, "hypothesisFamilyId", minimum_sample_count),
         "byHypothesisFamilyAndHorizon": grouped_family_horizon_metrics(observations, minimum_sample_count),

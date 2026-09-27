@@ -1,12 +1,12 @@
 {
   "sourceRevision": "bounded-parallel-context-and-crypto-scope-v1",
   "contractVersion": "projection-input-execution-v2",
-  "reason": "Projection receipts retain immutable temporal identity while bounded parallel reads and crypto target routing preserve the exact factual input set.",
+  "reason": "Projection receipts retain immutable temporal identity and bounded scope. HYP-01–03 adds evaluation-v2 interval/revision reports and explicitly unmeasured assistant quality to the live context; all other scenario fingerprints are unchanged.",
   "scenarios": {
     "full": "dacab891da76b5be900f6f138ef69dc761e63ea700b037298da62cecc3ea4c28",
     "target": "b8d438ce74f785cb619da15726ac63dd0890fe1804927aa5bf0093783044a0f4",
     "source-facts": "342993a6956fe5c181e786fc1608bbe7c523d309ba8ce760dfeea3cd23269a4f",
-    "live-context": "852214daeb78aadea8c3ee4abdee44364c2d4cc298bbc80797f0168a4f384186",
+    "live-context": "720330dac8a7b342cd03e33602ba02bb2f47a9d16eeb622c6f936cd7f890640d",
     "memory-hit": "bbd2a70771f856dc7d3bcb2084a0e665b99d039ce079c57df42ff5c827a20e57",
     "persistent-hit": "f8b57558a02c113c1346b4a46a3631998a34c31ddcb8f00d1607ac052883bffe",
     "cache-errors": "09d850f5cc0bbd10093da769d12be107428511b27a702d0732011b53ea064346",

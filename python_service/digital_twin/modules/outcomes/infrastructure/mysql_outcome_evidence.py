@@ -39,7 +39,7 @@ class MySQLOutcomeEvidenceSource(MySQLOperationalConnection):
                     "JOIN monitor_snapshot_history history ON history.account_id = %s "
                     "AND history.generated_at = (SELECT MAX(candidate.generated_at) FROM monitor_snapshot_history candidate "
                     "WHERE candidate.account_id = history.account_id AND candidate.generated_at <= request.cutoff_at "
-                    "AND candidate.generated_at >= request.floor_at "
+                    "AND candidate.generated_at >= request.floor_at AND candidate.created_at <= request.cutoff_at "
                     "AND CAST(REPLACE(REPLACE(candidate.generated_at, 'T', ' '), 'Z', '') AS DATETIME(6)) "
                     "<= CAST(REPLACE(REPLACE(request.cutoff_at, 'T', ' '), 'Z', '') AS DATETIME(6)))",
                     tuple(value for target in batch for value in target) + (str(account_id),),
@@ -55,4 +55,26 @@ class MySQLOutcomeEvidenceSource(MySQLOperationalConnection):
                         "companyContext": dict(company),
                         "evidenceSnapshotAt": str(row["generated_at"]),
                     }
+        # Reuse immutable graph-derived hypothesis anchors. Never value the
+        # historical target with today's settings or external provider data.
+        for request in list(requests or [])[:1000]:
+            if not request.get("requestId") or not request.get("observedAt") or not request.get("symbol") or not request.get("includeValuation"):
+                continue
+            with self.connect() as connection:
+                candidates = connection.execute(
+                    "SELECT episode_id, observed_from_at, created_at, "
+                    "JSON_EXTRACT(payload_json, '$.outcomeContract.observationBaseline.valuationObservation') AS valuation_json "
+                    "FROM investment_hypothesis_observation_episodes WHERE account_id = %s AND symbol = %s "
+                    "AND observed_from_at <= %s AND created_at <= %s AND observed_from_at >= %s "
+                    "ORDER BY observed_from_at DESC LIMIT 20",
+                    (str(account_id), str(request["symbol"]).upper(), str(request["observedAt"]), str(request["observedAt"]),
+                     (datetime.fromisoformat(str(request["observedAt"]).replace("Z", "+00:00")) - timedelta(days=1)).isoformat().replace("+00:00", "Z")),
+                ).fetchall()
+            for candidate in candidates:
+                raw = candidate.get("valuation_json")
+                value = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+                if value and value.get("bundleId"):
+                    result.setdefault(str(request["requestId"]), {}).update({"valuationObservation": value,
+                        "valuationEvidenceEpisodeId": candidate["episode_id"]})
+                    break
         return result

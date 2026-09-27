@@ -24,8 +24,14 @@
     "modules/portfolio/domain/valuation/registry.py::registered_valuation_model_rows": {"hash": "db99aa2d17989c369b8e11f0bc7bc0cb0f656e5f57de4c413005b02e793d9930", "reason": "Register driver DCF only for explicit symbol input bundles, keep blocked DCF from suppressing an established model, and place an unapproved shadow DCF after the source-backed PER result; test_driver_dcf, test_instrument_valuation_query; docs/investment-assistant-in08-in16-integration.md."},
     "modules/portfolio/domain/valuation/service.py::ValuationModelRequest": {"hash": "29d06a98d30c4209663f3688f4a2866c06deee0e22dc01044c007b063be91c36", "reason": "Accept explicit valuation, knowledge-cutoff and source-snapshot clocks so deterministic calculations do not depend on the execution time; test_valuation_snapshot, test_instrument_valuation_query; docs/investment-assistant-in08-in16-integration.md."},
     "modules/portfolio/domain/valuation/service.py::ValuationModelService": {"hash": "28557744fcd824b6fad04d33ea30b321849d787023f9d9647e5209bd737ccdc0", "reason": "Bind every quality-checked valuation row to a deterministic input bundle and assessment, and distinguish a source-complete negative-equity diagnostic from missing inputs; test_valuation_snapshot, test_driver_dcf, test_instrument_valuation_query; docs/investment-assistant-in08-in16-integration.md."},
-    "modules/reasoning/domain/ontology_relation_facts.py::_valuation_facts": {"hash": "b67bfd9571dab7effb0d8825d82f86aeaa8d714e5e71f9df671a5977a03dc227", "reason": "Expose valuation bundle and assessment identity plus fail-closed reproducibility state to the canonical reasoning facts; test_valuation_snapshot, test_ontology_inference_context; docs/investment-assistant-in08-in16-integration.md."},
-    "modules/reasoning/domain/ontology_relation_facts.py::_valuation_row_payload": {"hash": "18b67e9f472e1bdde37ab66a6f20a5f306cee6ec4b22b8a973716a4c1bdc2f38", "reason": "Retain valuation snapshot identity and reproducibility fields through bounded relation-row normalization; test_valuation_snapshot, test_ontology_inference_context; docs/investment-assistant-in08-in16-integration.md."},
+    "modules/reasoning/domain/ontology_relation_facts.py::_valuation_facts": {
+      "hash": "e1ec9a271b9d634211080141f38bcb808e8fd2e251f43e4b01e1f602fb35dd4c",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/reasoning/domain/ontology_relation_facts.py::_valuation_row_payload": {
+      "hash": "d5fa70e2886c922064b8619a7c63be2ee959c78977237ed86fd84b2e611bdd38",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
     "modules/decisions/domain/ai_inference_queue.py::notification_ai_material_contract": {"hash": "5cc1944cd92dbbf2594c27fe151c69a24b477187f04e9d594b1f0d958496efb6", "reason": "Extend AI work coalescing with stable company financial revisions, valuation inputs, assessment states, assumptions and invalidation conditions while excluding titles, display clocks and polling-only prices. Repeated identical work remains coalesced and material evidence changes receive a new request; test_ai_inference_queue; docs/investment-assistant-in04-semantic-delivery.md."},
     "modules/news_intelligence/domain/evidence_delta.py::INFERENCE_PAYLOAD_KEYS": {"hash": "024089696246b48946eb3bdfb0384c77c0cfff6d5033ef147f36e3327fa180ba", "reason": "Reviewed W07 company-event integrity: preserve immutable event lineage and separate audit-only source revisions from material disclosure and corporate-action semantics; test_disclosure_taxonomy, test_external_official_evidence_projection, test_external_data_platform; docs/company-event-integrity.md."},
     "modules/news_intelligence/domain/evidence_delta.py::_semantic_payload": {"hash": "2649e40752e18f7f582ef5f7733a46d8dce0d435e7b3f2ea48ed6f480b3e67be", "reason": "Reviewed W07 company-event integrity: preserve immutable event lineage while excluding collection-only company-event observation and source-document identities from semantic change detection; test_research_evidence_store, test_disclosure_taxonomy, test_external_official_evidence_projection, test_external_data_platform; docs/company-event-integrity.md."},
@@ -302,7 +308,75 @@
     "modules/model_registry/domain/ontology_tbox.py::CLASS_DEFS": {"hash": "4950bd6e44de19ef89970d33b56a1cdc53f51a73b409ecbd86a3ae9b2c7eeb1b", "reason": "Define IssuerIRDocument as a source-backed ResearchEvidence subtype before IR can influence investment notifications; test_external_official_evidence_projection."},
     "modules/model_registry/domain/ontology_tbox.py::_SOURCE_BACKED_CLASS_NAMES": {"hash": "9c5ea148288c42c53979b7556d416d621f0bccce69a9eb5fc347a309ab889584", "reason": "Require provenance and source clocks for IssuerIRDocument graph facts; test_external_official_evidence_projection."},
     "modules/reasoning/domain/portfolio_ontology_research_concepts.py::event_tbox_classes": {"hash": "af857680318c4c866198059070251633b9cc96d18f4bf096277bfbb587ab4c82", "reason": "Project verified issuer IR evidence as IssuerIRDocument and earnings IR as valuation-relevant earnings observations; test_external_official_evidence_projection."},
-    "modules/decisions/domain/prompt_evidence_admission.py::OFFICIAL_KINDS": {"hash": "a0cdc4d7fe7484ea47d3a80959aa6358cbc06b6cebbac9871645ed54ccf5ea45", "reason": "Apply the seven-day official-document freshness and verification gate to issuer IR before alert or prompt admission; test_external_official_evidence_projection."}
+    "modules/decisions/domain/prompt_evidence_admission.py::OFFICIAL_KINDS": {"hash": "a0cdc4d7fe7484ea47d3a80959aa6358cbc06b6cebbac9871645ed54ccf5ea45", "reason": "Apply the seven-day official-document freshness and verification gate to issuer IR before alert or prompt admission; test_external_official_evidence_projection."},
+    "modules/outcomes/domain/decision_performance.py::latest_independent_observations": {
+      "hash": "c514fbc2de7dffaa6ac650ed65016033c3f39f6c14a313d7797feab0a039e896",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/decision_performance.py::performance_observations": {
+      "hash": "2da1d063d7d11e178dddfe612c38581ddb4de44c78f698b0e8a2f651762b4119",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/decision_performance.py::metric_slice": {
+      "hash": "64cd8f8a65428d1fe7f67e9e8d855e5c2d5c03213ae6c9941b03369ea799fdaa",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/decision_performance.py::investment_insight_metric_slice": {
+      "hash": "c2c9713e8f9c31ce912615358f4b3a438a366182f9697618247ae7789805ac29",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/decision_performance.py::evaluate_decision_performance": {
+      "hash": "cac09a3ebfe34669fc33964ead648b3585b3bdf93d1315757edc8c05915f987a",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_calibration.py::attach_abox_hypothesis_calibrations": {
+      "hash": "53fbed664c3bf4ddfb6dd5f5295c273a8700f9ed99f4fee9a676c0b11cd8a0b9",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_calibration.py::normalized_hypothesis_calibration_row": {
+      "hash": "b90bf1b074b34c7cbcf132c9b615968ddc01d564b28b8b7d166125e0435a50d6",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_outcome_contract.py::SUPPORTED_OBSERVATION_DOMAINS": {
+      "hash": "d423168070ab44f0b6e2196c28533690ab9c76a98e3433c21b247f50985f39ab",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_outcome_contract.py::SUPPORTED_OUTCOME_CRITERION_METRICS": {
+      "hash": "c1934d395a37cd4bf52fa7980654fc089496f1efd31ea0e01e2961024aa03653",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_outcome_contract.py::observation_domain_status": {
+      "hash": "4c683709bee6f752260bcc58cd879d971d000a2e8bbfec66437d58c2ba5113ae",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_outcome_facts.py::freeze_outcome_baseline": {
+      "hash": "9c9c825de2fbeb1ba197e93aa3a635addc710535312a49ed4deeeaab4627ba99",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_outcome_facts.py::premise_observation_facts": {
+      "hash": "1a44052fa6d57f9ff17511b5c0074202316b61aadd9c5e9636ed8081212ff38a",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/decisions/domain/investment_brain.py::hypothesis_templates_from_rulebox_snapshot": {
+      "hash": "30576a5a151a114398688cdfab4b656aaf9067018a9affb58e7d6966249b4477",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/reasoning/domain/portfolio_ontology_cognitive_concepts.py::add_hypothesis_calibration_concepts": {
+      "hash": "d77d7846123f6c245ce2d532ed494a3b6d7269e9be8c8d9e6af786f0b7d3a7de",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/model_registry/domain/rule_claim_contract.py::hypothesis_qualification": {
+      "hash": "d6f7676d33c75d82870c16fb5f1807ca5a09c95dab3ced33e59cb97d089c62bf",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/outcomes/domain/hypothesis_calibration.py::calibration_is_not_after": {
+      "hash": "2b2139bdf1b8b40cd1593bde5b663c8fc5949f709a99ea28b78c485358a6a705",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    },
+    "modules/decisions/domain/investment_reasoning/contracts.py::rule_evaluation_records_from_projection_results": {
+      "hash": "6ec66acf44ed8e34b5ba04d0be4b339bba01f0be82bc94b0f37ab200a6de6671",
+      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+    }
   },
   "ports": {
     "modules/market_data/domain/repositories.py::MarketTimeSeriesRepository": {"hash": "f068bc22fc998962bfcf62ea20e588f44915d9a56ffae8b25d8fe7154fa6f2d8", "reason": "Add explicit historical-price ingestion through the versioned time-series port, keeping atomic storage and replica projection outside the collector; test_outcome_benchmark_collection."}
@@ -359,7 +433,7 @@
       "hash": "3b44f3e909503b35c73a9447db7ccb1f9e698bb4851531beb2a717e8654f3a85",
       "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
-    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {"hash": "1675f812f2f380e7befe99f94edd5373ff8d587795f484d7345d82003cdecc90", "reason": "Preserve scoped follow-up writes and bounded diagnostics, and extend the prior-decision read with an additive cutoff parameter so indexed storage selects the latest episode known at the frozen source clock. test_ai_follow_up_tracking, test_experiment_observations, and test_decision_continuity; docs/runtime-flow-remediation-2026-09-16.md and docs/investment-assistant-in03-continuity.md."},
+    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {"hash": "ab50c493bf5eb5e780480cb7b413d985aa8b7c85ffa92c120e336575838b84a3", "reason": "HYP-02/03: retain original AI assessment and persisted quality observations in bounded SQL performance reads; load exact adopted comparison receipts separately from immutable episode facts. test_hypothesis_evaluation_v2 and test_hypothesis_research_pipeline."},
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineComparisonStore": {
       "hash": "89db57c5d5b3b8cc04f86a371e3c4a2ef7f9c7798354e2b038599b36fc0dac12",
       "reason": "Persist comparison job identities and contract version as indexed columns so reconciliation never scans JSON payloads; preserve deterministic comparison IDs and payload audit history. test_reasoning_engine_versions."

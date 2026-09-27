@@ -58,12 +58,20 @@ function loadHypothesisDevelopment(force) {
   if (hypothesesState.hypothesisDevelopmentLoading && !force) return Promise.resolve(hypothesesState.hypothesisDevelopment);
   hypothesesState.hypothesisDevelopmentLoading = true;
   hypothesesState.hypothesisDevelopmentError = "";
-  return requestJson("/api/investment-brain/hypothesis-development?limit=100", {
+  return Promise.all([requestJson("/api/investment-brain/hypothesis-development?limit=100", {
     key: "hypothesis-development",
     force: Boolean(force),
     timeoutMs: 30000
   }).then(function (payload) {
-    hypothesesState.hypothesisDevelopment = payload && typeof payload === "object" ? payload : {};
+    hypothesesState.hypothesisDevelopment = payload || {};
+    hypothesesState.hypothesisDevelopmentLoaded = true;
+    syncActiveHypothesisDevelopmentCaseId();
+    if (shellState.snapshot) render();
+    return payload;
+  }), requestJson("/api/investment-brain/performance?limit=500", {
+    key: "hypothesis-quality-report", force: Boolean(force), cacheTtlMs: 60000, timeoutMs: 30000
+  }).catch(function () { return {status: "unavailable"}; })]).then(function (payload) {
+    hypothesesState.hypothesisDevelopment = { ...(payload[0] || {}), evaluation: payload[1] };
     hypothesesState.hypothesisDevelopmentLoaded = true;
     syncActiveHypothesisDevelopmentCaseId();
     return hypothesesState.hypothesisDevelopment;

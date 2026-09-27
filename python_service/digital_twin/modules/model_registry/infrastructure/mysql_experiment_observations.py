@@ -83,7 +83,8 @@ class MySQLExperimentObservationStore(MySQLOperationalConnection):
         if not plan.get("observationRequirements"):
             raise ValueError("observation-contract-required")
         end = timestamp(plan["createdAt"]) + timedelta(days=plan["policy"]["maximumShadowDays"] * 2)
-        expiry = end + timedelta(days=plan["policy"].get("experimentEvidenceRetentionDays", 7))
+        delay = int(((plan.get("candidateRule") or {}).get("claim_contract") or {}).get("outcomeContract", {}).get("maximumObservationDelayMinutes") or 0)
+        expiry = end + timedelta(days=plan["policy"].get("experimentEvidenceRetentionDays", 7), minutes=delay)
         with self.transaction() as connection:
             connection.execute(
                 "INSERT IGNORE INTO ontology_experiment_observation_plans "
@@ -155,12 +156,15 @@ class MySQLExperimentObservationStore(MySQLOperationalConnection):
                 summary["missingComparators"] += 1
             if candidate["input_status"] != "ready" or (other and other.get("input_status") != "ready"):
                 summary["unavailableInputs"] += 1
+            selection_opportunity = bool(plan.get("selectionContract") and episode.get("episodeKind") == "selection-opportunity")
             outcomes = [_json_loads(item.get("outcome_json"), {}) for item in (candidate, other)]
             payloads = [{**(item.get("payload") or {}), **item} for item in outcomes]
             base_episode = _json_loads(other.get("episode_json"), {})
             valid = bool(other.get("dataset_id") == candidate["dataset_id"] and
                          base_episode.get("observedFromAt") == episode.get("observedFromAt") and
                          all(item.get("input_status") == "ready" for item in (candidate, other)))
+            if selection_opportunity:
+                payloads[0] = payloads[1]
             for obs, outcome in zip((episode, base_episode), payloads):
                 valid = bool(valid and outcome.get("calibrationEligibility") == "eligible"
                              and outcome.get("contractFingerprint") == (obs.get("outcomeContract") or {}).get("contractFingerprint")
@@ -172,6 +176,8 @@ class MySQLExperimentObservationStore(MySQLOperationalConnection):
             pair.update({"eligible": valid, "candidateOutcome": payloads[0].get("selectedHypothesisStatus"),
                          "baselineOutcome": payloads[1].get("selectedHypothesisStatus"),
                          "observedAt": payloads[0].get("observedAt") or ""})
+            if plan.get("selectionContract"):
+                pair["selectionState"] = episode.get("selectionState") or (episode.get("inputProvenance") or {}).get("selectionState") or "unknown"
             if not valid:
                 if all(item.get("outcomeId") for item in payloads):
                     summary["invalidOutcomes"] += 1

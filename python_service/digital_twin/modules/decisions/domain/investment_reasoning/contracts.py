@@ -795,6 +795,28 @@ def rule_evaluation_records_from_projection_results(
         )
         snapshot_id = str(inference.get("sourceAboxSnapshotId") or projection.get("sourceAboxSnapshotId") or "")
         generation_id = str(inference.get("inferenceGenerationId") or projection.get("inferenceGenerationId") or "")
+        execution = _mapping(projection.get("ruleboxExecution"))
+        native = _mapping(execution.get("nativeMatchResult") or projection.get("nativeMatchResult") or execution)
+        for executed in native.get("executedRules") or []:
+            for receipt in _mapping(executed).get("selectionEvaluations") or []:
+                receipt = _mapping(receipt)
+                rule_id, subject_id = str(receipt.get("ruleId") or ""), str(receipt.get("subjectId") or "")
+                if (not snapshot_id or not generation_id or not rule_id or not subject_id
+                        or receipt.get("inputAvailability") != "typedb-proven"
+                        or not receipt.get("queryFingerprint")
+                        or receipt.get("failureReason") != "condition-not-met"):
+                    continue
+                trace_id = _stable_id("selection-proof", generation_id, rule_id, subject_id, receipt["queryFingerprint"])
+                key = (effective_account_id, rule_id, trace_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                records.append(RuleEvaluationRecord(
+                    evaluation_id=trace_id, account_id=effective_account_id, rule_id=rule_id,
+                    source_abox_snapshot_id=snapshot_id, inference_generation_id=generation_id,
+                    matched=False, failure_reason="condition-not-met",
+                    proof=RuleMatchProof(proof_id=trace_id, rule_id=rule_id, trace_id=trace_id,
+                                         subject_id=subject_id, matched=False, status="available")))
         for raw_evaluation in projection.get("ruleEvaluations") or projection.get("rule_evaluations") or []:
             if not isinstance(raw_evaluation, Mapping):
                 continue

@@ -29,7 +29,7 @@ class OutcomesRoutes:
                 limit = int(first_query(query, "limit") or 500)
             except ValueError:
                 limit = 500
-            return request.send_payload(200, self.build_investment_brain_service().performance(
+            return request.send_payload(200, self.build_investment_brain_service(settings=self.operational_read_settings()).performance(
                 account_id=first_query(query, "accountId"),
                 symbol=first_query(query, "symbol"),
                 limit=limit,

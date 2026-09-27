@@ -190,7 +190,10 @@ def attach_abox_hypothesis_calibrations(
             hypothesis["historicalCalibration"] = historical_calibration
             claim_contract = RuleClaimContract.from_dict(hypothesis.get("claimContract"))
             if claim_contract.is_predictive and claim_contract.claim_contract_id:
-                qualification = hypothesis_qualification(claim_contract, calibration)
+                current_metrics = calibration if calibration.get("evaluationVersion") == "hypothesis-evaluation-v2" else {}
+                qualification = hypothesis_qualification(claim_contract, current_metrics)
+                qualification["evaluationVersion"] = "hypothesis-evaluation-v2"
+                qualification["rebuildRequired"] = not bool(current_metrics)
                 hypothesis["qualification"] = qualification
                 qualification_by_template[template_id] = qualification
             matched_template_ids.append(template_id)
@@ -278,6 +281,11 @@ def normalized_hypothesis_calibration_row(
         confidence = binomial_confidence_interval(corroborated_count, decisive_count)
     return {
         "calibrationId": str(payload.get("id") or ""),
+        "evaluationVersion": str(payload.get("evaluationVersion") or "legacy"),
+        "claimFingerprint": str(payload.get("claimContractFingerprint") or ""),
+        **{key: payload[key] for key in ("baselineComparisonState", "baselineComparisonClaimFingerprint", "comparisonPlanFingerprint", "comparisonEvaluatedAt", "comparisonEvidenceIds") if key in payload},
+        "observationExclusions": list(payload.get("observationExclusions") or []),
+        "primaryHorizonMinutes": positive_int(payload.get("primaryHorizonMinutes")),
         "symbol": symbol,
         "templateId": template_id or calibration_identity,
         "familyId": family_id,
@@ -419,7 +427,9 @@ def normalized_horizon_slices(value: object) -> List[Dict[str, object]]:
 def calibration_is_not_after(calibration: Dict[str, object], inference_generation_at: str) -> bool:
     observed_at = timestamp_value(calibration.get("latestObservedAt"))
     inference_at = timestamp_value(inference_generation_at)
-    return bool(observed_at and inference_at and observed_at <= inference_at)
+    comparison_at = timestamp_value(calibration.get("comparisonEvaluatedAt"))
+    return bool(observed_at and inference_at and observed_at <= inference_at
+                and (not comparison_at or comparison_at <= inference_at))
 
 
 def timestamp_value(value: object):

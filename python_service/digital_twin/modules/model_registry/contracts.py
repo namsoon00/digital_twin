@@ -11,6 +11,7 @@ _EXPORTS['HypothesisLifecycleRepository'] = ('digital_twin.modules.model_registr
 
 
 _EXPORTS.update({
+    "study_readiness": ("digital_twin.modules.model_registry.domain.hypothesis_study", "study_readiness"),
     'information_event_lifecycle': ('digital_twin.modules.model_registry.domain.information_event_lifecycle', 'information_event_lifecycle'),
     'observation_requirements': ('digital_twin.modules.model_registry.domain.experiment_observations', 'observation_requirements'),
     'ACCOUNT_FIELDS': ('digital_twin.modules.model_registry.domain.hypothesis_scoping', 'ACCOUNT_FIELDS'),

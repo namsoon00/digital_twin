@@ -127,9 +127,18 @@ def append_rule_to_release_artifact(baseline, candidate):
         row = item.to_dict()
         if row["id"] in known:
             continue
-        # New executable vocabulary needs a schema migration, not an invented AI type.
+        # The source catalog may contain unrelated vocabulary newer than this
+        # immutable release. Retain only its frozen TBox. A candidate that
+        # actually references a missing type fails the endpoint check below.
         if row.get("properties", {}).get("ontologyBox") == "TBox":
-            raise ValueError("Candidate requires an unsupported TBox extension: " + row["id"])
+            continue
+        properties = row.get("properties") or {}
+        classes = set(properties.get("tboxClasses") or []) | {properties.get("tboxClass")}
+        required = {"tbox-class:" + name for name in classes if name}
+        if properties.get("relationType"):
+            required.add("tbox-relation:" + properties["relationType"])
+        if not required.issubset(known):
+            raise ValueError("Candidate contains an unbound TBox dependency: " + ",".join(sorted(required-known)))
         added.append(row)
     graph["entities"].extend(added)
     new_ids = {row["id"] for row in added}

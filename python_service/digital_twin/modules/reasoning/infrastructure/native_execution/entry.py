@@ -17,6 +17,7 @@ from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
 )
 from typing import Dict, Iterable
 import time
+from .selection_receipts import read_selection_receipts
 from .entry_ports import NativeExecutionEntryStore, NativeExecutionEntryRuntime
 
 
@@ -432,6 +433,9 @@ def execute_typedb_native_rule_entry(
                     "rowCount": len(rows),
                     "candidateSymbols": candidate_symbols,
                     **target_work_metadata,
+                    "selectionEvaluations": read_selection_receipts(
+                        _store, driver, transaction_type, rule_payload, candidate_symbols,
+                        rows, world_id, scoped_manifest_only, evidence_read_index, deadline),
                     "queryComplexity": int(planned.get("queryComplexity") or 0),
                     "queryCount": read_call_count,
                     "anyConditionQueryCount": any_condition_query_count,

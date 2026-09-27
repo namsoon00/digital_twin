@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import math
 
 from .experiment_observations import authored_observation_requirements
 from .hypothesis_compilation import compilation_fingerprint, ranked_authoring_rules, validation_requirements
@@ -9,7 +10,7 @@ from .ontology_rulebox_contracts import GraphInferenceRule
 from .ontology_evolution import comparison_measurement
 
 
-AUTHORING_CONTRACT = "registered-hypothesis-design-v1"
+AUTHORING_CONTRACT = "registered-hypothesis-design-v2"
 
 
 def _rules(context):
@@ -26,7 +27,7 @@ def _predictive(rule):
 
 def _context_condition(rule, row):
     return (rule.get("enabled") and rule.get("source_kind") == "stock"
-            and row.get("role") == "required" and row.get("kind") in {"property", "relation"}
+            and row.get("role") == "required" and row.get("kind") in {"subject_property", "relation"}
             and row.get("relation_type") != "HAS_MODEL_SIGNAL")
 
 
@@ -35,14 +36,14 @@ def authoring_catalog(context, cadence_seconds=180):
     ordered = [rules[row["rule_id"]] for row in ranked_authoring_rules(context) if row.get("rule_id") in rules]
     baselines, conditions = [], []
     for rule in ordered:
-        if _predictive(rule) and len(baselines) < 16:
+        if _predictive(rule):
             claim = rule["claim_contract"]
             baselines.append({"ruleId": rule["rule_id"], "label": rule["label"],
                               "statement": claim["statement"], "predictionTarget": claim["predictionTarget"],
                               "expectedDirection": claim["expectedDirection"],
                               "outcomeContract": claim["outcomeContract"]})
         for row in rule["conditions"]:
-            if _context_condition(rule, row) and len(conditions) < 32:
+            if _context_condition(rule, row):
                 conditions.append({"ruleId": rule["rule_id"], "conditionId": row["condition_id"],
                                    "ruleLabel": rule["label"], "condition": row})
     measurements = {row["ruleId"]: comparison_measurement(rules[row["ruleId"]]) for row in baselines}
@@ -55,7 +56,11 @@ def authoring_catalog(context, cadence_seconds=180):
             "collectorCadenceSeconds": cadence_seconds, "maximumLookbackMinutes": 1440,
             "systemOwned": ["source-packet", "claim_contract", "model_input_contract", "derivations",
                             "outcomeContract", "qualificationPolicy", "enabled", "evolutionScope"],
-            "scope": "registered-conditional-predictions-only"}
+            "scope": "registered-conditional-predictions-only",
+            "coverage": {"loadedRules": len(rules), "predictiveModels": len(baselines),
+                         "registeredConditions": len(conditions), "omittedModels": 0, "omittedConditions": 0},
+            "conditionVariants": {"numeric-property": {"operators": [">", ">=", "<", "<="], "unit": "inherited-registered-field", "finiteOnly": True}},
+            "catalogFingerprint": compilation_fingerprint({"baselines": baselines, "conditions": conditions})}
 
 
 def _text(value, name, maximum=2000):
@@ -66,20 +71,28 @@ def _text(value, name, maximum=2000):
 
 def _additional_conditions(design, catalog, rules, baseline):
     refs = design.get("conditionRefs")
-    if not isinstance(refs, list) or not 1 <= len(refs) <= 4:
-        raise ValueError("hypothesisDesign needs one to four additional registered conditions")
+    if not isinstance(refs, list) or not 1 <= len(refs) <= 8:
+        raise ValueError("hypothesisDesign needs one to eight additional registered conditions")
     allowed = {(row["ruleId"], row["conditionId"]) for row in catalog["conditions"]}
     result, seen = [], set()
     semantic = lambda row: compilation_fingerprint({k: v for k, v in row.items()
                                                     if k not in {"condition_id", "description", "evidence_group_key"}})
     original = {semantic(row) for row in baseline["conditions"]}
     for ref in refs:
-        if not isinstance(ref, dict) or set(ref) != {"ruleId", "conditionId"}:
-            raise ValueError("conditionRefs accepts only ruleId and conditionId")
+        if not isinstance(ref, dict) or set(ref) not in ({"ruleId", "conditionId"}, {"ruleId", "conditionId", "operator", "value"}):
+            raise ValueError("conditionRefs accepts identity or a typed numeric property variant")
         key = (ref["ruleId"], ref["conditionId"])
         if key not in allowed or key in seen:
             raise ValueError("Additional condition is not an offered unique registered condition")
         row = next(deepcopy(item) for item in rules[key[0]]["conditions"] if item["condition_id"] == key[1])
+        if "value" in ref:
+            if (row.get("kind") != "subject_property" or type(row.get("value")) not in {int, float}
+                    or type(ref["value"]) not in {int, float} or not math.isfinite(ref["value"])
+                    or ref["operator"] not in {">", ">=", "<", "<="}
+                    or row.get("operator") not in {">", ">=", "<", "<="}):
+                raise ValueError("Numeric variants require a registered numeric ordered property with unchanged unit")
+            row.update(operator=ref["operator"], value=ref["value"],
+                       description=str(row.get("field")) + " " + ref["operator"] + " " + str(ref["value"]))
         if semantic(row) in original:
             raise ValueError("Additional condition duplicates the baseline predicate")
         original.add(semantic(row))
@@ -137,6 +150,9 @@ def assemble_hypothesis_design(candidate, context):
     rule["claim_contract"].update({"ruleId": rule_id, "claimContractId": "rule-claim:" + rule_id,
                                    "statement": baseline["claim_contract"]["statement"] + " 추가 조건: " +
                                    "; ".join(row["description"] for row in extra)})
+    rule["claim_contract"]["qualificationPolicy"].update({
+        "version": "hypothesis-auto-qualification-v2", "activeMinLowerConfidence": 0.5,
+    })
     for index, row in enumerate(rule["derivations"]):
         row["target_key"] = "research-conditional:" + identity + ":" + str(index)
     rule["hypothesis_lifecycle"]["formationConditionIds"] = (
@@ -161,7 +177,16 @@ def assemble_hypothesis_design(candidate, context):
 
 def build_hypothesis_design_prompt(context, payload):
     payload = deepcopy(payload)
-    payload["authoringContract"] = context["authoringContract"]
+    catalog = deepcopy(context["authoringContract"])
+    measurements = {}
+    for baseline in catalog["baselines"]:
+        outcome = baseline.pop("outcomeContract")
+        identity = compilation_fingerprint(outcome)[:20]
+        measurements[identity] = outcome
+        baseline["outcomeContractRef"] = identity
+    catalog["outcomeContracts"] = measurements
+    payload["authoringContract"] = catalog
+    payload["researchContext"] = context.get("researchContext") or {"status": "not-queried"}
     payload["ruleDesign"] = {k: v for k, v in payload.get("ruleDesign", {}).items()
                              if k in {"version", "rulesHash", "ruleboxSnapshotId", "scope", "observationState"}}
     contract = {"candidates": [{"title": "가설 제목", "rationale": "원래 가설과 기존 모델, 추가 조건의 연결", "risk": "한계",
@@ -173,11 +198,11 @@ def build_hypothesis_design_prompt(context, payload):
         "너는 투자 가설 연구 설계자다. 원래 가설 하나의 검증 가능한 조건부 예측을 작성한다.",
         "실행 규칙 전체를 작성하지 않는다. hypothesisDesign만 작성하고 proposedRule, 내부 필드, 점수, 검증 결과는 만들지 않는다.",
         "modelRuleId는 authoringContract.baselines 중 정확한 예측 모델 하나다. 결과 지표, 기간, 임계치, 행동과 모델 연결은 시스템이 그대로 상속한다.",
-        "comparisonRuleId는 해당 모델의 comparableRuleIds 중 원래 주장과 비교할 기존 가설이다. 같은 방향의 같은 예측은 결과가 같으므로 우월성을 입증하지 못한다. 반대 가설도 실제로 비교 가능한 계약이며 원래 연구 질문에 맞을 때만 선택한다.",
-        "conditionRefs는 authoringContract.conditions 중 기존 예측에 추가할 필요한 조건 1~4개다. 기존 숫자나 조건을 임의 수정하지 않는다.",
+        "comparisonRuleId는 해당 모델의 comparableRuleIds 중 원래 주장과 비교할 기존 가설이다. modelRuleId와 같으면 조건부 선택 실험으로 전체 기회에서 회피한 실패와 놓친 성공을 함께 비교한다. 모든 기회를 그대로 선택하는 동일 예측은 우월성을 입증하지 못한다. 반대 가설은 계약이 비교 가능하고 원래 연구 질문에 맞을 때만 선택한다.",
+        "conditionRefs는 authoringContract.conditions 중 기존 예측에 추가할 필요한 조건 1~8개다. 숫자 property의 순서 비교만 등록 단위를 그대로 유지하며 operator/value로 변형할 수 있다. 그 외 표현과 단위는 변경하지 않는다.",
         "추가 조건은 원래 가설을 시험하는 의미가 있어야 한다. 통과만을 위한 임의 조건이나 동일 예측 복제는 금지다.",
         "원래 가설의 더 강한 인과 효과를 기존 예측 계약이 입증한다고 말하지 않는다. 검증하지 못하는 인과·장기 주장은 unverifiedClaims에 남긴다.",
-        "현재 ABox는 not-queried다. 저장 모델 평가 not-supported는 조건 불성립이며 모델 미등록이나 자료 결측 증거가 아니다. 현재 성립은 TypeDB가 검증한다.",
+        "researchContext는 스냅샷에 고정된 현재 연구다. 과거 제안 시점 검증으로 사용하지 않는다. status가 available/partial일 때만 반환된 facts를 인용하며 gaps를 인정한다. 저장 모델 평가 not-supported는 조건 불성립이며 모델 미등록이나 자료 결측 증거가 아니다. 현재 성립은 TypeDB가 검증한다.",
         "source-packet 식별과 원천 보존, 미래 결과 수집은 시스템 소유다. 이를 additionalObservations에 작성하지 않는다.",
         "additionalObservations는 등록 모델 입력 외에 실제로 더 필요한 과거 자료만 명시한다. 미래 결과 관측을 과거 1440분 이력 요구로 잘못 작성하지 않는다. 불필요하면 빈 배열이다.",
         "추가 자료는 metric, label, lookbackMinutes, minimumSamples, cadenceSeconds, maximumDelayMinutes를 사용한다. 모든 수치는 정수, 실제 수집 주기 이상이어야 한다.",

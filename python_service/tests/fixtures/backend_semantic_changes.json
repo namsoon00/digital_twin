@@ -34,5 +34,11 @@
     "bodyHash": "27a622416cbf4676cf5fe0aa013a82a6eed0433cef07a02a64fbade62cda22e2",
     "reason": "Make historic InferenceBox comparison explicitly optional for candidate condition checks; preserve ABox validation, exact native execution, default comparison and policy-only behavior.",
     "regressionTest": "test_hypothesis_candidate_validation.HypothesisCandidateValidationTests.test_candidate_preview_can_skip_only_diagnostic_baseline_not_abox_or_execution"
+  },
+  "TypeDBOntologyGraphRepository.execute_typedb_native_rule_entry": {
+    "baselineHash": "c7399afd96c3a2d43ae0a98d6e30c7b1b47054cfdc673f0f12eaac2682586871",
+    "bodyHash": "117f48503ebb9f9371994ffcac986c10adf5d0409b7f55ec82f8e868161e0384",
+    "reason": "HYP-07: same-lease TypeDB input-presence proof for conditional selection only; missing inputs, failed reads and unsupported absence predicates remain unknown. No Python rule decision.",
+    "regressionTest": "test_hypothesis_research_pipeline.ResearchPipelineTests.test_native_negative_receipt_requires_inputs_and_survives_compaction"
   }
 }

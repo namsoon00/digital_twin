@@ -21,7 +21,7 @@ def authoring_budget_available(case, maximum):
 
 def repairable_specification(case):
     if (case.status not in {"needs-revision", "blocked"} or case.evolution.get("plan")
-            or case.retry.get("contractRepair") or case.compilation_draft.get("designVersion") != REPAIR_FROM_VERSION):
+            or case.retry.get("contractRepair") or case.compilation_draft.get("designVersion") not in {REPAIR_FROM_VERSION, "hypothesis-rule-design-v7-registered-design"}):
         return False
     if any(row.get("kind") in {"unsupported-capability", "unverified-observation", "unclassified"}
            for row in case.retry.get("blockers") or []):
@@ -44,10 +44,10 @@ def begin_contract_repair(case, stamp):
     content = {key: draft.get(key) for key in ("candidates", "contextSummary", "world")}
     if compilation_fingerprint(content) != draft.get("contentFingerprint"):
         raise ValueError("Previous compilation fingerprint mismatch")
-    if draft.get("inputFingerprint") != authoring_input_fingerprint(case, design_version=REPAIR_FROM_VERSION):
+    if draft.get("inputFingerprint") != authoring_input_fingerprint(case, design_version=draft["designVersion"]):
         raise ValueError("Previous authoring evidence changed")
     case.retry["contractRepair"] = {
-        "contract": REPAIR_CONTRACT, "fromVersion": REPAIR_FROM_VERSION, "toVersion": RULE_DESIGN_VERSION,
+        "contract": REPAIR_CONTRACT, "fromVersion": draft["designVersion"], "toVersion": RULE_DESIGN_VERSION,
         "scheduledAt": stamp, "attemptLimit": 1, "attemptsUsed": 0,
         "previousAttempts": int(case.retry.get("authoringAttempts") or 0),
         "previousReason": case.blocked_reason, "previousDraft": draft,

@@ -1,3 +1,4 @@
+from ..domain.hypothesis_study import development_readiness
 import hashlib
 import json
 from copy import deepcopy
@@ -863,7 +864,7 @@ class HypothesisDevelopmentService:
             "status": "ok",
             "count": len(rows),
             "summary": {"statuses": statuses, "approvalRequiredCount": statuses.get("approval-required", 0)},
-            "cases": [{**item.to_dict(), "progress": development_progress(item)} for item in rows],
+            "cases": [{**item.to_dict(), "progress": development_progress(item), "readiness": development_readiness(item, dict(self.evolution_service.policy) if self.evolution_service else {})} for item in rows],
             "events": self.case_store.events(limit=100) if self.case_store and hasattr(self.case_store, "events") else [],
             "governance": "policy-governed-shadow-evolution" if self.evolution_service else "automatic-validation-human-deployment-approval",
             "evolutionPolicy": dict(self.evolution_service.policy) if self.evolution_service else {},
@@ -876,7 +877,7 @@ class HypothesisDevelopmentService:
         experiment = self.experiment_store.get(case.experiment_id) if self.experiment_store and case.experiment_id else None
         return {
             "status": "ok",
-            "case": {**case.to_dict(), "progress": development_progress(case)},
+            "case": {**case.to_dict(), "progress": development_progress(case), "readiness": development_readiness(case, dict(self.evolution_service.policy) if self.evolution_service else {})},
             "experiment": experiment.to_dict() if experiment else {},
             "events": self.case_store.events(case.case_id, 200) if hasattr(self.case_store, "events") else [],
         }

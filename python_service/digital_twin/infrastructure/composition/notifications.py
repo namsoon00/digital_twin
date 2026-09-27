@@ -26,7 +26,8 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         NotificationAIRequestEnqueuer,
         refresh_insight_delivery_comparison,
     )
-    from digital_twin.modules.news_intelligence.public import NewsDigestEnqueuer, NewsDigestEventReconciler
+    from digital_twin.modules.news_intelligence.public import CompanyChangeReportReconciler, NewsDigestEnqueuer, NewsDigestEventReconciler
+    from digital_twin.modules.read_models.public import InstrumentValuationQueryService
     from digital_twin.modules.notifications.infrastructure.notification.transport import (
         notifier_for_account,
         notifier_for_operations,
@@ -110,6 +111,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     ai_request_enqueuer = None
     reasoning_orchestrator = None
     news_digest_reconciler = None
+    company_change_report_reconciler = None
     alert_coverage_reconciler = None
     delivery_comparison_refresher = None
     if not dry_run:
@@ -149,6 +151,18 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
                 evidence_repository=stores.research_evidence_store(settings),
             ),
             cursor_store=stores.news_digest_reconciliation_state_store(settings),
+        )
+        company_report_queue = stores.notification_job_store(settings)
+        company_change_report_reconciler = CompanyChangeReportReconciler(
+            account_repository=stores.account_reader(settings),
+            monitor_store=monitor_store,
+            valuation_query_service=InstrumentValuationQueryService(
+                monitor_store=monitor_store,
+                settings=settings,
+                report_history_store=company_report_queue,
+            ),
+            queue=company_report_queue,
+            settings=settings,
         )
         coverage_queue = stores.notification_job_store(settings)
         coverage_registry = stores.reasoning_engine_registry_store(settings)
@@ -199,6 +213,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         ai_request_enqueuer=ai_request_enqueuer,
         reasoning_orchestrator=reasoning_orchestrator,
         news_digest_reconciler=news_digest_reconciler,
+        company_change_report_reconciler=company_change_report_reconciler,
         alert_coverage_reconciler=alert_coverage_reconciler,
         fresh_data_recheck_requester=request_fresh_data_recheck,
         link_base_resolver=ActiveShareNotificationLinkResolver(),

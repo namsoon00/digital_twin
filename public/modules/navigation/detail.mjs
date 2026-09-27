@@ -103,7 +103,7 @@ function openWorkDetailLayer(type, key) {
   render({ transition: "detail-open" });
   if (navigationState.workDetailLayer.type === "market-instrument") {
     var activeInstrumentTab = instrumentWorkspaceTab(navigationState.workDetailLayer.key);
-    if (activeInstrumentTab === "valuation") loadInstrumentValuation(navigationState.workDetailLayer.key, false);
+    if (["report", "valuation"].indexOf(activeInstrumentTab) >= 0) loadInstrumentValuation(navigationState.workDetailLayer.key, false);
     if (["chart", "decision", "timeline"].indexOf(activeInstrumentTab) >= 0) loadInstrumentTimeline(navigationState.workDetailLayer.key, false);
   }
   if (navigationState.workDetailLayer.type === "instrument-event-group") {

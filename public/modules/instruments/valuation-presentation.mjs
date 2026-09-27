@@ -204,4 +204,72 @@ function renderInstrumentInvestmentAnalysis(analysis, currency) {
   ].join("");
 }
 
-export { instrumentDcfAssumptionLabel, instrumentExposureStateLabel, instrumentValuationMissingLabel, instrumentValuationModelLabel, renderInstrumentInvestmentAnalysis };
+function companyReportFactValue(fact, currency) {
+  if (!valuationHasNumericValue((fact || {}).value)) return "값 확인 필요";
+  if (fact.unit === "percent") return valuationDecimal(fact.value, "%", 2);
+  return valuationPrice(fact.value, fact.unit && fact.unit !== "reported-currency" ? fact.unit : currency);
+}
+
+function companyReportSourceScopeLabel(value) {
+  var labels = {
+    overview: "기업 지표",
+    "overview-secondary": "보조 기업 지표",
+    "statements-governance": "재무·경영 정보",
+    "official-filing": "공식 공시",
+    "official-filing-company": "국내 공식 공시",
+    "valuation-model-input": "적정가 계산 입력",
+    "company-metrics": "기업 평가 지표"
+  };
+  return labels[String(value || "").toLowerCase()] || String(value || "기업 자료");
+}
+
+function companyReportChangeRow(change, currency) {
+  var previous = change.previous || {};
+  var current = change.current || {};
+  var label = change.label || change.modelId || current.label || current.modelId || "변경 항목";
+  var isModel = Boolean(current.modelId || change.modelId);
+  var before = change.kind === "new"
+    ? "이전 자료 없음"
+    : isModel ? valuationPrice(previous.fairValue, previous.currency || currency) : companyReportFactValue(previous, currency);
+  var after = isModel ? valuationPrice(current.fairValue, current.currency || currency) : companyReportFactValue(current, currency);
+  return '<p><strong>' + escapeHtml(label) + '</strong><span>' + escapeHtml(before + " → " + after) + '</span><em>' + escapeHtml(change.kind === "new" ? "새로 확인" : "이전 전달 보고서와 비교") + '</em></p>';
+}
+
+function renderCompanyChangeReport(report) {
+  report = report || {};
+  var state = report.currentState || {};
+  var changes = report.changes || {};
+  var facts = Array.isArray(state.facts) ? state.facts : [];
+  var models = Array.isArray(state.valuationModels) ? state.valuationModels : [];
+  var factChanges = Array.isArray(changes.factChanges) ? changes.factChanges : [];
+  var valuationChanges = Array.isArray(changes.valuationChanges) ? changes.valuationChanges : [];
+  var changeRows = factChanges.concat(valuationChanges);
+  var uncertainties = Array.isArray(report.uncertainties) ? report.uncertainties : [];
+  var nextChecks = Array.isArray(report.nextChecks) ? report.nextChecks : [];
+  var sources = Array.isArray(report.sources) ? report.sources : [];
+  var currency = report.currency || "";
+  var kindLabel = report.reportKind === "baseline" ? "기준 보고서" : report.reportKind === "change" ? "변화 확인" : "변화 없음";
+  var kindTone = report.reportKind === "change" ? "watch" : report.reportKind === "baseline" ? "caution" : "hold";
+  return [
+    '<section class="instrument-valuation-workspace company-change-report">',
+    '<header><div><span class="label">COMPANY CHANGE REPORT</span><h3>' + escapeHtml(report.headline || "기업 변화 보고서") + '</h3><p>' + escapeHtml(report.summary || "현재 확인 가능한 기업 상태를 정리했습니다.") + '</p></div><span class="tone-chip ' + kindTone + '">' + escapeHtml(kindLabel) + '</span></header>',
+    '<section class="instrument-valuation-band"><div class="instrument-valuation-section-head"><div><span class="label">CHANGE</span><h4>이번에 달라진 점</h4></div><span>' + escapeHtml(String(changes.count || 0) + "건") + '</span></div>',
+    changeRows.length ? '<div class="instrument-investment-facts">' + changeRows.slice(0, 8).map(function (change) { return companyReportChangeRow(change, currency); }).join("") + '</div>' : '<p class="instrument-valuation-explanation">' + escapeHtml(report.reportKind === "baseline" ? "첫 보고서이므로 현재 상태를 비교 기준으로 저장했습니다." : "마지막으로 전달된 보고서와 비교해 핵심 기업 상태 변화가 없습니다.") + '</p>',
+    '</section>',
+    '<section class="instrument-investment-analysis"><div class="instrument-valuation-section-head"><div><span class="label">VERIFIED STATE</span><h4>확인된 기업 상태</h4></div><span class="tone-chip hold">사실 기반</span></div>',
+    facts.length ? '<div class="instrument-investment-facts">' + facts.map(function (fact) { return '<p><strong>' + escapeHtml(fact.label || "기업 지표") + '</strong><span>' + escapeHtml(companyReportFactValue(fact, currency)) + '</span><em>' + escapeHtml(fact.period || "기간 확인 필요") + '</em></p>'; }).join("") + '</div>' : '<p class="instrument-valuation-explanation">원문 revision과 연결된 핵심 사업 지표가 아직 부족합니다.</p>',
+    models.length ? '<div class="instrument-investment-next"><strong>가치평가 상태</strong><div class="instrument-investment-facts">' + models.map(function (model) { return '<p><strong>' + escapeHtml(instrumentValuationModelLabel({ id: model.modelId })) + '</strong><span>' + escapeHtml(valuationPrice(model.fairValue, model.currency || currency)) + '</span><em>' + escapeHtml(model.decisionEligible ? "판단 입력 가능" : "참고용") + '</em></p>'; }).join("") + '</div></div>' : '',
+    '</section>',
+    '<div class="instrument-valuation-detail-grid">',
+    '<section class="instrument-valuation-band"><div class="instrument-valuation-section-head"><div><span class="label">LIMITS</span><h4>확인 한계</h4></div><span>' + escapeHtml(String(uncertainties.length) + "건") + '</span></div>' + (uncertainties.length ? '<ul>' + uncertainties.slice(0, 8).map(function (item) { return '<li>' + escapeHtml(instrumentValuationMissingLabel(item)) + '</li>'; }).join("") + '</ul>' : '<p>현재 보고서에 기록된 주요 누락 항목이 없습니다.</p>') + '</section>',
+    '<section class="instrument-valuation-band"><div class="instrument-valuation-section-head"><div><span class="label">NEXT</span><h4>다음 확인</h4></div><span>' + escapeHtml(String(nextChecks.length) + "건") + '</span></div>' + (nextChecks.length ? '<ul>' + nextChecks.slice(0, 8).map(function (item) { return '<li>' + escapeHtml(instrumentValuationMissingLabel(item)) + '</li>'; }).join("") + '</ul>' : '<p>현재 등록된 추가 확인 항목이 없습니다.</p>') + '</section>',
+    '</div>',
+    '<section class="instrument-valuation-sources"><div class="instrument-valuation-section-head"><div><span class="label">PROVENANCE</span><h4>출처와 보고 기준</h4></div><span>' + escapeHtml(report.sourceCutoffAt || report.generatedAt || "기준 시각 없음") + '</span></div>',
+    sources.length ? '<div>' + sources.map(function (source) { return '<p><strong>' + escapeHtml(source.provider || "출처 미기록") + '</strong><span>' + escapeHtml((source.scopes || [source.scope]).filter(Boolean).map(companyReportSourceScopeLabel).join(" · ") || "기업 자료") + '</span><time>' + escapeHtml(source.asOf || "기준일 없음") + '</time></p>'; }).join("") + '</div>' : '<p class="instrument-valuation-explanation">출처 기록이 없습니다.</p>',
+    '</section>',
+    '<p class="instrument-valuation-explanation"><strong>분석 경계</strong> · ' + escapeHtml(report.boundary || "확인된 사실을 요약하며 투자 행동을 만들지 않습니다.") + '</p>',
+    '</section>'
+  ].join("");
+}
+
+export { instrumentDcfAssumptionLabel, instrumentExposureStateLabel, instrumentValuationMissingLabel, instrumentValuationModelLabel, renderCompanyChangeReport, renderInstrumentInvestmentAnalysis };

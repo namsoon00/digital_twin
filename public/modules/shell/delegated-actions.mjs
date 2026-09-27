@@ -130,7 +130,7 @@ function bindDelegatedConsoleActions() {
       var instrumentSymbol = String(instrumentTab.getAttribute("data-instrument-symbol") || "").toUpperCase();
       instrumentsState.instrumentWorkspaceTabs[instrumentSymbol] = instrumentTab.getAttribute("data-instrument-workspace-tab") || "summary";
       render({ transition: "section" });
-      if (instrumentsState.instrumentWorkspaceTabs[instrumentSymbol] === "valuation") loadInstrumentValuation(instrumentSymbol, false);
+      if (["report", "valuation"].indexOf(instrumentsState.instrumentWorkspaceTabs[instrumentSymbol]) >= 0) loadInstrumentValuation(instrumentSymbol, false);
       if (["chart", "decision", "timeline"].indexOf(instrumentsState.instrumentWorkspaceTabs[instrumentSymbol]) >= 0) loadInstrumentTimeline(instrumentSymbol, false);
       return;
     }

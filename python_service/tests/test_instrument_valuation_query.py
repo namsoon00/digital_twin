@@ -1,10 +1,14 @@
 import sys
 import unittest
+import copy
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.read_models.application.instrument_valuation_query_service import InstrumentValuationQueryService
+from digital_twin.modules.news_intelligence.application.company_change_report_reconciliation_service import CompanyChangeReportReconciler
+from digital_twin.modules.news_intelligence.domain.company_change_report import build_company_change_report, render_company_change_report
 from digital_twin.modules.news_intelligence.domain.company_knowledge import (
     build_company_knowledge,
     company_valuation_context,
@@ -166,6 +170,9 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertIn(payload["valuation"]["inputSnapshot"]["reproducibilityState"], {"partial", "reproducible"})
         self.assertEqual("unresolved", payload["investmentAnalysis"]["priceExplanation"]["claimStrength"])
         self.assertFalse(payload["investmentAnalysis"]["customerMessageEligible"])
+        self.assertEqual("baseline", payload["companyChangeReport"]["reportKind"])
+        self.assertTrue(payload["companyChangeReport"]["deliveryEligible"])
+        self.assertEqual("factual-reference", payload["companyChangeReport"]["reportRole"])
         self.assertIn("currentVerifiedFacts", payload["investmentAnalysis"])
         self.assertEqual([], payload["investmentAnalysis"]["newlyConfirmedFacts"])
         self.assertTrue(payload["investmentAnalysis"]["valuationModels"])
@@ -274,6 +281,73 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self._assert_query_exposes_market_multiples_and_auditable_fair_value_without_action()
         self._assert_negative_eps_is_explained_as_non_meaningful_per()
         self._assert_query_does_not_expose_a_stale_positive_per_for_a_loss_company()
+        self._assert_company_change_report_and_reconciliation_contract()
+
+    def _assert_company_change_report_and_reconciliation_contract(self):
+        service = InstrumentValuationQueryService(
+            monitor_store=StubMonitorStore({"default": self.snapshot_state()}), settings={},
+        )
+        payload = service.query(InstrumentValuationQuery("035720", "default"))
+        baseline = payload["companyChangeReport"]
+        quote_only = copy.deepcopy(payload)
+        quote_only["instrument"]["currentPrice"] = 99_999
+        unchanged = build_company_change_report(quote_only, baseline)
+        self.assertEqual("unchanged", unchanged["reportKind"])
+        self.assertFalse(unchanged["deliveryEligible"])
+
+        factual = copy.deepcopy(payload)
+        factual["investmentAnalysis"]["currentVerifiedFacts"] = [{
+            "driverId": "revenue", "label": "매출", "value": 100,
+            "unit": "KRW", "period": "FY2026", "evidenceId": "filing:revenue:2026",
+        }]
+        factual["investmentAnalysis"]["companyDrivers"] = {"materialFingerprint": "drivers:100"}
+        factual_baseline = build_company_change_report(factual)
+        changed_payload = copy.deepcopy(factual)
+        changed_payload["investmentAnalysis"]["currentVerifiedFacts"][0]["value"] = 125
+        changed_payload["investmentAnalysis"]["companyDrivers"]["materialFingerprint"] = "drivers:125"
+        changed = build_company_change_report(changed_payload, factual_baseline)
+        self.assertEqual("change", changed["reportKind"])
+        self.assertEqual(100.0, changed["changes"]["factChanges"][0]["previous"]["value"])
+        self.assertEqual(125.0, changed["changes"]["factChanges"][0]["current"]["value"])
+        self.assertIn("이번에 달라진 점", render_company_change_report(changed))
+
+        class Queue:
+            def __init__(self):
+                self.keys = set()
+                self.jobs = []
+
+            def enqueue(self, job):
+                if job.dedupe_key in self.keys:
+                    return False
+                self.keys.add(job.dedupe_key)
+                self.jobs.append(job)
+                return True
+
+        class Accounts:
+            @staticmethod
+            def load():
+                return [SimpleNamespace(
+                    account_id="default", label="테스트", enabled=True,
+                    watchlist_symbols=("035720",),
+                )]
+
+        class Query:
+            @staticmethod
+            def query(_request):
+                return payload
+
+        queue = Queue()
+        reconciler = CompanyChangeReportReconciler(
+            account_repository=Accounts(),
+            monitor_store=StubMonitorStore({"default": self.snapshot_state()}),
+            valuation_query_service=Query(),
+            queue=queue,
+            settings={"companyChangeReportMaxSymbols": "2"},
+        )
+        self.assertEqual(1, reconciler.run_once()["queued"])
+        self.assertEqual(0, reconciler.run_once()["queued"])
+        self.assertEqual("informationUpdate", queue.jobs[0].message_type)
+        self.assertEqual("company-change-report", queue.jobs[0].context["notificationContent"]["kind"])
 
     def test_trailing_eps_never_inherits_forecast_period(self):
         from unittest.mock import patch

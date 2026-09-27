@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, Mapping, Optional
 
-from digital_twin.modules.news_intelligence.contracts import build_company_driver_map, company_prompt_context, company_valuation_context, evaluate_causal_attribution, latest_source_as_of
+from digital_twin.modules.news_intelligence.contracts import build_company_change_report, build_company_driver_map, company_prompt_context, company_valuation_context, evaluate_causal_attribution, latest_source_as_of
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state, utc_now_iso
 from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService, valuation_snapshot_delta
@@ -54,10 +54,12 @@ class InstrumentValuationQueryService:
         monitor_store,
         valuation_service: ValuationModelService = None,
         settings: Mapping[str, object] = None,
+        report_history_store=None,
     ):
         self.monitor_store = monitor_store
         self.valuation_service = valuation_service or ValuationModelService()
         self.settings = dict(settings or {})
+        self.report_history_store = report_history_store
 
     def query(self, query: InstrumentValuationQuery) -> Dict[str, object]:
         request = query.normalized()
@@ -259,7 +261,7 @@ class InstrumentValuationQueryService:
             *(["dcf-assumption-review-required"] if dcf_readiness.get("assumptionReviewState") == "required" else []),
         ])
 
-        return {
+        payload = {
             "contract": READ_MODEL_VERSION,
             "status": "ok",
             "generatedAt": utc_now_iso(),
@@ -390,6 +392,40 @@ class InstrumentValuationQueryService:
                 ),
             },
         }
+        payload["companyChangeReport"] = build_company_change_report(
+            payload,
+            self._previous_delivered_company_change_report(account_id, source_symbol),
+        )
+        return payload
+
+    def _previous_delivered_company_change_report(self, account_id: str, symbol: str) -> Dict[str, object]:
+        latest_reader = getattr(self.report_history_store, "latest_delivered_company_change_report", None)
+        if callable(latest_reader):
+            try:
+                report = latest_reader(account_id, symbol)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                report = {}
+            if isinstance(report, Mapping):
+                return dict(report)
+        reader = getattr(self.report_history_store, "recent_for_symbol", None)
+        if not callable(reader):
+            return {}
+        try:
+            jobs = reader(symbol, account_id=account_id, limit=40)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return {}
+        for job in jobs or []:
+            if str(getattr(job, "status", "") or "").lower() != "done":
+                continue
+            context = getattr(job, "context", None)
+            context = context if isinstance(context, Mapping) else {}
+            report = context.get("companyChangeReport")
+            if isinstance(report, Mapping) and _text(report.get("symbol")).upper() == _text(symbol).upper():
+                delivered = dict(report)
+                delivered["deliveredAt"] = _text(getattr(job, "updated_at", "") or getattr(job, "created_at", ""))
+                delivered["notificationJobId"] = _text(getattr(job, "job_id", ""))
+                return delivered
+        return {}
 
     @staticmethod
     def _previous_assessment(external_signals: Mapping[str, object], symbol: str) -> Dict[str, object]:

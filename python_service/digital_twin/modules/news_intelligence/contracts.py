@@ -4,6 +4,9 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {
+ 'COMPANY_CHANGE_REPORT_VERSION': ('digital_twin.modules.news_intelligence.domain.company_change_report', 'COMPANY_CHANGE_REPORT_VERSION'),
+ 'build_company_change_report': ('digital_twin.modules.news_intelligence.domain.company_change_report', 'build_company_change_report'),
+ 'render_company_change_report': ('digital_twin.modules.news_intelligence.domain.company_change_report', 'render_company_change_report'),
  'COMPANY_EVENT_CONTRACT_VERSION': ('digital_twin.modules.news_intelligence.domain.company_event', 'COMPANY_EVENT_CONTRACT_VERSION'),
  'bind_company_event_contract': ('digital_twin.modules.news_intelligence.domain.company_event', 'bind_company_event_contract'),
  'company_event_contract': ('digital_twin.modules.news_intelligence.domain.company_event', 'company_event_contract'),

@@ -36,9 +36,11 @@ def build_instrument_valuation_query_service(settings=None) -> InstrumentValuati
     from digital_twin.modules.read_models.public import InstrumentValuationQueryService
 
     configured_settings = settings or runtime_settings()
+    monitor_store = stores.monitor_store(configured_settings)
     return InstrumentValuationQueryService(
-        monitor_store=stores.monitor_store(configured_settings),
+        monitor_store=monitor_store,
         settings=configured_settings,
+        report_history_store=monitor_store,
     )
 
 

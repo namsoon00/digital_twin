@@ -558,6 +558,39 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             previous[row["account_id"]] = _json_loads(row["payload_json"], {})
         return previous
 
+    def latest_delivered_company_change_report(
+        self,
+        account_id: str,
+        symbol: str,
+    ) -> Dict[str, object]:
+        """Read the last delivered factual report without loading notification workflows."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, updated_at, payload_json
+                FROM notification_jobs
+                WHERE account_id = %s
+                  AND symbol = %s
+                  AND message_type = 'informationUpdate'
+                  AND status = 'done'
+                ORDER BY updated_at DESC, job_id DESC
+                LIMIT 40
+                """,
+                (str(account_id or ""), str(symbol or "").upper().strip()),
+            ).fetchall()
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+            report = context.get("companyChangeReport")
+            if not isinstance(report, dict):
+                continue
+            delivered = dict(report)
+            delivered["deliveredAt"] = str(row.get("updated_at") or "")
+            delivered["notificationJobId"] = str(row.get("job_id") or "")
+            return delivered
+        return {}
+
     def lock_previous_states_with_connection(
         self,
         connection,

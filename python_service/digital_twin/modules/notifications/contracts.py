@@ -50,6 +50,7 @@ _EXPORTS.update({
     'EXTERNAL_MACRO_SHIFT': ('digital_twin.modules.notifications.domain.message_types', 'EXTERNAL_MACRO_SHIFT'),
     'ExternalSignalAlertMixin': ('digital_twin.modules.notifications.domain.external_signal_alerts', 'ExternalSignalAlertMixin'),
     'HOLDING_TIMING': ('digital_twin.modules.notifications.domain.message_types', 'HOLDING_TIMING'),
+    'INFORMATION_UPDATE': ('digital_twin.modules.notifications.domain.message_types', 'INFORMATION_UPDATE'),
     'INSTRUMENT_MARKET_SCOPE': ('digital_twin.modules.notifications.domain.notification_decision_policy', 'INSTRUMENT_MARKET_SCOPE'),
     'INVESTMENT_ALERT_COVERAGE': ('digital_twin.modules.notifications.domain.message_types', 'INVESTMENT_ALERT_COVERAGE'),
     'INVESTMENT_CALENDAR_REMINDER': ('digital_twin.modules.notifications.domain.message_types', 'INVESTMENT_CALENDAR_REMINDER'),

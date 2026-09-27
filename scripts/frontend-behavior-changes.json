@@ -90,5 +90,9 @@
   {
     "reason": "Present a source-backed diagnostic DCF as a calculated reference condition when current economics do not support positive equity value. Covered by insight-presentation.test.mjs and test_driver_dcf.",
     "functions": ["instrumentValuationQualityMeta", "renderInstrumentInvestmentAnalysis"]
+  },
+  {
+    "reason": "Add a company change report tab backed by the existing valuation read model, and load the same source-bound payload for report and valuation views. Covered by test_company_change_report and test_instrument_valuation_query.",
+    "functions": ["instrumentWorkspaceTab", "renderInstrumentWorkspaceNavigation", "marketInstrumentWorkDetailPayload"]
   }
 ]

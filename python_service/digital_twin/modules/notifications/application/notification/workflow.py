@@ -234,6 +234,7 @@ class NotificationQueueRunner:
         ai_request_enqueuer=None,
         reasoning_orchestrator=None,
         news_digest_reconciler=None,
+        company_change_report_reconciler=None,
         alert_coverage_reconciler=None,
         fresh_data_recheck_requester=None,
         link_base_resolver: Callable = None,
@@ -261,6 +262,7 @@ class NotificationQueueRunner:
         self.ai_request_enqueuer = ai_request_enqueuer
         self.reasoning_orchestrator = reasoning_orchestrator
         self.news_digest_reconciler = news_digest_reconciler
+        self.company_change_report_reconciler = company_change_report_reconciler
         self.alert_coverage_reconciler = alert_coverage_reconciler
         self.fresh_data_recheck_requester = fresh_data_recheck_requester
         self.rendering_service = NotificationRenderingService(
@@ -286,6 +288,7 @@ class NotificationQueueRunner:
             freshness_enabled=self.dispatch_freshness_enabled,
         )
         self.last_news_digest_reconciliation: Dict[str, object] = {}
+        self.last_company_change_report_reconciliation: Dict[str, object] = {}
         self.last_alert_coverage_reconciliation: Dict[str, object] = {}
         self.last_run_details = []
         self.active_job = None
@@ -327,6 +330,16 @@ class NotificationQueueRunner:
                 }
         if self.news_digest_reconciler:
             self.last_news_digest_reconciliation = dict(self.news_digest_reconciler.run_once() or {})
+        if self.company_change_report_reconciler:
+            try:
+                self.last_company_change_report_reconciliation = dict(
+                    self.company_change_report_reconciler.run_once() or {}
+                )
+            except Exception as error:  # Reports must not block existing customer delivery.
+                self.last_company_change_report_reconciliation = {
+                    "status": "error",
+                    "reason": str(error)[:220],
+                }
         # Load account configuration before claiming durable jobs. A storage
         # timeout here must not leave an unowned processing lease behind.
         accounts = self.account_map()

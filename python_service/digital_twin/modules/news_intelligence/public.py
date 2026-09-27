@@ -5,6 +5,8 @@ from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {'HypothesisResearchPlanningService': ('digital_twin.modules.news_intelligence.application.hypothesis_research_planner_service',
                                        'HypothesisResearchPlanningService'),
+ 'CompanyChangeReportReconciler': ('digital_twin.modules.news_intelligence.application.company_change_report_reconciliation_service',
+                                   'CompanyChangeReportReconciler'),
  'InvestmentResearchOrchestrationService': ('digital_twin.modules.news_intelligence.application.investment_research_orchestration_service',
                                             'InvestmentResearchOrchestrationService'),
  'InvestmentResearchQueueRunner': ('digital_twin.modules.news_intelligence.application.investment_research_orchestration_service',

@@ -323,6 +323,7 @@
   },
   "storage": {
     "infrastructure/transactions/monitoring.py::MySQLEventLog": {"hash": "fc6819fe9b9a5866bd7e5539e1c8d5c4ec6f0a77c8634eb377cf9ee4111057c7", "reason": "Lease official external-fact projection deliveries from durable membership and fence completion or failure by lease token, eliminating timestamp-cursor loss; test_external_official_evidence_projection; docs/data-integration-acceptance.md."},
+    "infrastructure/transactions/monitoring.py::MySQLMonitorStore": {"hash": "8f7c1fd2f195d13680f18f772cb1f81cbf5c330a365c89f521e4ec502c85fa5b", "reason": "Read the latest successfully delivered company change report by indexed account, symbol, message type and status so the next report compares against a customer-visible baseline without loading notification application code. test_instrument_valuation_query and test_runtime_composition."},
     "modules/decisions/infrastructure/mysql_subject_decision_cases.py::MySQLSubjectDecisionCaseStore": {
       "hash": "38799ee80a38db69ae9914840ea5dbdcd8853c5ece83acce87a2cc9f511238f2",
       "reason": "Serialize subject decision lifecycle writes, read the latest version through the active AI publication transaction, and recover only durable post-AI delivery outcomes from insight episodes; test_decision_audit_entries and test_subject_decision_recovery."

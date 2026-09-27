@@ -114,6 +114,27 @@ test("instrument valuation separates verified changes, price-cause limits and re
   assert.match(shadowDcf, /terminal 비중/);
   assert.match(shadowDcf, /주식 위험 프리미엄|가중평균자본비용/);
   assert.doesNotMatch(shadowDcf, /fy1-revenue-consensus/);
+
+  const activeDiagnostic = renderInstrumentInvestmentAnalysis({
+    priceExplanation: {claimStrength: "unresolved"},
+    valuationModels: [{
+      modelId: "driver-fcff-dcf", fairValue: null, currency: "USD",
+      decisionEligible: false, sourceBacked: true, assumptionReviewState: "complete",
+      modelRelease: {status: "active", releaseMode: "active", releaseId: "driver-dcf-active-cpng-r1"},
+      releaseAudit: {diagnosticOnly: true, limitations: ["non-positive-equity-value-under-current-economics"]}
+    }],
+    dcfReadiness: {
+      status: "active-diagnostic", assumptionReviewState: "complete",
+      assumptionReview: {state: "complete", pendingCount: 0},
+      modelRelease: {status: "active", releaseMode: "active", releaseId: "driver-dcf-active-cpng-r1"},
+      releaseAudit: {diagnosticOnly: true, limitations: ["non-positive-equity-value-under-current-economics"]}
+    }
+  }, "USD");
+  assert.match(activeDiagnostic, /운영 승격 · 진단용/);
+  assert.match(activeDiagnostic, /현재 수익성으로 양\(\+\) 가치 미산출/);
+  assert.match(activeDiagnostic, /운영 분석 승격/);
+  assert.match(activeDiagnostic, /0개 대기/);
+  assert.match(activeDiagnostic, /운영 분석에서 계속 추적합니다/);
 });
 
 test("compact financial reviews keep all source-labelled facts separate from the new market change", () => {

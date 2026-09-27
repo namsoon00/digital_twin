@@ -193,7 +193,7 @@ class InstrumentValuationQueryService:
                 _number(position.current_price, positive=True) is not None
                 and financial_evidence.get("officialDecisionReady") is True
                 and consensus_evidence.get("status") == "validated"
-                and dcf_readiness.get("status") in {"ready-for-shadow", "released-reference"}
+                and dcf_readiness.get("status") in {"ready-for-shadow", "released-reference", "active", "active-diagnostic"}
                 and dcf_readiness.get("releaseState") != "blocked"
                 and model_agreement.get("status") != "conflict"
             ) else "limited",

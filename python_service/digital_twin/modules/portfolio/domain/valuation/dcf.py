@@ -15,6 +15,7 @@ from typing import Dict, Mapping
 DRIVER_DCF_VERSION = "driver-fcff-dcf-v2"
 DRIVER_DCF_SENSITIVITY_VERSION = "driver-fcff-dcf-sensitivity-v2"
 DRIVER_DCF_REFERENCE_RELEASE_VERSION = "driver-dcf-reference-release-v2-forecast-gate"
+DRIVER_DCF_ACTIVE_RELEASE_VERSION = "driver-dcf-active-release-v1-exact-bundle"
 SUPPORTED_APPLICABILITY = {"non-financial-company", "operating-company"}
 
 
@@ -491,6 +492,156 @@ def release_driver_dcf_reference(
         "modelRelease": model_release,
     })[:32]
     return {"released": True, "input": released_input, "audit": audit, "modelRelease": model_release}
+
+
+def promote_driver_dcf_active(
+    inputs: Mapping[str, object],
+    approval: Mapping[str, object],
+) -> Dict[str, object]:
+    """Promote one exact, reference-released input bundle into active analysis."""
+
+    source = dict(inputs or {})
+    policy = dict(approval or {})
+    symbol = _text(source.get("symbol")).upper()
+    input_bundle_id = _text(source.get("inputBundleId"))
+    assumption_version = _text(source.get("assumptionVersion"))
+    approved_input_bundle_id = _text(policy.get("inputBundleId"))
+    approved_assumption_version = _text(policy.get("assumptionVersion"))
+    approved_by = _text(policy.get("approvedBy"))
+    approved_at = _text(policy.get("approvedAt"))
+    approval_reason = _text(policy.get("approvalReason"))
+    release_id = _text(policy.get("releaseId"))
+    reference_release = dict(source.get("modelRelease") or {}) if isinstance(source.get("modelRelease"), Mapping) else {}
+    blockers = []
+    if _text(policy.get("status")).lower() not in {"approved", "active"}:
+        blockers.append("active-approval-required")
+    if _text(source.get("modelApprovalState")).lower() != "reference-released":
+        blockers.append("reference-release-required")
+    if reference_release.get("status") != "released" or reference_release.get("releaseMode") != "reference":
+        blockers.append("reference-release-contract-missing")
+    if not input_bundle_id or input_bundle_id != approved_input_bundle_id:
+        blockers.append("approved-input-bundle-mismatch")
+    if not assumption_version or assumption_version != approved_assumption_version:
+        blockers.append("approved-assumption-version-mismatch")
+    if _text(policy.get("symbol")).upper() != symbol:
+        blockers.append("approved-symbol-mismatch")
+    if not release_id:
+        blockers.append("active-release-id-missing")
+    if not approved_by:
+        blockers.append("active-approver-missing")
+    if not approved_at:
+        blockers.append("active-approval-time-missing")
+    if not approval_reason:
+        blockers.append("active-approval-reason-missing")
+    if blockers:
+        return {"promoted": False, "input": source, "blockers": sorted(set(blockers))}
+
+    approved_assumptions = []
+    for item in source.get("assumptions") or []:
+        if not isinstance(item, Mapping):
+            continue
+        row = dict(item)
+        if _text(row.get("status")).lower() not in {"observed", "verified"}:
+            row.update({
+                "status": "user-approved",
+                "reviewState": "approved",
+                "approvedBy": approved_by,
+                "approvedAt": approved_at,
+                "approvalReason": approval_reason,
+            })
+        approved_assumptions.append(row)
+    prior_review = dict(source.get("assumptionReview") or {}) if isinstance(source.get("assumptionReview"), Mapping) else {}
+    approved_review = {
+        **prior_review,
+        "state": "complete",
+        "pendingCount": 0,
+        "requiredAssumptionIds": [],
+        "promotionBlockers": [],
+        "approvedBy": approved_by,
+        "approvedAt": approved_at,
+        "approvalReason": approval_reason,
+        "approvedInputBundleId": input_bundle_id,
+        "approvedAssumptionVersion": assumption_version,
+    }
+    approved_source = {
+        **source,
+        "modelApprovalState": "approved",
+        "assumptions": approved_assumptions,
+        "assumptionReview": approved_review,
+    }
+    calculation = calculate_driver_dcf(approved_source)
+    calculation_blockers = set(calculation.get("blockedReasons") or [])
+    diagnostic_only = calculation.get("status") == "blocked" and calculation_blockers == {"non-positive-equity-value"}
+    if calculation.get("status") != "calculated" and not diagnostic_only:
+        return {
+            "promoted": False,
+            "input": source,
+            "blockers": list(calculation.get("blockedReasons") or ["dcf-calculation-not-ready"]),
+        }
+    approval_state = "limited-approved" if diagnostic_only else "approved"
+    limitations = sorted(set([
+        *(reference_release.get("audit", {}).get("limitations") or []),
+        *(["non-positive-equity-value-under-current-economics"] if diagnostic_only else []),
+    ]))
+    active_audit_material = {
+        "contractVersion": DRIVER_DCF_ACTIVE_RELEASE_VERSION,
+        "releaseId": release_id,
+        "releaseMode": "active",
+        "approvedBy": approved_by,
+        "approvedAt": approved_at,
+        "approvalReason": approval_reason,
+        "symbol": symbol,
+        "inputBundleId": input_bundle_id,
+        "assumptionVersion": assumption_version,
+        "priorReleaseId": _text(reference_release.get("releaseId")),
+        "diagnosticOnly": diagnostic_only,
+        "valuationDecisionEligible": bool(calculation.get("valuationDecisionEligible")),
+        "automaticTradingAllowed": False,
+        "calculatedValuePerShare": calculation.get("valuePerShare"),
+        "limitations": limitations,
+        "blockers": [],
+    }
+    active_audit = {
+        **active_audit_material,
+        "status": "active-with-limitations" if limitations else "active",
+        "auditId": "driver-dcf-active-audit:" + _digest(active_audit_material)[:32],
+    }
+    model_release = {
+        "contractVersion": DRIVER_DCF_ACTIVE_RELEASE_VERSION,
+        "releaseId": release_id,
+        "releaseMode": "active",
+        "releasedAt": approved_at,
+        "status": "active",
+        "scopeSymbols": [symbol],
+        "usagePolicy": "active-diagnostic-analysis" if diagnostic_only else "decision-support-analysis",
+        "automaticTradingAllowed": False,
+        "valuationDecisionEligible": bool(calculation.get("valuationDecisionEligible")),
+        "audit": active_audit,
+        "priorReferenceRelease": reference_release,
+    }
+    active_input = {
+        **approved_source,
+        "modelApprovalState": approval_state,
+        "modelRelease": model_release,
+        "assumptionReview": {
+            **approved_review,
+            "releaseState": "active",
+            "releaseId": release_id,
+        },
+    }
+    active_input["activeInputBundleId"] = "driver-dcf-active-input:" + _digest({
+        "inputBundleId": input_bundle_id,
+        "assumptionVersion": assumption_version,
+        "releaseId": release_id,
+        "approvedAt": approved_at,
+    })[:32]
+    return {
+        "promoted": True,
+        "input": active_input,
+        "audit": active_audit,
+        "modelRelease": model_release,
+        "diagnosticOnly": diagnostic_only,
+    }
 
 
 def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], settings: Mapping[str, object]) -> Dict[str, object]:

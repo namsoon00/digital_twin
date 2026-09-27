@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.modules.portfolio.domain.valuation.dcf import (
-    calculate_driver_dcf, calculate_driver_dcf_sensitivity, release_driver_dcf_reference,
+    calculate_driver_dcf, calculate_driver_dcf_sensitivity, promote_driver_dcf_active,
+    release_driver_dcf_reference,
 )
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import (
     build_driver_dcf_input_bundle,
@@ -442,6 +443,28 @@ class DriverDcfTests(unittest.TestCase):
         released_result = calculate_driver_dcf(released["input"])
         self.assertEqual("calculated", released_result["status"])
         self.assertFalse(released_result["valuationDecisionEligible"])
+        active = promote_driver_dcf_active(released["input"], {
+            "status": "approved",
+            "symbol": "TEST",
+            "inputBundleId": "driver-dcf-input:test",
+            "assumptionVersion": "test-v1",
+            "releaseId": "driver-dcf-active-test-r1",
+            "approvedBy": "local-user",
+            "approvedAt": "2026-09-27T01:00:00Z",
+            "approvalReason": "explicit user promotion",
+        })
+        self.assertTrue(active["promoted"])
+        self.assertEqual("active", active["modelRelease"]["status"])
+        self.assertTrue(calculate_driver_dcf(active["input"])["valuationDecisionEligible"])
+        self.assertFalse(active["modelRelease"]["automaticTradingAllowed"])
+        mismatched = promote_driver_dcf_active(released["input"], {
+            "status": "approved", "symbol": "TEST", "inputBundleId": "different",
+            "assumptionVersion": "test-v1", "releaseId": "active-r1",
+            "approvedBy": "local-user", "approvedAt": "2026-09-27T01:00:00Z",
+            "approvalReason": "explicit user promotion",
+        })
+        self.assertFalse(mismatched["promoted"])
+        self.assertIn("approved-input-bundle-mismatch", mismatched["blockers"])
         rejected = release_driver_dcf_reference(releasable, {
             "releaseMode": "reference", "releaseId": "driver-dcf-reference-r1",
             "symbols": ["OTHER"],
@@ -473,6 +496,21 @@ class DriverDcfTests(unittest.TestCase):
             "non-positive-equity-value-under-current-economics",
             diagnostic_release["audit"]["limitations"],
         )
+        active_diagnostic = promote_driver_dcf_active(diagnostic_release["input"], {
+            "status": "approved",
+            "symbol": "TEST",
+            "inputBundleId": "driver-dcf-input:diagnostic",
+            "assumptionVersion": "test-v1",
+            "releaseId": "driver-dcf-active-diagnostic-r1",
+            "approvedBy": "local-user",
+            "approvedAt": "2026-09-27T01:00:00Z",
+            "approvalReason": "explicit user promotion",
+        })
+        self.assertTrue(active_diagnostic["promoted"])
+        self.assertTrue(active_diagnostic["diagnosticOnly"])
+        self.assertEqual("limited-approved", active_diagnostic["input"]["modelApprovalState"])
+        self.assertEqual("active-diagnostic-analysis", active_diagnostic["modelRelease"]["usagePolicy"])
+        self.assertFalse(active_diagnostic["modelRelease"]["valuationDecisionEligible"])
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.news_intelligence.contracts import (
@@ -109,6 +110,19 @@ class DriverDcfEvidenceService:
             "symbols": sorted(symbols),
         }
 
+    def _active_approval(self, symbol: str) -> Dict[str, object]:
+        configured = self.settings.get("valuationDriverDcfApprovals")
+        if isinstance(configured, Mapping):
+            approvals = configured
+        else:
+            try:
+                parsed = json.loads(str(configured or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = {}
+            approvals = parsed if isinstance(parsed, Mapping) else {}
+        approval = approvals.get(symbol) if isinstance(approvals.get(symbol), Mapping) else {}
+        return {**dict(approval), "symbol": symbol} if approval else {}
+
     def enrich(self, signals: Dict[str, object], symbols: Iterable[object]) -> Dict[str, object]:
         result = dict(signals or {})
         requested = sorted({str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()})
@@ -182,22 +196,40 @@ class DriverDcfEvidenceService:
                 },
             )
             if isinstance(built.get("input"), Mapping):
-                from digital_twin.modules.portfolio.domain.valuation.dcf import release_driver_dcf_reference
+                from digital_twin.modules.portfolio.domain.valuation.dcf import promote_driver_dcf_active, release_driver_dcf_reference
 
                 released = release_driver_dcf_reference(built["input"], self._reference_release())
                 if released.get("released"):
-                    built = {
-                        **built,
-                        "status": "released-reference",
-                        "releaseState": "reference-released",
-                        "modelApprovalState": "reference-released",
-                        "decisionEligible": False,
-                        "modelRelease": dict(released.get("modelRelease") or {}),
-                        "releaseAudit": dict(released.get("audit") or {}),
-                        "input": dict(released["input"]),
-                        "releasedInputBundleId": released["input"].get("releasedInputBundleId"),
-                        "assumptionReview": dict(released["input"].get("assumptionReview") or {}),
-                    }
+                    promoted = promote_driver_dcf_active(released["input"], self._active_approval(symbol))
+                    if promoted.get("promoted"):
+                        promoted_input = dict(promoted["input"])
+                        built = {
+                            **built,
+                            "status": "active-diagnostic" if promoted.get("diagnosticOnly") else "active",
+                            "releaseState": "active",
+                            "modelApprovalState": promoted_input.get("modelApprovalState"),
+                            "decisionEligible": bool((promoted.get("modelRelease") or {}).get("valuationDecisionEligible")),
+                            "modelRelease": dict(promoted.get("modelRelease") or {}),
+                            "releaseAudit": dict(promoted.get("audit") or {}),
+                            "input": promoted_input,
+                            "releasedInputBundleId": released["input"].get("releasedInputBundleId"),
+                            "activeInputBundleId": promoted_input.get("activeInputBundleId"),
+                            "assumptionReview": dict(promoted_input.get("assumptionReview") or {}),
+                            "assumptionReviewState": "complete",
+                        }
+                    else:
+                        built = {
+                            **built,
+                            "status": "released-reference",
+                            "releaseState": "reference-released",
+                            "modelApprovalState": "reference-released",
+                            "decisionEligible": False,
+                            "modelRelease": dict(released.get("modelRelease") or {}),
+                            "releaseAudit": dict(released.get("audit") or {}),
+                            "input": dict(released["input"]),
+                            "releasedInputBundleId": released["input"].get("releasedInputBundleId"),
+                            "assumptionReview": dict(released["input"].get("assumptionReview") or {}),
+                        }
                 elif str(self.settings.get("valuationDriverDcfReleaseMode") or "").strip().lower() == "reference":
                     built = {**built, "releaseState": "blocked", "releaseAudit": dict(released.get("audit") or {})}
             readiness[symbol] = {key: value for key, value in built.items() if key != "input"}

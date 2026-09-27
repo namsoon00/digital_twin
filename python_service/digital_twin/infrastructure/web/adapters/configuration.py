@@ -584,6 +584,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "valuationDriverDcfReleaseId",
         "valuationDriverDcfReleaseAt",
         "valuationDriverDcfReleaseSymbols",
+        "valuationDriverDcfApprovals",
     ]
     public = {key: settings.get(key, "") for key in public_keys}
     public.update({

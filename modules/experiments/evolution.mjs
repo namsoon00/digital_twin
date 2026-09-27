@@ -51,7 +51,7 @@ export function renderHypothesisProgress(item = {}, formatClock = value => Strin
     '<div><dt>비교 실험</dt><dd>' + escapeHtml(progress.experimentStateLabel || (progress.experimentStarted ? '격리 버전 관측 중' : '아직 시작하지 않음')) + '</dd></div>' +
     (repair ? '<div><dt>명세 보정</dt><dd>' + escapeHtml(repair.attemptsUsed) + ' / ' + escapeHtml(repair.attemptLimit) +
       '회 · 기존 ' + escapeHtml(repair.previousAttempts) + '회 기록 유지</dd></div>' : '') +
-    '</dl></section>';
+    '</dl>' + renderHypothesisStudyReadiness(item.readiness) + '</section>';
 }
 
 function renderObservationRequirements(plan, evolution) {
@@ -105,4 +105,31 @@ export function renderOntologyEvolution(evolution = {}, formatClock = value => S
     '<p>변경 식별자 ' + escapeHtml(plan.fingerprint || "-") + '</p>' +
     (evolution.details?.error ? '<p class="form-error">' + escapeHtml(evolution.details.error) + '</p>' : '') +
     '</details></section>';
+}
+
+export function renderHypothesisStudyReadiness(readiness) {
+  if (!readiness) return "";
+  const study = readiness.study || {};
+  const labels = {"terminal": "종료된 개발", "unsupported-capability": "기능 보완 필요", "specification-repair": "명세 수정 필요", "awaiting-outcomes": "미래 결과 대기", "validation-required": "실행 검증 필요"};
+  return '<section aria-label="가설 검증 범위"><h4>검증 범위와 다음 자료</h4><p>' +
+    escapeHtml(labels[readiness.category] || "상태 확인 필요") + '</p><p>규칙 등록 · 현재 조건 성립 · 성과상 사용 자격 · 운영 배포는 각각 별도 검증입니다.</p>' +
+    (study.minimumAcquisitionDays ? '<p>최소 관측 기간 ' + escapeHtml(study.minimumAcquisitionDays) + '일 · 독립 표본 ' + escapeHtml(study.minimumIndependentObservations) + '건 · 필요한 보관 기간 ' + escapeHtml(study.minimumRetentionDays) + '일</p>' : '') +
+    (study.gaps || []).map(gap => '<p>' + escapeHtml(gap.reason || gap.kind) + (gap.minimumDays ? ' · 필요 ' + escapeHtml(gap.minimumDays) + '일 / 설정 ' + escapeHtml(gap.configuredDays) + '일' : '') + '</p>').join('') +
+    '<p>아직 관측하지 못한 결과는 성공으로 계산하지 않습니다. 주가 예측 성과와 AI 설명의 근거 품질은 별도로 평가합니다.</p></section>';
+}
+
+export function renderHypothesisQualityReport(report) {
+  if (!report) return "";
+  if (report.status === "unavailable") return '<p>성과 보고서를 읽지 못했습니다. 새로고침하면 다시 확인합니다.</p>';
+  const quality = report.assistantQuality || {};
+  const metrics = quality.metrics || {};
+  const percent = value => value == null ? "미측정" : (Number(value) * 100).toLocaleString("ko-KR", {maximumFractionDigits: 1}) + "%";
+  const excluded = (report.byClaimRevision || []).reduce((sum, row) => sum + (row.exclusions || []).length, 0);
+  return '<details aria-label="가설과 비서 품질 보고서"><summary>가설 성과와 비서 품질</summary><p>최근 결과가 있는 판단 최대 500건의 조회 범위입니다. 전체 과거 성과를 대표하지 않습니다.</p><dl>' +
+    '<div><dt>읽은 판단 / 제외된 가설 관측</dt><dd>' + escapeHtml(report.episodeCount || 0) + ' / ' + escapeHtml(excluded) + '건</dd></div>' +
+    '<div><dt>최종 AI 판단의 가격 결과</dt><dd>' + escapeHtml(report.investmentInsightPerformance?.outcomeCount || 0) + '건</dd></div>' +
+    '<div><dt>AI 설명 근거 추적률</dt><dd>' + escapeHtml(percent(metrics.sourceTraceRate)) + '</dd></div>' +
+    '<div><dt>근거 없는 주장 / 중복 발송 비율</dt><dd>' + escapeHtml(percent(metrics.unsupportedClaimRate)) + ' / ' + escapeHtml(percent(metrics.duplicateDeliveryRate)) + '</dd></div>' +
+    '<div><dt>품질 판정 기록</dt><dd>' + escapeHtml(quality.labelledEpisodeCount || 0) + '건 · 미판정 ' + escapeHtml(quality.unlabelledEpisodeCount || 0) + '건</dd></div></dl>' +
+    '<p>미측정은 오류가 없다는 뜻이 아닙니다. 실제 체결 수익과 가격 예측, AI 설명의 근거 품질은 서로 다른 지표입니다.</p></details>';
 }

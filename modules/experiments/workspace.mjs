@@ -9,7 +9,7 @@ import { cardTypeAttrs, renderEmptyState } from "../shell/layout.mjs";
 import { renderManagedPage } from "../shell/pages.mjs";
 import { experimentsState } from "../state/experiments.mjs";
 import { hypothesesState } from "../state/hypotheses.mjs";
-import { renderHypothesisProgress, renderOntologyEvolution } from "./evolution.mjs";
+import { renderHypothesisProgress, renderOntologyEvolution, renderHypothesisQualityReport } from "./evolution.mjs";
 
 function renderOntologyExperimentsPage(snapshot) {
   var experiments = ontologyExperimentItems();
@@ -294,6 +294,7 @@ export function renderHypothesisDevelopmentPanel() {
     '</div>',
     hypothesesState.hypothesisDevelopmentError ? '<p class="form-error">' + escapeHtml(hypothesesState.hypothesisDevelopmentError) + '</p>' : '',
     hypothesesState.hypothesisDevelopmentLoading && !hypothesesState.hypothesisDevelopmentLoaded ? '<div class="rule-strip"><span>가설 개발 계보와 검증 게이트를 읽는 중입니다.</span></div>' : '',
+    renderHypothesisQualityReport(payload.evaluation),
     '<div class="hypothesis-development-layout">',
     '<div class="hypothesis-development-list">',
     cases.length ? cases.slice(0, 20).map(function (item) {

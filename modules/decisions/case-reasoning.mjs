@@ -161,6 +161,10 @@ function renderInvestmentCaseScenarios(detail) {
       aiReview.reasoning ? '<p class="oa-case-scenario-qualification"><strong>AI 평가 · ' + escapeHtml(verdictLabels[aiReview.verdict] || aiReview.verdict || "미평가") + '</strong> ' + escapeHtml(aiReview.reasoning) + '</p>' : '',
       '<div class="oa-case-scenario-metrics"><span>지지 <strong>' + escapeHtml(item.supportCount || 0) + '</strong></span><span>반박 <strong>' + escapeHtml(item.counterCount || 0) + '</strong></span><span>독립 결과 <strong>' + escapeHtml(decisiveCount + "건") + '</strong></span><span>방향 적중 <strong>' + escapeHtml(hitRate) + '</strong></span><span>행동조정 수익 <strong>' + escapeHtml(adjustedReturn) + '</strong></span><span>추적 기록 <strong>' + escapeHtml(observationCount + "건") + '</strong></span></div>',
       qualification.reason ? '<p class="oa-case-scenario-qualification">' + escapeHtml(qualification.reason) + '</p>' : '',
+      qualification.evaluationVersion ? '<p>성과 평가: ' + escapeHtml(qualification.evaluationVersion) + ' · 제외 관측 ' + escapeHtml(qualification.excludedObservationCount || 0) + '건 · 적용 범위: 동일 계정·종목·가설 버전·기간</p>' : '',
+      qualification.rebuildRequired ? '<p>이전 집계의 재검증이 필요해 현재 사용 자격에 반영하지 않습니다.</p>' : '',
+      qualification.scopeSelectionRequired ? '<p>종목별 성적이 다르므로 개별 종목의 검증 범위를 확인해야 합니다.</p>' : '',
+
       (assumptions.length || invalidations.length) ? '<details><summary>전제와 무효화 조건</summary>' + (assumptions.length ? '<strong>전제</strong><ul>' + assumptions.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + (invalidations.length ? '<strong>무효화 조건</strong><ul>' + invalidations.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + '</details>' : '',
       '</article>'
     ].join("");

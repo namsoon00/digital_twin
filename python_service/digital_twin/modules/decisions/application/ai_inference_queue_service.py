@@ -784,7 +784,9 @@ class AIInferenceQueueRunner:
         self.judgement_service = NotificationAIJudgementService(
             reviewer,
             self.settings,
-            max_prompt_bytes=self.max_prompt_bytes,
+            # Contract repair is another model input, so it must obey the
+            # reviewed target rather than reopening the larger storage guard.
+            max_prompt_bytes=self.target_prompt_bytes,
             repair_reasoning_effort=self.comparison_repair_reasoning_effort,
             repair_timeout_seconds=self.comparison_repair_timeout_seconds,
         )

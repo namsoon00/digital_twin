@@ -1892,6 +1892,20 @@ class AIInferenceQueueTests(unittest.TestCase):
             16 * 1024,
             delivered.context["notificationAiExecutionAudit"]["executionProfile"]["effectiveMaxPromptBytes"],
         )
+        bounded_repair_runner = AIInferenceQueueRunner(
+            self.queue,
+            FakeReviewer(),
+            {
+                "notificationAiQueueTargetPromptBytes": str(32 * 1024),
+                "notificationAiQueueMaxPromptBytes": str(48 * 1024),
+            },
+            worker_id="worker-bounded-contract-repair",
+        )
+        self.assertEqual(32 * 1024, bounded_repair_runner.target_prompt_bytes)
+        self.assertEqual(
+            bounded_repair_runner.target_prompt_bytes,
+            bounded_repair_runner.judgement_service.max_prompt_bytes,
+        )
 
     def test_result_publication_retries_storage_timeout_without_repeating_ai_review(self):
         job = self.create_job()

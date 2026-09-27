@@ -11,6 +11,7 @@ import { app } from "../shell/root.mjs";
 import { notificationsState } from "../state/notifications.mjs";
 import { notificationCustomerDocument, renderNotificationCustomerDocument } from "./customer-document.mjs";
 import { renderEvidenceValidation, renderDeliveredMessage } from "./evidence-audit.mjs";
+import { renderCompanyChangeReport } from "../instruments/valuation-presentation.mjs";
 
 function renderNotificationDetailTabs(jobId, active) {
   var tabs = [
@@ -247,6 +248,10 @@ function renderNotificationDeliveryDecisionOverview(job, decisionFactors, compac
 
 function renderNotificationSummaryTab(job, context) {
   context = context || {};
+  if (job.companyChangeReport && typeof job.companyChangeReport === "object") {
+    return renderCompanyChangeReport(job.companyChangeReport)
+      + renderNotificationDetailDisclosure("발송된 메시지", "이 알림을 보낼 때 저장한 기업 보고서입니다.", context.messageDetails, "notification-summary-disclosure", "notification-job:" + context.jobId + ":summary:message");
+  }
   var customerDocument = notificationCustomerDocument(job);
   var hasCustomerDocument = Boolean(Object.keys(customerDocument).length);
   var customerDocumentBody = renderNotificationCustomerDocument(job, false);

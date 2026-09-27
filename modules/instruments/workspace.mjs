@@ -126,7 +126,7 @@ function instrumentValuationQualityMeta(quality, valuationStatus) {
   var status = String((quality || {}).status || valuationStatus || "unavailable").toLowerCase();
   if (status === "ready") return { label: "근거 충족", tone: "watch" };
   if (status === "blocked" || String(valuationStatus || "").indexOf("blocked") === 0) return { label: "계산 보류", tone: "danger" };
-  if (status === "partial" || valuationStatus === "calculated") return { label: "참고값", tone: "caution" };
+  if (status === "partial" || String(valuationStatus || "").indexOf("calculated") === 0) return { label: "참고값", tone: "caution" };
   return { label: "자료 부족", tone: "hold" };
 }
 

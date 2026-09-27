@@ -805,7 +805,12 @@ def canonical_evidence_url(value: object) -> str:
         if normalized in URL_TRACKING_QUERY_KEYS or normalized.startswith("utm_"):
             continue
         query.append((key, item))
-    path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
+    path = re.sub(r"/+", "/", parsed.path or "/")
+    # Some publishers expose the same article both with and without their
+    # front-controller segment (for example /index.php/finance/... ).
+    # It is a delivery route, not part of the document identity.
+    path = re.sub(r"^/index\.php(?=/|$)", "", path, flags=re.IGNORECASE) or "/"
+    path = path.rstrip("/") or "/"
     return urllib.parse.urlunsplit((parsed.scheme.casefold() or "https", host, path, urllib.parse.urlencode(sorted(query)), ""))
 
 

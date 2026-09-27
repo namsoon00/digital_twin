@@ -45,6 +45,7 @@
     {"file": "test_action_envelope_ai_gate.py", "tier": "unit", "core": true},
     {"file": "test_valuation_contracts.py", "tier": "unit", "core": true},
     {"file": "test_historical_multiple_evidence.py", "tier": "unit", "core": true},
+    {"file": "test_instrument_timeline_deduplication.py", "tier": "unit", "core": true},
     {"file": "test_instrument_valuation_query.py", "tier": "unit", "core": true},
     {"file": "test_valuation_snapshot.py", "tier": "unit", "core": true},
     {"file": "test_company_driver_causality.py", "tier": "unit", "core": true},
@@ -55,6 +56,7 @@
     {"file": "test_ontology_change_impact.py", "tier": "unit", "core": true},
     {"file": "test_abox_lifecycle.py", "tier": "unit", "core": true},
     {"file": "test_ontology_fact_slots.py", "tier": "unit", "core": true},
+    {"file": "test_investment_calendar_identity.py", "tier": "unit", "core": true},
     {"file": "test_investment_calendar_reasoning_facts.py", "tier": "unit", "core": true},
     {"file": "test_ontology_rule_manifest.py", "tier": "unit", "core": true},
     {"file": "test_rule_claim_contract.py", "tier": "unit", "core": true},
@@ -125,6 +127,7 @@
     {"file": "test_external_official_evidence_projection.py", "tier": "contract", "core": true},
     {"file": "test_news_analysis_domain.py", "tier": "contract", "core": true},
     {"file": "test_news_collection_quality.py", "tier": "contract", "core": true},
+    {"file": "test_research_evidence_identity.py", "tier": "unit", "core": true},
     {"file": "test_research_evidence_store.py", "tier": "integration", "core": false},
     {"file": "test_research_evidence_governance_maintenance.py", "tier": "contract", "core": true},
 

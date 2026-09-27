@@ -90,6 +90,78 @@ def normalized_list(values: object, normalizer=None, limit: int = 100) -> List[s
     return result
 
 
+def source_backed_event_id(
+    payload: Dict[str, object],
+    event_type: str,
+    symbols: Iterable[str],
+) -> str:
+    """Build a durable calendar id for one provider-owned source event.
+
+    Collection timestamps and domain-event ids are intentionally excluded so
+    replaying the same news, filing, or provider schedule updates one row.
+    """
+
+    values = payload if isinstance(payload, dict) else {}
+    body = values.get("payload") if isinstance(values.get("payload"), dict) else {}
+    source_identity = ""
+    source_identity_key = ""
+    for key in [
+        "sourceEvidenceId",
+        "receiptNo",
+        "receipt_no",
+        "rcept_no",
+        "accessionNumber",
+        "calendarIdentity",
+        "officialEventId",
+        "providerEventId",
+    ]:
+        source_identity = clean_text(body.get(key) or values.get(key), 500)
+        if source_identity:
+            source_identity_key = key
+            break
+    source_kind = clean_text(body.get("sourceKind"), 80).casefold()
+    if source_identity_key == "sourceEvidenceId" and source_kind in {
+        "financial-fact",
+        "market-fact",
+        "profile",
+        "provider-snapshot",
+    }:
+        # A provider snapshot can announce several successive earnings dates
+        # under one evidence row. Bind those broad snapshots to an occurrence,
+        # while immutable article/filing evidence remains schedule-correctable.
+        occurrence_day = clean_text(
+            values.get("startsAt")
+            or values.get("starts_at")
+            or values.get("localDate")
+            or values.get("local_date"),
+            80,
+        )[:10]
+        if occurrence_day:
+            source_identity += "|" + occurrence_day
+    if not source_identity and bool_value(body.get("autoDetected"), False):
+        source_url = clean_text(values.get("sourceUrl") or values.get("source_url"), 1000)
+        occurrence = clean_text(
+            values.get("startsAt")
+            or values.get("starts_at")
+            or values.get("localDate")
+            or values.get("local_date"),
+            80,
+        )
+        title = clean_text(values.get("title"), 500).casefold()
+        if source_url and occurrence:
+            # Official calendars commonly reuse one landing page for every
+            # meeting or release. The occurrence and title distinguish those
+            # events while still making an identical provider replay stable.
+            source_identity = "|".join([source_url, occurrence, title])
+    if not source_identity:
+        return ""
+    source = clean_text(values.get("source") or body.get("provider") or body.get("sourceParser"), 120).casefold()
+    phase = clean_text(body.get("schedulePhase") or body.get("dateSource"), 120).casefold()
+    symbol_key = ",".join(sorted(normalized_list(symbols, normalize_symbol, 100)))
+    token = "|".join([source, source_identity, event_type, phase, symbol_key])
+    return "source-event-" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+
+
 def event_timezone(name: object = ""):
     label = clean_text(name, 80) or DEFAULT_EVENT_TIMEZONE
     try:
@@ -245,7 +317,6 @@ class InvestmentCalendarEvent:
     @classmethod
     def from_payload(cls, payload: Dict[str, object]):
         payload = payload if isinstance(payload, dict) else {}
-        event_id = clean_text(payload.get("eventId") or payload.get("event_id") or "", 191) or uuid.uuid4().hex
         timezone_name = clean_text(payload.get("timezone") or DEFAULT_EVENT_TIMEZONE, 80)
         all_day = bool_value(payload.get("allDay") if "allDay" in payload else payload.get("all_day"), False)
         canonical_utc = bool_value(payload.get("_canonicalUtc") or payload.get("_canonical_utc"), False)
@@ -272,6 +343,11 @@ class InvestmentCalendarEvent:
         created_at = clean_text(payload.get("createdAt") or payload.get("created_at"), 40) or utc_now_iso()
         payload_body = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         symbols = normalized_list(payload.get("symbols"), normalize_symbol, 100)
+        event_id = (
+            clean_text(payload.get("eventId") or payload.get("event_id") or "", 191)
+            or source_backed_event_id(payload, event_type, symbols)
+            or uuid.uuid4().hex
+        )
         markets = normalized_event_markets(
             symbols,
             normalized_list(payload.get("markets"), normalize_market, 50),

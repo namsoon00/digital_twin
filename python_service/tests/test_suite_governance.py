@@ -191,8 +191,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # missing-driver, consensus-unit and forecast-anomaly fail-closed behavior.
         # Eleven trade-strength quality regressions protect raw-ratio semantics,
         # opening maturity, repeated-value staleness, ABox gating and messages.
-        # Two valuation regressions protect benchmark beta provenance and diagnostic release behavior.
-        self.assertLessEqual(total, 1821)
+        # Nine evidence identity, timeline projection and calendar replay
+        # regressions protect source-aware deduplication without merging distinct filings.
+        # Two valuation regressions were added concurrently to the shared suite.
+        self.assertLessEqual(total, 1830)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.investment_calendar.domain.events import investment_calendar_event_removed_event, investment_calendar_event_saved_event, investment_calendar_reminder_due_event
 from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
-from digital_twin.modules.investment_calendar.domain.investment_calendar import DEFAULT_EVENT_TIMEZONE, EVENT_TYPE_LABELS, InvestmentCalendarEvent, InvestmentCalendarReminder, due_reminders_for_event, event_materiality_level, event_type_label, parse_utc, utc_iso
+from digital_twin.modules.investment_calendar.domain.investment_calendar import DEFAULT_EVENT_TIMEZONE, EVENT_TYPE_LABELS, InvestmentCalendarEvent, InvestmentCalendarReminder, due_reminders_for_event, event_materiality_level, event_type_label, parse_utc, source_backed_event_id, utc_iso
 from digital_twin.modules.decisions.contracts import event_strategy_guidance, merge_strategy_context, strategy_message_lines
 from digital_twin.modules.reasoning.contracts import investment_calendar_source_fact
 from digital_twin.modules.notifications.contracts import INVESTMENT_CALENDAR_REMINDER
@@ -17,6 +17,25 @@ from digital_twin.modules.read_models.public import enrich_symbol_display_record
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 DEFAULT_VISIBLE_EVENT_STATUSES = {"active", "tentative"}
+
+
+def unique_calendar_events(events: Iterable[InvestmentCalendarEvent]) -> List[InvestmentCalendarEvent]:
+    """Collapse legacy replay rows only when their provider identity matches."""
+
+    selected: Dict[str, InvestmentCalendarEvent] = {}
+    for event in events or []:
+        identity = source_backed_event_id(event.to_dict(), event.event_type, event.symbols) or event.event_id
+        current = selected.get(identity)
+        if not current or (event.updated_at, event.created_at, event.event_id) > (
+            current.updated_at,
+            current.created_at,
+            current.event_id,
+        ):
+            selected[identity] = event
+    return sorted(
+        selected.values(),
+        key=lambda event: (event.starts_at, -int(event.importance or 0), event.event_id),
+    )
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -170,6 +189,7 @@ class InvestmentCalendarService:
         )
         if not requested_status and not include_inactive:
             events = [event for event in events if event.status in DEFAULT_VISIBLE_EVENT_STATUSES]
+        events = unique_calendar_events(events)
         events = events[:limit]
         summary = dict(self.repository.summary() or {})
         summary["storedTotal"] = int(summary.get("total") or 0)
@@ -441,7 +461,7 @@ class InvestmentCalendarService:
         lookback = self.reminder_lookback_minutes()
         candidates = self.repository.reminder_candidates(now_at=utc_iso(now_at), lookback_minutes=lookback)
         reminders: List[InvestmentCalendarReminder] = []
-        for event in candidates:
+        for event in unique_calendar_events(candidates):
             reminders.extend(due_reminders_for_event(event, now_at=now_at, lookback_minutes=lookback))
         return reminders
 

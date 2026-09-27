@@ -3,6 +3,8 @@
 import re
 from typing import Dict, Iterable, List
 
+from digital_twin.modules.read_models.domain.instrument_timeline import evidence_timeline_copy
+from digital_twin.modules.read_models.domain.instrument_timeline import evidence_timeline_identity
 from digital_twin.modules.read_models.domain.instrument_timeline import InstrumentTimelineQuery
 from digital_twin.modules.portfolio.contracts import utc_now_iso
 
@@ -169,20 +171,66 @@ class InstrumentTimelineQueryService:
 
     def events(self, request: InstrumentTimelineQuery) -> List[Dict[str, object]]:
         result: List[Dict[str, object]] = []
+        evidence_groups: Dict[str, List[Dict[str, object]]] = {}
         for evidence in self.evidence_store.latest(symbol=request.symbol, limit=100):
             payload = object_payload(evidence)
             polarity = text(payload.get("stockImpactPolarity") or payload.get("polarity"))
+            copy = evidence_timeline_copy(evidence)
+            identity = evidence_timeline_identity(evidence)
+            evidence_groups.setdefault(identity, []).append({
+                "payload": payload,
+                "copy": copy,
+                "polarity": polarity,
+            })
+        for identity, rows in evidence_groups.items():
+            representative = rows[0]
+            payload = representative["payload"]
+            copy = representative["copy"]
+            sources = []
+            evidence_ids = []
+            for row in rows:
+                row_payload = row["payload"]
+                source = text(row_payload.get("source"))
+                evidence_id = text(row_payload.get("evidenceId"))
+                if source and source not in sources:
+                    sources.append(source)
+                if evidence_id and evidence_id not in evidence_ids:
+                    evidence_ids.append(evidence_id)
+            polarities = {row["polarity"] for row in rows}
+            tone = (
+                "negative" if polarities.intersection({"negative", "risk", "counter"})
+                else "positive" if polarities.intersection({"positive", "support"})
+                else "neutral"
+            )
+            summary = text(copy.get("summary"))
+            if len(rows) > 1:
+                summary = " · ".join(filter(None, [
+                    summary,
+                    "같은 사건을 " + str(len(rows)) + "개 출처가 보도",
+                ]))
+            source_label = sources[0] if len(sources) == 1 else (
+                sources[0] + " 외 " + str(len(sources) - 1) + "개 출처"
+            ) if sources else ""
             result.append(marker(
-                payload.get("evidenceId"),
+                payload.get("evidenceId") if len(rows) == 1 else identity,
                 "evidence",
                 payload.get("publishedAt") or payload.get("observedAt"),
-                payload.get("title") or "새 투자 근거",
-                payload.get("articleSummaryKo") or payload.get("summary"),
-                payload.get("source"),
-                "negative" if polarity in {"negative", "risk", "counter"} else "positive" if polarity in {"positive", "support"} else "neutral",
+                copy.get("title") or "새 투자 근거",
+                summary,
+                source_label,
+                tone,
                 "research-evidence",
                 payload.get("evidenceId"),
-                {"evidenceRole": payload.get("evidenceRole"), "dataState": payload.get("dataState")},
+                {
+                    "evidenceRole": payload.get("evidenceRole"),
+                    "dataState": payload.get("dataState"),
+                    "timelineIdentity": identity,
+                    "sourceCount": len(sources),
+                    "sources": sources,
+                    "evidenceIds": evidence_ids,
+                    "reporter": copy.get("reporter"),
+                    "documentId": copy.get("documentId"),
+                },
             ))
         for event in self.calendar_store.list(symbol=request.symbol, limit=100):
             payload = object_payload(event)

@@ -931,8 +931,17 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             ))
         if not news_domain.relation_scope_is_investable(raw_payload.get("relationScope")):
             continue
+        article_identity = str(
+            raw_payload.get("articleIdentityUrl")
+            or raw_payload.get("articleCanonicalUrl")
+            or raw_payload.get("canonicalUrl")
+            or url
+        ).strip()
         evidence.append(ResearchEvidence(
-            evidence_id="research:" + normalized_symbol + ":news:" + stable_evidence_token(source, title, url, item.get("seenDate") or item.get("seendate")),
+            # Collection/seen timestamps are observations, not article
+            # identity. Including them created a new row whenever the same
+            # source article appeared in a later polling cycle.
+            evidence_id="research:" + normalized_symbol + ":news:" + stable_evidence_token(source, title, article_identity),
             symbol=normalized_symbol,
             kind="news",
             source=source,

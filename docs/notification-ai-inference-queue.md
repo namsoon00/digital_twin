@@ -66,6 +66,11 @@ The compatibility notification-first path can still park an existing job in
 - The model acknowledges that it reviewed all candidate evidence once; the
   server binds the exact TypeDB evidence IDs back to the review. This avoids
   spending output tokens copying generation-scoped identifiers.
+- Counter-evidence status is normalized without another model call only when
+  every routed hypothesis is explicitly marked fully reviewed, the selected
+  hypothesis has no `counterEvidenceIds`, and the response contains neither a
+  counter claim nor counter text. A routed counter ID without a verified
+  selected-hypothesis counter claim remains a publication error.
 - Queue priority is an operational scheduling band, never an investment score
   or probability.
 
@@ -89,13 +94,15 @@ profile and important-change reviews use at most 32 KiB. If the first packet
 does not fit, preparation expands only up to
 `NOTIFICATION_AI_QUEUE_TARGET_PROMPT_BYTES`; it no longer skips that target and
 jumps to the larger storage safety limit. A retry starts at 12 KiB and follows
-the same ordered limits. The compact packet preserves all current fact values,
-actions, competing hypotheses, continuity, financial comparisons and required
-evidence IDs. Its citation ledger keeps one stable row per evidence ID and only
-the observed facts connected to the current question, rules, hypotheses or
-follow-up conditions. The unabridged decision brief remains in the immutable
-audit store. `promptBudget.selectionMode`, retained counts and per-section byte
-sizes make this selection auditable.
+the same ordered limits. The compact packet preserves the subject, action
+envelope, every competing hypothesis and every evidence ID cited by those
+hypotheses. It may omit current facts that are unrelated to the routed question.
+Its citation ledger keeps one stable row per evidence ID and only the observed
+facts connected to the current question, rules, hypotheses or follow-up
+conditions. The unabridged decision brief remains in the immutable audit store.
+`promptBudget.semanticCoverage` records fact coverage, hypothesis coverage,
+missing citation count and whether the decision contract survived compaction.
+Retained counts and per-section byte sizes make this selection auditable.
 Contract-repair prompts use the same hard cap: DecisionCore is retained first
 and the previous model response is trimmed to the remaining byte budget.
 Initial generation and repair use one response schema. The persisted subject
@@ -104,6 +111,9 @@ still independently validates the result. Verified narrative fact references
 count as evidence without requiring a duplicated legacy list. Missing mechanism
 or investment implication cannot be replaced with copied conclusion text:
 same-role structured recovery is verified, otherwise at most one repair runs.
+Initial and repair prompt byte sizes are recorded separately. Prompt release
+`investment-ai-judge-v32-contract-normalized` starts a clean operational cohort
+so pre-release latency and repair rates cannot be mistaken for current behavior.
 
 Compressed execution audits retain initial/repair raw responses locally under
 the existing retention policy. `judgementContractVersion` and

@@ -2252,6 +2252,33 @@ def build_notification_ai_prompt_bundle(
         ).encode("utf-8"))
         for key, value in payload.items()
     }
+    original_facts = _mapping(decision_core.get("facts"))
+    retained_facts = _mapping(payload.get("facts"))
+    original_hypotheses = {
+        str(item.get("hypothesisId") or "").strip(): item
+        for item in _mapping(decision_core.get("hypothesisSet")).get("hypotheses") or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    }
+    retained_hypotheses = {
+        str(item.get("hypothesisId") or "").strip(): item
+        for item in _mapping(payload.get("hypothesisSet")).get("hypotheses") or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    }
+    original_citation_ids = {
+        str(value or "").strip()
+        for item in original_hypotheses.values()
+        for key in ("supportingEvidenceIds", "counterEvidenceIds")
+        for value in item.get(key) or []
+        if str(value or "").strip()
+    }
+    retained_evidence_ids = {
+        str(item.get("evidenceId") or "").strip()
+        for item in payload.get("evidenceLedger") or []
+        if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+    }
+    missing_citation_ids = sorted(original_citation_ids - retained_evidence_ids)
+    all_hypotheses_retained = set(original_hypotheses) <= set(retained_hypotheses)
+    all_hypothesis_evidence_retained = not missing_citation_ids
     if rendered_bytes > maximum:
         raise ValueError(
             "AI decision prompt exceeded its hard limit: "
@@ -2282,6 +2309,17 @@ def build_notification_ai_prompt_bundle(
             "retainedHypothesisCount": len(
                 _mapping(payload.get("hypothesisSet")).get("hypotheses") or []
             ),
+            "semanticCoverage": {
+                "allFactsRetained": set(original_facts) <= set(retained_facts),
+                "allHypothesesRetained": all_hypotheses_retained,
+                "allHypothesisEvidenceRetained": all_hypothesis_evidence_retained,
+                "originalEvidenceCount": len(decision_core.get("evidenceLedger") or []),
+                "retainedEvidenceCount": len(payload.get("evidenceLedger") or []),
+                "omittedCitationCount": len(missing_citation_ids),
+                "contractPreserved": (
+                    all_hypotheses_retained and all_hypothesis_evidence_retained
+                ),
+            },
         },
     }
 

@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v31-question-bounded"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v32-contract-normalized"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v22"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -236,7 +236,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "system readiness가 conditional/insufficient이거나 검증 근거가 연결된 causalChain이 없으면 BUY·ADD·TRIM·SELL을 선택하지 않는다. actionEnvelope의 허용·차단 행동을 지킨다.",
     "투자 관점과 실행 가능성을 분리한다. 실행이 금지돼도 가장 잘 지지되는 방향·인과 경로·투자 의미를 insightAssessment에 결론내리고, 자료 부족만으로 balanced를 선택하지 않는다.",
     "dominantThesis는 결론, causalMechanism은 원인 경로, investmentImplication은 사용자 대응 의미다. narrativeClaims의 view·mechanism·implication과 의미를 맞추되 같은 문장을 반복하지 않는다.",
-    "counterEvidenceStatus=confirmed는 근거 ID가 연결된 반대 문장이 있을 때, none-found는 모든 입력을 검토해 반대 사실이 없을 때만 사용한다. 다른 상태는 발행할 수 없다.",
+    "counterEvidenceStatus=confirmed는 selectedHypothesisId와 같은 가설의 counterEvidenceIds 중 하나가 연결된 반대 문장이 있을 때만 사용한다. 다른 가설의 support 근거를 선택 가설의 반대 근거로 바꾸지 않는다. 선택 가설의 counterEvidenceIds가 비어 있고 모든 입력을 검토했을 때만 none-found를 사용한다. 다른 상태는 발행할 수 없다.",
     "narrativeClaims는 narrativeClaimContract의 sectionEvidenceRoles와 recommendedEvidenceIdsBySection을 따르고 실제 evidenceLedger ID를 연결한다. view와 mechanism은 관측 근거, next-condition은 재관측 가능한 근거를 포함한다.",
     "support에는 role=support, counter에는 role=counter만 연결한다. context·limitation·자료 부족을 행동 근거나 반대 사실로 바꾸지 않는다.",
     "reasoningTrigger는 왜 지금 다시 봤는지, relationLifecycle은 가설 관계의 성립·강화·약화·해제를 설명한다. 실제 임계값·관측시각·근거 변화가 없으면 새 변화라고 말하지 않는다.",

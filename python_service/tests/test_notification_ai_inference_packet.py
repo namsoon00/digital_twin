@@ -3,6 +3,7 @@ import unittest
 
 from digital_twin.modules.decisions.application.notification_ai_judgement_service import (
     NotificationAIJudgementService, ai_contract_repair_prompt, ai_response_contract_error,
+    recover_verified_counter_status,
 )
 from digital_twin.modules.decisions.domain.notification_ai_prompt_release import AI_DECISION_RESPONSE_SCHEMA
 from digital_twin.modules.decisions.domain.notification_ai_gate_validation import disagreement_reason_text
@@ -270,6 +271,38 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         response = validated_response_from_payload(context, payload, raw_response=json.dumps(payload), source="test AI")
         self.assertEqual("confirmed", response.counter_evidence_status)
         self.assertEqual("ready", response.validation_state)
+
+        routed_context = {
+            "_notificationAiPreparedDecisionCore": {
+                "hypothesisSet": {
+                    "hypotheses": [{
+                        "hypothesisId": "hypothesis:selected",
+                        "counterEvidenceIds": [],
+                    }],
+                },
+            },
+        }
+        response.selected_hypothesis_id = "hypothesis:selected"
+        response.hypotheses = [{
+            "hypothesisId": "hypothesis:selected",
+            "evidenceReviewStatus": "all-input-evidence-reviewed",
+        }]
+        response.narrative_claims = [
+            item for item in response.narrative_claims if item.get("section") != "counter"
+        ]
+        response.counter_evidence = []
+        response.counter_evidence_status = "unavailable"
+        repaired = recover_verified_counter_status(routed_context, response)
+        self.assertEqual("repaired", repaired["status"])
+        self.assertEqual("none-found", response.counter_evidence_status)
+
+        routed_context["_notificationAiPreparedDecisionCore"]["hypothesisSet"]["hypotheses"][0][
+            "counterEvidenceIds"
+        ] = ["evidence:counter"]
+        response.counter_evidence_status = "unavailable"
+        unavailable = recover_verified_counter_status(routed_context, response)
+        self.assertEqual("unavailable", unavailable["status"])
+        self.assertEqual("unavailable", response.counter_evidence_status)
 
     def test_canonical_contract_is_checked_before_repair_success(self):
         class Reviewer:
@@ -900,6 +933,8 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             first.prompt_budget["renderedPromptBytes"],
         )
         self.assertLessEqual(first.prompt_bytes, first.prompt_budget["maxPromptBytes"])
+        self.assertTrue(first.prompt_budget["semanticCoverage"]["contractPreserved"])
+        self.assertEqual(0, first.prompt_budget["semanticCoverage"]["omittedCitationCount"])
         contract = first.decision_core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]
         self.assertIn("rule:graph.holding.guard.v1", contract["support"])
         self.assertNotIn("fact:currentPrice", contract["support"])

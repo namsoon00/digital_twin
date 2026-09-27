@@ -264,6 +264,77 @@ def refresh_investment_insight_assessment(
     )
 
 
+def recover_verified_counter_status(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> Dict[str, object]:
+    """Normalize an empty, fully reviewed counter-evidence result.
+
+    This is deliberately narrower than content repair.  It never creates a
+    counter claim or changes a selected hypothesis.  It only converts the
+    model's unusable status to ``none-found`` when the routed selected
+    hypothesis has no counter evidence IDs and every routed hypothesis was
+    explicitly returned as fully reviewed.
+    """
+
+    status = str(response.counter_evidence_status or "").strip().lower()
+    if status == "none-found":
+        return {"status": "not-required", "counterEvidenceStatus": status}
+    if "counter" in response.verified_claim_sections:
+        response.counter_evidence_status = "confirmed"
+        return {"status": "repaired", "counterEvidenceStatus": "confirmed"}
+    if response.counter_evidence:
+        return {
+            "status": "unavailable",
+            "reason": "counter-text-without-verified-claim",
+        }
+
+    prepared_core = context.get("_notificationAiPreparedDecisionCore")
+    prepared_core = prepared_core if isinstance(prepared_core, dict) else {}
+    hypothesis_set = prepared_core.get("hypothesisSet")
+    hypothesis_set = hypothesis_set if isinstance(hypothesis_set, dict) else {}
+    routed_hypotheses = {
+        str(item.get("hypothesisId") or "").strip(): item
+        for item in hypothesis_set.get("hypotheses") or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    }
+    selected_id = str(response.selected_hypothesis_id or "").strip()
+    selected = routed_hypotheses.get(selected_id)
+    if not selected:
+        return {"status": "unavailable", "reason": "selected-hypothesis-missing"}
+
+    reviews = {
+        str(item.get("hypothesisId") or "").strip(): str(
+            item.get("evidenceReviewStatus") or ""
+        ).strip().lower()
+        for item in response.hypotheses or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    }
+    if set(reviews) != set(routed_hypotheses) or any(
+        value != "all-input-evidence-reviewed" for value in reviews.values()
+    ):
+        return {"status": "unavailable", "reason": "hypothesis-review-incomplete"}
+
+    counter_ids = [
+        str(value or "").strip()
+        for value in selected.get("counterEvidenceIds") or []
+        if str(value or "").strip()
+    ]
+    if counter_ids:
+        return {
+            "status": "unavailable",
+            "reason": "selected-hypothesis-counter-claim-missing",
+            "counterEvidenceCount": len(counter_ids),
+        }
+
+    response.counter_evidence_status = "none-found"
+    return {
+        "status": "repaired",
+        "counterEvidenceStatus": "none-found",
+        "selectedHypothesisId": selected_id,
+    }
+
+
 def _structured_claim_evidence_ids(
     prepared_core: Dict[str, object],
     packet: NotificationAIInferencePacket,
@@ -755,7 +826,7 @@ def ai_contract_repair_prompt(
         "재무 문장 오류는 기존 보고 기간의 전제, 이번 시장 변화, 판단 연결로 나눠 고친다. 재무와 가격의 동시 관찰을 가격 변동 원인으로 단정하지 않는다. reused 자료는 새 공시가 아니며 항목별 출처·비교 기준을 유지한다. 긍정·부정 해석을 없애지 말고 근거가 지지하는 범위로 설명한다.",
         "설명 전용은 NO_ACTION을 쓰고 그 외 action은 actionEnvelope 안에서 선택한다. 모든 입력 가설을 한 번씩 검토한다.",
         "각 가설의 입력 근거와 반대 근거를 모두 확인한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 근거 ID 배열을 응답에 복사하지 않는다.",
-        "반대 근거 검사를 마쳤으면 counterEvidenceStatus를 쓴다. confirmed에는 근거 ID가 연결된 counter 문장이 필요하고, 모든 입력을 검토했지만 반대 사실이 없을 때만 none-found를 쓴다. not-checked와 unavailable은 허용되지 않는다.",
+        "반대 근거 검사를 마쳤으면 counterEvidenceStatus를 쓴다. confirmed에는 selectedHypothesisId와 같은 가설의 counterEvidenceIds 중 하나를 연결한 counter 문장이 필요하다. 다른 가설의 support 근거를 선택 가설의 counter 문장에 쓰지 않는다. 선택 가설의 counterEvidenceIds가 비어 있고 모든 입력을 검토했을 때만 none-found를 쓴다. not-checked와 unavailable은 허용되지 않는다.",
         "narrativeClaims는 허용된 evidence ID만 연결하며 가설이 있으면 view, mechanism, implication과 next-condition 또는 limitation을 포함한다.",
         "insightAssessment에는 가장 근거가 강한 방향, 기간, 근거 강도, 지배 가설, 인과 경로, 투자 의미, 촉매, 반대 시나리오와 무효화 조건을 채운다.",
         "무효화 조건은 관측 대상과 변화 방향 또는 입력 임계값을 구체적으로 쓰고 검증된 next-condition 근거와 연결한다. 일반적인 '근거가 사라지면 다시 본다' 문장은 쓰지 않는다.",
@@ -901,6 +972,10 @@ class NotificationAIJudgementService:
         initial_model_ms = int((time.monotonic() - initial_model_started) * 1000)
         validation_started = time.monotonic()
         ensure_packet_claim_validation(review_context, prepared_packet, response)
+        counter_status_repair = recover_verified_counter_status(
+            review_context,
+            response,
+        )
         refresh_investment_insight_assessment(response)
         enforce_contract = bool(
             self.enforce_contract_for_typed_response
@@ -963,6 +1038,7 @@ class NotificationAIJudgementService:
         repair_reasoning_effort = self.repair_reasoning_effort
         repair_structured_insight_repair = {"status": "not-attempted"}
         repair_structured_claim_repair = {"status": "not-attempted"}
+        repair_counter_status_repair = {"status": "not-attempted"}
         executed_prompt = prepared_packet.prompt
         if repair_attempted:
             repair_remaining = timeout_provider() if timeout_provider else timeout_seconds
@@ -1004,6 +1080,10 @@ class NotificationAIJudgementService:
                 repair_model_ms = int((time.monotonic() - repair_model_started) * 1000)
                 repair_validation_started = time.monotonic()
                 ensure_packet_claim_validation(repair_context, prepared_packet, response)
+                repair_counter_status_repair = recover_verified_counter_status(
+                    repair_context,
+                    response,
+                )
                 refresh_investment_insight_assessment(response)
                 repair_structured_insight_repair = recover_structured_investment_insight_claims(
                     repair_context,
@@ -1069,8 +1149,14 @@ class NotificationAIJudgementService:
                 "repairModelMs": repair_model_ms,
                 "repairValidationMs": repair_validation_ms,
                 "repairReasoningEffort": repair_reasoning_effort,
+                "initialPromptBytes": prepared_packet.prompt_bytes,
+                "repairPromptBytes": (
+                    len(executed_prompt.encode("utf-8")) if repair_attempted else 0
+                ),
+                "counterStatusRepair": counter_status_repair,
                 "structuredInsightRepair": structured_insight_repair,
                 "structuredNarrativeRepair": structured_claim_repair,
+                "repairCounterStatusRepair": repair_counter_status_repair,
                 "repairStructuredInsightRepair": repair_structured_insight_repair,
                 "repairStructuredNarrativeRepair": repair_structured_claim_repair,
                 "totalJudgementMs": int((time.monotonic() - total_started) * 1000),

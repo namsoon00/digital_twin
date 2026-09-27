@@ -823,13 +823,47 @@ def build_driver_dcf_input_bundle(
             "futureYears": "FY1/FY2 consensus followed by a versioned fade to terminal growth",
         },
     }
+    approval_material = {
+        "assumptionVersion": DRIVER_DCF_ASSUMPTION_VERSION,
+        "symbol": normalized_symbol,
+        "currency": observed["currency"],
+        "modelApplicability": input_bundle["modelApplicability"],
+        "sbcPolicy": input_bundle["sbcPolicy"],
+        "maxTerminalValueSharePct": input_bundle["maxTerminalValueSharePct"],
+        "reverseGrowthSearchBracketPct": input_bundle["reverseGrowthSearchBracketPct"],
+        "projectionPolicy": [
+            {
+                "year": item.get("year"),
+                "revenueBasis": item.get("revenueBasis"),
+                "periodFraction": item.get("periodFraction"),
+            }
+            for item in projection_years
+        ],
+        "assumptionPolicy": [
+            {
+                "id": item.get("id"),
+                "unit": item.get("unit"),
+                "evidenceClass": item.get("evidenceClass"),
+                "materiality": item.get("materiality"),
+                **({"policyValue": item.get("value")} if item.get("id") in {
+                    "equity-risk-premium", "terminal-growth", "constant-reinvestment-ratios",
+                    "preferred-equity-zero", "non-controlling-interest-zero",
+                } else {}),
+            }
+            for item in assumptions
+            if item.get("reviewState") == "pending"
+        ],
+        "calculationPolicy": input_bundle["calculationNotes"],
+    }
+    approval_material_fingerprint = "driver-dcf-approval-material:" + _digest(approval_material)
+    input_bundle["approvalMaterialFingerprint"] = approval_material_fingerprint
     input_bundle_id = "driver-dcf-input:" + _digest(input_bundle)[:32]
     pending_assumptions = [item for item in assumptions if item.get("reviewState") == "pending"]
     review_material = {
         "contractVersion": DRIVER_DCF_ASSUMPTION_REVIEW_VERSION,
         "subjectInputBundleId": input_bundle_id,
         "state": "required" if pending_assumptions else "complete",
-        "approvalScope": "exact-input-bundle-and-assumption-version",
+        "approvalScope": "symbol-assumption-policy-version",
         "automaticApprovalAllowed": False,
         "assumptionVersion": DRIVER_DCF_ASSUMPTION_VERSION,
         "pendingCount": len(pending_assumptions),
@@ -852,6 +886,7 @@ def build_driver_dcf_input_bundle(
         "status": "ready-for-shadow",
         "symbol": normalized_symbol,
         "inputBundleId": input_bundle_id,
+        "approvalMaterialFingerprint": approval_material_fingerprint,
         "missingInputs": [],
         "observedInputs": observed,
         "consensusEvidence": consensus_evidence,

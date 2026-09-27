@@ -506,6 +506,8 @@ def promote_driver_dcf_active(
     input_bundle_id = _text(source.get("inputBundleId"))
     assumption_version = _text(source.get("assumptionVersion"))
     approved_input_bundle_id = _text(policy.get("inputBundleId"))
+    approval_material_fingerprint = _text(source.get("approvalMaterialFingerprint"))
+    approved_material_fingerprint = _text(policy.get("approvalMaterialFingerprint"))
     approved_assumption_version = _text(policy.get("assumptionVersion"))
     approved_by = _text(policy.get("approvedBy"))
     approved_at = _text(policy.get("approvedAt"))
@@ -519,7 +521,10 @@ def promote_driver_dcf_active(
         blockers.append("reference-release-required")
     if reference_release.get("status") != "released" or reference_release.get("releaseMode") != "reference":
         blockers.append("reference-release-contract-missing")
-    if not input_bundle_id or input_bundle_id != approved_input_bundle_id:
+    if approved_material_fingerprint:
+        if not approval_material_fingerprint or approval_material_fingerprint != approved_material_fingerprint:
+            blockers.append("approved-material-fingerprint-mismatch")
+    elif not input_bundle_id or input_bundle_id != approved_input_bundle_id:
         blockers.append("approved-input-bundle-mismatch")
     if not assumption_version or assumption_version != approved_assumption_version:
         blockers.append("approved-assumption-version-mismatch")
@@ -561,6 +566,8 @@ def promote_driver_dcf_active(
         "approvedAt": approved_at,
         "approvalReason": approval_reason,
         "approvedInputBundleId": input_bundle_id,
+        "approvalOriginInputBundleId": approved_input_bundle_id,
+        "approvedMaterialFingerprint": approval_material_fingerprint,
         "approvedAssumptionVersion": assumption_version,
     }
     approved_source = {
@@ -592,6 +599,8 @@ def promote_driver_dcf_active(
         "approvalReason": approval_reason,
         "symbol": symbol,
         "inputBundleId": input_bundle_id,
+        "approvalMaterialFingerprint": approval_material_fingerprint,
+        "approvalOriginInputBundleId": approved_input_bundle_id,
         "assumptionVersion": assumption_version,
         "priorReleaseId": _text(reference_release.get("releaseId")),
         "diagnosticOnly": diagnostic_only,
@@ -630,7 +639,7 @@ def promote_driver_dcf_active(
         },
     }
     active_input["activeInputBundleId"] = "driver-dcf-active-input:" + _digest({
-        "inputBundleId": input_bundle_id,
+        "approvalMaterialFingerprint": approval_material_fingerprint or input_bundle_id,
         "assumptionVersion": assumption_version,
         "releaseId": release_id,
         "approvedAt": approved_at,

@@ -161,13 +161,16 @@ class DriverDcfTests(unittest.TestCase):
     def test_operational_input_builder_preserves_sources_and_requires_assumption_review(self):
         source = self.evidence_inputs()
         built = build_driver_dcf_input_bundle(**source, valuation_at="2026-01-04T00:00:00Z")
+        refreshed = build_driver_dcf_input_bundle(**source, valuation_at="2026-01-05T00:00:00Z")
 
         self.assertEqual("ready-for-shadow", built["status"])
+        self.assertNotEqual(built["inputBundleId"], refreshed["inputBundleId"])
+        self.assertEqual(built["approvalMaterialFingerprint"], refreshed["approvalMaterialFingerprint"])
         self.assertEqual(3, len(built["sourceReferences"]))
         self.assertEqual("required", built["assumptionReviewState"])
         self.assertEqual("secondary-aggregator", built["financialEvidence"]["sourceClass"])
         self.assertFalse(built["financialEvidence"]["officialDecisionReady"])
-        self.assertEqual("exact-input-bundle-and-assumption-version", built["assumptionReview"]["approvalScope"])
+        self.assertEqual("symbol-assumption-policy-version", built["assumptionReview"]["approvalScope"])
         self.assertFalse(built["assumptionReview"]["automaticApprovalAllowed"])
         self.assertEqual(8, built["assumptionReview"]["pendingCount"])
         self.assertEqual("USD", built["input"]["currency"])

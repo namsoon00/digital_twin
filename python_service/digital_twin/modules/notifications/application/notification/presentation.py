@@ -62,6 +62,11 @@ def present_notification(message_type, context, text) -> str:
     body = content_body(context.get("notificationContent")) or str(text or "").strip()
     if not body:
         return ""
+    if mapping(context.get("notificationContent")).get("kind") == "company-change-report":
+        detail_url = _text(context.get("notificationDetailUrl"))
+        link = content_body({"links": [{"url": detail_url, "label": "상세 기업 보고서 · 실적과 원문 근거"}]})
+        if link:
+            body += "\n\n" + link
     lines = body.splitlines()
     notices = []
     while lines and _plain(lines[0]).startswith(("🧪 테스트 알림", "[재발송]", "[검증]")):
@@ -75,7 +80,7 @@ def present_notification(message_type, context, text) -> str:
             str(context.get("title") or ""), str(context.get("headline") or ""), heading,
             str(mapping(context.get("customerInvestmentDocument")).get("headline") or ""),
         }
-        generated_title = bool(re.match(r"^(?:🔔 새 알림|🔎 |🧠 |🧭 |📊 |🔗 |📦 |⚙️ |📋 |📰 |🗓️ |💼 |\[(?:관찰|주의|위험)\])", first))
+        generated_title = bool(re.match(r"^(?:🔔 새 알림|🔎 |🧠 |🧭 |📊 |📑 |🔗 |📦 |⚙️ |📋 |📰 |🗓️ |💼 |\[(?:관찰|주의|위험)\])", first))
         # Free body text is not assumed to contain a title.
         has_body = any(_plain(line) for line in lines[1:])
         if not content_body(context.get("notificationContent")) and (known_title or generated_title) and (has_body or first == heading):

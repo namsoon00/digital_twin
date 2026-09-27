@@ -8,7 +8,35 @@ import { evidenceSummary, evidenceResolutionLabel } from "../../public/modules/d
 import { notificationEventSummary } from "../../public/modules/notifications/summary.mjs";
 import { renderSecondaryDisclosure } from "../../public/modules/shared/disclosure.mjs";
 import { renderNotificationCustomerDocument } from "../../public/modules/notifications/customer-document.mjs";
-import { renderInstrumentInvestmentAnalysis } from "../../public/modules/instruments/valuation-presentation.mjs";
+import { renderCompanyChangeReport, renderInstrumentInvestmentAnalysis } from "../../public/modules/instruments/valuation-presentation.mjs";
+
+test("company reports show captured financial periods and sources while reference prices stay collapsed", () => {
+  const report = {
+    contractVersion: "company-change-report-v2", reportKind: "expanded", headline: "기업 <테스트>",
+    symbol: "000660", currency: "KRW", summary: "자료 보강", sourceCutoffDisplay: "2026-09-28 07:19 KST",
+    sections: [
+      {key: "annualFinancials", title: "연간 실적", financialReports: [{period: "2025-12-31", metrics: [
+        {label: "매출액", value: 97146675000000, currency: "KRW", basisLabel: "2025-12-31 · 연간 · 연결",
+          provider: "공공데이터포털", sourceLabel: "공식 API 집계", sourceReferences: [{datasetId: "public-data.financials", revisionId: "r1"}], sourceUrl: "javascript:alert(1)"}
+      ]}]},
+      {key: "documents", title: "회사 발표", documents: [{title: "발표 <script>", bodyVerified: true, excerpt: "<script>alert(1)</script>", url: "https://example.test/ir?a=1&b=2", publishedAt: "2026-08-14"}]},
+      {key: "valuation", title: "가치평가", rows: ["모델 검토 대기"], models: [{label: "반도체 이익 방식", fairValue: 1793020, currency: "KRW", stateLabel: "참고 계산"}], calculation: {earningsScenario: {base: 100}, multipleBand: {base: 10}, fairValue: {base: 1793020}}}
+    ]
+  };
+  const html = renderCompanyChangeReport(report);
+  assert.match(html, /기업 &lt;테스트&gt;/);
+  assert.match(html, /97\.15 조원/);
+  assert.match(html, /2025-12-31 · 연간 · 연결/);
+  assert.match(html, /공식 API 집계/);
+  assert.match(html, /public-data.financials · r1/);
+  assert.match(html, /2026-09-28 07:19 KST/);
+  assert.match(html, /https:\/\/example.test\/ir\?a=1&amp;b=2/);
+  assert.doesNotMatch(html, /<script>|href="javascript:/);
+  assert.doesNotMatch(html.split('<details class="company-report-calculation">')[0], /1,793,020/);
+  assert.match(html, /<details class="company-report-calculation"><summary>참고 계산과 가정 펼치기/);
+  assert.match(html, /1,793,020 KRW/);
+  assert.doesNotMatch(html, /이번에 달라진 점/);
+});
 
 test("both notification lanes show financial dates, comparisons and sources in compact web details", () => {
   for (const role of ["typedb-observation", "ai-research-insight"]) {

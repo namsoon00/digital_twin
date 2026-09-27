@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, Mapping, Optional
 
-from digital_twin.modules.news_intelligence.contracts import build_company_change_report, build_company_driver_map, company_prompt_context, company_valuation_context, evaluate_causal_attribution, latest_source_as_of
+from digital_twin.modules.news_intelligence.contracts import build_company_change_report, build_company_report_evidence, build_company_driver_map, company_prompt_context, company_valuation_context, evaluate_causal_attribution, latest_source_as_of
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state, utc_now_iso
 from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService, valuation_snapshot_delta
@@ -392,6 +392,7 @@ class InstrumentValuationQueryService:
                 ),
             },
         }
+        payload["companyReportEvidence"] = build_company_report_evidence(source_symbol, external_signals)
         payload["companyChangeReport"] = build_company_change_report(
             payload,
             self._previous_delivered_company_change_report(account_id, source_symbol),

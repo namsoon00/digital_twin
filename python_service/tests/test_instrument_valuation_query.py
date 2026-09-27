@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.modules.read_models.application.instrument_valuation_query_service import InstrumentValuationQueryService
 from digital_twin.modules.news_intelligence.application.company_change_report_reconciliation_service import CompanyChangeReportReconciler
 from digital_twin.modules.news_intelligence.domain.company_change_report import build_company_change_report, render_company_change_report
+from digital_twin.modules.news_intelligence.domain.company_report_evidence import build_company_report_evidence
+from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.news_intelligence.domain.company_knowledge import (
     build_company_knowledge,
     company_valuation_context,
@@ -289,6 +291,13 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         )
         payload = service.query(InstrumentValuationQuery("035720", "default"))
         baseline = payload["companyChangeReport"]
+        self.assertEqual([], baseline["changes"]["factChanges"])
+        self.assertEqual([], baseline["changes"]["valuationChanges"])
+        self.assertNotIn("이번에 달라진 점", render_company_change_report(baseline))
+        upgraded = build_company_change_report(payload, {**baseline, "contractVersion": "company-change-report-v1"})
+        self.assertEqual("expanded", upgraded["reportKind"])
+        self.assertFalse(upgraded["materialChange"])
+        self._assert_company_report_evidence_contract(payload)
         quote_only = copy.deepcopy(payload)
         quote_only["instrument"]["currentPrice"] = 99_999
         unchanged = build_company_change_report(quote_only, baseline)
@@ -348,6 +357,78 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertEqual(0, reconciler.run_once()["queued"])
         self.assertEqual("informationUpdate", queue.jobs[0].message_type)
         self.assertEqual("company-change-report", queue.jobs[0].context["notificationContent"]["kind"])
+        self.assertNotIn("body", queue.jobs[0].context["notificationContent"])
+        queue.jobs[0].context["notifyLinkUrl"] = "https://reports.example.test/"
+        message = NotificationRenderingService().render(queue.jobs[0])
+        self.assertIn("📑 기업 보고서", message)
+        self.assertIn("상세 기업 보고서", message)
+        self.assertIn("detailKey=" + queue.jobs[0].job_id, message)
+        self.assertNotIn("&lt;b&gt;", message)
+        self.assertEqual(1, message.count(baseline["summary"]))
+
+    def _assert_company_report_evidence_contract(self, payload):
+        source = {"provider": "OpenDART", "currency": "KRW", "period": "2025-12-31",
+                  "durationBasis": "annual", "scope": "CFS", "official": True,
+                  "sourceUrl": "https://dart.fss.or.kr/test?rcpNo=123", "receiptNo": "123"}
+        reference = {"datasetId": "opendart.company_facts", "revisionId": "source-1"}
+        row = {"period": "2025-12-31", "frequency": "annual", "provider": "OpenDART",
+               "financialReportingVersion": "financial-reporting-v2", "revenue": 200, "operatingIncome": 40,
+               "metricProvenance": {"revenue": source, "operatingIncome": source},
+               "reportContract": {"contractVersion": "financial-report-observation-v1", "revisionState": "immutable-source-bound",
+                                  "periodEnd": "2025-12-31", "frequency": "annual", "durationBases": ["annual"],
+                                  "provider": "OpenDART", "observationId": "filing-123", "sourceReferences": [reference]},
+               "comparisonEvidence": {"revenueGrowthPct": {"status": "verified-comparable", "basis": "year-over-year",
+                                      "currentPeriod": "2025-12-31", "previousPeriod": "2024-12-31", "currentValue": 200,
+                                      "previousValue": 100, "changePct": 100, "source": source,
+                                      "previousSource": {**source, "period": "2024-12-31"}}}}
+        signals = {"companyKnowledge": {"035720": {"profile": {"companyName": "회사 <테스트>"}, "financials": {"annual": [row, {"period": "2024-12-31", "revenue": 100}]}}},
+                   "issuerIrDocuments": {"035720": {"items": [
+                       {"documentId": "ir-1", "title": "실적 <발표>", "publishedAt": "2026-01-20", "url": "https://example.test/ir",
+                        "documentVerified": True, "officialDocumentText": "회사 발표문 <script>내용</script>", "documentHash": "hash-1"},
+                       {"documentId": "ir-2", "title": "미검증 문서", "url": "javascript:alert(1)", "officialDocumentText": "인용하면 안 되는 본문"},
+                   ]}}}
+        evidence = build_company_report_evidence("035720", signals)
+        self.assertEqual(1, evidence["coverage"]["annualPeriods"])
+        self.assertEqual(100, evidence["annualFinancials"][0]["metrics"][0]["comparison"]["changePct"])
+        self.assertEqual("", evidence["documents"][1]["url"])
+        self.assertEqual("", evidence["documents"][1]["excerpt"])
+        enriched = copy.deepcopy(payload)
+        enriched["companyReportEvidence"] = evidence
+        enriched["snapshot"]["generatedAt"] = "2026-09-27T22:19:13Z"
+        enriched["investmentAnalysis"]["nextChecks"] = ["fy1-revenue-consensus-growth-outlier", "untranslated-internal-code"]
+        enriched["investmentAnalysis"]["valuationModels"] = [{"modelId": "semiconductor-cycle-earnings", "fairValue": 1793019.9,
+                                                                  "referenceOnly": True, "currency": "KRW", "reviewStatus": "ai_applied_pending_review"}]
+        report = build_company_change_report(enriched)
+        rendered = render_company_change_report(report)
+        self.assertIn("2026-09-28 07:19 KST", report["sourceCutoffDisplay"])
+        self.assertIn("실적 &lt;발표&gt;", rendered)
+        self.assertNotIn("1,793,020", rendered)
+        self.assertNotIn("fy1-revenue-consensus-growth-outlier", rendered)
+        self.assertNotIn("untranslated-internal-code", rendered)
+        self.assertTrue(any("20.00%" in line for section in report["sections"] for line in section.get("rows", [])))
+        refreshed = copy.deepcopy(enriched)
+        refreshed["companyReportEvidence"]["annualFinancials"][0]["metrics"][0]["sourceReferences"][0]["revisionId"] = "polled-again"
+        self.assertEqual("unchanged", build_company_change_report(refreshed, report)["reportKind"])
+        refreshed["companyReportEvidence"]["annualFinancials"][0]["metrics"][0]["value"] = 220
+        updated = build_company_change_report(refreshed, report)
+        self.assertEqual("change", updated["reportKind"])
+        self.assertTrue(updated["changes"]["evidenceChanges"])
+        mismatched = copy.deepcopy(signals)
+        mismatched["companyKnowledge"]["035720"]["financials"]["annual"][0]["comparisonEvidence"]["revenueGrowthPct"]["currentValue"] = 999
+        metric = build_company_report_evidence("035720", mismatched)["annualFinancials"][0]["metrics"][0]
+        self.assertNotIn("comparison", metric)
+        primary_alternative = copy.deepcopy(signals)
+        alternate = copy.deepcopy(row)
+        alternate["operatingCashFlow"] = 30
+        alternate["metricProvenance"]["operatingCashFlow"] = source
+        primary_alternative["companyKnowledge"]["035720"]["valuationFinancialCandidates"] = [alternate]
+        expanded_evidence = build_company_report_evidence("035720", primary_alternative)
+        self.assertEqual(1, len(expanded_evidence["annualFinancials"]))
+        self.assertTrue(any(item["key"] == "operatingCashFlow" for item in expanded_evidence["annualFinancials"][0]["metrics"]))
+        mixed = copy.deepcopy(signals)
+        mixed["companyKnowledge"]["035720"]["financials"]["annual"][0]["metricProvenance"]["operatingIncome"] = {**source, "durationBasis": "year-to-date", "provider": "yfinance", "official": False}
+        mixed_report = build_company_change_report({**payload, "companyReportEvidence": build_company_report_evidence("035720", mixed)})
+        self.assertFalse(any("영업이익률" in line for section in mixed_report["sections"] if section["key"] == "financialReading" for line in section.get("rows", [])))
 
     def test_trailing_eps_never_inherits_forecast_period(self):
         from unittest.mock import patch

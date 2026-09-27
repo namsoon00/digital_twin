@@ -26,7 +26,10 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         for legacy, expected in LEGACY_KINDS.items():
             with self.subTest(legacy=legacy):
                 self.assertEqual(expected, notification_kind(legacy).key)
-        self.assertEqual(11, len({kind.icon for kind in NOTIFICATION_KINDS.values()}))
+        self.assertEqual(len(NOTIFICATION_KINDS), len({kind.icon for kind in NOTIFICATION_KINDS.values()}))
+        self.assertEqual("company-change-report", notification_kind("informationUpdate", {
+            "notificationContent": {"kind": "company-change-report"},
+        }).key)
 
     def test_reference_only_ai_is_not_an_investment_decision(self):
         for mode in ("typedb-context-observation", "typedb-review-observation", "context-narrative"):

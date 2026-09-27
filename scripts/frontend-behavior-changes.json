@@ -1,5 +1,9 @@
 [
   {
+    "reason": "Company report notifications open their captured financial, filing and valuation evidence, with per-metric periods and sources. Reference calculations stay collapsed. Covered by company report presentation tests.",
+    "functions": ["renderNotificationSummaryTab", "renderCompanyChangeReport"]
+  },
+  {
     "reason": "Show receipt-backed actual message text, expired-body state and last successful comparison without regenerating historical messages. notification-evidence-audit.test.mjs and test_insight_evidence_flow cover delivery audit contracts.",
     "functions": ["renderNotificationDeliverySection"]
   },

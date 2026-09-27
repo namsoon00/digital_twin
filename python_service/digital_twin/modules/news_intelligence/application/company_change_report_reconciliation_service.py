@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.modules.news_intelligence.domain.company_change_report import render_company_change_report
+from digital_twin.modules.news_intelligence.domain.company_change_report import company_report_notification_content, render_company_change_report
 from digital_twin.modules.notifications.contracts import INFORMATION_UPDATE, NotificationJob
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 
@@ -96,6 +96,11 @@ class CompanyChangeReportReconciler:
                         continue
                     report = dict(report)
                     text = render_company_change_report(report)
+                    content = company_report_notification_content(report)
+                    readable = "\n".join([
+                        _text(report.get("headline")), content["summary"],
+                        *(line for section in content["sections"] for line in [section["title"], *section["rows"]]),
+                    ])
                     job = NotificationJob.create(
                         text,
                         account_id=account_id,
@@ -113,18 +118,13 @@ class CompanyChangeReportReconciler:
                             "symbol": symbol,
                             "rawSymbol": symbol,
                             "market": _text(report.get("market")),
-                            "referenceDate": _text(report.get("sourceCutoffAt")),
+                            "referenceDate": _text(report.get("sourceCutoffDisplay") or report.get("sourceCutoffAt")),
                             "body": text,
                             "telegramMessage": text,
-                            "readableMessage": text,
+                            "readableMessage": readable,
                             "dataQuality": "actual",
                             "isMock": False,
-                            "notificationContent": {
-                                "kind": "company-change-report",
-                                "subject": {"symbol": symbol, "name": _text(report.get("name"))},
-                                "summary": _text(report.get("summary")),
-                                "body": text,
-                            },
+                            "notificationContent": content,
                         },
                     )
                     queued += 1 if self.queue.enqueue(job) else 0

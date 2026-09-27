@@ -26,6 +26,7 @@ NOTIFICATION_KINDS = {
         NotificationKind("calendar", "투자 일정", "🗓️"),
         NotificationKind("operations", "운영 상태", "⚙️"),
         NotificationKind("report", "개발·검토 보고", "📦"),
+        NotificationKind("company-change-report", "기업 보고서", "📑"),
         NotificationKind("notice", "알림", "🔔"),
     )
 }
@@ -57,6 +58,7 @@ DEFAULT_POLICY_TYPES = {
     "news": "newsDigest", "account-change": "portfolioActivityObservation",
     "holdings": "portfolioHoldingsSnapshot", "calendar": "investmentCalendarReminder",
     "operations": "notification", "report": "workHandoff", "notice": "notification",
+    "company-change-report": "informationUpdate",
 }
 
 

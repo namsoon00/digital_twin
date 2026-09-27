@@ -1,4 +1,5 @@
 import { escapeHtml } from "../shared/text.mjs";
+import { renderCompanyEvidenceReport } from "./company-report.mjs";
 
 function valuationHasNumericValue(value) {
   if (value === null || value === undefined || value === "" || typeof value === "boolean") return false;
@@ -237,6 +238,7 @@ function companyReportChangeRow(change, currency) {
 
 function renderCompanyChangeReport(report) {
   report = report || {};
+  if (report.contractVersion === "company-change-report-v2" && Array.isArray(report.sections)) return renderCompanyEvidenceReport(report);
   var state = report.currentState || {};
   var changes = report.changes || {};
   var facts = Array.isArray(state.facts) ? state.facts : [];

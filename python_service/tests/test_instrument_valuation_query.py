@@ -365,6 +365,11 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertIn("detailKey=" + queue.jobs[0].job_id, message)
         self.assertNotIn("&lt;b&gt;", message)
         self.assertEqual(1, message.count(baseline["summary"]))
+        from digital_twin.infrastructure.web.adapters.notification_presentation import notification_job_public_payload
+        settings = {"notificationProcessingStaleMinutes": 2}
+        summary_payload = notification_job_public_payload(queue.jobs[0], settings=settings, include_customer_document=True)
+        self.assertEqual(baseline["reportId"], summary_payload["companyChangeReport"]["reportId"])
+        self.assertNotIn("companyChangeReport", notification_job_public_payload(queue.jobs[0], settings=settings))
 
     def _assert_company_report_evidence_contract(self, payload):
         source = {"provider": "OpenDART", "currency": "KRW", "period": "2025-12-31",

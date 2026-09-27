@@ -480,11 +480,11 @@ def notification_job_public_payload(
     if detail or include_customer_document:
         payload["customerInvestmentDocument"] = customer_document
         payload["customerInvestmentDocumentQuality"] = customer_document_quality
-    if detail:
-        configured_settings = configured_settings or operational_read_settings()
         report = context.get("companyChangeReport")
         if isinstance(report, dict):
             payload["companyChangeReport"] = report
+    if detail:
+        configured_settings = configured_settings or operational_read_settings()
         payload["fullText"] = full_notification_text(customer_text)
         payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this

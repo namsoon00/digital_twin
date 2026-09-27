@@ -68,7 +68,7 @@ function loadHypothesisDevelopment(force) {
     syncActiveHypothesisDevelopmentCaseId();
     if (shellState.snapshot) render();
     return payload;
-  }), requestJson("/api/investment-brain/performance?limit=500", {
+  }), requestJson("/api/investment-brain/performance?limit=500&sampleOnly=1", {
     key: "hypothesis-quality-report", force: Boolean(force), cacheTtlMs: 60000, timeoutMs: 30000
   }).catch(function () { return {status: "unavailable"}; })]).then(function (payload) {
     hypothesesState.hypothesisDevelopment = { ...(payload[0] || {}), evaluation: payload[1] };

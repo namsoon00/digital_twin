@@ -303,6 +303,27 @@ class FinancialReportingIntegrityTests(unittest.TestCase):
         self.assertEqual(48, rows[0]["totalDebt"])
         self.assertTrue(rows[0]["metricProvenance"]["totalDebt"]["derived"])
 
+    def test_dart_debt_components_cover_bonds_and_do_not_double_count_current_aggregate(self):
+        common = {
+            "bsns_year": "2025", "reprt_code": "11011", "sj_div": "BS",
+            "thstrm_dt": "2025-12-31", "rcept_no": "20260318000001",
+        }
+        rows = dart_statement_periods([
+            {**common, "account_id": "ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings", "account_nm": "유동차입금 합계", "thstrm_amount": "100"},
+            {**common, "account_id": "ifrs-full_ShorttermBorrowings", "account_nm": "단기차입금", "thstrm_amount": "70"},
+            {**common, "account_id": "dart_CurrentPortionOfBonds", "account_nm": "유동성사채", "thstrm_amount": "30"},
+            {**common, "account_id": "ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived", "account_nm": "장기차입금", "thstrm_amount": "200"},
+            {**common, "account_id": "ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued", "account_nm": "사채", "thstrm_amount": "300"},
+            {**common, "account_id": "ifrs-full_CurrentLeaseLiabilities", "account_nm": "유동리스부채", "thstrm_amount": "10"},
+            {**common, "account_id": "ifrs-full_NoncurrentLeaseLiabilities", "account_nm": "비유동리스부채", "thstrm_amount": "20"},
+        ])
+
+        self.assertEqual(630, rows[0]["totalDebt"])
+        provenance = rows[0]["metricProvenance"]["totalDebt"]
+        self.assertIn("ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings", provenance["componentMetrics"])
+        self.assertNotIn("ifrs-full_ShorttermBorrowings", provenance["componentMetrics"])
+        self.assertNotIn("dart_CurrentPortionOfBonds", provenance["componentMetrics"])
+
         receipt = "20260317000635"
         statement_rows = []
         for account, amount, section in (

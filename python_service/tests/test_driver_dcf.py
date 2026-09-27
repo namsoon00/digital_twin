@@ -133,7 +133,7 @@ class DriverDcfTests(unittest.TestCase):
         return {
             "symbol": "TEST", "company": {"financials": {"annual": [row]}},
             "overview": {"marketCapitalization": 5000, "beta": 1.2, "fetchedAt": "2026-01-03T00:00:00Z"},
-            "yfinance": {"revenueEstimate": [
+            "yfinance": {"provider": "yfinance", "info": {"financialCurrency": "USD"}, "revenueEstimate": [
                 {"period": "0y", "avg": 1100, "numberOfAnalysts": 10},
                 {"period": "+1y", "avg": 1210, "numberOfAnalysts": 11},
             ]},
@@ -153,6 +153,8 @@ class DriverDcfTests(unittest.TestCase):
         self.assertFalse(built["assumptionReview"]["automaticApprovalAllowed"])
         self.assertEqual(8, built["assumptionReview"]["pendingCount"])
         self.assertEqual("USD", built["input"]["currency"])
+        self.assertEqual("validated", built["consensusEvidence"]["status"])
+        self.assertEqual(["FY1", "FY2"], [row["horizon"] for row in built["consensusEvidence"]["rows"]])
         self.assertEqual("DGS10", built["observedInputs"]["riskFreeSeriesId"])
         self.assertEqual("fred.macro", built["observedInputs"]["riskFreeDatasetId"])
         self.assertEqual(22, built["input"]["projectionYears"][0]["changeInWorkingCapital"])
@@ -226,6 +228,7 @@ class DriverDcfTests(unittest.TestCase):
 
         source = self.evidence_inputs()
         public_official = source["company"]["financials"]["annual"][0]
+        source["yfinance"]["info"]["financialCurrency"] = "KRW"
         public_official["provider"] = "금융위원회 기업재무정보"
         public_official["currency"] = "KRW"
         public_official["metricProvenance"] = {
@@ -254,6 +257,7 @@ class DriverDcfTests(unittest.TestCase):
         )
 
         source = self.evidence_inputs()
+        source["yfinance"]["info"]["financialCurrency"] = "KRW"
         annual = source["company"]["financials"]["annual"][0]
         annual["currency"] = "KRW"
         annual["metricProvenance"] = {
@@ -315,6 +319,23 @@ class DriverDcfTests(unittest.TestCase):
         self.assertIn("working-capital-change-missing", built["missingInputs"])
         self.assertNotIn("input", built)
 
+    def test_operational_input_builder_fails_closed_on_consensus_unit_or_growth_anomaly(self):
+        source = self.evidence_inputs()
+        source["yfinance"]["info"]["financialCurrency"] = "KRW"
+        blocked = build_driver_dcf_input_bundle(**source)
+
+        self.assertEqual("blocked", blocked["status"])
+        self.assertIn("consensus-currency-mismatch", blocked["missingInputs"])
+
+        source = self.evidence_inputs()
+        source["yfinance"]["revenueEstimate"][0]["avg"] = 2500
+        blocked = build_driver_dcf_input_bundle(**source)
+
+        self.assertEqual("blocked", blocked["status"])
+        self.assertIn("fy1-revenue-consensus-growth-outlier", blocked["missingInputs"])
+        evidence = blocked["observedInputs"]["consensusEvidence"]
+        self.assertEqual("blocked", evidence["status"])
+
     def test_shadow_input_can_reverse_solve_a_known_constant_growth_price(self):
         source = self.evidence_inputs()
         built = build_driver_dcf_input_bundle(**source)
@@ -349,6 +370,16 @@ class DriverDcfTests(unittest.TestCase):
         })
         self.assertFalse(rejected["released"])
         self.assertIn("symbol-outside-release-scope", rejected["audit"]["blockers"])
+
+        anomalous = self.inputs()
+        anomalous.update({"inputBundleId": "driver-dcf-input:anomalous", "assumptionVersion": "test-v1"})
+        anomalous["baseRevenue"] = 40
+        anomalous["projectionYears"][0]["revenue"] = 100
+        rejected = release_driver_dcf_reference(anomalous, {
+            "releaseMode": "reference", "releaseId": "driver-dcf-reference-r1", "symbols": ["TEST"],
+        })
+        self.assertFalse(rejected["released"])
+        self.assertIn("forecast-growth-exceeds-100pct", rejected["audit"]["blockers"])
 
 
 if __name__ == "__main__":

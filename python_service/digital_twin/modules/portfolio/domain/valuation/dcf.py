@@ -14,7 +14,7 @@ from typing import Dict, Mapping
 
 DRIVER_DCF_VERSION = "driver-fcff-dcf-v2"
 DRIVER_DCF_SENSITIVITY_VERSION = "driver-fcff-dcf-sensitivity-v2"
-DRIVER_DCF_REFERENCE_RELEASE_VERSION = "driver-dcf-reference-release-v1"
+DRIVER_DCF_REFERENCE_RELEASE_VERSION = "driver-dcf-reference-release-v2-forecast-gate"
 SUPPORTED_APPLICABILITY = {"non-financial-company", "operating-company"}
 
 
@@ -404,6 +404,10 @@ def release_driver_dcf_reference(
         growth_rows.append({"year": item.get("year"), "growthPct": round(growth, 4) if growth is not None else None})
         if growth is not None and growth > 100.0:
             limitations.append("forecast-growth-exceeds-100pct")
+            blockers.append("forecast-growth-exceeds-100pct")
+        if growth is not None and growth < -80.0:
+            limitations.append("forecast-growth-below-minus-80pct")
+            blockers.append("forecast-growth-below-minus-80pct")
         previous = revenue if revenue is not None else previous
     terminal_share = _finite(calculation.get("terminalValueSharePct"))
     if terminal_share is not None and terminal_share > 80.0:

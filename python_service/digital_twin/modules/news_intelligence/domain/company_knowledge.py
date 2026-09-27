@@ -24,7 +24,7 @@ from digital_twin.modules.news_intelligence.domain.financial_reporting import (
 
 
 COMPANY_KNOWLEDGE_VERSION = "company-knowledge-v1"
-COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v4-contract-qualified-periods"
+COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v5-valuation-input-normalization"
 COMPANY_VALUATION_CONTEXT_VERSION = "company-valuation-context-v1"
 
 # Operational revision precision only. These values suppress a new company
@@ -140,7 +140,9 @@ OPEN_DART_XBRL_METRIC_TAGS = {
     ),
     "stockBasedCompensation": (
         "ExpenseFromSharebasedPaymentTransactionsWithEmployees",
+        "ExpenseFromSharebasedPaymentTransactionsInWhichGoodsOrServicesReceivedDidNotQualifyForRecognitionAsAssets",
         "AdjustmentsForShareBasedPayment",
+        "AdjustmentsForSharebasedPayments",
     ),
     "weightedAverageSharesDiluted": (
         "AdjustedWeightedAverageShares",
@@ -400,8 +402,17 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
         "ifrs-full_DepreciationAndAmortisationExpense": "depreciationAmortization",
         "ifrs-full_SharebasedPaymentTransactionExpense": "stockBasedCompensation",
         "ifrs-full_WeightedAverageNumberOfSharesOutstandingDiluted": "weightedAverageSharesDiluted",
-        "ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings": "debtCurrentBorrowings",
+        "ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings": "debtCurrentAggregate",
+        "ifrs-full_CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived": "debtCurrentAggregate",
+        "ifrs-full_ShorttermBorrowings": "debtCurrentShortTerm",
+        "dart_ShortTermBorrowings": "debtCurrentShortTerm",
+        "ifrs-full_CurrentPortionOfLongtermBorrowings": "debtCurrentPortion",
+        "dart_CurrentPortionOfBonds": "debtCurrentBonds",
+        "ifrs-full_CurrentPortionOfNoncurrentBondsIssued": "debtCurrentBonds",
         "ifrs-full_LongtermBorrowings": "debtNoncurrentBorrowings",
+        "dart_LongTermBorrowingsGross": "debtNoncurrentBorrowings",
+        "ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived": "debtNoncurrentBorrowings",
+        "ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued": "debtNoncurrentBonds",
         "ifrs-full_CurrentLeaseLiabilities": "debtCurrentLease",
         "ifrs-full_NoncurrentLeaseLiabilities": "debtNoncurrentLease",
     }
@@ -425,7 +436,8 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
         year = row.get("bsns_year") or basis.get("businessYear")
         balance = row.get("sj_div") == "BS" or field in {
             "totalAssets", "totalLiabilities", "equity", "cash", "totalDebt",
-            "debtCurrentBorrowings", "debtNoncurrentBorrowings", "debtCurrentLease", "debtNoncurrentLease",
+            "debtCurrentAggregate", "debtCurrentShortTerm", "debtCurrentPortion", "debtCurrentBonds",
+            "debtNoncurrentBorrowings", "debtNoncurrentBonds", "debtCurrentLease", "debtNoncurrentLease",
         }
         interim = code not in {"", "11011"}
         income = row.get("sj_div") in {"IS", "CIS"}
@@ -469,10 +481,22 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
                 }
     for target in grouped.values():
         provenance = target.get("metricProvenance") if isinstance(target.get("metricProvenance"), Mapping) else {}
-        required_debt = ("debtCurrentBorrowings", "debtNoncurrentBorrowings")
-        if all(optional_number(target.get(field)) is not None for field in required_debt):
+        current_aggregate = optional_number(target.get("debtCurrentAggregate"))
+        current_components = [
+            field for field in ("debtCurrentShortTerm", "debtCurrentPortion", "debtCurrentBonds")
+            if optional_number(target.get(field)) is not None
+        ]
+        current_fields = ["debtCurrentAggregate"] if current_aggregate is not None else current_components
+        noncurrent_fields = [
+            field for field in ("debtNoncurrentBorrowings", "debtNoncurrentBonds")
+            if optional_number(target.get(field)) is not None
+        ]
+        # Require evidence for both maturity buckets. Missing debt is never
+        # interpreted as a zero balance. An aggregate current line takes
+        # precedence over its disclosed subcomponents to prevent double count.
+        if current_fields and noncurrent_fields:
             debt_fields = [
-                field for field in (*required_debt, "debtCurrentLease", "debtNoncurrentLease")
+                field for field in (*current_fields, *noncurrent_fields, "debtCurrentLease", "debtNoncurrentLease")
                 if optional_number(target.get(field)) is not None
             ]
             values = [optional_number(target.get(field)) for field in debt_fields]
@@ -486,7 +510,10 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
                 "componentMetrics": [_clean((provenance.get(field) or {}).get("metric") or field) for field in debt_fields],
                 "componentValues": values,
             }
-        for field in ("debtCurrentBorrowings", "debtNoncurrentBorrowings", "debtCurrentLease", "debtNoncurrentLease"):
+        for field in (
+            "debtCurrentAggregate", "debtCurrentShortTerm", "debtCurrentPortion", "debtCurrentBonds",
+            "debtNoncurrentBorrowings", "debtNoncurrentBonds", "debtCurrentLease", "debtNoncurrentLease",
+        ):
             target.pop(field, None)
             provenance.pop(field, None)
         target["metricProvenance"] = provenance

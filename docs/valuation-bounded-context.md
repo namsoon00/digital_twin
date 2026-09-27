@@ -61,6 +61,13 @@ The response keeps three concerns separate:
 - `sources` and `missingData`: provider lineage, observation dates, and inputs
   that still prevent decision use.
 
+The response also exposes `dataReadiness` and `modelAgreement`. Data readiness
+shows quote time, official-filing metric coverage, consensus currency/horizon
+validation, DCF state, and exact source revision count. Model agreement compares
+positive values only when currencies match. A spread of 30 percent or more is a
+conflict: the UI keeps each model value separate, never averages them, and marks
+the result ineligible for decision use until the assumptions are reconciled.
+
 Current provider facts are rebuilt and merged with cached `companyKnowledge`
 before display. A positive KIS PER/PBR takes precedence over an older cached
 zero, while a broker zero sentinel cannot hide a usable forward multiple from

@@ -33,7 +33,7 @@ SEC_ANNUAL_DIRECT_FACTS = {
     "pretaxIncome": (("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"), ("USD",), True),
     "taxProvision": (("IncomeTaxExpenseBenefit",), ("USD",), True),
     "interestExpense": (("InterestExpenseNonoperating", "InterestExpenseNonOperating", "InterestAndDebtExpense"), ("USD",), True),
-    "depreciationAmortization": (("DepreciationDepletionAndAmortization", "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment"), ("USD",), True),
+    "depreciationAmortization": (("DepreciationDepletionAndAmortization", "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment", "Depreciation"), ("USD",), True),
     "capitalExpenditure": (("PaymentsToAcquireProductiveAssets", "PaymentsToAcquirePropertyPlantAndEquipment"), ("USD",), True),
     "stockBasedCompensation": (("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"), ("USD",), True),
     "cash": (("CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"), ("USD",), False),
@@ -41,8 +41,8 @@ SEC_ANNUAL_DIRECT_FACTS = {
 }
 
 SEC_ANNUAL_COMPONENT_FACTS = {
-    "debtCurrent": (("LongTermDebtAndFinanceLeaseObligationsCurrent", "LongTermDebtCurrent", "DebtCurrent"), ("USD",), False),
-    "debtNoncurrent": (("LongTermDebtAndFinanceLeaseObligationsNoncurrent", "LongTermDebtNoncurrent"), ("USD",), False),
+    "debtCurrent": (("LongTermDebtAndFinanceLeaseObligationsCurrent", "LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings"), ("USD",), False),
+    "debtNoncurrent": (("LongTermDebtAndFinanceLeaseObligationsNoncurrent", "LongTermDebtNoncurrent", "LongTermDebt"), ("USD",), False),
     "workingCapitalReceivables": (("IncreaseDecreaseInAccountsReceivable",), ("USD",), True),
     "workingCapitalInventory": (("IncreaseDecreaseInInventories",), ("USD",), True),
     "workingCapitalOtherAssets": (("IncreaseDecreaseInPrepaidDeferredExpenseAndOtherAssets", "IncreaseDecreaseInOtherOperatingAssets"), ("USD",), True),

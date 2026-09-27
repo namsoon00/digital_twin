@@ -28,6 +28,12 @@ test("instrument valuation separates verified changes, price-cause limits and re
       changeFromPrevious: {state: "unchanged", materialChange: false},
       priceExplanation: {claimStrength: "supported-mechanism", blockingReasons: ["precise-event-clock-missing"]},
       valuationModels: [{modelId: "growth-quality-earnings", fairValue: 40, currency: "USD", decisionEligible: false}],
+      modelAgreement: {status: "conflict", spreadPct: 47.1, blockingReasons: ["valuation-models-materially-disagree"]},
+      dataReadiness: {
+        status: "limited", quote: {status: "available", asOf: "2026-09-27"},
+        officialFinancials: {officialMetricCount: 9, requiredMetricCount: 12, period: "2025-12-31"},
+        consensus: {status: "blocked", currency: "USD"}
+      },
       nextChecks: ["company-currency-exposure-missing"]
   }, "USD");
   assert.match(html, /회사 상태와 이전 판단/);
@@ -36,6 +42,10 @@ test("instrument valuation separates verified changes, price-cause limits and re
   assert.match(html, /기업가치 영향 경로만 확인/);
   assert.match(html, /사건이 공개된 정확한 시각/);
   assert.match(html, /참고용/);
+  assert.match(html, /데이터 준비도/);
+  assert.match(html, /9\/12개/);
+  assert.match(html, /적정가 모델 충돌/);
+  assert.match(html, /평균내지 않고/);
   assert.match(html, /기업의 매출·비용 통화 노출/);
   assert.doesNotMatch(html, /causal-hypothesis|company-currency-exposure-missing/);
 

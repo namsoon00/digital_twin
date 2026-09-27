@@ -17,10 +17,13 @@ from typing import Dict, Mapping
 from digital_twin.modules.news_intelligence.contracts import financial_report_contract_assessment
 
 
-DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v3-market-currency"
+DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v4-consensus-validation"
 DRIVER_DCF_ASSUMPTION_VERSION = "driver-dcf-shadow-assumptions-v3-market-currency"
 DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION = "driver-dcf-financial-evidence-v1"
 DRIVER_DCF_ASSUMPTION_REVIEW_VERSION = "driver-dcf-assumption-review-v1"
+DRIVER_DCF_CONSENSUS_EVIDENCE_VERSION = "driver-dcf-consensus-evidence-v1"
+MAX_CONSENSUS_REVENUE_GROWTH_PCT = 100.0
+MIN_CONSENSUS_REVENUE_GROWTH_PCT = -80.0
 
 FINANCIAL_INPUT_METRICS = (
     "revenue", "operatingIncome", "pretaxIncome", "taxProvision", "interestExpense",
@@ -290,6 +293,8 @@ def _market_assumption(
 
 
 def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, object]]:
+    info = yfinance.get("info") if isinstance(yfinance.get("info"), Mapping) else {}
+    currency = _text(info.get("financialCurrency")).upper()
     result = {}
     for row in yfinance.get("revenueEstimate") or []:
         if not isinstance(row, Mapping):
@@ -303,8 +308,80 @@ def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, ob
                 "high": _finite(row.get("high")),
                 "analystCount": int(_finite(row.get("numberOfAnalysts")) or 0),
                 "growth": _finite(row.get("growth")),
+                "currency": currency,
+                "provider": _text(yfinance.get("provider") or "yfinance"),
+                "horizon": "FY1" if period == "0y" else "FY2",
             }
     return result
+
+
+def _consensus_evidence(
+    estimates: Mapping[str, Mapping[str, object]],
+    *,
+    annual_revenue: object,
+    annual_currency: str,
+) -> Dict[str, object]:
+    """Validate analyst estimates before they can drive a valuation.
+
+    The provider's financial currency is the unit contract for the estimate
+    table.  Missing currency or an implausible step change fails closed because
+    a unit mismatch can otherwise produce a plausible-looking DCF value.
+    """
+
+    base = _finite(annual_revenue)
+    rows = []
+    blockers = []
+    previous = base
+    for period, horizon in (("0y", "FY1"), ("+1y", "FY2")):
+        estimate = estimates.get(period) if isinstance(estimates.get(period), Mapping) else {}
+        value = _finite(estimate.get("value"))
+        low = _finite(estimate.get("low"))
+        high = _finite(estimate.get("high"))
+        analyst_count = int(_finite(estimate.get("analystCount")) or 0)
+        currency = _text(estimate.get("currency")).upper()
+        growth_pct = ((value / previous) - 1.0) * 100.0 if value is not None and previous not in (None, 0) else None
+        row_blockers = []
+        if value is None or value <= 0:
+            row_blockers.append(f"{horizon.lower()}-revenue-consensus-missing")
+        if not currency:
+            row_blockers.append("consensus-currency-missing")
+        elif currency != annual_currency:
+            row_blockers.append("consensus-currency-mismatch")
+        if analyst_count <= 0:
+            row_blockers.append(f"{horizon.lower()}-analyst-count-missing")
+        if low is not None and value is not None and low > value:
+            row_blockers.append(f"{horizon.lower()}-consensus-range-invalid")
+        if high is not None and value is not None and high < value:
+            row_blockers.append(f"{horizon.lower()}-consensus-range-invalid")
+        if growth_pct is not None and (
+            growth_pct > MAX_CONSENSUS_REVENUE_GROWTH_PCT
+            or growth_pct < MIN_CONSENSUS_REVENUE_GROWTH_PCT
+        ):
+            row_blockers.append(f"{horizon.lower()}-revenue-consensus-growth-outlier")
+        rows.append({
+            "periodToken": period,
+            "horizon": horizon,
+            "value": value,
+            "low": low,
+            "high": high,
+            "currency": currency,
+            "analystCount": analyst_count,
+            "provider": _text(estimate.get("provider")),
+            "growthPct": round(growth_pct, 6) if growth_pct is not None else None,
+            "status": "validated" if not row_blockers else "blocked",
+            "blockingReasons": sorted(set(row_blockers)),
+        })
+        blockers.extend(row_blockers)
+        if value is not None and value > 0:
+            previous = value
+    material = {
+        "contractVersion": DRIVER_DCF_CONSENSUS_EVIDENCE_VERSION,
+        "status": "validated" if not blockers else "blocked",
+        "currency": annual_currency,
+        "rows": rows,
+        "blockingReasons": sorted(set(blockers)),
+    }
+    return {**material, "evidenceId": "driver-dcf-consensus-evidence:" + _digest(material)[:32]}
 
 
 def _blocked(
@@ -377,6 +454,11 @@ def build_driver_dcf_input_bundle(
     }
     references = [references[key] for key in sorted(references)]
     estimates = _revenue_estimates(yfinance)
+    consensus_evidence = _consensus_evidence(
+        estimates,
+        annual_revenue=annual.get("revenue"),
+        annual_currency=currency,
+    )
 
     observed = {
         "annualPeriod": _text(annual_assessment.get("period") or annual.get("periodEnd") or annual.get("period")),
@@ -404,6 +486,8 @@ def build_driver_dcf_input_bundle(
         "riskFreeObservationDate": risk_free_observation.get("date"),
         "fy1RevenueConsensus": (estimates.get("0y") or {}).get("value"),
         "fy2RevenueConsensus": (estimates.get("+1y") or {}).get("value"),
+        "consensusCurrency": _text((estimates.get("0y") or {}).get("currency")).upper(),
+        "consensusEvidence": consensus_evidence,
     }
     required = {
         "revenue": "base-revenue-missing",
@@ -435,6 +519,7 @@ def build_driver_dcf_input_bundle(
         reasons.append("analyst-source-revision-missing")
     if risk_free_dataset and not any(item.get("datasetId") == risk_free_dataset for item in references):
         reasons.append("macro-source-revision-missing")
+    reasons.extend(consensus_evidence.get("blockingReasons") or [])
     for key, reason in required.items():
         value = observed.get(key)
         if value is None or (key in {"revenue", "dilutedShares", "marketCapitalization", "beta", "riskFreeRatePct", "fy1RevenueConsensus", "fy2RevenueConsensus"} and value <= 0):
@@ -537,6 +622,7 @@ def build_driver_dcf_input_bundle(
         "assumptions": assumptions,
         "projectionYears": projection_years,
         "observedInputs": observed,
+        "consensusEvidence": consensus_evidence,
         "calculationNotes": {
             "workingCapitalNormalization": "economic investment = -provider cash-flow change in working capital",
             "waccFormula": "E/(D+E)*costOfEquity + D/(D+E)*costOfDebt*(1-taxRate)",
@@ -575,6 +661,7 @@ def build_driver_dcf_input_bundle(
         "inputBundleId": input_bundle_id,
         "missingInputs": [],
         "observedInputs": observed,
+        "consensusEvidence": consensus_evidence,
         "sourceReferences": references,
         "financialEvidence": financial_evidence,
         "exposureReadiness": dict(exposure_readiness or {}),
@@ -594,6 +681,7 @@ __all__ = [
     "DRIVER_DCF_ASSUMPTION_VERSION",
     "DRIVER_DCF_ASSUMPTION_REVIEW_VERSION",
     "DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION",
+    "DRIVER_DCF_CONSENSUS_EVIDENCE_VERSION",
     "DRIVER_DCF_INPUT_VERSION",
     "build_driver_dcf_input_bundle",
 ]

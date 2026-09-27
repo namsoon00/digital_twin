@@ -11,7 +11,7 @@ from digital_twin.modules.portfolio.contracts import account_snapshot_from_monit
 from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService, valuation_snapshot_delta
 
 
-READ_MODEL_VERSION = "instrument-valuation-read-model-v1"
+READ_MODEL_VERSION = "instrument-valuation-read-model-v2-readiness-and-agreement"
 
 
 def _text(value: object) -> str:
@@ -152,6 +152,7 @@ class InstrumentValuationQueryService:
             "currentAssessmentId": current_identity["valuationAssessmentId"],
         }
         model_comparison = self._model_comparison(result.rows)
+        model_agreement = self._model_agreement(model_comparison)
         implied_expectations = self._implied_expectations(result.rows, source_symbol)
         readiness_rows = external_signals.get("driverDcfReadiness")
         dcf_readiness = (
@@ -159,6 +160,44 @@ class InstrumentValuationQueryService:
             if isinstance(readiness_rows, Mapping) and isinstance(readiness_rows.get(source_symbol), Mapping)
             else {}
         )
+        consensus_evidence = (
+            dict(dcf_readiness.get("consensusEvidence"))
+            if isinstance(dcf_readiness.get("consensusEvidence"), Mapping)
+            else dict((dcf_readiness.get("observedInputs") or {}).get("consensusEvidence") or {})
+        )
+        financial_evidence = (
+            dict(dcf_readiness.get("financialEvidence"))
+            if isinstance(dcf_readiness.get("financialEvidence"), Mapping)
+            else {}
+        )
+        data_readiness = {
+            "contractVersion": "instrument-valuation-data-readiness-v1",
+            "status": "ready" if (
+                _number(position.current_price, positive=True) is not None
+                and financial_evidence.get("officialDecisionReady") is True
+                and consensus_evidence.get("status") == "validated"
+                and dcf_readiness.get("status") in {"ready-for-shadow", "released-reference"}
+                and model_agreement.get("status") != "conflict"
+            ) else "limited",
+            "quote": {
+                "status": "available" if _number(position.current_price, positive=True) is not None else "missing",
+                "asOf": _text(position.updated_at or snapshot.generated_at),
+            },
+            "officialFinancials": {
+                "status": _text(financial_evidence.get("status") or "unavailable"),
+                "officialMetricCount": int(_number(financial_evidence.get("officialMetricCount")) or 0),
+                "requiredMetricCount": int(_number(financial_evidence.get("requiredMetricCount")) or 0),
+                "period": _text(financial_evidence.get("period")),
+            },
+            "consensus": consensus_evidence,
+            "dcf": {
+                "status": _text(dcf_readiness.get("status") or "unavailable"),
+                "assumptionReviewState": _text(dcf_readiness.get("assumptionReviewState")),
+            },
+            "modelAgreement": model_agreement,
+            "sourceRevisionCount": len((primary.get("valuationBundle") or {}).get("sourceRevisionVector") or []),
+            "decisionEligible": bool(primary.get("valuationDecisionEligible")) and model_agreement.get("status") != "conflict",
+        }
         current_verified = [
             {
                 "driverId": _text(item.get("driverId")),
@@ -184,6 +223,7 @@ class InstrumentValuationQueryService:
             *(causal_attribution.get("blockingReasons") or []),
             *(dcf_readiness.get("missingInputs") or []),
             *((dcf_readiness.get("financialEvidence") or {}).get("blockingReasons") or []),
+            *(model_agreement.get("blockingReasons") or []),
             *(["dcf-assumption-review-required"] if dcf_readiness.get("assumptionReviewState") == "required" else []),
         ])
 
@@ -267,7 +307,8 @@ class InstrumentValuationQueryService:
                     "dataState": _text(primary.get("valuationDataState")),
                     "reliabilityState": _text(primary.get("valuationReliabilityState")),
                     "freshnessStatus": _text(primary.get("valuationFreshnessStatus")),
-                    "decisionEligible": bool(primary.get("valuationDecisionEligible")),
+                    "decisionEligible": bool(primary.get("valuationDecisionEligible")) and model_agreement.get("status") != "conflict",
+                    "modelConflictBlocked": model_agreement.get("status") == "conflict",
                     "issues": quality_issues,
                 },
                 "asOf": _text(primary.get("valuationAsOf") or company.get("sourceAsOf")),
@@ -284,8 +325,10 @@ class InstrumentValuationQueryService:
                     "sourceRevisionCount": len((primary.get("valuationBundle") or {}).get("sourceRevisionVector") or []),
                 },
                 "models": model_comparison,
+                "modelAgreement": model_agreement,
                 "impliedExpectations": implied_expectations,
                 "dcfReadiness": dcf_readiness,
+                "dataReadiness": data_readiness,
             },
             "companyData": {
                 "state": _text(company.get("dataState") or "unavailable"),
@@ -304,6 +347,8 @@ class InstrumentValuationQueryService:
                 "companyDrivers": driver_map,
                 "priceExplanation": causal_attribution,
                 "valuationModels": model_comparison,
+                "modelAgreement": model_agreement,
+                "dataReadiness": data_readiness,
                 "dcfReadiness": dcf_readiness,
                 "impliedExpectations": implied_expectations,
                 "nextChecks": next_checks,
@@ -408,6 +453,38 @@ class InstrumentValuationQueryService:
                 "comparisonPolicy": "do-not-average-model-values",
             })
         return result
+
+    @staticmethod
+    def _model_agreement(models) -> Dict[str, object]:
+        calculated = [
+            dict(item) for item in models or []
+            if isinstance(item, Mapping) and _number(item.get("fairValue"), positive=True) is not None
+        ]
+        currencies = sorted({_text(item.get("currency")).upper() for item in calculated if _text(item.get("currency"))})
+        reasons = []
+        if len(currencies) > 1:
+            reasons.append("valuation-model-currency-conflict")
+        values = [float(item["fairValue"]) for item in calculated]
+        spread_pct = None
+        if len(values) >= 2 and len(currencies) <= 1:
+            midpoint = (max(values) + min(values)) / 2.0
+            spread_pct = (max(values) - min(values)) / midpoint * 100.0 if midpoint > 0 else None
+            if spread_pct is not None and spread_pct >= 30.0:
+                reasons.append("valuation-models-materially-disagree")
+        status = "conflict" if reasons else "comparable" if len(values) >= 2 else "insufficient-models"
+        material = {
+            "contractVersion": "valuation-model-agreement-v1",
+            "status": status,
+            "modelCount": len(values),
+            "currency": currencies[0] if len(currencies) == 1 else "",
+            "low": min(values) if values else None,
+            "high": max(values) if values else None,
+            "spreadPct": round(spread_pct, 4) if spread_pct is not None else None,
+            "blockingReasons": reasons,
+            "comparisonPolicy": "show-separately-never-average",
+            "decisionEligible": len(values) >= 2 and not reasons and all(bool(item.get("decisionEligible")) for item in calculated),
+        }
+        return material
 
     @staticmethod
     def _implied_expectations(rows, symbol: str) -> Dict[str, object]:

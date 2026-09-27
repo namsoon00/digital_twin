@@ -182,16 +182,16 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Twenty-one evidence preservation, source admission, outcome and real SQL/lock regressions.
         # Sixteen shared AI contract, canonical repair, nested freshness and
         # bounded request/outcome accounting regressions.
-        # Eighteen valuation snapshot, company-driver causality, pure DCF,
+        # Twenty-one valuation snapshot, company-driver causality, pure DCF,
         # reverse-DCF, isolated release and point-in-time quality regressions
         # protect the new accuracy-first investment-assistant boundary.
         # Three point-in-time historical multiple regressions protect look-ahead,
         # stale-consensus and comparable-sample admission boundaries.
-        # Three operational DCF input regressions protect exact source lineage,
-        # missing-driver fail-closed behavior and conditional reverse solving.
+        # Four operational DCF input regressions protect exact source lineage,
+        # missing-driver, consensus-unit and forecast-anomaly fail-closed behavior.
         # Eleven trade-strength quality regressions protect raw-ratio semantics,
         # opening maturity, repeated-value staleness, ABox gating and messages.
-        self.assertLessEqual(total, 1815)
+        self.assertLessEqual(total, 1818)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

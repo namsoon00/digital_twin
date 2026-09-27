@@ -149,9 +149,23 @@ class InstrumentValuationQueryTests(unittest.TestCase):
             "do-not-average-model-values",
             payload["investmentAnalysis"]["valuationModels"][0]["comparisonPolicy"],
         )
+        self.assertIn(payload["valuation"]["modelAgreement"]["status"], {"comparable", "conflict", "insufficient-models"})
+        self.assertIn("dataReadiness", payload["valuation"])
         for action_key in ("action", "decision", "recommendedAction"):
             self.assertNotIn(action_key, payload)
             self.assertNotIn(action_key, payload["valuation"])
+
+    def test_model_agreement_blocks_material_spread_without_averaging_values(self):
+        agreement = InstrumentValuationQueryService._model_agreement([
+            {"modelId": "earnings", "fairValue": 100, "currency": "USD", "decisionEligible": True},
+            {"modelId": "dcf", "fairValue": 160, "currency": "USD", "decisionEligible": True},
+        ])
+
+        self.assertEqual("conflict", agreement["status"])
+        self.assertGreater(agreement["spreadPct"], 30)
+        self.assertIn("valuation-models-materially-disagree", agreement["blockingReasons"])
+        self.assertFalse(agreement["decisionEligible"])
+        self.assertNotIn("average", agreement)
 
     def _assert_negative_eps_is_explained_as_non_meaningful_per(self):
         signals = {

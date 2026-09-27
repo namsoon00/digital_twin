@@ -10,7 +10,7 @@ from .news_ai_analysis import article_text_parts, source_text_hash
 
 
 INFORMATION_BRIEF_VERSION = "source-bound-information-v1"
-OFFICIAL_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing"}
+OFFICIAL_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing", "issuer-ir"}
 
 
 def _mapping(value):

@@ -14,6 +14,7 @@ from digital_twin.modules.news_intelligence.domain.event_types import RESEARCH_E
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology, entity_id
 from digital_twin.modules.reasoning.domain.ontology_external_abox import add_symbol_external_signal_concepts
+from digital_twin.modules.reasoning.domain.portfolio_ontology_research_concepts import event_tbox_classes
 from digital_twin.infrastructure.mysql_research_evidence import merge_derived_evidence_payload
 from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
 from digital_twin.infrastructure.transactions.monitoring import MySQLEventLog
@@ -273,6 +274,60 @@ def sec_fact(dataset_id="sec.document"):
     }
 
 
+def issuer_ir_fact(published_at="2026-08-25"):
+    document = (
+        "SK hynix announced its second quarter 2026 financial results. Revenue increased to KRW 20 trillion "
+        "and operating profit reached KRW 8 trillion, supported by high bandwidth memory demand. "
+        "Management expects the next quarter product mix to improve, while foreign exchange, customer demand, "
+        "capital expenditure and memory pricing remain material uncertainties. The company will update investors "
+        "if its demand outlook or investment plan changes. " * 2
+    )
+    return {
+        "datasetId": "issuer.ir_documents",
+        "subjectKey": "000660",
+        "providerId": "issuer-ir",
+        "sourceRevision": "skhynix-ir-20260825",
+        "sourceAsOf": published_at + "T00:00:00Z",
+        "fetchedAt": "2026-08-25T00:02:00Z",
+        "revisionId": "internal-ir-revision-1",
+        "payloadHash": "issuer-ir-fact-hash",
+        "sourceSchemaVersion": "official-issuer-ir-index-v1",
+        "availability": "observed",
+        "payload": {
+            "issuerIrDocuments": {
+                "000660": {
+                    "provider": "Official issuer IR",
+                    "issuerName": "SK hynix",
+                    "checkedAt": "2026-08-25T00:02:00Z",
+                    "items": [
+                        {
+                            "documentId": "skhynix-2026-q2-results",
+                            "title": "SK hynix Announces Second Quarter 2026 Financial Results",
+                            "url": "https://news.skhynix.com/sk-hynix-announces-second-quarter-2026-financial-results/",
+                            "publishedAt": published_at,
+                            "documentType": "web",
+                            "documentVerified": True,
+                            "analysisReady": True,
+                            "officialDocumentState": "document-verified",
+                            "officialDocumentText": document,
+                            "documentHash": "adapter-verified-hash",
+                        },
+                        {
+                            "documentId": "metadata-only-item",
+                            "title": "Unverified investor presentation",
+                            "url": "https://example.com/unverified.pdf",
+                            "publishedAt": published_at,
+                            "documentType": "pdf",
+                            "documentVerified": False,
+                            "analysisReady": False,
+                        },
+                    ],
+                },
+            },
+        },
+    }
+
+
 class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 8, 25, 1, 0, tzinfo=timezone.utc)
@@ -320,6 +375,32 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertEqual(1, collected.payload["alertEligibleCount"])
         self.assertEqual(1, len(collected.payload["alertEligibleItems"]))
         self._assert_projects_official_corporate_action_with_exact_revision_without_direct_alert()
+        self._assert_projects_verified_issuer_ir_into_alert_reasoning_contract()
+
+    def _assert_projects_verified_issuer_ir_into_alert_reasoning_contract(self):
+        row = issuer_ir_fact()
+        publisher = MemoryPublisher()
+        evidence_store = MemoryEvidenceStore()
+        projector = ExternalOfficialEvidenceProjectionService(
+            MemoryFactStore(row), evidence_store, publisher, {}, now_provider=lambda: self.now,
+        )
+
+        result = projector.project_fact(row)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["writtenCount"])
+        self.assertNotIn("research:000660:issuer-ir:metadata-only-item", evidence_store.items)
+        evidence = evidence_store.items["research:000660:issuer-ir:skhynix-2026-q2-results"]
+        self.assertEqual("issuer-ir", evidence.kind)
+        self.assertTrue(evidence.raw_payload["documentVerified"])
+        self.assertTrue(evidence.raw_payload["promptEvidenceAdmission"]["promptEligible"])
+        self.assertIn("IssuerIRDocument", event_tbox_classes(evidence))
+        self.assertIn("EarningsEvent", event_tbox_classes(evidence))
+        collected = next(event for event in publisher.events if event.name == RESEARCH_EVIDENCE_COLLECTED)
+        self.assertEqual(1, collected.payload["alertEligibleCount"])
+        reasoning = next(event for event in publisher.events if event.name == "ontology.reasoning_requested")
+        self.assertIn("IssuerIRDocument", reasoning.payload["factTypes"])
+        self.assertNotIn("DisclosureFiling", reasoning.payload["factTypes"])
 
     def test_projection_is_idempotent(self):
         first = self.projector.project_event(self.event())

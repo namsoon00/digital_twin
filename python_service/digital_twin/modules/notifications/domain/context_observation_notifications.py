@@ -595,7 +595,7 @@ def context_observation_evidence_presentation(value: object) -> Dict[str, object
     if not contract:
         return {}
     selected_rule_id = _text(contract.get("selectedRuleId"))
-    if "disclosure" not in selected_rule_id.lower():
+    if not any(term in selected_rule_id.lower() for term in ("disclosure", "issuer-ir", "earnings")):
         return {}
     brief = _mapping(payload.get("notificationAiDecisionBrief"))
     if not brief:
@@ -646,6 +646,8 @@ def context_observation_evidence_presentation(value: object) -> Dict[str, object
         reverse=True,
     )
     item = rows[0]
+    item_kind = _text(item.get("kind") or item.get("eventType")).lower()
+    is_issuer_ir = item_kind == "issuer-ir"
     analysis = _mapping(item.get("disclosureAnalysis"))
     confirmed_facts = [
         _text(entry)
@@ -663,10 +665,10 @@ def context_observation_evidence_presentation(value: object) -> Dict[str, object
         or item.get("summary")
     )
     return {
-        "kind": "disclosure",
+        "kind": "issuer-ir" if is_issuer_ir else "disclosure",
         "evidenceId": _text(item.get("evidenceId") or item.get("id")),
-        "title": _text(item.get("reportName") or item.get("title") or "공시 원문"),
-        "source": _text(item.get("sourcePublisher") or item.get("source") or "공시 원문"),
+        "title": _text(item.get("reportName") or item.get("title") or ("기업 IR 원문" if is_issuer_ir else "공시 원문")),
+        "source": _text(item.get("sourcePublisher") or item.get("source") or ("기업 공식 IR" if is_issuer_ir else "공시 원문")),
         "receiptDate": _text(
             item.get("receiptDate")
             or item.get("publishedAt")

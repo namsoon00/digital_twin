@@ -206,9 +206,10 @@ def _relation_rows(context: Dict[str, object], observation: Dict[str, object]) -
     )
     title = _text(presentation.get("title"))
     summary = _text(presentation.get("summary"))
+    source_label = "기업 IR 원문" if _text(presentation.get("kind")).lower() == "issuer-ir" else "공시 원문"
     rows: List[str] = []
     if title:
-        rows.append("공시 원문 ‘" + title + "’이 종목 관계에 새로 연결됐습니다.")
+        rows.append(source_label + " ‘" + title + "’이 종목 관계에 새로 연결됐습니다.")
     if summary:
         rows.append(summary)
     lifecycle_rows = _lifecycle_relation_rows(context)

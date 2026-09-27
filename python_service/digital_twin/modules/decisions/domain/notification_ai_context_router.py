@@ -1531,7 +1531,7 @@ def _external_evidence(
         append_row(legacy_disclosure, False)
     rows.sort(key=lambda row: (
         str(row.get("evidenceId") or "") not in linked_ids,
-        str(row.get("kind") or "").lower() not in {"disclosure", "filing", "official-statistics"},
+        str(row.get("kind") or "").lower() not in {"disclosure", "filing", "issuer-ir", "official-statistics"},
     ))
     return [row for row in rows if row][:3], {
         "evaluatedCount": evaluated_count,

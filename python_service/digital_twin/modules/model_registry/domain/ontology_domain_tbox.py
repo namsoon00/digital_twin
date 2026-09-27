@@ -198,6 +198,7 @@ CLASS_CONTEXT_OVERRIDES: Dict[str, str] = {
     "DisclosureEvent": "research-evidence",
     "DisclosureFiling": "research-evidence",
     "ResearchEvidence": "research-evidence",
+    "IssuerIRDocument": "research-evidence",
     "DividendEvent": "research-evidence",
     "EquityIssuanceEvent": "research-evidence",
     "LockupReleaseEvent": "research-evidence",

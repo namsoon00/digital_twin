@@ -22,9 +22,15 @@ def unique_list(values: List[str]) -> List[str]:
 
 def event_tbox_classes(item: object) -> List[str]:
     kind = str(getattr(item, "kind", "") or "").lower()
+    raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
     classes = ["Observation", "ExternalObservation", "ResearchEvidence", "ExternalSignal", "Evidence"]
     if "news" in kind:
         classes.extend(["NewsEvent", "NewsArticle"])
+    elif "issuer-ir" in kind:
+        classes.append("IssuerIRDocument")
+        event_type = str(raw_payload.get("eventType") or "").lower()
+        if event_type == "earnings_update":
+            classes.extend(["FundamentalObservation", "EarningsEvent", "ValuationSignal"])
     elif "disclosure" in kind or "filing" in kind:
         classes.extend(["DisclosureEvent", "DisclosureFiling"])
     elif "financial" in kind or "earning" in kind:

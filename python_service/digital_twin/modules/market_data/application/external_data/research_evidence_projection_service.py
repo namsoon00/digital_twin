@@ -23,7 +23,7 @@ from digital_twin.modules.decisions.contracts import assess_prompt_evidence, att
 
 
 OFFICIAL_DATASET_IDS = set(OFFICIAL_EVIDENCE_DATASET_IDS)
-OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing", "corporate-action"}
+OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing", "issuer-ir", "corporate-action"}
 DEFAULT_INITIAL_LOOKBACK_MINUTES = 10
 DEFAULT_MAX_REPLAY_AGE_MINUTES = 180
 CURRENT_FACT_BACKFILL_VERSION = OFFICIAL_EVIDENCE_PROJECTOR_VERSION
@@ -216,7 +216,7 @@ class ExternalOfficialEvidenceProjectionService:
                 ),
                 source_references=[source_reference] if source_reference else [],
             )
-            if _text(item.kind).lower() in {"disclosure", "filing", "sec-filing", "sec_filing"}:
+            if _text(item.kind).lower() in {"disclosure", "filing", "sec-filing", "sec_filing", "issuer-ir"}:
                 self.enrich_disclosure_analysis(item)
 
         first_payload = items[0].raw_payload if isinstance(items[0].raw_payload, dict) else {}
@@ -254,7 +254,7 @@ class ExternalOfficialEvidenceProjectionService:
             alert_items = [
                 item for item in changed_items
                 if allow_alert
-                and dataset_id in {"opendart.document", "sec.document"}
+                and dataset_id in {"opendart.document", "sec.document", "issuer.ir_documents"}
                 and bool((item.raw_payload or {}).get("documentVerified"))
                 and bool((item.raw_payload or {}).get("analysisReady"))
                 and bool((item.raw_payload or {}).get("documentHash"))
@@ -276,7 +276,9 @@ class ExternalOfficialEvidenceProjectionService:
             fact_types = ["ResearchEvidence", "VerifiedClaim"]
             if includes_corporate_action:
                 fact_types.append("CorporateAction")
-            else:
+            elif dataset_id == "issuer.ir_documents":
+                fact_types.append("IssuerIRDocument")
+            elif dataset_id in {"opendart.document", "sec.document"}:
                 fact_types.append("DisclosureFiling")
             event_payload = {
                 "source": "external-official-evidence-projection",
@@ -318,13 +320,21 @@ class ExternalOfficialEvidenceProjectionService:
                     changed_fields_by_symbol={
                         value: [
                             "external.researchEvidence",
-                            "external.corporateActions" if includes_corporate_action else "external.officialDocument",
+                            (
+                                "external.corporateActions"
+                                if includes_corporate_action
+                                else "external.issuerIrDocument"
+                                if dataset_id == "issuer.ir_documents"
+                                else "external.officialDocument"
+                            ),
                         ]
                         for value in inference_symbols
                     },
                     reason=(
                         "검증된 공식 기업행동 변경을 TypeDB ABox에 반영합니다."
                         if includes_corporate_action
+                        else "검증된 기업 IR 본문 변경을 TypeDB ABox에 반영합니다."
+                        if dataset_id == "issuer.ir_documents"
                         else "검증된 SEC/OpenDART 문서 변경을 TypeDB ABox에 반영합니다."
                     ),
                     materiality_assessments=assessments,

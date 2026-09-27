@@ -2280,7 +2280,8 @@ def customer_reason_rows(context: Dict[str, object], level: str) -> List[str]:
         title = str(presentation.get("title") or "").strip()
         source = str(presentation.get("source") or "").strip()
         if title:
-            row = "검증된 공시 원문 '" + title + "'의 분석이 완료되어 확인 자료로 전달합니다."
+            source_label = "기업 IR 원문" if str(presentation.get("kind") or "").lower() == "issuer-ir" else "공시 원문"
+            row = "검증된 " + source_label + " '" + title + "'의 분석이 완료되어 확인 자료로 전달합니다."
             if source:
                 row += " 출처는 " + source + "입니다."
         else:
@@ -4530,9 +4531,10 @@ def full_decision_evidence_rows(
         stamp = str(presentation.get("receiptDate") or "").strip()
         source = str(presentation.get("source") or "").strip()
         if title:
+            source_label = "기업 IR 원문" if str(presentation.get("kind") or "").lower() == "issuer-ir" else "공시 원문"
             append_unique_text(
                 rows,
-                "공시 원문: " + title
+                source_label + ": " + title
                 + ((" · " + source) if source else "")
                 + ((" · 접수 " + stamp) if stamp else ""),
                 360,
@@ -5925,7 +5927,7 @@ def full_event_and_catalyst_rows(context: Dict[str, object], limit: int = 5) -> 
         if not isinstance(item, dict):
             continue
         kind = str(item.get("kind") or item.get("eventType") or "").strip().lower()
-        if kind not in {"news", "disclosure", "filing", "earnings", "supply_chain", "general"}:
+        if kind not in {"news", "disclosure", "filing", "issuer-ir", "earnings", "supply_chain", "general"}:
             continue
         title = customer_visible_ai_text(item.get("title") or item.get("summary") or "")
         if not title:

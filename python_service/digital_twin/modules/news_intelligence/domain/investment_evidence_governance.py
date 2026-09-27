@@ -37,7 +37,7 @@ CLAIM_STATES = (
     "rejected",
 )
 
-OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing"}
+OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing", "issuer-ir"}
 CORRECTION_MARKERS = (
     "correction",
     "corrected",

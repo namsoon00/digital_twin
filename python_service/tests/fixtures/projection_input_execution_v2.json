@@ -3,14 +3,14 @@
   "contractVersion": "projection-input-execution-v2",
   "reason": "Projection receipts retain immutable temporal identity while bounded parallel reads and crypto target routing preserve the exact factual input set.",
   "scenarios": {
-    "full": "8b8e6ab7a119e44e51bf88ec39b9cb745a8f7c5fd9cff314064989031299c922",
-    "target": "1dc288ff7bb3ee79d62f72322beef0231e4287ecb974cdf55c8351674f9b40f8",
-    "source-facts": "1b7199b95d221a9a909737714332901ea49ae9b28370d2b33143724e11099ec8",
-    "live-context": "0dba1757cd5bf5564f7dbd936a650deb10be35a5e59a682c10a791bf67ce78f1",
-    "memory-hit": "b32b26e37c96e11e4c340a807ec3365558e9d3a2da2585eacbf85331968d89ca",
-    "persistent-hit": "aa016efe0dd3f8b45b08e6c26fbbd06e2fbaf1b49c0188ed99c6f60ab30b21cf",
-    "cache-errors": "217fd4531c50d0a5055cd11da736bea9944de0789b7fd03f4027f0246ae7f0c5",
-    "scoring-failure": "9362a9b1c570fadf88fc9c433529947dd68970c0738bde81fac48213f71480b1",
-    "world-identity": "22568305207a41b11eb74b5e21c03d5942b3a1bf4bea2f9cd8db6bc2dbad85be"
+    "full": "dacab891da76b5be900f6f138ef69dc761e63ea700b037298da62cecc3ea4c28",
+    "target": "b8d438ce74f785cb619da15726ac63dd0890fe1804927aa5bf0093783044a0f4",
+    "source-facts": "342993a6956fe5c181e786fc1608bbe7c523d309ba8ce760dfeea3cd23269a4f",
+    "live-context": "852214daeb78aadea8c3ee4abdee44364c2d4cc298bbc80797f0168a4f384186",
+    "memory-hit": "bbd2a70771f856dc7d3bcb2084a0e665b99d039ce079c57df42ff5c827a20e57",
+    "persistent-hit": "f8b57558a02c113c1346b4a46a3631998a34c31ddcb8f00d1607ac052883bffe",
+    "cache-errors": "09d850f5cc0bbd10093da769d12be107428511b27a702d0732011b53ea064346",
+    "scoring-failure": "f6c53d39139d48f8810661e31608c9431289c620c08b7fe017bbcfa3c24aa865",
+    "world-identity": "79eaea60cc27071c181302598369ae342bd20b65f892f2dd14fe9680de89ba5b"
   }
 }

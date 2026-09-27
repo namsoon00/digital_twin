@@ -225,7 +225,7 @@ class ResearchEvidence:
         if lifecycle_changed_at:
             payload["evidenceLifecycleChangedAt"] = lifecycle_changed_at
         normalized_kind = str(kind or "news").strip().lower() or "news"
-        if normalized_kind in {"news", "disclosure", "filing", "sec-filing", "sec_filing", "corporate-action"}:
+        if normalized_kind in {"news", "disclosure", "filing", "sec-filing", "sec_filing", "corporate-action", "issuer-ir"}:
             payload = bind_company_event_contract(
                 payload,
                 symbol=symbol,
@@ -962,6 +962,68 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
     evidence = research_evidence_from_facts(normalized_symbol, facts)
     sec = (external_signals.get("secFilings") or {}).get(normalized_symbol) if isinstance(external_signals.get("secFilings"), dict) else {}
     evidence.extend(sec_research_evidence(normalized_symbol, sec if isinstance(sec, dict) else {}))
+    issuer_ir_group = external_signals.get("issuerIrDocuments") if isinstance(external_signals.get("issuerIrDocuments"), dict) else {}
+    issuer_ir = issuer_ir_group.get(normalized_symbol) if isinstance(issuer_ir_group.get(normalized_symbol), dict) else {}
+    for item in issuer_ir.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        document_text = compact_text(item.get("officialDocumentText"), 20000)
+        published_at = str(item.get("publishedAt") or "").strip()
+        if (
+            item.get("documentVerified") is not True
+            or item.get("analysisReady") is not True
+            or not item.get("documentHash")
+            or not document_text
+            or not published_at
+        ):
+            continue
+        title = compact_text(item.get("title") or "공식 IR 자료", 240)
+        lowered = title.casefold()
+        event_type = (
+            "earnings_update"
+            if any(term in lowered for term in ("earnings", "financial result", "실적", "분기", "반기"))
+            else "issuer_ir_update"
+        )
+        raw_payload = {
+            **dict(item),
+            "symbol": normalized_symbol,
+            "companyName": str(issuer_ir.get("issuerName") or normalized_symbol),
+            "provider": str(issuer_ir.get("provider") or "Official issuer IR"),
+            "sourcePublisher": str(issuer_ir.get("issuerName") or issuer_ir.get("provider") or "Official issuer IR"),
+            "sourceKind": "issuer-ir",
+            "officialSource": True,
+            "primarySource": True,
+            "relationScope": "direct",
+            "sourceTrustState": "trusted",
+            "materialityState": "notable",
+            "dataState": "sufficient",
+            "validationState": "ready",
+            "eventType": event_type,
+            "reportName": title,
+            "receiptDate": published_at,
+            "publishedAt": published_at,
+            "observedAt": str(issuer_ir.get("checkedAt") or published_at),
+            "sourceAsOf": published_at,
+            "officialDocumentText": document_text,
+            "documentUsePolicy": "issuer-reported-reference-until-cross-checked",
+            "valuationInputEligible": False,
+        }
+        evidence.append(ResearchEvidence(
+            evidence_id=(
+                "research:" + normalized_symbol + ":issuer-ir:"
+                + str(item.get("documentId") or stable_evidence_token(item.get("url"), title, published_at))
+            ),
+            symbol=normalized_symbol,
+            kind="issuer-ir",
+            source=str(issuer_ir.get("provider") or "Official issuer IR"),
+            title=title,
+            summary=compact_text(document_text, 520),
+            url=str(item.get("url") or issuer_ir.get("sourceUrl") or ""),
+            observed_at=str(issuer_ir.get("checkedAt") or published_at),
+            polarity="context",
+            published_at=published_at,
+            raw_payload=raw_payload,
+        ))
     corporate_group = external_signals.get("corporateActions") if isinstance(external_signals.get("corporateActions"), dict) else {}
     corporate_actions = corporate_group.get(normalized_symbol) if isinstance(corporate_group.get(normalized_symbol), dict) else {}
     for event_id, source_event in corporate_actions.items():

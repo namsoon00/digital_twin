@@ -22,6 +22,7 @@ OFFICIAL_EVIDENCE_DATASET_IDS = frozenset({
     "opendart.document",
     "sec.submissions",
     "sec.document",
+    "issuer.ir_documents",
     "public-data.kr-dividends",
     "public-data.kr-capital-events",
     "public-data.kr-shareholder-rights",

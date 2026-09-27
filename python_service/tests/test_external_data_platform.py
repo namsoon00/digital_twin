@@ -63,9 +63,11 @@ from digital_twin.infrastructure.external_api.adapters.yfinance import (
 )
 from digital_twin.infrastructure.external_api.adapters.issuer_ir import (
     IssuerIrDocumentsAdapter,
+    extract_ir_body,
     parse_ir_json,
     parse_ir_documents,
     parse_ir_xml,
+    verified_ir_document,
 )
 from digital_twin.modules.market_data.domain.issuer_ir import issuer_ir_coverage, issuer_ir_sources
 from digital_twin.infrastructure.external_api.mysql_stores import (
@@ -1127,6 +1129,24 @@ class ExternalDataPlatformTest(unittest.TestCase):
             "https://issuer.example.com/ir/announcement",
         )
         self.assertEqual(json_documents[0]["publishedAt"], xml_documents[0]["publishedAt"])
+        verified = verified_ir_document(
+            {
+                "documentId": "doc-1", "title": "2026년 반기 연결 실적 안내",
+                "publishedAt": "2026-08-14", "url": "https://issuer.example.com/ir/53",
+            },
+            "<html><body><nav>메뉴</nav><main><h1>2026년 반기 연결 실적 안내</h1>"
+            + "<p>공식 연결 실적 본문입니다. 매출액과 영업손실, 연구개발비 및 향후 계획을 주주에게 설명합니다.</p>" * 12
+            + "</main><script>alert('ignored')</script></body></html>",
+            "https://issuer.example.com/ir/53",
+            "text/html",
+        )
+        self.assertTrue(verified["documentVerified"])
+        self.assertEqual("document-verified", verified["officialDocumentState"])
+        self.assertNotIn("alert('ignored')", verified["officialDocumentText"])
+        self.assertEqual(
+            "제목 본문 내용",
+            extract_ir_body('{"data":{"title":"제목","content":"<p>본문 내용</p>"}}', "application/json"),
+        )
         coverage = issuer_ir_coverage(
             [ExternalSubject("AAPL", symbol="AAPL", name="Apple", market="US")],
             [{

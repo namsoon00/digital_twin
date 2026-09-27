@@ -69,7 +69,7 @@ class ResearchEvidenceGovernanceService:
 
     def governance_max_age_minutes(self, items: List[ResearchEvidence]) -> int:
         base = self.max_age_minutes()
-        if any(str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing"} for item in items or []):
+        if any(str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing", "sec_filing", "issuer-ir"} for item in items or []):
             return max(base, self.official_max_age_minutes())
         return base
 
@@ -106,7 +106,7 @@ class ResearchEvidenceGovernanceService:
             for item in items
         }
         news_items = [item for item in items if str(item.kind or "").lower() == "news"]
-        disclosure_items = [item for item in items if str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing"}]
+        disclosure_items = [item for item in items if str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing", "sec_filing", "issuer-ir"}]
         for item in disclosure_items:
             payload = dict(item.raw_payload or {})
             existing_analysis = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}

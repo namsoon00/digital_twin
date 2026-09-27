@@ -81,6 +81,106 @@ class _LinkParser(HTMLParser):
             self._current = None
 
 
+class _VisibleTextParser(HTMLParser):
+    SKIPPED_TAGS = {"script", "style", "svg", "noscript", "nav", "header", "footer", "form"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, _attrs):
+        if str(tag or "").lower() in self.SKIPPED_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if str(tag or "").lower() in self.SKIPPED_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if not self._skip_depth:
+            value = _clean(data)
+            if value:
+                self.parts.append(value)
+
+
+def extract_ir_body(markup: str, content_type: str = "text/html", limit: int = 20000) -> str:
+    """Extract readable issuer text while discarding navigation and executable markup."""
+
+    text = str(markup or "")
+    stripped = text.lstrip("\ufeff \t\r\n")
+    embedded = ""
+    if "json" in str(content_type or "").casefold() or stripped.startswith(("{", "[")):
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            payload = {}
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        if isinstance(data, dict):
+            embedded = " ".join(_clean(data.get(key)) for key in ("title", "titleEn", "content", "contentEn") if _clean(data.get(key)))
+    elif stripped.startswith("<Result"):
+        try:
+            root = ElementTree.fromstring(text)
+        except (ElementTree.ParseError, TypeError, ValueError):
+            root = None
+        data = root.find(".//data") if root is not None else None
+        if data is not None:
+            embedded = " ".join(_clean(data.findtext(key)) for key in ("title", "titleEn", "content", "contentEn") if _clean(data.findtext(key)))
+    parser = _VisibleTextParser()
+    try:
+        parser.feed(embedded or text)
+    except (TypeError, ValueError):
+        return ""
+    body = _clean(" ".join(parser.parts))
+    return body[: max(1000, min(50000, int(limit or 20000)))]
+
+
+def _title_matches_body(title: object, body: object) -> bool:
+    normalized_title = re.sub(r"[^0-9a-z가-힣]+", "", _clean(title).casefold())
+    normalized_body = re.sub(r"[^0-9a-z가-힣]+", "", _clean(body).casefold())
+    if not normalized_title or not normalized_body:
+        return False
+    if normalized_title in normalized_body:
+        return True
+    tokens = [
+        token.casefold()
+        for token in re.findall(r"[0-9a-z가-힣]{3,}", _clean(title), re.IGNORECASE)
+        if token.casefold() not in {"the", "and", "for", "with", "announcement", "안내"}
+    ]
+    return bool(tokens) and sum(1 for token in tokens if token in _clean(body).casefold()) >= min(3, len(tokens))
+
+
+def verified_ir_document(item: Dict[str, object], markup: str, resolved_url: str, content_type: str) -> Dict[str, object]:
+    """Return a decision-eligible body only when the official document identity is verifiable."""
+
+    result = dict(item or {})
+    body = extract_ir_body(markup, content_type)
+    title = _clean(result.get("title"))
+    if not result.get("publishedAt"):
+        result.update({"bodyState": "reference-only", "bodyVerificationReason": "published-date-missing"})
+        return result
+    if len(body) < 400:
+        result.update({"bodyState": "reference-only", "bodyVerificationReason": "document-body-too-short"})
+        return result
+    if not _title_matches_body(title, body):
+        result.update({"bodyState": "reference-only", "bodyVerificationReason": "title-body-mismatch"})
+        return result
+    document_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    result.update({
+        "resolvedUrl": resolved_url,
+        "bodyState": "verified",
+        "bodyVerificationReason": "official-body-title-and-date-verified",
+        "officialDocumentState": "document-verified",
+        "documentVerified": True,
+        "analysisReady": True,
+        "officialDocumentText": body,
+        "officialDocumentPreview": body[:600],
+        "documentHash": document_hash,
+        "documentCharCount": len(body),
+    })
+    return result
+
+
 def parse_ir_documents(markup: str, page_url: str, limit: int = 80) -> List[Dict[str, object]]:
     parser = _LinkParser()
     parser.feed(str(markup or ""))
@@ -221,6 +321,10 @@ class IssuerIrDocumentsAdapter:
             limit = max(5, min(200, int(float(settings.get("externalIssuerIrMaxDocuments") or 80))))
         except (TypeError, ValueError):
             limit = 80
+        try:
+            body_limit = max(0, min(5, int(float(settings.get("externalIssuerIrMaxVerifiedBodies") or 3))))
+        except (TypeError, ValueError):
+            body_limit = 3
         blocked = []
         reachable = []
         for url in source.source_urls:
@@ -241,6 +345,49 @@ class IssuerIrDocumentsAdapter:
             reachable.append({"url": resolved_url, "contentType": content_type, "documentCount": len(documents)})
             if not documents:
                 continue
+            allowed_hosts = {
+                urllib.parse.urlparse(value).netloc.casefold()
+                for value in source.source_urls
+                if urllib.parse.urlparse(value).netloc
+            }
+            verified_count = 0
+            body_attempt_count = 0
+            body_attempt_limit = max(3, body_limit * 3)
+            enriched_documents = []
+            for item in documents:
+                enriched = dict(item)
+                item_url = _clean(item.get("url"))
+                item_host = urllib.parse.urlparse(item_url).netloc.casefold()
+                candidates = [item_url]
+                item_query = urllib.parse.parse_qs(urllib.parse.urlparse(item_url).query)
+                item_id = _clean((item_query.get("id") or [""])[0])
+                if item_id:
+                    candidates.extend(
+                        value.split("/getList", 1)[0] + "/getDetail/" + urllib.parse.quote(item_id)
+                        for value in source.source_urls
+                        if "/getList" in value
+                    )
+                if (
+                    verified_count < body_limit
+                    and body_attempt_count < body_attempt_limit
+                    and item.get("publishedAt")
+                    and item.get("documentType") == "web"
+                    and item_host in allowed_hosts
+                ):
+                    for document_url in candidates:
+                        if body_attempt_count >= body_attempt_limit:
+                            break
+                        body_attempt_count += 1
+                        try:
+                            document_markup, document_resolved_url, document_content_type = _fetch(document_url, timeout)
+                        except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+                            continue
+                        enriched = verified_ir_document(enriched, document_markup, document_resolved_url, document_content_type)
+                        if enriched.get("documentVerified") is True:
+                            verified_count += 1
+                            break
+                enriched_documents.append(enriched)
+            documents = enriched_documents
             latest = max((str(item.get("publishedAt") or "") for item in documents), default="")
             fragment = {
                 "issuerIrDocuments": {
@@ -256,6 +403,7 @@ class IssuerIrDocumentsAdapter:
                         "contentType": content_type,
                         "checkedAt": utc_now_iso(),
                         "documentCount": len(documents),
+                        "bodyVerifiedCount": verified_count,
                         "latestPublishedAt": latest,
                         "items": documents,
                         "fallbackDatasets": list(source.fallback_datasets),
@@ -277,8 +425,8 @@ class IssuerIrDocumentsAdapter:
                     "accessState": "reachable",
                     "documentCount": len(documents),
                     "latestPublishedAt": latest,
-                    "bodyVerifiedCount": 0,
-                    "decisionUse": "reference-only",
+                    "bodyVerifiedCount": verified_count,
+                    "decisionUse": "verified-body-reference" if verified_count else "reference-only",
                 },
             )
         access_state = "reachable" if reachable else "blocked"

@@ -7,7 +7,7 @@ from digital_twin.modules.market_data.contracts import parse_datetime
 
 PROMPT_EVIDENCE_ADMISSION_VERSION = "prompt-evidence-admission-v3-conditional-news-reference"
 NEWS_KINDS = {"news"}
-OFFICIAL_KINDS = {"disclosure", "filing", "sec-filing"}
+OFFICIAL_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing", "issuer-ir"}
 DEFAULT_MAX_AGE_MINUTES = {
     "news": 3 * 24 * 60,
     "official": 7 * 24 * 60,

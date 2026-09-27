@@ -17,6 +17,7 @@ from digital_twin.modules.market_data.application.external_data.read_model_servi
 from digital_twin.modules.market_data.application.external_data.registry import ExternalDatasetRegistry
 from digital_twin.modules.market_data.domain.event_types import EXTERNAL_OBSERVATION_RECORDED
 from digital_twin.modules.market_data.domain.external_data_contracts import normalized_availability
+from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
 from digital_twin.modules.market_data.domain.external_dataset_catalog import external_dataset_catalog
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.domain.ontology_external_abox import interest_rate_signal_ids
@@ -145,6 +146,10 @@ class ConcurrencyTrackingAdapter(StaticAdapter):
             return super().fetch(job, settings)
         finally:
             self.active -= 1
+
+
+class BoundedAdapter(StaticAdapter):
+    descriptor = replace(StaticAdapter.descriptor, max_partitions=1)
 
 
 class FollowupAdapter:
@@ -379,6 +384,60 @@ class ExternalDataPlatformTest(unittest.TestCase):
 
         self.assertEqual("KOSDAQ", subject.market)
         self.assertEqual("376900.KQ", query_symbol)
+        self._assert_account_focus_subjects_are_never_dropped_by_provider_partition_caps()
+
+    def _assert_account_focus_subjects_are_never_dropped_by_provider_partition_caps(self):
+        registry = ExternalDatasetRegistry([BoundedAdapter()])
+        subjects = [
+            ExternalSubject("NVDA", symbol="NVDA", market="US", source="holding"),
+            ExternalSubject("AAPL", symbol="AAPL", market="US", source="watchlist"),
+            ExternalSubject("SPY", symbol="SPY", market="US", source="market-proxy"),
+        ]
+
+        partitions = registry.desired_partitions(subjects, {})
+
+        self.assertEqual(["AAPL", "NVDA"], sorted(item.partition_key for item in partitions))
+
+    def _assert_fitness_distinguishes_fresh_empty_and_provider_unavailable_from_not_collected(self):
+        descriptors = [
+            {"datasetId": "opendart.disclosures", "enabled": True},
+            {"datasetId": "yfinance.news", "enabled": True},
+        ]
+        facts = [{
+            "datasetId": "opendart.disclosures",
+            "subjectKey": "000680",
+            "payloadPresent": True,
+            "freshnessState": "stale",
+            "sourceAsOf": "2026-08-01T00:00:00Z",
+        }]
+        collection_states = [
+            {
+                "datasetId": "opendart.disclosures", "subjectKey": "000680",
+                "active": True, "jobStatus": "pending", "emptyResult": True,
+                "lastSuccessAt": "2026-08-16T00:00:00Z",
+                "nextDueAt": "2026-08-16T00:10:00Z",
+                "collectionFreshnessState": "fresh",
+            },
+            {
+                "datasetId": "yfinance.news", "subjectKey": "000680",
+                "active": True, "jobStatus": "pending", "availability": "not-available",
+                "lastSuccessAt": "2026-08-16T00:00:00Z",
+                "nextDueAt": "2026-08-17T00:00:00Z",
+                "collectionFreshnessState": "fresh",
+            },
+        ]
+
+        fitness = evaluate_external_data_fitness(
+            facts, [], descriptors, ["000680"], collection_states=collection_states,
+        )
+        purposes = fitness["subjects"]["000680"]["purposes"]
+
+        self.assertEqual("fresh", purposes["disclosure"]["state"])
+        self.assertEqual(["opendart.disclosures"], purposes["disclosure"]["checkedEmptyDatasets"])
+        self.assertEqual("unsupported", purposes["news"]["state"])
+        self.assertEqual(["yfinance.news"], purposes["news"]["unavailableDatasets"])
+        self.assertTrue(purposes["derivatives"]["scheduleComplete"])
+        self.assertNotIn("disclosure", {item["purpose"] for item in fitness["attention"]})
 
     def test_domestic_reference_does_not_override_non_numeric_market_subject(self):
         subject = external_subject_from_market_quote(
@@ -1627,6 +1686,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("not-collected", fitness["subjects"]["NVDA"]["purposes"]["derivatives"]["state"])
         self.assertEqual("fresh", fitness["subjects"]["GLOBAL"]["purposes"]["crypto-market"]["state"])
         self.assertEqual("failed", fitness["subjects"]["GLOBAL"]["purposes"]["macro-regime"]["state"])
+        self._assert_fitness_distinguishes_fresh_empty_and_provider_unavailable_from_not_collected()
         self._assert_read_model_binds_company_event_to_exact_fact_revision()
         self._assert_consensus_revision_survives_both_dataset_orders_into_valuation_evidence()
 

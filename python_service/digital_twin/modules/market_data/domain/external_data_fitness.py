@@ -144,6 +144,7 @@ def _purpose_fitness(
     facts: Iterable[Mapping[str, object]],
     provider_states: Mapping[str, Mapping[str, object]],
     enabled_datasets: set,
+    collection_states: Iterable[Mapping[str, object]],
 ) -> Dict[str, object]:
     market = subject_market(subject_key)
     expected = contract.datasets(market)
@@ -156,10 +157,37 @@ def _purpose_fitness(
             "subjectKey": _upper(subject_key),
             "market": market,
             "expectedDatasets": [],
+            "enabledDatasets": [],
+            "scheduledDatasets": [],
+            "scheduleComplete": True,
             "availableDatasets": [],
             "reason": "이 시장과 판단 목적을 지원하는 데이터 계약이 없습니다.",
         }
     enabled_expected = tuple(dataset for dataset in expected if dataset in enabled_datasets)
+    scheduled = [
+        dict(row)
+        for row in collection_states
+        if _text(row.get("datasetId")) in enabled_expected
+        and _upper(row.get("subjectKey")) == _upper(subject_key)
+        and (row.get("active") is not False or _text(row.get("jobStatus")) == "completed")
+    ]
+    scheduled_datasets = sorted({_text(row.get("datasetId")) for row in scheduled})
+    current_collection = [
+        row for row in scheduled
+        if _text(row.get("lastSuccessAt"))
+        and _text(row.get("collectionFreshnessState")) == "fresh"
+    ]
+    checked_empty_datasets = sorted({
+        _text(row.get("datasetId"))
+        for row in current_collection
+        if bool(row.get("emptyResult"))
+    })
+    unavailable_datasets = sorted({
+        _text(row.get("datasetId"))
+        for row in current_collection
+        if _text(row.get("availability")).lower()
+        in {"not-available", "unsupported", "not-applicable"}
+    })
     matching = [
         dict(row)
         for row in facts
@@ -177,16 +205,21 @@ def _purpose_fitness(
     })
     fresh_datasets = sorted({_text(row.get("datasetId")) for row in fresh})
     available_datasets = sorted({_text(row.get("datasetId")) for row in usable})
-    if len(fresh_datasets) >= contract.minimum_sources:
-        state = "fresh" if len(fresh_datasets) >= contract.ideal_sources else "partial"
-        reason = (
-            "판단에 필요한 최신 원천이 충족됐습니다."
-            if state == "fresh"
-            else "최소 판단 원천은 최신이지만 교차검증 원천이 부족합니다."
-        )
+    current_datasets = sorted(set(fresh_datasets) | set(checked_empty_datasets))
+    if len(current_datasets) >= contract.minimum_sources:
+        state = "fresh" if len(current_datasets) >= contract.ideal_sources else "partial"
+        if checked_empty_datasets and not fresh_datasets:
+            reason = "최신 조회가 완료됐고 현재 조건에 맞는 사건은 없습니다."
+        elif state == "fresh":
+            reason = "판단에 필요한 최신 원천이 충족됐습니다."
+        else:
+            reason = "최소 판단 원천은 최신이지만 교차검증 원천이 부족합니다."
     elif fresh:
         state = "partial"
         reason = "최신 원천이 있으나 최소 원천 수를 충족하지 못했습니다."
+    elif enabled_expected and unavailable_datasets and set(unavailable_datasets) >= set(enabled_expected):
+        state = "unsupported"
+        reason = "수집은 완료됐지만 공급자가 이 종목의 데이터를 제공하지 않습니다."
     elif stale:
         state = "stale"
         reason = "수집 이력은 있지만 신선도 한도를 넘었습니다."
@@ -211,8 +244,12 @@ def _purpose_fitness(
         "idealSources": contract.ideal_sources,
         "expectedDatasets": list(expected),
         "enabledDatasets": list(enabled_expected),
+        "scheduledDatasets": scheduled_datasets,
+        "scheduleComplete": len(scheduled_datasets) >= contract.minimum_sources,
         "availableDatasets": available_datasets,
         "freshDatasets": fresh_datasets,
+        "checkedEmptyDatasets": checked_empty_datasets,
+        "unavailableDatasets": unavailable_datasets,
         "staleDatasets": sorted({_text(row.get("datasetId")) for row in stale}),
         "failedDatasets": failed_datasets,
         "sourceAsOf": max((_text(row.get("sourceAsOf")) for row in usable), default=""),
@@ -227,8 +264,10 @@ def evaluate_external_data_fitness(
     descriptors: Iterable[Mapping[str, object]],
     subject_keys: Iterable[str] = None,
     include_subjects: bool = True,
+    collection_states: Iterable[Mapping[str, object]] = None,
 ) -> Dict[str, object]:
     rows = [dict(row or {}) for row in facts or []]
+    collection_rows = [dict(row or {}) for row in collection_states or []]
     requested = sorted({_upper(item) for item in subject_keys or [] if _upper(item)})
     if not requested:
         requested = sorted({
@@ -263,6 +302,7 @@ def evaluate_external_data_fitness(
                 rows,
                 provider_states,
                 enabled_datasets,
+                collection_rows,
             )
             purpose_rows[contract.purpose] = assessment
             state_counts[assessment["state"]] += 1
@@ -287,6 +327,28 @@ def evaluate_external_data_fitness(
         for purpose, item in _mapping(subject.get("purposes")).items()
         if _text(item.get("state")) in {"partial", "stale", "failed", "not-collected"}
     ]
+    coverage_gaps = [
+        {
+            "subjectKey": subject_key,
+            "purpose": purpose,
+            "label": item.get("label"),
+            "expectedDatasets": item.get("enabledDatasets") or item.get("expectedDatasets") or [],
+            "scheduledDatasets": item.get("scheduledDatasets") or [],
+        }
+        for subject_key, subject in by_subject.items()
+        if subject_key != "GLOBAL"
+        for purpose, item in _mapping(subject.get("purposes")).items()
+        if item.get("scheduleComplete") is not True
+    ]
+    complete_subjects = sorted({
+        subject_key
+        for subject_key, subject in by_subject.items()
+        if subject_key != "GLOBAL"
+        and all(
+            item.get("scheduleComplete") is True
+            for item in _mapping(subject.get("purposes")).values()
+        )
+    })
     result = {
         "contractVersion": FITNESS_CONTRACT_VERSION,
         "states": sorted(FITNESS_STATES),
@@ -294,6 +356,14 @@ def evaluate_external_data_fitness(
         "stateCounts": state_counts,
         "attentionCount": len(attention),
         "attention": attention[:100],
+        "coverageGate": {
+            "status": "complete" if len(complete_subjects) == len(requested) else "incomplete",
+            "subjectCount": len(requested),
+            "completeSubjectCount": len(complete_subjects),
+            "incompleteSubjectCount": max(0, len(requested) - len(complete_subjects)),
+            "missingScheduleCount": len(coverage_gaps),
+            "missingSchedules": coverage_gaps[:100],
+        },
     }
     if include_subjects:
         result["subjects"] = by_subject

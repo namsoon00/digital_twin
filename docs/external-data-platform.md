@@ -10,6 +10,10 @@ This boundary supplies source facts. It does not decide `BUY`, `SELL`, or `HOLD`
 
 1. `ExternalDatasetRegistry` loads typed adapters.
 2. The worker derives active partitions from current account-focus symbols.
+   Holdings and watchlist symbols are coverage-critical: provider batch caps
+   may delay execution, but cannot remove those symbols from the durable
+   schedule. New account-focus symbols become due work on the next partition
+   sync.
 3. MySQL leases due work from `external_dataset_state` with `FOR UPDATE SKIP LOCKED`.
 4. Independent providers run concurrently; work for the same provider runs serially.
 5. `external_provider_state` atomically enforces provider call spacing, dataset request budgets, and circuit state.
@@ -20,6 +24,11 @@ This boundary supplies source facts. It does not decide `BUY`, `SELL`, or `HOLD`
    successful provider call is not confused with data that is usable for a
    price, valuation, disclosure, news, consensus, derivative, macro, or crypto
    decision.
+10. The coverage gate compares every holding/watchlist subject with its
+    supported purpose schedules. `complete` means every subject has the
+    required durable partitions; missing schedules stay visible and are made
+    eligible for normal worker collection rather than disappearing from the
+    read model.
 
 ## Datasets
 
@@ -85,4 +94,4 @@ The refresh command validates dataset and subject identifiers, marks only that
 scope due, and drains bounded batches through the normal rate-limit, retry, and
 circuit-breaker path. It does not deactivate unrelated subjects or datasets.
 
-Web status is available at `GET /api/external-data/status`. It reports configured policies, partition backlog, current fact storage, provider state, purpose-specific fitness, and 24-hour latency/error aggregates without exposing API keys or raw credentials. Fitness states are `fresh`, `partial`, `stale`, `unsupported`, `failed`, and `not-collected`; `partial` means the minimum usable source exists but the configured cross-check source does not.
+Web status is available at `GET /api/external-data/status`. It reports configured policies, partition backlog, current fact storage, provider state, purpose-specific fitness, account-focus `coverageGate`, and 24-hour latency/error aggregates without exposing API keys or raw credentials. Fitness states are `fresh`, `partial`, `stale`, `unsupported`, `failed`, and `not-collected`; `partial` means the minimum usable source exists but the configured cross-check source does not. A successful current poll with no matching disclosure is recorded as fresh empty coverage, while a provider response that explicitly does not support the symbol is `unsupported`. Neither is mislabeled as an unattempted collection.

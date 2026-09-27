@@ -1174,6 +1174,52 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             })
         return result
 
+    def collection_coverage_rows(self, subject_keys: Iterable[str] = None) -> List[Dict[str, object]]:
+        """Return lightweight per-subject scheduling and empty-result evidence."""
+
+        subjects = sorted({str(item or "").upper().strip() for item in subject_keys or [] if str(item or "").strip()})
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT dataset_id, partition_key, subject_json, watermark_json, active,
+                       job_status, next_due_at, last_attempt_at, last_success_at,
+                       source_as_of, last_error
+                FROM external_dataset_state
+                WHERE active = 1 OR job_status = 'completed'
+                ORDER BY dataset_id, partition_key
+                """
+            ).fetchall()
+        current = utc_now()
+        result = []
+        for row in rows or []:
+            subject = _json_loads(row.get("subject_json"), {})
+            subject_key = str(subject.get("subjectKey") or subject.get("symbol") or "").upper().strip()
+            if not subject_key or (subjects and subject_key not in subjects):
+                continue
+            watermark = _json_loads(row.get("watermark_json"), {})
+            next_due = parse_iso(row.get("next_due_at"))
+            last_success = parse_iso(row.get("last_success_at"))
+            result.append({
+                "datasetId": str(row.get("dataset_id") or ""),
+                "partitionKey": str(row.get("partition_key") or ""),
+                "subjectKey": subject_key,
+                "active": bool(row.get("active")),
+                "jobStatus": str(row.get("job_status") or ""),
+                "nextDueAt": str(row.get("next_due_at") or ""),
+                "lastAttemptAt": str(row.get("last_attempt_at") or ""),
+                "lastSuccessAt": str(row.get("last_success_at") or ""),
+                "sourceAsOf": str(row.get("source_as_of") or ""),
+                "lastError": str(row.get("last_error") or ""),
+                "emptyResult": bool(watermark.get("emptyResult")),
+                "availability": str(watermark.get("availability") or ""),
+                "collectionFreshnessState": (
+                    "fresh"
+                    if last_success and (not bool(row.get("active")) or not next_due or next_due >= current)
+                    else "stale" if last_success else "not-collected"
+                ),
+            })
+        return result
+
     def provider_statuses(self) -> List[Dict[str, object]]:
         with self.connect() as connection:
             rows = connection.execute(

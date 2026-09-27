@@ -519,6 +519,8 @@ class ExternalDataCollectionService:
         subjects = self.store.list_subjects()
         subject_keys = [str(item.subject_key or item.symbol or "").upper() for item in subjects]
         facts = fitness_loader(subject_keys) if callable(fitness_loader) else self.store.list_current(subject_keys)
+        coverage_loader = getattr(self.store, "collection_coverage_rows", None)
+        collection_states = coverage_loader(subject_keys) if callable(coverage_loader) else []
         return {
             "enabled": self.enabled(),
             "workerId": self.worker_id,
@@ -533,6 +535,7 @@ class ExternalDataCollectionService:
                 descriptors,
                 subject_keys,
                 include_subjects=False,
+                collection_states=collection_states,
             ),
             "officialEvidenceProjection": projection_status,
             "documentRecovery": self.document_recovery.last_result if self.document_recovery else {"status": "not-configured"},

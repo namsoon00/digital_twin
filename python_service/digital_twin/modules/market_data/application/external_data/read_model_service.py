@@ -474,6 +474,13 @@ class ExternalSignalsReadModelService:
             result = self.valuation_evidence_service.enrich(result, requested_subjects)
         if self.driver_dcf_evidence_service is not None:
             result = self.driver_dcf_evidence_service.enrich(result, requested_subjects)
+        coverage_loader = getattr(self.fact_store, "collection_coverage_rows", None)
+        collection_states = coverage_loader(requested_subjects) if callable(coverage_loader) else []
+        descriptor_ids = sorted({
+            str(row.get("datasetId") or "")
+            for row in [*rows, *collection_states]
+            if str(row.get("datasetId") or "")
+        })
         result["externalDataPlatform"] = {
             "enabled": True,
             "factCount": len(rows),
@@ -482,11 +489,9 @@ class ExternalSignalsReadModelService:
             "fitness": evaluate_external_data_fitness(
                 rows,
                 self.fact_store.provider_statuses(),
-                [
-                    {"datasetId": row.get("datasetId"), "enabled": True}
-                    for row in rows
-                ],
+                [{"datasetId": dataset_id, "enabled": True} for dataset_id in descriptor_ids],
                 requested_subjects,
+                collection_states=collection_states,
             ),
         }
         return result

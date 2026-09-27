@@ -54,7 +54,23 @@ class ExternalDatasetRegistry:
             if descriptor.partition_strategy == "followup":
                 continue
             partitions = adapter.partitions(subject_rows, settings)
-            rows.extend(partitions[:descriptor.resolved_max_partitions(settings)])
+            bounded = partitions[:descriptor.resolved_max_partitions(settings)]
+            # Holdings and watchlist names are the user's explicit investment
+            # universe.  Provider batch caps may throttle background coverage,
+            # but must never silently remove those subjects from the durable
+            # collection schedule.  Vendor rate limits are still enforced when
+            # jobs are claimed and executed.
+            account_focus = [
+                partition
+                for partition in partitions
+                if str(partition.subject.source or "").strip().lower()
+                in {"holding", "watchlist", "account-focus"}
+            ]
+            by_identity = {
+                (partition.dataset_id, partition.partition_key): partition
+                for partition in [*bounded, *account_focus]
+            }
+            rows.extend(by_identity[key] for key in sorted(by_identity))
         return rows
 
     def validate_dataset_ids(self, dataset_ids: Iterable[str] = None) -> List[str]:

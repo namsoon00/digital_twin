@@ -384,6 +384,8 @@ class InstrumentValuationQueryService:
                 "sourceBacked": bool(row.get("sourceBacked") or row.get("sourceReferences")),
                 "assumptionReviewState": _text(row.get("assumptionReviewState")),
                 "assumptionReview": dict(row.get("assumptionReview")) if isinstance(row.get("assumptionReview"), Mapping) else {},
+                "modelRelease": dict(row.get("modelRelease")) if isinstance(row.get("modelRelease"), Mapping) else {},
+                "releaseAudit": dict(row.get("releaseAudit")) if isinstance(row.get("releaseAudit"), Mapping) else {},
                 "financialEvidence": dict(row.get("financialEvidence")) if isinstance(row.get("financialEvidence"), Mapping) else {},
                 "exposureReadiness": dict(row.get("exposureReadiness")) if isinstance(row.get("exposureReadiness"), Mapping) else {},
                 "officialFinancialsReady": bool(row.get("officialFinancialsReady")),

@@ -14,6 +14,7 @@ from typing import Dict, Mapping
 
 DRIVER_DCF_VERSION = "driver-fcff-dcf-v2"
 DRIVER_DCF_SENSITIVITY_VERSION = "driver-fcff-dcf-sensitivity-v2"
+DRIVER_DCF_REFERENCE_RELEASE_VERSION = "driver-dcf-reference-release-v1"
 SUPPORTED_APPLICABILITY = {"non-financial-company", "operating-company"}
 
 
@@ -99,6 +100,7 @@ def calculate_driver_dcf(inputs: Mapping[str, object]) -> Dict[str, object]:
     financial_evidence = dict(source.get("financialEvidence") or {}) if isinstance(source.get("financialEvidence"), Mapping) else {}
     exposure_readiness = dict(source.get("exposureReadiness") or {}) if isinstance(source.get("exposureReadiness"), Mapping) else {}
     assumption_review = dict(source.get("assumptionReview") or {}) if isinstance(source.get("assumptionReview"), Mapping) else {}
+    model_release = dict(source.get("modelRelease") or {}) if isinstance(source.get("modelRelease"), Mapping) else {}
 
     if not symbol:
         reasons.append("symbol-missing")
@@ -255,6 +257,7 @@ def calculate_driver_dcf(inputs: Mapping[str, object]) -> Dict[str, object]:
         "financialEvidence": financial_evidence,
         "exposureReadiness": exposure_readiness,
         "assumptionReview": assumption_review,
+        "modelRelease": model_release,
         "assumptions": assumptions,
         "projectionYears": trace_rows,
         "blockedReasons": sorted(set(reasons)),
@@ -353,6 +356,124 @@ def calculate_driver_dcf_sensitivity(
     }
 
 
+def release_driver_dcf_reference(
+    inputs: Mapping[str, object],
+    release: Mapping[str, object],
+) -> Dict[str, object]:
+    """Validate and bind a display-only release without granting action authority."""
+
+    source = dict(inputs or {})
+    policy = dict(release or {})
+    symbol = _text(source.get("symbol")).upper()
+    release_id = _text(policy.get("releaseId"))
+    release_mode = _text(policy.get("releaseMode")).lower()
+    scope = sorted({_text(item).upper() for item in policy.get("symbols") or [] if _text(item)})
+    calculation = calculate_driver_dcf(source)
+    sensitivity = calculate_driver_dcf_sensitivity(source)
+    financial_evidence = source.get("financialEvidence") if isinstance(source.get("financialEvidence"), Mapping) else {}
+    exposure_readiness = source.get("exposureReadiness") if isinstance(source.get("exposureReadiness"), Mapping) else {}
+    references = _source_references(source.get("sourceReferences") or [])
+    blockers = []
+    if release_mode != "reference":
+        blockers.append("reference-release-mode-required")
+    if not release_id:
+        blockers.append("reference-release-id-missing")
+    if symbol not in scope:
+        blockers.append("symbol-outside-release-scope")
+    if calculation.get("status") != "calculated":
+        blockers.append("dcf-calculation-not-ready")
+    if financial_evidence.get("officialDecisionReady") is not True:
+        blockers.append("official-financial-evidence-incomplete")
+    if not references:
+        blockers.append("exact-source-revisions-missing")
+    if int(sensitivity.get("validScenarioCount") or 0) != 9:
+        blockers.append("sensitivity-grid-incomplete")
+
+    limitations = list(calculation.get("warnings") or [])
+    for area in ("currency", "debtRate"):
+        readiness = exposure_readiness.get(area) if isinstance(exposure_readiness.get(area), Mapping) else {}
+        if readiness.get("decisionEligible") is not True:
+            limitations.extend(str(item) for item in readiness.get("blockingReasons") or [] if str(item))
+    base_revenue = _finite(source.get("baseRevenue"))
+    projection_rows = [item for item in source.get("projectionYears") or [] if isinstance(item, Mapping)]
+    growth_rows = []
+    previous = base_revenue
+    for item in projection_rows:
+        revenue = _finite(item.get("revenue"))
+        growth = ((revenue / previous) - 1.0) * 100.0 if revenue is not None and previous not in (None, 0) else None
+        growth_rows.append({"year": item.get("year"), "growthPct": round(growth, 4) if growth is not None else None})
+        if growth is not None and growth > 100.0:
+            limitations.append("forecast-growth-exceeds-100pct")
+        previous = revenue if revenue is not None else previous
+    terminal_share = _finite(calculation.get("terminalValueSharePct"))
+    if terminal_share is not None and terminal_share > 80.0:
+        limitations.append("terminal-value-share-exceeds-80pct")
+    limitations = sorted(set(limitations))
+    audit_material = {
+        "contractVersion": DRIVER_DCF_REFERENCE_RELEASE_VERSION,
+        "releaseId": release_id,
+        "releaseMode": release_mode,
+        "releasedAt": _text(policy.get("releasedAt")),
+        "symbol": symbol,
+        "inputBundleId": _text(source.get("inputBundleId")),
+        "assumptionVersion": _text(source.get("assumptionVersion")),
+        "officialMetricCount": int(financial_evidence.get("officialMetricCount") or 0),
+        "requiredMetricCount": int(financial_evidence.get("requiredMetricCount") or 0),
+        "sourceRevisionCount": len(references),
+        "sensitivityValidScenarioCount": int(sensitivity.get("validScenarioCount") or 0),
+        "calculatedValuePerShare": calculation.get("valuePerShare"),
+        "currency": _text(source.get("currency")).upper(),
+        "terminalValueSharePct": calculation.get("terminalValueSharePct"),
+        "exposureReadiness": dict(exposure_readiness),
+        "projectionGrowth": growth_rows,
+        "limitations": limitations,
+        "blockers": sorted(set(blockers)),
+    }
+    audit = {
+        **audit_material,
+        "status": "blocked" if blockers else "passed-with-limitations" if limitations else "passed",
+        "auditId": "driver-dcf-release-audit:" + _digest(audit_material)[:32],
+    }
+    if blockers:
+        return {"released": False, "input": source, "audit": audit}
+
+    model_release = {
+        "contractVersion": DRIVER_DCF_REFERENCE_RELEASE_VERSION,
+        "releaseId": release_id,
+        "releaseMode": "reference",
+        "releasedAt": _text(policy.get("releasedAt")),
+        "status": "released",
+        "scopeSymbols": scope,
+        "usagePolicy": "display-and-analysis-only",
+        "automaticTradingAllowed": False,
+        "valuationDecisionEligible": False,
+        "audit": audit,
+    }
+    assumption_review = dict(source.get("assumptionReview") or {}) if isinstance(source.get("assumptionReview"), Mapping) else {}
+    promotion_blockers = [
+        item for item in assumption_review.get("promotionBlockers") or []
+        if item != "model-release-not-approved"
+    ]
+    if "reference-release-only" not in promotion_blockers:
+        promotion_blockers.append("reference-release-only")
+    released_input = {
+        **source,
+        "modelApprovalState": "reference-released",
+        "modelRelease": model_release,
+        "assumptionReview": {
+            **assumption_review,
+            "releaseState": "reference-released",
+            "releaseId": release_id,
+            "promotionBlockers": promotion_blockers,
+        },
+    }
+    released_input["releasedInputBundleId"] = "driver-dcf-released-input:" + _digest({
+        "inputBundleId": source.get("inputBundleId"),
+        "modelRelease": model_release,
+    })[:32]
+    return {"released": True, "input": released_input, "audit": audit, "modelRelease": model_release}
+
+
 def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], settings: Mapping[str, object]) -> Dict[str, object]:
     """Registry adapter; only emits a row for an explicit symbol input bundle."""
 
@@ -384,6 +505,7 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
             "missingInputs": list(result.get("blockedReasons") or []),
             "modelExclusionReasons": list(result.get("blockedReasons") or []),
             "assumptionReview": dict(source.get("assumptionReview") or {}),
+            "modelRelease": dict(source.get("modelRelease") or {}),
             "financialEvidence": dict(source.get("financialEvidence") or {}),
             "exposureReadiness": dict(source.get("exposureReadiness") or {}),
             "dcfAssessment": result,
@@ -418,6 +540,7 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         "modelApprovalState": result.get("modelApprovalState"),
         "assumptionReviewState": assumption_review_state,
         "assumptionReview": assumption_review,
+        "modelRelease": dict(source.get("modelRelease") or {}),
         "financialEvidence": dict(result.get("financialEvidence") or {}),
         "exposureReadiness": dict(result.get("exposureReadiness") or {}),
         "sourceBacked": bool(result.get("sourceReferences")),
@@ -457,6 +580,8 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         "assumptionVersion": source.get("assumptionVersion"),
         "assumptionReviewState": assumption_review_state,
         "assumptionReview": assumption_review,
+        "modelRelease": dict(result.get("modelRelease") or {}),
+        "releaseAudit": dict((result.get("modelRelease") or {}).get("audit") or {}),
         "financialEvidence": dict(result.get("financialEvidence") or {}),
         "exposureReadiness": dict(result.get("exposureReadiness") or {}),
         "officialFinancialsReady": bool((result.get("financialEvidence") or {}).get("officialDecisionReady")),
@@ -495,9 +620,11 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
 
 
 __all__ = [
+    "DRIVER_DCF_REFERENCE_RELEASE_VERSION",
     "DRIVER_DCF_SENSITIVITY_VERSION",
     "DRIVER_DCF_VERSION",
     "calculate_driver_dcf",
     "calculate_driver_dcf_sensitivity",
     "driver_dcf_valuation_row",
+    "release_driver_dcf_reference",
 ]

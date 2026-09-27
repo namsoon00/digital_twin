@@ -48,6 +48,10 @@ bundle과 가정 버전에 대한 사람의 검토와 모델 release 승인이 �
 | `VALUATION_DRIVER_DCF_KR_EQUITY_RISK_PREMIUM_PCT` | `5` | 한국 ERP 후보 |
 | `VALUATION_DRIVER_DCF_US_TERMINAL_GROWTH_PCT` | `2.5` | 미국 영구성장률 후보 |
 | `VALUATION_DRIVER_DCF_KR_TERMINAL_GROWTH_PCT` | `2.5` | 한국 영구성장률 후보 |
+| `VALUATION_DRIVER_DCF_RELEASE_MODE` | `shadow` | `reference`일 때 검증된 참고용 release 활성화 |
+| `VALUATION_DRIVER_DCF_RELEASE_ID` | 비어 있음 | 감사 가능한 참고용 release 식별자 |
+| `VALUATION_DRIVER_DCF_RELEASE_AT` | 비어 있음 | release 승인 시각 |
+| `VALUATION_DRIVER_DCF_RELEASE_SYMBOLS` | 비어 있음 | release 대상 종목 목록 |
 
 기존 공통 ERP와 영구성장률 설정은 시장별 값이 없을 때의 호환 기본값으로 유지한다. 모든 기본 가정은
 승인값이 아니라 검토 후보이다.
@@ -85,11 +89,23 @@ provenance에 남기며 원본 ZIP 자체는 운영 fact에 저장하지 않는�
 
 | 종목 | 계산 입력 | 공식 coverage | 상태 |
 | --- | --- | ---: | --- |
-| NVDA | SEC EDGAR 2026-01-25 연간보고 | 12/12 | `official-ready`, 가정 검토 전 shadow |
-| 000660 | OpenDART 2025-12-31 사업보고서 | 12/12 | `official-ready`, 가정 검토 전 shadow |
+| NVDA | SEC EDGAR 2026-01-25 연간보고 | 12/12 | `released-reference`, 판단·자동매매 제외 |
+| 000660 | OpenDART 2025-12-31 사업보고서 | 12/12 | `released-reference`, 판단·자동매매 제외 |
 
 2026-09-27 운영 검증에서 000660 사업보고서 접수번호 `20260317000635`의 단일계정 재무와 XBRL을
 결합해 공식 12개 항목을 모두 확인했다. 이 상태는 재무 입력의 공식 출처가 완전하다는 뜻이며, DCF의
-ERP·영구성장률·마진·재투자율 등 미래 가정까지 정확하다는 뜻은 아니다. 가정 검토와 모델 release 전에는
-계속 shadow로 유지한다. 다른 한국 종목도 각 회사의 XBRL 태그와 context가 허용 계약에 맞아야 같은
+ERP·영구성장률·마진·재투자율 등 미래 가정까지 정확하다는 뜻은 아니다. 가정 검토와 판단 모델 승격 전에는
+계속 reference-only로 유지한다. 다른 한국 종목도 각 회사의 XBRL 태그와 context가 허용 계약에 맞아야 같은
 상태가 되며, 후보가 없거나 접수번호가 다르면 `reference-only`로 남는다.
+
+## 참고용 release
+
+`driver-dcf-reference-r1-20260927`은 NVDA와 000660의 적정가, reverse DCF와 3×3 민감도 데이터를
+화면에서 비교하기 위한 참고용 release다. release audit는 공식 재무 12개, exact source revision,
+양수 계산값과 9개 민감도 시나리오를 확인한다. 검증을 통과하지 못한 종목은 설정에 포함돼도 release되지
+않는다. 통과한 종목도 `valuationDecisionEligible=false`, `automaticTradingAllowed=false`를 유지한다.
+
+운영 검증에서 NVDA는 주당 121.20 USD, 민감도 107.12~139.96 USD였고, 000660은 주당
+1,856,485원, 민감도 1,640,231~2,145,488원이었다. 이 값은 현재 가정으로 계산한 결과다. 000660은
+FY1 매출 컨센서스가 기준연도보다 100% 넘게 증가하므로 `forecast-growth-exceeds-100pct` 경고를
+표시한다. 두 종목 모두 장기 가정 검토와 기업별 환율·부채금리 노출 연결이 남아 있다.

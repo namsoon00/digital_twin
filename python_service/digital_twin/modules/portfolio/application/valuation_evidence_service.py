@@ -96,6 +96,19 @@ class DriverDcfEvidenceService:
             values = str(configured or "NVDA,000660").split(",")
         return {str(item or "").upper().strip() for item in values if str(item or "").strip()}
 
+    def _reference_release(self) -> Dict[str, object]:
+        symbols = {
+            str(item or "").upper().strip()
+            for item in str(self.settings.get("valuationDriverDcfReleaseSymbols") or "").split(",")
+            if str(item or "").strip()
+        }
+        return {
+            "releaseMode": str(self.settings.get("valuationDriverDcfReleaseMode") or "shadow").strip().lower(),
+            "releaseId": str(self.settings.get("valuationDriverDcfReleaseId") or "").strip(),
+            "releasedAt": str(self.settings.get("valuationDriverDcfReleaseAt") or "").strip(),
+            "symbols": sorted(symbols),
+        }
+
     def enrich(self, signals: Dict[str, object], symbols: Iterable[object]) -> Dict[str, object]:
         result = dict(signals or {})
         requested = sorted({str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()})
@@ -167,6 +180,25 @@ class DriverDcfEvidenceService:
                     "KRW": _float_setting(self.settings, "valuationDriverDcfKrTerminalGrowthPct", generic_terminal_growth),
                 },
             )
+            if isinstance(built.get("input"), Mapping):
+                from digital_twin.modules.portfolio.domain.valuation.dcf import release_driver_dcf_reference
+
+                released = release_driver_dcf_reference(built["input"], self._reference_release())
+                if released.get("released"):
+                    built = {
+                        **built,
+                        "status": "released-reference",
+                        "releaseState": "reference-released",
+                        "modelApprovalState": "reference-released",
+                        "decisionEligible": False,
+                        "modelRelease": dict(released.get("modelRelease") or {}),
+                        "releaseAudit": dict(released.get("audit") or {}),
+                        "input": dict(released["input"]),
+                        "releasedInputBundleId": released["input"].get("releasedInputBundleId"),
+                        "assumptionReview": dict(released["input"].get("assumptionReview") or {}),
+                    }
+                elif str(self.settings.get("valuationDriverDcfReleaseMode") or "").strip().lower() == "reference":
+                    built = {**built, "releaseState": "blocked", "releaseAudit": dict(released.get("audit") or {})}
             readiness[symbol] = {key: value for key, value in built.items() if key != "input"}
             if isinstance(built.get("input"), Mapping):
                 bundles[symbol] = dict(built["input"])

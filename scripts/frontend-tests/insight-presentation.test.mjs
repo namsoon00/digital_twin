@@ -58,6 +58,8 @@ test("instrument valuation separates verified changes, price-cause limits and re
       financialEvidence: {sourceClass: "secondary-aggregator", officialDecisionReady: false, officialMetricCount: 0, requiredMetricCount: 12},
       exposureReadiness: {currency: {status: "unresolved"}, debtRate: {status: "unresolved"}},
       assumptionReview: {state: "required", pendingCount: 2},
+      modelRelease: {status: "released", releaseMode: "reference", releaseId: "driver-dcf-reference-r1"},
+      releaseAudit: {status: "passed-with-limitations", limitations: ["forecast-growth-exceeds-100pct", "unapproved-assumptions-present"]},
       assumptions: [
         {id: "fy1-revenue-consensus", value: 100, unit: "USD", status: "observed"},
         {id: "wacc", value: 16.2, unit: "percent", status: "candidate"},
@@ -73,6 +75,8 @@ test("instrument valuation separates verified changes, price-cause limits and re
       financialEvidence: {sourceClass: "secondary-aggregator", officialDecisionReady: false, officialMetricCount: 0, requiredMetricCount: 12},
       exposureReadiness: {currency: {status: "unresolved"}, debtRate: {status: "unresolved"}},
       assumptionReview: {state: "required", pendingCount: 2}
+      ,modelRelease: {status: "released", releaseMode: "reference", releaseId: "driver-dcf-reference-r1"}
+      ,releaseAudit: {status: "passed-with-limitations", limitations: ["forecast-growth-exceeds-100pct", "unapproved-assumptions-present"]}
     },
     impliedExpectations: {
       status: "solved", impliedRevenueGrowthPct: 62.5, assumptionReviewState: "required",
@@ -87,6 +91,10 @@ test("instrument valuation separates verified changes, price-cause limits and re
   assert.match(shadowDcf, /기업별 노출 자료 없음/);
   assert.match(shadowDcf, /현재 입력 bundle에만 유효/);
   assert.match(shadowDcf, /가정 검토 필요/);
+  assert.match(shadowDcf, /참고용 릴리즈/);
+  assert.match(shadowDcf, /driver-dcf-reference-r1/);
+  assert.match(shadowDcf, /전망 매출 성장률이 100%를 초과함/);
+  assert.match(shadowDcf, /매수·매도 판단과 자동 주문에는 사용하지 않습니다/);
   assert.match(shadowDcf, /5년 일정 매출 성장률/);
   assert.match(shadowDcf, /62.5%/);
   assert.match(shadowDcf, /시장 기대를 관측한 값이 아님/);

@@ -5,7 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.modules.portfolio.domain.valuation.dcf import calculate_driver_dcf, calculate_driver_dcf_sensitivity
+from digital_twin.modules.portfolio.domain.valuation.dcf import (
+    calculate_driver_dcf, calculate_driver_dcf_sensitivity, release_driver_dcf_reference,
+)
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
 from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import solve_implied_revenue_growth
 from digital_twin.modules.portfolio.domain.valuation.models import apply_review_override
@@ -326,6 +328,27 @@ class DriverDcfTests(unittest.TestCase):
 
         self.assertEqual("solved", solved["status"])
         self.assertAlmostEqual(10.0, solved["impliedRevenueGrowthPct"], places=4)
+        releasable = self.inputs()
+        releasable.update({"inputBundleId": "driver-dcf-input:test", "assumptionVersion": "test-v1"})
+        released = release_driver_dcf_reference(releasable, {
+            "releaseMode": "reference",
+            "releaseId": "driver-dcf-reference-r1",
+            "releasedAt": "2026-09-27T00:00:00Z",
+            "symbols": ["TEST"],
+        })
+        self.assertTrue(released["released"])
+        self.assertIn(released["audit"]["status"], {"passed", "passed-with-limitations"})
+        self.assertEqual("reference-released", released["input"]["modelApprovalState"])
+        self.assertFalse(released["input"]["modelRelease"]["automaticTradingAllowed"])
+        released_result = calculate_driver_dcf(released["input"])
+        self.assertEqual("calculated", released_result["status"])
+        self.assertFalse(released_result["valuationDecisionEligible"])
+        rejected = release_driver_dcf_reference(releasable, {
+            "releaseMode": "reference", "releaseId": "driver-dcf-reference-r1",
+            "symbols": ["OTHER"],
+        })
+        self.assertFalse(rejected["released"])
+        self.assertIn("symbol-outside-release-scope", rejected["audit"]["blockers"])
 
 
 if __name__ == "__main__":

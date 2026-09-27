@@ -224,3 +224,12 @@ DCF 후보 가정은 `driver-dcf-assumption-review-v1`로 현재 `inputBundleId`
 고정된다. 검토는 자동 승인할 수 없고, 과거의 종목 단위 `valuationReviewOverrides`는 DCF를 승격시키지
 못한다. 각 가정의 evidence class, materiality, review state와 승격 차단 사유를 UI read model과 ABox의
 `UserValuationReview`에 같은 identity로 투영한다. 이 계약은 승인 절차의 입력이며 승인 자체는 아니다.
+
+### 2026-09-27 참고용 DCF release
+
+NVDA와 000660은 `driver-dcf-reference-r1-20260927`로 참고용 release했다. release audit는 공식 재무
+12/12, exact source revision, 계산 성공과 3×3 민감도 완결성을 확인하고 입력별 경고를 보존한다.
+이는 화면 조회와 분석 비교를 허용하는 release이며 가정 승인은 아니다. 따라서
+`valuationDecisionEligible=false`, `automaticTradingAllowed=false`이고 ActiveValuation이나 자동 주문
+근거로 사용하지 않는다. 000660의 기준연도 대비 FY1 전망 매출 증가율이 100%를 초과하는 현상도
+release 화면에 제한 사항으로 표시한다.

@@ -1,6 +1,7 @@
 """Outcomes HTTP routes; order is wired in web.composition."""
 
 from dataclasses import dataclass
+from digital_twin.infrastructure.composition.outcomes import build_hypothesis_performance_report_service
 from digital_twin.infrastructure.service_factory import build_historical_replay_job_service
 from digital_twin.infrastructure.service_factory import build_investment_brain_service
 from digital_twin.infrastructure.web.common import configured
@@ -22,6 +23,7 @@ class OutcomesRoutes:
     build_historical_replay_job_service: Callable[..., object] = build_historical_replay_job_service
     build_investment_brain_service: Callable[..., object] = build_investment_brain_service
     operational_read_settings: Callable[..., object] = operational_read_settings
+    build_hypothesis_performance_report_service: Callable[..., object] = build_hypothesis_performance_report_service
 
     def route_investment_brain_performance(self, request, path: str, query: Query):
         if path == "/api/investment-brain/performance" and request.command == "GET":
@@ -29,7 +31,8 @@ class OutcomesRoutes:
                 limit = int(first_query(query, "limit") or 500)
             except ValueError:
                 limit = 500
-            return request.send_payload(200, self.build_investment_brain_service(settings=self.operational_read_settings()).performance(
+            factory = self.build_hypothesis_performance_report_service if first_query(query, "sampleOnly") == "1" else self.build_investment_brain_service
+            return request.send_payload(200, factory(settings=self.operational_read_settings()).performance(
                 account_id=first_query(query, "accountId"),
                 symbol=first_query(query, "symbol"),
                 limit=limit,

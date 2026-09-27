@@ -4,7 +4,22 @@ from copy import deepcopy
 from typing import Mapping
 
 
-DECISION_CALIBRATION_INPUT_VERSION = "decision-calibration-input-v1"
+DECISION_CALIBRATION_INPUT_VERSION = "decision-calibration-input-v2"
+
+
+def calibration_ai_judgment(judgment):
+    judgment = judgment if isinstance(judgment, Mapping) else {}
+    return {"insightAssessment": deepcopy(judgment.get("insight_assessment") or judgment.get("insightAssessment") or {})}
+
+
+def calibration_input(payload):
+    facts = payload.get("factsAtDecision") or {}
+    facts = facts if isinstance(facts, Mapping) else {}
+    judgment = facts.get("aiJudgment") or {}
+    return {"hypotheses": calibration_hypotheses(payload),
+            "aiJudgment": calibration_ai_judgment(judgment),
+            "insightAssessment": deepcopy(payload.get("insightAssessment") or {}),
+            "assistantQualityObservation": deepcopy(facts.get("assistantQualityObservation") or {})}
 
 
 def calibration_hypotheses(payload: Mapping[str, object]) -> list:

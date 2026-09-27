@@ -7,7 +7,7 @@ from unittest.mock import patch
 from stabilization_database import StabilizationDatabaseCase
 from test_internal_decision_history import episode, outcome, NOW
 from digital_twin.modules.decisions.contracts import DecisionEpisode
-from digital_twin.modules.outcomes.domain.decision_calibration_input import calibration_hypotheses
+from digital_twin.modules.outcomes.domain.decision_calibration_input import calibration_hypotheses, calibration_input
 from digital_twin.modules.outcomes.contracts import evaluate_decision_performance
 from digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs import MySQLDecisionCalibrationInputStore
 from digital_twin.modules.outcomes.infrastructure import transaction_writes
@@ -24,6 +24,11 @@ class CalibrationInputShapeTests(unittest.TestCase):
                           {"hypothesisId": "a", "claimContract": {"revision": 1}}], result)
         result[0]["claimContract"]["revision"] = 9
         self.assertEqual(2, source["hypothesisSet"]["hypotheses"][0]["claimContract"]["revision"])
+        source["factsAtDecision"]["aiJudgment"] = {"insight_assessment":{"direction":"positive"},"prompt":"private-prompt"}
+        compact = calibration_input(source)
+        self.assertEqual({"insightAssessment":{"direction":"positive"}}, compact["aiJudgment"])
+        self.assertNotIn("private-prompt", str(compact))
+        self.assertNotIn("not-calibration", str(compact))
 
     def test_calibration_projection_preserves_missing_contract_semantics(self):
         for payload in ({}, {"hypothesisSet": None}, {"hypothesisSet": {"hypotheses": 7}}):
@@ -37,6 +42,8 @@ class CalibrationInputStorageTests(StabilizationDatabaseCase):
         value = episode("calibration:" + uuid.uuid4().hex)
         payload = value.to_dict()
         payload["factsAtDecision"]["auditOnly"] = "x" * 50000
+        payload["factsAtDecision"]["aiJudgment"] = {"insight_assessment":{"publishable":True,"direction":"positive","conviction":"moderate"},"prompt":"private-full-prompt"}
+        payload["factsAtDecision"]["assistantQualityObservation"] = {"sourceTraceComplete":True,"recordedAt":NOW}
         payload["hypothesisSet"]["hypotheses"][0]["claimContract"] = {"claimContractId": "claim:exact", "revision": 3}
         value = DecisionEpisode.from_dict(payload)
         self.decisions.save(value)

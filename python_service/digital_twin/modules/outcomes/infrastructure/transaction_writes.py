@@ -9,7 +9,7 @@ from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.modules.decisions.contracts import DecisionEpisode, canonical_investment_timestamp, stable_id, utc_now_iso
 from digital_twin.modules.outcomes.domain.decision_calibration_input import (
     DECISION_CALIBRATION_INPUT_VERSION,
-    calibration_hypotheses,
+    calibration_input,
 )
 from digital_twin.modules.outcomes.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION, FOLLOW_UP_OPERATORS
 from digital_twin.modules.outcomes.domain.follow_up_tracking import (
@@ -135,7 +135,7 @@ def upsert_decision_calibration_input(
         "source_updated_at = VALUES(source_updated_at), "
         "hypotheses_json = VALUES(hypotheses_json)",
         (episode_id, DECISION_CALIBRATION_INPUT_VERSION, stamp,
-         json_dumps(calibration_hypotheses(payload))),
+         json_dumps(calibration_input(payload))),
     )
 
 

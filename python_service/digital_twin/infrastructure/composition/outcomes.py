@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+
+def build_hypothesis_performance_report_service(settings):
+    from digital_twin.infrastructure.operational_store import investment_decision_episode_store
+    from digital_twin.modules.outcomes.public import HypothesisPerformanceReportService
+
+    return HypothesisPerformanceReportService(investment_decision_episode_store(settings), settings)
+
 if TYPE_CHECKING:
     from digital_twin.modules.outcomes.public import (
         HistoricalDecisionReplayService,

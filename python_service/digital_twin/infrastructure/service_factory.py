@@ -33,6 +33,8 @@ _EXPORTS = {'ActiveDeploymentWorldProjectionSink': ('digital_twin.infrastructure
                                           'build_hypothesis_development_service'),
  'build_hypothesis_lifecycle_service': ('digital_twin.infrastructure.composition.outcomes',
                                         'build_hypothesis_lifecycle_service'),
+ 'build_hypothesis_performance_report_service': ('digital_twin.infrastructure.composition.outcomes',
+                                                'build_hypothesis_performance_report_service'),
  'build_hypothesis_proposal_service': ('digital_twin.infrastructure.composition.model_registry',
                                        'build_hypothesis_proposal_service'),
  'build_hypothesis_research_planning_service': ('digital_twin.infrastructure.composition.news_intelligence',

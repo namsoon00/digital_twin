@@ -39,6 +39,22 @@ class HypothesisEvaluationV2Tests(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertEqual("hypothesis-evaluation-v2", payload["evaluationVersion"])
 
+    def test_screen_report_is_bounded_and_does_not_build_research_or_scan_population(self):
+        from unittest.mock import Mock
+        from digital_twin.infrastructure.web.routes.outcomes import OutcomesRoutes
+        from digital_twin.modules.outcomes.public import HypothesisPerformanceReportService
+        store = SimpleNamespace(performance_episodes=Mock(return_value=[]))
+        factory = Mock(return_value=HypothesisPerformanceReportService(store))
+        heavy = Mock(side_effect=AssertionError("research service must not initialize"))
+        routes = OutcomesRoutes(build_investment_brain_service=heavy,
+            build_hypothesis_performance_report_service=factory, operational_read_settings=lambda:{"_skipOperationalSchemaBootstrap":"1"})
+        request = SimpleNamespace(command="GET", send_payload=lambda status,payload:payload)
+        report = routes.route_investment_brain_performance(request, "/api/investment-brain/performance", {"sampleOnly":["1"], "limit":["10000"]})
+        store.performance_episodes.assert_called_once_with(account_id="", symbol="", limit=500)
+        self.assertEqual("not-measured", report["populationCoverageState"])
+        self.assertEqual("hypothesis-evaluation-v2", report["evaluationVersion"])
+        self.assertEqual(0, report["assistantQuality"]["labelledEpisodeCount"])
+
     def test_bucket_boundary_does_not_make_overlapping_predictions_independent(self):
         anchor = datetime(2026, 1, 1, 0, 59, tzinfo=timezone.utc)
         a, b = observation(0, start=anchor), observation(1, start=anchor + timedelta(minutes=1))

@@ -433,7 +433,7 @@
       "hash": "3b44f3e909503b35c73a9447db7ccb1f9e698bb4851531beb2a717e8654f3a85",
       "reason": "Select interrupted processing independently of a future retry schedule; the existing named lock proves the worker is absent before recovery. Keep legacy recovery budgets. test_hypothesis_closed_loop and test_stabilization_transactions."
     },
-    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {"hash": "ab50c493bf5eb5e780480cb7b413d985aa8b7c85ffa92c120e336575838b84a3", "reason": "HYP-02/03: retain original AI assessment and persisted quality observations in bounded SQL performance reads; load exact adopted comparison receipts separately from immutable episode facts. test_hypothesis_evaluation_v2 and test_hypothesis_research_pipeline."},
+    "infrastructure/transactions/decision_history.py::MySQLInvestmentDecisionEpisodeStore": {"hash": "dfe73c99df82c9224c3a18f4b9340fea46c693feebf9ff56fc89923572060be8", "reason": "HYP-02/03: retain original AI assessment and persisted quality observations in bounded SQL performance reads; load exact adopted comparison receipts separately from immutable episode facts. test_hypothesis_evaluation_v2 and test_hypothesis_research_pipeline."},
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineComparisonStore": {
       "hash": "89db57c5d5b3b8cc04f86a371e3c4a2ef7f9c7798354e2b038599b36fc0dac12",
       "reason": "Persist comparison job identities and contract version as indexed columns so reconciliation never scans JSON payloads; preserve deterministic comparison IDs and payload audit history. test_reasoning_engine_versions."

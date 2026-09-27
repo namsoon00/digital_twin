@@ -32,8 +32,7 @@ class MySQLDecisionCalibrationInputStore(MySQLOperationalConnection):
             # would also block unrelated already-projected decisions.
             for candidate in candidates:
                 row = connection.execute(
-                    "SELECT episode_id, updated_at, "
-                    "JSON_EXTRACT(payload_json, '$.hypothesisSet.hypotheses') AS hypotheses_json "
+                    "SELECT episode_id, updated_at, payload_json "
                     "FROM investment_decision_episodes WHERE episode_id = %s FOR UPDATE SKIP LOCKED",
                     (candidate["episode_id"],),
                 ).fetchone()
@@ -42,9 +41,7 @@ class MySQLDecisionCalibrationInputStore(MySQLOperationalConnection):
                 upsert_decision_calibration_input(
                     connection,
                     row["episode_id"],
-                    {"hypothesisSet": {
-                        "hypotheses": _json_loads(row.get("hypotheses_json"), []),
-                    }},
+                    _json_loads(row.get("payload_json"), {}),
                     row["updated_at"],
                 )
                 repaired += 1

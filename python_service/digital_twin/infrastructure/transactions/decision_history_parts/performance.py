@@ -7,6 +7,7 @@ from digital_twin.modules.decisions.domain.investment_brain import canonical_inv
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from .ports import ConnectionFactory
 from digital_twin.modules.outcomes.domain.decision_calibration_input import DECISION_CALIBRATION_INPUT_VERSION
+from digital_twin.modules.outcomes.domain.decision_calibration_input import calibration_ai_judgment
 
 
 def performance(
@@ -240,18 +241,24 @@ def performance_episodes(
             "SELECT outcomes.episode_id, outcomes.observed_at, outcomes.payload_json AS outcome_json, "
             "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
             "episodes.selected_hypothesis_id, episodes.decided_at, "
-            "JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.aiJudgment') AS ai_judgment_json, "
-            "JSON_EXTRACT(episodes.payload_json, '$.insightAssessment') AS insight_assessment_json, "
-            "JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.assistantQualityObservation') AS quality_observation_json, "
-            "COALESCE(calibration.hypotheses_json, "
+            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.aiJudgment'), "
+            "JSON_OBJECT('insightAssessment', JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.aiJudgment.insightAssessment'), "
+            "'insight_assessment', JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.aiJudgment.insight_assessment'))) AS ai_judgment_json, "
+            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.insightAssessment'), "
+            "JSON_EXTRACT(episodes.payload_json, '$.insightAssessment')) AS insight_assessment_json, "
+            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.assistantQualityObservation'), "
+            "JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.assistantQualityObservation')) AS quality_observation_json, "
+            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.hypotheses'), "
             "JSON_EXTRACT(episodes.payload_json, '$.hypothesisSet.hypotheses')) AS hypotheses_json "
-            "FROM investment_decision_outcomes AS outcomes JOIN ("
+            "FROM ("
             "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
             "FROM investment_decision_outcomes"
             + where
             + " GROUP BY episode_id ORDER BY latest_observed_at DESC LIMIT %s"
-            ") AS selected ON selected.episode_id = outcomes.episode_id "
-            "JOIN investment_decision_episodes AS episodes ON episodes.episode_id = outcomes.episode_id "
+            ") AS selected STRAIGHT_JOIN investment_decision_episodes AS episodes FORCE INDEX (PRIMARY) "
+            "ON episodes.episode_id = selected.episode_id "
+            "STRAIGHT_JOIN investment_decision_outcomes AS outcomes FORCE INDEX (idx_decision_outcomes_episode_time) "
+            "ON outcomes.episode_id = selected.episode_id "
             "LEFT JOIN investment_decision_calibration_inputs AS calibration "
             "ON calibration.episode_id = episodes.episode_id "
             "AND calibration.source_updated_at = episodes.updated_at "
@@ -340,7 +347,7 @@ def performance_episodes(
                 },
                 "factsAtDecision": {
                     "hypothesisOutcomeContract": contract,
-                    "aiJudgment": _json_loads(row.get("ai_judgment_json"), {}),
+                    "aiJudgment": calibration_ai_judgment(_json_loads(row.get("ai_judgment_json"), {})),
                     "assistantQualityObservation": _json_loads(row.get("quality_observation_json"), {}),
                 },
                 "insightAssessment": _json_loads(row.get("insight_assessment_json"), {}),

@@ -253,6 +253,8 @@ class CalendarReleaseProjectionTests(unittest.TestCase):
         result = calendar_release_information(event, {"facts": [fact]}, NOW)
         self.assertEqual(result["status"], "released")
         self.assertFalse(result["decisionAuthority"])
+        self.assertEqual(result["informationLifecycle"]["state"], "released")
+        self.assertTrue(result["informationLifecycle"]["resultAvailable"])
         self.assertEqual((event, fact), before)
         self.assertNotIn("sourceText", result["release"])
 
@@ -261,6 +263,7 @@ class CalendarReleaseProjectionTests(unittest.TestCase):
         event["startsAt"] = "2026-10-14T12:30:00Z"
         result = calendar_release_information(event, {"facts": [cpi_fact()]}, NOW)
         self.assertEqual(result["status"], "scheduled")
+        self.assertEqual(result["informationLifecycle"]["state"], "scheduled")
         self.assertIsNone(result["release"])
 
     def test_wrong_country_unverified_schedule_and_tampered_source(self):
@@ -287,7 +290,9 @@ class CalendarReleaseProjectionTests(unittest.TestCase):
     def test_operational_time_is_not_official_time(self):
         event = cpi_event()
         event["payload"]["timeState"] = "operationalDefault"
-        self.assertEqual(calendar_release_information(event, {}, NOW)["timeRole"], "reminder-default")
+        result = calendar_release_information(event, {}, NOW)
+        self.assertEqual(result["timeRole"], "reminder-default")
+        self.assertEqual(result["informationLifecycle"]["state"], "awaiting-result")
 
 
 if __name__ == "__main__":

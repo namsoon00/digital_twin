@@ -231,7 +231,7 @@ class ResearchEvidence:
                 symbol=symbol,
                 kind=normalized_kind,
                 title=title,
-                published_at=published_at or observed_at,
+                published_at=published_at if normalized_kind == "corporate-action" else published_at or observed_at,
             )
         if not payload.get("sourceTrustState"):
             payload["sourceTrustState"] = (
@@ -950,6 +950,8 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
 
 
 def research_evidence_from_external_signals(symbol: str, external_signals: Dict[str, object]) -> List[ResearchEvidence]:
+    from digital_twin.modules.news_intelligence.domain.evidence_time import corporate_action_time_contract
+
     external_signals = external_signals or {}
     normalized_symbol = str(symbol or "").upper()
     facts = {
@@ -973,18 +975,23 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
             "lockup-release": "보호예수 해제",
             "shareholder-right": "주주 권리 일정",
         }.get(action_type, "기업행동")
-        published_at = str(event.get("publishedAt") or event.get("announcedAt") or "").strip()
-        observed_at = str(event.get("observedAt") or published_at or "").strip()
-        event_date = next((
-            str(event.get(key) or "").strip()
-            for key in (
-                "exerciseStartDate", "releaseDate", "issueDate", "recordDate",
-                "cashPaymentDate", "listingDate",
-            )
-            if str(event.get(key) or "").strip()
-        ), "")
+        event_times = corporate_action_time_contract(
+            event,
+            observed_fallback=external_signals.get("fetchedAt"),
+            source_as_of_fallback=external_signals.get("sourceAsOf"),
+        )
+        published_at = str(event_times.get("publishedAt") or event_times.get("announcedAt") or "").strip()
+        observed_at = str(event_times.get("observedAt") or "").strip()
+        event_date = str(event_times.get("effectiveAt") or "").strip()
         payload = {
             **event,
+            "eventTimeContract": event_times,
+            "announcedAt": event_times.get("announcedAt") or "",
+            "publishedAt": event_times.get("publishedAt") or "",
+            "observedAt": observed_at,
+            "sourceAsOf": event_times.get("sourceAsOf") or "",
+            "effectiveAt": event_date,
+            "effectiveFrom": event_date,
             "relationScope": "direct",
             "sourceTrustState": "trusted" if event.get("officialSource") else "standard",
             "materialityState": "material" if action_type in {"equity-issuance", "lockup-release"} else "notable",
@@ -1002,7 +1009,7 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
             title=label,
             summary=(label + (" · 기준일 " + event_date if event_date else "")),
             url=str(event.get("sourceUrl") or ""),
-            observed_at=event_date or observed_at,
+            observed_at=observed_at,
             polarity="context",
             published_at=published_at,
             raw_payload=payload,

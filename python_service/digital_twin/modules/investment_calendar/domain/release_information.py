@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 from digital_twin.modules.market_data.public import verified_bls_statistics
+from digital_twin.modules.model_registry.contracts import information_event_lifecycle
 
 
 def _time(value):
@@ -80,17 +81,31 @@ def calendar_release_information(event, snapshot=None, now=None, enabled=True):
         "marketReaction": {"status": "not-observed", "label": "발표 후 시장 반응 관측 미연결"},
         "decisionAuthority": False,
     }
+    def finalize():
+        release = result.get("release") if isinstance(result.get("release"), dict) else {}
+        result["informationLifecycle"] = information_event_lifecycle(
+            scheduled_at=event.get("startsAt"),
+            announced_at=payload.get("announcedAt"),
+            published_at=payload.get("publishedAt"),
+            released_at=release.get("releasedAt") or release.get("releasedDate"),
+            release_status=result.get("status"),
+            assessment=result.get("comparison") if isinstance(result.get("comparison"), dict) else {},
+            market_reaction=result.get("marketReaction") if isinstance(result.get("marketReaction"), dict) else {},
+            expires_at=payload.get("expiresAt"),
+            evaluated_at=now.isoformat(),
+        )
+        return result
     if indicator in {"cpi", "employment"}:
         result["latestStatistics"] = latest_statistics(snapshot, indicator, now)
     if not indicator:
-        return result
+        return finalize()
     matches = [fact for fact in snapshot.get("facts") or [] if _verified_release(fact, indicator, event_date, now)]
     if not matches:
         state = "scheduled" if start and start > now else "awaiting-release"
         if snapshot.get("error") or collection.get("error"):
             state = "collection-error"
         result.update(status=state, statusLabel={"scheduled": "발표 전", "awaiting-release": "이 일정의 공식 결과 미확보", "collection-error": "결과 수집 오류"}[state])
-        return result
+        return finalize()
     matches.sort(key=lambda fact: _time(fact.get("fetchedAt")))
     selected = matches[-1]
     release = {key: value for key, value in selected["payload"]["officialRelease"].items() if key != "sourceText"}
@@ -102,7 +117,7 @@ def calendar_release_information(event, snapshot=None, now=None, enabled=True):
     release.update(firstCollectedAt=matches[0]["fetchedAt"], lastCollectedAt=selected["fetchedAt"],
                    revisionCount=len(hashes), revisions=list(revisions.values())[-8:])
     result.update(status="released", statusLabel="공식 발표 결과 확보", release=release)
-    return result
+    return finalize()
 
 
 def latest_statistics(snapshot, indicator, now):

@@ -10,6 +10,7 @@ from digital_twin.infrastructure.web.common import request_bool
 from digital_twin.infrastructure.web.events import RealtimeEventBridge
 from digital_twin.infrastructure.web.events import new_domain_event
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
+from digital_twin.modules.news_intelligence.domain.company_event import bind_company_event_contract
 from digital_twin.modules.news_intelligence.domain.integration_events import research_evidence_lifecycle_events
 from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import claim_quality_summary
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget
@@ -279,6 +280,15 @@ def research_evidence_list_payload(item, include_detail: bool = False) -> Dict[s
     item, analysis_source = projected_research_evidence(item)
     news_eligibility = evidence_eligibility(item) if str(item.kind or "").lower() == "news" else {}
     raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    if str(item.kind or "").lower() in {"news", "disclosure", "filing", "sec-filing", "sec_filing", "corporate-action"}:
+        raw = bind_company_event_contract(
+            raw,
+            symbol=item.symbol,
+            kind=item.kind,
+            title=item.title,
+            published_at=item.published_at,
+            source_references=raw.get("sourceReferences") if isinstance(raw.get("sourceReferences"), list) else (),
+        )
     states = item.state_payload()
     governance = raw.get("evidenceGovernance") if isinstance(raw.get("evidenceGovernance"), dict) else {}
     prompt_admission = assess_prompt_evidence(
@@ -377,6 +387,7 @@ def research_evidence_list_payload(item, include_detail: bool = False) -> Dict[s
         "officialDocumentPreview": str(raw.get("officialDocumentPreview") or "")[:2000],
         "disclosureDocumentQuality": disclosure_quality,
         "documentLifecycle": document_lifecycle,
+        "informationLifecycle": dict((raw.get("companyEventContract") or {}).get("informationLifecycle") or {}),
         "disclosureAnalysis": {
             "status": str(disclosure_analysis.get("status") or ""),
             "version": str(disclosure_analysis.get("version") or ""),
@@ -488,7 +499,14 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
     projected, analysis_source = projected_research_evidence(item)
     payload = projected.to_dict()
     payload.update(research_evidence_list_payload(projected, include_detail=True))
-    payload["payload"] = dict(projected.raw_payload or {})
+    payload["payload"] = bind_company_event_contract(
+        dict(projected.raw_payload or {}),
+        symbol=projected.symbol,
+        kind=projected.kind,
+        title=projected.title,
+        published_at=projected.published_at,
+        source_references=(projected.raw_payload or {}).get("sourceReferences") if isinstance((projected.raw_payload or {}).get("sourceReferences"), list) else (),
+    )
     payload["promptEvidenceAdmission"] = assess_prompt_evidence(
         projected.raw_payload,
         kind=projected.kind,

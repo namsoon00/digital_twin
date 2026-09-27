@@ -16,6 +16,7 @@ from digital_twin.modules.decisions.domain.investment_reasoning import (
     SubjectDecisionCase,
     inference_dispatch_decision,
 )
+from digital_twin.modules.decisions.domain.investment_reasoning.remediation import reasoning_remediation_plan
 from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
 from digital_twin.modules.notifications.domain.notification_ai_delivery import final_ai_delivery_decision
@@ -296,6 +297,13 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             self.assertEqual("READY", case.stage)
 
     def test_domain_dispatch_routes_are_explicit_and_fail_closed(self):
+        remediation = reasoning_remediation_plan(
+            disposition_code="HYPOTHESIS_QUALIFICATION_PENDING",
+            qualification_reasons=["independent-observation-required"],
+        )
+        self.assertEqual("hypothesis-observation", remediation["reasonClass"])
+        self.assertEqual("observe-authored-outcome-contract", remediation["automaticAction"])
+        self.assertTrue(remediation["automatic"])
         observation = subject_case("subject:observation")
         material_context = context_observation(observation)
         self.assertEqual(

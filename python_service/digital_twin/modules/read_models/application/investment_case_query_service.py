@@ -976,6 +976,7 @@ class InvestmentCaseQueryService:
             "freshness": item_dict(lineage.get("freshness")),
             "evidence": item_dict(lineage.get("evidence")),
             "integrity": integrity,
+            "pipelineHealth": item_dict(lineage.get("pipelineHealth")),
             "traceRefs": item_dict(lineage.get("traceRefs")),
             "reasoningLineage": lineage,
             "outcome": {
@@ -1325,6 +1326,7 @@ class InvestmentCaseQueryService:
                 "trace": {
                     "stages": detail.get("stages") or [],
                     "gaps": item_dict(detail.get("integrity")).get("issues") or [],
+                    "pipelineHealth": item_dict(detail.get("pipelineHealth")),
                     **item_dict(detail.get("traceRefs")),
                 },
             }

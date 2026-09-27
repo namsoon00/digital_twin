@@ -1359,6 +1359,9 @@ def subject_reasoning_lineage(
         "sourceAsOf": next((item.get("asOf") for item in facts if evidence_id in (item.get("evidenceIds") or [])), ""),
     } for evidence_id in evidence_ids]
     data_gaps = list(candidate.get("data_gaps") or candidate.get("dataGaps") or [])
+    remediation_plan = _mapping(
+        _first(candidate, "remediation_plan", "remediationPlan", default={})
+    )
     data_constraints = [item for item in rules if item.get("evidenceRole") == "data-quality"]
     missing_items = [{
         "label": item.get("label") or "자료 확인 필요",
@@ -1366,6 +1369,70 @@ def subject_reasoning_lineage(
         "source": "저장된 판단 규칙",
         "applicability": "needs-check",
     } for item in data_constraints]
+    candidate_set_id = _text(_first(candidate, "candidate_set_id", "candidateSetId"))
+    ai_request_id = _text(
+        _first(ai_episode, "request_id", "requestId")
+        or _first(subject, "ai_request_id", "aiRequestId")
+    )
+    notification_job_id = _text(
+        _first(ai_episode, "notification_job_id", "notificationJobId")
+        or _first(subject, "notification_job_id", "notificationJobId")
+    )
+    notification_delivery = _mapping(ai_episode.get("notificationDelivery"))
+    delivery_status = _text(notification_delivery.get("status")).lower()
+    pipeline_stages = [
+        {
+            "id": "source-snapshot",
+            "label": "원천 사실 고정",
+            "state": "pass" if source_abox_snapshot_id else "blocked",
+            "referenceId": source_abox_snapshot_id,
+        },
+        {
+            "id": "typedb-inference",
+            "label": "TypeDB 추론",
+            "state": "pass" if inference_generation_id and included else "blocked",
+            "referenceId": inference_generation_id,
+        },
+        {
+            "id": "candidate-comparison",
+            "label": "가설 후보 비교",
+            "state": "pass" if candidate_set_id else "blocked",
+            "referenceId": candidate_set_id,
+        },
+        {
+            "id": "ai-analysis",
+            "label": "AI 분석",
+            "state": "pass" if ai_status == "ai-authored" else "warning" if ai_status in {"typedb-fallback", "not-run"} else "pending",
+            "referenceId": ai_request_id or _text(ai_episode.get("episodeId")),
+        },
+        {
+            "id": "notification-delivery",
+            "label": "알림 전달",
+            "state": "pass" if delivery_status == "delivered" else "pending" if notification_job_id else "not-requested",
+            "referenceId": notification_job_id,
+        },
+        {
+            "id": "outcome-observation",
+            "label": "사후 결과 관측",
+            "state": "pass" if observations else "pending",
+            "referenceId": _text(observations[0].get("episodeId")) if observations else "",
+        },
+    ]
+    blocking_pipeline_stage = next(
+        (item for item in pipeline_stages if item["state"] == "blocked"),
+        None,
+    )
+    warning_pipeline_stage = next(
+        (item for item in pipeline_stages if item["state"] == "warning"),
+        None,
+    )
+    pipeline_health = {
+        "version": "investment-reasoning-pipeline-health-v1",
+        "state": "blocked" if blocking_pipeline_stage else "degraded" if warning_pipeline_stage else "complete",
+        "firstIncompleteStage": dict(blocking_pipeline_stage or warning_pipeline_stage or {}),
+        "stages": pipeline_stages,
+        "remediation": remediation_plan,
+    }
     return {
         "version": SUBJECT_REASONING_LINEAGE_VERSION,
         "status": "ok" if not blocking_issues else "integrity-blocked",
@@ -1428,6 +1495,7 @@ def subject_reasoning_lineage(
             "excludedDuplicateRuleEvaluationCount": duplicate_count,
             "invalidRuleEvaluationCount": invalid_count,
         },
+        "pipelineHealth": pipeline_health,
         "reasoning": reasoning,
         "scenarios": scenarios,
         "explanation": {
@@ -1512,6 +1580,10 @@ def subject_reasoning_lineage(
             "batchCaseId": _text(_first(subject, "batch_case_id", "batchCaseId")),
             "sourceAboxSnapshotId": source_abox_snapshot_id,
             "inferenceGenerationId": inference_generation_id,
+            "candidateSetId": candidate_set_id,
+            "aiRequestId": ai_request_id,
+            "aiInsightEpisodeId": _text(ai_episode.get("episodeId")),
+            "notificationJobId": notification_job_id,
             "selectedHypothesisId": selected_hypothesis_id,
             "ruleIds": sorted(proof_rule_ids),
             "modelRelease": {

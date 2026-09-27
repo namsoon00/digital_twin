@@ -57,6 +57,7 @@ def investment_calendar_payload(query: Dict[str, List[str]]) -> Dict[str, object
 def investment_calendar_observation_payload(event):
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.modules.market_data.public import InformationObservationService
+    from digital_twin.modules.model_registry.contracts import information_event_lifecycle
     information = event.get("releaseInformation") or {}
     release = information.get("release") or {}
     symbols = list(event.get("symbols") or [])
@@ -67,6 +68,16 @@ def investment_calendar_observation_payload(event):
     tracking = information_tracking_payload("calendar", event.get("eventId"), release.get("sourceHash"))
     if tracking:
         information["marketReaction"] = tracking
+    information["informationLifecycle"] = information_event_lifecycle(
+        scheduled_at=event.get("startsAt"),
+        announced_at=(event.get("payload") or {}).get("announcedAt"),
+        published_at=(event.get("payload") or {}).get("publishedAt"),
+        released_at=release.get("releasedAt") or release.get("releasedDate"),
+        release_status=information.get("status"),
+        assessment=information.get("comparison") if isinstance(information.get("comparison"), dict) else {},
+        market_reaction=information.get("marketReaction") if isinstance(information.get("marketReaction"), dict) else {},
+        expires_at=(event.get("payload") or {}).get("expiresAt"),
+    )
     event["releaseInformation"] = information
     return event
 

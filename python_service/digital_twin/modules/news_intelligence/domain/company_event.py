@@ -14,6 +14,8 @@ import json
 import re
 from typing import Dict, Iterable, Mapping
 
+from digital_twin.modules.model_registry.contracts import information_event_lifecycle
+
 
 COMPANY_EVENT_CONTRACT_VERSION = "company-event-observation-v1"
 COMPANY_EVENT_KINDS = frozenset({"news", "disclosure", "filing", "corporate-action"})
@@ -195,6 +197,8 @@ def company_event_contract(
         or _first(source, "publishedAt", "filingDate", "receiptDate", "receipt_date")
     )
     announced = _date_value(_first(source, "announcedAt", "announcementDate")) or published
+    observed = _date_value(_first(source, "observedAt", "retrievedAt", "fetchedAt"))
+    source_as_of = _date_value(_first(source, "sourceAsOf", "asOf", "baseDate"))
     effective_from = _date_value(_first(
         source,
         "effectiveFrom", "exerciseStartDate", "releaseDate", "issueDate", "recordDate", "listingDate",
@@ -237,6 +241,9 @@ def company_event_contract(
         "title": normalized_title,
         "announcedAt": announced,
         "publishedAt": published,
+        "observedAt": observed,
+        "sourceAsOf": source_as_of,
+        "effectiveAt": effective_from,
         "effectiveFrom": effective_from,
         "effectiveTo": effective_to,
         "recordDate": _date_value(_first(source, "recordDate")),
@@ -247,6 +254,17 @@ def company_event_contract(
         "correctsSourceDocumentId": corrects_document_id,
         "sourceReferences": references,
     }
+    material["informationLifecycle"] = information_event_lifecycle(
+        scheduled_at=effective_from,
+        announced_at=announced,
+        published_at=published,
+        released_at=_first(source, "releasedAt", "releaseDateTime"),
+        release_status=_first(source, "releaseStatus"),
+        assessment=_mapping(source.get("eventAssessment") or source.get("aiAnalysis")),
+        market_reaction=_mapping(source.get("marketReaction")),
+        expires_at=_first(source, "validUntil", "expiresAt"),
+        evaluated_at=_first(source, "evaluatedAt", "observedAt", "retrievedAt", "fetchedAt"),
+    )
     digest = hashlib.sha256(
         json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:32]

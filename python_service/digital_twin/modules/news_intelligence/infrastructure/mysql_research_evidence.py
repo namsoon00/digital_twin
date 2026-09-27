@@ -13,6 +13,7 @@ import digital_twin.modules.news_intelligence.domain.news_analysis as news_domai
 from digital_twin.modules.news_intelligence.contracts import apply_enrichment_snapshot, article_enrichment_revision, article_source_revision, authoritative_enrichment, authoritative_event_takeaway, clear_resolved_analysis_conflict, enrichment_payload_snapshot, has_article_source_validation
 from digital_twin.modules.news_intelligence.contracts import annotate_news_eligibility
 from digital_twin.modules.news_intelligence.contracts import event_episode_identity, news_event_fingerprint
+from digital_twin.modules.news_intelligence.contracts import bind_company_event_contract, repair_legacy_corporate_action_times
 from digital_twin.infrastructure.operational_common import json_dumps, research_evidence_from_row
 from digital_twin.infrastructure.settings import utc_now
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
@@ -199,6 +200,66 @@ def merge_derived_evidence_payload(
 
 
 class MySQLResearchEvidenceStore(MySQLOperationalConnection):
+    def repair_corporate_action_time_semantics(self, limit: int = 5000, dry_run: bool = True) -> Dict[str, object]:
+        row_limit = max(1, min(10000, int(limit or 5000)))
+
+        def operation(connection):
+            rows = connection.execute(
+                """
+                SELECT * FROM research_evidence
+                WHERE kind = 'corporate-action'
+                ORDER BY first_seen_at ASC, evidence_id ASC
+                LIMIT %s
+                """,
+                (row_limit,),
+            ).fetchall()
+            result = {
+                "scannedCount": len(rows or []),
+                "repairableCount": 0,
+                "changedCount": 0,
+                "dryRun": bool(dry_run),
+            }
+            for row in rows or []:
+                item = research_evidence_from_row(row)
+                repaired = repair_legacy_corporate_action_times(
+                    item.raw_payload,
+                    observed_at=row.get("observed_at"),
+                    published_at=row.get("published_at"),
+                    first_seen_at=row.get("first_seen_at"),
+                )
+                if not repaired.get("effectiveAt"):
+                    continue
+                result["repairableCount"] += 1
+                if not repaired.get("changed"):
+                    continue
+                payload = bind_company_event_contract(
+                    repaired.get("payload") or {},
+                    symbol=item.symbol,
+                    kind=item.kind,
+                    title=item.title,
+                    published_at=repaired.get("publishedAt") or "",
+                )
+                result["changedCount"] += 1
+                if dry_run:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE research_evidence
+                    SET published_at = %s, observed_at = %s, payload_json = %s
+                    WHERE evidence_id = %s AND payload_json = %s
+                    """,
+                    (
+                        str(repaired.get("publishedAt") or ""),
+                        str(repaired.get("observedAt") or ""),
+                        json_dumps(payload),
+                        item.evidence_id,
+                        str(row.get("payload_json") or ""),
+                    ),
+                )
+            return result
+
+        return dict(self.transaction_with_deadlock_retry("corporate-action-time-repair", operation) or {})
+
     def document_recovery_candidates(self, limit=25, after_id=""):
         with self.connect() as connection:
             rows = connection.execute(
@@ -524,6 +585,12 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         item.raw_payload = payload
         provenance = payload.get("sourceProvenance") if isinstance(payload.get("sourceProvenance"), dict) else {}
         relationship = str(payload.get("evidenceRelationship") or provenance.get("evidenceRelationship") or "original")
+        company_event = payload.get("companyEventContract") if isinstance(payload.get("companyEventContract"), dict) else {}
+        episode_payload = {
+            **fingerprint,
+            "companyEventId": str(company_event.get("eventId") or ""),
+            "informationLifecycle": dict(company_event.get("informationLifecycle") or {}),
+        }
         connection.execute(
             """
             INSERT INTO news_event_episodes (
@@ -546,7 +613,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 item.evidence_id,
                 stamp,
                 stamp,
-                json_dumps(fingerprint),
+                json_dumps(episode_payload),
             ),
         )
         connection.execute(

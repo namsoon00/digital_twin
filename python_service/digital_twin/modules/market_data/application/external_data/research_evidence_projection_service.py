@@ -18,6 +18,7 @@ from digital_twin.modules.news_intelligence.contracts import claim_policy, gover
 from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget, ResearchEvidence, research_evidence_from_external_signals
 from digital_twin.modules.news_intelligence.contracts import evidence_materiality
 from digital_twin.modules.news_intelligence.contracts import bind_company_event_contract, source_reference_from_fact_row
+from digital_twin.modules.news_intelligence.contracts import corporate_action_time_contract
 from digital_twin.modules.decisions.contracts import assess_prompt_evidence, attach_prompt_evidence_admission
 
 
@@ -157,6 +158,23 @@ class ExternalOfficialEvidenceProjectionService:
         source_reference = source_reference_from_fact_row(row)
         for item in items:
             payload = dict(item.raw_payload or {})
+            if _text(item.kind).lower() == "corporate-action":
+                event_times = corporate_action_time_contract(
+                    payload,
+                    observed_fallback=row.get("fetchedAt"),
+                    source_as_of_fallback=source_as_of,
+                )
+                item.observed_at = _text(event_times.get("observedAt"))
+                item.published_at = _text(event_times.get("publishedAt") or event_times.get("announcedAt"))
+                payload.update({
+                    "eventTimeContract": event_times,
+                    "announcedAt": event_times.get("announcedAt") or "",
+                    "publishedAt": event_times.get("publishedAt") or "",
+                    "observedAt": item.observed_at,
+                    "sourceAsOf": event_times.get("sourceAsOf") or "",
+                    "effectiveAt": event_times.get("effectiveAt") or "",
+                    "effectiveFrom": event_times.get("effectiveAt") or "",
+                })
             document_text = _text(payload.get("officialDocumentText"))
             document_hash = hashlib.sha256(document_text.encode("utf-8")).hexdigest() if document_text else ""
             document_revision = _text(payload.get("receiptNo") or payload.get("accessionNumber") or source_revision)
@@ -173,7 +191,7 @@ class ExternalOfficialEvidenceProjectionService:
                 "externalFactSourceRevision": source_revision,
                 "externalFactSourceAsOf": source_as_of,
                 "sourceRevision": document_revision,
-                "sourceAsOf": document_as_of,
+                "sourceAsOf": _text(payload.get("sourceAsOf")) if _text(item.kind).lower() == "corporate-action" else document_as_of,
                 "sourceFetchedAt": _text(row.get("fetchedAt")),
                 "documentHash": document_hash,
                 "documentCharCount": len(document_text),
@@ -191,7 +209,11 @@ class ExternalOfficialEvidenceProjectionService:
                 symbol=item.symbol,
                 kind=item.kind,
                 title=item.title,
-                published_at=item.published_at or item.observed_at,
+                published_at=(
+                    item.published_at
+                    if _text(item.kind).lower() == "corporate-action"
+                    else item.published_at or item.observed_at
+                ),
                 source_references=[source_reference] if source_reference else [],
             )
             if _text(item.kind).lower() in {"disclosure", "filing", "sec-filing", "sec_filing"}:

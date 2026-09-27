@@ -10,10 +10,11 @@ from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 from digital_twin.modules.decisions.domain.investment_reasoning.contracts import AIJudgmentResult, DataGap, DecisionSynthesis, FinalDecision, HypothesisRecord
 from digital_twin.modules.decisions.domain.investment_reasoning.dispatch import InferenceDispatchDecision
+from digital_twin.modules.decisions.domain.investment_reasoning.remediation import reasoning_remediation_plan
 
 
 SUBJECT_CASE_VERSION = "investment-subject-decision-case-v4"
-CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v3"
+CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v4-remediation"
 PUBLICATION_VERSION = "investment-decision-publication-v1"
 
 SUBJECT_CREATED = "CREATED"
@@ -75,6 +76,7 @@ class CandidateSetSnapshot:
     data_gaps: Tuple[DataGap, ...] = ()
     disposition_code: str = "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
     rule_coverage_state: str = "no-material-match"
+    remediation_plan: Dict[str, object] = field(default_factory=dict)
     validation_errors: Tuple[str, ...] = ()
     created_at: str = ""
     version: str = CANDIDATE_SET_VERSION
@@ -130,6 +132,12 @@ class CandidateSetSnapshot:
             scope_errors.append(
                 "execution-hypothesis-missing:" + ",".join(missing_execution)
             )
+        remediation_plan = reasoning_remediation_plan(
+            disposition_code=synthesis.disposition_code,
+            data_gaps=synthesis.data_gaps,
+            qualification_reasons=synthesis.hypothesis_qualification_reasons,
+            graph_trace_complete=synthesis.graph_trace_complete,
+        )
         material = {
             "batchCaseId": str(batch_case_id or ""),
             "accountId": synthesis.account_id,
@@ -148,6 +156,7 @@ class CandidateSetSnapshot:
             "dataGaps": [item.to_dict() for item in synthesis.data_gaps],
             "dispositionCode": synthesis.disposition_code,
             "ruleCoverageState": synthesis.rule_coverage_state,
+            "remediationPlan": remediation_plan,
         }
         fingerprint = _fingerprint(material)
         return cls(
@@ -168,6 +177,7 @@ class CandidateSetSnapshot:
             data_gaps=tuple(synthesis.data_gaps),
             disposition_code=synthesis.disposition_code,
             rule_coverage_state=synthesis.rule_coverage_state,
+            remediation_plan=remediation_plan,
             validation_errors=_texts(scope_errors),
             created_at=_now(),
         )
@@ -191,6 +201,7 @@ class CandidateSetSnapshot:
             "dataGaps": [item.to_dict() for item in self.data_gaps],
             "dispositionCode": self.disposition_code,
             "ruleCoverageState": self.rule_coverage_state,
+            "remediationPlan": dict(self.remediation_plan or {}),
             "validationErrors": list(self.validation_errors),
             "createdAt": self.created_at,
             "version": self.version,
@@ -199,6 +210,21 @@ class CandidateSetSnapshot:
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "CandidateSetSnapshot":
         payload = dict(value or {})
+        data_gaps = tuple(
+            DataGap.from_dict(item)
+            for item in payload.get("dataGaps") or []
+            if isinstance(item, Mapping)
+        )
+        disposition_code = str(
+            payload.get("dispositionCode")
+            or "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
+        ).upper()
+        remediation_plan = dict(payload.get("remediationPlan") or {})
+        if not remediation_plan:
+            remediation_plan = reasoning_remediation_plan(
+                disposition_code=disposition_code,
+                data_gaps=data_gaps,
+            )
         return cls(
             candidate_set_id=str(payload.get("candidateSetId") or ""),
             fingerprint=str(payload.get("fingerprint") or ""),
@@ -220,18 +246,12 @@ class CandidateSetSnapshot:
             allowed_actions=_texts(payload.get("allowedActions") or []),
             blocked_actions=_texts(payload.get("blockedActions") or []),
             missing_data=_texts(payload.get("missingData") or []),
-            data_gaps=tuple(
-                DataGap.from_dict(item)
-                for item in payload.get("dataGaps") or []
-                if isinstance(item, Mapping)
-            ),
-            disposition_code=str(
-                payload.get("dispositionCode")
-                or "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
-            ).upper(),
+            data_gaps=data_gaps,
+            disposition_code=disposition_code,
             rule_coverage_state=str(
                 payload.get("ruleCoverageState") or "no-material-match"
             ).lower(),
+            remediation_plan=remediation_plan,
             validation_errors=_texts(payload.get("validationErrors") or []),
             created_at=str(payload.get("createdAt") or ""),
             version=str(payload.get("version") or CANDIDATE_SET_VERSION),

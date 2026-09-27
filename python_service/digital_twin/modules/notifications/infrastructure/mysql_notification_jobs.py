@@ -10,6 +10,10 @@ from digital_twin.modules.read_models.contracts import investment_decision_key
 from digital_twin.modules.notifications.domain.message_types import HOLDING_TIMING, INVESTMENT_CALENDAR_REMINDER, INVESTMENT_INSIGHT, MODEL_BUY, MODEL_SELL, NEWS_DIGEST, OPERATOR_REASONING_REPORT, WATCHLIST_BUY_CANDIDATE, WATCHLIST_ONTOLOGY_SIGNAL
 from digital_twin.modules.notifications.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, notification_fingerprint, ontology_relation_delivery_metadata, notification_subject_group_key, notification_state_group_key
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.delivery_recovery import (
+    notification_failure_retry_at,
+    terminal_delivery_recovery_decision,
+)
 from digital_twin.modules.notifications.domain.notification_feedback import normalize_notification_feedback
 from digital_twin.modules.notifications.contracts import NotificationLifecycleEvent
 from digital_twin.modules.notifications.domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
@@ -2131,17 +2135,19 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         lane_sql = (" AND " + " AND ".join(lane_clauses)) if lane_clauses else ""
         claimed: List[NotificationJob] = []
         with self.transaction() as connection:
+            self.reconcile_terminal_failures_with_connection(connection, stamp, limit=50)
             query_specs = [
                 (
                     """
                     SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'pending'
+                      AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
                     ORDER BY created_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
-                    tuple(lane_params),
+                    (stamp, *lane_params),
                 ),
                 (
                     """
@@ -2159,12 +2165,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     """
                     SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'failed' AND attempts < %s
+                      AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
                     ORDER BY attempts, created_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
-                    (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, *lane_params),
+                    (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, stamp, *lane_params),
                 ),
             ]
             for sql, params in query_specs:
@@ -2185,7 +2192,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                         """
                         UPDATE notification_jobs
                         SET status = %s, attempts = %s, updated_at = %s, last_error = %s,
-                            processing_started_at = %s, payload_json = %s
+                            processing_started_at = %s, retry_at = '', payload_json = %s
                         WHERE job_id = %s
                           AND (
                             status = 'pending'
@@ -2247,9 +2254,93 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         job.status = "failed"
         job.last_error = error
         job.updated_at = utc_now()
+        retry_at = notification_failure_retry_at(error, job.attempts)
         with self.transaction() as connection:
             self.upsert_job_with_connection(connection, job)
-            self.record_lifecycle_with_connection(connection, job, "failed", "retryable", error)
+            connection.execute(
+                "UPDATE notification_jobs SET retry_at = %s, processing_started_at = '' WHERE job_id = %s",
+                (retry_at, job.job_id),
+            )
+            self.record_lifecycle_with_connection(
+                connection,
+                job,
+                "failed",
+                "retryable" if job.attempts < MAX_NOTIFICATION_DELIVERY_ATTEMPTS else "terminal",
+                error,
+                {"retryAt": retry_at},
+            )
+
+    def reconcile_terminal_failures_with_connection(
+        self,
+        connection,
+        stamp: str,
+        *,
+        limit: int = 50,
+    ) -> Dict[str, int]:
+        rows = connection.execute(
+            """
+            SELECT job_id, text, payload_json FROM notification_jobs
+            WHERE status = 'failed' AND attempts >= %s
+            ORDER BY updated_at, job_id
+            LIMIT %s FOR UPDATE SKIP LOCKED
+            """,
+            (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, max(1, min(200, int(limit or 50)))),
+        ).fetchall()
+        summary = {"retried": 0, "superseded": 0, "retained": 0}
+        now = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        for row in rows or []:
+            job = self.job_from_row(row)
+            decision = terminal_delivery_recovery_decision(job.to_dict(), now=now)
+            action = str(decision.get("action") or "retain-failed")
+            if action == "retry":
+                context = dict(job.context or {})
+                recovery = dict(context.get("deliveryRecovery") or {})
+                recovery.update({
+                    "version": decision.get("version"),
+                    "count": int(decision.get("recoveryCount") or 0) + 1,
+                    "reasonCode": decision.get("reasonCode"),
+                    "recoveredAt": stamp,
+                })
+                context["deliveryRecovery"] = recovery
+                job.context = context
+                job.status = "pending"
+                job.attempts = 0
+                job.last_error = ""
+                job.updated_at = stamp
+                self.upsert_job_with_connection(connection, job)
+                connection.execute(
+                    "UPDATE notification_jobs SET retry_at = %s, processing_started_at = '' WHERE job_id = %s",
+                    (str(decision.get("retryAt") or stamp), job.job_id),
+                )
+                self.record_lifecycle_with_connection(
+                    connection, job, "recovered", "pending", metadata=decision
+                )
+                summary["retried"] += 1
+            elif action == "supersede":
+                job.status = "superseded"
+                job.last_error = "복구 시점에 알림의 유효시간이 지나 재발송하지 않았습니다."
+                job.updated_at = stamp
+                self.upsert_job_with_connection(connection, job)
+                connection.execute(
+                    "UPDATE notification_jobs SET retry_at = '', processing_started_at = '' WHERE job_id = %s",
+                    (job.job_id,),
+                )
+                self.record_lifecycle_with_connection(
+                    connection, job, "superseded", "expired", job.last_error, decision
+                )
+                summary["superseded"] += 1
+            else:
+                summary["retained"] += 1
+        return summary
+
+    def reconcile_terminal_failures(self, limit: int = 50) -> Dict[str, int]:
+        stamp = utc_now()
+        with self.transaction() as connection:
+            return self.reconcile_terminal_failures_with_connection(
+                connection,
+                stamp,
+                limit=limit,
+            )
 
     def mark_suppressed(self, job: NotificationJob, reason: str) -> None:
         job.status = "suppressed"

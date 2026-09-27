@@ -33,6 +33,7 @@ class DisclosureTaxonomyTests(unittest.TestCase):
         self.assertEqual("2026-08-26", contract["publishedAt"])
         self.assertEqual("2026-09-01", contract["effectiveFrom"])
         self.assertNotEqual("2026-08-27T01:00:00Z", contract["publishedAt"])
+        self.assertEqual("announced", contract["informationLifecycle"]["state"])
 
     def _assert_corporate_action_inference_ignores_lineage_only_revision_but_detects_share_change(self):
         def evidence(revision_id, shares):

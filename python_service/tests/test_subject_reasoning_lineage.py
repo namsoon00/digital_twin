@@ -221,6 +221,13 @@ class SubjectReasoningLineageTests(unittest.TestCase):
             "investment-ai-judge-v16",
             lineage["traceRefs"]["modelRelease"]["aiPromptReleaseId"],
         )
+        self.assertEqual("candidate-set:sk", lineage["traceRefs"]["candidateSetId"])
+        self.assertEqual("degraded", lineage["pipelineHealth"]["state"])
+        self.assertEqual("ai-analysis", lineage["pipelineHealth"]["firstIncompleteStage"]["id"])
+        self.assertEqual(
+            ["pass", "pass", "pass", "warning", "not-requested", "pass"],
+            [row["state"] for row in lineage["pipelineHealth"]["stages"]],
+        )
         self.assertEqual(1, lineage["scenarios"][0]["observationState"]["sampleCount"])
         self.assertEqual(
             ["fact", "relation", "rule", "hypothesis", "decision"],

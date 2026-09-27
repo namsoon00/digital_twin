@@ -77,6 +77,7 @@ class KoreanReleaseTests(unittest.TestCase):
         event = {'startsAt':'2026-08-26T23:00:00Z','payload':{'sourceProvider':'BOK','country':'KR','meetingType':'monetaryPolicyDecision','officialSource':True}}
         result = calendar_release_information(event, {'facts':[fact]}, NOW)
         self.assertEqual(result['status'], 'released')
+        self.assertEqual(result['informationLifecycle']['state'], 'released')
         fact['fetchedAt'] = '2026-08-26T23:00:00Z'
         self.assertEqual(calendar_release_information(event, {'facts':[fact]}, datetime(2026,8,26,23,tzinfo=timezone.utc))['status'], 'released')
         event['startsAt'] = '2026-10-15T00:00:00Z'

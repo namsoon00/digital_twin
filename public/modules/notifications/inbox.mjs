@@ -19,7 +19,11 @@ function renderAlertConsoleRow(row) {
     renderSecondaryDisclosure("alert-delivery-" + row.key, "전달 상태", '<p>' + escapeHtml(row.channel + ' · ' + row.status) + '</p>', row.status),
     '<footer>',
     row.decisionEpisodeId ? renderWorkDetailButton("investment-case", row.decisionEpisodeId, "종목의 투자 해석", "text-button compact") : '',
-    '<span class="oa-alert-actions"><button class="icon-button" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.important ? "false" : "true") + '" aria-label="중요 표시" title="중요 표시">' + (row.important ? '&#9733;' : '&#9734;') + '</button><button class="icon-button" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.acknowledgedAt ? "false" : "true") + '" aria-label="확인 완료" title="확인 완료">&#10003;</button><button class="icon-button primary" type="button" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '" aria-label="알림 상세" title="알림 상세">&rarr;</button></span>',
+    '<span class="oa-alert-actions">',
+    '<button class="oa-alert-action-button" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.important ? "false" : "true") + '" aria-label="' + escapeHtml(row.important ? "중요 표시 해제" : "중요 표시") + '"><b aria-hidden="true">' + (row.important ? '&#9733;' : '&#9734;') + '</b><span>' + escapeHtml(row.important ? "중요 해제" : "중요") + '</span></button>',
+    '<button class="oa-alert-action-button" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.acknowledgedAt ? "false" : "true") + '" aria-label="' + escapeHtml(row.acknowledgedAt ? "확인 완료 취소" : "확인 완료") + '"><b aria-hidden="true">&#10003;</b><span>' + escapeHtml(row.acknowledgedAt ? "확인 취소" : "확인 완료") + '</span></button>',
+    '<button class="oa-alert-action-button primary" type="button" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '" aria-label="알림 상세 보기"><b aria-hidden="true">&rarr;</b><span>상세 보기</span></button>',
+    '</span>',
     '</footer>',
     '</article>'
   ].join("");

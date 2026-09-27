@@ -82,5 +82,9 @@
   {
     "reason": "Label driver DCF separately and translate causal, macro-exposure and reproducibility gaps into user-facing Korean in the shared valuation view.",
     "functions": ["instrumentValuationModelLabel", "instrumentValuationMissingLabel"]
+  },
+  {
+    "reason": "Separate actionable investment opinions from observation-only interpretation, unify detected and registered calendar presentation, make background freshness explicit, and label notification actions. Covered by insight-presentation tests and browser validation.",
+    "functions": ["renderLoading", "renderTopbarSyncState", "renderAppNavCommand", "renderConsoleTaskRow", "investmentCalendarEvents", "renderInvestmentCalendarMonthPanel", "renderInvestmentCalendarSelectedDayAgenda", "tossLensPath"]
   }
 ]

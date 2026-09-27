@@ -145,8 +145,11 @@ async function insightFirstScreens(page, label) {
   await delivery.locator(':scope > summary').click();
   await routeTo(page, "overview");
   await page.locator('#disclosure-today-awaiting').waitFor();
-  const today = page.locator('[data-console-keyed-list="today-primary"]');
-  assert.doesNotMatch(await today.textContent(), /Synthetic alert|검증용 기업 5|미확정|전달 상태/);
+  const today = page.locator('[data-console-live-region="today-primary-body"]');
+  assert.doesNotMatch(await today.textContent(), /Synthetic alert|검증용 기업 5|전달 상태/);
+  assert.match(await page.locator('.oa-today-briefing').textContent(), /오늘의 결론/);
+  const observations = page.locator('[data-console-live-region="today-observation-body"]');
+  if (await observations.count()) assert.doesNotMatch(await observations.textContent(), /검증용 기업 5|Synthetic alert/);
   await page.locator('#disclosure-today-awaiting > summary').click();
   assert.match(await page.locator('#disclosure-today-awaiting').textContent(), /검증용 기업 5/);
   await page.locator('#disclosure-today-awaiting > summary').click();

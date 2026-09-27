@@ -59,8 +59,10 @@ function selectConsoleTodayTasks(snapshot, options) {
         key: "decision:" + (row.id || row.symbol),
         priority: ["SELL", "TRIM", "AVOID"].indexOf(String(row.action || "").toUpperCase()) >= 0 ? 1 : 2,
         kind: "판단",
+        actionCode: String(row.action || "").toUpperCase(),
         target: row.name || row.symbol,
         reason: reading.meaning || reading.headline,
+        nextAction: row.nextAction || (reading.nextChecks || [])[0] || "새 근거나 가격 변화가 생길 때 다시 확인합니다.",
         state: reading.status,
         reading: reading,
         tone: action.tone,
@@ -76,8 +78,10 @@ function selectConsoleTodayTasks(snapshot, options) {
         key: "decision:" + row.key,
         priority: row.tone === "danger" ? 1 : (row.tone === "caution" ? 2 : 3),
         kind: "판단",
+        actionCode: String(row.actionCode || "").toUpperCase(),
         target: row.name || row.symbol,
         reason: row.reading ? row.reading.meaning || row.reading.headline : row.reason,
+        nextAction: row.nextAction || ((row.reading || {}).nextChecks || [])[0] || "새 근거나 가격 변화가 생길 때 다시 확인합니다.",
         reading: row.reading,
         state: row.reading ? row.reading.status : row.decision,
         tone: row.tone,
@@ -160,7 +164,7 @@ function renderConsoleTaskRow(task) {
   return [
     '<button class="oa-work-row" type="button" data-console-row-key="' + escapeHtml(task.key || [task.kind, task.detailKey].join(":")) + '" data-work-detail="' + escapeHtml(task.detailType || "") + '" data-work-detail-key="' + escapeHtml(task.detailKey || "") + '">',
     '<span class="oa-row-kind">' + escapeHtml(task.kind || "-") + '</span>',
-    '<span class="oa-row-main"><strong>' + escapeHtml(task.target || "-") + '</strong><em>' + escapeHtml(task.reason || "") + '</em>' + renderRecordChangedAt(task) + '</span>',
+    '<span class="oa-row-main"><strong>' + escapeHtml(task.target || "-") + '</strong><em><b>이유</b>' + escapeHtml(task.reason || "") + '</em>' + (task.nextAction ? '<small><b>다음 확인</b>' + escapeHtml(task.nextAction) + '</small>' : '') + renderRecordChangedAt(task) + '</span>',
     '<span class="tone-chip ' + escapeHtml(task.tone || "hold") + '">' + escapeHtml(task.state || "-") + '</span>',
     '<span class="oa-row-action">' + escapeHtml(task.action || "상세") + ' &rarr;</span>',
     '</button>'
@@ -168,7 +172,8 @@ function renderConsoleTaskRow(task) {
 }
 
 function todayQueueWorkDetailPayload() {
-  var tasks = groupTodayTasks(selectConsoleTodayTasks(shellState.snapshot || {}, { collapseCalendar: false })).investment;
+  var groups = groupTodayTasks(selectConsoleTodayTasks(shellState.snapshot || {}, { collapseCalendar: false }));
+  var tasks = groups.actionable.concat(groups.observation);
   var historicalCount = consoleTodayHistoricalCount();
   var page = consolePageSlice(tasks, "today", 12);
   var body = page.items.length
@@ -176,8 +181,8 @@ function todayQueueWorkDetailPayload() {
     : renderConsoleEmpty("현재 확인할 투자 의견이 없습니다", "매수·보유·매도 의견이 없는 상태를 보유 유지 의견으로 해석하지 않습니다.");
   return editorWorkDetailPayload(
     "Investment Views",
-    "내 종목 투자 의견",
-    "현재 " + tasks.length + "건" + (historicalCount ? " · 이전 기록 " + historicalCount + "건은 이력에 보관" : ""),
+    "투자 의견과 관찰 해석",
+    "행동 의견 " + groups.actionable.length + "건 · 관찰 " + groups.observation.length + "건" + (historicalCount ? " · 이전 기록 " + historicalCount + "건은 이력에 보관" : ""),
     '<section class="oa-detail-queue">' + renderConsoleLiveRegion("today-full-body", body) + renderConsolePager("today", page) + '</section>'
   );
 }
@@ -187,7 +192,8 @@ function renderTodayConsole(snapshot) {
   var dashboard = shellState.dashboardSummary || {};
   var dashboardPortfolio = dashboard.portfolio || {};
   var groups = groupTodayTasks(selectConsoleTodayTasks(snapshot, { collapseCalendar: true }));
-  var tasks = groups.investment;
+  var tasks = groups.actionable;
+  var observations = groups.observation;
   var pendingRows = selectConsoleDecisionRows(snapshot).filter(function (row) {
     return row.reading && ["awaiting", "unavailable"].includes(row.reading.kind) && consoleTodayDecisionIsCurrent(row);
   });
@@ -196,27 +202,42 @@ function renderTodayConsole(snapshot) {
   var totalValue = hasNumericValue(dashboardPortfolio.invested) ? numeric(dashboardPortfolio.invested) : portfolio.invested;
   var positionCount = hasNumericValue(dashboardPortfolio.positionCount) ? numeric(dashboardPortfolio.positionCount) : portfolio.holdingCount;
   var valuationBasis = String(dashboardPortfolio.valuationBasis || portfolio.valuationBasis || "legacy-unknown");
+  var dashboardFreshness = dashboard.effectiveFreshness || dashboard.dataFreshness || {};
+  var freshnessNeedsReview = ["stale", "error", "failed"].includes(String(dashboardFreshness.status || "").toLowerCase());
+  var freshnessLabel = freshnessNeedsReview ? "일부 자료 확인 필요" : portfolio.freshness.label;
+  var freshnessDetail = freshnessNeedsReview
+    ? (dashboardFreshness.reason || "화면별 자료 기준 시각을 확인하세요.")
+    : portfolio.freshness.detail;
   var metrics = [
     { label: portfolioInvestedMetricLabel(valuationBasis), value: formatMoney(totalValue), detail: portfolioValuationBasisLabel(valuationBasis) + " · 현금 제외 · " + positionCount + "개 보유", target: { type: "tab", value: "portfolio" } },
     { label: "현금", value: hasNumericValue(dashboardPortfolio.cash) ? formatMoney(dashboardPortfolio.cash) : formatMoney(portfolio.cash), detail: "포트폴리오 원장", target: { type: "tab", value: "portfolio" } },
-    { label: "투자 의견", value: tasks.length + "건", detail: "내 종목 분석", target: { type: "detail", value: "today-work-queue" } },
+    { label: "오늘 할 일", value: tasks.length + "건", detail: tasks.length ? "매수·매도·비중 조정 검토" : "직접 행동할 의견 없음", target: { type: "detail", value: "today-work-queue" } },
+    { label: "관찰 중", value: observations.length + "건", detail: "행동 의견이 아닌 참고 해석", target: { type: "tab", value: "modeling" } },
     { label: "다가오는 일정", value: upcoming.length + "건 표시", detail: "미리보기 · 전체 일정은 캘린더", target: { type: "tab", value: "calendar" } },
-    { label: "데이터", value: portfolio.freshness.label, detail: portfolio.freshness.detail, tone: portfolio.freshness.tone, target: { type: "detail", value: "feed-source-board" } }
+    { label: "데이터", value: freshnessLabel, detail: freshnessDetail, tone: freshnessNeedsReview ? "caution" : portfolio.freshness.tone, target: { type: "detail", value: "feed-source-board" } }
   ];
-  var taskBody = tasks.length ? '<div class="oa-work-list" data-console-keyed-list="today-primary">' + tasks.slice(0, 3).map(renderConsoleTaskRow).join("") + '</div>' : renderConsoleEmpty("새로 확인할 투자 의견이 없습니다", pendingRows.length ? pendingRows.length + "개 종목은 아직 투자 의견이 확정되지 않았습니다." : "현재 저장된 분석 중 새로 검토할 투자 의견이 없습니다.");
+  var taskBody = tasks.length ? '<div class="oa-work-list" data-console-keyed-list="today-primary">' + tasks.slice(0, 3).map(renderConsoleTaskRow).join("") + '</div>' : renderConsoleEmpty("오늘 바로 행동할 투자 의견이 없습니다", "매수·매도·비중 조정 의견이 없는 상태입니다. 이를 보유 유지 권고로 해석하지 마세요.");
+  var observationBody = observations.length
+    ? '<div class="oa-work-list oa-observation-list" data-console-keyed-list="today-observations">' + observations.slice(0, 2).map(renderConsoleTaskRow).join("") + '</div>'
+    : renderConsoleEmpty("새로 관찰할 변화가 없습니다", "새 근거나 관계 변화가 생기면 이곳에 표시합니다.");
   var importantBlockers = blockers.filter(function (item) { return ["blocked", "error"].includes(item.state); });
   var contextBody = [
     upcoming[0] ? '<button type="button" class="oa-next-event" data-work-detail="investment-calendar-event" data-work-detail-key="' + escapeHtml(upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "") + '"><span>다음 일정</span><strong>' + escapeHtml(investmentCalendarDisplayTitle(upcoming[0])) + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em><p>' + escapeHtml(investmentCalendarImpactText(upcoming[0])) + '</p><b aria-hidden="true">&rarr;</b></button>' : '',
   ].join("");
   return renderConsoleManagedPage("overview", metrics, [
+    '<section class="oa-today-briefing" aria-label="오늘 투자 브리핑">',
+    '<div><span>오늘의 결론</span><strong>' + escapeHtml(tasks.length ? tasks.length + "건의 행동 의견을 확인하세요" : "지금 바로 바꿀 투자 행동은 없습니다") + '</strong><p>' + escapeHtml(observations.length ? observations.length + "건은 관찰 해석이며 매매 의견이 아닙니다." : "새로운 행동 의견이 생기면 이 영역에서 가장 먼저 안내합니다.") + '</p></div>',
+    '<button class="text-button primary" type="button" data-tab="modeling">판단 전체 보기</button>',
+    '</section>',
     '<div class="oa-console-grid oa-console-grid-primary">',
-    renderConsoleSurface({ title: "내 종목에서 확인할 투자 의견", meta: tasks.length + "건", actions: tasks.length > 3 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
+    renderConsoleSurface({ title: "오늘 할 일", meta: tasks.length + "건", actions: tasks.length > 3 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
     upcoming.length ? renderConsoleSurface({ title: "다가오는 투자 일정", body: renderConsoleLiveRegion("today-context-body", contextBody) }) : '',
     '</div>',
+    observations.length ? renderConsoleSurface({ title: "관찰 중인 변화", meta: observations.length + "건 · 매매 의견 아님", actions: '<button class="text-button compact" type="button" data-tab="modeling">전체 보기</button>', body: renderConsoleLiveRegion("today-observation-body", observationBody) }) : '',
     pendingRows.length ? renderSecondaryDisclosure("today-awaiting", "투자 의견이 아직 없는 종목", '<div class="oa-context-list">' + pendingRows.map(function (row) {
       return '<button type="button" class="oa-context-row" data-work-detail="investment-case" data-work-detail-key="' + escapeHtml(row.subjectCaseId || row.caseId || row.decisionEpisodeId || row.key) + '"><span><strong>' + escapeHtml(row.name) + '</strong><em>' + escapeHtml(row.reading.headline) + '</em></span><b aria-hidden="true">&rarr;</b></button>';
     }).join("") + '</div>', pendingRows.length + "개 종목") : '',
-    portfolio.freshness.tone !== "watch" ? '<p class="oa-data-notice caution">자료 상태 · ' + escapeHtml(portfolio.freshness.label + " · " + portfolio.freshness.detail) + '</p>' : '',
+    freshnessNeedsReview || portfolio.freshness.tone !== "watch" ? '<p class="oa-data-notice caution">자료 상태 · ' + escapeHtml(freshnessLabel + " · " + freshnessDetail) + '</p>' : '',
     groups.operations.length || importantBlockers.length ? renderSecondaryDisclosure("today-operations", "수집·전달 문제", '<div class="oa-work-list" data-console-keyed-list="today-operations">' + groups.operations.map(renderConsoleTaskRow).join("") + '</div>' + (importantBlockers.length ? '<button class="text-button" type="button" data-tab="experiments">분석 처리 문제 ' + importantBlockers.length + '종류 확인</button>' : ''), groups.operations.length + "건 · 분석 처리 " + importantBlockers.length + "종류") : '',
     '<nav class="oa-related-links"><button class="text-button" type="button" data-tab="modeling">투자 의견 전체</button><button class="text-button" type="button" data-tab="experiments">근거 점검</button></nav>'
   ].join(""), { secondaryMetrics: true });

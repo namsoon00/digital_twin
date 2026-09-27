@@ -255,6 +255,11 @@ def flow_lens_read_model() -> FlowLensReadModel:
         return FLOW_LENS_READ_MODEL
 
 
+def prewarm_flow_lens_read_model() -> None:
+    """Start preparing the shared summary view without delaying server startup."""
+    flow_lens_read_model().read(mock=False, watchlist_symbols="", refresh=False)
+
+
 def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()
     detail = configured(first_query(query, "detail") or first_query(query, "view")).lower()

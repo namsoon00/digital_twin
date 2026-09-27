@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { investmentBrief, investmentReading, renderInvestmentBrief } from "../../public/modules/decisions/brief.mjs";
-import { groupTodayTasks } from "../../public/modules/overview/task-groups.mjs";
+import { groupTodayTasks, todayTaskNeedsAction } from "../../public/modules/overview/task-groups.mjs";
+import { calendarEventCanBeDeleted, mergeCalendarEvents } from "../../public/modules/calendar/presentation.mjs";
 import { opinionRecency, decisionInView } from "../../public/modules/decisions/recency.mjs";
 import { evidenceSummary, evidenceResolutionLabel } from "../../public/modules/decisions/evidence-summary.mjs";
 import { notificationEventSummary } from "../../public/modules/notifications/summary.mjs";
@@ -245,6 +246,34 @@ test("operational failures never occupy the investor queue and input order is pr
   assert.deepEqual(groups.pending.map(x => x.key), ["pending"]);
   assert.deepEqual(groups.calendar.map(x => x.key), ["earnings"]);
   assert.equal(JSON.stringify(tasks), before);
+});
+
+test("today separates actionable opinions from observation-only interpretations", () => {
+  const buy = {kind: "판단", key: "buy", actionCode: "BUY", reading: {kind: "opinion"}};
+  const hold = {kind: "판단", key: "hold", actionCode: "HOLD", reading: {kind: "opinion"}};
+  const interpretation = {kind: "판단", key: "interpretation", actionCode: "NO_ACTION", reading: {kind: "interpretation"}};
+  const groups = groupTodayTasks([interpretation, hold, buy]);
+  assert.equal(todayTaskNeedsAction(buy), true);
+  assert.equal(todayTaskNeedsAction(hold), false);
+  assert.equal(todayTaskNeedsAction(interpretation), false);
+  assert.deepEqual(groups.actionable.map(item => item.key), ["buy"]);
+  assert.deepEqual(groups.observation.map(item => item.key), ["interpretation", "hold"]);
+  assert.deepEqual(groups.investment.map(item => item.key), ["interpretation", "hold", "buy"]);
+});
+
+test("calendar combines registered and detected schedules without duplicate or delete ambiguity", () => {
+  const registered = [{eventId: "gdp", title: "GDP", startsAt: "2026-09-30T12:30:00Z", status: "active", notes: "stored"}];
+  const detected = [
+    {eventId: "gdp", title: "GDP", startsAt: "2026-09-30T12:30:00Z", notes: "detected duplicate"},
+    {eventId: "pce", title: "PCE", startsAt: "2026-09-30T12:30:00Z"}
+  ];
+  const merged = mergeCalendarEvents(registered, detected);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].notes, "stored");
+  assert.equal(merged[0].calendarOrigin, "registered");
+  assert.equal(calendarEventCanBeDeleted(merged[0]), true);
+  assert.equal(merged[1].calendarOrigin, "detected");
+  assert.equal(calendarEventCanBeDeleted(merged[1]), false);
 });
 
 test("an unfinished current analysis belongs to preparation, not investment opinions", () => {

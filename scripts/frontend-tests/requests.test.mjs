@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createJsonClient } from "../../public/modules/requests/client.mjs";
 import { createLatestRequestLane } from "../../public/modules/requests/latest.mjs";
 import { requestsAreSilent, withSilentRequests } from "../../public/modules/requests/activity-scope.mjs";
+import { flowLensPath } from "../../public/modules/snapshot/path.mjs";
 
 function fixture(options = {}) {
   const pending = [];
@@ -109,4 +110,11 @@ test("silent request batches are nested and end synchronously", async () => {
   assert(!requestsAreSilent()); resolve(); await pending;
   assert.throws(() => withSilentRequests(() => { throw new Error("test"); }));
   assert(!requestsAreSilent());
+});
+
+test("summary and status snapshot reads use one stable cache key", () => {
+  assert.equal(flowLensPath({detail: "summary"}, ["AAPL", "TSLA"], ""), "/api/flow-lens?detail=summary");
+  assert.equal(flowLensPath({detail: "status"}, ["AAPL", "TSLA"], ""), "/api/flow-lens?detail=status");
+  assert.equal(flowLensPath({detail: "summary", refresh: true}, ["AAPL"], ""), "/api/flow-lens?detail=summary&refresh=1");
+  assert.equal(flowLensPath({detail: "full"}, ["AAPL", "TSLA"], ""), "/api/flow-lens?detail=full&watchlistSymbols=AAPL%2CTSLA");
 });

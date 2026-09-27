@@ -4,6 +4,7 @@ import errno
 import os
 from http.server import ThreadingHTTPServer
 
+from .web.adapters.flow_lens import prewarm_flow_lens_read_model
 from .web.composition import build_api_router
 from .web.handler import make_handler
 
@@ -56,6 +57,7 @@ def serve(host: str = "", port: int = 3000):
         selected_port,
         allow_port_fallback=port_fallback_enabled(),
     )
+    prewarm_flow_lens_read_model()
     display_host = "127.0.0.1" if selected_host in {"", "0.0.0.0"} else selected_host
     if selected_port != requested_port:
         print(

@@ -125,6 +125,10 @@ class WebRouterPayloadTests(unittest.TestCase):
         self.assertEqual("stale", payload["dataFreshness"]["status"])
         model.read.assert_called_once_with(mock=False, watchlist_symbols="AAPL", refresh=True)
         capital.assert_not_called()
+        prewarm_model = SimpleNamespace(read=Mock())
+        with patch.object(flow_lens, "flow_lens_read_model", return_value=prewarm_model):
+            flow_lens.prewarm_flow_lens_read_model()
+        prewarm_model.read.assert_called_once_with(mock=False, watchlist_symbols="", refresh=False)
 
     def test_bootstrap_shape_and_masked_account_payloads(self):
         stored = {"profile": {"ownerName": "demo"}, "memories": [], "items": [], "messages": [], "metadata": {"internal": True}}

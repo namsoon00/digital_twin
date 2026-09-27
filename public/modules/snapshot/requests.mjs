@@ -1,6 +1,7 @@
 import { timestampAgeMinutes } from "../accounts/balance.mjs";
 import { allAccountWatchlistSymbols } from "../accounts/watchlist.mjs";
 import { watchlistSymbols } from "../instruments/catalog.mjs";
+import { flowLensPath } from "./path.mjs";
 import { primeActiveTabData, scheduleTabDataPreload } from "../navigation/preload.mjs";
 import { snapshotHasFullOntologyDetail } from "../ontology/requests.mjs";
 import { render } from "../render/scheduler.mjs";
@@ -29,17 +30,12 @@ var SNAPSHOT_REFRESH_POLL_LIMIT = 18;
 
 function tossLensPath(options) {
   options = options || {};
-  var params = new URLSearchParams();
-  params.set("detail", options.detail || "summary");
-  var pageParams = new URLSearchParams(window.location.search || "");
-  var mockMode = String(pageParams.get("mock") || "").toLowerCase();
-  if (["1", "true", "mock"].indexOf(mockMode) >= 0) params.set("mock", "1");
-  var symbols = allAccountWatchlistSymbols();
-  if (!symbols.length) symbols = watchlistSymbols();
-  if (symbols.length) params.set("watchlistSymbols", symbols.join(","));
-  if (options.refresh) params.set("refresh", "1");
-  var query = params.toString();
-  return "/api/flow-lens" + (query ? "?" + query : "");
+  var symbols = [];
+  if (String(options.detail || "summary") === "full") {
+    symbols = allAccountWatchlistSymbols();
+    if (!symbols.length) symbols = watchlistSymbols();
+  }
+  return flowLensPath(options, symbols, window.location.search || "");
 }
 
 function load(options) {

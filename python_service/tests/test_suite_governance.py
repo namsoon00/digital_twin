@@ -189,7 +189,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # stale-consensus and comparable-sample admission boundaries.
         # Three operational DCF input regressions protect exact source lineage,
         # missing-driver fail-closed behavior and conditional reverse solving.
-        self.assertLessEqual(total, 1804)
+        # Eleven trade-strength quality regressions protect raw-ratio semantics,
+        # opening maturity, repeated-value staleness, ABox gating and messages.
+        self.assertLessEqual(total, 1815)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

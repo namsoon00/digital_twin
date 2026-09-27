@@ -8,7 +8,7 @@ from digital_twin.modules.reasoning.domain.ontology_observation_quality import p
 from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
 from digital_twin.modules.portfolio.contracts import Position, expects_kr_microstructure_signals
 from digital_twin.modules.reasoning.domain.portfolio_ontology_catalog import METRIC_CONCEPTS
-from digital_twin.modules.market_data.contracts import trading_value_snapshot, volume_pace_snapshot
+from digital_twin.modules.market_data.contracts import trade_strength_quality_properties, trading_value_snapshot, volume_pace_snapshot
 
 
 def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
@@ -552,6 +552,11 @@ def add_metric_concepts(
         if value in (None, "", 0):
             continue
         observation = profile_for_domain(observation_profiles or {}, metric_observation_domain(field_name))
+        metric_quality = (
+            trade_strength_quality_properties(position.market_signal_coverage)
+            if field_name == "trade_strength"
+            else {}
+        )
         metric_id = add_entity(graph, kind + "-metric", symbol + ":" + public_key, label, {
             "tboxClass": tbox_class,
             "tboxClasses": metric_tbox_classes(tbox_class, field_name),
@@ -559,8 +564,9 @@ def add_metric_concepts(
             "value": round(value, 4),
             "positionSource": source,
             **observation,
+            **metric_quality,
         })
-        properties = metric_relation_properties(field_name, value, source)
+        properties = {**metric_relation_properties(field_name, value, source), **metric_quality}
         add_relation(
             graph,
             stock_id,

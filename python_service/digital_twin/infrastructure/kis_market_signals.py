@@ -10,6 +10,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from digital_twin.modules.market_data.domain.data_freshness import combine_quality
 from digital_twin.modules.market_data.domain.market_data import known_stock, number, optional_investor_net_volume, pct_distance
+from digital_twin.modules.market_data.domain.trade_strength_quality import trade_strength_quality_snapshot
 from digital_twin.modules.portfolio.domain.portfolio import Position, utc_now_iso
 from digital_twin.modules.news_intelligence.domain.company_knowledge import merge_company_overview_rows
 from digital_twin.modules.portfolio.domain.position_identity import preferred_instrument_name
@@ -359,7 +360,10 @@ def investor_estimate_selection(items: List[Dict[str, object]], now: datetime) -
 
 def stage_source_as_of(stage: str, raw_payload, fetched_at: str) -> Tuple[str, str]:
     if stage != "investor":
-        return fetched_at, "provider-timestamp"
+        # KIS REST quote/ccnl/orderbook responses do not reliably expose one
+        # exchange-issued timestamp in every response shape. Keep the fetch
+        # clock, but never describe it as a provider event timestamp.
+        return fetched_at, "queried-at-fallback"
     rows = raw_payload if isinstance(raw_payload, list) else [raw_payload] if isinstance(raw_payload, dict) else []
     for row in rows:
         if not isinstance(row, dict):
@@ -501,6 +505,12 @@ def stage_coverage(
             payload["latencyReason"] = "KIS REST 응답은 방금 조회했지만 정규장 외 시간이라 장중 실시간 시세가 아닌 최근 마감 기준값입니다."
         else:
             payload["freshnessStatus"] = "near-live"
+    if stage in {"ccnl", "orderbook"} and payload["status"] == "available":
+        regular_session = bool(session and session.get("regular"))
+        payload["realTime"] = bool(real_time)
+        payload["judgementEvidenceUsable"] = regular_session
+        if not regular_session:
+            payload["aiUsableAsStrongEvidence"] = False
     if session:
         payload["marketSession"] = str(session.get("key") or "")
         payload["marketSessionLabel"] = str(session.get("label") or "")
@@ -563,6 +573,40 @@ def stage_coverage(
             if party_status == "not-yet-published"
         ]
     return payload
+
+
+def apply_trade_strength_quality(
+    signal: Dict[str, object],
+    coverage: Dict[str, object],
+    previous_coverage: Dict[str, object] = None,
+    changed_since_previous: Optional[bool] = None,
+    stale_repeat_count: int = 3,
+) -> Dict[str, object]:
+    if not isinstance(coverage, dict):
+        return coverage
+    ccnl = coverage.get("ccnl") if isinstance(coverage.get("ccnl"), dict) else {}
+    if not ccnl:
+        return coverage
+    previous_ccnl = (
+        previous_coverage.get("ccnl")
+        if isinstance(previous_coverage, dict) and isinstance(previous_coverage.get("ccnl"), dict)
+        else {}
+    )
+    next_ccnl = dict(ccnl)
+    next_ccnl.update(trade_strength_quality_snapshot(
+        trade_strength=signal.get("tradeStrength"),
+        coverage=next_ccnl,
+        observed_at=next_ccnl.get("fetchedAt") or signal.get("updatedAt"),
+        buy_volume=signal.get("buyVolume"),
+        sell_volume=signal.get("sellVolume"),
+        cumulative_volume=signal.get("volume"),
+        changed_since_previous=changed_since_previous,
+        previous_coverage=previous_ccnl,
+        stale_repeat_count=stale_repeat_count,
+    ))
+    result = dict(coverage)
+    result["ccnl"] = next_ccnl
+    return result
 
 
 def unavailable_stage_coverage(stage: str, session: Dict[str, object]) -> Dict[str, object]:
@@ -1183,7 +1227,32 @@ class KISMarketSignalProvider:
         signal["marketSessionLabel"] = str(session.get("label") or "")
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
         coverage = dict(coverage or {})
+        if session.get("regular"):
+            return signal
         if session.get("microstructureAvailable"):
+            for stage in ["ccnl", "orderbook"]:
+                item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
+                if not item:
+                    continue
+                next_item = dict(item)
+                next_item.update({
+                    "marketSession": str(session.get("key") or "post_close"),
+                    "marketSessionLabel": str(session.get("label") or "장 마감 후"),
+                    "freshnessStatus": "last-close",
+                    "cadence": "market-close-reference",
+                    "latencyStatus": "market-closed-reference",
+                    "latencyLabel": "장 마감 기준값",
+                    "latencyReason": "정규장 종료 후의 체결·호가 값은 최근 장 마감 참고값입니다.",
+                    "judgementEvidenceUsable": False,
+                    "aiUsableAsStrongEvidence": False,
+                })
+                coverage[stage] = next_item
+            coverage = apply_trade_strength_quality(
+                signal,
+                coverage,
+                stale_repeat_count=self.unchanged_stale_count(),
+            )
+            signal["marketSignalCoverage"] = coverage
             return signal
         for key in MICROSTRUCTURE_SIGNAL_KEYS:
             signal.pop(key, None)
@@ -1195,20 +1264,25 @@ class KISMarketSignalProvider:
         return signal
 
     def mark_unchanged_stage_health(self, signal: Dict[str, object], previous: Dict[str, object] = None) -> Dict[str, object]:
-        if not signal or not previous or not self.is_kr_regular_market_hours():
+        if not signal or not self.is_kr_regular_market_hours():
             return signal
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+        previous = previous if isinstance(previous, dict) else {}
         previous_coverage = previous.get("marketSignalCoverage") if isinstance(previous.get("marketSignalCoverage"), dict) else {}
         if not isinstance(coverage, dict):
             return signal
         coverage = dict(coverage)
         stage_keys = {
             "price": ["currentPrice", "volume", "tradingValue"],
-            "ccnl": ["tradeStrength", "buyVolume", "sellVolume"],
+            # A stable ratio can still be a fresh observation when cumulative
+            # executions advance. Include volume so only a fully frozen REST
+            # payload is classified as unchanged.
+            "ccnl": ["tradeStrength", "buyVolume", "sellVolume", "volume"],
             "investor": INVESTOR_SIGNAL_KEYS,
             "orderbook": ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
         }
         stale_threshold = self.unchanged_stale_count()
+        stage_changes: Dict[str, bool] = {}
         for stage, keys in stage_keys.items():
             item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
             if str(item.get("status") or "") != "available":
@@ -1221,6 +1295,7 @@ class KISMarketSignalProvider:
             if not comparable_keys:
                 continue
             unchanged = all(abs(float(current_values[key]) - float(previous_values[key])) < 0.000001 for key in comparable_keys)
+            stage_changes[stage] = not unchanged
             next_item = dict(item)
             if unchanged:
                 previous_item = previous_coverage.get(stage) if isinstance(previous_coverage, dict) and isinstance(previous_coverage.get(stage), dict) else {}
@@ -1267,6 +1342,13 @@ class KISMarketSignalProvider:
             else:
                 next_item["unchangedCount"] = 0
             coverage[stage] = next_item
+        coverage = apply_trade_strength_quality(
+            signal,
+            coverage,
+            previous_coverage=previous_coverage,
+            changed_since_previous=stage_changes.get("ccnl"),
+            stale_repeat_count=stale_threshold,
+        )
         signal["marketSignalCoverage"] = coverage
         included = []
         if coverage_has_fields(coverage, "price", ["currentPrice"]):
@@ -1697,6 +1779,12 @@ class KISMarketSignalProvider:
             signal["fundamentalEstimates"] = fundamental_estimates
         signal = merge_fresh_websocket_stages(signal, cached_signal, max(10, self.live_refresh_seconds() * 2))
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
+        coverage = apply_trade_strength_quality(
+            signal,
+            coverage,
+            stale_repeat_count=self.unchanged_stale_count(),
+        )
+        signal["marketSignalCoverage"] = coverage
         signal = remove_unreliable_investor_values(signal)
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
         included = []

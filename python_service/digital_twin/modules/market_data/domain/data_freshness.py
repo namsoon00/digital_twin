@@ -311,11 +311,22 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "providerUpdateCurrent",
                 "nextProviderUpdateAt",
                 "validUntil",
+                "tradeStrengthQualityState",
+                "tradeStrengthQualityReason",
+                "tradeStrengthSessionElapsedMinutes",
+                "tradeStrengthOpeningConfirmationMinutes",
+                "tradeStrengthSampleCount",
+                "tradeStrengthSampleState",
+                "tradeStrengthObservedChangeConfirmed",
+                "tradeStrengthPreviousConfirmationRetained",
+                "tradeStrengthDecisionUsable",
             ]:
                 if stage_payload.get(key) not in (None, ""):
                     record[key] = stage_payload.get(key)
             if stage_payload.get("unchangedCount") not in (None, ""):
                 record["unchangedCount"] = stage_payload.get("unchangedCount")
+            if stage_payload.get("judgementEvidenceUsable") is False and stage_payload.get("tradeStrengthQualityReason"):
+                record["reason"] = stage_payload.get("tradeStrengthQualityReason")
             records.append(record)
         elif status in {"stale", "unknown"}:
             records.append({
@@ -341,6 +352,9 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "latencyStatus": stage_payload.get("latencyStatus"),
                 "latencyLabel": stage_payload.get("latencyLabel"),
                 "latencyReason": stage_payload.get("latencyReason"),
+                "tradeStrengthQualityState": stage_payload.get("tradeStrengthQualityState"),
+                "tradeStrengthQualityReason": stage_payload.get("tradeStrengthQualityReason"),
+                "tradeStrengthDecisionUsable": stage_payload.get("tradeStrengthDecisionUsable"),
             })
     return records
 
@@ -482,6 +496,14 @@ def aggregate_freshness(records: Iterable[Dict[str, object]], message_type: str,
         freshness_budgets.append((float(maximum) - float(age), age, maximum))
     limiting_budget = min(freshness_budgets, key=lambda value: value[0]) if freshness_budgets else None
     max_ages = [int(item.get("maxAgeMinutes") or 0) for item in items if int(item.get("maxAgeMinutes") or 0)]
+    judgement_usable_sources = [
+        item for item in items
+        if item.get("judgementEvidenceUsable") is not False
+    ]
+    strong_evidence_sources = [
+        item for item in items
+        if item.get("aiUsableAsStrongEvidence") is not False
+    ]
     return {
         "status": status,
         "reason": reason,
@@ -495,6 +517,13 @@ def aggregate_freshness(records: Iterable[Dict[str, object]], message_type: str,
             else min(max_ages) if max_ages else max_age_minutes_for_message_type(message_type, settings)
         ),
         "sources": items,
+        # Flow stages are independent observations. A gated trade-strength
+        # sample must not suppress a fresh investor or order-book observation.
+        # Each metric still carries its own explicit evidence gate in ABox.
+        "judgementEvidenceUsable": bool(judgement_usable_sources),
+        "aiUsableAsStrongEvidence": bool(strong_evidence_sources),
+        "judgementEvidenceUsableSourceCount": len(judgement_usable_sources),
+        "judgementEvidenceGatedSourceCount": len(items) - len(judgement_usable_sources),
         "checkedAt": utc_iso(now),
     }
 

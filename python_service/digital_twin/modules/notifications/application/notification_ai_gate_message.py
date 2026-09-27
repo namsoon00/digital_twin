@@ -3806,6 +3806,11 @@ def _market_signal_basis_label(context: Dict[str, object], stage: str) -> str:
     freshness = str(payload.get("freshnessStatus") or "").strip().lower()
     latency = str(payload.get("latencyStatus") or "").strip().lower()
     measurement = str(payload.get("measurementType") or "").strip().lower()
+    trade_strength_quality = str(payload.get("tradeStrengthQualityState") or "").strip().lower()
+    if stage == "ccnl" and trade_strength_quality == "confirmed-live":
+        return "정규장 실시간 원값"
+    if stage == "ccnl" and trade_strength_quality in {"confirmed-polled-change", "confirmed-provider-time"}:
+        return "정규장 누적 원값"
     if stage == "investor" and (
         measurement == "daily-final"
         or freshness == "market-close-final"
@@ -3829,6 +3834,10 @@ def _market_signal_exclusion_note(context: Dict[str, object], stage: str) -> str
     if not payload or _market_signal_stage_visible(context, stage):
         return ""
     status = str(payload.get("status") or "").strip().lower()
+    if stage == "ccnl" and payload.get("judgementEvidenceUsable") is False:
+        reason = str(payload.get("tradeStrengthQualityReason") or "").strip()
+        if reason:
+            return reason
     if status in {"stale", "stale-at-dispatch"}:
         return "최신값이 아니어서 이번 판단에서는 제외"
     if status in {"unavailable", "missing", "empty"}:

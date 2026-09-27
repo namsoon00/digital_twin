@@ -7,6 +7,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from digital_twin.modules.accounts.domain.accounts import split_symbols
 from digital_twin.modules.market_data.domain.market_data import known_stock, number
+from digital_twin.modules.market_data.domain.trade_strength_quality import trade_strength_quality_snapshot
 from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from .external_signal_utils import guarded_external_call
 from .kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, clean_symbol
@@ -233,6 +234,16 @@ def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object]
     coverage = dict(merged.get("marketSignalCoverage") or {}) if isinstance(merged.get("marketSignalCoverage"), dict) else {}
     fields = [key for key in KIS_REALTIME_STAGE_FIELDS[stage] if update.get(key) not in (None, "")]
     coverage[stage] = websocket_stage_coverage(stage, fields, fetched_at, tr_id)
+    if stage == "ccnl":
+        coverage[stage].update(trade_strength_quality_snapshot(
+            trade_strength=merged.get("tradeStrength"),
+            coverage=coverage[stage],
+            observed_at=fetched_at,
+            buy_volume=merged.get("buyVolume"),
+            sell_volume=merged.get("sellVolume"),
+            cumulative_volume=merged.get("volume"),
+            changed_since_previous=True,
+        ))
     coverage[stage]["validationVersion"] = KIS_REALTIME_VALIDATION_VERSION
     coverage[stage]["wireFieldCount"] = update.get("wireFieldCount")
     coverage[stage]["values"] = {"symbol": symbol, **{key: update[key] for key in fields}}

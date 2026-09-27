@@ -109,6 +109,8 @@ _EXPORTS.update({
     'sorted_candles': ('digital_twin.modules.market_data.domain.market_data', 'sorted_candles'),
     'technical_indicators_from_candles': ('digital_twin.modules.market_data.domain.market_data', 'technical_indicators_from_candles'),
     'trading_value_snapshot': ('digital_twin.modules.market_data.domain.volume_time_adjustment', 'trading_value_snapshot'),
+    'trade_strength_quality_properties': ('digital_twin.modules.market_data.domain.trade_strength_quality', 'trade_strength_quality_properties'),
+    'trade_strength_quality_snapshot': ('digital_twin.modules.market_data.domain.trade_strength_quality', 'trade_strength_quality_snapshot'),
     'utc_iso': ('digital_twin.modules.market_data.domain.data_freshness', 'utc_iso'),
     'volume_pace_snapshot': ('digital_twin.modules.market_data.domain.volume_time_adjustment', 'volume_pace_snapshot'),
 })

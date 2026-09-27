@@ -901,6 +901,8 @@ def _coverage_status(
         if status in {"stale", "unknown"}:
             return status
         if any(key in fields for key in keys):
+            if item.get("judgementEvidenceUsable") is False:
+                return "gated"
             return "available" if any(key in non_zero_fields for key in keys) or value else "zero"
         if status in {"empty", "missing"}:
             return status
@@ -943,6 +945,15 @@ def _availability_with_coverage(status: str, source: str, coverage: Dict[str, ob
         "providerUpdateSlot",
         "providerUpdateCode",
         "measurementType",
+        "tradeStrengthQualityState",
+        "tradeStrengthQualityReason",
+        "tradeStrengthSessionElapsedMinutes",
+        "tradeStrengthOpeningConfirmationMinutes",
+        "tradeStrengthSampleCount",
+        "tradeStrengthSampleState",
+        "tradeStrengthObservedChangeConfirmed",
+        "tradeStrengthPreviousConfirmationRetained",
+        "tradeStrengthDecisionUsable",
     ]:
         if key in stage_item and stage_item.get(key) not in (None, ""):
             item[key] = stage_item.get(key)
@@ -1213,6 +1224,9 @@ def position_signal_facts(
     if expects_kr_signals and trade_strength_status != "available":
         if trade_strength_status == "zero":
             effect = "체결강도 응답은 있었지만 0으로 들어와 체결 압력 근거로 쓰지 않습니다."
+        elif trade_strength_status == "gated":
+            ccnl_coverage = _coverage_item(market_signal_coverage, "ccnl")
+            effect = str(ccnl_coverage.get("tradeStrengthQualityReason") or "체결강도는 수집됐지만 시간대·갱신·표본 품질 기준을 통과하지 못해 판단 근거에서 제외합니다.")
         elif trade_strength_status == "empty":
             effect = "KIS 체결 단계 응답이 비어 있어 수급 방향 판단을 가격·거래량 중심으로 봅니다."
         else:

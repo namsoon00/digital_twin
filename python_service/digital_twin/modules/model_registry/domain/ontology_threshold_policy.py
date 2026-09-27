@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, Iterable, List, Tuple
 
 
-ONTOLOGY_THRESHOLD_POLICY_VERSION = "ontology-threshold-policy-v1"
+ONTOLOGY_THRESHOLD_POLICY_VERSION = "ontology-threshold-policy-v2"
 ONTOLOGY_THRESHOLD_POLICY_SOURCE = "RuleBox threshold policy"
 
 
@@ -154,7 +154,7 @@ class ProfitLossDeliveryThresholdPolicy:
 
 @dataclass(frozen=True)
 class DataQualityThresholdPolicy:
-    policy_id: str = "threshold.data_quality.v1"
+    policy_id: str = "threshold.data_quality.v2"
     label: str = "데이터 품질 교차검증 정책"
     tbox_class: str = "DataQuality"
     tbox_classes: Tuple[str, ...] = ("DataQuality", "ObservationDataState")
@@ -163,6 +163,8 @@ class DataQualityThresholdPolicy:
     trading_value_mismatch_pct: float = 35.0
     volume_pace_strong_ratio: float = 1.5
     volume_pace_normal_ratio: float = 0.8
+    trade_strength_opening_confirmation_minutes: float = 5.0
+    trade_strength_unchanged_stale_count: int = 3
 
 
 @dataclass(frozen=True)

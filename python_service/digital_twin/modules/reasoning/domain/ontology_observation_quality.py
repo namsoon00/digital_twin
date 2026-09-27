@@ -166,11 +166,14 @@ def observation_profile(
         and fetched_age_minutes <= max_age_minutes
     )
     status = "fresh" if closed_market_reference else raw_status
-    evidence_usable = status == "fresh" and timestamp_present
+    explicit_evidence_usable = (record or {}).get("judgementEvidenceUsable")
+    evidence_usable = status == "fresh" and timestamp_present and explicit_evidence_usable is not False
     if not timestamp_present:
         gate_reason = "원천 기준시각이 없어 투자 판단 근거로 사용할 수 없습니다."
     elif status != "fresh":
         gate_reason = str((record or {}).get("reason") or "신선도 기준 미충족")
+    elif explicit_evidence_usable is False:
+        gate_reason = str((record or {}).get("reason") or "현재 관측 품질 기준을 통과하지 못해 투자 판단 근거로 사용하지 않습니다.")
     elif closed_market_reference:
         gate_reason = "최근 조회한 장 마감 기준값으로 판단에 사용하며 실시간 체결 신호로 보지 않습니다."
     elif session_status != "open":

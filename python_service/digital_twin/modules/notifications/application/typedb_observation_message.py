@@ -665,6 +665,28 @@ def _investor_row(facts: Dict[str, object]) -> str:
     return "투자자 수급: " + " · ".join(rows) if rows else ""
 
 
+def _market_signal_stage(facts: Dict[str, object], stage: str) -> Dict[str, object]:
+    coverage = facts.get("marketSignalCoverage") if isinstance(facts.get("marketSignalCoverage"), Mapping) else {}
+    payload = coverage.get(stage) if isinstance(coverage.get(stage), Mapping) else {}
+    return dict(payload or {})
+
+
+def _trade_strength_presentation(facts: Dict[str, object]) -> Dict[str, object]:
+    stage = _market_signal_stage(facts, "ccnl")
+    if not stage:
+        return {"visible": True, "basis": "", "reason": ""}
+    status = str(stage.get("status") or "").strip().lower()
+    usable = status in {"available", "partial", "proxy"} and stage.get("judgementEvidenceUsable") is not False
+    quality = str(stage.get("tradeStrengthQualityState") or "").strip().lower()
+    basis = ""
+    if quality == "confirmed-live":
+        basis = "정규장 실시간 원값"
+    elif quality in {"confirmed-polled-change", "confirmed-provider-time"}:
+        basis = "정규장 누적 원값"
+    reason = str(stage.get("tradeStrengthQualityReason") or stage.get("reason") or "").strip()
+    return {"visible": usable, "basis": basis, "reason": reason}
+
+
 def _flow_rows(context: Dict[str, object], limit: int) -> List[str]:
     facts = relation_facts(context)
     relation = relation_context_value(context)
@@ -712,12 +734,18 @@ def _flow_rows(context: Dict[str, object], limit: int) -> List[str]:
         rows.append(volume_text)
     rows.append(_investor_row(facts))
     strength = _number(facts.get("tradeStrength"))
-    if strength and strength > 0:
+    strength_presentation = _trade_strength_presentation(facts)
+    if strength and strength > 0 and strength_presentation["visible"]:
         label = trade_strength_label(strength)
-        rows.append(
+        strength_row = (
             "체결 흐름: 체결강도 " + _decimal(strength, 1)
             + ((" (" + label + ")") if label else "")
         )
+        if strength_presentation["basis"]:
+            strength_row += " · " + str(strength_presentation["basis"])
+        rows.append(strength_row)
+    elif strength and strength > 0 and strength_presentation["reason"]:
+        rows.append("체결 흐름: " + str(strength_presentation["reason"]))
     return _unique(rows, limit)
 
 

@@ -39,6 +39,29 @@ class ValuationModelResult:
         return any(bool(row.get("valuationDecisionEligible")) for row in self.rows)
 
 
+def valuation_result_status(rows: List[Dict[str, object]]) -> str:
+    if not rows:
+        return "unavailable"
+    if any(
+        number(row.get("fairValue")) > 0.0
+        and bool(row.get("valuationDecisionEligible"))
+        for row in rows
+    ):
+        return "calculated"
+    if any(
+        str(row.get("valuationModelFamily") or "") == "driver-dcf"
+        and str(row.get("valuationInputState") or "") == "sufficient"
+        and set((row.get("dcfAssessment") or {}).get("blockedReasons") or []) == {"non-positive-equity-value"}
+        for row in rows
+    ):
+        return "calculated-diagnostic"
+    if any(number(row.get("fairValue")) > 0.0 for row in rows):
+        return "calculated"
+    if any(str(row.get("valuationQualityStatus") or "") == "blocked" for row in rows):
+        return "blocked-invalid-data"
+    return "blocked-missing-inputs"
+
+
 class ValuationModelService:
     """Select and execute the valuation model appropriate to the instrument.
 
@@ -71,21 +94,7 @@ class ValuationModelService:
                 model_release_id=checked.get("valuationModelId") or checked.get("valuationMethod"),
                 source_snapshot_id=request.source_snapshot_id or getattr(position, "valuation_snapshot_id", ""),
             ))
-        if not rows:
-            status = "unavailable"
-        elif any(number(row.get("fairValue")) > 0.0 for row in rows):
-            status = "calculated"
-        elif any(
-            str(row.get("valuationModelFamily") or "") == "driver-dcf"
-            and str(row.get("valuationInputState") or "") == "sufficient"
-            and set((row.get("dcfAssessment") or {}).get("blockedReasons") or []) == {"non-positive-equity-value"}
-            for row in rows
-        ):
-            status = "calculated-diagnostic"
-        elif any(str(row.get("valuationQualityStatus") or "") == "blocked" for row in rows):
-            status = "blocked-invalid-data"
-        else:
-            status = "blocked-missing-inputs"
+        status = valuation_result_status(rows)
         return ValuationModelResult(
             symbol=str(position.symbol or "").upper().strip(),
             rows=[dict(row) for row in rows],

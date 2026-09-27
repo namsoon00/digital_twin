@@ -37,6 +37,7 @@ from digital_twin.modules.portfolio.domain.valuation import (
 )
 from digital_twin.modules.portfolio.domain.valuation.models import convert_cross_listed_valuation_inputs
 from digital_twin.modules.portfolio.domain.valuation.projection import add_valuation_row_concepts, quality_checked_valuation_row
+from digital_twin.modules.portfolio.domain.valuation.service import valuation_result_status
 
 
 class ValuationContractTests(unittest.TestCase):
@@ -155,6 +156,23 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(VALUATION_MODEL_SERVICE_VERSION, result.rows[0]["valuationModelServiceVersion"])
         for action_key in ("action", "recommendedAction", "decision", "buy", "sell"):
             self.assertNotIn(action_key, result.rows[0])
+        diagnostic_rows = [
+            {
+                "fairValue": 120,
+                "valuationDecisionEligible": False,
+                "valuationModelFamily": "growth",
+            },
+            {
+                "fairValue": None,
+                "valuationDecisionEligible": False,
+                "valuationModelFamily": "driver-dcf",
+                "valuationInputState": "sufficient",
+                "dcfAssessment": {"blockedReasons": ["non-positive-equity-value"]},
+            },
+        ]
+        self.assertEqual("calculated-diagnostic", valuation_result_status(diagnostic_rows))
+        diagnostic_rows[0]["valuationDecisionEligible"] = True
+        self.assertEqual("calculated", valuation_result_status(diagnostic_rows))
 
     def test_quarterly_eps_is_not_combined_with_annual_per(self):
         observation = annual_eps_observation(

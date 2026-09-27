@@ -61,6 +61,13 @@ from digital_twin.infrastructure.external_api.adapters.yfinance import (
     YFinanceProfileAdapter,
     unusable_modules_error_message,
 )
+from digital_twin.infrastructure.external_api.adapters.issuer_ir import (
+    IssuerIrDocumentsAdapter,
+    parse_ir_json,
+    parse_ir_documents,
+    parse_ir_xml,
+)
+from digital_twin.modules.market_data.domain.issuer_ir import issuer_ir_coverage, issuer_ir_sources
 from digital_twin.infrastructure.external_api.mysql_stores import (
     EMPTY_DOCUMENT_HASH,
     completed_followup_needs_retry,
@@ -1041,6 +1048,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self._assert_source_reference_distinguishes_provider_correction_without_using_fetch_clock()
         self._assert_source_observation_keeps_zero_separate_from_missing_and_unsupported()
         self._assert_transition_detects_correction_beyond_display_field_limit()
+        self._assert_official_ir_registry_parser_and_coverage_contract()
 
     def _assert_registered_dataset_catalog_exposes_owned_semantics(self):
         catalog = external_dataset_catalog()
@@ -1049,6 +1057,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertIn("financial", catalog["sec.company_facts"].category_ids)
         self.assertIn("financial", catalog["opendart.xbrl_facts"].category_ids)
         self.assertIn("company_event", catalog["opendart.document"].category_ids)
+        self.assertEqual(("investor-relations",), catalog["issuer.ir_documents"].purpose_ids)
         self.assertEqual("unsupported", catalog["yfinance.options"].empty_result_semantics)
 
         xbrl = b"""<?xml version='1.0' encoding='UTF-8'?>
@@ -1079,6 +1088,72 @@ class ExternalDataPlatformTest(unittest.TestCase):
             {row["datasetId"] for row in registry.descriptors({})},
         )
         self.assertTrue(all(row["categoryIds"] for row in registry.descriptors({})))
+
+    def _assert_official_ir_registry_parser_and_coverage_contract(self):
+        sources = issuer_ir_sources()
+        self.assertEqual(
+            {"000660", "000680", "005380", "028260", "035420", "035720", "066570", "376900", "AAPL", "CPNG", "MSTR", "NVDA", "PLTR", "TSLA"},
+            set(sources),
+        )
+        adapter = IssuerIrDocumentsAdapter()
+        partitions = adapter.partitions([
+            ExternalSubject(symbol, symbol=symbol, name=sources[symbol].issuer_name, market=sources[symbol].market, source="watchlist")
+            for symbol in sources
+        ], {})
+        self.assertEqual(set(sources), {item.partition_key for item in partitions})
+        documents = parse_ir_documents("""
+            <a href='/files/2026_Q2_earnings.pdf'>2026.08.07 Q2 Earnings Presentation</a>
+            <a href='/about'>Company overview</a>
+            <a href='javascript:void(0)'>2026 IR</a>
+        """, "https://issuer.example.com/investors")
+        self.assertEqual(1, len(documents))
+        self.assertEqual("2026-08-07", documents[0]["publishedAt"])
+        self.assertEqual("pdf", documents[0]["documentType"])
+        button_documents = parse_ir_documents(
+            "<button onclick=\"fileDownload('/files/2026/q2-earnings-call.pdf')\"></button>",
+            "https://issuer.example.com/investors",
+        )
+        self.assertEqual("pdf", button_documents[0]["documentType"])
+        json_documents = parse_ir_json(
+            '{"data":{"content":[{"announcementId":53,"title":"2026년 반기 연결 실적 안내","createdAt":"2026-08-14 11:50:27"}]}}',
+            "https://api.issuer.example.com/ir/announcement/getList",
+            "https://issuer.example.com/ir/announcement",
+        )
+        self.assertEqual("2026-08-14", json_documents[0]["publishedAt"])
+        self.assertIn("/53?id=53", json_documents[0]["url"])
+        xml_documents = parse_ir_xml(
+            "<Result><data><content><content><announcementId>53</announcementId><title>반기 실적 안내</title><createdAt>2026-08-14 11:50:27</createdAt></content></content></data></Result>",
+            "https://api.issuer.example.com/ir/announcement/getList",
+            "https://issuer.example.com/ir/announcement",
+        )
+        self.assertEqual(json_documents[0]["publishedAt"], xml_documents[0]["publishedAt"])
+        coverage = issuer_ir_coverage(
+            [ExternalSubject("AAPL", symbol="AAPL", name="Apple", market="US")],
+            [{
+                "datasetId": "issuer.ir_documents", "subjectKey": "AAPL", "freshnessState": "fresh",
+                "sourceAsOf": "2026-08-07", "quality": {"dataUsable": True, "documentCount": 3, "latestPublishedAt": "2026-08-07"},
+            }],
+            [{"datasetId": "issuer.ir_documents", "subjectKey": "AAPL", "lastSuccessAt": "2026-08-08T00:00:00Z"}],
+        )
+        self.assertEqual("complete", coverage["status"])
+        self.assertEqual(3, coverage["items"][0]["documentCount"])
+        fallback_coverage = issuer_ir_coverage(
+            [ExternalSubject("CPNG", symbol="CPNG", name="Coupang", market="US")],
+            [
+                {
+                    "datasetId": "issuer.ir_documents", "subjectKey": "CPNG", "freshnessState": "fresh",
+                    "quality": {"dataUsable": False, "accessState": "blocked", "documentCount": 0},
+                },
+                {
+                    "datasetId": "sec.document", "subjectKey": "CPNG", "freshnessState": "fresh",
+                    "sourceAsOf": "2026-08-04", "quality": {"dataUsable": True, "documentState": "document-verified"},
+                },
+            ],
+            [{"datasetId": "issuer.ir_documents", "subjectKey": "CPNG", "lastSuccessAt": "2026-08-08T00:00:00Z"}],
+        )
+        self.assertEqual("blocked", fallback_coverage["items"][0]["state"])
+        self.assertTrue(fallback_coverage["items"][0]["fallbackReady"])
+        self.assertEqual("complete", fallback_coverage["authoritativeStatus"])
 
     def _assert_source_reference_distinguishes_provider_correction_without_using_fetch_clock(self):
         base = SourceObservation(

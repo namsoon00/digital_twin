@@ -29,6 +29,7 @@ from .public_data_portal_company import (
 from .sec import SecCompanyFactsAdapter, SecDocumentAdapter, SecSubmissionsAdapter
 from .yfinance import YFinanceProfileAdapter
 from .alpha_vantage import AlphaVantageQuoteAdapter
+from .issuer_ir import IssuerIrDocumentsAdapter
 
 
 def default_external_dataset_registry(
@@ -61,6 +62,7 @@ def default_external_dataset_registry(
         SecSubmissionsAdapter(),
         SecDocumentAdapter(),
         SecCompanyFactsAdapter(),
+        IssuerIrDocumentsAdapter(),
         YFinanceProfileAdapter("price"),
         YFinanceProfileAdapter("options"),
         YFinanceProfileAdapter("news"),

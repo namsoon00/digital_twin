@@ -170,6 +170,23 @@ class InstrumentValuationQueryService:
             if isinstance(dcf_readiness.get("financialEvidence"), Mapping)
             else {}
         )
+        fitness_subjects = (
+            ((external_signals.get("externalDataPlatform") or {}).get("fitness") or {}).get("subjects")
+            if isinstance(external_signals.get("externalDataPlatform"), Mapping)
+            else {}
+        )
+        subject_fitness = (
+            dict(fitness_subjects.get(source_symbol) or {})
+            if isinstance(fitness_subjects, Mapping)
+            else {}
+        )
+        purpose_fitness = subject_fitness.get("purposes") if isinstance(subject_fitness.get("purposes"), Mapping) else {}
+        investor_relations_fitness = dict(purpose_fitness.get("investor-relations") or {})
+        ir_documents = (
+            dict((external_signals.get("issuerIrDocuments") or {}).get(source_symbol) or {})
+            if isinstance(external_signals.get("issuerIrDocuments"), Mapping)
+            else {}
+        )
         data_readiness = {
             "contractVersion": "instrument-valuation-data-readiness-v1",
             "status": "ready" if (
@@ -196,6 +213,19 @@ class InstrumentValuationQueryService:
                 "assumptionReviewState": _text(dcf_readiness.get("assumptionReviewState")),
             },
             "modelAgreement": model_agreement,
+            "investorRelations": {
+                "status": _text(investor_relations_fitness.get("state") or "not-collected"),
+                "usable": bool(investor_relations_fitness.get("usable")),
+                "reason": _text(investor_relations_fitness.get("reason")),
+                "availableDatasets": list(investor_relations_fitness.get("availableDatasets") or []),
+                "freshDatasets": list(investor_relations_fitness.get("freshDatasets") or []),
+                "sourceUrl": _text(ir_documents.get("sourceUrl")),
+                "documentCount": int(_number(ir_documents.get("documentCount")) or 0),
+                "latestPublishedAt": _text(ir_documents.get("latestPublishedAt")),
+                "documentUsePolicy": _text(ir_documents.get("documentUsePolicy") or "reference-only-until-body-verified"),
+                "fallbackDatasets": list(ir_documents.get("fallbackDatasets") or []),
+                "valuationInputEligible": False,
+            },
             "sourceRevisionCount": len((primary.get("valuationBundle") or {}).get("sourceRevisionVector") or []),
             "decisionEligible": bool(primary.get("valuationDecisionEligible")) and model_agreement.get("status") != "conflict",
         }
@@ -225,6 +255,7 @@ class InstrumentValuationQueryService:
             *(dcf_readiness.get("missingInputs") or []),
             *((dcf_readiness.get("financialEvidence") or {}).get("blockingReasons") or []),
             *(model_agreement.get("blockingReasons") or []),
+            *(["official-ir-source-not-ready"] if investor_relations_fitness.get("state") not in {"fresh", "partial"} else []),
             *(["dcf-assumption-review-required"] if dcf_readiness.get("assumptionReviewState") == "required" else []),
         ])
 

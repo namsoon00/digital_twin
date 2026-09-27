@@ -11,6 +11,7 @@ from digital_twin.modules.market_data.application.external_data.contracts import
 from digital_twin.modules.market_data.application.external_data.fact_transition_service import ExternalFactTransitionService, FactTransition
 from digital_twin.modules.market_data.domain.external_call import ExternalCallDeferred
 from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
+from digital_twin.modules.market_data.domain.issuer_ir import issuer_ir_coverage
 
 
 def utc_now() -> datetime:
@@ -521,6 +522,7 @@ class ExternalDataCollectionService:
         facts = fitness_loader(subject_keys) if callable(fitness_loader) else self.store.list_current(subject_keys)
         coverage_loader = getattr(self.store, "collection_coverage_rows", None)
         collection_states = coverage_loader(subject_keys) if callable(coverage_loader) else []
+        ir_coverage = issuer_ir_coverage(subjects, facts, collection_states)
         return {
             "enabled": self.enabled(),
             "workerId": self.worker_id,
@@ -539,5 +541,6 @@ class ExternalDataCollectionService:
             ),
             "officialEvidenceProjection": projection_status,
             "documentRecovery": self.document_recovery.last_result if self.document_recovery else {"status": "not-configured"},
+            "issuerIrCoverage": ir_coverage,
             **summary,
         }

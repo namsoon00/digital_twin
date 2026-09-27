@@ -27,6 +27,7 @@ EXTERNAL_SIGNAL_MAP_FIELDS = {
     "yfinanceData",
     "researchEvidence",
     "companyKnowledge",
+    "issuerIrDocuments",
     "externalDataLineage",
 }
 
@@ -381,6 +382,7 @@ class ExternalSignalsReadModelService:
             "earningsReports": {},
             "yfinanceData": {},
             "researchEvidence": {},
+            "issuerIrDocuments": {},
             "statuses": [],
             "externalDataLineage": {},
             "externalDataPlatform": {

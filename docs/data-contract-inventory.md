@@ -60,6 +60,7 @@
 | `public-data.kr-shareholder-rights` | company_event, calendar | shareholder-rights-event-v1 | disclosure | KR | missing |
 | `sec.submissions` | company_event, identity | official-filing-index-v1 | disclosure, identity | US | missing |
 | `sec.document` | company_event, financial | official-filing-document-v1 | disclosure, valuation | US | missing |
+| `issuer.ir_documents` | company_event, financial, calendar | official-issuer-ir-index-v1 | investor-relations | KR, US | missing |
 | `sec.company_facts` | financial | company-financial-facts-v1 | valuation | US | missing |
 | `yfinance.price` | price_trade | secondary-market-observation-v1 | market-price | KR, US | missing |
 | `yfinance.options` | price_trade, market_context | derivatives-observation-v1 | derivatives | US | unsupported |

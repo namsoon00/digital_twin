@@ -76,6 +76,30 @@ class InstrumentValuationQueryTests(unittest.TestCase):
                     },
                 }
             },
+            "issuerIrDocuments": {
+                "035720": {
+                    "sourceUrl": "https://www.kakaocorp.com/ir/noticeList?lang=en",
+                    "documentCount": 4,
+                    "latestPublishedAt": "2026-08-07",
+                    "documentUsePolicy": "reference-only-until-body-verified",
+                }
+            },
+            "externalDataPlatform": {
+                "fitness": {
+                    "subjects": {
+                        "035720": {
+                            "purposes": {
+                                "investor-relations": {
+                                    "state": "fresh", "usable": True,
+                                    "reason": "공식 IR 문서 목록이 최신입니다.",
+                                    "availableDatasets": ["issuer.ir_documents"],
+                                    "freshDatasets": ["issuer.ir_documents"],
+                                }
+                            }
+                        }
+                    }
+                }
+            },
         }
 
     def snapshot_state(self):
@@ -151,6 +175,11 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         )
         self.assertIn(payload["valuation"]["modelAgreement"]["status"], {"comparable", "conflict", "insufficient-models"})
         self.assertIn("dataReadiness", payload["valuation"])
+        self.assertEqual("fresh", payload["valuation"]["dataReadiness"]["investorRelations"]["status"])
+        self.assertEqual(4, payload["valuation"]["dataReadiness"]["investorRelations"]["documentCount"])
+        self.assertEqual(["issuer.ir_documents"], payload["valuation"]["dataReadiness"]["investorRelations"]["freshDatasets"])
+        self.assertFalse(payload["valuation"]["dataReadiness"]["investorRelations"]["valuationInputEligible"])
+        self.assertNotIn("official-ir-source-not-ready", payload["investmentAnalysis"]["nextChecks"])
         for action_key in ("action", "decision", "recommendedAction"):
             self.assertNotIn(action_key, payload)
             self.assertNotIn(action_key, payload["valuation"])

@@ -78,6 +78,7 @@ class ExternalFactTransitionService:
         "public-data.kr-capital-events",
         "public-data.kr-shareholder-rights",
         "public-data.kr-security-master",
+        "issuer.ir_documents",
     }
 
     DISCOVERY_DATASETS = {

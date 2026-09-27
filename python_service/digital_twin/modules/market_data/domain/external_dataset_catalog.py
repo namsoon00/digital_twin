@@ -63,6 +63,7 @@ _CATALOG = {
     "sec.submissions": _spec("sec.submissions", ("company_event", "identity"), "official-filing-index-v1", ("disclosure", "issuer-identity"), ("US",), ("issuer",)),
     "sec.document": _spec("sec.document", ("company_event", "financial"), "official-filing-document-v1", ("disclosure", "valuation"), ("US",), ("issuer",)),
     "sec.company_facts": _spec("sec.company_facts", ("financial",), "company-financial-facts-v1", ("valuation",), ("US",), ("issuer",)),
+    "issuer.ir_documents": _spec("issuer.ir_documents", ("company_event", "financial", "calendar"), "official-issuer-ir-index-v1", ("investor-relations",), ("KR", "US"), ("issuer",)),
     "yfinance.price": _spec("yfinance.price", ("price_trade",), "secondary-market-observation-v1", ("market-price",), ("KR", "US"), ("listing",), basis="estimated"),
     "yfinance.options": _spec("yfinance.options", ("price_trade", "market_context"), "derivatives-observation-v1", ("derivatives",), ("US",), ("option-chain",), basis="estimated", empty="unsupported"),
     "yfinance.news": _spec("yfinance.news", ("company_event",), "news-metadata-v1", ("news",), ("KR", "US"), ("issuer",), basis="estimated", empty="unsupported"),

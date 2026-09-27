@@ -85,6 +85,16 @@ PURPOSE_CONTRACTS = (
         },
     ),
     DataPurposeContract(
+        "investor-relations",
+        "기업 IR 원문·발표자료",
+        ("KR", "US"),
+        {
+            "KR": ("issuer.ir_documents", "opendart.document"),
+            "US": ("issuer.ir_documents", "sec.document"),
+        },
+        ideal_sources=2,
+    ),
+    DataPurposeContract(
         "issuer-identity",
         "기업 식별·프로필",
         ("KR", "US"),

@@ -20,7 +20,8 @@ function renderTopbarSyncState(snapshot) {
   if (shellState.refreshing) {
     return [
       '<div class="toolbar topbar-actions">',
-      '<span class="status-pill demo">백그라운드 동기화 중</span>',
+      '<span class="status-pill demo">최신 자료 확인 중</span>',
+      '<em>현재 화면은 직전 확인 자료로 계속 사용할 수 있습니다.</em>',
       '</div>'
     ].join("");
   }
@@ -199,6 +200,14 @@ function renderAppNavCommand(pageId, snapshot) {
   var tab = tabById(normalized) || activeTabMeta();
   var activeSnapshot = snapshot || shellState.snapshot || {};
   var freshness = accountFreshness(activeSnapshot);
+  var dashboardFreshness = (shellState.dashboardSummary || {}).effectiveFreshness || {};
+  if (normalized === "overview" && ["stale", "error", "failed"].includes(String(dashboardFreshness.status || "").toLowerCase())) {
+    freshness = {
+      tone: "warn",
+      label: "일부 자료 확인 필요",
+      detail: dashboardFreshness.reason || "화면별 자료 기준 시각을 확인하세요."
+    };
+  }
   var profile = pageCommandProfile(normalized, activeSnapshot);
   var action = normalized === "overview" ? ["screen-info", "overview", "오늘의 데이터 기준"] : null;
   return [
@@ -209,8 +218,8 @@ function renderAppNavCommand(pageId, snapshot) {
     '</div>',
     '<p class="oa-console-command-objective">' + escapeHtml(profile.objective || tab.description || "") + '</p>',
     '<div class="oa-console-command-status">',
-    '<span class="status-pill ' + escapeHtml(shellState.snapshotFromCache ? "mock" : (freshness.tone === "warn" ? "demo" : "live")) + '">' + escapeHtml(shellState.refreshing ? "갱신 중" : (shellState.snapshotFromCache ? "직전 화면" : freshness.label)) + '</span>',
-    '<em>' + escapeHtml(shellState.refreshing ? "데이터를 확인하고 있습니다" : freshness.detail) + '</em>',
+    '<span class="status-pill ' + escapeHtml(shellState.snapshotFromCache ? "mock" : (freshness.tone === "warn" ? "demo" : "live")) + '">' + escapeHtml(shellState.refreshing ? "최신 자료 확인 중" : (shellState.snapshotFromCache ? "직전 화면" : freshness.label)) + '</span>',
+    '<em>' + escapeHtml(shellState.refreshing ? "직전 확인 자료를 표시하며 백그라운드에서 갱신합니다." : freshness.detail) + '</em>',
     '</div>',
     '<div class="oa-console-command-actions">',
     renderInfoIconButton(normalized, "이 화면의 데이터 기준"),

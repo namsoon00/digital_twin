@@ -1,5 +1,6 @@
 import { currentInvestmentCalendar, currentInvestmentCalendarCandidates, defaultInvestmentCalendarDraft, investmentCalendarCandidateById, investmentCalendarEventTypes } from "./commands.mjs";
 import { INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE } from "./constants.mjs";
+import { calendarEventCanBeDeleted, mergeCalendarEvents } from "./presentation.mjs";
 import { renderCalendarReleaseInformation } from "./results.mjs";
 import { decisionStateMeta } from "../decisions/signals.mjs";
 import { stockDisplayName, textWithDisplaySymbol } from "../instruments/catalog.mjs";
@@ -15,6 +16,7 @@ import { cardFormatAttrs, cardTypeAttrs, renderEmptyState } from "../shell/layou
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";
 import { calendarState } from "../state/calendar.mjs";
 import { settingsState } from "../state/settings.mjs";
+import { shellState } from "../state/shell.mjs";
 
 function renderInvestmentCalendarPage(snapshot) {
   return renderConsoleManagedPage("calendar", [], [
@@ -39,7 +41,11 @@ function calendarCandidateBoardWorkDetailPayload() {
 
 function investmentCalendarEvents() {
   var payload = currentInvestmentCalendar();
-  return Array.isArray(payload.events) ? payload.events : [];
+  var registered = Array.isArray(payload.events) ? payload.events : [];
+  var detected = Array.isArray((shellState.dashboardSummary || {}).upcomingEvents)
+    ? shellState.dashboardSummary.upcomingEvents
+    : [];
+  return mergeCalendarEvents(registered, detected);
 }
 
 function investmentCalendarUpcomingEvents() {
@@ -258,6 +264,8 @@ function investmentCalendarSelectedDayKey(monthDate, eventsByDay) {
 function renderInvestmentCalendarSummaryPanel() {
   var payload = currentInvestmentCalendar();
   var summary = payload.summary || {};
+  var events = investmentCalendarEvents();
+  var registeredCount = events.filter(function (event) { return event.calendarOrigin !== "detected"; }).length;
   var upcoming = investmentCalendarUpcomingEvents();
   var next = upcoming[0] || {};
   var important = investmentCalendarEvents().filter(function (event) {
@@ -283,7 +291,7 @@ function renderInvestmentCalendarSummaryPanel() {
     '</div>',
     calendarState.investmentCalendarError ? '<p class="form-error">' + escapeHtml(calendarState.investmentCalendarError) + '</p>' : '',
     '<details class="oa-secondary-details" id="disclosure-calendar-metrics"><summary><strong>일정 현황</strong></summary><div class="investment-calendar-kpis">',
-    renderCalendarKpi("전체", summary.total || 0, "등록 이벤트", "metric-cell", "hold", { type: "anchor", value: "calendar-events" }),
+    renderCalendarKpi("전체", events.length, registeredCount + "건 등록 · " + (events.length - registeredCount) + "건 자동 감지", "metric-cell", "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "표시 일정", "metric-cell", upcoming.length ? "watch" : "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("다음", next.startsAt ? investmentCalendarScheduleLabel(next) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold", next.startsAt ? { type: "detail", value: "investment-calendar-event", key: next.eventId || next.id || next.title || "" } : { type: "calendar-entry" }),
@@ -346,7 +354,7 @@ function renderInvestmentCalendarMonthPanel() {
   return [
     '<article class="panel investment-calendar-list-panel investment-calendar-month-panel" data-console-monitor-destination="calendar-events" tabindex="-1"' + cardTypeAttrs("process-card", events.length ? "watch" : "hold") + '>',
     '<div class="panel-head">',
-    '<div><p class="label">CALENDAR</p><h2>' + escapeHtml(investmentCalendarMonthLabel(monthDate)) + ' 투자 캘린더</h2><span>각 날짜 셀에서 예정 이벤트를 바로 확인하고, 날짜를 선택해 상세 일정을 봅니다.</span></div>',
+    '<div><p class="label">투자 캘린더</p><h2>' + escapeHtml(investmentCalendarMonthLabel(monthDate)) + ' 투자 캘린더</h2><span>등록 일정과 오늘 화면에서 감지한 주요 일정을 함께 표시합니다.</span></div>',
     '<div class="investment-calendar-month-controls" aria-label="캘린더 월 이동">',
     '<button class="mini-button" type="button" data-calendar-month-step="-1">이전</button>',
     '<button class="mini-button" type="button" data-calendar-month-today>이번 달</button>',
@@ -445,7 +453,7 @@ function renderInvestmentCalendarSelectedDayAgenda(dayKey, events) {
   return [
     '<section class="investment-calendar-selected-day">',
     '<div class="investment-calendar-selected-day-head">',
-    '<div><p class="label">SELECTED DAY</p><h3>' + escapeHtml(investmentCalendarDayLabel(dayKey)) + '</h3></div>',
+    '<div><p class="label">선택 날짜</p><h3>' + escapeHtml(investmentCalendarDayLabel(dayKey)) + '</h3></div>',
     '<span>' + escapeHtml(selectedEvents.length) + '건</span>',
     '</div>',
     '<div class="investment-calendar-list">',
@@ -473,7 +481,7 @@ function renderInvestmentCalendarEvent(event) {
     '<span>중요도 ' + escapeHtml(event.importance || 0) + '</span>',
     '<span>' + escapeHtml(investmentCalendarTargetLabel(event)) + '</span>',
     investmentCalendarSymbolMetaLabel(event) ? '<span>' + escapeHtml(investmentCalendarSymbolMetaLabel(event)) + '</span>' : '',
-    String(event.status || "").toLowerCase() === "tentative" ? '<span>검토 전 일정</span>' : '',
+    event.calendarOrigin === "detected" ? '<span>자동 감지 일정</span>' : (String(event.status || "").toLowerCase() === "tentative" ? '<span>검토 전 일정</span>' : ''),
     investmentCalendarPayload(event).timeState === "operationalDefault" ? '<span>시각은 알림 기준</span>' : '',
     event.releaseInformation ? '<span>' + escapeHtml(event.releaseInformation.statusLabel) + '</span>' : '',
     '<span>' + escapeHtml(investmentCalendarReminderLabel(event)) + '</span>',
@@ -484,7 +492,7 @@ function renderInvestmentCalendarEvent(event) {
     '</div>',
     '<div class="investment-calendar-event-actions">',
     renderWorkDetailButton("investment-calendar-event", key, "상세", "mini-button"),
-    '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '"' + (calendarState.investmentCalendarDeleting === event.eventId ? ' disabled' : '') + '>' + (calendarState.investmentCalendarDeleting === event.eventId ? "삭제 중" : "삭제") + '</button>',
+    calendarEventCanBeDeleted(event) ? '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '"' + (calendarState.investmentCalendarDeleting === event.eventId ? ' disabled' : '') + '>' + (calendarState.investmentCalendarDeleting === event.eventId ? "삭제 중" : "삭제") + '</button>' : '',
     '</div>',
     '</section>'
   ].join("");
@@ -750,7 +758,7 @@ function renderInvestmentCalendarRailPanel() {
   return [
     '<aside class="investment-calendar-rail">',
     '<section class="panel investment-calendar-next-card"' + cardTypeAttrs("action-queue-card", next.startsAt ? "watch" : "hold") + '>',
-    '<div class="panel-head"><div><p class="label">NEXT SCHEDULE</p><h2>다음 일정</h2></div></div>',
+    '<div class="panel-head"><div><p class="label">예정 일정</p><h2>다음 일정</h2></div></div>',
     '<div class="investment-calendar-next-body">',
     '<strong class="investment-calendar-next-time">' + escapeHtml(next.startsAt ? investmentCalendarScheduleLabel(next) : "등록 대기") + '</strong>',
     '<em>' + escapeHtml((String(next.status || "").toLowerCase() === "tentative" ? "검토 전 · " : "") + nextType + " · " + nextTarget) + '</em>',
@@ -771,7 +779,7 @@ function renderInvestmentCalendarRailPanel() {
     '<section class="panel investment-calendar-quality-panel"' + cardTypeAttrs("source-card", "hold") + '>',
     '<div class="panel-head"><div><p class="label">DATA QUALITY</p><h2>운영 연결</h2></div></div>',
     '<div class="investment-calendar-quality-list">',
-    renderCalendarRailCheck("이벤트 저장소", summary.total ? "저장됨" : "대기", summary.total ? "watch" : "hold"),
+    renderCalendarRailCheck("이벤트 저장소", Number(summary.total || 0) ? Number(summary.total || 0) + "건 저장" : "저장 일정 없음", Number(summary.total || 0) ? "watch" : "hold"),
     renderCalendarRailCheck("리마인더 대상", reminderCandidates.length ? reminderCandidates.length + "건 활성" : "승인 일정 없음", reminderCandidates.length ? "watch" : "hold"),
     renderCalendarRailCheck("판단 연결", "온톨로지 요청", "hold"),
     '</div>',
@@ -846,7 +854,9 @@ function investmentCalendarEventWorkDetailPayload(key) {
       '<p>' + escapeHtml([investmentCalendarTargetLabel(event), investmentCalendarSymbolMetaLabel(event)].filter(Boolean).join(" · ")) + '</p>',
       '</section>'
     ].join(""),
-    footer: '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '">삭제</button>'
+    footer: calendarEventCanBeDeleted(event)
+      ? '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '">삭제</button>'
+      : '<span class="work-detail-origin-note">오늘 요약에서 자동 감지한 일정입니다.</span>'
   };
 }
 

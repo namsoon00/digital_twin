@@ -32124,6 +32124,41 @@ button.instrument-timeline-event:focus-visible {
   animation: loadingProgress 1.35s infinite ease-in-out;
 }
 
+.loading-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: -8px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: loading-step;
+}
+
+.loading-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.loading-steps li::before {
+  counter-increment: loading-step;
+  content: counter(loading-step);
+  display: grid;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .loading-skeleton-board {
   display: grid;
   gap: var(--ds-space-5);
@@ -32203,6 +32238,10 @@ button.instrument-timeline-event:focus-visible {
 
   .loading-skeleton-head,
   .loading-skeleton-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .loading-steps {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -39634,6 +39673,158 @@ html[data-theme="dark"] :where(
   .oa-reading-questions > section { padding: 18px 0; }
   .oa-console-page-modeling .oa-case-row > header { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .oa-console-page-modeling .oa-case-state { text-align: left; align-items: flex-start; max-width: 100%; }
+}
+
+/* Investor-first summaries: conclusion, reason, and next check remain distinct. */
+.oa-today-briefing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 22px;
+  border: 1px solid color-mix(in srgb, var(--blue) 46%, var(--line));
+  border-left: 4px solid var(--blue);
+  border-radius: var(--ds-radius-panel);
+  background: color-mix(in srgb, var(--blue) 6%, var(--panel));
+}
+
+.oa-today-briefing > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.oa-today-briefing span {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.oa-today-briefing strong {
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.oa-today-briefing p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.oa-row-main > :is(em, small) {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-style: normal;
+  line-height: 1.55;
+}
+
+.oa-row-main > :is(em, small) b {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.oa-row-main > small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.oa-observation-list .oa-work-row {
+  border-left-color: var(--muted);
+  background: color-mix(in srgb, var(--panel-soft) 70%, var(--panel));
+}
+
+.topbar-actions > em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.oa-alert-actions {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(92px, auto));
+  gap: 8px !important;
+  justify-content: end;
+}
+
+.oa-alert-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.oa-alert-action-button:hover,
+.oa-alert-action-button:focus-visible {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 8%, var(--panel));
+}
+
+.oa-alert-action-button.primary {
+  border-color: color-mix(in srgb, var(--blue) 70%, var(--line));
+  color: var(--blue);
+}
+
+.work-detail-origin-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .oa-today-briefing {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 17px 16px;
+  }
+
+  .oa-today-briefing .text-button {
+    width: 100%;
+  }
+
+  .oa-alert-card footer {
+    align-items: stretch;
+  }
+
+  .oa-alert-actions {
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .oa-alert-action-button {
+    min-height: 44px;
+    padding: 8px 6px;
+  }
+}
+
+@media (max-width: 390px) {
+  .oa-alert-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .oa-alert-action-button {
+    justify-content: flex-start;
+    padding-inline: 14px;
+  }
+
+  .oa-row-main > :is(em, small) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
 }
 
 /* Global tab viewport stability contract. Keep this last in the cascade. */

@@ -198,7 +198,7 @@ class FollowupTests(unittest.TestCase):
 
 
 class FreeSourceTests(unittest.TestCase):
-    def test_rejected_candidates_do_not_reset_usable_news_freshness(self):
+    def test_rejected_candidates_do_not_turn_healthy_collection_into_stale_outage(self):
         previous = {'state': 'healthy', 'firstObservedAt': stamp(NOW - timedelta(minutes=10)), 'lastNonZeroAt': stamp(NOW - timedelta(minutes=10))}
         result = {'status': 'ok', 'targetCount': 3, 'fetchedCount': 5, 'admittedCount': 0, 'savedCount': 0,
             'statuses': [{'source': 'google_rss_kr', 'ok': True, 'count': 5}]}
@@ -206,7 +206,20 @@ class FreeSourceTests(unittest.TestCase):
         self.assertEqual(health.reason_code, 'collected-items-not-admitted')
         self.assertEqual(health.last_non_zero_at, previous['lastNonZeroAt'])
         self.assertEqual(health.consecutive_zero_runs, 1)
-        self.assertEqual(evaluate_news_collection_health(result, previous, now=NOW + timedelta(hours=4)).state, 'stale')
+        later = evaluate_news_collection_health(result, previous, now=NOW + timedelta(hours=4))
+        self.assertEqual(later.state, 'idle')
+        self.assertEqual(later.reason_code, 'collected-items-not-admitted')
+        self.assertEqual(later.dimensions['providerAvailability']['state'], 'healthy')
+        self.assertEqual(later.dimensions['evidenceAdmission']['state'], 'stale')
+
+        missing_observation = evaluate_news_collection_health(
+            {'status': 'ok', 'targetCount': 3, 'fetchedCount': 0, 'admittedCount': 0, 'savedCount': 0, 'statuses': []},
+            {'state': 'idle', 'firstObservedAt': stamp(NOW - timedelta(hours=4)), 'lastNonZeroAt': ''},
+            now=NOW,
+        )
+        self.assertEqual(missing_observation.state, 'stale')
+        self.assertEqual(missing_observation.reason_code, 'collection-observation-stale')
+        self.assertEqual(missing_observation.dimensions['providerAvailability']['state'], 'idle')
 
     def test_retry_after_defers_instead_of_retry_burst(self):
         for header in ['120', 'Mon, 14 Sep 2026 00:02:00 GMT']:

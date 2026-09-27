@@ -440,12 +440,15 @@ def evaluate_news_collection_health(
         and zero_runs >= max(1, int(blocked_warning_streak or 1))
     ):
         state, reason_code, reason = "degraded", "article-body-unavailable", "뉴스 후보의 절반 이상에서 원문 본문을 확보하지 못하는 상태가 반복되고 있습니다."
-    elif zero_age_minutes >= max(1, int(stale_after_minutes or 1)):
-        state, reason_code, reason = "stale", "coverage-stale", "품질 기준을 통과한 최신 뉴스가 허용된 공백 시간 동안 수집되지 않았습니다."
     elif fetched_count:
         state, reason_code, reason = "idle", "collected-items-not-admitted", "기사 후보는 확인했지만 저장 품질 기준을 통과한 근거는 없습니다."
     elif provider_candidates:
         state, reason_code, reason = "idle", "candidates-filtered", "공급자는 정상이며 후보가 종목 관련성·본문·신선도 품질 기준에서 제외되었습니다."
+    elif (
+        zero_age_minutes >= max(1, int(stale_after_minutes or 1))
+        and not provider_successes
+    ):
+        state, reason_code, reason = "stale", "collection-observation-stale", "뉴스 공급자 수집 결과가 허용된 공백 시간 동안 확인되지 않았습니다."
     else:
         state, reason_code, reason = "idle", "no-new-evidence", "공급자 장애는 없으며 현재 새로 반영할 투자 관련 뉴스가 없습니다."
 

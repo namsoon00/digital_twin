@@ -12,7 +12,7 @@ import { instrumentsState } from "../state/instruments.mjs";
 
 function instrumentWorkspaceTab(symbol) {
   var value = String((instrumentsState.instrumentWorkspaceTabs || {})[String(symbol || "").toUpperCase()] || "summary");
-  return ["summary", "valuation", "chart", "decision", "timeline"].indexOf(value) >= 0 ? value : "summary";
+  return ["summary", "report", "valuation", "chart", "decision", "timeline"].indexOf(value) >= 0 ? value : "summary";
 }
 
 function instrumentValuationCacheKey(symbol, requestedAccountId) {

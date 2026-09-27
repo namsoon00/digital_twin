@@ -9,7 +9,7 @@ import { escapeHtml } from "../shared/text.mjs";
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";
 import { instrumentsState } from "../state/instruments.mjs";
 import { shellState } from "../state/shell.mjs";
-import { instrumentValuationMissingLabel, instrumentValuationModelLabel, renderInstrumentInvestmentAnalysis } from "./valuation-presentation.mjs";
+import { instrumentValuationMissingLabel, instrumentValuationModelLabel, renderCompanyChangeReport, renderInstrumentInvestmentAnalysis } from "./valuation-presentation.mjs";
 
 function renderInstrumentWorkspaceLink(symbol, label) {
   var normalized = String(symbol || "").toUpperCase().trim();
@@ -48,6 +48,7 @@ function renderInstrumentWorkspaceNavigation(symbol) {
   var active = instrumentWorkspaceTab(symbol);
   var tabs = [
     ["summary", "요약"],
+    ["report", "기업 변화 보고서"],
     ["valuation", "기업가치"],
     ["chart", "차트"],
     ["decision", "판단"],
@@ -56,6 +57,14 @@ function renderInstrumentWorkspaceNavigation(symbol) {
   return '<nav class="instrument-workspace-tabs" role="tablist" aria-label="종목 상세 보기">' + tabs.map(function (item) {
     return '<button type="button" role="tab" aria-selected="' + (active === item[0] ? "true" : "false") + '" data-instrument-workspace-tab="' + item[0] + '" data-instrument-symbol="' + escapeHtml(symbol) + '" class="' + (active === item[0] ? "active" : "") + '">' + escapeHtml(item[1]) + '</button>';
   }).join("") + '</nav>';
+}
+
+function renderInstrumentCompanyReport(row, view) {
+  if (view.staticPreview) return '<div class="instrument-chart-state"><strong>정적 화면에서는 기업 변화 보고서를 조회하지 않습니다.</strong><p>로컬 또는 공유 앱에서 실제 수집 자료로 만든 보고서를 확인하세요.</p></div>';
+  if (view.loading && !view.payload) return '<div class="instrument-chart-state is-loading"><span></span><strong>기업 변화 보고서를 만들고 있습니다.</strong></div>';
+  if (view.error && !view.payload) return '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-valuation-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>';
+  if (!view.payload) return '<div class="instrument-empty"><strong>기업 변화 보고서를 아직 불러오지 않았습니다.</strong><button type="button" class="text-button" data-instrument-valuation-refresh="' + escapeHtml(row.symbol) + '">보고서 조회</button></div>';
+  return renderCompanyChangeReport(view.payload.companyChangeReport || {});
 }
 
 function renderInstrumentSummary(row) {
@@ -497,6 +506,8 @@ function marketInstrumentWorkDetailPayload(key) {
   var valuationView = instrumentValuationViewState(symbol);
   var content = active === "chart"
     ? renderInstrumentChart(row, view)
+    : active === "report"
+      ? renderInstrumentCompanyReport(row, valuationView)
     : active === "valuation"
       ? renderInstrumentValuation(row, valuationView)
       : active === "decision"

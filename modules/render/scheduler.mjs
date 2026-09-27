@@ -222,7 +222,7 @@ function renderNow() {
   }
   if (navigationState.workDetailLayer && navigationState.workDetailLayer.type === "market-instrument" && navigationState.workDetailLayer.key) {
     var activeInstrumentTab = instrumentWorkspaceTab(navigationState.workDetailLayer.key);
-    if (activeInstrumentTab === "valuation") {
+    if (["report", "valuation"].indexOf(activeInstrumentTab) >= 0) {
       var valuationKey = instrumentValuationCacheKey(navigationState.workDetailLayer.key);
       if (!instrumentsState.instrumentValuations[valuationKey]
         && !instrumentsState.instrumentValuationLoading[valuationKey]

@@ -1811,6 +1811,93 @@ def _is_research_review_core(value: object) -> bool:
     )
 
 
+def _deduplicated_evidence_ledger(value: object) -> List[Dict[str, object]]:
+    """Keep one canonical row per evidence ID in stable source order."""
+
+    rows: List[Dict[str, object]] = []
+    indexes: Dict[str, int] = {}
+    merge_fields = (
+        "relatedEvidenceIds", "sourceFactIds", "modelEvidenceIds",
+        "ruleIds", "hypothesisIds",
+    )
+    for item in value or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_id = str(item.get("evidenceId") or "").strip()
+        if not evidence_id:
+            continue
+        if evidence_id not in indexes:
+            indexes[evidence_id] = len(rows)
+            rows.append(dict(item))
+            continue
+        current = rows[indexes[evidence_id]]
+        for key in merge_fields:
+            merged = _unique_all([
+                *(current.get(key) if isinstance(current.get(key), (list, tuple, set)) else []),
+                *(item.get(key) if isinstance(item.get(key), (list, tuple, set)) else []),
+            ])
+            if merged:
+                current[key] = merged
+        current_roles = _mapping(current.get("hypothesisRoles"))
+        nested_roles = _mapping(item.get("hypothesisRoles"))
+        if current_roles or nested_roles:
+            current["hypothesisRoles"] = {**nested_roles, **current_roles}
+        for key, nested in item.items():
+            if current.get(key) in (None, "", [], {}) and nested not in (None, "", [], {}):
+                current[key] = nested
+    return rows
+
+
+def _question_bounded_fact_evidence_ids(
+    core: Dict[str, object],
+    *,
+    limit: int = 12,
+) -> set:
+    """Select observed fact citations that can answer this decision question.
+
+    The complete fact map remains protected in ``facts``. The evidence ledger
+    only needs citation rows for the facts connected to the current rules,
+    hypotheses, follow-up conditions, or the claim contract's preferred
+    observations. Keeping every fact twice made unrelated macro and flow data
+    consume the model budget without changing the decision contract.
+    """
+
+    facts = _mapping(core.get("facts"))
+    available = {
+        "fact:" + str(key): str(key)
+        for key, current in facts.items()
+        if current not in (None, "", [], {}) and not isinstance(current, (dict, list))
+    }
+    requested: List[str] = []
+
+    def add_evidence_id(value: object) -> None:
+        evidence_id = str(value or "").strip()
+        if evidence_id in available and evidence_id not in requested:
+            requested.append(evidence_id)
+
+    for key in ("currentPrice", "profitLossRate", "priceChangeRate"):
+        add_evidence_id("fact:" + key)
+    for rule in core.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        for field in rule.get("appliedFactFields") or []:
+            add_evidence_id("fact:" + str(field))
+    continuity = _mapping(core.get("continuityDelta"))
+    for condition in continuity.get("followUpConditions") or []:
+        if isinstance(condition, dict):
+            add_evidence_id("fact:" + str(condition.get("field") or ""))
+    for hypothesis in _mapping(core.get("hypothesisSet")).get("hypotheses") or []:
+        if not isinstance(hypothesis, dict):
+            continue
+        for key in ("supportingEvidenceIds", "counterEvidenceIds"):
+            for evidence_id in hypothesis.get(key) or []:
+                add_evidence_id(evidence_id)
+    claim_contract = _mapping(core.get("narrativeClaimContract"))
+    for evidence_id in claim_contract.get("preferredObservedEvidenceIds") or []:
+        add_evidence_id(evidence_id)
+    return set(requested[: max(1, int(limit or 1))])
+
+
 def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     """Reduce reference detail without truncating the hypothesis evidence contract."""
 
@@ -1829,11 +1916,10 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
 def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     budget = max(1, int(budget_bytes or 6 * 1024))
     fitted = json.loads(json.dumps(core, ensure_ascii=False, default=str))
-    protected_fact_ids = {
-        "fact:" + str(key)
-        for key, value in _mapping(fitted.get("facts")).items()
-        if value not in (None, "", [], {})
-    }
+    fitted["evidenceLedger"] = _deduplicated_evidence_ledger(
+        fitted.get("evidenceLedger") or []
+    )
+    protected_fact_ids = _question_bounded_fact_evidence_ids(fitted)
     required_evidence_ids = {
         evidence_id
         for item in _mapping(fitted.get("hypothesisSet")).get("hypotheses") or []
@@ -1843,6 +1929,13 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
     } | _financial_evidence_ids(fitted) | protected_fact_ids | {
         str(row.get("evidenceId") or "") for row in fitted.get("evidenceLedger") or []
         if isinstance(row, dict) and row.get("kind") in {"decision-transition", "model-signal"}
+    }
+    fitted["routingAudit"] = {
+        **_mapping(fitted.get("routingAudit")),
+        "evidenceSelection": {
+            "mode": "question-bounded",
+            "candidateFactEvidenceCount": len(protected_fact_ids),
+        },
     }
 
     def compact_ledger(limit: int) -> List[Dict[str, object]]:
@@ -1869,6 +1962,18 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
             if str(item.get("evidenceId") or "") in selected_ids
         ]
 
+    fitted["evidenceLedger"] = compact_ledger(12)
+    fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
+        fitted["evidenceLedger"]
+    )
+    fitted["routingAudit"]["evidenceSelection"].update({
+        "retainedEvidenceCount": len(fitted["evidenceLedger"]),
+        "omittedDuplicateOrUnlinkedCount": max(
+            0,
+            len(_deduplicated_evidence_ledger(core.get("evidenceLedger") or []))
+            - len(fitted["evidenceLedger"]),
+        ),
+    })
     if _json_bytes(fitted) <= budget:
         return fitted
     if _is_research_review_core(fitted):
@@ -1880,6 +1985,7 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
     fitted["routingAudit"] = {
         "version": compact_routing_audit.get("version"),
         "status": "reference-trimmed",
+        "evidenceSelection": compact_routing_audit.get("evidenceSelection") or {},
     }
     fitted["evidenceLedger"] = [
         _selected(
@@ -2101,7 +2207,17 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
         fitted["evidenceLedger"]
     )
     fitted["routingAudit"] = {
+        **_mapping(fitted.get("routingAudit")),
         "status": "minimum-decision-contract",
+        "evidenceSelection": {
+            "mode": "question-bounded",
+            "retainedEvidenceCount": len(fitted.get("evidenceLedger") or []),
+            "retainedFactEvidenceCount": len([
+                item for item in fitted.get("evidenceLedger") or []
+                if isinstance(item, dict)
+                and str(item.get("evidenceId") or "") in protected_fact_ids
+            ]),
+        },
     }
     if _json_bytes(fitted) <= budget:
         return fitted

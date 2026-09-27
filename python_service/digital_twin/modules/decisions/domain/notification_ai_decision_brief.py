@@ -156,7 +156,7 @@ def notification_ai_execution_profile(
             fixed_effort or settings.get("notificationAiDeepReasoningEffort"),
             "high",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 40 * 1024, 12 * 1024, 64 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 32 * 1024, 12 * 1024, 32 * 1024)
     else:
         effort = _reasoning_effort(
             fixed_effort or settings.get("notificationAiStandardReasoningEffort"),
@@ -165,7 +165,7 @@ def notification_ai_execution_profile(
         prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 24 * 1024, 12 * 1024, 32 * 1024)
     queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 48 * 1024, 12 * 1024, 64 * 1024)
     return {
-        "version": "notification-ai-execution-profile-v5",
+        "version": "notification-ai-execution-profile-v6",
         "name": profile,
         "reasoningEffort": effort,
         "maxPromptBytes": min(prompt_bytes, queue_limit),
@@ -2243,6 +2243,15 @@ def build_notification_ai_prompt_bundle(
             default=str,
         ).encode("utf-8")
     )
+    fitted_section_bytes = {
+        str(key): len(json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8"))
+        for key, value in payload.items()
+    }
     if rendered_bytes > maximum:
         raise ValueError(
             "AI decision prompt exceeded its hard limit: "
@@ -2258,7 +2267,7 @@ def build_notification_ai_prompt_bundle(
         "contextRouting": routing_audit,
         "promptRelease": release.to_public_dict(),
         "promptBudget": {
-            "version": "notification-ai-prompt-budget-v1",
+            "version": "notification-ai-prompt-budget-v2",
             "profile": str(execution_profile.get("name") or ""),
             "maxPromptBytes": maximum,
             "instructionBytes": instruction_bytes,
@@ -2267,6 +2276,12 @@ def build_notification_ai_prompt_bundle(
             "fittedDecisionCoreBytes": fitted_core_bytes,
             "renderedPromptBytes": rendered_bytes,
             "compacted": decision_core_bytes != fitted_core_bytes,
+            "selectionMode": "question-bounded",
+            "fittedSectionBytes": fitted_section_bytes,
+            "retainedEvidenceCount": len(payload.get("evidenceLedger") or []),
+            "retainedHypothesisCount": len(
+                _mapping(payload.get("hypothesisSet")).get("hypotheses") or []
+            ),
         },
     }
 

@@ -649,7 +649,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "notificationAiDeepReasoningEffort", "label": "중요 변화 투자 판단 추론 강도", "type": "select", "options": ["low", "medium", "high", "max"], "default": "high"},
                     {"key": "notificationAiComparisonRepairReasoningEffort", "label": "판단 계약 보정 추론 강도", "type": "select", "options": ["low", "medium", "high", "max"], "default": "medium"},
                     {"key": "notificationAiStandardPromptMaxBytes", "label": "일반 투자 판단 입력 상한", "type": "number", "default": "24576", "unit": "bytes"},
-                    {"key": "notificationAiDeepPromptMaxBytes", "label": "중요 변화 투자 판단 입력 상한", "type": "number", "default": "40960", "unit": "bytes"},
+                    {"key": "notificationAiDeepPromptMaxBytes", "label": "중요 변화 투자 판단 입력 상한", "type": "number", "default": "32768", "unit": "bytes"},
                     {"key": "notificationAiQueueMaxAttempts", "label": "투자 판단 최대 실행 횟수", "type": "number", "default": "1"},
                     {"key": "notificationAiQueueTargetPromptBytes", "label": "투자 판단 입력 목표", "type": "number", "default": "32768", "unit": "bytes"},
                     {"key": "notificationAiQueueMaxPromptBytes", "label": "투자 판단 입력 절대 상한", "type": "number", "default": "49152", "unit": "bytes"},

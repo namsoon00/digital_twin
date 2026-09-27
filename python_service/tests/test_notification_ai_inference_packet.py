@@ -99,6 +99,112 @@ def response_payload(view_id, support_id, next_id):
 
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
+    def _assert_question_bounded_compaction_keeps_facts_but_deduplicates_citations(self):
+        facts = {
+            "currentPrice": 1775000,
+            "profitLossRate": -4.2,
+            "priceChangeRate": 2.1,
+            **{"metric" + str(index): index for index in range(36)},
+        }
+        ledger = [
+            {
+                "evidenceId": "fact:" + key,
+                "role": "context",
+                "kind": "fact",
+                "label": key,
+                "value": value,
+                "source": "verified-snapshot",
+                "sourceAsOf": "2026-09-27T09:00:00Z",
+                "judgementEligible": True,
+            }
+            for key, value in facts.items()
+        ]
+        ledger.extend([
+            dict(ledger[0]),
+            {
+                "evidenceId": "model:current",
+                "role": "support",
+                "kind": "model-signal",
+                "value": {"direction": "positive", "strengthBand": "moderate"},
+                "source": "model-release:1",
+                "judgementEligible": True,
+            },
+        ])
+        core = {
+            "schemaVersion": "investment-ai-decision-core-v5",
+            "question": {"questionId": "question:1", "intent": "holding-review"},
+            "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
+            "facts": facts,
+            "decision": {
+                "actionEnvelope": {
+                    "status": "HYPOTHESIS_COMPARISON_REQUIRED",
+                    "allowedActions": ["HOLD"],
+                },
+            },
+            "continuityDelta": {
+                "previousDecision": {"action": "HOLD"},
+                "followUpConditions": [{
+                    "field": "metric12", "operator": ">", "threshold": 10,
+                    "purpose": "strengthen", "transitionVerified": False,
+                }],
+            },
+            "rules": [{
+                "ruleId": "rule:current",
+                "appliedFactFields": ["metric8", "metric9"],
+            }],
+            "hypothesisSet": {
+                "hypothesisSetId": "hypothesis-set:1",
+                "hypotheses": [{
+                    "hypothesisId": "hypothesis:1",
+                    "claim": "현재 가격 회복이 이어질 수 있습니다.",
+                    "candidateAction": "HOLD",
+                    "supportingRuleIds": ["rule:current"],
+                    "supportingEvidenceIds": ["model:current"],
+                    "counterEvidenceIds": [],
+                }],
+            },
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
+            "background": {"catalog": "reference-only " * 4000},
+            "routingAudit": {"status": "routed"},
+        }
+
+        first = fit_notification_ai_decision_core(core, 14 * 1024)
+        second = fit_notification_ai_decision_core(core, 14 * 1024)
+
+        self.assertEqual(first, second)
+        self.assertEqual(facts, first["facts"])
+        retained_ids = [item["evidenceId"] for item in first["evidenceLedger"]]
+        self.assertEqual(len(retained_ids), len(set(retained_ids)))
+        self.assertIn("model:current", retained_ids)
+        self.assertIn("fact:currentPrice", retained_ids)
+        self.assertIn("fact:metric8", retained_ids)
+        self.assertIn("fact:metric12", retained_ids)
+        self.assertNotIn("fact:metric35", retained_ids)
+        self.assertEqual(
+            "question-bounded",
+            first["routingAudit"]["evidenceSelection"]["mode"],
+        )
+        self.assertLessEqual(
+            len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()),
+            14 * 1024,
+        )
+
+    def _assert_deep_profile_respects_question_bounded_prompt_ceiling(self):
+        context = investment_context()
+        context["ontologyRelationContext"].update({
+            "reviewLevel": "immediate",
+            "conflictState": "contested",
+        })
+
+        profile = notification_ai_execution_profile(context, {
+            "notificationAiDeepPromptMaxBytes": "49152",
+            "notificationAiQueueMaxPromptBytes": "49152",
+        })
+
+        self.assertEqual("deepResearch", profile["name"])
+        self.assertEqual(32 * 1024, profile["maxPromptBytes"])
+
     def test_verified_claims_do_not_need_duplicate_legacy_evidence(self):
         packet = build_notification_ai_inference_packet(investment_context())
         context = packet.bind_context(investment_context())
@@ -192,15 +298,16 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertTrue(all(json.loads(row["rawResponse"]) for row in outcome.model_responses))
 
     def test_deep_research_profile_uses_bounded_contract_budget_by_default(self):
+        self._assert_deep_profile_respects_question_bounded_prompt_ceiling()
         context = investment_context()
         context["ontologyRelationContext"]["reviewLevel"] = "immediate"
 
         profile = notification_ai_execution_profile(context, {})
 
-        self.assertEqual("notification-ai-execution-profile-v5", profile["version"])
+        self.assertEqual("notification-ai-execution-profile-v6", profile["version"])
         self.assertEqual("deepResearch", profile["name"])
         self.assertEqual("high", profile["reasoningEffort"])
-        self.assertEqual(40 * 1024, profile["maxPromptBytes"])
+        self.assertEqual(32 * 1024, profile["maxPromptBytes"])
 
     def test_display_rounding_and_korean_direction_preserve_numeric_grounding(self):
         rows = [
@@ -545,6 +652,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertTrue(required_ids.issubset(retained_ids))
 
     def test_retry_budget_preserves_minimum_contract_for_large_live_shape(self):
+        self._assert_question_bounded_compaction_keeps_facts_but_deduplicates_citations()
         self._assert_research_compaction_preserves_each_rule_proof_path()
         self._assert_compaction_preserves_every_hypothesis_evidence_identifier()
         self._assert_live_nested_audit_detail_cannot_block_ai_before_model_execution()

@@ -1031,7 +1031,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiDeepReasoningEffort": "high",
     "notificationAiDeepResearchProfileEnabled": "1",
     "notificationAiStandardPromptMaxBytes": "24576",
-    "notificationAiDeepPromptMaxBytes": "40960",
+    "notificationAiDeepPromptMaxBytes": "32768",
     "notificationAiFreshnessReserveMinutes": "4",
     "notificationAiInternalDataEnabled": "1",
     "notificationAiInternalDataCacheMaxEntries": "256",

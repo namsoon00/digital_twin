@@ -900,26 +900,30 @@ class AIInferenceQueueRunner:
                 self.max_prompt_bytes,
                 int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
             )
+            decision_prompt_hard_limit = min(
+                self.max_prompt_bytes,
+                self.target_prompt_bytes,
+            )
             attempt_prompt_limit = (
                 min(self.max_prompt_bytes, 12 * 1024)
                 if request.attempts > 1
-                else min(self.target_prompt_bytes, preferred_prompt_limit)
+                else min(decision_prompt_hard_limit, preferred_prompt_limit)
             )
             packet = None
             packet_error = None
-            prompt_limits = []
-            for value in (
-                attempt_prompt_limit,
-                15 * 1024,
-                preferred_prompt_limit,
-                self.max_prompt_bytes,
-            ):
-                bounded = min(self.max_prompt_bytes, max(12 * 1024, int(value or 0)))
-                if (
-                    bounded not in prompt_limits
-                    and (not prompt_limits or bounded > prompt_limits[-1])
-                ):
-                    prompt_limits.append(bounded)
+            prompt_limits = sorted({
+                min(
+                    decision_prompt_hard_limit,
+                    max(12 * 1024, int(value or 0)),
+                )
+                for value in (
+                    attempt_prompt_limit,
+                    15 * 1024,
+                    preferred_prompt_limit,
+                    decision_prompt_hard_limit,
+                )
+                if attempt_prompt_limit <= int(value or 0) <= decision_prompt_hard_limit
+            })
             for prompt_limit in prompt_limits:
                 try:
                     packet = build_notification_ai_inference_packet(

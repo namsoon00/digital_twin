@@ -84,13 +84,18 @@ The compatibility notification-first path can still park an existing job in
 
 The delivery deadline may remain disabled because inference is asynchronous.
 The attempt watchdog is different: it bounds one local model process so a hung
-execution cannot hold a worker forever. A deep investment packet targets 48
-KiB and may expand to the 64 KiB hard cap only when the minimum decision
-contract does not fit. Standard profiles keep their lower profile-specific
-limit. A retry starts with a 12 KiB minimum-contract packet and uses the same
-bounded expansion path. The compact packet keeps action, hypothesis
-identity, rules, evidence IDs, current facts, continuity, and valuation while
-the unabridged decision brief remains in the immutable audit store.
+execution cannot hold a worker forever. Standard reviews first try the 24 KiB
+profile and important-change reviews use at most 32 KiB. If the first packet
+does not fit, preparation expands only up to
+`NOTIFICATION_AI_QUEUE_TARGET_PROMPT_BYTES`; it no longer skips that target and
+jumps to the larger storage safety limit. A retry starts at 12 KiB and follows
+the same ordered limits. The compact packet preserves all current fact values,
+actions, competing hypotheses, continuity, financial comparisons and required
+evidence IDs. Its citation ledger keeps one stable row per evidence ID and only
+the observed facts connected to the current question, rules, hypotheses or
+follow-up conditions. The unabridged decision brief remains in the immutable
+audit store. `promptBudget.selectionMode`, retained counts and per-section byte
+sizes make this selection auditable.
 Contract-repair prompts use the same hard cap: DecisionCore is retained first
 and the previous model response is trimmed to the remaining byte budget.
 Initial generation and repair use one response schema. The persisted subject

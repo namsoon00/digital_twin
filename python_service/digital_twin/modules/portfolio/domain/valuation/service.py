@@ -75,6 +75,13 @@ class ValuationModelService:
             status = "unavailable"
         elif any(number(row.get("fairValue")) > 0.0 for row in rows):
             status = "calculated"
+        elif any(
+            str(row.get("valuationModelFamily") or "") == "driver-dcf"
+            and str(row.get("valuationInputState") or "") == "sufficient"
+            and set((row.get("dcfAssessment") or {}).get("blockedReasons") or []) == {"non-positive-equity-value"}
+            for row in rows
+        ):
+            status = "calculated-diagnostic"
         elif any(str(row.get("valuationQualityStatus") or "") == "blocked" for row in rows):
             status = "blocked-invalid-data"
         else:

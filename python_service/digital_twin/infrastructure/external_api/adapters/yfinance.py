@@ -43,6 +43,16 @@ PROFILE_POLICIES = {
 }
 
 OPTIONAL_EMPTY_PROFILES = {"options", "news", "analyst"}
+VALUATION_BENCHMARKS = (
+    ExternalSubject(
+        subject_key="SPY", symbol="SPY", name="SPDR S&P 500 ETF Trust",
+        market="US", currency="USD", source="valuation-benchmark",
+    ),
+    ExternalSubject(
+        subject_key="^KS11", symbol="^KS11", name="KOSPI Composite Index",
+        market="INDEX", currency="KRW", source="valuation-benchmark",
+    ),
+)
 
 
 def unusable_modules_error_message(profile: str, query_symbol: str, payload: Dict[str, object]) -> str:
@@ -94,7 +104,15 @@ class YFinanceProfileAdapter:
         )
 
     def partitions(self, subjects: Iterable[ExternalSubject], _settings: Dict[str, object]) -> List[CollectionPartition]:
-        return equity_partitions(self.descriptor, subjects)
+        subject_rows = list(subjects or [])
+        if self.profile == "price":
+            markets = {str(item.market or "").upper().strip() for item in subject_rows}
+            currencies = {str(item.currency or "").upper().strip() for item in subject_rows}
+            if currencies.intersection({"USD", "USDT", "USDC"}) or markets.intersection({"US", "USA", "NASDAQ", "NYSE", "AMEX"}):
+                subject_rows.append(VALUATION_BENCHMARKS[0])
+            if "KRW" in currencies or markets.intersection({"KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX"}):
+                subject_rows.append(VALUATION_BENCHMARKS[1])
+        return equity_partitions(self.descriptor, subject_rows)
 
     def fetch(self, job: CollectionJob, settings: Dict[str, object]):
         try:

@@ -373,6 +373,17 @@ def release_driver_dcf_reference(
     financial_evidence = source.get("financialEvidence") if isinstance(source.get("financialEvidence"), Mapping) else {}
     exposure_readiness = source.get("exposureReadiness") if isinstance(source.get("exposureReadiness"), Mapping) else {}
     references = _source_references(source.get("sourceReferences") or [])
+    calculation_blockers = set(calculation.get("blockedReasons") or [])
+    diagnostic_only = (
+        calculation.get("status") == "blocked"
+        and calculation_blockers == {"non-positive-equity-value"}
+    )
+    sensitivity_rows = [item for item in sensitivity.get("rows") or [] if isinstance(item, Mapping)]
+    diagnostic_sensitivity_complete = bool(
+        diagnostic_only
+        and len(sensitivity_rows) == 9
+        and all(set(item.get("blockedReasons") or []) == {"non-positive-equity-value"} for item in sensitivity_rows)
+    )
     blockers = []
     if release_mode != "reference":
         blockers.append("reference-release-mode-required")
@@ -380,16 +391,18 @@ def release_driver_dcf_reference(
         blockers.append("reference-release-id-missing")
     if symbol not in scope:
         blockers.append("symbol-outside-release-scope")
-    if calculation.get("status") != "calculated":
+    if calculation.get("status") != "calculated" and not diagnostic_only:
         blockers.append("dcf-calculation-not-ready")
     if financial_evidence.get("officialDecisionReady") is not True:
         blockers.append("official-financial-evidence-incomplete")
     if not references:
         blockers.append("exact-source-revisions-missing")
-    if int(sensitivity.get("validScenarioCount") or 0) != 9:
+    if int(sensitivity.get("validScenarioCount") or 0) != 9 and not diagnostic_sensitivity_complete:
         blockers.append("sensitivity-grid-incomplete")
 
     limitations = list(calculation.get("warnings") or [])
+    if diagnostic_only:
+        limitations.append("non-positive-equity-value-under-current-economics")
     for area in ("currency", "debtRate"):
         readiness = exposure_readiness.get(area) if isinstance(exposure_readiness.get(area), Mapping) else {}
         if readiness.get("decisionEligible") is not True:
@@ -425,6 +438,8 @@ def release_driver_dcf_reference(
         "requiredMetricCount": int(financial_evidence.get("requiredMetricCount") or 0),
         "sourceRevisionCount": len(references),
         "sensitivityValidScenarioCount": int(sensitivity.get("validScenarioCount") or 0),
+        "sensitivityScenarioCount": len(sensitivity_rows),
+        "diagnosticOnly": diagnostic_only,
         "calculatedValuePerShare": calculation.get("valuePerShare"),
         "currency": _text(source.get("currency")).upper(),
         "terminalValueSharePct": calculation.get("terminalValueSharePct"),
@@ -448,7 +463,7 @@ def release_driver_dcf_reference(
         "releasedAt": _text(policy.get("releasedAt")),
         "status": "released",
         "scopeSymbols": scope,
-        "usagePolicy": "display-and-analysis-only",
+        "usagePolicy": "diagnostic-display-only" if diagnostic_only else "display-and-analysis-only",
         "automaticTradingAllowed": False,
         "valuationDecisionEligible": False,
         "audit": audit,
@@ -488,47 +503,29 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
     if not source:
         return {}
     result = calculate_driver_dcf({**source, "symbol": symbol})
-    if result.get("status") != "calculated":
-        return {
-            "assumptionKey": symbol + ":driver-dcf",
-            "symbol": symbol,
-            "label": (getattr(position, "name", "") or symbol) + " 사업 변수 DCF",
-            "provider": "Orbit Alpha deterministic DCF",
-            "source": "driver-dcf",
-            "valuationMethod": "driver-fcff-dcf",
-            "formula": "FCFF의 명시적 기간과 terminal value를 WACC로 할인",
-            "modelVersion": DRIVER_DCF_VERSION,
-            "valuationModelId": "driver-fcff-dcf",
-            "valuationModelFamily": "driver-dcf",
-            "valuationCurrency": _text(source.get("currency") or getattr(position, "currency", "")),
-            "valuationInputState": "unavailable",
-            "valuationDataState": "unavailable",
-            "valuationReliabilityState": "unavailable",
-            "valuationDecisionEligible": False,
-            "valuationReferenceOnly": True,
-            "missingInputs": list(result.get("blockedReasons") or []),
-            "modelExclusionReasons": list(result.get("blockedReasons") or []),
-            "assumptionReview": dict(source.get("assumptionReview") or {}),
-            "modelRelease": dict(source.get("modelRelease") or {}),
-            "financialEvidence": dict(source.get("financialEvidence") or {}),
-            "exposureReadiness": dict(source.get("exposureReadiness") or {}),
-            "dcfAssessment": result,
-        }
-    value = float(result["valuePerShare"])
     current = _finite(getattr(position, "current_price", 0.0)) or 0.0
     sensitivity = calculate_driver_dcf_sensitivity(source)
     if current > 0:
-        from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import solve_implied_revenue_growth
+        from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import (
+            solve_implied_ebit_margin,
+            solve_implied_revenue_growth,
+        )
 
         bracket = source.get("reverseGrowthSearchBracketPct")
         lower = bracket[0] if isinstance(bracket, list) and len(bracket) == 2 else -50.0
         upper = bracket[1] if isinstance(bracket, list) and len(bracket) == 2 else 100.0
-        implied_expectations = solve_implied_revenue_growth(
+        revenue_expectations = solve_implied_revenue_growth(
             source,
             target_price=current,
             lower_growth_pct=lower,
             upper_growth_pct=upper,
         )
+        margin_expectations = solve_implied_ebit_margin(source, target_price=current)
+        implied_expectations = dict(
+            margin_expectations if margin_expectations.get("status") == "solved" else revenue_expectations
+        )
+        implied_expectations["revenueGrowthScenario"] = revenue_expectations
+        implied_expectations["ebitMarginScenario"] = margin_expectations
     else:
         implied_expectations = {
             "contractVersion": "reverse-dcf-growth-solver-v1",
@@ -545,16 +542,51 @@ def driver_dcf_valuation_row(position, external_signals: Mapping[str, object], s
         "assumptionReviewState": assumption_review_state,
         "assumptionReview": assumption_review,
         "modelRelease": dict(source.get("modelRelease") or {}),
-        "financialEvidence": dict(result.get("financialEvidence") or {}),
-        "exposureReadiness": dict(result.get("exposureReadiness") or {}),
-        "sourceBacked": bool(result.get("sourceReferences")),
-        "officialFinancialsReady": bool((result.get("financialEvidence") or {}).get("officialDecisionReady")),
+        "financialEvidence": dict(result.get("financialEvidence") or source.get("financialEvidence") or {}),
+        "exposureReadiness": dict(result.get("exposureReadiness") or source.get("exposureReadiness") or {}),
+        "sourceBacked": bool(result.get("sourceReferences") or source.get("sourceReferences")),
+        "officialFinancialsReady": bool((result.get("financialEvidence") or source.get("financialEvidence") or {}).get("officialDecisionReady")),
     }
     dcf_assessment = {
         **result,
         "sensitivity": sensitivity,
         "impliedExpectations": implied_expectations,
     }
+    if result.get("status") != "calculated":
+        return {
+            "assumptionKey": symbol + ":driver-dcf",
+            "symbol": symbol,
+            "label": (getattr(position, "name", "") or symbol) + " 사업 변수 DCF",
+            "provider": "Orbit Alpha deterministic DCF",
+            "source": "driver-dcf",
+            "valuationMethod": "driver-fcff-dcf",
+            "formula": "FCFF의 명시적 기간과 terminal value를 WACC로 할인",
+            "modelVersion": DRIVER_DCF_VERSION,
+            "valuationModelId": "driver-fcff-dcf",
+            "valuationModelFamily": "driver-dcf",
+            "valuationCurrency": _text(source.get("currency") or getattr(position, "currency", "")),
+            "valuationInputState": "sufficient" if result.get("blockedReasons") == ["non-positive-equity-value"] else "unavailable",
+            "valuationDataState": "partial",
+            "valuationReliabilityState": "partial",
+            "valuationDecisionEligible": False,
+            "valuationReferenceOnly": True,
+            "missingInputs": list(result.get("blockedReasons") or []),
+            "modelExclusionReasons": list(result.get("blockedReasons") or []),
+            "assumptionReview": dict(source.get("assumptionReview") or {}),
+            "modelRelease": dict(source.get("modelRelease") or {}),
+            "releaseAudit": dict((source.get("modelRelease") or {}).get("audit") or {}),
+            "financialEvidence": dict(source.get("financialEvidence") or {}),
+            "exposureReadiness": dict(source.get("exposureReadiness") or {}),
+            "officialFinancialsReady": bool((source.get("financialEvidence") or {}).get("officialDecisionReady")),
+            "sourceBacked": bool(source.get("sourceReferences")),
+            "assumptionReviewState": assumption_review_state,
+            "assumptions": list(source.get("assumptions") or []),
+            "modelWarnings": list(result.get("warnings") or []),
+            "impliedExpectations": implied_expectations,
+            "sensitivity": sensitivity,
+            "dcfAssessment": dcf_assessment,
+        }
+    value = float(result["valuePerShare"])
     return {
         "assumptionKey": symbol + ":driver-dcf",
         "symbol": symbol,

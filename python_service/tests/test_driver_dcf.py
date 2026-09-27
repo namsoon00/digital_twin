@@ -1,6 +1,7 @@
 import copy
 import sys
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -8,13 +9,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.modules.portfolio.domain.valuation.dcf import (
     calculate_driver_dcf, calculate_driver_dcf_sensitivity, release_driver_dcf_reference,
 )
-from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
-from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import solve_implied_revenue_growth
+from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import (
+    build_driver_dcf_input_bundle,
+    calculate_historical_market_beta,
+)
+from digital_twin.modules.portfolio.domain.valuation.reverse_dcf import (
+    solve_implied_ebit_margin,
+    solve_implied_revenue_growth,
+)
 from digital_twin.modules.portfolio.domain.valuation.models import apply_review_override
 from digital_twin.modules.news_intelligence.domain.financial_reporting import FINANCIAL_REPORTING_VERSION, bind_financial_report_contract
 
 
 class DriverDcfTests(unittest.TestCase):
+    @staticmethod
+    def price_history(return_values, starting_price=100.0):
+        price = float(starting_price)
+        rows = [{"Date": "2026-01-01T00:00:00Z", "Adj Close": price}]
+        for index, return_value in enumerate(return_values, start=2):
+            price *= 1.0 + float(return_value)
+            day = date(2026, 1, 1) + timedelta(days=index - 1)
+            rows.append({"Date": day.isoformat() + "T00:00:00Z", "Adj Close": price})
+        return rows
+
     def inputs(self):
         return {
             "symbol": "TEST",
@@ -319,6 +336,59 @@ class DriverDcfTests(unittest.TestCase):
         self.assertIn("working-capital-change-missing", built["missingInputs"])
         self.assertNotIn("input", built)
 
+    def test_market_inputs_use_price_facts_and_reproducible_benchmark_beta(self):
+        market_returns = [0.006 if index % 3 == 0 else -0.003 if index % 3 == 1 else 0.001 for index in range(70)]
+        equity_returns = [value * 1.5 for value in market_returns]
+        beta = calculate_historical_market_beta(
+            {"history": self.price_history(equity_returns)},
+            {"history": self.price_history(market_returns, 400.0)},
+            benchmark_symbol="SPY",
+        )
+
+        self.assertEqual("calculated", beta["status"])
+        self.assertEqual(70, beta["sampleCount"])
+        self.assertAlmostEqual(1.5, beta["beta"], places=6)
+
+        source = self.evidence_inputs()
+        source["overview"] = {"fetchedAt": "2026-01-03T00:00:00Z"}
+        source["yfinance"]["info"] = {}
+        source["yfinance"]["fastInfo"] = {"currency": "USD"}
+        source["yfinance"]["quote"] = {"price": 50.0}
+        source["yfinance"]["history"] = self.price_history(equity_returns)
+        source["benchmark_yfinance_by_symbol"] = {
+            "SPY": {"history": self.price_history(market_returns, 400.0)},
+        }
+        source["lineage"]["price"] = {
+            "datasetId": "yfinance.price", "subjectKey": "TEST",
+            "revisionId": "price-r1", "payloadHash": "price-h1",
+            "fetchedAt": "2026-01-03T00:00:00Z",
+        }
+        source["lineage"]["benchmark"] = {
+            "datasetId": "yfinance.price", "subjectKey": "SPY",
+            "revisionId": "spy-r1", "payloadHash": "spy-h1",
+            "fetchedAt": "2026-01-03T00:00:00Z",
+        }
+
+        built = build_driver_dcf_input_bundle(**source)
+
+        self.assertEqual("ready-for-shadow", built["status"])
+        self.assertEqual("validated", built["consensusEvidence"]["status"])
+        self.assertEqual("provider-fast-info-currency", built["consensusEvidence"]["rows"][0]["currencyBasis"])
+        self.assertAlmostEqual(1.5, built["observedInputs"]["beta"], places=6)
+        self.assertEqual(5000.0, built["observedInputs"]["marketCapitalization"])
+        self.assertEqual(
+            "derived-current-price-times-official-diluted-shares",
+            built["observedInputs"]["marketCapitalizationBasis"],
+        )
+        self.assertEqual(
+            {"SPY", "TEST"},
+            {
+                item["subjectKey"]
+                for item in built["sourceReferences"]
+                if item["datasetId"] == "yfinance.price"
+            },
+        )
+
     def test_operational_input_builder_fails_closed_on_consensus_unit_or_growth_anomaly(self):
         source = self.evidence_inputs()
         source["yfinance"]["info"]["financialCurrency"] = "KRW"
@@ -349,6 +419,14 @@ class DriverDcfTests(unittest.TestCase):
 
         self.assertEqual("solved", solved["status"])
         self.assertAlmostEqual(10.0, solved["impliedRevenueGrowthPct"], places=4)
+        margin_target = calculate_driver_dcf(built["input"])["valuePerShare"]
+        margin_solved = solve_implied_ebit_margin(built["input"], target_price=margin_target)
+        self.assertEqual("solved", margin_solved["status"])
+        self.assertAlmostEqual(
+            built["input"]["projectionYears"][0]["ebitMarginPct"],
+            margin_solved["impliedEbitMarginPct"],
+            places=4,
+        )
         releasable = self.inputs()
         releasable.update({"inputBundleId": "driver-dcf-input:test", "assumptionVersion": "test-v1"})
         released = release_driver_dcf_reference(releasable, {
@@ -380,6 +458,21 @@ class DriverDcfTests(unittest.TestCase):
         })
         self.assertFalse(rejected["released"])
         self.assertIn("forecast-growth-exceeds-100pct", rejected["audit"]["blockers"])
+
+        diagnostic = self.inputs()
+        diagnostic.update({"inputBundleId": "driver-dcf-input:diagnostic", "assumptionVersion": "test-v1"})
+        for row in diagnostic["projectionYears"]:
+            row["ebitMarginPct"] = -10
+        diagnostic_release = release_driver_dcf_reference(diagnostic, {
+            "releaseMode": "reference", "releaseId": "driver-dcf-reference-r1", "symbols": ["TEST"],
+        })
+        self.assertTrue(diagnostic_release["released"])
+        self.assertTrue(diagnostic_release["audit"]["diagnosticOnly"])
+        self.assertEqual("diagnostic-display-only", diagnostic_release["modelRelease"]["usagePolicy"])
+        self.assertIn(
+            "non-positive-equity-value-under-current-economics",
+            diagnostic_release["audit"]["limitations"],
+        )
 
 
 if __name__ == "__main__":

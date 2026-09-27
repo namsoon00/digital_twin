@@ -165,6 +165,7 @@ class DriverDcfEvidenceService:
                 {**company, "valuationFinancialCandidates": financial_candidates},
                 overview=overviews.get(symbol) if isinstance(overviews.get(symbol), Mapping) else {},
                 yfinance=yfinance_data.get(symbol) if isinstance(yfinance_data.get(symbol), Mapping) else {},
+                benchmark_yfinance_by_symbol=yfinance_data,
                 macro=macro,
                 lineage=lineage,
                 exposure_readiness=driver_map.get("exposureReadiness") if isinstance(driver_map, Mapping) else {},

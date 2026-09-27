@@ -22,6 +22,7 @@ DRIVER_DCF_ASSUMPTION_VERSION = "driver-dcf-shadow-assumptions-v3-market-currenc
 DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION = "driver-dcf-financial-evidence-v1"
 DRIVER_DCF_ASSUMPTION_REVIEW_VERSION = "driver-dcf-assumption-review-v1"
 DRIVER_DCF_CONSENSUS_EVIDENCE_VERSION = "driver-dcf-consensus-evidence-v1"
+DRIVER_DCF_MARKET_EVIDENCE_VERSION = "driver-dcf-market-evidence-v1"
 MAX_CONSENSUS_REVENUE_GROWTH_PCT = 100.0
 MIN_CONSENSUS_REVENUE_GROWTH_PCT = -80.0
 
@@ -39,6 +40,10 @@ OFFICIAL_FINANCIAL_DATASETS = {
 RISK_FREE_SERIES_BY_CURRENCY = {
     "USD": {"seriesId": "DGS10", "datasetId": "fred.macro", "label": "미국 10년 국채금리"},
     "KRW": {"seriesId": "KRGB10Y", "datasetId": "ecos.macro", "label": "한국 10년 국고채금리"},
+}
+MARKET_BETA_BENCHMARK_BY_CURRENCY = {
+    "USD": "SPY",
+    "KRW": "^KS11",
 }
 
 
@@ -82,12 +87,16 @@ def _source_references(
     lineage: Mapping[str, object],
     symbol: str,
     currency: str,
+    price_subjects=(),
 ) -> list[Dict[str, object]]:
     accepted = {
         *OFFICIAL_FINANCIAL_DATASETS,
-        "yfinance.fundamental", "yfinance.analyst", "fred.macro", "ecos.macro",
+        "yfinance.fundamental", "yfinance.analyst", "yfinance.price", "fred.macro", "ecos.macro",
     }
     macro_dataset = str((RISK_FREE_SERIES_BY_CURRENCY.get(currency) or {}).get("datasetId") or "")
+    accepted_price_subjects = {
+        _text(item).upper() for item in [symbol, *list(price_subjects or [])] if _text(item)
+    }
     result = {}
     for item in (lineage or {}).values():
         if not isinstance(item, Mapping):
@@ -99,8 +108,11 @@ def _source_references(
             continue
         if dataset_id in {"fred.macro", "ecos.macro"} and dataset_id != macro_dataset:
             continue
-        if dataset_id not in {"fred.macro", "ecos.macro"} and subject != symbol:
+        if dataset_id == "yfinance.price" and subject not in accepted_price_subjects:
             continue
+        if dataset_id not in {"fred.macro", "ecos.macro"} and subject != symbol:
+            if dataset_id != "yfinance.price":
+                continue
         row = {
             "datasetId": dataset_id,
             "subjectKey": subject,
@@ -294,7 +306,18 @@ def _market_assumption(
 
 def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, object]]:
     info = yfinance.get("info") if isinstance(yfinance.get("info"), Mapping) else {}
-    currency = _text(info.get("financialCurrency")).upper()
+    fast_info = yfinance.get("fastInfo") if isinstance(yfinance.get("fastInfo"), Mapping) else {}
+    history_metadata = yfinance.get("historyMetadata") if isinstance(yfinance.get("historyMetadata"), Mapping) else {}
+    currency_values = [
+        (info.get("financialCurrency"), "provider-financial-currency"),
+        (info.get("currency"), "provider-listing-currency"),
+        (fast_info.get("currency"), "provider-fast-info-currency"),
+        (history_metadata.get("currency"), "provider-history-currency"),
+    ]
+    currency, currency_basis = next(
+        ((_text(value).upper(), basis) for value, basis in currency_values if _text(value)),
+        ("", "missing"),
+    )
     result = {}
     for row in yfinance.get("revenueEstimate") or []:
         if not isinstance(row, Mapping):
@@ -308,7 +331,9 @@ def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, ob
                 "high": _finite(row.get("high")),
                 "analystCount": int(_finite(row.get("numberOfAnalysts")) or 0),
                 "growth": _finite(row.get("growth")),
+                "yearAgoRevenue": _finite(row.get("yearAgoRevenue")),
                 "currency": currency,
+                "currencyBasis": currency_basis,
                 "provider": _text(yfinance.get("provider") or "yfinance"),
                 "horizon": "FY1" if period == "0y" else "FY2",
             }
@@ -365,6 +390,7 @@ def _consensus_evidence(
             "low": low,
             "high": high,
             "currency": currency,
+            "currencyBasis": _text(estimate.get("currencyBasis")),
             "analystCount": analyst_count,
             "provider": _text(estimate.get("provider")),
             "growthPct": round(growth_pct, 6) if growth_pct is not None else None,
@@ -382,6 +408,151 @@ def _consensus_evidence(
         "blockingReasons": sorted(set(blockers)),
     }
     return {**material, "evidenceId": "driver-dcf-consensus-evidence:" + _digest(material)[:32]}
+
+
+def _history_prices(payload: Mapping[str, object]) -> Dict[str, float]:
+    result = {}
+    for row in payload.get("history") or []:
+        if not isinstance(row, Mapping):
+            continue
+        date = _text(row.get("Date") or row.get("date") or row.get("index"))[:10]
+        price = _finite(row.get("Adj Close"))
+        if price is None:
+            price = _finite(row.get("Close"))
+        if date and price is not None and price > 0:
+            result[date] = price
+    return result
+
+
+def calculate_historical_market_beta(
+    equity_yfinance: Mapping[str, object],
+    benchmark_yfinance: Mapping[str, object],
+    *,
+    benchmark_symbol: str,
+    minimum_samples: int = 60,
+) -> Dict[str, object]:
+    """Calculate beta from aligned observed daily returns with an audit trace."""
+
+    equity_prices = _history_prices(equity_yfinance or {})
+    benchmark_prices = _history_prices(benchmark_yfinance or {})
+
+    def returns(prices):
+        values = {}
+        previous = None
+        for date in sorted(prices):
+            current = prices[date]
+            if previous is not None and previous > 0:
+                values[date] = current / previous - 1.0
+            previous = current
+        return values
+
+    equity_returns = returns(equity_prices)
+    benchmark_returns = returns(benchmark_prices)
+    dates = sorted(set(equity_returns).intersection(benchmark_returns))
+    blockers = []
+    if len(dates) < max(2, int(minimum_samples)):
+        blockers.append("beta-return-samples-insufficient")
+    beta = None
+    if not blockers:
+        xs = [benchmark_returns[date] for date in dates]
+        ys = [equity_returns[date] for date in dates]
+        x_mean = sum(xs) / len(xs)
+        y_mean = sum(ys) / len(ys)
+        variance_sum = sum((value - x_mean) ** 2 for value in xs)
+        if variance_sum <= 0:
+            blockers.append("benchmark-return-variance-zero")
+        else:
+            beta = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys)) / variance_sum
+            if not math.isfinite(beta) or beta < -3.0 or beta > 5.0:
+                beta = None
+                blockers.append("beta-out-of-range")
+    material = {
+        "contractVersion": DRIVER_DCF_MARKET_EVIDENCE_VERSION,
+        "status": "calculated" if beta is not None and not blockers else "blocked",
+        "method": "covariance-of-aligned-daily-returns-divided-by-benchmark-variance",
+        "benchmarkSymbol": _text(benchmark_symbol).upper(),
+        "sampleCount": len(dates),
+        "minimumSampleCount": max(2, int(minimum_samples)),
+        "windowStart": dates[0] if dates else "",
+        "windowEnd": dates[-1] if dates else "",
+        "beta": round(beta, 8) if beta is not None else None,
+        "blockingReasons": blockers,
+    }
+    return {**material, "evidenceId": "driver-dcf-market-beta:" + _digest(material)[:32]}
+
+
+def _market_evidence(
+    overview: Mapping[str, object],
+    yfinance: Mapping[str, object],
+    benchmark_yfinance: Mapping[str, object],
+    *,
+    benchmark_symbol: str,
+    annual_currency: str,
+    diluted_shares: object,
+) -> Dict[str, object]:
+    info = yfinance.get("info") if isinstance(yfinance.get("info"), Mapping) else {}
+    fast_info = yfinance.get("fastInfo") if isinstance(yfinance.get("fastInfo"), Mapping) else {}
+    history_metadata = yfinance.get("historyMetadata") if isinstance(yfinance.get("historyMetadata"), Mapping) else {}
+    quote = yfinance.get("quote") if isinstance(yfinance.get("quote"), Mapping) else {}
+    market_currency = _text(
+        overview.get("currency") or info.get("currency") or fast_info.get("currency")
+        or history_metadata.get("currency")
+    ).upper()
+    currency_compatible = not market_currency or market_currency == annual_currency
+    current_price = next((value for value in (
+        _finite(overview.get("currentPrice")), _finite(quote.get("price")),
+        _finite(fast_info.get("lastPrice")), _finite(info.get("currentPrice")),
+        _finite(info.get("regularMarketPrice")),
+    ) if value is not None and value > 0), None)
+    direct_market_cap = next((value for value in (
+        _finite(overview.get("marketCapitalization")), _finite(fast_info.get("marketCap")),
+        _finite(info.get("marketCap")),
+    ) if value is not None and value > 0), None)
+    shares = _finite(diluted_shares)
+    market_cap = direct_market_cap
+    market_cap_basis = "provider-reported" if direct_market_cap is not None else ""
+    if market_cap is None and current_price is not None and shares is not None and shares > 0:
+        market_cap = current_price * shares
+        market_cap_basis = "derived-current-price-times-official-diluted-shares"
+    provider_beta = next((value for value in (
+        _finite(overview.get("beta")), _finite(info.get("beta")),
+    ) if value is not None), None)
+    beta_evidence = calculate_historical_market_beta(
+        yfinance,
+        benchmark_yfinance,
+        benchmark_symbol=benchmark_symbol,
+    ) if provider_beta is None else {
+        "contractVersion": DRIVER_DCF_MARKET_EVIDENCE_VERSION,
+        "status": "observed",
+        "method": "provider-reported",
+        "benchmarkSymbol": "",
+        "sampleCount": 0,
+        "beta": provider_beta,
+        "blockingReasons": [],
+    }
+    beta = provider_beta if provider_beta is not None else _finite(beta_evidence.get("beta"))
+    blockers = []
+    if not currency_compatible:
+        blockers.append("market-input-currency-mismatch")
+        market_cap = None
+    if market_cap is None:
+        blockers.append("market-capitalization-missing")
+    if beta is None:
+        blockers.extend(beta_evidence.get("blockingReasons") or ["beta-missing"])
+    material = {
+        "contractVersion": DRIVER_DCF_MARKET_EVIDENCE_VERSION,
+        "status": "validated" if not blockers else "blocked",
+        "currency": market_currency,
+        "annualCurrency": annual_currency,
+        "currencyCompatible": currency_compatible,
+        "currentPrice": current_price,
+        "marketCapitalization": round(market_cap, 4) if market_cap is not None else None,
+        "marketCapitalizationBasis": market_cap_basis,
+        "beta": beta,
+        "betaEvidence": beta_evidence,
+        "blockingReasons": sorted(set(blockers)),
+    }
+    return {**material, "evidenceId": "driver-dcf-market-evidence:" + _digest(material)[:32]}
 
 
 def _blocked(
@@ -414,6 +585,7 @@ def build_driver_dcf_input_bundle(
     *,
     overview: Mapping[str, object] = None,
     yfinance: Mapping[str, object] = None,
+    benchmark_yfinance_by_symbol: Mapping[str, object] = None,
     macro: Mapping[str, object] = None,
     lineage: Mapping[str, object] = None,
     exposure_readiness: Mapping[str, object] = None,
@@ -433,6 +605,13 @@ def build_driver_dcf_input_bundle(
     candidates = _annual_candidates(company or {})
     financial_evidence = _financial_evidence_contract(annual, annual_assessment, candidates)
     currency = _annual_currency(annual)
+    benchmark_symbol = MARKET_BETA_BENCHMARK_BY_CURRENCY.get(currency, "")
+    benchmark_yfinance_by_symbol = dict(benchmark_yfinance_by_symbol or {})
+    benchmark_yfinance = (
+        benchmark_yfinance_by_symbol.get(benchmark_symbol)
+        if isinstance(benchmark_yfinance_by_symbol.get(benchmark_symbol), Mapping)
+        else {}
+    )
     market_equity_risk_premium_pct = _market_assumption(
         currency, equity_risk_premium_pct_by_currency, equity_risk_premium_pct,
     )
@@ -441,11 +620,13 @@ def build_driver_dcf_input_bundle(
     )
     risk_free_observation = _risk_free_observation(macro, currency)
     risk_free_dataset = _text(risk_free_observation.get("datasetId"))
-    lineage_references = _source_references(lineage or {}, normalized_symbol, currency)
+    lineage_references = _source_references(
+        lineage or {}, normalized_symbol, currency, price_subjects=[benchmark_symbol],
+    )
     financial_references = list(financial_evidence.get("sourceReferences") or [])
     auxiliary_references = [
         item for item in lineage_references
-        if item.get("datasetId") in {"yfinance.analyst", risk_free_dataset}
+        if item.get("datasetId") in {"yfinance.analyst", "yfinance.price", risk_free_dataset}
     ]
     references = {
         (_text(item.get("datasetId")), _text(item.get("revisionId"))): dict(item)
@@ -458,6 +639,14 @@ def build_driver_dcf_input_bundle(
         estimates,
         annual_revenue=annual.get("revenue"),
         annual_currency=currency,
+    )
+    market_evidence = _market_evidence(
+        overview,
+        yfinance,
+        benchmark_yfinance,
+        benchmark_symbol=benchmark_symbol,
+        annual_currency=currency,
+        diluted_shares=annual.get("weightedAverageSharesDiluted"),
     )
 
     observed = {
@@ -476,8 +665,10 @@ def build_driver_dcf_input_bundle(
         "cash": _finite(annual.get("cash")),
         "debt": _finite(annual.get("totalDebt")),
         "dilutedShares": _finite(annual.get("weightedAverageSharesDiluted")),
-        "marketCapitalization": _finite(overview.get("marketCapitalization")),
-        "beta": _finite(overview.get("beta")),
+        "marketCapitalization": _finite(market_evidence.get("marketCapitalization")),
+        "marketCapitalizationBasis": _text(market_evidence.get("marketCapitalizationBasis")),
+        "marketEvidence": market_evidence,
+        "beta": _finite(market_evidence.get("beta")),
         "riskFreeRatePct": risk_free_observation.get("value"),
         "riskFreeSeriesId": risk_free_observation.get("seriesId"),
         "riskFreeDatasetId": risk_free_dataset,
@@ -486,7 +677,7 @@ def build_driver_dcf_input_bundle(
         "riskFreeObservationDate": risk_free_observation.get("date"),
         "fy1RevenueConsensus": (estimates.get("0y") or {}).get("value"),
         "fy2RevenueConsensus": (estimates.get("+1y") or {}).get("value"),
-        "consensusCurrency": _text((estimates.get("0y") or {}).get("currency")).upper(),
+        "consensusCurrency": _text((consensus_evidence.get("rows") or [{}])[0].get("currency")).upper(),
         "consensusEvidence": consensus_evidence,
     }
     required = {
@@ -520,9 +711,10 @@ def build_driver_dcf_input_bundle(
     if risk_free_dataset and not any(item.get("datasetId") == risk_free_dataset for item in references):
         reasons.append("macro-source-revision-missing")
     reasons.extend(consensus_evidence.get("blockingReasons") or [])
+    reasons.extend(market_evidence.get("blockingReasons") or [])
     for key, reason in required.items():
         value = observed.get(key)
-        if value is None or (key in {"revenue", "dilutedShares", "marketCapitalization", "beta", "riskFreeRatePct", "fy1RevenueConsensus", "fy2RevenueConsensus"} and value <= 0):
+        if value is None or (key in {"revenue", "dilutedShares", "marketCapitalization", "riskFreeRatePct", "fy1RevenueConsensus", "fy2RevenueConsensus"} and value <= 0):
             reasons.append(reason)
     if reasons:
         return _blocked(normalized_symbol, reasons, observed=observed, references=references,
@@ -623,6 +815,7 @@ def build_driver_dcf_input_bundle(
         "projectionYears": projection_years,
         "observedInputs": observed,
         "consensusEvidence": consensus_evidence,
+        "marketEvidence": market_evidence,
         "calculationNotes": {
             "workingCapitalNormalization": "economic investment = -provider cash-flow change in working capital",
             "waccFormula": "E/(D+E)*costOfEquity + D/(D+E)*costOfDebt*(1-taxRate)",
@@ -662,6 +855,7 @@ def build_driver_dcf_input_bundle(
         "missingInputs": [],
         "observedInputs": observed,
         "consensusEvidence": consensus_evidence,
+        "marketEvidence": market_evidence,
         "sourceReferences": references,
         "financialEvidence": financial_evidence,
         "exposureReadiness": dict(exposure_readiness or {}),
@@ -683,5 +877,8 @@ __all__ = [
     "DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION",
     "DRIVER_DCF_CONSENSUS_EVIDENCE_VERSION",
     "DRIVER_DCF_INPUT_VERSION",
+    "DRIVER_DCF_MARKET_EVIDENCE_VERSION",
+    "MARKET_BETA_BENCHMARK_BY_CURRENCY",
     "build_driver_dcf_input_bundle",
+    "calculate_historical_market_beta",
 ]

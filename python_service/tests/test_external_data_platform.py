@@ -395,6 +395,24 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("376900.KQ", query_symbol)
         self._assert_account_focus_subjects_are_never_dropped_by_provider_partition_caps()
 
+    def test_yfinance_price_partitions_include_matching_valuation_benchmarks(self):
+        adapter = YFinanceProfileAdapter("price")
+        partitions = adapter.partitions([
+            ExternalSubject("CPNG", symbol="CPNG", market="US", currency="USD", source="holding"),
+            ExternalSubject("005930", symbol="005930", market="KOSPI", currency="KRW", source="watchlist"),
+        ], {})
+
+        self.assertEqual(
+            {"005930", "CPNG", "SPY", "^KS11"},
+            {item.partition_key for item in partitions},
+        )
+        benchmark_sources = {
+            item.partition_key: item.subject.source
+            for item in partitions
+            if item.partition_key in {"SPY", "^KS11"}
+        }
+        self.assertEqual({"SPY": "valuation-benchmark", "^KS11": "valuation-benchmark"}, benchmark_sources)
+
     def _assert_account_focus_subjects_are_never_dropped_by_provider_partition_caps(self):
         registry = ExternalDatasetRegistry([BoundedAdapter()])
         subjects = [

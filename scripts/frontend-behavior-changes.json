@@ -86,5 +86,9 @@
   {
     "reason": "Separate actionable investment opinions from observation-only interpretation, unify detected and registered calendar presentation, make background freshness explicit, and label notification actions. Covered by insight-presentation tests and browser validation.",
     "functions": ["renderLoading", "renderTopbarSyncState", "renderAppNavCommand", "renderConsoleTaskRow", "investmentCalendarEvents", "renderInvestmentCalendarMonthPanel", "renderInvestmentCalendarSelectedDayAgenda", "tossLensPath"]
+  },
+  {
+    "reason": "Present a source-backed diagnostic DCF as a calculated reference condition when current economics do not support positive equity value. Covered by insight-presentation.test.mjs and test_driver_dcf.",
+    "functions": ["instrumentValuationQualityMeta", "renderInstrumentInvestmentAnalysis"]
   }
 ]

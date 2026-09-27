@@ -38,6 +38,7 @@ COMPANY_EVENT_DATASETS = {
     "public-data.kr-dividends", "public-data.kr-capital-events",
     "public-data.kr-shareholder-rights", "yfinance.news",
 }
+VALUATION_BENCHMARK_SUBJECTS = ("SPY", "^KS11")
 
 
 def bind_external_event_lineage(fragment: Dict[str, object], fact_row: Dict[str, object]) -> Dict[str, object]:
@@ -395,7 +396,8 @@ class ExternalSignalsReadModelService:
         datasets = set()
         stale = set()
         requested_subjects = [str(item or "").upper().strip() for item in subject_keys or [] if str(item or "").strip()]
-        rows = [row for row in self.fact_store.list_current(requested_subjects) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
+        fact_subjects = list(dict.fromkeys([*requested_subjects, *VALUATION_BENCHMARK_SUBJECTS]))
+        rows = [row for row in self.fact_store.list_current(fact_subjects) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
         for row in rows:
             fragment = row.get("payload") if isinstance(row.get("payload"), dict) else {}
             fragment = bind_external_event_lineage(fragment, row)

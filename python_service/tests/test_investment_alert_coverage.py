@@ -21,6 +21,7 @@ from digital_twin.modules.reasoning.domain.investment_alert_coverage import (
     material_event_assessment,
     reasoning_delivery_trigger,
 )
+from digital_twin.modules.decisions.domain.ai_inference_queue import notification_ai_cost_control_exemption
 from digital_twin.modules.news_intelligence.domain.event_payloads import compact_materiality_assessment_event_payload
 
 
@@ -107,6 +108,63 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
             2,
             compact["facts"]["confirmedSignalTransitions"][0]["confirmationCount"],
         )
+        follow_up_event = {
+            "eventId": "follow-up-reasoning:bc74",
+            "name": "ontology.reasoning_requested",
+            "occurredAt": "2026-09-25T07:12:50Z",
+            "payload": {
+                "trigger": "decision-follow-up-transition",
+                "affectedSymbols": ["MSTR"],
+                "changedFieldsBySymbol": {"MSTR": ["followUpStatus", "ma20Distance"]},
+                "sourceFacts": [{
+                    "factType": "DecisionFollowUpCondition",
+                    "qualityState": "verified-observation-transition",
+                    "revision": "follow-up:1fcd0d05df13037c4f2387aa",
+                    "subjectIds": ["MSTR"],
+                    "payload": {
+                        "conditionId": "ai-insight-follow-up:0fa884",
+                        "transitionVerified": True,
+                        "transitionId": "follow-up:1fcd0d05df13037c4f2387aa",
+                        "status": "satisfied",
+                        "symbol": "MSTR",
+                        "field": "ma20Distance",
+                        "operator": "<",
+                        "threshold": 14.113943994589938,
+                        "previousValue": 13.82,
+                        "currentValue": 13.6664659843,
+                        "purpose": "weaken",
+                        "label": "20일선과의 가격 차이 축소",
+                        "confirmationCount": 2,
+                        "transitionAt": "2026-09-25T07:12:50Z",
+                    },
+                }],
+            },
+        }
+        follow_up_material, follow_up_reason = material_event_assessment(
+            follow_up_event["payload"],
+            "MSTR",
+        )
+        self.assertTrue(follow_up_material)
+        self.assertEqual("verified-decision-follow-up-transition", follow_up_reason)
+        follow_up_trigger = reasoning_delivery_trigger([follow_up_event], "MSTR")
+        self.assertTrue(follow_up_trigger["material"])
+        self.assertTrue(follow_up_trigger["userObservable"])
+        self.assertTrue(follow_up_trigger["observationFollowup"])
+        self.assertEqual(
+            ["follow-up:1fcd0d05df13037c4f2387aa"],
+            follow_up_trigger["materialRevisionKeys"],
+        )
+        self.assertIn("ma20Distance", follow_up_trigger["changedFields"])
+        self.assertIn("ai-insight-follow-up:0fa884", follow_up_trigger["matchedConditions"])
+        self.assertEqual(
+            "follow-up:1fcd0d05df13037c4f2387aa",
+            follow_up_trigger["facts"]["followUpTransitions"][0]["transitionId"],
+        )
+        exemption = notification_ai_cost_control_exemption({
+            "reasoningDeliveryTrigger": follow_up_trigger,
+        })
+        self.assertTrue(exemption["exempt"])
+        self.assertIn("tracked-condition-transition", exemption["reasons"])
         self.assertEqual({}, reasoning_delivery_trigger([{
             "eventId": "reasoning:event:quiet",
             "payload": {

@@ -89,6 +89,69 @@ def _matched_symbol(item: Mapping[str, object], symbol: str) -> bool:
     return not subject or subject == _upper(symbol)
 
 
+def _verified_decision_follow_up_transitions(
+    event_payload: Mapping[str, object],
+    symbol: str,
+) -> list[Dict[str, object]]:
+    """Extract only durable, confirmed follow-up state transitions."""
+
+    payload = _mapping(event_payload)
+    if _text(payload.get("trigger")) != "decision-follow-up-transition":
+        return []
+    clean_symbol = _upper(symbol)
+    transitions = []
+    allowed_statuses = {"satisfied", "invalidated", "expired"}
+    copied_keys = (
+        "conditionId",
+        "sourceConditionId",
+        "transitionId",
+        "symbol",
+        "field",
+        "operator",
+        "threshold",
+        "previousValue",
+        "currentValue",
+        "purpose",
+        "status",
+        "label",
+        "onSatisfied",
+        "confirmationCount",
+        "transitionAt",
+    )
+    for raw_fact in payload.get("sourceFacts") or []:
+        fact = _mapping(raw_fact)
+        transition = _mapping(fact.get("payload"))
+        subjects = {
+            _upper(item)
+            for item in fact.get("subjectIds") or []
+            if _upper(item)
+        }
+        transition_symbol = _upper(transition.get("symbol"))
+        if clean_symbol and clean_symbol not in subjects and transition_symbol != clean_symbol:
+            continue
+        if _text(fact.get("factType")) != "DecisionFollowUpCondition":
+            continue
+        if _text(fact.get("qualityState")) != "verified-observation-transition":
+            continue
+        if transition.get("transitionVerified") is not True:
+            continue
+        if not _text(transition.get("transitionId")):
+            continue
+        if _text(transition.get("status")).lower() not in allowed_statuses:
+            continue
+        item = {
+            key: transition.get(key)
+            for key in copied_keys
+            if transition.get(key) is not None and transition.get(key) != ""
+        }
+        item["symbol"] = transition_symbol or clean_symbol
+        revision = _text(fact.get("revision"))
+        if revision:
+            item["sourceRevision"] = revision
+        transitions.append(item)
+    return transitions
+
+
 def material_event_assessment(
     event_payload: Mapping[str, object],
     symbol: str,
@@ -99,6 +162,8 @@ def material_event_assessment(
 
     payload = _mapping(event_payload)
     clean_symbol = _upper(symbol)
+    if _verified_decision_follow_up_transitions(payload, clean_symbol):
+        return True, "verified-decision-follow-up-transition"
     followups = {
         _upper(item)
         for item in payload.get("observationFollowupSymbols") or []
@@ -153,6 +218,10 @@ def reasoning_delivery_trigger(
     for raw_event in source_events or []:
         event = _mapping(raw_event)
         payload = _mapping(event.get("payload")) or event
+        follow_up_transitions = _verified_decision_follow_up_transitions(
+            payload,
+            clean_symbol,
+        )
         event_symbols = {
             _upper(item)
             for key in ("affectedSymbols", "symbols", "targetSymbols")
@@ -170,12 +239,17 @@ def reasoning_delivery_trigger(
             for item in payload.get("observationFollowupSymbols") or []
             if _upper(item)
         })
+        event_symbols.update({
+            _upper(item.get("symbol"))
+            for item in follow_up_transitions
+            if _upper(item.get("symbol"))
+        })
         if event_symbols and clean_symbol not in event_symbols:
             continue
         material, reason = material_event_assessment(payload, clean_symbol)
         if not material:
             continue
-        observation_followup = clean_symbol in {
+        observation_followup = bool(follow_up_transitions) or clean_symbol in {
             _upper(item)
             for item in payload.get("observationFollowupSymbols") or []
             if _upper(item)
@@ -199,8 +273,18 @@ def reasoning_delivery_trigger(
             for condition in assessment.get("matchedConditions") or []
             if _text(condition)
         }
+        matched_conditions.update(
+            _text(item.get("conditionId") or item.get("sourceConditionId"))
+            for item in follow_up_transitions
+            if _text(item.get("conditionId") or item.get("sourceConditionId"))
+        )
         event_fields = _mapping(payload.get("changedFieldsBySymbol")).get(clean_symbol) or []
         changed_fields.update(_text(item) for item in event_fields if _text(item))
+        changed_fields.update(
+            _text(item.get("field"))
+            for item in follow_up_transitions
+            if _text(item.get("field"))
+        )
         for assessment in assessments:
             changed_fields.update(
                 _text(item)
@@ -210,11 +294,28 @@ def reasoning_delivery_trigger(
         revision = _text(
             _mapping(payload.get("factRevisionsBySymbol")).get(clean_symbol)
         )
+        if not revision:
+            revision = next((
+                _text(item.get("sourceRevision"))
+                for item in follow_up_transitions
+                if _text(item.get("sourceRevision"))
+            ), "")
         event_id = _text(
             event.get("eventId")
             or event.get("event_id")
             or payload.get("sourceEventId")
         )
+        facts = _mapping(assessments[-1].get("facts")) if assessments else {}
+        if follow_up_transitions:
+            facts.update({
+                "followUpTransitionCount": len(follow_up_transitions),
+                "followUpTransitionIds": [
+                    _text(item.get("transitionId"))
+                    for item in follow_up_transitions
+                    if _text(item.get("transitionId"))
+                ],
+                "followUpTransitions": follow_up_transitions,
+            })
         matched_rows.append({
             "kind": (
                 "verified-market-observation-followup"
@@ -235,7 +336,7 @@ def reasoning_delivery_trigger(
                 or event.get("occurred_at")
             ),
             "observationFollowup": observation_followup,
-            "facts": _mapping(assessments[-1].get("facts")) if assessments else {},
+            "facts": facts,
         })
     if not matched_rows:
         return {}

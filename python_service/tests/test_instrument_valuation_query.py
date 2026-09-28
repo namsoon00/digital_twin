@@ -371,6 +371,55 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertEqual(baseline["reportId"], summary_payload["companyChangeReport"]["reportId"])
         self.assertNotIn("companyChangeReport", notification_job_public_payload(queue.jobs[0], settings=settings))
 
+        class RotationQueue(Queue):
+            def recent_for_symbol(self, symbol, account_id="", limit=20):
+                return [
+                    job for job in reversed(self.jobs)
+                    if job.context.get("symbol") == symbol and (not account_id or job.account_id == account_id)
+                ][:limit]
+
+        class RotationQuery:
+            @staticmethod
+            def query(request):
+                rotated = copy.deepcopy(payload)
+                report = rotated["companyChangeReport"]
+                report["symbol"] = request.symbol
+                report["name"] = "회사 " + request.symbol
+                report["reportId"] = "company-change-report:" + request.symbol
+                report["materialFingerprint"] = "fingerprint:" + request.symbol
+                return rotated
+
+        from datetime import datetime, timedelta, timezone
+        clock = [datetime(1970, 1, 1, tzinfo=timezone.utc)]
+        rotation_queue = RotationQueue()
+        rotation_state = {"positions": [{"symbol": symbol} for symbol in ("A", "B", "C", "D")], "watchlist": []}
+        class RotationAccounts:
+            @staticmethod
+            def load():
+                return [type("Account", (), {"account_id": "default", "enabled": True, "watchlist_symbols": ()})()]
+
+        rotating = CompanyChangeReportReconciler(
+            account_repository=RotationAccounts(), monitor_store=StubMonitorStore({"default": rotation_state}),
+            valuation_query_service=RotationQuery(), queue=rotation_queue,
+            settings={"companyChangeReportBatchSize": "2", "companyChangeReportRotationSeconds": "60"},
+            now_provider=lambda: clock[0],
+        )
+        first = rotating.run_once()
+        self.assertEqual(["A", "B"], first["selectedSymbols"])
+        self.assertEqual(4, first["universeCount"])
+        self.assertEqual(4, first["withoutReportBeforeRun"])
+        for job in rotation_queue.jobs:
+            job.status = "done"
+        second = rotating.run_once()
+        self.assertEqual(["C", "D"], second["selectedSymbols"])
+        for job in rotation_queue.jobs:
+            job.status = "done"
+        third = rotating.run_once()
+        self.assertEqual(["A", "B"], third["selectedSymbols"])
+        clock[0] += timedelta(seconds=60)
+        fourth = rotating.run_once()
+        self.assertEqual(["C", "D"], fourth["selectedSymbols"])
+
     def _assert_company_report_evidence_contract(self, payload):
         source = {"provider": "OpenDART", "currency": "KRW", "period": "2025-12-31",
                   "durationBasis": "annual", "scope": "CFS", "official": True,
@@ -393,6 +442,9 @@ class InstrumentValuationQueryTests(unittest.TestCase):
                        {"documentId": "ir-2", "title": "미검증 문서", "url": "javascript:alert(1)", "officialDocumentText": "인용하면 안 되는 본문"},
                    ]}}}
         evidence = build_company_report_evidence("035720", signals)
+        self.assertEqual("partial", evidence["coverage"]["state"])
+        self.assertEqual("부분 확보", evidence["coverage"]["label"])
+        self.assertEqual("preparing", build_company_report_evidence("UNKNOWN", {})["coverage"]["state"])
         self.assertEqual(1, evidence["coverage"]["annualPeriods"])
         self.assertEqual(100, evidence["annualFinancials"][0]["metrics"][0]["comparison"]["changePct"])
         self.assertEqual("", evidence["documents"][1]["url"])
@@ -406,6 +458,7 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         report = build_company_change_report(enriched)
         rendered = render_company_change_report(report)
         self.assertIn("2026-09-28 07:19 KST", report["sourceCutoffDisplay"])
+        self.assertIn("자료 확보 수준: 부분 확보", rendered)
         self.assertIn("실적 &lt;발표&gt;", rendered)
         self.assertNotIn("1,793,020", rendered)
         self.assertNotIn("fy1-revenue-consensus-growth-outlier", rendered)

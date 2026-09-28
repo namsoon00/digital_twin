@@ -220,13 +220,31 @@ def build_company_report_evidence(symbol, external_signals):
     documents = _documents(symbol, signals)
     business = text(info.get("longBusinessSummary"))
     company_profile = {key: profile.get(key) for key in ("companyName", "ceoName", "industry", "sector", "website", "employeeCount", "auditFirm", "auditOpinion") if profile.get(key) not in (None, "")}
+    coverage_state = (
+        "sufficient" if len(annual) >= 3 and recent and documents
+        else "partial" if annual or recent or documents or company_profile
+        else "preparing"
+    )
+    coverage_labels = {"sufficient": "자료 충분", "partial": "부분 확보", "preparing": "준비 중"}
+    coverage_gaps = []
+    if len(annual) < 3:
+        coverage_gaps.append("확인 가능한 연간 재무자료가 3개 기간보다 적습니다.")
+    if not recent:
+        coverage_gaps.append("최근 중간·분기 재무자료를 확인하지 못했습니다.")
+    if not documents:
+        coverage_gaps.append("본문 또는 문서 식별자를 확인한 최근 공시·IR이 없습니다.")
     return {
         "contractVersion": "company-report-evidence-v1", "symbol": symbol,
         "profile": company_profile,
         "businessDescription": (business[:1000].rsplit(" ", 1)[0] + "…") if len(business) > 1000 else business,
         "businessDescriptionSource": "yfinance" if business else "",
         "annualFinancials": annual, "recentFinancials": recent, "documents": documents,
-        "coverage": {"annualPeriods": len(annual), "recentPeriods": len(recent), "documents": len(documents), "verifiedDocuments": sum(item["bodyVerified"] for item in documents)},
+        "coverage": {
+            "state": coverage_state, "label": coverage_labels[coverage_state],
+            "annualPeriods": len(annual), "recentPeriods": len(recent),
+            "documents": len(documents), "verifiedDocuments": sum(item["bodyVerified"] for item in documents),
+            "gaps": coverage_gaps,
+        },
         "limitations": [
             "사업부·제품별 매출 비중과 수주잔고는 이 보고서에 구조화된 근거가 없습니다.",
             "기업 IR의 전망과 설명은 회사 주장으로 표시하며 독립적인 검증 결과가 아닙니다.",
@@ -295,7 +313,17 @@ def company_evidence_sections(evidence):
     profile_labels = {"companyName": "법인명", "ceoName": "대표이사", "industry": "산업", "sector": "업종", "employeeCount": "임직원 수", "auditFirm": "감사인", "auditOpinion": "감사의견"}
     profile_rows = [label + ": " + profile_value(profile[key]) for key, label in profile_labels.items() if profile.get(key) not in (None, "")]
     business = text(evidence.get("businessDescription"))
-    sections = [{"key": "business", "title": "사업과 기업 개요", "rows": profile_rows,
+    coverage = mapping(evidence.get("coverage"))
+    coverage_rows = [
+        "자료 확보 수준: " + text(coverage.get("label") or "준비 중"),
+        "연간 재무 " + str(coverage.get("annualPeriods", 0)) + "개 기간 · 최근 재무 "
+        + str(coverage.get("recentPeriods", 0)) + "개 보고자료 · 공시·IR "
+        + str(coverage.get("documents", 0)) + "건",
+        *[text(item) for item in coverage.get("gaps") or [] if text(item)],
+    ]
+    sections = [{"key": "coverage", "title": "자료 확보 상태", "rows": coverage_rows,
+                 "paragraphs": ["자료 확보 수준은 보고서 작성 범위를 뜻하며 기업의 투자 매력이나 위험도를 평가하지 않습니다."]},
+                {"key": "business", "title": "사업과 기업 개요", "rows": profile_rows,
                  "sourceExcerpt": business, "sourceExcerptLabel": "사업 설명 발췌 원문 · yfinance",
                  "paragraphs": ["기업 프로필은 수집된 소개 정보이며 항목별 공시 대조가 완료된 것은 아닙니다."]}]
     sections.append({"key": "financialReading", "title": "실적과 현금흐름 읽기", "rows": financial_reading(evidence),

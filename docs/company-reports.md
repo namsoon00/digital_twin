@@ -37,6 +37,20 @@ polling clocks and financial cache-revision changes alone do not. Immutable
 source references remain in the captured report even when excluded from the
 material-change fingerprint.
 
+The reconciliation universe is every distinct holding and watchlist symbol by
+default. `COMPANY_CHANGE_REPORT_SYMBOLS` may restrict that universe explicitly.
+`COMPANY_CHANGE_REPORT_BATCH_SIZE` limits work and new baseline messages per
+worker cycle; it does not cap the total number of covered companies. Companies
+without any report job are selected first. Once every company has a report job,
+the reconciler uses a time-bucketed rotation so unchanged companies still get
+checked without a mutable cursor. Pending jobs are excluded until delivery or
+retry completes. `COMPANY_CHANGE_REPORT_ROTATION_SECONDS` controls the bucket
+duration and defaults to 60 seconds.
+
+Each report labels coverage as `자료 충분`, `부분 확보` or `준비 중`. This
+describes only the available report inputs. It must not be presented as a
+judgement about company quality, investment merit or risk.
+
 Validation extends `test_instrument_valuation_query`, the notification
 presentation boundary tests and `insight-presentation.test.mjs`. Fixtures cover
 baseline/upgrade/change behavior, period/source comparison boundaries, malicious

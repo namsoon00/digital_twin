@@ -501,6 +501,7 @@ def company_report_notification_content(report):
         sections.append({"title": "추가 확인", "rows": checks[:3]})
     coverage = _mapping(evidence.get("coverage"))
     sections.append({"title": "상세 보고서", "rows": [
+        "자료 확보 수준: " + _text(coverage.get("label") or "준비 중"),
         "연간 " + str(coverage.get("annualPeriods", 0)) + "개 기간 · 최근 " + str(coverage.get("recentPeriods", 0)) + "개 보고자료 · 공시·IR " + str(coverage.get("documents", 0)) + "건의 근거와 계산 내역을 담았습니다.",
         _text(report.get("boundary")),
     ]})

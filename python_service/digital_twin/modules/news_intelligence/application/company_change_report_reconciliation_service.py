@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import math
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.news_intelligence.domain.company_change_report import company_report_notification_content, render_company_change_report
@@ -11,6 +13,10 @@ from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 
 def _text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
+
+
+def _mapping(value: object) -> Dict[str, object]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _enabled(value: object, default: bool = True) -> bool:
@@ -37,6 +43,43 @@ def _state_symbols(state: Mapping[str, object], configured: Iterable[str] = None
     return symbols
 
 
+def _report_job_state(queue, account_id: str, symbol: str) -> Dict[str, object]:
+    reader = getattr(queue, "recent_for_symbol", None)
+    if not callable(reader):
+        return {}
+    try:
+        jobs = reader(symbol, account_id=account_id, limit=20)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return {}
+    for job in jobs or []:
+        context = getattr(job, "context", None)
+        context = context if isinstance(context, Mapping) else {}
+        report = context.get("companyChangeReport")
+        if not isinstance(report, Mapping) or _text(report.get("symbol")).upper() != symbol:
+            continue
+        return {
+            "status": _text(getattr(job, "status", "")).lower(),
+            "updatedAt": _text(getattr(job, "updated_at", "") or getattr(job, "created_at", "")),
+        }
+    return {}
+
+
+def _rotating_symbols(symbols, states, batch_size: int, now: datetime, rotation_seconds: int) -> list[str]:
+    """Prioritize uncovered companies, then rotate without a mutable cursor."""
+
+    uncovered = [symbol for symbol in symbols if not states.get(symbol)]
+    available = uncovered or [
+        symbol for symbol in symbols
+        if states.get(symbol, {}).get("status") not in {"pending", "processing", "awaiting_ai"}
+    ]
+    if not available:
+        return []
+    batch_count = max(1, math.ceil(len(available) / batch_size))
+    slot = int(now.timestamp() // rotation_seconds) % batch_count
+    start = slot * batch_size
+    return available[start:start + batch_size]
+
+
 class CompanyChangeReportReconciler:
     """Create a baseline once, then notify only on a material report change."""
 
@@ -48,17 +91,26 @@ class CompanyChangeReportReconciler:
         valuation_query_service,
         queue,
         settings: Mapping[str, object] = None,
+        now_provider=None,
     ):
         self.account_repository = account_repository
         self.monitor_store = monitor_store
         self.valuation_query_service = valuation_query_service
         self.queue = queue
         self.settings = dict(settings or {})
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     def run_once(self) -> Dict[str, object]:
         if not _enabled(self.settings.get("companyChangeReportEnabled"), True):
             return {"status": "disabled", "checked": 0, "queued": 0}
-        maximum = max(1, min(20, int(self.settings.get("companyChangeReportMaxSymbols") or 2)))
+        batch_size = max(1, min(20, int(
+            self.settings.get("companyChangeReportBatchSize")
+            or self.settings.get("companyChangeReportMaxSymbols")
+            or 2
+        )))
+        rotation_seconds = max(30, min(24 * 60 * 60, int(
+            self.settings.get("companyChangeReportRotationSeconds") or 60
+        )))
         preferred = [
             item.strip().upper()
             for item in str(self.settings.get("companyChangeReportSymbols") or "").split(",")
@@ -71,6 +123,10 @@ class CompanyChangeReportReconciler:
         queued = 0
         skipped = 0
         errors = []
+        universe_count = 0
+        selected_symbols = []
+        coverage_counts = {"sufficient": 0, "partial": 0, "preparing": 0}
+        without_report = 0
         for account in accounts:
             if not bool(getattr(account, "enabled", True)):
                 continue
@@ -80,7 +136,14 @@ class CompanyChangeReportReconciler:
                 continue
             available = _state_symbols(state, getattr(account, "watchlist_symbols", []))
             symbols = [symbol for symbol in preferred if symbol in available] if preferred else available
-            for symbol in symbols[:maximum]:
+            histories = {symbol: _report_job_state(self.queue, account_id, symbol) for symbol in symbols}
+            universe_count += len(symbols)
+            without_report += sum(not bool(histories[symbol]) for symbol in symbols)
+            selected = _rotating_symbols(
+                symbols, histories, batch_size, self.now_provider(), rotation_seconds,
+            )
+            selected_symbols.extend(selected)
+            for symbol in selected:
                 checked += 1
                 try:
                     payload = self.valuation_query_service.query(
@@ -95,6 +158,10 @@ class CompanyChangeReportReconciler:
                         skipped += 1
                         continue
                     report = dict(report)
+                    coverage_state = _text(
+                        _mapping(_mapping(report.get("evidence")).get("coverage")).get("state")
+                    ) or "preparing"
+                    coverage_counts[coverage_state if coverage_state in coverage_counts else "preparing"] += 1
                     text = render_company_change_report(report)
                     content = company_report_notification_content(report)
                     readable = "\n".join([
@@ -135,6 +202,11 @@ class CompanyChangeReportReconciler:
             "checked": checked,
             "queued": queued,
             "skipped": skipped,
+            "universeCount": universe_count,
+            "batchSize": batch_size,
+            "selectedSymbols": selected_symbols,
+            "withoutReportBeforeRun": without_report,
+            "coverageCounts": coverage_counts,
             "errors": errors[:10],
         }
 

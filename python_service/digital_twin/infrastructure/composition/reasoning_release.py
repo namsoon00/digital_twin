@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
     """Resolve model releases required by enabled rules and runtime scorers."""
-    from digital_twin.modules.model_registry.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID
+    from digital_twin.modules.model_registry.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID
 
     required = set()
     for rule in (rulebox_snapshot or {}).get("rules") or []:
@@ -40,6 +40,8 @@ def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
             or DEFAULT_FLOW_SIGNAL_RELEASE_ID
         ).strip(),
         DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+        LEGACY_VALUATION_SIGNAL_RELEASE_ID,
+        LEGACY_EVENT_SIGNAL_RELEASE_ID,
         DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
         DEFAULT_EVENT_SIGNAL_RELEASE_ID,
         DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,

@@ -3,7 +3,7 @@
 from typing import Dict
 
 from digital_twin.modules.reasoning.public import StatisticalSignalPipelineService
-from digital_twin.modules.model_registry.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID
+from digital_twin.modules.model_registry.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID
 from digital_twin.modules.model_registry.infrastructure.mysql_statistical_signals import MySQLStatisticalModelSignalStore
 from digital_twin.modules.market_data.infrastructure.mysql_temporal_runtime import MySQLTemporalFeatureSnapshotStore
 from .settings import runtime_settings
@@ -28,6 +28,8 @@ def build_statistical_signal_pipeline_service(settings: Dict[str, object] = None
             flow_release_id,
             CAPITAL_FLOW_SHADOW_RELEASE_ID,
             DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+            LEGACY_VALUATION_SIGNAL_RELEASE_ID,
+            LEGACY_EVENT_SIGNAL_RELEASE_ID,
             DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
             DEFAULT_EVENT_SIGNAL_RELEASE_ID,
             DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,

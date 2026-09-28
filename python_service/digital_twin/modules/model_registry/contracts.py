@@ -30,6 +30,8 @@ _EXPORTS.update({
     'DEFAULT_PROMPT_TEMPLATES': ('digital_twin.modules.model_registry.domain.ontology_prompt_registry', 'DEFAULT_PROMPT_TEMPLATES'),
     'DEFAULT_RELATION_THRESHOLDS': ('digital_twin.modules.model_registry.domain.ontology_relation_contracts', 'DEFAULT_RELATION_THRESHOLDS'),
     'DEFAULT_VALUATION_SIGNAL_RELEASE_ID': ('digital_twin.modules.model_registry.domain.statistical_signals.registry', 'DEFAULT_VALUATION_SIGNAL_RELEASE_ID'),
+    'LEGACY_EVENT_SIGNAL_RELEASE_ID': ('digital_twin.modules.model_registry.domain.statistical_signals.registry', 'LEGACY_EVENT_SIGNAL_RELEASE_ID'),
+    'LEGACY_VALUATION_SIGNAL_RELEASE_ID': ('digital_twin.modules.model_registry.domain.statistical_signals.registry', 'LEGACY_VALUATION_SIGNAL_RELEASE_ID'),
     'DecisionStageDefinition': ('digital_twin.modules.model_registry.domain.ontology_relation_contracts', 'DecisionStageDefinition'),
     'GRAPH_REASONER_VERSION': ('digital_twin.modules.model_registry.domain.ontology_rulebox_contracts', 'GRAPH_REASONER_VERSION'),
     'GraphInferenceRule': ('digital_twin.modules.model_registry.domain.ontology_rulebox_contracts', 'GraphInferenceRule'),

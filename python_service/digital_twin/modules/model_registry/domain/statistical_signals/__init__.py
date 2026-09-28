@@ -1,7 +1,7 @@
 """Versioned statistical-signal contracts used by ontology reasoning."""
 
 from digital_twin.modules.model_registry.domain.statistical_signals.contracts import MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION, MODEL_SIGNAL_CONTRACT_VERSION, MODEL_HYPOTHESIS_ASSESSMENT_CONTRACT_VERSION, ModelHypothesisAssessment, ModelSignal, ModelSignalBundle, ModelSignalSnapshot, SignalEligibility
-from digital_twin.modules.model_registry.domain.statistical_signals.registry import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, StatisticalModelRelease, default_statistical_model_registry, signal_hypothesis_family, validate_signal_hypothesis_mapping
+from digital_twin.modules.model_registry.domain.statistical_signals.registry import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID, StatisticalModelRelease, default_statistical_model_registry, signal_hypothesis_family, validate_signal_hypothesis_mapping
 from digital_twin.modules.model_registry.domain.statistical_signals.scoring import score_temporal_feature_snapshot
 from digital_twin.modules.model_registry.domain.statistical_signals.flow_scoring import score_flow_feature_snapshot
 from digital_twin.modules.model_registry.domain.statistical_signals.graph_scoring import MODEL_HYPOTHESIS_SCORER_VERSION, evaluate_market_hypothesis_contract, score_graph_hypothesis_contracts
@@ -17,6 +17,8 @@ __all__ = [
     "DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID",
     "DEFAULT_VALUATION_SIGNAL_RELEASE_ID",
     "DEFAULT_EVENT_SIGNAL_RELEASE_ID",
+    "LEGACY_VALUATION_SIGNAL_RELEASE_ID",
+    "LEGACY_EVENT_SIGNAL_RELEASE_ID",
     "DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID",
     "MODEL_SIGNAL_CONTRACT_VERSION",
     "MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION",

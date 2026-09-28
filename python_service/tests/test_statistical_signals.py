@@ -31,6 +31,8 @@ from digital_twin.modules.model_registry.domain.statistical_signals import (
     DEFAULT_FLOW_SIGNAL_RELEASE_ID,
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
     DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
+    LEGACY_EVENT_SIGNAL_RELEASE_ID,
+    LEGACY_VALUATION_SIGNAL_RELEASE_ID,
     ModelHypothesisAssessment,
     ModelSignalSnapshot,
     model_signal_evaluation_report,
@@ -170,6 +172,20 @@ class FakeSignalConnection:
 
 class StatisticalSignalTests(unittest.TestCase):
     def test_price_signal_is_immutable_conditional_score_only(self):
+        from digital_twin.modules.model_registry.domain.statistical_signals.registry import model_release
+
+        legacy_event = model_release(LEGACY_EVENT_SIGNAL_RELEASE_ID)
+        legacy_valuation = model_release(LEGACY_VALUATION_SIGNAL_RELEASE_ID)
+
+        self.assertEqual("production", legacy_event.status)
+        self.assertEqual("production", legacy_valuation.status)
+        self.assertEqual("event-response-hypothesis-contract-v2", legacy_event.scorer_version)
+        self.assertEqual("valuation-hypothesis-contract-v2", legacy_valuation.scorer_version)
+        self.assertNotIn("event-negative-absorption-support", legacy_event.signal_types)
+        self.assertNotIn("valuation-gap-convergence-support", legacy_valuation.signal_types)
+        self.assertNotEqual(LEGACY_EVENT_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID)
+        self.assertNotEqual(LEGACY_VALUATION_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID)
+
         snapshot = feature_snapshot()
         first = score_temporal_feature_snapshot(snapshot)
         second = score_temporal_feature_snapshot(snapshot)

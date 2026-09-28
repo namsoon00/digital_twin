@@ -272,7 +272,7 @@ class ReasoningEnginePlatformService:
         from digital_twin.modules.reasoning.domain.ontology_schema import ONTOLOGY_TBOX_VERSION, tbox_fingerprint
         from digital_twin.modules.decisions.contracts import AI_DECISION_PROMPT_VERSION
         from digital_twin.infrastructure.typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
-        from digital_twin.modules.model_registry.contracts import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, MODEL_SIGNAL_CONTRACT_VERSION
+        from digital_twin.modules.model_registry.contracts import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID, MODEL_SIGNAL_CONTRACT_VERSION
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
         shadow_backend = str(self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow")
@@ -332,6 +332,8 @@ class ReasoningEnginePlatformService:
                     or DEFAULT_FLOW_SIGNAL_RELEASE_ID
                 ),
                 DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+                LEGACY_VALUATION_SIGNAL_RELEASE_ID,
+                LEGACY_EVENT_SIGNAL_RELEASE_ID,
                 DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
                 DEFAULT_EVENT_SIGNAL_RELEASE_ID,
                 DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,

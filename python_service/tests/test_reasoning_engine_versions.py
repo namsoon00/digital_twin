@@ -783,6 +783,33 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             ["event-statistics-production-v3"], contract["missingReleaseIds"]
         )
 
+        release_ids = [
+            "event-response-statistics-production-v2",
+            "valuation-statistics-production-v2",
+            "event-response-statistics-production-v3",
+            "valuation-statistics-production-v3",
+        ]
+        compatible_contract = v2_model_signal_release_contract({
+            "rules": [
+                {
+                    "enabled": True,
+                    "conditions": [
+                        {
+                            "relation_type": "HAS_MODEL_SIGNAL",
+                            "target_property_filters": {"releaseId": release_id},
+                        }
+                    ],
+                }
+                for release_id in release_ids
+            ]
+        })
+
+        self.assertEqual("matched", compatible_contract["status"])
+        self.assertEqual([], compatible_contract["missingReleaseIds"])
+        self.assertTrue(
+            set(release_ids).issubset(compatible_contract["availableReleaseIds"])
+        )
+
     def test_v2_watch_waits_for_release_database_without_process_exit(self):
         from digital_twin.infrastructure.cli import watch_v2_reasoning_engine
 

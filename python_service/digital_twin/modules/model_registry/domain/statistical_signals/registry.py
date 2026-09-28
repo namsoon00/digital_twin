@@ -8,6 +8,8 @@ DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-production-v2"
 DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-production-v2"
 CAPITAL_FLOW_SHADOW_RELEASE_ID = "capital-flow-statistics-shadow-v1"
 DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-production-v2"
+LEGACY_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-production-v2"
+LEGACY_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-production-v2"
 DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-production-v3"
 DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-production-v3"
 DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID = "authored-thesis-statistics-production-v2"
@@ -150,6 +152,37 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
             minimum_coverage_ratio=0.75,
             scorer_version="cross-asset-hypothesis-contract-v2",
             description="시점 고정 시장·금리·환율·크립토 사실을 규칙별 가설 계약으로 검증하는 조건부 신호입니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=LEGACY_VALUATION_SIGNAL_RELEASE_ID,
+            model_family="valuation-factor-statistics",
+            signal_types=(
+                "valuation-relative-opportunity",
+                "valuation-relative-stretch-risk",
+            ),
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
+            minimum_samples=1,
+            minimum_coverage_ratio=0.75,
+            scorer_version="valuation-hypothesis-contract-v2",
+            description="동결된 v2 RuleBox의 무중단 전달을 위한 호환 릴리스입니다. 새 규칙은 v3에만 연결합니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=LEGACY_EVENT_SIGNAL_RELEASE_ID,
+            model_family="event-response-statistics",
+            signal_types=(
+                "event-abnormal-return-support",
+                "event-abnormal-return-risk",
+                "event-response-persistence",
+            ),
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
+            minimum_samples=1,
+            minimum_coverage_ratio=0.75,
+            scorer_version="event-response-hypothesis-contract-v2",
+            description="동결된 v2 RuleBox의 무중단 전달을 위한 호환 릴리스입니다. 새 규칙은 v3에만 연결합니다.",
         ),
         StatisticalModelRelease(
             release_id=DEFAULT_VALUATION_SIGNAL_RELEASE_ID,

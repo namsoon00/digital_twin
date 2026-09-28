@@ -238,8 +238,12 @@ FAMILY_OUTCOME_PROFILES = {
     "flow-distribution": ([60, 1440], 0.50, ("quote", "flow")),
     "fundamental-rerating": ([10080, 43200], 1.50, ("quote", "research")),
     "fundamental-deterioration": ([10080, 43200], 1.50, ("quote", "research")),
+    "valuation-convergence": ([10080, 43200], 1.50, ("quote", "valuation")),
+    "valuation-divergence": ([10080, 43200], 1.50, ("quote", "valuation")),
     "event-support": ([60, 1440], 0.75, ("quote", "research")),
     "event-risk": ([60, 1440], 0.75, ("quote", "research")),
+    "event-absorption": ([60, 1440], 0.75, ("quote", "research")),
+    "event-rejection": ([60, 1440], 0.75, ("quote", "research")),
     "cross-asset-support": ([1440, 10080], 0.75, ("quote", "trend")),
     "cross-asset-risk": ([1440, 10080], 0.75, ("quote", "trend")),
     "thesis-support": ([1440, 10080, 43200], 1.00, ("quote", "research")),
@@ -254,7 +258,7 @@ def predictive_outcome_contract(thesis_family: str, direction: str, rule_id: str
     )
     risk = _text(direction).lower() == "risk"
     relative = thesis_family in {
-        "trend-continuation", "trend-break", "event-support", "event-risk",
+        "trend-continuation", "trend-break", "event-support", "event-risk", "event-absorption", "event-rejection",
         "cross-asset-support", "cross-asset-risk",
     }
     criteria = [
@@ -302,6 +306,23 @@ def predictive_outcome_contract(thesis_family: str, direction: str, rule_id: str
         "graph.company.market.value_trap.risk.v1": [("operatingIncomeGrowthPct", "<=", 0, "fundamental")],
         "graph.company.market.unsupported_rerating.risk.v1": [("revenueGrowthPct", "<=", 0, "fundamental")],
     }.get(rule_id, premise_specs)
+    valuation_families = {
+        "fundamental-rerating", "fundamental-deterioration",
+        "valuation-convergence", "valuation-divergence",
+    }
+    if thesis_family in valuation_families:
+        criteria.append(HypothesisOutcomeCriterion(
+            criterion_id=thesis_family + ":valuation-gap",
+            label="동일 가치평가 방법에서 가치 괴리 변화",
+            role="cause",
+            metric="valuationGapReductionPp",
+            operator=">" if thesis_family in {"fundamental-rerating", "valuation-convergence"} else "<=",
+            threshold=0,
+            required=True,
+            required_observation_domains=["valuation"],
+            source_policy=["two-immutable-comparable-valuation-bundles"],
+            failure_outcome="contradicted",
+        ))
     if any(domain == "fundamental" for _metric, _operator, _threshold, domain in premise_specs):
         horizons = [90 * 1440, 180 * 1440]
     for metric, operator, threshold, domain in premise_specs:
@@ -315,7 +336,11 @@ def predictive_outcome_contract(thesis_family: str, direction: str, rule_id: str
         ))
     return HypothesisOutcomeContract(
         outcome_horizon_minutes=list(horizons),
-        required_observation_domains=sorted({"quote", *(domain for _metric, _operator, _threshold, domain in premise_specs)}),
+        required_observation_domains=sorted({
+            "quote",
+            *({"valuation"} if thesis_family in valuation_families else set()),
+            *(domain for _metric, _operator, _threshold, domain in premise_specs),
+        }),
         minimum_independent_episodes=5,
         maximum_observation_delay_minutes=180,
         verification_focus=[

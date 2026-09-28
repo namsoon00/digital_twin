@@ -20,7 +20,7 @@ class HypothesisCandidateValidationTests(unittest.TestCase):
         case = hypothesis()
         case.created_at = "2026-08-01T00:00:00Z"
         store = CaseStore([case])
-        rule = next(row for row in default_graph_inference_rules() if row.rule_id == "graph.temporal.risk_event_absorption.support.v1").to_dict()
+        rule = next(row for row in default_graph_inference_rules() if row.rule_id == "graph.temporal.risk_event_absorption.support.v2").to_dict()
         candidate = normalize_rule_change_candidate({"proposedRule": rule, "blockers": [],
                                                     "validationRequirements": requirements or []})
         rulebox = {"status": "ok", "rules": [], "rulesHash": "hash:1", "ruleboxSnapshotId": "seed:1"}

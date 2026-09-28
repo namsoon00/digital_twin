@@ -1,5 +1,5 @@
 {
-  "sourceRevision": "d6c80ec85 + rule RHS capabilities v2; RuleBox payload unchanged by routing index v3",
+  "sourceRevision": "pre-release hypothesis semantics v2; event and valuation claims versioned",
   "changedCases": [
     "schema",
     "schemaIdentity",
@@ -7,9 +7,9 @@
     "generatedRows"
   ],
   "scenarios": {
-    "schema": "a520d81d058ea352ff9024299cb4f6ba5190906e3ac38278a81d3c01aedbdda3",
-    "schemaIdentity": "5d3be51ae8a6c28ad60093cc340eab16f107f9d290600e33e9de847847359eee",
-    "manifestIdentity": "418fed921009449b364e5d61992eae154b49d6d01914b159861ab759597235a4",
+    "schema": "d171fe960f124ba7da03d2c9fd30231ff968e171da0a007c2328da63074fcf5d",
+    "schemaIdentity": "68023ea3bb517d17448921107393f98161795204fe268a1cdcdd7747f035a769",
+    "manifestIdentity": "678ee6b187dcdad261700d5eaf935b84ff76d492c7d305d39e24b5e054b7985e",
     "generatedRows": "52ca3ba5cf54a076db5d7b94daef063bf32a624dd7af7ce0147737c618effcb8",
     "sentinels": "3b8bb27e009be58c191f5e74edeefec43fb750d855cb2418758ed9987b816214",
     "restore:ok": "a79224c735d57e5cb2a44b81fd45f6305ff66a94f341f021199e1844bed209e0",

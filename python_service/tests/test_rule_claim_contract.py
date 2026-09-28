@@ -2,6 +2,7 @@ import unittest
 from dataclasses import replace
 
 from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.modules.model_registry.domain.hypothesis_semantic_audit import audit_active_predictive_rules
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.modules.model_registry.domain.rule_claim_contract import (
     hypothesis_qualification,
@@ -16,6 +17,38 @@ from digital_twin.modules.outcomes.domain.hypothesis_calibration_identity import
 
 
 class RuleClaimContractTests(unittest.TestCase):
+    def test_every_active_predictive_rule_has_aligned_signal_claim_and_outcome_semantics(self):
+        audit = audit_active_predictive_rules(default_graph_inference_rules())
+
+        self.assertEqual(0, audit["issueRuleCount"], audit["issues"])
+        self.assertEqual(audit["activePredictiveRuleCount"], audit["alignedRuleCount"])
+        self.assertEqual(58, audit["activePredictiveRuleCount"])
+
+    def test_high_beta_is_market_sensitivity_and_high_pe_is_review_context(self):
+        rules = {item.rule_id: item for item in default_graph_inference_rules()}
+        beta = rules["graph.benchmark.beta.context.v1"]
+        expensive = rules["graph.valuation.expensive.review.v2"]
+
+        self.assertEqual("context-observation", beta.resolved_knowledge_basis.rule_kind)
+        self.assertEqual("context-observation", expensive.resolved_knowledge_basis.rule_kind)
+        self.assertFalse(expensive.resolved_claim_contract.is_predictive)
+        self.assertNotIn("high-beta", [item.condition_id for item in expensive.conditions])
+        self.assertTrue(any("베타" in item.description for item in beta.conditions))
+
+    def test_negative_event_absorption_has_its_own_claim_and_model_input(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.temporal.risk_event_absorption.support.v2"
+        )
+        claim = rule.resolved_claim_contract
+        dependencies = set(rule.model_input_contract.get("dependencyKeys") or [])
+
+        self.assertEqual("event-absorption", rule.resolved_knowledge_basis.thesis_family)
+        self.assertEqual("event-abnormal-return", claim.outcome_metric)
+        self.assertIn("kind:temporal-window:field:riskeventcount", dependencies)
+        self.assertIn("kind:temporal-window:field:pricechangepct", dependencies)
+        self.assertNotIn("kind:temporal-window:field:supporteventcount", dependencies)
+
     def test_every_rule_has_one_typed_claim_and_predictive_outcome_contract(self):
         rules = default_graph_inference_rules()
 
@@ -26,8 +59,8 @@ class RuleClaimContractTests(unittest.TestCase):
         self.assertEqual(0, coverage["orphanRuleCount"])
         self.assertEqual(0, coverage["duplicateClaimCount"])
         self.assertEqual(0, coverage["violationCount"])
-        self.assertEqual(72, coverage["predictiveClaimCount"])
-        self.assertEqual(72, coverage["structuredOutcomeContractCount"])
+        self.assertEqual(71, coverage["predictiveClaimCount"])
+        self.assertEqual(71, coverage["structuredOutcomeContractCount"])
         self.assertTrue(coverage["complete"])
 
     def test_claim_contract_round_trips_with_rulebox_payload(self):
@@ -104,10 +137,10 @@ class RuleClaimContractTests(unittest.TestCase):
         criteria = [item for item in graph.entities if item.kind == "hypothesis-outcome-criterion"]
         relation_types = [item.relation_type for item in graph.relations]
         self.assertEqual(122, len(claims))
-        self.assertEqual(72, len(outcomes))
+        self.assertEqual(71, len(outcomes))
         self.assertGreater(len(criteria), 144)
         self.assertEqual(122, relation_types.count("GOVERNED_BY_CLAIM"))
-        self.assertEqual(72, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
+        self.assertEqual(71, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
         self.assertEqual(len(criteria), relation_types.count("HAS_OUTCOME_CRITERION"))
 
     def test_market_rise_does_not_validate_event_outperformance(self):
@@ -130,8 +163,9 @@ class RuleClaimContractTests(unittest.TestCase):
         self.assertEqual("inconclusive", missing["selectedHypothesisStatus"])
         facts.update({"newFinancialPeriod": True, "revenueGrowthPct": -20, "freeCashFlowMarginPct": -10})
         contradicted = evaluate_hypothesis_outcome(contract, "support", facts, 3, 90 * 1440)
-        self.assertEqual("directionally-contradicted", contradicted["selectedHypothesisStatus"])
-        facts.update({"revenueGrowthPct": 20, "freeCashFlowMarginPct": 10})
+        self.assertEqual("inconclusive", contradicted["selectedHypothesisStatus"])
+        facts.update({"revenueGrowthPct": 20, "freeCashFlowMarginPct": 10,
+                      "valuationGapReductionPp": 5, "valuationMeasurementState": "measured"})
         supported = evaluate_hypothesis_outcome(contract, "support", facts, 3, 90 * 1440)
         self.assertEqual("corroborated", supported["thesisValidationStatus"])
         self.assertEqual("not-established", supported["causalAttribution"])
@@ -144,9 +178,11 @@ class RuleClaimContractTests(unittest.TestCase):
             claim_validation_fingerprint(changed.resolved_claim_contract.to_dict()),
         )
 
-    def test_valuation_only_rule_does_not_pretend_to_validate_earnings(self):
+    def test_valuation_rule_measures_comparable_value_gap_without_pretending_to_validate_earnings(self):
         contract = predictive_outcome_contract("fundamental-rerating", "support", "graph.valuation.margin_of_safety.opportunity.v1")
-        self.assertFalse([row for row in contract.criteria if row.role == "cause"])
+        causes = [row for row in contract.criteria if row.role == "cause"]
+        self.assertEqual(["valuationGapReductionPp"], [row.metric for row in causes])
+        self.assertIn("valuation", contract.required_observation_domains)
 
     def test_missing_flow_is_not_zero_net_buying(self):
         contract = predictive_outcome_contract("flow-accumulation", "support").to_dict()

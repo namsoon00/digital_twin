@@ -107,10 +107,9 @@ STATISTICAL_MODEL_RULE_IDS = frozenset({
     "graph.temporal.intraday_downside_acceleration.risk.v1",
     "graph.temporal.intraday_reversal.defense.v1",
     "graph.temporal.persistent_decline.risk.v1",
-    "graph.temporal.risk_event_absorption.support.v1",
+    "graph.temporal.risk_event_absorption.support.v2",
     "graph.temporal.support_event_rejection.risk.v1",
     "graph.temporal.weakness_accumulation.defense.v1",
-    "graph.valuation.high_beta_or_expensive.review.v1",
     "graph.valuation.margin_of_safety.opportunity.v1",
     "graph.valuation.negative_margin.risk.v1",
     "graph.watchlist.direct_momentum.entry.v1",
@@ -124,6 +123,7 @@ MARKET_OBSERVATION_RULE_IDS = frozenset()
 
 ONTOLOGY_SEMANTIC_RULE_IDS = frozenset({
     "graph.benchmark.beta.context.v1",
+    "graph.valuation.expensive.review.v2",
     "graph.crypto.market.24h.down.major.v1",
     "graph.crypto.market.24h.down.watch.v1",
     "graph.crypto.market.24h.up.major.v1",

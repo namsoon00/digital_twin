@@ -9,13 +9,17 @@ boundary prevents infrastructure code from becoming a second RuleBox.
 from typing import Dict, FrozenSet
 
 
-RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v5"
+RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v6"
 
 DEPRECATED_TYPEDB_RULE_IDS: FrozenSet[str] = frozenset({
     "shadow.market_psychology.state.v1",
     # Replaced by change-and-response rules. The old rule treated a static
     # rate level as a recurring stock risk and therefore over-selected macro.
     "graph.macro.regime.risk.v1",
+    # Pre-release semantic corrections. These identifiers mixed market beta
+    # with valuation and treated negative-event absorption as positive news.
+    "graph.valuation.high_beta_or_expensive.review.v1",
+    "graph.temporal.risk_event_absorption.support.v1",
 })
 
 RATE_MACRO_RULE_IDS: FrozenSet[str] = frozenset({
@@ -171,7 +175,8 @@ RULEBOX_PLATFORM_RELEASE_ADDITION_IDS: FrozenSet[str] = frozenset({
     "graph.regulatory.event.risk.v1",
     "graph.temporal.intraday_downside_acceleration.risk.v1",
     "graph.temporal.intraday_reversal.defense.v1",
-    "graph.temporal.risk_event_absorption.support.v1",
+    "graph.temporal.risk_event_absorption.support.v2",
+    "graph.valuation.expensive.review.v2",
     "graph.temporal.support_event_rejection.risk.v1",
     "graph.market_proxy.relative_underperformance.risk.v1",
     "graph.market_proxy.relative_resilience.support.v1",

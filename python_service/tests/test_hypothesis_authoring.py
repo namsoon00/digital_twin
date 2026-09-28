@@ -31,7 +31,7 @@ class RegisteredHypothesisAuthoringTests(unittest.TestCase):
 
     def candidate(self):
         return {"title": "공시 이후 충격 흡수 검토", "blockers": [], "hypothesisDesign": {
-            "modelRuleId": "graph.temporal.risk_event_absorption.support.v1",
+            "modelRuleId": "graph.temporal.risk_event_absorption.support.v2",
             "comparisonRuleId": "graph.disclosure.financing_or_dilution.risk.v1",
             "conditionRefs": [{"ruleId": "graph.disclosure.event_risk.v1", "conditionId": "symbol-disclosure-signal"}],
             "additionalObservations": [], "unverifiedClaims": [],

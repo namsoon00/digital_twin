@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import Dict, Iterable, Optional, Tuple
 
 
-HYPOTHESIS_CATALOG_VERSION = "investment-hypothesis-catalog-v1"
+HYPOTHESIS_CATALOG_VERSION = "investment-hypothesis-catalog-v2"
 
 
 @dataclass(frozen=True)
@@ -73,8 +73,12 @@ _DEFINITIONS = (
     _family("flow-distribution", "수급 분산", "market-microstructure-and-investor-flow", "investor-flow", "risk", "매도 수요 또는 가격-수급 괴리가 하방 위험을 확대", "intraday-to-short", ("flow-accumulation",), ("flow", "price", "liquidity"), "flow-price-divergence", "매도 수급이 해소되고 가격 방어가 반복 확인"),
     _family("fundamental-rerating", "펀더멘털 재평가", "fundamental-valuation-and-factors", "fundamental-value-gap", "support", "이익·품질 개선이 가치 괴리 축소로 연결", "medium-to-long", ("fundamental-deterioration",), ("fundamental", "valuation", "price"), "valuation-convergence", "이익 또는 현금흐름 가정이 훼손되거나 가치 괴리가 확대"),
     _family("fundamental-deterioration", "펀더멘털 훼손", "fundamental-valuation-and-factors", "fundamental-value-gap", "risk", "실적·품질 저하가 가치 함정 또는 재평가 실패로 연결", "medium-to-long", ("fundamental-rerating",), ("fundamental", "valuation", "price"), "fundamental-revision", "공식 실적과 전망이 회복되고 가치 수렴이 확인"),
-    _family("event-support", "우호 사건 확산", "event-information-diffusion", "event-price-response", "support", "검증된 우호 사건의 비정상 반응이 지속", "event-to-short", ("event-risk",), ("event", "price", "volume"), "event-abnormal-return", "원문이 기각되거나 가격 반응이 빠르게 소멸"),
-    _family("event-risk", "위험 사건 확산", "event-information-diffusion", "event-price-response", "risk", "검증된 위험 사건의 영향이 가격과 펀더멘털에 지속", "event-to-short", ("event-support",), ("event", "price", "volume"), "event-abnormal-return", "후속 확인에서 영향이 제한되고 가격이 충격을 흡수"),
+    _family("valuation-convergence", "가치 괴리 수렴", "fundamental-valuation-and-factors", "fundamental-value-gap", "support", "동일한 가치평가 방법에서 가격과 추정 가치의 괴리가 축소", "medium-to-long", ("valuation-divergence",), ("valuation", "price"), "valuation-convergence", "동일 방법의 가치 괴리가 확대되거나 평가 재현성이 깨짐"),
+    _family("valuation-divergence", "가치 괴리 확대", "fundamental-valuation-and-factors", "fundamental-value-gap", "risk", "동일한 가치평가 방법에서 가격과 추정 가치의 괴리가 확대", "medium-to-long", ("valuation-convergence",), ("valuation", "price"), "valuation-divergence", "동일 방법의 가치 괴리가 축소되고 가격 부담이 해소"),
+    _family("event-support", "우호 사건 확산", "event-information-diffusion", "event-price-response", "support", "검증된 우호 사건의 비정상 반응이 지속", "event-to-short", ("event-risk", "event-rejection"), ("event", "price", "volume"), "event-abnormal-return", "원문이 기각되거나 가격 반응이 빠르게 소멸"),
+    _family("event-risk", "위험 사건 확산", "event-information-diffusion", "event-price-response", "risk", "검증된 위험 사건의 영향이 가격과 펀더멘털에 지속", "event-to-short", ("event-support", "event-absorption"), ("event", "price", "volume"), "event-abnormal-return", "후속 확인에서 영향이 제한되고 가격이 충격을 흡수"),
+    _family("event-absorption", "위험 사건 흡수", "event-information-diffusion", "event-price-response", "support", "검증된 부정적 사건 이후 하방 충격이 제한되고 가격 방어가 유지", "event-to-short", ("event-risk",), ("event", "price", "volume"), "event-abnormal-return", "사건 이후 가격 방어가 무너지거나 하방 초과수익이 확대"),
+    _family("event-rejection", "우호 사건 거부", "event-information-diffusion", "event-price-response", "risk", "검증된 우호 사건 이후 부정적 가격 반응이 지속", "event-to-short", ("event-support",), ("event", "price", "volume"), "event-abnormal-return", "우호 사건 이후 가격이 회복되고 양의 초과 반응이 유지"),
     _family("cross-asset-support", "연관자산 우호 전이", "cross-asset-and-regime-transmission", "cross-asset-residual", "support", "연관 시장 변화가 종목의 초과 반응을 지지", "short-to-medium", ("cross-asset-risk",), ("cross-asset", "price"), "cross-asset-residual-return", "민감도 관계가 해소되거나 종목 반응이 분리"),
     _family("cross-asset-risk", "연관자산 위험 전이", "cross-asset-and-regime-transmission", "cross-asset-residual", "risk", "거시·연관자산 충격이 종목 위험으로 전이", "short-to-medium", ("cross-asset-support",), ("cross-asset", "price"), "cross-asset-residual-risk", "충격이 완화되거나 종목이 독립적인 상대 강도를 확인"),
     _family("thesis-support", "투자 논리 유지", "authored-investment-thesis", "investment-thesis", "support", "검증된 투자 논리의 핵심 전제가 유지", "multi-horizon", ("thesis-risk",), ("price", "fundamental"), "thesis-outcome-utility", "핵심 전제 또는 인과 경로가 관측으로 반증"),

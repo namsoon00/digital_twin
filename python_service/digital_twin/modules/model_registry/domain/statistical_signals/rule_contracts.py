@@ -49,8 +49,11 @@ PRODUCTION_RULE_SIGNAL_TYPES = {
     "graph.security_line.leveraged_flow_amplification.v1": "flow-distribution-risk",
     "graph.watchlist.pullback.entry.v1": "price-recovery-support",
     "graph.temporal.weakness_accumulation.defense.v1": "flow-accumulation-support",
-    "graph.temporal.risk_event_absorption.support.v1": "event-abnormal-return-support",
-    "graph.valuation.high_beta_or_expensive.review.v1": "valuation-relative-stretch-risk",
+    "graph.temporal.risk_event_absorption.support.v2": "event-negative-absorption-support",
+    "graph.temporal.event_cluster.risk.v1": "event-abnormal-return-risk",
+    "graph.temporal.support_event_rejection.risk.v1": "event-positive-rejection-risk",
+    "graph.valuation.margin_of_safety.opportunity.v1": "valuation-gap-convergence-support",
+    "graph.valuation.negative_margin.risk.v1": "valuation-gap-divergence-risk",
 }
 
 PRICE_TREND_SIGNALS = (
@@ -73,10 +76,14 @@ CROSS_ASSET_SIGNALS = (
 VALUATION_SIGNALS = (
     "valuation-relative-opportunity",
     "valuation-relative-stretch-risk",
+    "valuation-gap-convergence-support",
+    "valuation-gap-divergence-risk",
 )
 EVENT_SIGNALS = (
     "event-abnormal-return-support",
     "event-abnormal-return-risk",
+    "event-negative-absorption-support",
+    "event-positive-rejection-risk",
     "event-response-persistence",
 )
 

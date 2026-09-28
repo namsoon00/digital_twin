@@ -93,6 +93,12 @@ def source_policy_status(criterion, facts: Mapping[str, object]) -> Tuple[bool, 
         return True, ""
     if "new-financial-period" in required:
         return (True, "") if facts.get("newFinancialPeriod") is True else (False, "new-financial-period-not-observed")
+    if "two-immutable-comparable-valuation-bundles" in required:
+        return (
+            (True, "")
+            if facts.get("valuationMeasurementState") == "measured"
+            else (False, "comparable-valuation-bundles-not-observed")
+        )
     observed = {
         text(value).lower()
         for value in [

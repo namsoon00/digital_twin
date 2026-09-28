@@ -50,7 +50,7 @@ def rule_evaluation(symbol, observed_value):
                 "matchedTargetProperties": {
                     "signalType": "fundamental-confirmation",
                     "strengthBand": "strong",
-                    "releaseId": "valuation-statistics-production-v2",
+                    "releaseId": "valuation-statistics-production-v3",
                     "sourceFeatureSnapshotId": f"feature-snapshot:{symbol}",
                     "modelEvidenceIds": [f"model-evidence:{symbol}"],
                     "currentPrice": observed_value,

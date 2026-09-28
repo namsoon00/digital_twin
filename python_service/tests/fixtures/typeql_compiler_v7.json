@@ -1,45 +1,49 @@
 {
-  "sourceRevision": "d6c80ec85 + native account-policy reference fix; RuleBox payload unchanged by routing index v3",
+  "sourceRevision": "pre-release hypothesis semantics v2; event and valuation claims versioned",
   "engineVersion": "typedb-direct-typeql-rule-engine-v7",
-  "semanticChange": "Compare account strategy fields in TypeDB; default only when absent. Producer-consumer closure remains an execution-routing index and does not alter compiled RuleBox semantics.",
+  "semanticChange": "Compile versioned event absorption/rejection and valuation-gap claims; keep high beta and expensive valuation as separate context.",
   "changedCases": [
+    "any-group",
+    "bridge",
+    "catalog",
     "condition",
     "governed",
     "indexed",
     "match",
+    "planning",
     "profiles",
     "schema"
   ],
   "groups": {
     "any-group": {
       "count": 58,
-      "bytes": 139371,
-      "sha256": "8c1a5c3e9e4c5b35a8fb6e1faf6eada4f60afa7b13380940c5ad3fc6e2c6be79"
+      "bytes": 139096,
+      "sha256": "e26b7a70cb467afb47db5ff977f74292f45dbc0bc22b11e2f36584a0ecafca5a"
     },
     "bridge": {
       "count": 10,
-      "bytes": 38589,
-      "sha256": "bbd1d21c8d66b30dd382c8b55cd8af0fa6f615b03252d982cfd20d6cd86bde61"
+      "bytes": 38198,
+      "sha256": "51f13637a489b344037f356ee34c8474074600ed84ef48fce25015fd4f64a6ab"
     },
     "catalog": {
       "count": 1,
-      "bytes": 2534194,
-      "sha256": "2e07b33214ca87e4d4a73836c0547edfa5cf6d184d18c80791d3e468d1b51bdb"
+      "bytes": 2540583,
+      "sha256": "4967245211798a6dfd1b0a343cf19d76ba4d939af381a1d62e1008170d871cd9"
     },
     "condition": {
       "count": 281,
-      "bytes": 543643,
-      "sha256": "33bf5c2ad6a70327fb4f59793f816a857d75b9f6f4e8db2b512cc5877234a9aa"
+      "bytes": 542946,
+      "sha256": "bde77839684a99e5dcc61fec5d6051b10afbfba4df1d6ccab53b8c5a47b93f79"
     },
     "governed": {
       "count": 29,
-      "bytes": 300862,
-      "sha256": "a63f3196171032ba3b5d14639436268a71230a1f221faf8cfa7ee673fdb77d45"
+      "bytes": 297993,
+      "sha256": "ee488f96dd680bf2d1cc6a3adebdb127f683433461ae8fcbe4509ca6b7d3807e"
     },
     "indexed": {
       "count": 244,
-      "bytes": 646158,
-      "sha256": "5180699ccc32740547071ff16849e78a2c0f8492460a67735b9056e9a9f5112a"
+      "bytes": 643817,
+      "sha256": "2c3aa99ee408f0120fa75cdce718442f9bb0df2eecfa597e0407ce4c9ed910af"
     },
     "literals": {
       "count": 30,
@@ -48,23 +52,23 @@
     },
     "match": {
       "count": 366,
-      "bytes": 1339869,
-      "sha256": "4478563882464a38a053de6e82ab3780595a758bdb6bc07132962fc6af0f84f3"
+      "bytes": 1337426,
+      "sha256": "6017ca046f882375bfcb79ea062ff43699773039e3c15d0435ac40741e0b6001"
     },
     "planning": {
       "count": 2,
-      "bytes": 42342,
-      "sha256": "9358bec8547578ae40718c770be57462104bd50fe50863a45daa162d5f8b9e31"
+      "bytes": 42361,
+      "sha256": "c778e1448eaa3e93f8cf0bafc3b92a1ec78abf426d30bd880537b764d3460828"
     },
     "profiles": {
       "count": 1,
-      "bytes": 293596,
-      "sha256": "3e1f28cf923ac3cabb74eb9493bd1bcab1e0c017e9140fbe3cedaa77a9a8a051"
+      "bytes": 293625,
+      "sha256": "ddc173e32539d97d62207b0ceaf6f1681219e1e2cca8ddc406d686edd2fd8ffb"
     },
     "schema": {
       "count": 1,
-      "bytes": 25433,
-      "sha256": "3fa39b14dfe3f928947a98536cc27fe5b88d0b455adbbe0cbc344ef673265167"
+      "bytes": 25520,
+      "sha256": "5ec5444c3dad5e282c0cbac5f876119c62b132cbc219f33ecca506ae94f5d26d"
     }
   }
 }

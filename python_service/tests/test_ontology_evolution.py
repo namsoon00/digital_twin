@@ -210,7 +210,7 @@ class EvolutionTests(unittest.TestCase):
 class EvolutionArtifactTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.rule = next(r for r in default_graph_inference_rules() if r.rule_id == "graph.temporal.risk_event_absorption.support.v1")
+        cls.rule = next(r for r in default_graph_inference_rules() if r.rule_id == "graph.temporal.risk_event_absorption.support.v2")
         cls.artifact = ontology_release_seed_artifact([cls.rule], release_bundle={"release_id": "baseline"})
         cls.candidate = json.loads(json.dumps(cls.rule.to_dict()).replace(cls.rule.rule_id, "graph.test.event_recovery.v1"))
         cls.candidate["enabled"] = False

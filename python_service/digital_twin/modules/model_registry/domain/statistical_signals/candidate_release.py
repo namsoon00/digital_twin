@@ -33,8 +33,12 @@ MODEL_SIGNAL_LABELS = {
     "regime-transition-risk": "시장 국면 전환 위험 신호",
     "valuation-relative-opportunity": "상대가치 기회 신호",
     "valuation-relative-stretch-risk": "상대가치 부담 신호",
+    "valuation-gap-convergence-support": "가치 괴리 수렴 후보 신호",
+    "valuation-gap-divergence-risk": "가치 괴리 확대 위험 신호",
     "event-abnormal-return-support": "사건 반응 지지 신호",
     "event-abnormal-return-risk": "사건 반응 위험 신호",
+    "event-negative-absorption-support": "부정적 사건 이후 가격 방어 신호",
+    "event-positive-rejection-risk": "우호 사건 이후 가격 거부 신호",
     "event-response-persistence": "사건 반응 지속 신호",
 }
 

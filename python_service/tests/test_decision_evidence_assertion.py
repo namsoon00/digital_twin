@@ -34,7 +34,7 @@ def inference_trace(rule_id, evidence_id, signal_type, direction, label):
             "observedValue": observed_value,
             "matchedTargetProperties": {
                 **observed_value,
-                "releaseId": "event-response-statistics-production-v2",
+                "releaseId": "event-response-statistics-production-v3",
                 "sourceFeatureSnapshotId": "feature-snapshot:000660",
                 "modelEvidenceIds": ["model-evidence:000660:event"],
                 "currentPrice": 1775000,
@@ -126,7 +126,7 @@ class DecisionEvidenceAssertionTests(unittest.TestCase):
             by_id[risk_id]["sourceFeatureSnapshotId"],
         )
         self.assertEqual(
-            "event-response-statistics-production-v2",
+            "event-response-statistics-production-v3",
             by_id[risk_id]["modelReleaseId"],
         )
         self.assertEqual(8.6, by_id[risk_id]["featureSummary"]["ma20Distance"])

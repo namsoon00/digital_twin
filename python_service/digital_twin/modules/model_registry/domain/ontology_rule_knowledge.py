@@ -75,11 +75,20 @@ PREDICTIVE_RULE_FAMILY_OVERRIDES = {
     "graph.temporal.weakness_accumulation.defense.v1": (
         "market-microstructure-and-investor-flow", "flow-accumulation",
     ),
-    "graph.temporal.risk_event_absorption.support.v1": (
-        "event-information-diffusion", "event-support",
+    "graph.temporal.risk_event_absorption.support.v2": (
+        "event-information-diffusion", "event-absorption",
     ),
-    "graph.valuation.high_beta_or_expensive.review.v1": (
-        "fundamental-valuation-and-factors", "fundamental-deterioration",
+    "graph.temporal.event_cluster.risk.v1": (
+        "event-information-diffusion", "event-risk",
+    ),
+    "graph.temporal.support_event_rejection.risk.v1": (
+        "event-information-diffusion", "event-rejection",
+    ),
+    "graph.valuation.margin_of_safety.opportunity.v1": (
+        "fundamental-valuation-and-factors", "valuation-convergence",
+    ),
+    "graph.valuation.negative_margin.risk.v1": (
+        "fundamental-valuation-and-factors", "valuation-divergence",
     ),
     "graph.security_line.leveraged_flow_amplification.v1": (
         "market-microstructure-and-investor-flow", "flow-distribution",
@@ -311,6 +320,7 @@ CONTEXT_ONLY_RULE_TOKENS = (
     "instrument_profile.strategy_mismatch",
     "instrument_profile.averaging_down_policy",
     "benchmark.beta.context",
+    "valuation.expensive.review",
     "market_proxy.observation",
     "materiality.alert_candidate",
     "portfolio.reentry.review",

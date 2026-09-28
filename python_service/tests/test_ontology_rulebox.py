@@ -114,7 +114,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertEqual([], rulebox_semantic_violations(rules))
         self.assertEqual(108, sum(item.enabled for item in executable))
-        self.assertEqual(60, sum(
+        self.assertEqual(59, sum(
             item.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
             and item.resolved_knowledge_basis.migration_disposition == "model-signal-production"
             for item in executable
@@ -219,10 +219,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract
 
         absorption = next(item for item in default_graph_inference_rules()
-                          if item.rule_id == "graph.temporal.risk_event_absorption.support.v1")
+                          if item.rule_id == "graph.temporal.risk_event_absorption.support.v2")
         renamed = replace(absorption, rule_id="graph.disclosure.risk_event_absorption.conditioned_support.v1")
         contract = rule_statistical_signal_contract(renamed)
-        self.assertEqual(["event-abnormal-return-support"], contract["signalTypes"])
+        self.assertEqual(["event-negative-absorption-support"], contract["signalTypes"])
         self.assertEqual(absorption.rule_id, contract["hypothesisContractId"])
         self.assertEqual("explicit-model-conditions", contract["hypothesisContractBinding"])
         self.assertEqual([], rule_model_signal_family_violations(renamed))
@@ -1452,7 +1452,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.earnings.surprise.support.v1", rule_ids)
         self.assertIn("graph.regulatory.event.risk.v1", rule_ids)
         self.assertIn("graph.news.quality.validation_state.v1", rule_ids)
-        self.assertIn("graph.valuation.high_beta_or_expensive.review.v1", rule_ids)
+        self.assertIn("graph.valuation.expensive.review.v2", rule_ids)
+        self.assertNotIn("graph.valuation.high_beta_or_expensive.review.v1", rule_ids)
         self.assertIn("graph.portfolio.concentration.review.v1", rule_ids)
         self.assertEqual("HAS_MODEL_SIGNAL", support_transition["conditionRelationType"])
         self.assertEqual("statistical-model-hypothesis-evidence", support_transition["conditionTargetKind"])

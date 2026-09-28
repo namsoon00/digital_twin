@@ -8,8 +8,8 @@ DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-production-v2"
 DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-production-v2"
 CAPITAL_FLOW_SHADOW_RELEASE_ID = "capital-flow-statistics-shadow-v1"
 DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-production-v2"
-DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-production-v2"
-DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-production-v2"
+DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-production-v3"
+DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-production-v3"
 DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID = "authored-thesis-statistics-production-v2"
 
 
@@ -27,8 +27,12 @@ SIGNAL_HYPOTHESIS_FAMILY_BY_TYPE = {
     "regime-transition-risk": "cross-asset-risk",
     "valuation-relative-opportunity": "fundamental-rerating",
     "valuation-relative-stretch-risk": "fundamental-deterioration",
+    "valuation-gap-convergence-support": "valuation-convergence",
+    "valuation-gap-divergence-risk": "valuation-divergence",
     "event-abnormal-return-support": "event-support",
     "event-abnormal-return-risk": "event-risk",
+    "event-negative-absorption-support": "event-absorption",
+    "event-positive-rejection-risk": "event-rejection",
     "event-response-persistence": "event-support",
 }
 
@@ -153,13 +157,15 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
             signal_types=(
                 "valuation-relative-opportunity",
                 "valuation-relative-stretch-risk",
+                "valuation-gap-convergence-support",
+                "valuation-gap-divergence-risk",
             ),
             status="production",
             validation_status="validated-deterministic",
             decision_eligibility="conditional",
             minimum_samples=1,
             minimum_coverage_ratio=0.75,
-            scorer_version="valuation-hypothesis-contract-v2",
+            scorer_version="valuation-hypothesis-contract-v3",
             description="시점 재현 재무·가치·가격 사실을 규칙별 가설 계약으로 검증하는 조건부 신호입니다.",
         ),
         StatisticalModelRelease(
@@ -168,6 +174,8 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
             signal_types=(
                 "event-abnormal-return-support",
                 "event-abnormal-return-risk",
+                "event-negative-absorption-support",
+                "event-positive-rejection-risk",
                 "event-response-persistence",
             ),
             status="production",
@@ -175,7 +183,7 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
             decision_eligibility="conditional",
             minimum_samples=1,
             minimum_coverage_ratio=0.75,
-            scorer_version="event-response-hypothesis-contract-v2",
+            scorer_version="event-response-hypothesis-contract-v3",
             description="검증된 뉴스·공시·사건과 가격 반응을 규칙별 가설 계약으로 평가하는 조건부 신호입니다.",
         ),
         StatisticalModelRelease(
@@ -211,7 +219,7 @@ def model_release(release_id: object = "") -> StatisticalModelRelease:
 def model_registry_payload(releases: Iterable[StatisticalModelRelease] = None) -> Dict[str, object]:
     rows = tuple(releases or default_statistical_model_registry())
     return {
-        "version": "statistical-model-registry-v2",
+        "version": "statistical-model-registry-v3",
         "releaseCount": len(rows),
         "releases": [item.to_dict() for item in rows],
     }

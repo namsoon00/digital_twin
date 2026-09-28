@@ -187,8 +187,6 @@ class NotificationRenderingService:
         )
         if registration_revision and registration_revision != context.get("customerInvestmentDocumentRegistrationRevision"):
             document = None
-        if observation and presentation_metadata(job.message_type, context)["kind"] == "price-change":
-            document = None
         if not document:
             validated = (
                 context.get("notificationAiValidatedResponse")

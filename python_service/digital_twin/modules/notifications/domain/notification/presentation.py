@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
-PRESENTATION_VERSION = "notification-presentation-v3"
+PRESENTATION_VERSION = "notification-presentation-v4"
 
 
 @dataclass(frozen=True)
@@ -122,26 +122,11 @@ def notification_kind(message_type: str, context: Mapping = None) -> Notificatio
             return NOTIFICATION_KINDS["investment-decision"]
         if ai_authored:
             return NOTIFICATION_KINDS["ai-interpretation"]
-        trigger = mapping(context_value(values, "reasoningDeliveryTrigger"))
-        facts = mapping(trigger.get("facts"))
-        transitions = [mapping(row) for row in facts.get("confirmedSignalTransitions") or []]
         rules = mapping(context_value(values, "ontologyRelationContext"))
-        decision = mapping(rules.get("decision"))
-        rule_id = str(decision.get("selectedRuleId") or "").lower()
-        raw_delta = "raw_delta" in rule_id or "raw-delta" in rule_id or rule_id == "graph.materiality.alert_candidate.v1"
-        relation_changed = material_relation_change(values)
-        price_only = bool(transitions) and all(
-            str(row.get("signalId") or "") in {"price", "price-change", "pnl"}
-            for row in transitions
-        )
-        explicit_relation_comparison = bool(mapping(context_value(values, "ontologyRelationDiff")))
-        if not relation_changed and (
-            facts.get("cryptoTransitions")
-            or price_only and (raw_delta or explicit_relation_comparison)
-        ):
-            return NOTIFICATION_KINDS["price-change"]
         if not rules and not mode and requested != "relation-change":
             return NOTIFICATION_KINDS["notice"]
+        # A price trigger does not turn a relation analysis into a raw quote
+        # alert. The body describes whether those relations changed or held.
         return NOTIFICATION_KINDS["relation-change"]
     if requested:
         return NOTIFICATION_KINDS.get(requested, NOTIFICATION_KINDS["notice"])

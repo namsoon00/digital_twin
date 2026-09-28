@@ -822,7 +822,7 @@ def typedb_observation_telegram_message(
 ) -> str:
     """Render relation facts only; AI investment judgement uses another module."""
 
-    from digital_twin.modules.notifications.domain.notification.presentation import notification_kind
+    from digital_twin.modules.notifications.domain.notification.presentation import context_value, material_relation_change, notification_kind
 
     observation = typedb_context_observation_contract(context)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
@@ -868,19 +868,19 @@ def typedb_observation_telegram_message(
     trigger_rows = reasoning_trigger_rows(context)
     flow_rows = _flow_rows(context, 3 if detail_level == "concise" else 5)
     follow_up_rows = _follow_up_rows(context)
-    relation_diff = _mapping(context.get("ontologyRelationDiff"))
+    relation_diff = _mapping(context_value(context, "ontologyRelationDiff"))
     relation_unchanged_rows: List[str] = []
-    if kind.key == "price-change" and relation_diff and not relation_diff.get("material"):
+    if relation_diff and not material_relation_change(context):
         relation_unchanged_rows = [
             (
-                "관계 맥락의 일부는 달라졌지만 투자 행동을 바꿀 중요한 관계 변화는 아닙니다."
+                "관계 맥락의 일부는 달라졌지만 투자 행동을 바꿀 정도는 아닙니다."
                 if relation_diff.get("changed")
-                else "이번 재계산에서는 TypeDB 관계 근거와 투자 행동 범위가 이전 확인과 같습니다."
+                else "관계 유지: 관계 근거와 투자 행동 범위가 이전 확인과 같습니다."
             )
         ]
     rule_summary_rows = _rule_summary_rows(context, observation)
     relation_rows = (
-        [] if kind.key == "price-change"
+        [] if relation_unchanged_rows
         else _relation_rows(context, observation)
     )
     lead = (
@@ -910,16 +910,12 @@ def typedb_observation_telegram_message(
         role="typedb-observation",
         headline=headline,
         target=target,
-        role_label=(
-            "시세 재확인 · 가격 변화는 확인됐지만 관계 변화와 투자 판단은 별도로 구분합니다."
-            if kind.key == "price-change"
-            else "관계 변화 확인 · TypeDB에서 성립·강화·해제된 관계를 구분해 보여드립니다."
-        ),
+        role_label="관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
         lead=lead,
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
             for key, title, rows in (
-                ("change", "가격 변화" if kind.key == "price-change" else "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
+                ("change", "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
                 ("relation-status", "관계 판단", relation_unchanged_rows),
                 (
                     "rules",

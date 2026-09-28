@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.application.notification.intake import N
 from digital_twin.modules.notifications.application.notification.presentation import content_body, present_notification
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.application.notification.workflow import NotificationHoldingSnapshotEnricher, NotificationQueueRunner
-from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, _rule_summary_rows, reasoning_trigger_rows
+from digital_twin.modules.notifications.application.typedb_observation_message import _flow_rows, _rule_summary_rows, reasoning_trigger_rows, typedb_observation_telegram_message
 from digital_twin.modules.read_models.domain.customer_investment_document import CustomerInvestmentDocument, CustomerInvestmentSection
 from digital_twin.modules.notifications.domain.notification.presentation import LEGACY_KINDS, NOTIFICATION_KINDS, notification_kind
 from digital_twin.modules.notifications.domain.notification.request import NotificationRequest
@@ -103,6 +103,7 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         job = NotificationJob.create("현재가가 3.8% 올랐습니다.", account_id="main", message_type="marketObservation")
         service = NotificationRenderingService(template_renderer=Mock(side_effect=ValueError("bad template")))
         message = service.render(job)
+        self.assertIn("📊 시세 변화", message)
         self.assertIn("3.8%", message)
         self.assertEqual(["template-fallback:ValueError"], job.context["notificationPresentationWarnings"])
         self.assertNotIn("notificationAiValidatedResponse", job.context)
@@ -204,13 +205,13 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         self.assertEqual(0, runner.run_once())
         transport.send.assert_called_once()
 
-    def test_price_only_typedb_trigger_is_not_a_relation_change(self):
+    def test_price_trigger_keeps_relation_analysis_distinct_from_raw_quotes(self):
         context = {
             "notificationDecisionMode": "typedb-context-observation",
             "reasoningDeliveryTrigger": {"facts": {"confirmedSignalTransitions": [{"signalId": "price", "observedValue": 3.8}]}},
             "ontologyRelationContext": {"decision": {"selectedRuleId": "graph.materiality.alert_candidate.v1"}},
         }
-        self.assertEqual("price-change", notification_kind("investmentInsight", context).key)
+        self.assertEqual("relation-change", notification_kind("investmentInsight", context).key)
         context = {
             "notificationDecisionMode": "typedb-context-observation",
             "reasoningDeliveryTrigger": {"facts": {"confirmedSignalTransitions": [
@@ -221,7 +222,30 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
                 "decision": {"selectedRuleId": "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1"},
             },
         }
-        self.assertEqual("price-change", notification_kind("investmentInsight", context).key)
+        self.assertEqual("relation-change", notification_kind("investmentInsight", context).key)
+        context["displayTarget"] = "관계 분석 종목 / SAMPLE"
+        # Keep the measured price move and unchanged relation in the delivered
+        # body, including legacy metadata and an old price-change heading.
+        for nested in (False, True):
+            for changed in (False, True):
+                with self.subTest(nested=nested, changed=changed):
+                    values = copy.deepcopy(context)
+                    values["ontologyRelationDiff"]["changed"] = changed
+                    values["ontologyRelationDiff"]["changeClass"] = "context-only" if changed else "unchanged"
+                    original_diff = copy.deepcopy(values["ontologyRelationDiff"])
+                    if nested:
+                        values["metadata"] = {"ontologyRelationDiff": values.pop("ontologyRelationDiff")}
+                    typedb_observation_telegram_message(values)
+                    values["customerInvestmentDocument"]["headline"] = "📊 시세 변화 · 관계 분석 종목"
+                    job = NotificationJob.create("기존 본문", message_type="investmentInsight", context=values)
+                    rendered = NotificationRenderingService().render(job)
+                    self.assertIn("🔗 관계 변화 · 관계 분석 종목", rendered)
+                    self.assertNotIn("📊 시세 변화", rendered)
+                    self.assertIn("+0.9%", rendered)
+                    self.assertIn("투자 행동을 바꿀 정도는 아닙니다" if changed else "관계 유지", rendered)
+                    saved = job.context["metadata"] if nested else job.context
+                    self.assertEqual(original_diff, saved["ontologyRelationDiff"])
+                    self.assertNotIn("notificationAiValidatedResponse", job.context)
         context = {
             "notificationDecisionMode": "typedb-context-observation",
             "reasoningDeliveryTrigger": {"facts": {
@@ -256,27 +280,32 @@ class NotificationPresentationBoundaryTests(unittest.TestCase):
         from digital_twin.infrastructure.web.adapters.notification_presentation import notification_job_list_payload
 
         cases = [
-            ("ai-interpretation", {
+            ("investmentInsight", "ai-interpretation", {
                 "notificationDecisionMode": "context-narrative",
                 "notificationWriterProvenance.aiAuthored": True,
                 "notificationAiValidatedResponse.action": "NO_ACTION",
             }),
-            ("investment-decision", {"notificationAiValidatedResponse.action": "ADD"}),
-            ("price-change", {
+            ("investmentInsight", "investment-decision", {"notificationAiValidatedResponse.action": "ADD"}),
+            ("investmentInsight", "relation-change", {
                 "notificationDecisionMode": "typedb-context-observation",
                 "ontologyRelationContext.decision.selectedRuleId": "graph.materiality.alert_candidate.v1",
                 "reasoningDeliveryTrigger.facts.confirmedSignalTransitions": [{"signalId": "price"}],
             }),
-            ("price-change", {
+            ("investmentInsight", "relation-change", {
+                "ontologyRelationContext.engine": "typedb",
                 "reasoningDeliveryTrigger.facts.cryptoTransitions": [{"symbol": "ETH"}],
             }),
-            ("relation-change", {"ontologyRelationContext.engine": "typedb"}),
+            ("investmentInsight", "relation-change", {"ontologyRelationContext.engine": "typedb"}),
+            ("investmentInsight", "notice", {
+                "reasoningDeliveryTrigger.facts.cryptoTransitions": [{"symbol": "ETH"}],
+            }),
+            ("marketObservation", "price-change", {}),
         ]
-        for expected, fields in cases:
-            with self.subTest(kind=expected):
+        for message_type, expected, fields in cases:
+            with self.subTest(message_type=message_type, kind=expected):
                 fields["symbolDisplayName"] = "종목 이름"
                 job = MySQLNotificationJobStore.list_job_from_row({
-                    "job_id": "list-job", "message_type": "investmentInsight",
+                    "job_id": "list-job", "message_type": message_type,
                     "symbol": "MSTR", "text": "기존 본문은 유지합니다.",
                     "presentation_json": json.dumps(fields),
                 })

@@ -410,7 +410,8 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             NotificationAIValidatedResponse(action="NO_ACTION"),
         )
         self.assertIn("🔗 스트래티지 · 달라진 신호", typedb_message)
-        self.assertIn("달라진 신호 확인", typedb_message)
+        self.assertIn("가격·거래 흐름·뉴스 연결 분석 결과", typedb_message)
+        self.assertIn("기존 근거가 유지됐는지를 구분", typedb_message)
         self.assertIn("무엇이 달라졌나요", typedb_message)
         self.assertIn("새로 확인된 수치는 주가 등락률 +2.4%입니다.", typedb_message)
         self.assertIn("왜 중요한가요", typedb_message)

@@ -76,9 +76,13 @@ query parameter; doing so would hide valid history after the next refresh.
 
 Legacy `investmentInsight` is resolved from its publication mode and saved action.
 Reference-only or NO_ACTION results cannot be labeled as investment decisions.
-An AI narrative needs upstream AI-writer provenance to use the AI label. A raw
-price-only materiality trigger or crypto price threshold is a price observation,
-not evidence that a new causal relationship was discovered.
+An AI narrative needs upstream AI-writer provenance to use the AI label. Raw
+`marketObservation` alerts use `price-change`; TypeDB relation analyses use
+`relation-change`, including analyses triggered by price, profit/loss or crypto
+thresholds. The heading identifies the analysis category, not proof that a new
+causal relationship was discovered. When the saved comparison is unchanged or
+non-material, the body states that the relation was maintained or only its
+context changed. Missing relation context does not establish an analysis.
 
 ## Validation And Delivery
 

@@ -86,7 +86,8 @@ class InformationStorageTests(unittest.TestCase):
         identity = 'test-information-' + uuid.uuid4().hex
         descriptor = DatasetDescriptor(dataset_id=identity, provider_id=identity, capability='test',
             cadence_seconds=60, freshness_seconds=60, rate_limit_seconds=6, daily_request_budget=1)
-        now = datetime.now(timezone.utc)
+        # Keep the retry in the same quota day even when the suite runs at midnight.
+        now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
         try:
             self.assertTrue(first.reserve_provider_call(descriptor, now)['allowed'])
             self.assertEqual(second.reserve_provider_call(descriptor, now)['reason'], 'rate-limited')

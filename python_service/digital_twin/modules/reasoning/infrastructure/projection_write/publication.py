@@ -315,10 +315,17 @@ def attach_abox_persistence_runtime_stages(
     timing = (
         dict(verification.get("timing") or {}) if isinstance(verification, dict) else {}
     )
+    if not timing:
+        timing = dict(result.get("timing") or result.get("aboxPersistenceTiming") or {})
     runtime_modes = result.setdefault("runtimeModes", {})
     if not isinstance(runtime_modes, dict):
         runtime_modes = {}
         result["runtimeModes"] = runtime_modes
+    if timing.get("stage"):
+        runtime_modes["aboxPersistenceStage"] = str(timing["stage"])
+    progress = dict(timing.get("changedScopeWriteProgress") or {})
+    if progress.get("stage"):
+        runtime_modes["aboxWriteStage"] = str(progress["stage"])
 
     def record(source_key: str, target_key: str, source: Dict[str, object]) -> None:
         try:
@@ -336,6 +343,8 @@ def attach_abox_persistence_runtime_stages(
         "totalMs": "aboxScopedPersistenceTotalMs",
     }.items():
         record(source_key, target_key, timing)
+    for key in ("completedNodeTransactionCount", "completedRelationTransactionCount"):
+        record(key, "abox" + key[0].upper() + key[1:], progress)
     write_strategy = str(timing.get("currentStateWriteStrategy") or "").strip()
     if write_strategy:
         runtime_modes["aboxCurrentStateWriteStrategy"] = write_strategy

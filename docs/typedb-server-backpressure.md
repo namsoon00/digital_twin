@@ -11,6 +11,7 @@ Candidate and maintenance workers yield to that reservation. The operating
 system releases both locks on process exit. A running candidate turn is not
 interrupted; delivery can wait for that bounded turn to finish. Candidate
 throughput may decrease while delivery is continuously busy.
+Delivery retains its reservation while polling the shared cooldown.
 
 A retryable TypeDB request/timeout/connection failure records a shared server
 cooldown before releasing ownership. The delay starts at 5 seconds, doubles
@@ -32,3 +33,11 @@ completion, decreasing oldest request age and backlog, and the same source
 identity reaching AI and a provider delivery receipt when delivery is eligible.
 A worker heartbeat alone is not recovery. Historical observation gaps and
 pre-change failures must remain in the continuity evidence.
+
+The initial rollout still reproduced `typedbRequestError` during ABox
+persistence in both deployments. Server admission is therefore a mitigation,
+not proof that the storage failure is resolved. Failed scoped writes now retain
+their persistence stage, row-write stage and completed transaction counts in
+the projection runtime observation, including failures before verification.
+These diagnostics must identify the failing phase before a storage-specific
+remedy can be validated.

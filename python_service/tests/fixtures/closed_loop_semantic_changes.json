@@ -404,6 +404,7 @@
     "modules/market_data/domain/repositories.py::MarketTimeSeriesRepository": {"hash": "f068bc22fc998962bfcf62ea20e588f44915d9a56ffae8b25d8fe7154fa6f2d8", "reason": "Add explicit historical-price ingestion through the versioned time-series port, keeping atomic storage and replica projection outside the collector; test_outcome_benchmark_collection."}
   },
   "projection": {
+    "ontology_projection.PortfolioOntologyProjectionRecorder.attach_abox_persistence_runtime_stages": {"hash": "2ea663d35a1c665c64552432bdf22be675ae8e014997279ddae5428165d9f6d7", "reason": "Preserve failed ABox persistence stage and completed transaction counts when verification was never reached; test_ontology_projection_audit; docs/typedb-server-backpressure.md. This changes diagnostics only, not graph activation or inference semantics."},
     "ontology_projection.PortfolioOntologyProjectionRecorder.record_snapshot": {
       "hash": "5174f410643e83e922629896992e5d56d90aee70a38f76a076e76f2d2b862dbc",
       "reason": "Keep complete factual endpoints for scoped Manifest repair while bounding runtime-context and statistical-signal computation to the original target subjects. test_internal_patch_manifest, test_projection_input_ownership, test_projection_input_preflight and test_backend_stabilization."

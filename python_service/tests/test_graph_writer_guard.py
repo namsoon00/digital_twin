@@ -107,6 +107,12 @@ class LocalGraphWriterGuardTests(unittest.TestCase):
             self.assertTrue(candidate.acquire()["acquired"])
             self.assertFalse(delivery.acquire()["acquired"])
             candidate.release()
+            with patch("digital_twin.infrastructure.graph_writer_guard.time.time", return_value=100):
+                # An overload in the previous turn must not erase a waiting
+                # delivery reservation when it encounters the shared cooldown.
+                candidate._cooldown_path.write_text('{"until": 105, "failures": 1}')
+                self.assertEqual("server-cooling-down", delivery.acquire()["status"])
+                self.assertTrue(delivery.status()["deliveryIntent"])
             self.assertEqual("delivery-waiting", candidate.acquire()["status"])
             self.assertTrue(delivery.acquire()["acquired"])
             delivery.release()

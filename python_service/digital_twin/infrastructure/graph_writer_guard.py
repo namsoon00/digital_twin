@@ -124,7 +124,8 @@ class LocalGraphWriterGuard:
         remaining = min(120, max(0, float(cooldown.get("until") or 0) - time.time()))
         if remaining:
             handle.close()
-            self._release_priority()
+            # Keep delivery's reservation across cooldown polls, so a faster
+            # candidate poll cannot steal the first admissible recovery turn.
             return {"acquired": False, "status": "server-cooling-down",
                     "retryAfterSeconds": math.ceil(remaining),
                     "contractVersion": self.contract_version}

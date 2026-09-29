@@ -287,6 +287,20 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             observation["modes"]["aboxCurrentStateWriteStrategy"],
         )
         self.assertNotIn("aboxCurrentStateWriteStrategy", observation["stages"])
+        failed = {"status": "error", "timing": {
+            "stage": "changed-scope-write", "candidateCleanupMs": 12,
+            "changedScopeWriteProgress": {
+                "stage": "node-write", "completedNodeTransactionCount": 2,
+            },
+        }}
+        failed_stages = {}
+        PortfolioOntologyProjectionRecorder.attach_abox_persistence_runtime_stages(
+            failed_stages, failed,
+        )
+        self.assertEqual("changed-scope-write", failed["runtimeModes"]["aboxPersistenceStage"])
+        self.assertEqual("node-write", failed["runtimeModes"]["aboxWriteStage"])
+        self.assertEqual(2, failed_stages["aboxCompletedNodeTransactionCount"])
+        self.assertEqual(12, failed_stages["aboxCandidateCleanupMs"])
 
     def test_staged_recovery_reuses_the_active_projection_audit_owner(self):
         self.assert_abox_runtime_modes_are_not_coerced_into_numeric_stages()

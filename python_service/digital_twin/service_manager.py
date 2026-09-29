@@ -426,6 +426,16 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             or os.environ.get("TYPEDB_RUNTIME_HEALTH_PROBE_INTERVAL_SECONDS")
             or "30"
         ),
+        "runtimeHealthProbeTimeoutMillis": str(
+            (settings or {}).get("typedbRuntimeHealthProbeTimeoutMillis")
+            or os.environ.get("TYPEDB_RUNTIME_HEALTH_PROBE_TIMEOUT_MILLIS")
+            or "10000"
+        ),
+        "startupHealthProbeTimeoutMillis": str(
+            (settings or {}).get("typedbStartupHealthProbeTimeoutMillis")
+            or os.environ.get("TYPEDB_STARTUP_HEALTH_PROBE_TIMEOUT_MILLIS")
+            or "30000"
+        ),
         "runtimeHealthFailureThreshold": str(
             (settings or {}).get("typedbRuntimeHealthFailureThreshold")
             or os.environ.get("TYPEDB_RUNTIME_HEALTH_FAILURE_THRESHOLD")
@@ -2673,7 +2683,24 @@ def typedb_driver_components():
     return TypeDB, Credentials, DriverOptions, DriverTlsConfig
 
 
-def typedb_driver_ready(spec: Dict[str, object]) -> bool:
+def typedb_health_probe_timeout_millis(
+    spec: Dict[str, object],
+    *,
+    startup: bool = False,
+) -> int:
+    """Bound driver probes while allowing a loaded graph store to respond."""
+    if startup:
+        configured = spec.get("startupHealthProbeTimeoutMillis")
+        return min(60000, int_value(configured, 30000, 1000))
+    configured = spec.get("runtimeHealthProbeTimeoutMillis")
+    return min(30000, int_value(configured, 10000, 1000))
+
+
+def typedb_driver_ready(
+    spec: Dict[str, object],
+    *,
+    startup: bool = False,
+) -> bool:
     """Verify TypeDB accepts authenticated driver requests, not only TCP."""
     components = typedb_driver_components()
     if components is None:
@@ -2692,7 +2719,13 @@ def typedb_driver_ready(spec: Dict[str, object]) -> bool:
                 str(spec.get("typedbUser") or "admin"),
                 str(spec.get("typedbPassword") or "password"),
             ),
-            DriverOptions(tls_config, request_timeout_millis=1000),
+            DriverOptions(
+                tls_config,
+                request_timeout_millis=typedb_health_probe_timeout_millis(
+                    spec,
+                    startup=startup,
+                ),
+            ),
         )
         # ``contains`` is valid before the application database is seeded. A
         # successful response proves the server has completed gRPC startup.
@@ -2708,12 +2741,16 @@ def typedb_driver_ready(spec: Dict[str, object]) -> bool:
             pass
 
 
-def typedb_service_ready(spec: Dict[str, object]) -> bool:
+def typedb_service_ready(
+    spec: Dict[str, object],
+    *,
+    startup: bool = False,
+) -> bool:
     """Probe a managed TypeDB without blocking the runtime supervisor."""
     address = spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729"
     if not tcp_ready(address):
         return False
-    if typedb_driver_ready(spec):
+    if typedb_driver_ready(spec, startup=startup):
         clear_typedb_credentials_bootstrap_pending()
         return True
     if typedb_credentials_bootstrap_pending():
@@ -2857,7 +2894,13 @@ def configure_fresh_typedb_credentials(spec: Dict[str, object]) -> bool:
     address = str(spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729")
     tls_enabled = truthy(spec.get("typedbTlsEnabled"))
     tls_config = DriverTlsConfig.enabled() if tls_enabled else DriverTlsConfig.disabled()
-    options = DriverOptions(tls_config, request_timeout_millis=1000)
+    options = DriverOptions(
+        tls_config,
+        request_timeout_millis=typedb_health_probe_timeout_millis(
+            spec,
+            startup=True,
+        ),
+    )
     default_driver = None
     try:
         default_driver = TypeDB.driver(address, Credentials("admin", "password"), options)
@@ -2907,7 +2950,7 @@ def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
             append_log(spec["log"], "not-ready process-exited")
             print(str(spec["label"]) + " did not become ready because the process exited.")
             return False
-        if typedb_service_ready(spec):
+        if typedb_service_ready(spec, startup=True):
             append_log(spec["log"], "ready " + str(address))
             print(str(spec["label"]) + " ready. address=" + str(address))
             return True
@@ -4071,7 +4114,7 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
         print(str(spec["label"]) + " already running.")
         if role == "typedb":
             if not wait_for_ready:
-                if typedb_service_ready(spec):
+                if typedb_service_ready(spec, startup=True):
                     mark_typedb_startup_finalized(spec, existing)
                     return status_worker(spec)
                 append_log(log_path, "recovery in progress")
@@ -4271,11 +4314,7 @@ def status() -> int:
     except (TypeError, ValueError):
         heartbeat_age = -1
     watchdog_pid = read_pid(supervisor_watchdog_pid_path())
-    watchdog_running = bool(
-        watchdog_pid
-        and pid_exists(watchdog_pid)
-        and "monitor_service.py watchdog" in command_for_pid(watchdog_pid)
-    )
+    watchdog_running = supervisor_watchdog_process_matches(watchdog_pid)
     print(
         "Orbit Alpha supervisor watchdog: "
         + ("running" if watchdog_running else "stopped")
@@ -4407,6 +4446,29 @@ def supervisor_watchdog_pid_path() -> Path:
 
 def supervisor_watchdog_log_path() -> Path:
     return data_dir() / "python-supervisor-watchdog.log"
+
+
+def supervisor_watchdog_process_matches(pid: int) -> bool:
+    return bool(
+        pid
+        and pid_exists(pid)
+        and "monitor_service.py watchdog" in command_for_pid(pid)
+    )
+
+
+def claim_supervisor_watchdog_pid(path: Path) -> bool:
+    """Claim the PID file unless it belongs to a live Orbit Alpha watchdog."""
+    existing = read_pid(path)
+    if (
+        existing
+        and existing != os.getpid()
+        and supervisor_watchdog_process_matches(existing)
+    ):
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()) + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    return True
 
 
 def write_supervisor_heartbeat(state: str = "running", **details: object) -> Dict[str, object]:
@@ -4752,7 +4814,7 @@ def supervise() -> int:
                 initialized_typedb_pid = 0
                 typedb_runtime_health_failures = 0
             elif initialized_typedb_pid != typedb_pid and time.monotonic() >= typedb_initialization_retry_at:
-                if typedb_service_ready(typedb_spec):
+                if typedb_service_ready(typedb_spec, startup=True):
                     seed_ready = ensure_typedb_startup_seed_contract(typedb_spec)
                     shared_world_ready = bool(
                         seed_ready
@@ -4806,7 +4868,9 @@ def supervise() -> int:
                         supervisor_log_path(),
                         "typedb service unhealthy; restarting managed process pid="
                         + str(typedb_pid)
-                        + " failures=" + str(typedb_runtime_health_failures),
+                        + " failures=" + str(typedb_runtime_health_failures)
+                        + " probe-timeout-ms="
+                        + str(typedb_health_probe_timeout_millis(typedb_spec)),
                     )
                     stop_worker(typedb_spec)
                     initialized_typedb_pid = 0
@@ -5004,12 +5068,8 @@ def supervisor_watchdog_once(
 
 def supervise_watchdog() -> int:
     path = supervisor_watchdog_pid_path()
-    existing = read_pid(path)
-    if existing and existing != os.getpid() and pid_exists(existing):
+    if not claim_supervisor_watchdog_pid(path):
         return 0
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(os.getpid()) + "\n", encoding="utf-8")
-    os.chmod(path, 0o600)
     stopping = {"value": False}
 
     def request_stop(_signum, _frame):
@@ -5267,7 +5327,7 @@ def wait_for_fresh_typedb_candidate(spec: Dict[str, object]) -> bool:
         if pid and not pid_exists(pid):
             return False
         if tcp_ready(spec.get("healthAddress")):
-            if typedb_driver_ready(spec):
+            if typedb_driver_ready(spec, startup=True):
                 return True
             if not configured:
                 configured = True

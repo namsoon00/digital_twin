@@ -81,15 +81,20 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             os.environ,
             {
                 "TYPEDB_RUNTIME_HEALTH_PROBE_INTERVAL_SECONDS": "",
+                "TYPEDB_RUNTIME_HEALTH_PROBE_TIMEOUT_MILLIS": "",
+                "TYPEDB_STARTUP_HEALTH_PROBE_TIMEOUT_MILLIS": "",
                 "TYPEDB_RUNTIME_HEALTH_FAILURE_THRESHOLD": "",
             },
             clear=False,
         ):
             typedb_spec = service_manager.typedb_worker_spec({})
         self.assertEqual("30", typedb_spec["runtimeHealthProbeIntervalSeconds"])
+        self.assertEqual("10000", typedb_spec["runtimeHealthProbeTimeoutMillis"])
+        self.assertEqual("30000", typedb_spec["startupHealthProbeTimeoutMillis"])
         self.assertEqual("10", typedb_spec["runtimeHealthFailureThreshold"])
         self.assertEqual("0", typedb_spec["processNice"])
         self.assertEqual("0", typedb_spec["blueGreenSchemaBuildProcessNice"])
+        self._assert_typedb_health_probe_timeouts_allow_loaded_store_recovery()
         result = evaluate_typedb_capacity_policy({
             "typedbSizeMb": 75,
             "typedbLimitMb": 100,
@@ -863,6 +868,72 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertEqual("replace", decision["action"])
         self.assertEqual(401, decision["heartbeatAgeSeconds"])
+        self._assert_watchdog_claim_replaces_pid_reused_by_unrelated_process()
+        self._assert_watchdog_claim_preserves_live_orbit_watchdog()
+
+    def _assert_typedb_health_probe_timeouts_allow_loaded_store_recovery(self):
+        spec = {
+            "runtimeHealthProbeTimeoutMillis": "12000",
+            "startupHealthProbeTimeoutMillis": "45000",
+        }
+
+        self.assertEqual(
+            12000,
+            service_manager.typedb_health_probe_timeout_millis(spec),
+        )
+        self.assertEqual(
+            45000,
+            service_manager.typedb_health_probe_timeout_millis(spec, startup=True),
+        )
+        self.assertEqual(
+            30000,
+            service_manager.typedb_health_probe_timeout_millis(
+                {"runtimeHealthProbeTimeoutMillis": "90000"},
+            ),
+        )
+        self.assertEqual(
+            60000,
+            service_manager.typedb_health_probe_timeout_millis(
+                {"startupHealthProbeTimeoutMillis": "90000"},
+                startup=True,
+            ),
+        )
+
+    def _assert_watchdog_claim_replaces_pid_reused_by_unrelated_process(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "watchdog.pid"
+            path.write_text("741\n", encoding="utf-8")
+            with patch.object(service_manager.os, "getpid", return_value=900), patch.object(
+                service_manager,
+                "pid_exists",
+                return_value=True,
+            ), patch.object(
+                service_manager,
+                "command_for_pid",
+                return_value="/System/Library/CoreServices/ReportCrash agent",
+            ):
+                claimed = service_manager.claim_supervisor_watchdog_pid(path)
+
+            self.assertTrue(claimed)
+            self.assertEqual("900", path.read_text(encoding="utf-8").strip())
+
+    def _assert_watchdog_claim_preserves_live_orbit_watchdog(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "watchdog.pid"
+            path.write_text("741\n", encoding="utf-8")
+            with patch.object(service_manager.os, "getpid", return_value=900), patch.object(
+                service_manager,
+                "pid_exists",
+                return_value=True,
+            ), patch.object(
+                service_manager,
+                "command_for_pid",
+                return_value="python python_service/monitor_service.py watchdog",
+            ):
+                claimed = service_manager.claim_supervisor_watchdog_pid(path)
+
+            self.assertFalse(claimed)
+            self.assertEqual("741", path.read_text(encoding="utf-8").strip())
 
     def test_typedb_rotate_recovers_workers_and_alerts_when_reset_fails(self):
         spec = {"role": "typedb", "dataPath": Path("/tmp/orbit-alpha-typedb-test")}

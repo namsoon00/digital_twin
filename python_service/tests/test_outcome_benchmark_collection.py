@@ -145,9 +145,21 @@ class OutcomeBenchmarkCollectionTests(unittest.TestCase):
         target = {"requestId": "original", "symbol": "SPY", "targetAt": "2026-09-11T14:00:00Z", "maximumObservationAt": "2026-09-11T14:02:00Z"}
         self.assertEqual({}, store.load_outcome_observations("main", [target]))
         self.assertIn("2026-09-11T14:02:00Z", read.call_args.args[1])
+        sql = read.call_args.args[0]
+        self.assertIn("JOIN LATERAL", sql)
+        self.assertIn("LIMIT 1", sql)
+        self.assertNotIn("ROW_NUMBER() OVER", sql)
         read.reset_mock()
         self.assertEqual({}, store.load_outcome_observations("main", [{**target, "maximumObservationAt": "invalid"}]))
         read.assert_not_called()
+        baseline = {"requestId": "baseline", "symbol": "SPY", "targetAt": "2026-09-11T14:00:00Z", "knownBeforeTarget": True}
+        self.assertEqual({}, store.load_baseline_observations("main", [baseline]))
+        sql, params = read.call_args.args
+        self.assertIn("JOIN LATERAL", sql)
+        self.assertIn("candidate.observed_at <= target_requests.target_at", sql)
+        self.assertIn("LIMIT 1", sql)
+        self.assertNotIn("ROW_NUMBER() OVER", sql)
+        self.assertEqual(["main", "__market_data__"], params[-2:])
 
     def runner(self, **kwargs):
         return MarketDataCollectionRunner(

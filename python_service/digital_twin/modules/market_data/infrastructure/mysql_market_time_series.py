@@ -990,33 +990,31 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM (
-                    SELECT target_requests.request_key,
-                           observations.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY target_requests.request_key, observations.account_id
-                               ORDER BY COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) ASC,
-                                        CASE observations.granularity
-                                            WHEN '1m' THEN 0
-                                            WHEN '3m' THEN 1
-                                            WHEN '10m' THEN 2
-                                            WHEN '15m' THEN 3
-                                            WHEN '1h' THEN 4
-                                            WHEN '1d' THEN 5
-                                            ELSE 6
-                                        END ASC,
-                                        observations.bucket_at ASC
-                           ) AS row_number_value
-                    FROM (""" + target_sql + """) AS target_requests
-                    JOIN market_time_series_observations observations
-                      ON observations.symbol = target_requests.symbol
-                     AND observations.account_id IN (%s, %s)
-                     AND observations.current_price > 0
-                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) >= target_requests.target_at
-                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) <= target_requests.deadline_at
-                     AND (target_requests.granularities = '' OR FIND_IN_SET(observations.granularity, target_requests.granularities) > 0)
-                ) ranked
-                WHERE ranked.row_number_value = 1
+                SELECT target_requests.request_key, observations.*
+                FROM (""" + target_sql + """) AS target_requests
+                JOIN (SELECT %s AS account_id UNION SELECT %s) AS account_scope
+                JOIN LATERAL (
+                    SELECT candidate.*
+                    FROM market_time_series_observations candidate
+                    WHERE candidate.symbol = target_requests.symbol
+                      AND candidate.account_id = account_scope.account_id
+                      AND candidate.current_price > 0
+                      AND COALESCE(NULLIF(candidate.source_as_of, ''), candidate.observed_at) >= target_requests.target_at
+                      AND COALESCE(NULLIF(candidate.source_as_of, ''), candidate.observed_at) <= target_requests.deadline_at
+                      AND (target_requests.granularities = '' OR FIND_IN_SET(candidate.granularity, target_requests.granularities) > 0)
+                    ORDER BY COALESCE(NULLIF(candidate.source_as_of, ''), candidate.observed_at) ASC,
+                             CASE candidate.granularity
+                                 WHEN '1m' THEN 0
+                                 WHEN '3m' THEN 1
+                                 WHEN '10m' THEN 2
+                                 WHEN '15m' THEN 3
+                                 WHEN '1h' THEN 4
+                                 WHEN '1d' THEN 5
+                                 ELSE 6
+                             END ASC,
+                             candidate.bucket_at ASC
+                    LIMIT 1
+                ) AS observations ON TRUE
                 """,
                 params,
             ).fetchall()
@@ -1106,34 +1104,32 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM (
-                    SELECT target_requests.request_key,
-                           observations.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY target_requests.request_key, observations.account_id
-                               ORDER BY COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) DESC,
-                                        CASE observations.granularity
-                                            WHEN '1m' THEN 0
-                                            WHEN '3m' THEN 1
-                                            WHEN '10m' THEN 2
-                                            WHEN '15m' THEN 3
-                                            WHEN '1h' THEN 4
-                                            WHEN '1d' THEN 5
-                                            ELSE 6
-                                        END ASC,
-                                        observations.bucket_at DESC
-                           ) AS row_number_value
-                    FROM (""" + target_sql + """) AS target_requests
-                    JOIN market_time_series_observations observations
-                      ON observations.symbol = target_requests.symbol
-                     AND observations.account_id IN (%s, %s)
-                     AND observations.current_price > 0
-                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) <= target_requests.target_at
-                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) >= target_requests.earliest_at
-                     AND (target_requests.granularities = '' OR FIND_IN_SET(observations.granularity, target_requests.granularities) > 0)
-                     AND (target_requests.known_before_target = 0 OR observations.observed_at <= target_requests.target_at)
-                ) ranked
-                WHERE ranked.row_number_value = 1
+                SELECT target_requests.request_key, observations.*
+                FROM (""" + target_sql + """) AS target_requests
+                JOIN (SELECT %s AS account_id UNION SELECT %s) AS account_scope
+                JOIN LATERAL (
+                    SELECT candidate.*
+                    FROM market_time_series_observations candidate
+                    WHERE candidate.symbol = target_requests.symbol
+                      AND candidate.account_id = account_scope.account_id
+                      AND candidate.current_price > 0
+                      AND COALESCE(NULLIF(candidate.source_as_of, ''), candidate.observed_at) <= target_requests.target_at
+                      AND COALESCE(NULLIF(candidate.source_as_of, ''), candidate.observed_at) >= target_requests.earliest_at
+                      AND (target_requests.granularities = '' OR FIND_IN_SET(candidate.granularity, target_requests.granularities) > 0)
+                      AND (target_requests.known_before_target = 0 OR candidate.observed_at <= target_requests.target_at)
+                    ORDER BY COALESCE(NULLIF(candidate.source_as_of, ''), candidate.observed_at) DESC,
+                             CASE candidate.granularity
+                                 WHEN '1m' THEN 0
+                                 WHEN '3m' THEN 1
+                                 WHEN '10m' THEN 2
+                                 WHEN '15m' THEN 3
+                                 WHEN '1h' THEN 4
+                                 WHEN '1d' THEN 5
+                                 ELSE 6
+                             END ASC,
+                             candidate.bucket_at DESC
+                    LIMIT 1
+                ) AS observations ON TRUE
                 """,
                 params,
             ).fetchall()

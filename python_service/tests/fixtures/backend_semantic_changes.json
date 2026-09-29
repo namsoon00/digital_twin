@@ -40,5 +40,11 @@
     "bodyHash": "117f48503ebb9f9371994ffcac986c10adf5d0409b7f55ec82f8e868161e0384",
     "reason": "HYP-07: same-lease TypeDB input-presence proof for conditional selection only; missing inputs, failed reads and unsupported absence predicates remain unknown. No Python rule decision.",
     "regressionTest": "test_hypothesis_research_pipeline.ResearchPipelineTests.test_native_negative_receipt_requires_inputs_and_survives_compaction"
+  },
+  "ScopedABoxManifestMixin.save_scoped_abox_graph": {
+    "baselineHash": "57dfcf93cc8edcc7182232dbc267115c68181fd89e7cc6065a9462e1af6a952c",
+    "bodyHash": "351a54f56c6c7e7ab0debac514e9d9153dd495b3e5596aeb64ac76d3e25f7af4",
+    "reason": "Treat a generic TypeDB request failure during scoped ABox persistence as bounded transient back-pressure while preserving the active generation.",
+    "regressionTest": "test_abox_candidates.ABoxCandidateTests.test_retry_only_replays_transport_failures_and_preserves_failed_scope_diagnostics"
   }
 }

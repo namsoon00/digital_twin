@@ -19,6 +19,7 @@ def with_scoped_abox_candidate_verification_retry(store: CandidateRetryStore, op
     scope_verification = verification if isinstance(verification, dict) else {}
     retry_transient = lambda error: error_code(error) in {  # noqa: E731
         "typedbConnectionError",
+        "typedbRequestError",
         "typedbTimeout",
     }
     try:

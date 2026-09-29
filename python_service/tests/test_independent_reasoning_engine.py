@@ -270,6 +270,14 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
     def _assert_failure_recovery_allows_only_repairable_blocked_results(self):
         self.assertTrue(reasoning_failure_recovery_allowed(
+            "typedbRequestError",
+            {},
+        ))
+        self.assertTrue(reasoning_failure_recovery_allowed(
+            "typedbTimeout",
+            {},
+        ))
+        self.assertTrue(reasoning_failure_recovery_allowed(
             "reasoning-execution-blocked",
             {
                 "projection_results": {

@@ -418,6 +418,10 @@
     }
   },
   "storage": {
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::reasoning_failure_recovery_allowed": {
+      "hash": "b46c8d2a5628cb111a297b183a3bddb0409bca353258caf57e66d74bdc4d1965",
+      "reason": "Allow the existing bounded recovery worker to replay TypeDB generic request and timeout failures that predate the live deferral path; test_independent_reasoning_engine."
+    },
     "infrastructure/transactions/monitoring.py::MySQLEventLog": {"hash": "fc6819fe9b9a5866bd7e5539e1c8d5c4ec6f0a77c8634eb377cf9ee4111057c7", "reason": "Lease official external-fact projection deliveries from durable membership and fence completion or failure by lease token, eliminating timestamp-cursor loss; test_external_official_evidence_projection; docs/data-integration-acceptance.md."},
     "infrastructure/transactions/monitoring.py::MySQLMonitorStore": {"hash": "8f7c1fd2f195d13680f18f772cb1f81cbf5c330a365c89f521e4ec502c85fa5b", "reason": "Read the latest successfully delivered company change report by indexed account, symbol, message type and status so the next report compares against a customer-visible baseline without loading notification application code. test_instrument_valuation_query and test_runtime_composition."},
     "modules/decisions/infrastructure/mysql_subject_decision_cases.py::MySQLSubjectDecisionCaseStore": {

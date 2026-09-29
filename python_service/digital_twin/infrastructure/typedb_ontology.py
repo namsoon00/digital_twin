@@ -728,6 +728,13 @@ def typedb_error_code(error: object) -> str:
     text = str(error or "").lower()
     if "scoped abox candidate verification failed" in text:
         return "typedbCandidateVerificationError"
+    # TypeDB can collapse a server-side, retryable request failure to this
+    # generic driver message.  Keeping it under ``typedbReadError`` made ABox
+    # writes terminal even though the same request succeeds after the driver
+    # channel is recreated.  Give it a transport-neutral code because it can
+    # be raised by both read and write transactions.
+    if "request generated error" in text:
+        return "typedbRequestError"
     if any(term in text for term in ["unable to connect", "connection refused", "connect failed", "unavailable"]):
         return "typedbConnectionError"
     # TypeDB can surface a cancelled bounded read as TSV13 without including

@@ -4388,6 +4388,7 @@ class OntologyReasoningRunner:
             reason: object,
             retry_after_seconds: object = 0,
             diagnostics: Mapping[str, object] = None,
+            retryable_result: bool = False,
         ) -> None:
             try:
                 retry_after = max(0, int(float(retry_after_seconds or 0)))
@@ -4403,7 +4404,7 @@ class OntologyReasoningRunner:
                 item["retryAfterSeconds"] = retry_after
             if isinstance(diagnostics, Mapping) and diagnostics:
                 item["diagnostics"] = dict(diagnostics)
-            if is_retryable_projection_status(status):
+            if retryable_result or is_retryable_projection_status(status):
                 retryable.append(item)
             else:
                 failures.append(item)
@@ -4421,6 +4422,14 @@ class OntologyReasoningRunner:
                     result.get("reason") or "TypeDB ABox 투영이 완료되지 않았습니다.",
                     result.get("recommendedRetryAfterSeconds") or result.get("retryAfterSeconds"),
                     {
+                        "reasonCode": str(
+                            result.get("reasonCode") or result.get("reason_code") or ""
+                        ),
+                        "persistenceStage": str(
+                            ((result.get("timing") or {}).get("stage"))
+                            if isinstance(result.get("timing"), Mapping)
+                            else ""
+                        ),
                         "graphInput": {
                             key: value
                             for key, value in dict(result.get("graphInput") or {}).items()
@@ -4445,6 +4454,7 @@ class OntologyReasoningRunner:
                             }
                         },
                     },
+                    retryable_result=bool(result.get("retryable")),
                 )
                 continue
             execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}

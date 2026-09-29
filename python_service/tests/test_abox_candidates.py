@@ -193,6 +193,9 @@ class ABoxCandidateTests(unittest.TestCase):
             operation = Mock(side_effect=[RuntimeError("typedbConnectionError"), "recovered"])
             self.assertEqual("recovered", repository.with_scoped_abox_candidate_verification_retry(operation))
             self.assertEqual(2, operation.call_count)
+            operation = Mock(side_effect=[RuntimeError("typedbRequestError"), "recovered"])
+            self.assertEqual("recovered", repository.with_scoped_abox_candidate_verification_retry(operation))
+            self.assertEqual(2, operation.call_count)
             operation = Mock(side_effect=RuntimeError("typedbCandidateVerificationError"))
             timing = {}
             verification = {STATE: {"status": "ok"}, LINK: {"status": "incomplete"}}

@@ -629,6 +629,25 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
     def test_projection_alert_outcome_marks_an_evaluated_no_match_as_no_material_change(self):
         runner = self.build_runner([])
+        transient = runner.projection_gate(SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "error",
+                "reasonCode": "typedbRequestError",
+                "reason": "Request generated error",
+                "retryable": True,
+                "timing": {"stage": "changed-scope-write"},
+            },
+        }))
+        self.assertFalse(transient["ready"])
+        self.assertTrue(transient["retryable"])
+        self.assertEqual(
+            "typedbRequestError",
+            transient["results"][0]["diagnostics"]["reasonCode"],
+        )
+        self.assertEqual(
+            "changed-scope-write",
+            transient["results"][0]["diagnostics"]["persistenceStage"],
+        )
         monitor = SimpleNamespace(last_ontology_projection_results={
             "main": {
                 "status": "ok",

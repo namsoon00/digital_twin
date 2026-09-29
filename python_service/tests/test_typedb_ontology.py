@@ -3247,6 +3247,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("skipped", result["clearResult"]["status"])
 
     def test_typedb_retry_helper_retries_transient_failures(self):
+        from digital_twin.infrastructure.typedb_ontology import typedb_error_code
+
+        self.assertEqual(
+            "typedbRequestError",
+            typedb_error_code(RuntimeError("Request generated error")),
+        )
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=1)
         calls = {"count": 0}
 

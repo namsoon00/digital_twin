@@ -61,6 +61,8 @@ def reasoning_failure_recovery_allowed(
         "typedbconnectionerror",
         "typedbconnectionlost",
         "typedbtransactionerror",
+        "typedbrequesterror",
+        "typedbtimeout",
         "reasoningworkerinterrupted",
         "reasoningexecutionfailed",
     }:

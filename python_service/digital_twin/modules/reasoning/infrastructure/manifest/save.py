@@ -1060,6 +1060,7 @@ def save_scoped_abox_graph(
             "retryable": reason_code
             in {
                 "typedbConnectionError",
+                "typedbRequestError",
                 "typedbTimeout",
             },
             "scopeVerification": verification,

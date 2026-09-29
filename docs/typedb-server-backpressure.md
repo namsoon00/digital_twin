@@ -41,3 +41,13 @@ their persistence stage, row-write stage and completed transaction counts in
 the projection runtime observation, including failures before verification.
 These diagnostics must identify the failing phase before a storage-specific
 remedy can be validated.
+
+The detailed post-rollout failure occurred at the first node-write batch,
+with zero completed write transactions and an HTTP/2 excessive-load error.
+The bounded ABox writer now creates a dedicated driver for each node or
+relation transaction attempt and closes it on success or failure. Calling
+`open_driver` had reused the persistent read channel despite the writer's
+intended independent-channel lifetime. Tests preserve the existing query,
+commit, verification and activation contracts while rejecting shared-channel
+reuse. This is a transport-isolation fix; runtime recovery still requires the
+native completion and delivery evidence above.

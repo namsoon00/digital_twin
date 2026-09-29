@@ -99,7 +99,7 @@ def write_persistence_rows(
             # transactions. Keep each bounded commit on a fresh local
             # driver; the outer driver remains available for the final
             # scope verification and control-plane swap.
-            write_driver = store.open_driver(imported)
+            write_driver = store.create_driver(imported)
             try:
                 store.ensure_database(write_driver)
                 with runtime.timeout(store.write_operation_timeout_seconds(), "TypeDB scoped ABox write batch"):
@@ -195,7 +195,7 @@ def write_persistence_rows(
             return
 
         def write_given_transaction():
-            write_driver = store.open_driver(imported)
+            write_driver = store.create_driver(imported)
             try:
                 store.ensure_database(write_driver)
                 with runtime.timeout(store.write_operation_timeout_seconds(), "TypeDB scoped ABox given relation batch"):

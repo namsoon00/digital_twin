@@ -14,7 +14,7 @@ from digital_twin.infrastructure import typedb_ontology as api
 from digital_twin.modules.reasoning.infrastructure.abox_persistence import controls, ports, world_calls
 from abox_persistence_fixture import (
     METHODS, NEW, NOW, OLD, OTHER_WORLD, WORLD, RecordingABoxStore,
-    contract_fingerprints, control_graph, run_scenario,
+    contract_fingerprints, control_graph, run_scenario, rows_fixture,
 )
 
 
@@ -125,6 +125,32 @@ for name in sys.modules:
         self.assertEqual({"settings", "now", "timeout", "error_code"}, set(ports.ABoxRuntime.__dataclass_fields__))
 
     def test_physical_writes_verify_endpoints_and_do_not_activate_partial_candidates(self):
+        # A live repository may cache its read driver. Each write attempt must
+        # bypass that cache and close its own channel, including failed writes.
+        for failure in ("", "node-write"):
+            store = RecordingABoxStore(api.TypeDBOntologyGraphRepository, failure)
+            opened, closed = [], []
+
+            class FreshDriver:
+                def transaction(self, *args, **kwargs):
+                    return store.transaction(*args, **kwargs)
+
+            def create_driver(imported):
+                driver = FreshDriver()
+                opened.append(driver)
+                return driver
+
+            store.create_driver = create_driver
+            store.close_driver = closed.append
+            with patch.object(store, "open_driver", side_effect=AssertionError("shared channel reused")):
+                if failure:
+                    with self.assertRaisesRegex(RuntimeError, "node write failed"):
+                        store.write_persistence_rows(store, store.driver_imports(), *rows_fixture())
+                else:
+                    store.write_persistence_rows(store, store.driver_imports(), *rows_fixture())
+            self.assertTrue(opened)
+            self.assertEqual(opened, closed)
+            self.assertEqual(len(opened), len({id(driver) for driver in opened}))
         baseline = RecordingABoxStore(api.TypeDBOntologyGraphRepository).state()
         for scenario in ["identity-conflict", "node-write", "timeout", "inventory", "missing-endpoint", "relation-write"]:
             with self.subTest(scenario=scenario):

@@ -183,6 +183,9 @@ class RecordingABoxStore:
         self.journal.append(["open-driver"])
         return self
 
+    def create_driver(self, imported):
+        return self.open_driver(imported)
+
     def close_driver(self, driver):
         assert driver is self
         self.journal.append(["close-driver"])

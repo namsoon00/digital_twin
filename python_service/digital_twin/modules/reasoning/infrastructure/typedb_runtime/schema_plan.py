@@ -179,6 +179,15 @@ def base_schema_bootstrap_plan(expected_schema_text: str, existing_schema_text: 
     def missing_extension_clauses(identity: Tuple[str, str], expected_statement: str) -> List[str]:
         actual = existing_by_identity.get(identity, "")
         actual_clauses = set(schema_definition_clauses(actual))
+        # A capability inherited from a parent is already available. Adding it
+        # again on a subtype can conflict with the inherited ownership contract.
+        parent = schema_subtype_parent(actual)
+        visited = set()
+        while parent and parent not in visited:
+            visited.add(parent)
+            parent_statement = existing_by_identity.get((identity[0], parent), "")
+            actual_clauses.update(schema_definition_clauses(parent_statement))
+            parent = schema_subtype_parent(parent_statement)
         return [
             clause
             for clause in schema_definition_clauses(expected_statement)
@@ -230,4 +239,18 @@ def base_schema_bootstrap_plan(expected_schema_text: str, existing_schema_text: 
             and name not in existing_names
         ],
     )
+    # Existing type names do not prove an up-to-date schema: a context may
+    # gain an owns/plays capability while all attribute/type names stay fixed.
+    for identity, statement in expected_by_identity.items():
+        kind, name = identity
+        if kind not in {"entity", "relation"} or name not in existing_names:
+            continue
+        if identity in {assertion_identity, node_identity}:
+            continue
+        for batch in schema_definition_batches(missing_extension_clauses(identity, statement), batch_size):
+            plan.append({
+                "phase": "existing-type-capabilities",
+                "definitionCount": len(batch),
+                "query": "define\n" + name + " " + ", ".join(batch) + ";",
+            })
     return plan

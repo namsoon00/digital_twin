@@ -360,6 +360,7 @@ class TypeDBRuntimeTests(unittest.TestCase):
         self.assertFalse(any("delete" in query.lower() for query in driver.pending))
 
     def test_pure_schema_plan_handles_quotes_dependency_order_and_partial_ownership(self):
+        self.assert_existing_type_capabilities_are_repaired_before_readiness()
         quoted = 'define attribute label, value string @values("a;b,c");'
         statements = schema_plan.schema_definition_statements(quoted)
         self.assertEqual(1, len(statements))
@@ -373,6 +374,37 @@ class TypeDBRuntimeTests(unittest.TestCase):
         self.assertNotIn("attribute ontology-id,", queries)
         self.assertIn("ontology-node owns ontology-storage-id @unique;", queries)
         self.assertEqual([], schema_plan.base_schema_bootstrap_plan(SCHEMA, SCHEMA))
+
+    def assert_existing_type_capabilities_are_repaired_before_readiness(self):
+        existing = SCHEMA + "attribute metric, value double;\nentity other, sub ontology-node, owns metric;"
+        expected = existing.replace("entity parent-node, sub ontology-node;",
+                                    "entity parent-node, sub ontology-node, owns metric;")
+        plan = schema_plan.base_schema_bootstrap_plan(expected, existing)
+        self.assertEqual(["define\nparent-node owns metric;"], [item["query"] for item in plan])
+        inherited = expected.replace("entity child-node, sub parent-node;",
+                                     "entity child-node, sub parent-node, owns metric;")
+        self.assertEqual([], schema_plan.base_schema_bootstrap_plan(inherited, expected))
+        for fresh in (False, True):
+            repo = self.repository(fresh_candidate_rebuild=fresh)
+            repo.database = "capability-repair-" + str(fresh)
+            repo.schema_query = lambda: expected
+            repo.typedb_schema_text = lambda driver: existing
+            repo.base_schema_contract_state = lambda: {"status": "current"}
+            repo.schema_transaction_options = lambda timeout=None: None
+            # All type names already exist, and the persisted marker incorrectly
+            # claims readiness. Other contexts owning metric cannot satisfy this.
+            for name in ("ontology_storage_identity", "ontology_scope_schema",
+                         "ontology_content_fingerprint_schema", "ontology_world_schema",
+                         "promoted_schema", "ontology_semantic_schema"):
+                setattr(repo, name + "_migration_required", lambda *args: False)
+            driver = SchemaDriver(failure=1)
+            with self.assertRaisesRegex(RuntimeError, "schema commit failed"):
+                repo.ensure_schema(driver, IMPORTED)
+            self.assertEqual("", repo._base_schema_ready_fingerprint)
+            driver = SchemaDriver()
+            repo.ensure_schema(driver, IMPORTED)
+            self.assertEqual(["define\nparent-node owns metric;"], driver.committed)
+            self.assertTrue(repo._base_schema_ready_fingerprint)
 
     def test_contract_sync_reports_disabled_missing_driver_failure_and_success(self):
         repo = self.repository(retry_count=0)

@@ -39,7 +39,7 @@ def ensure_schema(store: SchemaLifecyclePort, driver, imported, *, runtime: Type
                 schema_text,
                 flags=re.MULTILINE,
             ))
-            if store.base_schema_type_names().issubset(schema_type_names):
+            if store.base_schema_type_names().issubset(schema_type_names) and not store.base_schema_bootstrap_plan(schema_text):
                 store._base_schema_ready_fingerprint = schema_fingerprint
                 store.mark_process_base_schema_ready(schema_fingerprint)
                 return
@@ -72,7 +72,7 @@ def ensure_schema(store: SchemaLifecyclePort, driver, imported, *, runtime: Type
         # can invalidate the driver's connection before this schema write.
         if store.base_schema_type_names().issubset(schema_type_names):
             contract_state = store.base_schema_contract_state()
-            if str(contract_state.get("status") or "") == "current":
+            if str(contract_state.get("status") or "") == "current" and not store.base_schema_bootstrap_plan(schema_text):
                 store._base_schema_ready_fingerprint = schema_fingerprint
                 store.mark_process_base_schema_ready(schema_fingerprint)
                 return
@@ -109,7 +109,7 @@ def ensure_schema(store: SchemaLifecyclePort, driver, imported, *, runtime: Type
             schema_text,
             flags=re.MULTILINE,
         ))
-        if store.base_schema_type_names().issubset(schema_type_names):
+        if store.base_schema_type_names().issubset(schema_type_names) and not store.base_schema_bootstrap_plan(schema_text):
             store._base_schema_ready_fingerprint = schema_fingerprint
             store.mark_process_base_schema_ready(schema_fingerprint)
             return

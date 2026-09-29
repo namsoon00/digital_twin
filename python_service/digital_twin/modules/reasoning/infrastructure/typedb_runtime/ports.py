@@ -156,6 +156,9 @@ class HttpPort(Protocol):
 
 
 class SchemaLifecyclePort(Protocol):
+    def base_schema_bootstrap_plan(self, schema_text: str = '', batch_size: int = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE) -> List[Dict[str, object]]:
+        ...
+
     _base_schema_ready_fingerprint: str
 
     _database_created_in_process: bool

@@ -333,6 +333,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self._assert_target_scope_repair_uses_bounded_subject_local_wait()
         self._assert_failure_recovery_allows_only_repairable_blocked_results()
         self._assert_replayed_crypto_event_upgrades_stale_dependency_contract()
+        self._assert_transient_server_failure_skips_background_and_releases_writer()
         self._assert_live_watch_turn_releases_graph_writer_before_polling_sleep()
         self._assert_live_watch_turn_refreshes_published_writer_state_after_release()
         monitor = SimpleNamespace(sent={})
@@ -3043,6 +3044,19 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(2, first["releasedCount"])
         self.assertEqual(first, second)
         self.assertEqual(1, len(queue.calls))
+
+    def _assert_transient_server_failure_skips_background_and_releases_writer(self):
+        guard = SimpleNamespace(acquire=lambda: {"acquired": True},
+                                record_result=lambda result: {"retryAfterSeconds": 12},
+                                release=unittest.mock.Mock())
+        runner = IndependentReasoningJobRunner(SimpleNamespace(), SimpleNamespace(),
+                                               SimpleNamespace(), graph_writer_guard=guard)
+        runner._run_once = lambda: {"status": "deferred", "processedCount": 1}
+        runner.run_background_graph_turn = unittest.mock.Mock()
+        result = runner.run_watch_turn()
+        self.assertEqual(12, result["retryAfterSeconds"])
+        runner.run_background_graph_turn.assert_not_called()
+        guard.release.assert_called_once()
 
     def _assert_live_watch_turn_releases_graph_writer_before_polling_sleep(self):
         class Guard:

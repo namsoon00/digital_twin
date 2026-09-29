@@ -2165,7 +2165,9 @@ class IndependentReasoningJobRunner:
         if not bool(ownership.get("acquired")):
             return self.graph_writer_deferred_result(ownership)
         try:
-            return self._run_once()
+            result = self._run_once()
+            self.record_graph_writer_result(result)
+            return result
         finally:
             self.release_graph_writer_ownership()
 
@@ -2187,7 +2189,8 @@ class IndependentReasoningJobRunner:
             return deferred
         try:
             result = self._run_once()
-            if result.get("status") != "inactive-control-binding":
+            backoff = self.record_graph_writer_result(result)
+            if result.get("status") != "inactive-control-binding" and not backoff.get("retryAfterSeconds"):
                 self.run_background_graph_turn()
             return result
         finally:
@@ -3240,6 +3243,14 @@ class IndependentReasoningJobRunner:
                 "reason": str(error)[:240],
             }
 
+    def record_graph_writer_result(self, result):
+        record = getattr(self.graph_writer_guard, "record_result", None)
+        backoff = dict(record(result) or {}) if callable(record) else {}
+        if backoff.get("retryAfterSeconds"):
+            result["retryAfterSeconds"] = backoff["retryAfterSeconds"]
+            result["graphWriterBackoff"] = backoff
+        return backoff
+
     def release_graph_writer_ownership(self) -> Dict[str, object]:
         release = getattr(self.graph_writer_guard, "release", None)
         if not callable(release):
@@ -3266,7 +3277,7 @@ class IndependentReasoningJobRunner:
             "status": "deferred",
             "processedCount": 0,
             "retryable": True,
-            "retryAfterSeconds": 5,
+            "retryAfterSeconds": int(ownership.get("retryAfterSeconds") or 5),
             "reasonCode": "typedb-graph-writer-owned",
             "reason": str(
                 ownership.get("reason")

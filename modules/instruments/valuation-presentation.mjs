@@ -238,7 +238,7 @@ function companyReportChangeRow(change, currency) {
 
 function renderCompanyChangeReport(report) {
   report = report || {};
-  if (report.contractVersion === "company-change-report-v2" && Array.isArray(report.sections)) return renderCompanyEvidenceReport(report);
+  if (["company-change-report-v2", "company-change-report-v3"].includes(report.contractVersion) && Array.isArray(report.sections)) return renderCompanyEvidenceReport(report);
   var state = report.currentState || {};
   var changes = report.changes || {};
   var facts = Array.isArray(state.facts) ? state.facts : [];

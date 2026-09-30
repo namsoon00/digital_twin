@@ -30,6 +30,8 @@ SEC_CONTACT_EMAIL_PATTERN = re.compile(
 SEC_ANNUAL_DIRECT_FACTS = {
     "revenue": (("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet"), ("USD",), True),
     "operatingIncome": (("OperatingIncomeLoss",), ("USD",), True),
+    "netIncome": (("NetIncomeLoss", "ProfitLoss"), ("USD",), True),
+    "operatingCashFlow": (("NetCashProvidedByUsedInOperatingActivities",), ("USD",), True),
     "pretaxIncome": (("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"), ("USD",), True),
     "taxProvision": (("IncomeTaxExpenseBenefit",), ("USD",), True),
     "interestExpense": (("InterestExpenseNonoperating", "InterestExpenseNonOperating", "InterestAndDebtExpense"), ("USD",), True),

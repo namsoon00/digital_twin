@@ -2700,6 +2700,12 @@ def validated_response_from_payload(
         execution_decision = current_action_plan
     relation_facts = relation_context_value(context).get("facts")
     relation_facts = dict(relation_facts or {}) if isinstance(relation_facts, dict) else {}
+    relation_clock = relation_context_value(context)
+    relation_facts["financialObservationCutoffAt"] = (
+        relation_clock.get("inferenceGenerationAt")
+        or (relation_clock.get("typedbInference") or {}).get("inferenceGenerationAt")
+        or relation_facts.get("updatedAt") or relation_facts.get("sourceAsOf") or ""
+    )
     subject = relation_context_value(context).get("subject")
     subject = dict(subject or {}) if isinstance(subject, dict) else {}
     follow_up_conditions, unsupported_follow_ups = normalize_follow_up_conditions(

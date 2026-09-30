@@ -59,7 +59,7 @@ def evaluate_follow_up_observation(
                 "accountId": str(row.get("account_id") or account_id or ""),
                 "symbol": str(row.get("symbol") or symbol or "").upper(),
                 "trackingOwner": "system",
-                "trackingCadence": "each-live-snapshot",
+                "trackingCadence": "next-comparable-annual-report" if payload.get("financialReportWatch") else "each-live-snapshot",
                 "trackingStatus": "active",
                 "notificationOnTransition": True,
             }

@@ -14,7 +14,7 @@ from digital_twin.modules.notifications.contracts import build_decision_core_evi
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v11-question-coverage"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v12-annual-report-continuity"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v5"
 
 RESEARCH_INSIGHT_FACT_LABELS = (
@@ -262,7 +262,7 @@ def _minimum_evidence_ledger_rows(value: object, limit: int) -> List[Dict[str, o
             # signal without improving evidence closure.
             row.pop("featureSummary", None)
             row.pop("modelEvidenceIds", None)
-        elif kind in {"financial-comparison", "financial-ratio"}:
+        elif kind in {"financial-comparison", "financial-ratio", "financial-report"}:
             # The complete paired-period provenance is already retained in
             # companyEvidence.financialEvidence. Citation rows only need the
             # exact value, period, source and eligibility fields validated by
@@ -549,7 +549,7 @@ def _financial_evidence_ids(core: Dict[str, object]) -> set:
         str(item.get("evidenceId") or "")
         for item in core.get("evidenceLedger") or []
         if isinstance(item, dict)
-        and item.get("kind") in {"financial-comparison", "financial-ratio"}
+        and item.get("kind") in {"financial-comparison", "financial-ratio", "financial-report"}
         and item.get("evidenceId")
     }
 
@@ -561,6 +561,7 @@ def _minimum_company_evidence(value: object) -> Dict[str, object]:
         "symbol", "companyName", "factRevision", "materialRevision",
         "valuation", "coverage", "financialEvidence", "financialIntegrity",
         "financialInterpretationPolicy", "financialEvidenceUse",
+        "annualReportFollowUpFields",
     ))
     if result.get("financialInterpretationPolicy"):
         result["financialInterpretationPolicy"] = "Period-bound financial premise, not a new filing or proof of price causation. Keep metric source and comparison basis."
@@ -684,7 +685,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
             ),
         )
         row["label"] = _sentence_text(item.get("label"), 140)
-        if item.get("kind") in {"financial-comparison", "financial-ratio"}:
+        if item.get("kind") in {"financial-comparison", "financial-ratio", "financial-report"}:
             # Full paired-period and formula provenance remains in
             # companyEvidence.financialEvidence. The citation row keeps the
             # exact scalar, period and source without duplicating that packet.
@@ -692,7 +693,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         if item.get("value") not in (None, ""):
             row["value"] = (
                 item.get("value")
-                if not isinstance(item.get("value"), (dict, list, tuple))
+                if item.get("kind") == "financial-report" or not isinstance(item.get("value"), (dict, list, tuple))
                 else (_minimum_transition_detail(item.get("value"))
                       if item.get("kind") == "decision-transition"
                       else _bounded_detail_bytes(item.get("value"), 900))
@@ -799,6 +800,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         "evidenceLedger": ledger,
         "narrativeClaimContract": claim_contract,
         "researchProgress": core.get("researchProgress") or {},
+        "continuityDelta": core.get("continuityDelta") or {},
         "dataLimits": [
             _bounded_detail_bytes(item, 260)
             for item in list(core.get("dataLimits") or [])[:3]
@@ -1299,13 +1301,15 @@ def _marker_relevant(rules: List[Dict[str, object]], hypotheses: List[Dict[str, 
     return any(marker.casefold() in text for marker in markers)
 
 
-def _company_context(current: Dict[str, object], rules: List[Dict[str, object]], hypotheses: List[Dict[str, object]], facts: Dict[str, object]) -> Tuple[Dict[str, object], Dict[str, object]]:
+def _company_context(current: Dict[str, object], rules: List[Dict[str, object]], hypotheses: List[Dict[str, object]], facts: Dict[str, object], question: Dict[str, object] = None) -> Tuple[Dict[str, object], Dict[str, object]]:
     from digital_twin.modules.news_intelligence.contracts import compact_financial_evidence
     company = _mapping(current.get("companyContext"))
     if not company:
         return {}, {}
     relevant = (bool(facts.get("valuationDecisionEligible")) or _marker_relevant(rules, hypotheses, VALUATION_MARKERS)
-                or any(str(rule.get("ruleId") or "").startswith("graph.company.") for rule in rules))
+                or any(str(rule.get("ruleId") or "").startswith("graph.company.") for rule in rules)
+                or (_mapping(question).get("source") == "user"
+                    and _mapping(question).get("subjectSymbol") == company.get("symbol")))
     profile = _selected(company.get("profile"), ("sector", "industry", "country", "exchange"))
     coverage = _selected(company.get("coverage"), ("dataState", "officialSource", "financialPeriods", "valuationFields"))
     if not relevant:
@@ -1321,9 +1325,15 @@ def _company_context(current: Dict[str, object], rules: List[Dict[str, object]],
         "operatingIncomeGrowthPct", "operatingMarginPct", "netIncome",
         "netIncomeGrowthPct", "freeCashFlow",
     )
+    financial_packet = compact_financial_evidence(company)
+    annual_history = financial_packet.get("annualHistory") or []
+    annual_values = (annual_history[0].get("values") or {}) if annual_history else {}
     return {
         **_selected(company, ("symbol", "companyName", "factRevision", "materialRevision", "judgmentUse")),
-        "financialEvidence": compact_financial_evidence(company),
+        "financialEvidence": financial_packet,
+        "annualReportFollowUpFields": ["financial.annual." + metric for metric in (
+            "revenue", "netIncome", "operatingCashFlow", "freeCashFlow",
+        ) if metric in annual_values],
         "financialEvidenceUse": _mapping(company.get("financialEvidenceUse")),
         "financialInterpretationPolicy": (
             "Cite current/prior values, periods and provider; excluded comparisons are not evidence. "
@@ -1387,7 +1397,8 @@ def _continuity_delta(value: object) -> Dict[str, object]:
             continue
         row = _selected(
             item,
-            ("conditionId", "field", "operator", "threshold", "purpose", "status", "currentValue", "onSatisfied", "transitionVerified", "transitionAt", "previousMatched", "currentMatched"),
+            ("conditionId", "field", "operator", "threshold", "purpose", "status", "currentValue", "onSatisfied", "transitionVerified", "transitionAt", "previousMatched", "currentMatched",
+             "financialReportWatch", "reportObservation", "observationStatus"),
         )
         if row.get("onSatisfied"):
             row["onSatisfied"] = _sentence_text(row.get("onSatisfied"), 120)
@@ -1664,7 +1675,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
             break
     facts = _relation_facts(current, rules, drivers)
     linked_fact_keys = _rule_linked_fact_keys(rules, drivers)
-    company, company_reference = _company_context(current, rules, hypotheses, _mapping(current.get("relationFacts")))
+    company, company_reference = _company_context(current, rules, hypotheses, _mapping(current.get("relationFacts")), _mapping(brief.get("question")))
     if company and not company.get("financialEvidenceUse"):
         from digital_twin.modules.news_intelligence.contracts import financial_evidence_use
         prior = _mapping(decision_state.get("previousInvestmentInsight"))
@@ -2164,7 +2175,8 @@ def _fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: in
         "followUpConditions": [{
             **_selected(
                 item,
-                ("field", "operator", "threshold", "purpose", "status", "transitionVerified", "previousMatched", "currentMatched"),
+                ("field", "operator", "threshold", "purpose", "status", "currentValue", "transitionVerified", "previousMatched", "currentMatched",
+                 "financialReportWatch", "reportObservation", "observationStatus"),
             ),
             "onSatisfied": _sentence_text(item.get("onSatisfied"), 80),
         } for item in list(continuity.get("followUpConditions") or [])[:1]

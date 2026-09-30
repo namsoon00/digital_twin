@@ -401,6 +401,18 @@ def build_decision_core_evidence_ledger(
                 feature_summary=dict(comparison),
             )
 
+    for report in financial.get("annualHistory") or []:
+        period = str(report.get("periodEnd") or "")
+        evidence_id = "financial:annual:" + period
+        rows[evidence_id] = NarrativeEvidence(
+            evidence_id=evidence_id, role="context", kind="financial-report",
+            label="연간 재무 " + period,
+            value={"periodEnd": period, "values": dict(report.get("values") or {})},
+            source=", ".join(sorted({str(basis.get("provider") or "") for basis in (report.get("metricBasis") or {}).values()})),
+            source_as_of=str(report.get("observedAt") or ""),
+            detail="보고기간·발표일·수집시각을 구분한 공식 연간 이력. 매매 행동이나 새 발표의 증거가 아닙니다.",
+        )
+
     for ratio in financial.get("ratios") or []:
         if ratio.get("status") != "verified-comparable":
             continue
@@ -639,7 +651,7 @@ def build_decision_core_evidence_ledger(
             row.evidence_id,
         ),
     )
-    financial_rows = [row for row in prioritized if row.kind in {"financial-comparison", "financial-ratio"}]
+    financial_rows = [row for row in prioritized if row.kind in {"financial-comparison", "financial-ratio", "financial-report"}]
     financial_ids = {row.evidence_id for row in financial_rows}
     other_rows = [row for row in prioritized if row.evidence_id not in financial_ids]
     retained_ids = financial_ids | {
@@ -886,7 +898,7 @@ def resolved_narrative_claim_evidence_contract(
 
 
 def _financial_claim_reasons(text, section, known_rows, financial_use, earnings_quality=None):
-    financial = [row for row in known_rows if row.get("kind") in {"financial-comparison", "financial-ratio"}]
+    financial = [row for row in known_rows if row.get("kind") in {"financial-comparison", "financial-ratio", "financial-report"}]
     if not financial or section in {"next-condition", "catalyst", "limitation"}:
         return []
     # Numeric comparisons and moving averages prove co-observation, not the

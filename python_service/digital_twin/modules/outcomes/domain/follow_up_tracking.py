@@ -54,8 +54,10 @@ def ai_follow_up_registration_admission(episode):
 
 
 def follow_up_semantic_key(condition):
-    return (str(condition.get("field") or ""), str(condition.get("operator") or ""),
+    key = (str(condition.get("field") or ""), str(condition.get("operator") or ""),
             finite_number(condition.get("threshold")), str(condition.get("purpose") or "switch"))
+    report = (condition.get("financialReportWatch") or {}).get("baseline") or {}
+    return key + (str(report.get("periodEnd") or ""), str(sorted((report.get("basis") or {}).items()))) if report else key
 
 
 def follow_up_thesis_key(insight):
@@ -118,17 +120,22 @@ def follow_up_observation_policy(condition, settings=None):
 def registered_follow_up(condition, *, episode_id, account_id, symbol, registered_at,
                          owner_kind="decision", settings=None):
     row = dict(condition)
+    report_watch = bool(row.get("financialReportWatch"))
     if owner_kind == "ai-insight":
         source_id = str(row.get("sourceConditionId") or row.get("conditionId") or "")
         identity = "|".join((account_id, symbol, episode_id, source_id))
         row["sourceConditionId"] = source_id
         row["conditionId"] = "ai-insight-follow-up:" + hashlib.sha256(identity.encode()).hexdigest()[:32]
-        row["observationPolicy"] = follow_up_observation_policy(row, settings)
-        row["trackingBaselineCaptured"] = False
+    if owner_kind == "ai-insight" or report_watch:
+        row["observationPolicy"] = ({"version": "annual-report-follow-up-v1", "requiredConfirmations": 1,
+                                     "distinctReportRequired": True, "rebaseOnFirstObservation": False,
+                                     "investmentActionAuthority": False}
+                                    if report_watch else follow_up_observation_policy(row, settings))
+        row["trackingBaselineCaptured"] = report_watch
         created = observation_time(registered_at)
         expiry = observation_time(row.get("expiresAt"))
         if created:
-            maximum = created + timedelta(days=7)
+            maximum = created + timedelta(days=540 if report_watch else 7)
             row["expiresAt"] = min(expiry, maximum).isoformat().replace("+00:00", "Z") if expiry else maximum.isoformat().replace("+00:00", "Z")
     row.update({"episodeId": episode_id, "accountId": account_id, "symbol": symbol, "ownerKind": owner_kind})
     receipt_id = hashlib.sha256((episode_id + "|" + str(row.get("conditionId"))).encode()).hexdigest()[:32]

@@ -20,6 +20,9 @@ METRICS = (
     ("capitalExpenditure", "설비투자 현금흐름"), ("freeCashFlow", "잉여현금흐름"),
     ("cash", "현금 및 현금성자산"), ("totalDebt", "이자부채"),
     ("totalAssets", "자산총계"), ("totalLiabilities", "부채총계"), ("equity", "자본총계"),
+    ("pretaxIncome", "세전이익"), ("taxProvision", "법인세비용"),
+    ("stockBasedCompensation", "주식보상비용"),
+    ("changeInWorkingCapital", "운전자본의 현금흐름 기여"),
 )
 DURATIONS = {"annual": "연간", "quarterly": "단일 분기", "year-to-date": "연초부터 누적", "instant": "기말 잔액"}
 SCOPES = {"CFS": "연결", "OFS": "별도", "provider-reported": "공급자 보고 기준"}

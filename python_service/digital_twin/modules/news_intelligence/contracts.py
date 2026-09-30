@@ -4,6 +4,7 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {
+ 'annual_financial_observations': ('digital_twin.modules.news_intelligence.domain.annual_financial_history', 'annual_financial_observations'),
  'RESEARCH_FINANCIAL_METRICS': ('digital_twin.modules.news_intelligence.domain.financial_research_evidence', 'REPORTED_METRICS'),
  'build_company_report_evidence': ('digital_twin.modules.news_intelligence.domain.company_report_evidence', 'build_company_report_evidence'),
  'COMPANY_CHANGE_REPORT_VERSION': ('digital_twin.modules.news_intelligence.domain.company_change_report', 'COMPANY_CHANGE_REPORT_VERSION'),

@@ -474,7 +474,7 @@ def notification_ai_decision_brief(
         ),
         "decisionPolicyScope": policy_scope,
         "executionProfile": execution_profile,
-        "question": relation.get("investmentQuestion") or {
+        "question": merged.get("investmentBrainQuestion") or relation.get("investmentQuestion") or {
             "text": _clean(merged.get("investmentBrainQuestionText") or "현재 투자 행동과 다음 확인 조건을 판단한다."),
             "subjectSymbol": subject.get("symbol") or merged.get("rawSymbol") or merged.get("symbol"),
             "subjectName": subject.get("name") or merged.get("displayTarget") or merged.get("target"),

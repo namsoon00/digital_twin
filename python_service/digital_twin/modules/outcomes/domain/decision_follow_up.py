@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Tuple
 from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.market_data.contracts import observable_follow_up_fields
 from digital_twin.modules.outcomes.domain.follow_up_tracking import finite_number, observation_time, confirm_follow_up_observation
+from .financial_report_follow_up import financial_report_baseline, report_watch_contract, observe_financial_report
 
 
 FOLLOW_UP_CONDITION_VERSION = "decision-follow-up-condition-v2"
@@ -96,8 +97,10 @@ def normalize_follow_up_conditions(
         if key in seen:
             continue
         seen.add(key)
-        current_value = _fact_value(facts, field)
-        is_observable = field in observable
+        report_baseline = financial_report_baseline(facts, field, symbol) if field.startswith("financial.annual.") else {}
+        report_watch = report_watch_contract(raw, report_baseline)
+        current_value = report_baseline.get("value") if report_watch else _fact_value(facts, field)
+        is_observable = bool(report_watch) or field in observable
         condition_id = str(raw.get("conditionId") or "").strip() or _stable_id(
             symbol,
             field,
@@ -147,6 +150,8 @@ def normalize_follow_up_conditions(
                 "transitionVerified": False,
             })
         if is_observable:
+            if report_watch:
+                row.update({"financialReportWatch": report_watch, "trackingCadence": "next-comparable-annual-report"})
             tracked.append(row)
         else:
             profile_key = str(profile.get("profileKey") or "")
@@ -183,6 +188,17 @@ def evaluate_follow_up_conditions(
             row["transitionVerified"] = True
             row["transitionKind"] = "pending-to-expired"
         else:
+            if row.get("financialReportWatch"):
+                if observe_financial_report(row, facts, stamp):
+                    row.update({
+                        "status": "invalidated" if row.get("purpose") == "invalidate" else "satisfied",
+                        "transitionVerified": True, "transitionKind": "new-comparable-financial-report",
+                        "transitionId": _stable_id(row.get("conditionId"), row.get("lastReportObservationId")),
+                        "previousStatus": previous, "transitionAt": stamp, "trackingStatus": "condition-reached",
+                    })
+                    material = True
+                updated.append(row)
+                continue
             value = finite_number(_fact_value(facts, str(row.get("field") or "")))
             if value is None:
                 if row.get("ownerKind") == "ai-insight":

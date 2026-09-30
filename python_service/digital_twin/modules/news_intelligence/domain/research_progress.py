@@ -12,6 +12,7 @@ from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.contracts import parse_datetime
 from .investment_research import ResearchEvidence
+from .financial_reporting import financial_report_contract_assessment
 
 
 RESEARCH_PROGRESS_VERSION = "question-evidence-coverage-v1"
@@ -69,6 +70,10 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
             continue
         raw = item.raw_payload or {}
         types = set(KIND_TYPES.get(item.kind.lower(), set()))
+        report = raw.get("financialReport") or {}
+        if ("financial-fact" in types and report.get("officialSource") is True
+                and financial_report_contract_assessment(report, str(raw.get("frequency") or "")).get("eligible")):
+            types.add("official-filing")
         if item.kind.lower() == "news" and str(raw.get("articleReadStatus") or raw.get("readScope") or "") in {"body", "full-body", "full", "article-body"}:
             types.add("news-full-text")
         source_types = set()
@@ -101,6 +106,7 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
             "metricProvenance": dict(raw.get("metricProvenance") or {}),
             "freshnessBasis": str(raw.get("freshnessBasis") or "publication"),
             "freshnessObservedAt": str(raw.get("freshnessObservedAt") or ""),
+            "readScope": "normalized-financial-metrics" if "financial-fact" in types else str(raw.get("articleReadStatus") or raw.get("readScope") or ""),
             "title": item.title[:320], "statement": claim.statement[:1200],
             "evidenceTypes": sorted(types), "sourceTypes": sorted(source_types),
             "verificationStatus": claim.verification_status,

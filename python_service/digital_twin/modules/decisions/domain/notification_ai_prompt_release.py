@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v33-question-evidence"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v34-annual-report-continuity"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v22"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -248,6 +248,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "earningsQuality가 unknown이면 반복 가능한 이익으로 단정하지 않는다. 재무 개선과 가격 상승의 동시 관측만으로 인과관계를 만들지 않는다.",
     "externalEvidence는 evidenceUse=action만 행동을 바꿀 수 있다. 사건 흡수·반응은 사건 ID·시각, 전후 가격, 벤치마크가 있을 때만 판단하고 누락 창은 unresolved로 둔다.",
     "invalidationCondition은 실제 관측 대상과 변화 방향을 쓰고 next-condition 근거를 연결한다. 입력에 있는 수치형 observable만 followUpConditions로 구조화하며 새 임계값을 만들지 않는다.",
+    "companyEvidence.financialEvidence.annualHistory의 공식 연간 수치로 여러 해의 변화와 이익·현금흐름의 차이를 설명한다. 수치만으로 일회성 원인을 단정하지 않는다. annualReportFollowUpFields는 다음 연간 보고서의 확인 조건이다. 이 필드를 쓰면 threshold는 가장 최근 연간 보고서의 동일 지표 값, operator는 < 또는 >만 사용한다. 분기·누적 수치를 연간 기준과 비교하지 않으며 새로운 보고서의 실측으로만 평가한다.",
     "시스템이 자동으로 확인한다고 표현할 조건은 반드시 followUpConditions에 구조화한다. 이는 관찰 등록 요청일 뿐 등록 완료가 아니며, 검증된 transitionId가 있으면 도달값·관측시각과 이전 해석을 비교한다.",
     "같은 사실을 summary·evidence·narrativeClaims에 반복하지 않는다. summary는 결론, evidence는 최대 3개 근거, counterEvidence는 최대 2개, nextChecks는 최대 2개다.",
     "changeAnalysis는 직전 판단 이후 실제로 달라진 값·방향·기간·근거·행동만 쓴다. 변화가 없으면 명시하고 상투적인 '추가 확인 필요'만 쓰지 않는다.",

@@ -74,6 +74,17 @@ class InvestmentOutcomeObservationService:
             list(snapshot.positions or []) + list(snapshot.watchlist or []),
             observed_at,
         )
+        from digital_twin.modules.news_intelligence.contracts import annual_financial_observations
+        companies = (getattr(snapshot, "external_signals", None) or {}).get("companyKnowledge") or {}
+        for position in list(snapshot.positions or []) + list(snapshot.watchlist or []):
+            if not position or position.is_cash():
+                continue
+            symbol = str(position.symbol or "").upper().strip()
+            financial_observations = annual_financial_observations(
+                companies.get(symbol) or {}, symbol, observed_at,
+            )
+            if symbol and financial_observations:
+                snapshot_observations.setdefault(symbol, {})["annualFinancialObservations"] = financial_observations
         follow_up = self.observe_follow_ups(snapshot.account_id, snapshot_observations, observed_at)
         if not self.enabled():
             return {

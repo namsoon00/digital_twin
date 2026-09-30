@@ -308,6 +308,7 @@ def build_decision_continuity_packet(
             "transitionKind", "transitionVerified", "legacyBaselineCaptured", "expiresAt",
             "episodeId", "accountId", "symbol", "sourceConditionId", "ownerKind", "registration",
             "trackingStatus", "trackingOwner", "observationPolicy", "confirmationCount", "lastSourceAsOf",
+            "financialReportWatch", "reportObservation", "lastReportObservationId", "observationStatus",
         ), 8),
         unsupported_follow_ups=_rows(unsupported_follow_ups or [], (
             "conditionId", "field", "operator", "threshold", "purpose", "label",

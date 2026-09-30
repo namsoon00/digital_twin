@@ -832,6 +832,7 @@ def _sec_fact_periods(
     facts: Mapping[str, object],
     *,
     frequency: str,
+    cik: str = "",
 ) -> List[Dict[str, object]]:
     annual_series = facts.get("annualSeries") if isinstance(facts.get("annualSeries"), Mapping) else {}
     annual_components = facts.get("annualComponents") if isinstance(facts.get("annualComponents"), Mapping) else {}
@@ -847,6 +848,10 @@ def _sec_fact_periods(
             ), None) if isinstance(values, list) else None
 
         def provenance(field: str, value: Mapping[str, object], *, derived=None, duration_basis="annual"):
+            accession = _clean(value.get("accessionNumber"))
+            filing_url = ("https://www.sec.gov/Archives/edgar/data/" + str(int(cik)) + "/"
+                          + accession.replace("-", "") + "/" + accession + "-index.html"
+                          if str(cik).isdigit() and re.fullmatch(r"\d{10}-\d{2}-\d{6}", accession) else "")
             return {
                 "provider": "SEC EDGAR",
                 "metric": _clean(value.get("tag") or field),
@@ -859,6 +864,7 @@ def _sec_fact_periods(
                 "accessionNumber": _clean(value.get("accessionNumber")),
                 "periodStart": _clean(value.get("start")),
                 "publishedAt": _clean(value.get("filed")),
+                "sourceUrl": filing_url,
                 "accountingStandard": "US-GAAP",
                 "currency": _clean(value.get("unit")),
                 "scope": "official-filing",
@@ -1200,7 +1206,7 @@ def build_company_knowledge(
     if official_annual:
         annual = official_annual
     if sec_filing.get("facts"):
-        sec_annual = _sec_fact_periods(sec_filing.get("facts") or {}, frequency="annual")
+        sec_annual = _sec_fact_periods(sec_filing.get("facts") or {}, frequency="annual", cik=sec_filing.get("cik") or "")
         sec_interim = _sec_fact_periods(sec_filing.get("facts") or {}, frequency="interim")
         if sec_annual:
             annual = sec_annual
@@ -1847,7 +1853,7 @@ def company_prompt_context(
         "materialSectionRevisions": dict(payload.get("materialSectionRevisions") or {}),
         "financialIntegrity": financial_integrity,
         "currentFinancialState": current_financials,
-        "financialEvidence": compact_financial_evidence({"financials": financials}),
+        "financialEvidence": compact_financial_evidence({"symbol": normalized_symbol, "financials": financials}),
         "judgmentUse": "active-company-rule-only",
         "profile": section("profile", (
             "companyName", "ceoName", "sector", "industry", "establishedDate",

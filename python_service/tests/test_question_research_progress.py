@@ -2,19 +2,29 @@
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 import unittest
 
 from digital_twin.modules.decisions.contracts import InvestmentQuestion, utc_now_iso
 from digital_twin.modules.decisions.application.investment_brain_service import InvestmentBrainService
-from digital_twin.modules.portfolio.contracts import Position
+from digital_twin.modules.portfolio.contracts import Position, AccountSnapshot
 from digital_twin.modules.decisions.domain.notification_ai_gate_validation import compact_research_cycle_for_ai
 from digital_twin.modules.decisions.domain.notification_ai_context_router import fit_notification_ai_decision_core
 from digital_twin.modules.decisions.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
+from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
+from digital_twin.modules.news_intelligence.domain.company_knowledge import build_company_knowledge, company_prompt_context
+from digital_twin.modules.news_intelligence.domain.annual_financial_history import annual_financial_observations
+from digital_twin.modules.outcomes.domain.decision_follow_up import normalize_follow_up_conditions, evaluate_follow_up_conditions
+from digital_twin.modules.outcomes.domain.follow_up_tracking import registered_follow_up, follow_up_is_registered
+from digital_twin.modules.outcomes.domain.financial_report_follow_up import valid_financial_report_watch
+from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
+from digital_twin.modules.outcomes.infrastructure.transaction_writes import register_ai_insight_followups
+from digital_twin.infrastructure.external_signal_provider_sec import ExternalSignalSecMixin
 from digital_twin.modules.news_intelligence.application.hypothesis_research_planner_service import HypothesisResearchPlanningService
 from digital_twin.modules.news_intelligence.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
 from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import ResearchRun, governed_evidence
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.modules.news_intelligence.domain.financial_reporting import FINANCIAL_REPORTING_VERSION, bind_financial_report_contract
+from digital_twin.modules.news_intelligence.domain.financial_reporting import FINANCIAL_REPORTING_VERSION, bind_financial_report_contract, financial_evidence_use
 from digital_twin.modules.news_intelligence.domain.financial_research_evidence import financial_research_evidence
 from digital_twin.modules.news_intelligence.domain.research_progress import assess_tasks, audit_retain_until, evidence_packets
 from digital_twin.infrastructure.investment_research_gateway import ExistingApiResearchGateway, CompositeInvestmentResearchGateway
@@ -91,6 +101,10 @@ class Advisor:
 
     def plan(self, context):
         self.contexts.append(deepcopy(context))
+        if "causal-gap" not in context["dataCoverageMap"]["approvedDiscoveryKinds"]:
+            raise AssertionError("Planner must receive the discovery kinds enforced by admission")
+        if "REVIEW_LEVEL" not in context["dataCoverageMap"]["approvedDecisionImpacts"]:
+            raise AssertionError("Planner must receive the permitted research-only impact")
         reviews = []
         for row in context["researchProgress"].get("tasks") or []:
             if row["candidateEvidenceIds"]:
@@ -143,6 +157,133 @@ class QuestionResearchProgressTests(unittest.TestCase):
         self._assert_collected_revision_wins_over_cached_duplicate_and_receipts_round_trip()
         self._assert_queued_checkpoints_keep_original_context_and_legacy_runs_load()
         self._assert_audit_survives_prompt_and_existing_research_graph_projection()
+        self._assert_annual_history_and_later_report_form_one_auditable_chain()
+
+    def _assert_annual_history_and_later_report_form_one_auditable_chain(self):
+        def company(year, cash, *, currency="USD", published=None, observed=None):
+            period, accession = f"{year}-09-30", f"0000320193-{str(year)[-2:]}-000001"
+            def metric(value):
+                return {"units": {currency: [{"start": f"{year-1}-10-01", "end": period,
+                    "filed": published or f"{year}-11-01", "fy": year, "fp": "FY", "form": "10-K",
+                    "accn": accession, "val": value}]}}
+            raw = {"facts": {"us-gaap": {"Revenues": metric(300), "NetIncomeLoss": metric(50),
+                "NetCashProvidedByUsedInOperatingActivities": metric(cash),
+                "PaymentsToAcquirePropertyPlantAndEquipment": metric(10)}}}
+            return build_company_knowledge("AAPL", sec_filing={"provider": "SEC EDGAR", "cik": "0000320193",
+                "facts": ExternalSignalSecMixin().sec_company_facts_summary(raw)}, source_references=[{
+                    "datasetId": "sec.company_facts", "subjectKey": "AAPL", "revisionId": accession,
+                    "fetchedAt": observed or f"{year}-11-02T00:00:00Z"}])
+        original = company(2025, 70)
+        previous = company(2024, 60)
+        original["financials"]["annual"].extend(previous["financials"]["annual"])
+        context = company_prompt_context({"companyKnowledge": {"AAPL": original}}, "AAPL")
+        history = context["financialEvidence"]["annualHistory"]
+        self.assertEqual(["2025-09-30", "2024-09-30"], [row["periodEnd"] for row in history])
+        self.assertEqual(50, history[0]["values"]["netIncome"])
+        self.assertEqual(70, history[0]["values"]["operatingCashFlow"])
+        self.assertEqual(60, history[0]["values"]["freeCashFlow"])
+        self.assertIn("sec.gov/Archives/", history[0]["metricBasis"]["netIncome"]["sourceUrl"])
+        refreshed = deepcopy(context["financialEvidence"])
+        refreshed["annualHistory"][0]["observedAt"] = "2026-09-30T00:00:00Z"
+        refreshed["annualHistory"][0]["sourceReferences"][0]["revisionId"] = "new-ingestion-same-values"
+        self.assertEqual("reused", financial_evidence_use(refreshed, context["financialEvidence"])["state"])
+        refreshed["annualHistory"][0]["values"]["operatingCashFlow"] = 71
+        self.assertEqual("revised", financial_evidence_use(refreshed, context["financialEvidence"])["state"])
+        native = {"messageType": "investmentInsight", "rawSymbol": "AAPL", "ontologyRelationContext": {
+            "subject": {"symbol": "AAPL", "market": "US"}, "source": "typedbInferenceBox", "graphStoreUsed": True,
+            "inferenceGenerationAt": "2026-09-30T00:00:00Z",
+            "facts": {"companyContext": context},
+            "activeRules": [{"ruleId": "graph.company.fundamental.test", "label": "Financial context"}],
+        }}
+        packet = build_notification_ai_inference_packet(native, max_prompt_bytes=48 * 1024)
+        core = packet.decision_core
+        self.assertEqual(history, core["companyEvidence"]["financialEvidence"]["annualHistory"])
+        self.assertTrue(any(row["evidenceId"] == "financial:annual:2025-09-30" for row in core["evidenceLedger"]))
+        question = InvestmentQuestion.create("애플의 장기 현금흐름을 검토해줘", subject_symbol="AAPL").to_dict()
+        requested = deepcopy(native)
+        requested["investmentBrainQuestion"] = question
+        requested["ontologyRelationContext"]["activeRules"] = []
+        question_core = build_notification_ai_inference_packet(requested, max_prompt_bytes=48 * 1024).decision_core
+        self.assertEqual(question["text"], question_core["question"]["text"])
+        self.assertEqual(history, question_core["companyEvidence"]["financialEvidence"]["annualHistory"])
+        self.assertFalse(question_core["decision"]["actionEnvelope"].get("allowedActions"))
+        core["background"] = {"unused": "x" * 100000}
+        core["hypothesisSet"]["comparisonMode"] = "research-only"
+        fitted = fit_notification_ai_decision_core(core, 24 * 1024)
+        self.assertEqual(history, fitted["companyEvidence"]["financialEvidence"]["annualHistory"])
+        field = "financial.annual.operatingCashFlow"
+        facts = {"companyContext": context, "updatedAt": "2026-09-30T00:00:00Z"}
+        raw = {"field": field, "operator": "<", "threshold": 70, "purpose": "weaken", "label": "현금흐름 감소"}
+        pending, unsupported = normalize_follow_up_conditions([raw], facts, "AAPL")
+        self.assertEqual([], unsupported)
+        self.assertTrue(valid_financial_report_watch(pending[0]))
+        self.assertFalse(normalize_follow_up_conditions([{**raw, "threshold": 90}], facts, "AAPL")[0])
+        self.assertFalse(normalize_follow_up_conditions([raw], facts, "TSLA")[0])
+        watch = registered_follow_up(pending[0], episode_id="case:test", account_id="test", symbol="AAPL",
+            registered_at="2026-09-30T00:00:00Z", owner_kind="ai-insight")
+        self.assertTrue(follow_up_is_registered(watch))
+        self.assertGreater(watch["expiresAt"], "2027-09-30")
+        decision_watch = registered_follow_up(pending[0], episode_id="decision:test", account_id="test", symbol="AAPL",
+            registered_at="2026-09-30T00:00:00Z")
+        self.assertEqual(watch["observationPolicy"], decision_watch["observationPolicy"])
+        self.assertEqual(watch["expiresAt"], decision_watch["expiresAt"])
+        class Connection:
+            def __init__(self): self.writes = []
+            def execute(self, sql, params=()):
+                if "INSERT INTO investment_decision_follow_ups" in sql: self.writes.append(params)
+                return self
+            def fetchone(self): return None
+            def fetchall(self): return []
+        connection = Connection()
+        episode = SimpleNamespace(episode_id="case:test", account_id="test", symbol="AAPL", ai_authored=True,
+            publication_contract_passed=True, contract_failure_code="", insight={"followUpConditions": pending},
+            reconciliation={"status": "reconciled", "notificationDecision": "suppress", "reasonCode": "unchanged_investment_insight",
+                            "deliveryOutcome": {"status": "web-only", "queued": False}})
+        registered = register_ai_insight_followups(connection, episode, "2026-09-30T00:00:00Z")
+        self.assertEqual(1, len(connection.writes))
+        self.assertTrue(follow_up_is_registered(registered[0]))
+        same, material = evaluate_follow_up_conditions([watch], facts, "2026-10-01T00:00:00Z")
+        self.assertFalse(material)
+        self.assertEqual("pending", same[0]["status"])
+        later = company(2026, 65)
+        observed_at = "2026-11-03T00:00:00Z"
+        observations = annual_financial_observations(later, "AAPL", observed_at)
+        self.assertFalse(evaluate_follow_up_conditions(pending, {"annualFinancialObservations": observations}, observed_at)[1])
+        self.assertEqual({}, annual_financial_observations(later, "AAPL", "2026-10-01T00:00:00Z"))
+        wrong_basis = deepcopy(observations)
+        wrong_basis[field]["basis"]["currency"] = "KRW"
+        rejected, material = evaluate_follow_up_conditions([watch], {"annualFinancialObservations": wrong_basis}, observed_at)
+        self.assertFalse(material)
+        self.assertEqual("incompatible-report-basis", rejected[0]["observationStatus"])
+        shortened = deepcopy(observations)
+        shortened[field]["periodStart"] = "2026-01-01"
+        rejected, material = evaluate_follow_up_conditions([watch], {"annualFinancialObservations": shortened}, observed_at)
+        self.assertFalse(material)
+        self.assertEqual("incompatible-report-duration", rejected[0]["observationStatus"])
+        result, material = evaluate_follow_up_conditions([watch], {"annualFinancialObservations": observations}, observed_at)
+        self.assertTrue(material)
+        self.assertEqual("satisfied", result[0]["status"])
+        self.assertEqual(65, result[0]["currentValue"])
+        self.assertFalse(evaluate_follow_up_conditions(result, {"annualFinancialObservations": observations}, observed_at)[1])
+        continuity = build_decision_continuity_packet(account_id="test", symbol="AAPL", captured_at=observed_at,
+                                                     follow_up_conditions=result)
+        self.assertEqual("2026-09-30", continuity["followUpConditions"][0]["reportObservation"]["periodEnd"])
+        next_packet = build_notification_ai_inference_packet({**native, "decisionContinuityPacket": continuity}, max_prompt_bytes=48 * 1024)
+        next_core = next_packet.decision_core
+        next_core["background"] = {"unused": "x" * 100000}
+        next_core["hypothesisSet"]["comparisonMode"] = "research-only"
+        next_core = fit_notification_ai_decision_core(next_core, 24 * 1024)
+        followup = next_core["continuityDelta"]["followUpConditions"][0]
+        self.assertEqual(watch["financialReportWatch"], followup["financialReportWatch"])
+        self.assertEqual(observations[field], followup["reportObservation"])
+        captured = []
+        store = SimpleNamespace(evaluate_follow_up_observation=lambda account, symbol, facts, at: captured.append(facts) or [])
+        observer = InvestmentOutcomeObservationService(decision_episode_store=store)
+        observer.observe_snapshot(AccountSnapshot(account_id="test", account_label="test", provider="test", mode="live",
+            status="ok", generated_at=observed_at, portfolio=None, positions=[Position("AAPL", "Apple", current_price=0)],
+            external_signals={"companyKnowledge": {"AAPL": later}}))
+        self.assertEqual(observations, captured[0]["annualFinancialObservations"])
+        self.assertNotIn("currentPrice", captured[0])
 
     def _assert_existing_report_values_flow_with_periods_and_comparable_units(self):
         stamp = utc_now_iso()
@@ -150,7 +291,7 @@ class QuestionResearchProgressTests(unittest.TestCase):
         def report(period, value):
             return bind_financial_report_contract({
                 "period": period, "periodEnd": period, "frequency": "quarterly", "provider": "SEC EDGAR",
-                "financialReportingVersion": FINANCIAL_REPORTING_VERSION, "operatingCashFlow": value,
+                "financialReportingVersion": FINANCIAL_REPORTING_VERSION, "operatingCashFlow": value, "officialSource": True,
                 "metricProvenance": {"operatingCashFlow": {
                     "provider": "SEC EDGAR", "period": period, "currency": "USD", "scope": "CFS",
                     "durationBasis": "quarterly", "filed": "2026-08-01", "official": True,
@@ -181,9 +322,16 @@ class QuestionResearchProgressTests(unittest.TestCase):
         self.assertTrue(all(node.properties["historicalReport"] for node in financial_nodes))
         self.assertTrue(all("operatingCashFlow" in node.properties["reportedValues"] for node in financial_nodes))
         packets = evidence_packets(accepted, claims)
+        self.assertTrue(all("official-filing" in row["sourceTypes"] for row in packets))
+        self.assertTrue(all(row["readScope"] == "normalized-financial-metrics" for row in packets))
+        secondary = deepcopy(accepted[0])
+        secondary.raw_payload["financialReport"]["officialSource"] = False
+        self.assertNotIn("official-filing", evidence_packets([secondary], claims)[0]["sourceTypes"])
         self.assertEqual(0, packets[0]["reportedValues"]["operatingCashFlow"] if packets[0]["periodEnd"] == "2026-03-31" else packets[1]["reportedValues"]["operatingCashFlow"])
         t = {**task(), "requiredPeriodEnds": ["2026-03-31", "2026-06-30"], "requiredMetrics": ["operatingCashFlow"]}
         self.assertEqual([], assess_tasks([t], packets, "AAPL", utc_now_iso())[0]["missingRequirements"])
+        official_task = {**t, "sourceTypes": ["official-filing"], "requiredEvidenceTypes": ["official-filing", "financial-fact"]}
+        self.assertEqual([], assess_tasks([official_task], packets, "AAPL", utc_now_iso())[0]["missingRequirements"])
         packets[1]["metricProvenance"]["operatingCashFlow"]["currency"] = "KRW"
         self.assertIn("incomparable-metric:operatingCashFlow", assess_tasks([t], packets, "AAPL", utc_now_iso())[0]["missingRequirements"])
         packets[1]["reportedValues"].pop("operatingCashFlow")

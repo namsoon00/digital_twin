@@ -135,6 +135,8 @@ def research_planner_input(
             "approvedSourceTypes": sorted(APPROVED_DISCOVERY_SOURCE_TYPES),
             "approvedEvidenceTypes": sorted(APPROVED_DISCOVERY_EVIDENCE_TYPES),
             "supportedFinancialMetrics": list(RESEARCH_FINANCIAL_METRICS),
+            "approvedDiscoveryKinds": sorted(APPROVED_DISCOVERY_KINDS),
+            "approvedDecisionImpacts": sorted(EXPECTED_DECISION_IMPACTS),
         },
         "guardrails": {
             "cannotAssertUncollectedFacts": True,
@@ -208,7 +210,8 @@ def apply_ai_research_guidance(
             rejected.append({"index": index, "reason": "unknown-hypothesis-id"})
             continue
         if not hypothesis_id and not open_discovery:
-            rejected.append({"index": index, "reason": "hypothesis-or-approved-discovery-kind-required"})
+            rejected.append({"index": index, "reason": "hypothesis-or-approved-discovery-kind-required",
+                             "discoveryKind": clean_text(discovery_kind, 80)})
             continue
         if open_discovery and (not rationale or not expected_impacts):
             rejected.append({"index": index, "reason": "open-discovery-decision-impact-required"})

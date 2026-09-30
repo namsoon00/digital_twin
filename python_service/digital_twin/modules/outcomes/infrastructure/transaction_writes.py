@@ -12,6 +12,7 @@ from digital_twin.modules.outcomes.domain.decision_calibration_input import (
     calibration_input,
 )
 from digital_twin.modules.outcomes.domain.decision_follow_up import FOLLOW_UP_CONDITION_VERSION, FOLLOW_UP_OPERATORS
+from digital_twin.modules.outcomes.domain.financial_report_follow_up import valid_financial_report_watch
 from digital_twin.modules.outcomes.domain.follow_up_tracking import (
     LIVE_FOLLOW_UP_FIELDS, ai_follow_up_registration_admission, finite_number,
     follow_up_is_registered, follow_up_semantic_key, follow_up_thesis_key,
@@ -77,7 +78,7 @@ def register_ai_insight_followups(connection: BoundWriteConnection, episode, sta
         expiry = observation_time(raw.get("expiresAt"))
         if (not source_id or raw.get("version") != FOLLOW_UP_CONDITION_VERSION
                 or raw.get("observable") is not True or raw.get("status") != "pending"
-                or raw.get("field") not in LIVE_FOLLOW_UP_FIELDS
+                or (raw.get("field") not in LIVE_FOLLOW_UP_FIELDS and not valid_financial_report_watch(raw))
                 or raw.get("operator") not in FOLLOW_UP_OPERATORS or finite_number(raw.get("threshold")) is None
                 or str(raw.get("symbol") or episode.symbol).upper() != episode.symbol
                 or (raw.get("expiresAt") and not expiry) or (expiry and (not now or expiry <= now))):

@@ -399,6 +399,10 @@ def compact_financial_evidence(company: Mapping):
         "cashFlowComparisonAvailable": any(item.get("metric") == "freeCashFlow" and item.get("status") == "verified-comparable" for item in comparisons),
         "cashConversionAvailable": "cashConversionPct" in ratios,
     }
+    from .annual_financial_history import annual_financial_history
+    history = annual_financial_history(company)
+    if history:
+        material["annualHistory"] = history
     material["fingerprint"] = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:24]
     material["decisionFingerprint"] = _financial_decision_fingerprint(material)
     material["eventSemantics"] = "reporting-period-evidence-not-new-filing"
@@ -414,7 +418,12 @@ def _financial_decision_fingerprint(packet: Mapping) -> str:
         for key in ("period", "comparisons", "issues", "ratios", "earningsQuality")
         if key in packet
     }
-    if not any(payload.get(key) for key in ("comparisons", "issues", "ratios", "earningsQuality")):
+    if packet.get("annualHistory"):
+        payload["annualHistory"] = [{"periodEnd": row.get("periodEnd"), "values": row.get("values"),
+            "metricBasis": {metric: {key: value for key, value in basis.items() if key != "sourceUrl"}
+                            for metric, basis in (row.get("metricBasis") or {}).items()}}
+            for row in packet["annualHistory"]]
+    if not any(payload.get(key) for key in ("comparisons", "issues", "ratios", "earningsQuality", "annualHistory")):
         return ""
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()

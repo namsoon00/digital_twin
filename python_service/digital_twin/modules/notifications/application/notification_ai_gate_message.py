@@ -4646,7 +4646,8 @@ def customer_follow_up_plan(
         text = _follow_up_condition_text(item, context)
         policy = item.get("observationPolicy") or {}
         if policy and status == "pending":
-            text += " · 새 데이터 " + str(policy.get("requiredConfirmations") or 2) + "회 연속 확인 후 재분석"
+            text += (" · 다음 연간 보고서를 같은 회계 기준으로 확인 후 재분석" if item.get("financialReportWatch")
+                     else " · 새 데이터 " + str(policy.get("requiredConfirmations") or 2) + "회 연속 확인 후 재분석")
             minimum = policy.get("minimumBaselineChange") or 0
             if minimum:
                 unit = {"percentage-points": "%p", "%": "%p", "ratio": "배", "index": "포인트", "price": "가격 단위"}.get(policy.get("unit"), "")

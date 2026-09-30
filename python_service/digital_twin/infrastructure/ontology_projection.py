@@ -17,7 +17,7 @@ from digital_twin.modules.reasoning.infrastructure.projection_write import selec
 from digital_twin.modules.reasoning.infrastructure.projection_write import shared_dispatch as _projection_write_shared_dispatch
 from digital_twin.modules.reasoning.infrastructure.projection_write import shared_premises as _projection_write_shared_premises
 from digital_twin.modules.reasoning.infrastructure.projection_write import shared_world as _projection_write_shared_world
-from digital_twin.modules.reasoning.infrastructure.projection_write.catalog_ports import EnsureRuleboxReadyBindings
+from digital_twin.modules.reasoning.infrastructure.projection_write.catalog_ports import EnsureRuleboxReadyBindings, MigrateRuleCatalogBindings
 from digital_twin.modules.reasoning.infrastructure.projection_write.record_ports import RecordSnapshotBindings
 from digital_twin.modules.reasoning.infrastructure.projection_write.reuse_ports import CompactSharedInferenceReuseBindings
 from digital_twin.modules.reasoning.infrastructure.projection_write.reuse_ports import ExecutionNamespaceBindings
@@ -1451,7 +1451,8 @@ class PortfolioOntologyProjectionRecorder:
         self, snapshot: Dict[str, object], bootstrap_rules: List[Dict[str, object]]
     ) -> Dict[str, object]:
         return _projection_write_catalog.migrate_typedb_rule_catalog(
-            self, snapshot, bootstrap_rules
+            self, snapshot, bootstrap_rules,
+            _bindings=MigrateRuleCatalogBindings(migrate_rules=migrate_typedb_rule_catalog),
         )
 
     def graph_for_graph_store_persistence(

@@ -1,7 +1,7 @@
 """Catalog implementation; facade-independent dependencies."""
 
 from __future__ import annotations
-from .catalog_ports import CatalogPort, EnsureRuleboxReadyBindings
+from .catalog_ports import CatalogPort, EnsureRuleboxReadyBindings, MigrateRuleCatalogBindings
 from copy import deepcopy
 from digital_twin.modules.model_registry.contracts import rulebox_rules_hash as compute_rulebox_rules_hash
 from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import WORLD_PARTITIONED_REASONING_VERSION, compile_world_partitioned_rules
@@ -371,13 +371,15 @@ def migrate_typedb_rule_catalog(
     _store: CatalogPort,
     snapshot: Dict[str, object],
     bootstrap_rules: List[Dict[str, object]],
+    *,
+    _bindings: MigrateRuleCatalogBindings,
 ) -> Dict[str, object]:
     stored_rules = (
         snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
     )
     if not stored_rules:
         return {"status": "not-inspectable", "required": False, "saved": False}
-    migration = migrate_typedb_rule_catalog(stored_rules, bootstrap_rules)
+    migration = _bindings.migrate_rules(stored_rules, bootstrap_rules)
     if not migration.get("changed"):
         return {"status": "ready", "required": False, "saved": False}
     if not hasattr(_store.repository, "save_rulebox"):

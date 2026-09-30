@@ -113,6 +113,27 @@ Manifest marker only after all of its unprotected generations are gone. The
 maintenance status records planned and removed generation counts, duplicate
 references avoided, and the remaining generation drain backlog per world.
 
+The projection recorder injects its pure RuleBox migration function into the
+catalog adapter. The adapter must not resolve its own same-named persistence
+wrapper as the migration function: that prevents existing RuleBox rows from
+being inspected during a candidate PortfolioWorld rebuild. Recorder-boundary
+tests cover migration, unchanged catalogs and failed persistence.
+
+For capacity incidents, check the persisted reasoning `executionGuard` as well
+as process health. `rotation-required` can stop new inference while TypeDB,
+workers and collection all remain alive. Host free space, candidate staging
+headroom and TypeDB usage thresholds are separate gates. Freeing host space
+alone does not clear a TypeDB usage gate; a verified rebuild must also succeed.
+Use the actual configured thresholds rather than the defaults above.
+
+Inspect MySQL allocation before removing retained evidence. Tables can contain
+substantial already-free allocator pages; explicit allow-listed physical
+compaction can return them without deleting additional rows. Pause managed
+writers first, reserve enough temporary space, and inspect every table result.
+Do not manually delete TypeDB WAL/checkpoint files or MySQL `.ibd` files. A
+successful cutover retains the previous graph for the configured rollback
+window; record active-store reduction separately from host space recovered.
+
 Candidate preparation failure never stops the active TypeDB. A fresh candidate
 cannot inherit an active instance's seed skip flag: TBox and RuleBox seeding is
 mandatory before any world replay. Consecutive failures retry after 5, 15, 30,

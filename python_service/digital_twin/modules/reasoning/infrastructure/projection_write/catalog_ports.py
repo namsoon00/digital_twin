@@ -39,3 +39,8 @@ class EnsureRuleboxReadyBindings:
     rulebox_catalog_requires_bootstrap_repair: Callable[..., Any]
     rulebox_input_relation_types: Callable[..., Any]
     rulebox_rules_missing_decision_stage: Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class MigrateRuleCatalogBindings:
+    migrate_rules: Callable[[List[Dict[str, object]], List[Dict[str, object]]], Dict[str, object]]

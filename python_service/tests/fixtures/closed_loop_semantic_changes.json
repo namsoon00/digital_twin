@@ -404,6 +404,7 @@
     "modules/market_data/domain/repositories.py::MarketTimeSeriesRepository": {"hash": "f068bc22fc998962bfcf62ea20e588f44915d9a56ffae8b25d8fe7154fa6f2d8", "reason": "Add explicit historical-price ingestion through the versioned time-series port, keeping atomic storage and replica projection outside the collector; test_outcome_benchmark_collection."}
   },
   "projection": {
+    "ontology_projection.PortfolioOntologyProjectionRecorder.migrate_typedb_rule_catalog": {"hash": "12bec3ed3311909752d8ce0252ecc0e7164e3e5fa05a1c09e8dfa1b18977888c", "reason": "Inject the pure RuleBox migration function explicitly instead of recursively calling the persistence wrapper with two arguments. Preserves unchanged rules and fails closed on save errors; recorder-boundary regression in test_typedb_ontology; docs/ontology-storage-lifecycle.md."},
     "ontology_projection.PortfolioOntologyProjectionRecorder.attach_abox_persistence_runtime_stages": {"hash": "2ea663d35a1c665c64552432bdf22be675ae8e014997279ddae5428165d9f6d7", "reason": "Preserve failed ABox persistence stage and completed transaction counts when verification was never reached; test_ontology_projection_audit; docs/typedb-server-backpressure.md. This changes diagnostics only, not graph activation or inference semantics."},
     "ontology_projection.PortfolioOntologyProjectionRecorder.record_snapshot": {
       "hash": "5174f410643e83e922629896992e5d56d90aee70a38f76a076e76f2d2b862dbc",

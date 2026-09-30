@@ -2659,6 +2659,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             [item["decision_effect"] for item in migrated["derivations"]],
         )
 
+        # Exercise the production recorder boundary used during candidate
+        # PortfolioWorld rebuilds, not only the pure migration function.
+        original = deepcopy(stored)
+        repository = SimpleNamespace(save_rulebox=MagicMock(return_value={"status": "ok", "saved": True}))
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+        result = recorder.migrate_typedb_rule_catalog({"rules": [stored]}, bootstrap)
+        self.assertEqual("migrated", result["status"])
+        self.assertTrue(result["saved"])
+        self.assertEqual(migration["rules"], repository.save_rulebox.call_args.args[0]["rules"])
+        self.assertEqual(original, stored)
+
+        repository.save_rulebox.reset_mock()
+        unchanged = recorder.migrate_typedb_rule_catalog({"rules": migration["rules"]}, bootstrap)
+        self.assertEqual("ready", unchanged["status"])
+        repository.save_rulebox.assert_not_called()
+
+        repository.save_rulebox.side_effect = RuntimeError("candidate write failed")
+        failed = recorder.migrate_typedb_rule_catalog({"rules": [stored]}, bootstrap)
+        self.assertEqual("error", failed["status"])
+        self.assertTrue(failed["required"])
+        self.assertFalse(failed["saved"])
+        self.assertEqual(original, stored)
+
     def test_inferencebox_recovery_metadata_reads_only_the_active_generation_marker(self):
         class MarkerRepository(TypeDBOntologyGraphRepository):
             def __init__(self):

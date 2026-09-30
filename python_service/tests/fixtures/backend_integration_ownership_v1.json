@@ -847,7 +847,9 @@
       "bodyHash": "2d13af5017ebb417a87a972d668f9287ad4672836a25486754134785e88284b1",
       "signature": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='snapshot', annotation=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='bootstrap_rules', annotation=Subscript(value=Name(id='List', ctx=Load()), slice=Subscript(value=Name(id='Dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load()), ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
       "decorators": [],
-      "runtimeFields": [],
+      "runtimeFields": [
+        "migrate_rules"
+      ],
       "port": "CatalogPort"
     },
     "ontology_projection.PortfolioOntologyProjectionRecorder.prepare_shared_premises": {

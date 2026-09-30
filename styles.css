@@ -39909,3 +39909,8 @@ html {
     overscroll-behavior-inline: contain;
   }
 }
+
+.company-report-brief { margin: 0; overflow-wrap: anywhere; }
+.company-report-brief h4 { margin: 0 0 8px; }
+.company-report-brief ul { margin: 0; padding-left: 20px; line-height: 1.6; }
+.company-report-full > summary { cursor: pointer; padding: 16px 0; font-weight: 600; }

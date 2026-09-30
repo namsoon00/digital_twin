@@ -556,6 +556,8 @@ def _reading_notification_content(report):
     insight = _mapping(reading.get("insight"))
     lead = next(iter(financial), {})
     facts = [lead["meaning"], lead.get("briefFact", lead["fact"])] if lead else ["손익의 원인을 설명할 비교 가능한 재무 근거가 아직 없습니다."]
+    if len(financial) > 1 and lead.get("components") and financial[1].get("components"):
+        facts.append(financial[1].get("briefFact", financial[1]["fact"]))
     value = next((card for card in valuation if card.get("key") == "price-requirements"), None)
     if value:
         value_text = value["fact"] + " · 조건부 역산이며 실제 시장 기대를 관측한 값이 아닙니다."

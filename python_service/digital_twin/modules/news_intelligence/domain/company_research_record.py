@@ -115,7 +115,17 @@ def advance_company_research_record(report, previous, registered_at):
                 'sourceCutoffAt': cutoff.isoformat(), 'fingerprint': fingerprint,
                 'status': 'awaiting-new-report', 'revision': 1, 'history': [], 'archivedRevisionCount': 0,
                 'boundary': '자료 변화와 확인 질문의 기록입니다. 투자 가설의 적중·실패나 매매 판단을 판정하지 않습니다.'}
-    changes = _changes(facts, mapping(previous.get('latestFacts')))
+    # A same-season comparator may have rotated out of the latest read model.
+    # Reuse only the facts actually retained at registration or later observation.
+    retained = deepcopy(mapping(mapping(previous.get('baseline')).get('facts')))
+    for event in rows(previous.get('history')):
+        for change in rows(event.get('changes')):
+            fact = mapping(change.get('after'))
+            if fact:
+                identity = '|'.join(text(fact.get(key)) for key in ('key', 'period', 'durationBasis', 'scope', 'provider', 'currency'))
+                retained[identity] = fact
+    retained.update(mapping(previous.get('latestFacts')))
+    changes = _changes(facts, retained)
     # Retain dated interpretation in history when its exact current binding expires.
     event = {'revision': previous.get('revision', 1) + 1, 'registeredAt': now.isoformat(),
              'sourceCutoffAt': cutoff.isoformat(), 'changes': changes, 'questions': questions,

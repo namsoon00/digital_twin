@@ -2,6 +2,7 @@
 
 from datetime import date
 import hashlib
+import re
 
 from .company_report_evidence import mapping, number, rows, text
 
@@ -67,7 +68,7 @@ def accounting_bridge_cards(evidence):
                                    ['회계적 기여이며 사업 원인·반복 가능성·정상화 이익을 확정한 결과가 아닙니다.'],
                                    headline=('순이익 증가에는 세전이익 변화뿐 아니라 세금 비용 감소가 함께 반영됐습니다.'
                                              if key == 'net-income-bridge' and delta > 0 and second > 0 else title + '를 공시 수치로 분해했습니다.'),
-                                   briefFact=fact, briefCheck=check,
+                                   briefFact=title + " · " + fact, briefCheck=check,
                                    components={'totalChange': delta, 'firstContribution': first, 'secondContribution': second, 'residual': delta - first - second},
                                    currentPeriod=inputs[0]['period'], previousPeriod=before[0]['period']))
                 topic = 'income-tax' if key == 'net-income-bridge' else 'operating-cash'
@@ -79,6 +80,7 @@ def accounting_bridge_cards(evidence):
                     for passage in rows(document.get('passages')):
                         quote = text(passage.get('quote'))
                         if (passage.get('topic') == topic and quote
+                                and re.search(r'compared to|year.over.year|increased|decreased|one.time', quote, re.I)
                                 and hashlib.sha256(quote.encode()).hexdigest() == passage.get('passageHash')):
                             statements.append({'quote': quote, 'url': document.get('url'),
                                                'documentId': document['documentId'], 'publishedAt': document.get('publishedAt'),

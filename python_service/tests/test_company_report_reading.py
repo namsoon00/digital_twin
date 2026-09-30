@@ -393,11 +393,24 @@ class CompanyTemporalResearchTests(unittest.TestCase):
         income, cash = cards[:2]
         self.assertEqual({'totalChange':18274, 'firstContribution':9244, 'secondContribution':9030, 'residual':0}, income['components'])
         self.assertEqual(-10040, cash['components']['totalChange'])
+        self.assertIn('투자 후 현금 변화의 구성', render_company_change_report(build_company_change_report(value)))
         for field, bad in (('currency','USD'), ('provider','other'), ('periodStart','2025-03-01'), ('sourceDocumentId','other'), ('official',False), ('value',999)):
             changed = copy.deepcopy(value)
             changed['companyReportEvidence']['annualFinancials'][-1]['metrics'][1][field] = bad
             self.assertNotIn('net-income-bridge', [c['key'] for c in financial_reading_cards(changed['companyReportEvidence'])])
         self.assertIn('정상화 이익', income['limitations'][0])
+        import hashlib
+        statement = 'Income tax expense decreased compared to last year due to a one-time charge.'
+        policy = 'Derivative cash flows are generally classified as cash from operating activities.'
+        document = {'bodyVerified':True, 'documentId':'annual-2025', 'reportDate':'2025-12-31',
+                    'passages':[{'topic':topic, 'quote':quote, 'passageHash':hashlib.sha256(quote.encode()).hexdigest()}
+                                for topic,quote in [('income-tax',statement), ('operating-cash',policy)]]}
+        value['companyReportEvidence']['documents'] = [document]
+        linked = financial_reading_cards(value['companyReportEvidence'])
+        self.assertEqual(statement, linked[0]['sourceStatements'][0]['quote'])
+        self.assertEqual([], linked[1]['sourceStatements'])
+        document['documentId'] = 'different-filing'
+        self.assertEqual([], financial_reading_cards(value['companyReportEvidence'])[0]['sourceStatements'])
 
     def test_registration_correction_new_period_restart_and_no_future_evidence(self):
         from digital_twin.modules.news_intelligence.domain.company_research_record import advance_company_research_record
@@ -435,6 +448,27 @@ class CompanyTemporalResearchTests(unittest.TestCase):
         self.assertEqual(renewed, advance_company_research_record(report, renewed, '2027-02-02T01:00:00Z'))
         self.assertTrue(all(c['before'] for c in renewed['history'][-1]['changes']))
         self.assertNotIn('action', renewed)
+        # Intermediate quarters must not erase the prior year's same quarter.
+        def quarter(end, start, published, cutoff):
+            candidate = self.annual_payload()
+            row = candidate['companyReportEvidence']['annualFinancials'][-1]
+            row.update(period=end, publishedAt=published, frequency='quarterly')
+            for item in row['metrics']:
+                item.update(period=end, periodStart=start, durationBasis='quarterly', sourceDocumentId=end)
+            candidate['companyReportEvidence'] = {'recentFinancials':[row]}
+            candidate['snapshot']['generatedAt'] = cutoff
+            return build_company_change_report(candidate)
+        first = quarter('2025-12-31','2025-10-01','2026-02-01','2026-02-02T00:00:00Z')
+        tracked = advance_company_research_record(first, {}, '2026-02-03T00:00:00Z')
+        for end, start, published, cutoff in (
+            ('2026-03-31','2026-01-01','2026-05-01','2026-05-02T00:00:00Z'),
+            ('2026-12-31','2026-10-01','2027-02-01','2027-02-02T00:00:00Z'),
+            ('2027-03-31','2027-01-01','2027-05-01','2027-05-02T00:00:00Z'),
+            ('2027-12-31','2027-10-01','2028-02-01','2028-02-02T00:00:00Z'),
+        ):
+            tracked = advance_company_research_record(quarter(end,start,published,cutoff), tracked, cutoff)
+        self.assertTrue(all(item['before']['period']=='2026-12-31' for item in tracked['history'][-1]['changes']))
+        self.assertEqual('2025-12-31', next(iter(tracked['baseline']['facts'].values()))['period'])
 
     def test_temporal_state_is_saved_quietly_and_read_on_report(self):
         from datetime import datetime, timezone

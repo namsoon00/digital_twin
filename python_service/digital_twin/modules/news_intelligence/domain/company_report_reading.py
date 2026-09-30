@@ -68,7 +68,8 @@ def _margin_card(metrics):
     return _card("operating-margin", "매출이 영업이익으로 남는 정도", fact, meaning,
                  [revenue, operating],
                  ["다음 동일 기준 실적에서 영업이익률의 유지·변화를 확인하고, 가격·판매량·비용 및 일회성 항목을 원문과 대조해야 합니다."],
-                 ["이 계산만으로 개선·악화의 원인이나 지속 가능한 이익 수준을 확정할 수 없습니다."])
+                 ["이 계산만으로 개선·악화의 원인이나 지속 가능한 이익 수준을 확정할 수 없습니다."],
+                 briefCheck="다음 실적에서 영업이익률의 변화와 비용·일회성 항목을 확인합니다.")
 
 
 def _cash_card(metrics):
@@ -87,7 +88,9 @@ def _cash_card(metrics):
     return _card("cash-after-investment", "투자 후 남는 영업현금", fact, meaning,
                  [cash, capex],
                  ["다음 비교 가능한 기간에서 영업현금흐름과 설비투자를 함께 확인해야 합니다. 차감액이 음수이면 투자 확대와 영업현금 감소 중 어느 항목이 설명하는지 확인해야 합니다."],
-                 ["차입·상환·배당 및 기업 인수대금은 이 계산에 포함되지 않습니다. 음수만으로 재무위기나 투자 실패를 뜻하지 않습니다."])
+                 ["차입·상환·배당 및 기업 인수대금은 이 계산에 포함되지 않습니다. 음수만으로 재무위기나 투자 실패를 뜻하지 않습니다."],
+                 briefFact=cash["basisLabel"] + " · 설비투자 후 현금 " + amount(remaining, currency) + " · " + cash["provider"],
+                 briefCheck="다음 누적 실적에서 영업현금과 설비투자 지출의 변화를 함께 확인합니다.")
 
 
 def _earnings_card(metrics):

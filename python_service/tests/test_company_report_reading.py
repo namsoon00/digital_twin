@@ -45,6 +45,10 @@ class CompanyReportReadingTests(unittest.TestCase):
         self.assertIn("영업손실", rendered)
         self.assertIn("차입·상환·배당", rendered)
         self.assertIn("OpenDART", rendered)
+        self.assertLess(len(rendered), 850)
+        self.assertEqual(3, len(report["brief"]["sections"]))
+        self.assertEqual(report["brief"], report["notificationContent"])
+        self.assertNotIn("기업의 확정 가치", rendered)
         self.assertNotIn("2025-12-31", rendered)
         self.assertLess(report["sections"].index(next(s for s in report["sections"] if s["key"] == "businessMeaning")),
                         report["sections"].index(next(s for s in report["sections"] if s["key"] == "annualFinancials")))
@@ -128,7 +132,8 @@ class CompanyReportInsightTests(unittest.TestCase):
         value = payload()
         value["companyReportInsight"] = result
         report = build_company_change_report(value)
-        self.assertIn(result["meaning"], render_company_change_report(report))
+        self.assertIn(result["meaning"], str(report["sections"]))
+        self.assertIn("AI 해석의 조건·반대 근거", render_company_change_report(report))
         self.assertEqual("linkedInsight", report["sections"][0]["key"])
         self.episode["insight"]["insightAssessment"]["investmentImplication"] = "바뀐 설명"
         self.assertEqual(result["meaning"], report["reading"]["insight"]["meaning"])

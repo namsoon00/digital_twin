@@ -67,6 +67,12 @@ test("company report v3 explains recent facts and conditional value with traceab
     ]};
   const html = renderCompanyChangeReport(report);
   assert.ok(html.indexOf("실적이 의미하는 것") < html.indexOf("연간 실적"));
+  const compact = html.split('<details class="company-report-full">')[0];
+  assert.match(html, /<details class="company-report-full"><summary>상세 근거와 전체 보고서/);
+  assert.match(compact, /핵심 수치/);
+  assert.match(compact, /가치 판단/);
+  assert.match(compact, /다음 확인/);
+  assert.doesNotMatch(compact, /연간 실적|할인율|filing · r1/);
   assert.match(html, /수치로 확인한 의미/);
   assert.match(html, /이 설명의 근거와 가정/);
   assert.match(html, /filing · r1/);

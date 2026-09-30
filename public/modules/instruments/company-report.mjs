@@ -98,6 +98,22 @@ function companyReadingCards(cards) {
   }).join("");
 }
 
+function companyReportBrief(report) {
+  if (report.brief && report.brief.presentation === "company-report-brief-v1") return report.brief;
+  var source = companyEvidenceArray(report.sections);
+  var reading = report.reading || {};
+  var financial = companyEvidenceArray(reading.financial || (source.find(function (item) { return item.key === "businessMeaning"; }) || {}).readingCards).slice(0, 2);
+  var valuations = companyEvidenceArray(reading.valuation || (source.find(function (item) { return item.key === "valuationMeaning"; }) || {}).readingCards);
+  var value = valuations.find(function (item) { return item.key === "price-requirements"; }) || valuations[0];
+  var checks = companyEvidenceArray((source.find(function (item) { return item.key === "judgmentConditions"; }) || {}).rows);
+  var changes = source.find(function (item) { return item.key === "changes"; });
+  return {summary: String(report.summary || "").split(". ")[0], sections: [
+    {title: changes ? "이번에 달라진 점" : "핵심 수치", rows: changes ? companyEvidenceArray(changes.rows).slice(0, 2) : financial.map(function (card) { return String(card.briefFact || card.fact).replaceAll("official-filing", "공시 기준") + (card.key === "cash-after-investment" ? " · 차입·상환·배당 제외" : ""); })},
+    {title: "가치 판단", rows: value ? [value.fact + " · " + value.meaning + " " + companyEvidenceArray(value.limitations).join(" ")] : ["가치평가 근거 확인 필요"]},
+    {title: "다음 확인", rows: checks.slice(0, 1)}
+  ]};
+}
+
 function renderCompanyEvidenceReport(report) {
   var kindLabel = {baseline: "첫 비교 기준", expanded: "상세 자료 보강", change: "변경 자료 확인", unchanged: "변화 없음"}[report.reportKind] || "기업 보고서";
   var sections = companyEvidenceArray(report.sections).map(function (section, index) {
@@ -105,7 +121,13 @@ function renderCompanyEvidenceReport(report) {
     var insightSources = companyEvidenceArray(section.insightEvidenceIds).length ? '<details class="company-report-provenance"><summary>해석의 근거 식별자</summary><ul>' + section.insightEvidenceIds.map(function (id) { return '<li>' + escapeHtml(id) + '</li>'; }).join("") + '</ul></details>' : '';
     return '<section class="instrument-valuation-band company-report-section"><div class="instrument-valuation-section-head"><h4>' + escapeHtml(String(index + 1).padStart(2, "0") + ' · ' + section.title) + '</h4></div>' + companyEvidenceArray(section.paragraphs).map(function (paragraph) { return '<p class="instrument-valuation-explanation">' + escapeHtml(paragraph) + '</p>'; }).join("") + (companyEvidenceArray(section.rows).length ? '<ul>' + section.rows.map(function (row) { return '<li>' + escapeHtml(row) + '</li>'; }).join("") + '</ul>' : '') + companyReadingCards(section.readingCards) + insightSources + sourceExcerpt + companyEvidenceFinancials(section.financialReports) + companyEvidenceDocuments(section.documents) + companyEvidenceCalculation(section, report.currency) + '</section>';
   }).join("");
-  return '<section class="instrument-valuation-workspace company-change-report"><header><div><span class="label">기업 자료 보고서</span><h3>' + escapeHtml(report.headline || "기업 보고서") + '</h3><p>' + escapeHtml(report.summary) + '</p></div><span class="tone-chip hold">' + escapeHtml(kindLabel) + '</span></header><p class="instrument-valuation-explanation">자료 확인 ' + escapeHtml(report.sourceCutoffDisplay || report.sourceCutoffAt || "시각 미기록") + ' · 종목 ' + escapeHtml(report.symbol) + '</p>' + sections + '<p class="instrument-valuation-explanation">' + escapeHtml(report.boundary) + '</p></section>';
+  var compact = report.contractVersion === "company-change-report-v3";
+  var brief = compact ? companyReportBrief(report) : null;
+  var briefHtml = brief ? companyEvidenceArray(brief.sections).map(function (section) {
+    return '<section class="company-report-brief"><h4>' + escapeHtml(section.title) + '</h4><ul>' + companyEvidenceArray(section.rows).map(function (row) { return '<li>' + escapeHtml(row) + '</li>'; }).join("") + '</ul></section>';
+  }).join("") : '';
+  var full = sections + '<p class="instrument-valuation-explanation">' + escapeHtml(report.boundary) + '</p>';
+  return '<section class="instrument-valuation-workspace company-change-report"><header><div><span class="label">기업 자료 보고서</span><h3>' + escapeHtml(report.headline || "기업 보고서") + '</h3><p>' + escapeHtml(brief ? brief.summary : report.summary) + '</p></div><span class="tone-chip hold">' + escapeHtml(kindLabel) + '</span></header><p class="instrument-valuation-explanation">자료 확인 ' + escapeHtml(report.sourceCutoffDisplay || report.sourceCutoffAt || "시각 미기록") + ' · 종목 ' + escapeHtml(report.symbol) + '</p>' + briefHtml + (compact ? '<details class="company-report-full"><summary>상세 근거와 전체 보고서</summary>' + full + '</details>' : full) + '</section>';
 }
 
 export { renderCompanyEvidenceReport };

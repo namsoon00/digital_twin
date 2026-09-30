@@ -6,7 +6,16 @@ profile, up to three annual periods, the latest interim and quarterly source
 reports, simple comparable financial observations, up to six filings/IR
 documents, market context, valuation assumptions and missing evidence.
 
-The first sections now explain comparable accounting observations: how much
+The default v3 view and new notification messages show a compact captured brief:
+one sentence, up to two financial facts, one valuation condition and one next
+check. Full AI interpretations, counter-evidence, tables, sources and calculation
+assumptions remain in a closed full-report disclosure. Historical v3 reports
+without a captured brief use their own saved reading for the compact web view;
+already delivered message bodies are not rewritten. Shortening presentation does
+not change material fingerprints or resend unchanged reports. Qualified AI prose
+is never cut mid-claim to fit the brief; it remains complete in the detail.
+
+The full sections explain comparable accounting observations: how much
 revenue remains as operating profit, how much operating cash remains after
 capital expenditure, and why net income must be distinguished from operating
 income. Recent periods are selected before annual history for each question.

@@ -1,6 +1,6 @@
 [
   {
-    "reason": "Company report v3 opens captured accounting explanations, matched validated AI interpretation, conditional valuation and next checks before source tables; v2 history remains readable. Reference amounts remain collapsed. Covered by test_company_report_reading and insight-presentation.test.mjs.",
+    "reason": "Company report v3 defaults to a compact captured brief with two facts, one valuation condition and one next check. Full evidence and qualified AI interpretations stay in a closed disclosure; frozen v3 history uses its captured reading and v2 stays readable. Covered by test_company_report_reading and insight-presentation.test.mjs.",
     "functions": ["renderNotificationSummaryTab", "renderCompanyChangeReport"]
   },
   {

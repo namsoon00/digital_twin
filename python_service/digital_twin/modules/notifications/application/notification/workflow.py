@@ -622,6 +622,11 @@ class NotificationQueueRunner:
         return False
 
     def apply_deferred_admission_delivery_gate(self, job: NotificationJob) -> bool:
+        if job.context.get("companyChangeReport") and not job.context.get("notificationReplayPreserveOriginal"):
+            policy = job.context.get("companyReportDelivery") or {}
+            if policy.get("version") != "company-report-delivery-v1" or policy.get("eligible") is not True:
+                self.queue.mark_suppressed(job, "기업 보고서의 의미 있는 변화와 발송 주기가 확인되지 않아 자동 발송하지 않습니다.")
+                return False
         if str(job.message_type or "") != INVESTMENT_INSIGHT:
             return True
         context = dict(job.context or {})

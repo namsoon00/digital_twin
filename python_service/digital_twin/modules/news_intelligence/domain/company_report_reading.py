@@ -18,7 +18,8 @@ def _same_basis(*metrics):
     return bool(metrics) and all(
         all(metric.get(key) and metric.get(key) == metrics[0].get(key) for key in BASIS_KEYS)
         and number(metric.get("value")) is not None for metric in metrics
-    )
+    ) and all(metric.get("periodStart") == metrics[0].get("periodStart")
+              and metric.get("sourceDocumentId") == metrics[0].get("sourceDocumentId") for metric in metrics)
 
 
 def _evidence(metric):
@@ -150,10 +151,12 @@ def _earnings_card(metrics):
     operating, net = mapping(metrics.get("operatingIncome")), mapping(metrics.get("netIncome"))
     if not _same_basis(operating, net) or net["value"] <= operating["value"]:
         return None
-    return _card("earnings-basis", "순이익과 본업 이익의 차이", net["basisLabel"]
+    meaning = ("순손실이 영업손실보다 작습니다. 영업외손익·법인세가 최종 손실에 미친 영향을 확인해야 하며, 흑자를 뜻하지 않습니다."
+               if net["value"] < 0 else "순이익이 영업손익보다 큽니다. 영업외손익·법인세 영향을 구분해야 반복 가능한 이익인지 판단할 수 있습니다.")
+    return _card("earnings-basis", "순손익과 영업손익의 차이", net["basisLabel"]
                  + " · 영업이익 " + amount(operating["value"], operating["currency"])
                  + " · 순이익 " + amount(net["value"], net["currency"]),
-                 "순이익이 영업이익보다 큽니다. 순이익 전체를 본업에서 남긴 이익으로 해석할 수 없습니다.",
+                 meaning,
                  [operating, net],
                  ["영업외손익과 법인세 내역을 확인해야 합니다. 일회성 항목이 확인되면 반복 가능한 이익과 구분해 평가 입력을 검토해야 합니다."],
                  ["차이의 원인과 반복 여부는 이 두 금액만으로 확인되지 않습니다."])
@@ -201,7 +204,11 @@ def valuation_reading_cards(payload):
                   "nextChecks": ["매출·이익 전망 또는 적용 배수가 달라지면 가치 범위를 다시 검토해야 합니다. 검토 대기 가정은 확정값으로 사용하지 않습니다."],
                   "limitations": ["기업의 확정 가치나 매매 권고가 아닙니다."], "calculationEligible": eligible})
     implied = mapping(valuation.get("impliedExpectations"))
-    if implied.get("status") == "solved":
+    evidence_period = text(mapping(implied.get("financialEvidence")).get("period"))
+    annual_periods = [text(row.get("period")) for row in rows(mapping(payload.get("companyReportEvidence")).get("annualFinancials"))]
+    if (implied.get("status") == "solved" and implied.get("assumptionReviewState") == "complete"
+            and implied.get("officialFinancialsReady") is True and evidence_period
+            and (not annual_periods or evidence_period >= max(annual_periods))):
         margin, growth = number(implied.get("impliedEbitMarginPct")), number(implied.get("impliedRevenueGrowthPct"))
         value = margin if margin is not None else growth
         if value is not None:

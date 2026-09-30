@@ -11,12 +11,14 @@ import hashlib
 import html
 import json
 import math
+from copy import deepcopy
 from datetime import datetime
 from typing import Dict, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from .company_report_evidence import amount, company_evidence_sections, evidence_material, profile_value
 from .company_report_reading import build_company_report_reading, reading_sections
+from .company_report_delivery import attach_delivery_brief
 
 
 COMPANY_CHANGE_REPORT_VERSION = "company-change-report-v3"
@@ -299,7 +301,7 @@ def build_company_change_report(
 ) -> Dict[str, object]:
     """Build one baseline or change report from the valuation read model."""
 
-    payload = dict(valuation_payload or {})
+    payload = deepcopy(dict(valuation_payload or {}))
     previous = dict(previous_report or {})
     instrument = _mapping(payload.get("instrument"))
     current = _material_packet(payload)
@@ -356,7 +358,7 @@ def build_company_change_report(
         "previousReportId": _text(previous.get("reportId")),
         "previousMaterialFingerprint": previous_fingerprint,
         "materialChange": report_kind == "change",
-        "deliveryEligible": report_kind in {"baseline", "change", "expanded"},
+        "deliveryEligible": False,  # Set only by the financial change delivery policy.
         "changes": {
             "factChanges": fact_changes,
             "valuationChanges": model_changes,
@@ -408,6 +410,7 @@ def build_company_change_report(
     if insight.get("state") == "available" and not financial_reading:
         report["summary"] = insight["thesis"] + " · 분석 " + _display_time(insight.get("asOf"))
     report["brief"] = _reading_notification_content(report)
+    attach_delivery_brief(report, previous)
     report["notificationContent"] = report["brief"]
     return report
 
@@ -498,6 +501,8 @@ def _assessment_sections(report):
 
 def company_report_notification_content(report):
     """Plain structured fields are escaped once by the delivery renderer."""
+    if isinstance(report.get("brief"), Mapping):
+        return deepcopy(dict(report["brief"]))
     evidence = _mapping(report.get("evidence"))
     if _mapping(report.get("reading")).get("contractVersion"):
         return _reading_notification_content(report)

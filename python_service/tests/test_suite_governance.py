@@ -206,7 +206,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # filing/period isolation and accounting-to-cash interpretation.
         # Ten retention regressions cover protected references, bounded marker
         # completion, retry/timeout behavior and honest physical-delete counters.
-        self.assertLessEqual(total, 1884)
+        # Three report-delivery regressions cover semantic changes, quiet source
+        # updates and durable coalescing/receipt cooldown across restarts.
+        self.assertLessEqual(total, 1887)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

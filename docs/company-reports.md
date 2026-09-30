@@ -19,7 +19,12 @@ assumptions remain in a closed full-report disclosure. Historical v3 reports
 without a captured brief use their own saved reading for the compact web view;
 already delivered message bodies are not rewritten. Shortening presentation does
 not change material fingerprints or resend unchanged reports. Qualified AI prose
-is never cut mid-claim to fit the brief.
+is never cut mid-claim to fit the brief. New automatic messages use the exact
+captured change brief, rather than regenerating a generic margin summary.
+They name the changed financial items, before/after amounts and comparison
+basis, explain their accounting significance and retain concrete next checks.
+Cash-flow reversals and borrowing changes cannot disappear behind an unchanged
+operating-profit headline. All admitted financial changes share one message.
 
 SEC collection now retains operating unrealized crypto-asset gain/loss concepts.
 When a signed gain/loss or positive loss-only concept explains at least half of
@@ -58,7 +63,10 @@ Existing eligible primary-model ranges can be explained when model identity,
 currency, range order and agreement match. Unreviewed fair values remain in a
 closed reference disclosure. Existing reverse-DCF results are conditional
 business requirements, never observed market expectations. Their quote time,
-fixed assumptions and pending-review state remain attached. Stored assumptions
+fixed assumptions remain attached. The brief admits an inverse calculation only
+after assumptions are reviewed and official inputs are ready, with a base period
+at least as recent as the report's latest annual evidence. Old or unreviewed
+calculations remain reference detail. Stored assumptions
 and sensitivity ranges are available in the calculation disclosure.
 
 Both the notification and web detail project the same captured reading. Change
@@ -74,7 +82,11 @@ scope, document identifier and source revision. A row-level official provider
 does not make a merged vendor metric official. Comparisons additionally require
 matching current values and matching provider/currency/scope/duration; margins
 require the same basis for revenue and operating income. Loss-to-profit and
-profit-to-loss transitions are labeled explicitly.
+profit-to-loss transitions are labeled explicitly; two negative profit measures
+are described as losses. SEC current-only debt concepts are excluded from the
+total-borrowing display and change triggers instead of being presented as totals.
+General accounting ratios additionally require matching period starts and filing
+identities when those fields are present.
 
 IR excerpts retain company wording and are shown only when the captured body
 was verified. A verified body is not independent corroboration of the company's
@@ -90,23 +102,41 @@ for a detail request; the UI renders the captured report instead of substituting
 current company data. Reference valuation amounts are inside a closed disclosure
 with their inputs and review state, and are omitted from the message summary.
 
-A first report has no change list. Upgrading a delivered older report creates an
-`expanded` report and does not claim a new company event. Subsequent source
-values, review states and document changes can trigger delivery. Quote movement,
-polling clocks and financial cache-revision changes alone do not. Immutable
-source references remain in the captured report even when excluded from the
-material-change fingerprint.
-The report contract version is included in the material fingerprint so a v3
-upgrade has its own deduplication identity. AI prose and read availability alone
-do not change that fingerprint or bypass existing investment delivery policy.
+A first report and a format upgrade are quiet reference updates. Model-review
+state, document acquisition, profile changes and source enrichment alone never
+send a company report. A new official reporting period or a comparable financial
+amount changing by at least 10%, including every zero/sign transition, can enter
+the delivery buffer. This threshold filters notification noise; it is not an
+investment action or severity rule. Same-period changes are labeled corrections,
+not quarter-on-quarter performance. New-period growth uses only existing verified
+year-on-year comparisons; otherwise comparison direction stays unknown. This
+path covers structured accounts, not inferred guidance or document sentiment;
+the existing graph-backed investment-insight path retains its own policy.
+
+`COMPANY_CHANGE_REPORT_COALESCE_MINUTES` defaults to 30. A subject's first
+eligible change starts a fixed buffer, and the newest report is compared against
+the saved baseline when it expires. More updates do not keep extending the wait.
+`COMPANY_CHANGE_REPORT_COOLDOWN_HOURS` defaults to 24, measured from successful
+delivery, per account and symbol. During cooldown changes accumulate; a reversal
+to the baseline cancels the pending change. Queuing is never delivery success.
+There is no empty daily message and no new cron job.
+
+One subject-scoped app-store record persists the reference baseline, pending
+clock, outbox job and last successful delivery across restarts. A MySQL named
+lock serializes reconciliation for that subject. The baseline and cooldown are
+advanced only by a completed job; failed or suppressed jobs cannot consume a
+change. Dedupe includes the last delivered job identity so A→B→A→B remains
+reportable. Initial adoption saves current evidence quietly, with no historical
+catch-up flood. If initial financial evidence is empty, the first available
+financial evidence quietly establishes the comparison reference. Legacy pending automatic jobs are blocked at final admission;
+explicit receipt replay preserves its existing behavior. Delivered bodies are
+never rewritten.
 
 The reconciliation universe is every distinct holding and watchlist symbol by
 default. `COMPANY_CHANGE_REPORT_SYMBOLS` may restrict that universe explicitly.
-`COMPANY_CHANGE_REPORT_BATCH_SIZE` limits work and new baseline messages per
-worker cycle; it does not cap the total number of covered companies. Companies
-without any report job are selected first. Once every company has a report job,
-the reconciler uses a time-bucketed rotation so unchanged companies still get
-checked without a mutable cursor. Pending jobs are excluded until delivery or
+`COMPANY_CHANGE_REPORT_BATCH_SIZE` limits work per worker cycle; it does not cap
+the total number of covered companies. Time-bucketed rotation includes companies
+with quiet baselines and no notification jobs. Pending jobs are excluded until delivery or
 retry completes. `COMPANY_CHANGE_REPORT_ROTATION_SECONDS` controls the bucket
 duration and defaults to 60 seconds.
 

@@ -117,6 +117,10 @@ def _financial_row(row, company):
         if value is None:
             continue
         provenance = mapping(mapping(row.get("metricProvenance")).get(field))
+        if field == "totalDebt" and text(provenance.get("metric")) in {
+            "LongTermDebtCurrent", "LongTermDebtAndFinanceLeaseObligationsCurrent", "DebtCurrent", "ShortTermBorrowings",
+        }:
+            continue  # A current component cannot be presented as total borrowings.
         provider = text(provenance.get("provider"))
         # A row-level provider may not label a metric merged from another source.
         if not provider:
@@ -308,8 +312,8 @@ def financial_reading(evidence):
             net = mapping(metrics.get("netIncome"))
             if operating and net and operating.get("durationBasis") != net.get("durationBasis"):
                 observations.append("최근 영업이익과 순이익의 집계 기간이 다릅니다. 두 금액을 직접 비교하지 않습니다.")
-            elif comparable and net and all(net.get(key) == operating.get(key) for key in ("period", "durationBasis", "scope", "provider", "currency")) and net["value"] > operating["value"]:
-                observations.append("최근 순이익이 영업이익보다 큽니다. 차이의 원인을 설명하려면 영업외손익·법인세 항목 확인이 필요합니다.")
+            elif comparable and net and all(net.get(key) == operating.get(key) for key in ("period", "periodStart", "sourceDocumentId", "durationBasis", "scope", "provider", "currency")) and net["value"] > operating["value"]:
+                observations.append(("최근 순손실이 영업손실보다 작으며, 흑자를 뜻하지 않습니다." if net["value"] < 0 else "최근 순이익이 영업손익보다 큽니다.") + " 차이의 원인을 설명하려면 영업외손익·법인세 항목 확인이 필요합니다.")
     return observations
 
 

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
+import hashlib
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.modules.news_intelligence.domain.company_change_report import company_report_notification_content, render_company_change_report
+from digital_twin.modules.news_intelligence.domain.company_change_report import build_company_change_report, company_report_notification_content, render_company_change_report
+from digital_twin.modules.news_intelligence.domain.company_report_delivery import DELIVERY_VERSION, has_delivery_reference
 from digital_twin.modules.notifications.contracts import INFORMATION_UPDATE, NotificationJob
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 
@@ -44,7 +46,7 @@ def _state_symbols(state: Mapping[str, object], configured: Iterable[str] = None
 
 
 def _report_job_state(queue, account_id: str, symbol: str) -> Dict[str, object]:
-    reader = getattr(queue, "recent_for_symbol", None)
+    reader = getattr(queue, "recent_company_reports", None) or getattr(queue, "recent_for_symbol", None)
     if not callable(reader):
         return {}
     try:
@@ -65,10 +67,9 @@ def _report_job_state(queue, account_id: str, symbol: str) -> Dict[str, object]:
 
 
 def _rotating_symbols(symbols, states, batch_size: int, now: datetime, rotation_seconds: int) -> list[str]:
-    """Prioritize uncovered companies, then rotate without a mutable cursor."""
+    """Rotate quiet references fairly, including subjects with no outbox history."""
 
-    uncovered = [symbol for symbol in symbols if not states.get(symbol)]
-    available = uncovered or [
+    available = [
         symbol for symbol in symbols
         if states.get(symbol, {}).get("status") not in {"pending", "processing", "awaiting_ai"}
     ]
@@ -81,7 +82,7 @@ def _rotating_symbols(symbols, states, batch_size: int, now: datetime, rotation_
 
 
 class CompanyChangeReportReconciler:
-    """Create a baseline once, then notify only on a material report change."""
+    """Save a quiet reference, then coalesce comparable financial changes."""
 
     def __init__(
         self,
@@ -92,15 +93,19 @@ class CompanyChangeReportReconciler:
         queue,
         settings: Mapping[str, object] = None,
         now_provider=None,
+        state_store=None,
     ):
         self.account_repository = account_repository
         self.monitor_store = monitor_store
         self.valuation_query_service = valuation_query_service
         self.queue = queue
+        self.state_store = state_store
         self.settings = dict(settings or {})
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     def run_once(self) -> Dict[str, object]:
+        if self.state_store is None:
+            return {"status": "state-store-unavailable", "checked": 0, "queued": 0}
         if not _enabled(self.settings.get("companyChangeReportEnabled"), True):
             return {"status": "disabled", "checked": 0, "queued": 0}
         batch_size = max(1, min(20, int(
@@ -149,52 +154,15 @@ class CompanyChangeReportReconciler:
                     payload = self.valuation_query_service.query(
                         InstrumentValuationQuery(symbol=symbol, account_id=account_id)
                     )
-                    report = payload.get("companyChangeReport") if isinstance(payload, Mapping) else {}
-                    if not isinstance(report, Mapping) or not report.get("deliveryEligible"):
-                        skipped += 1
-                        continue
-                    fingerprint = _text(report.get("materialFingerprint"))
-                    if not fingerprint:
-                        skipped += 1
-                        continue
-                    report = dict(report)
-                    coverage_state = _text(
-                        _mapping(_mapping(report.get("evidence")).get("coverage")).get("state")
-                    ) or "preparing"
-                    coverage_counts[coverage_state if coverage_state in coverage_counts else "preparing"] += 1
-                    text = render_company_change_report(report)
-                    content = company_report_notification_content(report)
-                    readable = "\n".join([
-                        _text(report.get("headline")), content["summary"],
-                        *(line for section in content["sections"] for line in [section["title"], *section["rows"]]),
-                    ])
-                    job = NotificationJob.create(
-                        text,
-                        account_id=account_id,
-                        account_label=_text(getattr(account, "label", "")),
-                        message_type=INFORMATION_UPDATE,
-                        source_event_id=_text(report.get("reportId")),
-                        source_event_name="company_change_report.reconciled",
-                        dedupe_key="company-change-report:" + account_id + ":" + symbol + ":" + fingerprint[:32],
-                        context={
-                            "companyChangeReport": report,
-                            "messageType": INFORMATION_UPDATE,
-                            "notificationSubject": "기업 변화 보고서",
-                            "displayTarget": _text(report.get("name") or symbol),
-                            "target": _text(report.get("name") or symbol),
-                            "symbol": symbol,
-                            "rawSymbol": symbol,
-                            "market": _text(report.get("market")),
-                            "referenceDate": _text(report.get("sourceCutoffDisplay") or report.get("sourceCutoffAt")),
-                            "body": text,
-                            "telegramMessage": text,
-                            "readableMessage": readable,
-                            "dataQuality": "actual",
-                            "isMock": False,
-                            "notificationContent": content,
-                        },
-                    )
-                    queued += 1 if self.queue.enqueue(job) else 0
+                    coverage = _text(_mapping(_mapping(payload.get("companyReportEvidence")).get("coverage")).get("state")) or "preparing"
+                    coverage_counts[coverage if coverage in coverage_counts else "preparing"] += 1
+                    with self.state_store.subject(account_id, symbol) as state:
+                        if state is None:
+                            skipped += 1
+                            continue
+                        outcome = self._reconcile_subject(account, symbol, payload, state)
+                    queued += int(outcome == "queued")
+                    skipped += int(outcome != "queued")
                 except Exception as error:  # noqa: BLE001 - one symbol must not block other reports.
                     errors.append({"accountId": account_id, "symbol": symbol, "reason": str(error)[:180]})
         return {
@@ -210,5 +178,82 @@ class CompanyChangeReportReconciler:
             "errors": errors[:10],
         }
 
-
-__all__ = ["CompanyChangeReportReconciler"]
+    def _reconcile_subject(self, account, symbol, payload, state_store):
+        now = self.now_provider()
+        state = state_store.load()
+        reader = getattr(self.queue, "recent_company_reports", None) or getattr(self.queue, "recent_for_symbol", None)
+        history = reader(symbol, account_id=account.account_id, limit=40) if callable(reader) else []
+        jobs = [job for job in history if isinstance(getattr(job, "context", {}).get("companyChangeReport"), Mapping)]
+        # Include the exact queued job even if general history has rotated away.
+        if state.get("queuedJobId") and callable(getattr(self.queue, "get", None)):
+            job = self.queue.get(state["queuedJobId"])
+            if job:
+                jobs.insert(0, job)
+        for job in jobs:
+            if job.status in {"pending", "processing", "awaiting_ai"}:
+                if job.context.get("companyReportDelivery", {}).get("version") != DELIVERY_VERSION:
+                    self.queue.mark_suppressed(job, "기업 보고서 발송 정책 변경: 이전 대기 보고서는 화면에서 확인합니다.")
+                    continue
+                return "pending"
+        completed = max((job for job in jobs if job.status == "done"
+                         and job.context.get("companyReportDelivery", {}).get("version") == DELIVERY_VERSION
+                         and (job.updated_at or job.created_at) > state.get("lastSentAt", "")),
+                        key=lambda job: job.updated_at or job.created_at, default=None)
+        if completed and state.get("version") == DELIVERY_VERSION:
+            state.update(baseline=completed.context["companyChangeReport"], lastSentAt=completed.updated_at or completed.created_at,
+                         baselineJobId=completed.job_id, lastFingerprint=completed.context["companyReportDelivery"]["fingerprint"], pendingSince="", queuedJobId="")
+            state_store.replace(state)
+        if state.get("version") != DELIVERY_VERSION or not state.get("baseline"):
+            delivered = [job for job in jobs if job.status == "done"]
+            last_sent = max((job.updated_at or job.created_at for job in delivered), default="")
+            state_store.replace({"version": DELIVERY_VERSION, "baseline": build_company_change_report(payload),
+                                 "lastSentAt": last_sent, "pendingSince": ""})
+            return "baseline-saved"
+        if not has_delivery_reference(state["baseline"].get("evidence")):
+            # First available financial data initializes an empty reference
+            # quietly, so later changes can be compared after a cold start.
+            if has_delivery_reference(payload.get("companyReportEvidence")):
+                state["baseline"] = build_company_change_report(payload)
+                state_store.replace(state)
+            return "reference-only"
+        report = build_company_change_report(payload, state["baseline"])
+        policy = report["deliveryPolicy"]
+        if not policy["eligible"]:
+            if report["reportKind"] == "expanded":
+                state.update(baseline=report, pendingSince="")
+                state_store.replace(state)
+            elif state.get("pendingSince"):
+                state["pendingSince"] = ""
+                state_store.replace(state)
+            return "reference-only"
+        if not state.get("pendingSince"):
+            state["pendingSince"] = now.isoformat()
+            state_store.replace(state)
+        coalesce = max(1, int(self.settings.get("companyChangeReportCoalesceMinutes") or 30))
+        cooldown = max(1, int(self.settings.get("companyChangeReportCooldownHours") or 24))
+        def clock(value):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        ready_at = clock(state["pendingSince"]) + timedelta(minutes=coalesce)
+        if state.get("lastSentAt"):
+            ready_at = max(ready_at, clock(state["lastSentAt"]) + timedelta(hours=cooldown))
+        if now < ready_at:
+            return "coalescing"
+        content = company_report_notification_content(report)
+        fingerprint = policy["fingerprint"]
+        # Include the baseline so a later A -> B -> A transition is not lost.
+        dedupe = fingerprint + ":" + str(state.get("baselineJobId") or state["baseline"].get("reportId", ""))
+        job = NotificationJob.create(
+            render_company_change_report(report), account_id=account.account_id,
+            account_label=_text(getattr(account, "label", "")), message_type=INFORMATION_UPDATE,
+            source_event_id=report["reportId"], source_event_name="company_change_report.reconciled",
+            dedupe_key="company-report-v1:" + account.account_id + ":" + symbol + ":" + hashlib.sha256(dedupe.encode()).hexdigest()[:32],
+            context={"companyChangeReport": report, "companyReportDelivery": {**policy, "readyAt": ready_at.isoformat()},
+                     "messageType": INFORMATION_UPDATE, "notificationSubject": "기업 변화 보고서",
+                     "displayTarget": report["name"], "target": report["name"], "symbol": symbol, "rawSymbol": symbol,
+                     "market": report["market"], "referenceDate": report["sourceCutoffDisplay"],
+                     "notificationContent": content, "dataQuality": "actual", "isMock": False})
+        if self.queue.enqueue(job):
+            state["queuedJobId"] = job.job_id
+            state_store.replace(state)
+            return "queued"
+        return "not-admitted"

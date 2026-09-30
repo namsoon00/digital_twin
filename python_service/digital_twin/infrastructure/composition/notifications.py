@@ -154,8 +154,10 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         )
         company_report_queue = stores.notification_job_store(settings)
         from digital_twin.modules.read_models.public import CompanyReportInsightQueryService
+        from digital_twin.modules.news_intelligence.infrastructure.mysql_company_report_state import MySQLCompanyReportStateStore
 
         company_change_report_reconciler = CompanyChangeReportReconciler(
+            state_store=MySQLCompanyReportStateStore(settings),
             account_repository=stores.account_reader(settings),
             monitor_store=monitor_store,
             valuation_query_service=InstrumentValuationQueryService(

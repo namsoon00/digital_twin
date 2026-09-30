@@ -157,6 +157,16 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             ).fetchall()
         return [self.job_from_row(row) for row in rows or []]
 
+    def recent_company_reports(self, symbol: str, account_id: str = "", limit: int = 40):
+        """Report-only history cannot be displaced by other notification kinds."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT text, payload_json FROM notification_jobs WHERE account_id = %s AND symbol = %s "
+                "AND source_event_name = 'company_change_report.reconciled' ORDER BY updated_at DESC LIMIT %s",
+                (account_id, symbol, max(1, min(200, int(limit)))),
+            ).fetchall()
+        return [self.job_from_row(row) for row in rows]
+
     def timeline_for_symbol(
         self,
         symbol: str,

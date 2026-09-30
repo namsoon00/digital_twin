@@ -31,6 +31,150 @@ def payload():
 
 
 class CompanyReportReadingTests(unittest.TestCase):
+    def test_changed_cash_and_debt_drive_message_while_enrichment_stays_quiet(self):
+        value = payload()
+        metrics = value["companyReportEvidence"]["recentFinancials"][0]["metrics"]
+        metrics.append(metric("totalDebt", 100, duration="instant"))
+        baseline = build_company_change_report(value)
+        self.assertFalse(baseline["deliveryEligible"])
+        for key, changed, phrase in (("operatingCashFlow", -30, "순유입에서 순유출"),
+                                     ("totalDebt", 200, "totalDebt 증가"),
+                                     ("operatingIncome", -40, "손실 확대")):
+            candidate = copy.deepcopy(value)
+            item = next(m for m in candidate["companyReportEvidence"]["recentFinancials"][0]["metrics"] if m["key"] == key)
+            item["value"] = changed
+            report = build_company_change_report(candidate, baseline)
+            self.assertTrue(report["deliveryEligible"])
+            self.assertIn(phrase, render_company_change_report(report))
+            self.assertNotEqual(baseline["brief"], report["brief"])
+            self.assertTrue(report["deliveryPolicy"]["changes"][0]["evidence"])
+        for change in ("source", "small", "document", "upgrade"):
+            candidate = copy.deepcopy(value)
+            prior = copy.deepcopy(baseline)
+            if change == "source":
+                for m in candidate["companyReportEvidence"]["recentFinancials"][0]["metrics"]:
+                    m["sourceDocumentId"] = "new-source-same-numbers"
+            elif change == "small":
+                candidate["companyReportEvidence"]["recentFinancials"][0]["metrics"][0]["value"] = 201
+            elif change == "document":
+                candidate["companyReportEvidence"]["documents"] = [{"documentId": "new", "title": "문서 추가"}]
+            else:
+                prior["contractVersion"] = "company-change-report-v2"
+            self.assertFalse(build_company_change_report(candidate, prior)["deliveryEligible"])
+        candidate = copy.deepcopy(value)
+        candidate["companyReportEvidence"]["recentFinancials"][0]["metrics"][-1].update(value=200, sourceMetric="LongTermDebtCurrent")
+        self.assertFalse(build_company_change_report(candidate, baseline)["deliveryEligible"])
+        candidate = copy.deepcopy(value)
+        candidate["companyReportEvidence"]["recentFinancials"][0]["metrics"][1]["value"] = 0
+        self.assertIn("손익분기", render_company_change_report(build_company_change_report(candidate, baseline)))
+
+    def test_new_official_period_and_same_period_correction_are_not_conflated(self):
+        value = payload()
+        baseline = build_company_change_report(value)
+        recent = value["companyReportEvidence"]["recentFinancials"][0]
+        recent["period"] = "2026-09-30"
+        for m in recent["metrics"]:
+            m.update(period="2026-09-30", official=True, sourceDocumentId="new-quarter", basisLabel="2026-09-30 · 단일 분기")
+        report = build_company_change_report(value, baseline)
+        self.assertTrue(report["deliveryEligible"])
+        self.assertIn("비교 가능한 전년 동기", render_company_change_report(report))
+        self.assertNotIn("수치 정정", render_company_change_report(report))
+        for m in recent["metrics"]:
+            m["comparison"] = {"basis": "year-over-year", "previousValue": m["value"],
+                               "previousPeriod": "2025-09-30", "previousSource": {**m, "period": "2025-09-30"}}
+        same = build_company_change_report(value, baseline)
+        self.assertTrue(same["deliveryEligible"])
+        self.assertIn("전년 동기와 동일", render_company_change_report(same))
+        recent["metrics"][0]["value"] += 1
+        self.assertIn("revenue 증가", render_company_change_report(build_company_change_report(value, baseline)))
+        for m in recent["metrics"]:
+            m["official"] = False
+        self.assertFalse(build_company_change_report(value, baseline)["deliveryEligible"])
+        value = payload()
+        m = value["companyReportEvidence"]["recentFinancials"][0]["metrics"][1]
+        m.update(value=-40, periodStart="different-start")
+        self.assertFalse(build_company_change_report(value, baseline)["deliveryEligible"])
+
+    def test_quiet_baseline_coalescing_receipt_cooldown_and_restart(self):
+        from contextlib import nullcontext
+        from datetime import datetime, timedelta, timezone
+        from digital_twin.modules.news_intelligence.application.company_change_report_reconciliation_service import CompanyChangeReportReconciler
+        class State:
+            value = {}
+            def load(self): return copy.deepcopy(self.value)
+            def replace(self, value): self.value = copy.deepcopy(value)
+        class States:
+            def __init__(self): self.values = {}
+            def subject(self, account, symbol): return nullcontext(self.values.setdefault((account, symbol), State()))
+        class Queue:
+            def __init__(self): self.jobs = []
+            def recent_company_reports(self, symbol, account_id, limit):
+                return [job for job in reversed(self.jobs) if job.account_id == account_id and job.context["symbol"] == symbol][:limit]
+            def get(self, job_id): return next((j for j in self.jobs if j.job_id == job_id), None)
+            def enqueue(self, job):
+                if any(j.dedupe_key == job.dedupe_key for j in self.jobs): return False
+                self.jobs.append(job)
+                return True
+            def mark_suppressed(self, job, reason): job.status = "suppressed"
+        now = [datetime(2026, 9, 30, tzinfo=timezone.utc)]
+        value, state, queue = payload(), States(), Queue()
+        account = SimpleNamespace(account_id="a", label="test", enabled=True, watchlist_symbols=())
+        def runner():
+            return CompanyChangeReportReconciler(account_repository=SimpleNamespace(load=lambda:[account]),
+                monitor_store=SimpleNamespace(previous={"a":{"positions":[{"symbol":"TEST"}]}}),
+                valuation_query_service=SimpleNamespace(query=lambda request:copy.deepcopy(value)),
+                queue=queue, state_store=state, settings={}, now_provider=lambda:now[0])
+        self.assertEqual(0, runner().run_once()["queued"])
+        cash = value["companyReportEvidence"]["recentFinancials"][0]["metrics"][3]
+        cash["value"] = -30
+        self.assertEqual(0, runner().run_once()["queued"])
+        now[0] += timedelta(minutes=29)
+        cash["value"] = -60
+        self.assertEqual(0, runner().run_once()["queued"])
+        now[0] += timedelta(minutes=1)
+        self.assertEqual(1, runner().run_once()["queued"])
+        self.assertIn("-60 KRW", queue.jobs[0].text)
+        self.assertEqual(0, runner().run_once()["queued"])
+        # A fresh service instance reads durable state. Only a successful receipt
+        # advances the baseline/cooldown; queued status never counts as delivery.
+        queue.jobs[0].status = "done"
+        queue.jobs[0].updated_at = now[0].isoformat()
+        runner().run_once()
+        cash["value"] = 30
+        runner().run_once()
+        now[0] += timedelta(hours=23, minutes=59)
+        self.assertEqual(0, runner().run_once()["queued"])
+        now[0] += timedelta(minutes=1)
+        self.assertEqual(1, runner().run_once()["queued"])
+        self.assertIn("순유출에서 순유입", queue.jobs[-1].text)
+        self.assertNotEqual(queue.jobs[0].dedupe_key, queue.jobs[1].dedupe_key)
+        queue.jobs[1].status = "done"
+        queue.jobs[1].updated_at = now[0].isoformat()
+        runner().run_once()
+        cash["value"] = -60
+        runner().run_once()
+        now[0] += timedelta(hours=24)
+        self.assertEqual(1, runner().run_once()["queued"])
+        self.assertNotEqual(queue.jobs[0].dedupe_key, queue.jobs[2].dedupe_key)
+        from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner
+        legacy = copy.deepcopy(queue.jobs[-1])
+        legacy.context.pop("companyReportDelivery")
+        self.assertFalse(NotificationQueueRunner.apply_deferred_admission_delivery_gate(SimpleNamespace(queue=queue), legacy))
+        self.assertEqual("suppressed", legacy.status)
+        self.assertTrue(NotificationQueueRunner.apply_deferred_admission_delivery_gate(SimpleNamespace(queue=queue), queue.jobs[-1]))
+        # A cold start without any financial data must not stay uncomparable.
+        value, state, queue = payload(), States(), Queue()
+        available = value.pop("companyReportEvidence")
+        self.assertEqual(0, runner().run_once()["queued"])
+        value["companyReportEvidence"] = available
+        self.assertEqual(0, runner().run_once()["queued"])
+        state.values[("a", "TEST")].value["baseline"]["contractVersion"] = "old-contract"
+        self.assertEqual(0, runner().run_once()["queued"])
+        available["recentFinancials"][0]["metrics"][3]["value"] = -30
+        self.assertEqual(0, runner().run_once()["queued"])
+        now[0] += timedelta(minutes=30)
+        self.assertEqual(1, runner().run_once()["queued"])
+
     def test_recent_meaning_preserves_distinct_cash_flow_period_and_sources(self):
         report = build_company_change_report(payload())
         cards = report["reading"]["financial"]
@@ -56,7 +200,7 @@ class CompanyReportReadingTests(unittest.TestCase):
                         report["sections"].index(next(s for s in report["sections"] if s["key"] == "annualFinancials")))
 
     def test_mixed_sources_periods_units_and_missing_values_are_not_joined(self):
-        for field, value in (("provider", "yfinance"), ("durationBasis", "annual"), ("currency", "USD"), ("scope", "OFS"), ("period", "2025-12-31"), ("value", None)):
+        for field, value in (("provider", "yfinance"), ("durationBasis", "annual"), ("currency", "USD"), ("scope", "OFS"), ("period", "2025-12-31"), ("periodStart", "2026-01-01"), ("sourceDocumentId", "other-filing"), ("value", None)):
             with self.subTest(field=field):
                 operating = {**metric("operatingIncome", 20), field: value}
                 evidence = {"recentFinancials": [{"metrics": [metric("revenue", 100), operating]}]}
@@ -83,9 +227,13 @@ class CompanyReportReadingTests(unittest.TestCase):
         value["investmentAnalysis"]["valuationModels"] = [{"modelId": "model", "currency": "KRW", "fairValue": 888880, "referenceOnly": True}]
         rendered = render_company_change_report(build_company_change_report(value))
         self.assertNotIn("888,880", rendered)
-        self.assertIn("17.50%", rendered)
-        self.assertIn("실제 시장 기대를 관측한 값이 아닙니다", rendered)
-        self.assertIn("가정 검토가 남은", rendered)
+        self.assertNotIn("17.50%", rendered)
+        self.assertIn("평가 가정 검토 전", rendered)
+        value["valuation"]["impliedExpectations"].update(assumptionReviewState="complete", officialFinancialsReady=True,
+            financialEvidence={"period": "2023-12-31"})
+        self.assertNotIn("17.50%", render_company_change_report(build_company_change_report(value)))
+        value["valuation"]["impliedExpectations"]["financialEvidence"]["period"] = "2025-12-31"
+        self.assertIn("17.50%", render_company_change_report(build_company_change_report(value)))
         value["investmentAnalysis"]["valuationModels"][0].update(decisionEligible=True, referenceOnly=False)
         value["valuation"]["quality"]["decisionEligible"] = True
         self.assertTrue(valuation_reading_cards(value)[0]["calculationEligible"])

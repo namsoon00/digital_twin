@@ -53,20 +53,31 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
 
 def build_ontology_portfolio_rebuild_runner(settings=None) -> OntologyPortfolioRebuildRunner:
     """Compose the read-only source replay used before TypeDB cutover."""
+    import json
+    import os
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings
     from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.reasoning.public import OntologyPortfolioRebuildRunner
+    from digital_twin.infrastructure.composition.reasoning_release import prepare_v2_rulebox_release
 
     configured_settings = dict(settings or runtime_settings())
     store_settings = dict(configured_settings)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    repository = ontology_repository_from_settings(configured_settings)
+    guard = json.loads(os.environ.get("ORBIT_TYPEDB_REBUILD_RELEASE_GUARD") or "{}")
+    if not isinstance(guard, dict) or not guard.get("immutable"):
+        raise RuntimeError("Portfolio rebuild requires a verified immutable release guard")
+    frozen_catalog, _ = prepare_v2_rulebox_release(
+        repository, configured_settings, release_guard=guard,
+    )
     return OntologyPortfolioRebuildRunner(
         snapshot_store=stores.monitor_store(store_settings),
         projection_recorder=PortfolioOntologyProjectionRecorder(
-            ontology_repository_from_settings(configured_settings),
+            repository,
+            frozen_rulebox_catalog=frozen_catalog,
             settings=configured_settings,
             source="typedb-blue-green-candidate-rebuild",
         ),

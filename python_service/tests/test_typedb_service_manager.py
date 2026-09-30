@@ -571,7 +571,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
                         "ready": True,
                         "status": "ready",
-                    }), \
+                    }) as release_check, \
                     patch.object(service_manager, "validate_typedb_candidate_inference_runtime", return_value={
                         "ready": True,
                         "mode": "native",
@@ -580,12 +580,54 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     patch.object(service_manager, "ensure_typedb_portfolio_world_projection_rebuilt", return_value=True), \
                     patch.object(service_manager, "typedb_driver_ready", return_value=True):
                 result = service_manager.prepare_typedb_blue_green_candidate(spec)
+                self.assertEqual(3, release_check.call_count)
+                release_check.side_effect = [
+                    {"ready": True, "status": "ready"},
+                    {"ready": True, "status": "ready"},
+                    {"ready": False, "status": "fingerprint-mismatch"},
+                ]
+                rejected = service_manager.prepare_typedb_blue_green_candidate(spec)
 
         self.assertEqual("prepared", result["status"])
         self.assertTrue(result["candidateSeedReused"])
         self.assertEqual([], result["missingProtectedDatabases"])
         seed.assert_not_called()
         artifact_restore.assert_not_called()
+        self.assertEqual("candidate-post-rebuild-release-contract-failed", rejected["status"])
+        self.assertFalse(rejected["candidate"]["_candidateReusable"])
+
+    def test_portfolio_rebuild_composition_freezes_verified_release(self):
+        from unittest.mock import MagicMock
+        from digital_twin.infrastructure.composition.reasoning_projection import build_ontology_portfolio_rebuild_runner
+        guard = {"immutable": True, "ruleboxFingerprint": "frozen-rules", "tboxFingerprint": "frozen-tbox"}
+        catalog = {"configured": True, "status": "ok", "rules": [{"rule_id": "frozen"}], "frozenReleaseVerified": True}
+        repository = MagicMock()
+        with patch.dict(os.environ, {"ORBIT_TYPEDB_REBUILD_RELEASE_GUARD": json.dumps(guard)}), \
+                patch("digital_twin.infrastructure.ontology_graph_store.ontology_repository_from_settings", return_value=repository), \
+                patch("digital_twin.infrastructure.composition.reasoning_release.prepare_v2_rulebox_release", return_value=(catalog, {})) as verify, \
+                patch("digital_twin.infrastructure.ontology_projection.PortfolioOntologyProjectionRecorder") as recorder, \
+                patch("digital_twin.infrastructure.operational_store.monitor_store"):
+            build_ontology_portfolio_rebuild_runner({"typedbDatabase": "candidate"})
+            verify.assert_called_once_with(repository, {"typedbDatabase": "candidate"}, release_guard=guard)
+            self.assertIs(catalog, recorder.call_args.kwargs["frozen_rulebox_catalog"])
+            verify.side_effect = RuntimeError("fingerprint mismatch")
+            recorder.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, "fingerprint mismatch"):
+                build_ontology_portfolio_rebuild_runner({"typedbDatabase": "candidate"})
+            recorder.assert_not_called()
+
+    def test_portfolio_rebuild_subprocess_receives_seed_fingerprints(self):
+        spec = {"role": "typedb-stage", "label": "candidate", "log": "unused",
+                "_typedbSeedContract": {"activeRuleboxFingerprint": "frozen-rules", "activeTboxFingerprint": "frozen-tbox"}}
+        with patch.object(service_manager, "typedb_portfolio_world_projection_rebuild_command", return_value=["rebuild"]), \
+                patch.object(service_manager, "typedb_subprocess_environment", return_value={}), \
+                patch.object(service_manager, "low_priority_command", return_value=["rebuild"]), \
+                patch.object(service_manager, "append_log"), \
+                patch.object(service_manager, "append_log_text"), \
+                patch.object(service_manager.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="{}", stderr="")) as run:
+            self.assertTrue(service_manager.ensure_typedb_portfolio_world_projection_rebuilt(spec))
+        guard = json.loads(run.call_args.kwargs["env"]["ORBIT_TYPEDB_REBUILD_RELEASE_GUARD"])
+        self.assertEqual({"immutable": True, "ruleboxFingerprint": "frozen-rules", "tboxFingerprint": "frozen-tbox"}, guard)
 
     def _assert_fresh_blue_green_candidate_restarts_after_schema_seed(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -196,7 +196,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Two valuation regressions were added concurrently to the shared suite.
         # Hypothesis audit regressions cover interval/version isolation, graph
         # research, immutable valuation inputs and whole-cohort experiment storage.
-        self.assertLessEqual(total, 1860)
+        # Storage rotation additionally verifies frozen recorder composition
+        # and seed-fingerprint propagation across the rebuild subprocess.
+        self.assertLessEqual(total, 1862)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -4051,6 +4051,12 @@ def ensure_typedb_portfolio_world_projection_rebuilt(spec: Dict[str, object]) ->
     # may skip historical storage-identity reads while retaining every normal
     # live-path reuse and conflict check.
     environment["TYPEDB_FRESH_CANDIDATE_REBUILD"] = "1"
+    seed_contract = dict(spec.get("_typedbSeedContract") or {})
+    environment["ORBIT_TYPEDB_REBUILD_RELEASE_GUARD"] = json.dumps({
+        "immutable": True,
+        "ruleboxFingerprint": seed_contract.get("activeRuleboxFingerprint") or "",
+        "tboxFingerprint": seed_contract.get("activeTboxFingerprint") or "",
+    })
     try:
         result = subprocess.run(
             low_priority_command(spec, command),
@@ -5519,6 +5525,18 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
                 return {
                     "status": "candidate-portfolio-rebuild-failed",
                     "database": database_name,
+                    "candidate": candidate,
+                }
+            # A pre-replay attestation cannot prove the final catalog stayed
+            # immutable: world reconstruction can write catalog rows.
+            release_contract = validate_typedb_candidate_release_contract(database_spec)
+            if not bool(release_contract.get("ready")):
+                candidate["_candidateReusable"] = False
+                clear_typedb_candidate_reuse_marker(candidate)
+                return {
+                    "status": "candidate-post-rebuild-release-contract-failed",
+                    "database": database_name,
+                    "releaseContract": release_contract,
                     "candidate": candidate,
                 }
             if not typedb_driver_ready(database_spec):

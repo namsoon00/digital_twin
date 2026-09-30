@@ -119,6 +119,12 @@ wrapper as the migration function: that prevents existing RuleBox rows from
 being inspected during a candidate PortfolioWorld rebuild. Recorder-boundary
 tests cover migration, unchanged catalogs and failed persistence.
 
+Candidate PortfolioWorld reconstruction receives the verified seed's RuleBox
+and TBox fingerprints and uses the immutable release preflight to freeze its
+recorder catalog. It must never migrate restored rules using current source
+defaults. The manager re-reads the release contract after world reconstruction;
+a post-rebuild mismatch invalidates candidate reuse and blocks cutover.
+
 For capacity incidents, check the persisted reasoning `executionGuard` as well
 as process health. `rotation-required` can stop new inference while TypeDB,
 workers and collection all remain alive. Host free space, candidate staging

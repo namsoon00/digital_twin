@@ -145,6 +145,14 @@ class MaintenanceFairnessTests(unittest.TestCase):
         self.assertEqual("verified-world-turns", self.state["lastResult"]["capacityBudget"]["deleteBatchEstimateSource"])
         policy = self.maintenance.policy()
         adaptive = self.maintenance.adaptive_drain(policy, self.state, "portfolio:test")
+        for requested, allowed in [(8, 8), (16, 9)]:
+            enlarged = {**adaptive, "effectiveMaxDeleteBatches": requested}
+            budget = self.maintenance.capacity_maintenance_budget(policy, enlarged, {}, samples)
+            self.assertEqual(allowed, budget["maxAboxDeleteBatches"])
+            self.assertEqual(45, budget["maxDurationSeconds"])
+            self.assertEqual(2, self.maintenance.capacity_maintenance_budget(
+                policy, enlarged, {}, [],
+            )["maxAboxDeleteBatches"])
         for label, evidence in [
             ("cold", []), ("insufficient", samples[:2]),
             ("expired", [{**row, "observedAt": (self.now - timedelta(hours=1)).isoformat()} for row in samples]),

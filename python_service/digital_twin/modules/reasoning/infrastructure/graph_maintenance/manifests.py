@@ -9,6 +9,40 @@ import time
 from .manifests_ports import GraphMaintenanceManifestsStore, GraphMaintenanceManifestsRuntime
 
 
+def present_retired_generations(
+    _store: GraphMaintenanceManifestsStore, driver, imported, generation_ids: Iterable[str],
+    timeout_seconds: float, deadline_monotonic: float = None,
+) -> set:
+    """Probe exact IDs in one read snapshot, including both nodes and relations.
+
+    The caller holds the world writer lease. This proof is local to this turn,
+    never a persisted empty-generation cache that could outlive a rebuild.
+    """
+    requested = set(generation_ids)
+    if not requested or len(requested) > 64:
+        raise ValueError("Retired generation presence probe requires 1–64 exact IDs.")
+    transaction_type = imported[0][4]
+    present = set()
+    with driver.transaction(_store.database, transaction_type.READ) as tx:
+        for snapshot_id in sorted(requested):
+            remaining = None if deadline_monotonic is None else deadline_monotonic - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("Retired generation presence probe exhausted the cleanup budget.")
+            # Broadly match any owner of these attributes. Omitting an isa
+            # restriction includes relation-only generations. Separate indexed
+            # limit-one queries avoid a large OR/group-by native query plan.
+            rows = _store.read_rows_in_transaction(
+                tx,
+                'match $item has ontology-box "ABox", has ontology-snapshot-id '
+                + typedb_string(snapshot_id) + "; limit 1;",
+                [], label="typedb.retired-generation-presence",
+                timeout_seconds=timeout_seconds if remaining is None else min(timeout_seconds, max(0.5, remaining)),
+            )
+            if rows:
+                present.add(snapshot_id)
+    return present
+
+
 def discard_scoped_abox_manifest_in_driver(
     _store: GraphMaintenanceManifestsStore,
     driver,
@@ -489,7 +523,10 @@ def prune_inactive_scoped_abox_manifests_in_driver(
     ]
     marker_only_manifest_count = sum(not required for required in required_generations_by_manifest)
     marker_batch_reserve = 1 if marker_only_manifest_count else 0
-    for generation_id in retired_generation_ids:
+    presence_checked_ids = set()
+    present_generation_ids = set()
+    presence_probe_count = 0
+    for generation_index, generation_id in enumerate(retired_generation_ids):
         if remaining_batch_budget <= marker_batch_reserve or (
             deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
         ):
@@ -500,14 +537,28 @@ def prune_inactive_scoped_abox_manifests_in_driver(
             resume_generation_id = generation_id
             break
         attempted_generation_ids.append(generation_id)
-        cleanup = _store.delete_box_snapshot_rows_in_batches(
-            driver,
-            imported,
-            "ABox",
-            generation_id,
-            batch_size=bounded_delete_batch_size,
-            max_batches=remaining_batch_budget - marker_batch_reserve,
-            deadline_monotonic=deadline_monotonic,
+        if generation_id not in presence_checked_ids:
+            probe_ids = retired_generation_ids[generation_index:generation_index + 64]
+            present_generation_ids.update(present_retired_generations(
+                _store, driver, imported, probe_ids,
+                min(5.0, max(0.5, deadline_monotonic - time.monotonic()))
+                if deadline_monotonic is not None else 5.0,
+                deadline_monotonic=deadline_monotonic,
+            ))
+            presence_checked_ids.update(probe_ids)
+            presence_probe_count += 1
+        cleanup = (
+            _store.delete_box_snapshot_rows_in_batches(
+                driver,
+                imported,
+                "ABox",
+                generation_id,
+                batch_size=bounded_delete_batch_size,
+                max_batches=remaining_batch_budget - marker_batch_reserve,
+                deadline_monotonic=deadline_monotonic,
+            )
+            if generation_id in present_generation_ids
+            else {"status": "ok", "deletedBatchCount": 0, "aboxSnapshotId": generation_id}
         )
         generation_cleanup_rows.append(cleanup)
         deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
@@ -612,6 +663,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(
         "generationCleanupCounterVersion": "physical-delete-v2",
         "clearedRetiredScopeGenerationCount": len(cleared_generation_ids),
         "alreadyEmptyRetiredScopeGenerationCount": len(already_empty_generation_ids),
+        "generationPresenceProbeCount": presence_probe_count,
         "protectedExternalRelationGenerationCount": len(
             protected_external_reference_generation_ids
         ),

@@ -1849,6 +1849,7 @@ class OntologyMaintenanceRunner:
             "removedRetiredScopeGenerationCount": removed_retired_generation_count,
             "clearedRetiredScopeGenerationCount": cleared_retired_generation_count,
             "alreadyEmptyRetiredScopeGenerationCount": max(0, integer(abox.get("alreadyEmptyRetiredScopeGenerationCount"))),
+            "generationPresenceProbeCount": max(0, integer(abox.get("generationPresenceProbeCount"))),
             "generationCleanupCounterVersion": text(abox.get("generationCleanupCounterVersion")),
             "deduplicatedScopeGenerationReferenceCount": deduplicated_generation_reference_count,
             "retiredScopeGenerationBacklogCount": max(

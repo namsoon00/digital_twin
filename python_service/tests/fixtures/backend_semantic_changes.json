@@ -49,9 +49,9 @@
   },
   "ScopedABoxManifestMixin.prune_inactive_scoped_abox_manifests_in_driver": {
     "baselineHash": "31ad48fe532cea2cde19e4a0a7e6b2bd3df3ea8086e427520b6880ff9966b84f",
-    "bodyHash": "b08cae0e2ad8154067a6c2386a75d5fefef361d4ca7ed3c0f201d231c1ae3fbb",
-    "reason": "Fail closed on missing protection metadata, reserve marker completion budget, and distinguish physical deletes from repeated empty confirmations.",
-    "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_small_turns_finish_markers_and_preserve_live_and_rollback"
+    "bodyHash": "745e02cb4546d29689ecb7b2e3fe3d0e4d7b875319d5ae247f35f55007f17ffb",
+    "reason": "Fail closed on missing protection metadata, reserve marker completion budget, and distinguish physical deletes from repeated empty confirmations. Bound fresh exact-ID presence reads to 64 generations per read transaction, skip only proven-empty generations, and fail closed on read errors or deadlines without caching across turns.",
+    "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_shared_retired_generation_is_deleted_once"
   },
   "ScopedABoxManifestMixin.run_deferred_maintenance": {
     "baselineHash": "f863135f80a45e867594d5e4daa23c92944961cae3babc510596be2cc9370bf3",

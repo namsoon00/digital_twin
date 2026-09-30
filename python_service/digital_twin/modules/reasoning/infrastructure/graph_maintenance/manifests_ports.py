@@ -69,6 +69,11 @@ class GraphMaintenanceManifestsStore(Protocol):
 
     def pending_abox_activation(self, world_id: str = "") -> Dict[str, object]: ...
 
+    def read_rows_in_transaction(
+        self, tx, query: str, columns: Iterable[str], label: str = "typedb.read",
+        timeout_seconds: float = None,
+    ) -> List[Dict[str, object]]: ...
+
     def prune_inactive_scoped_abox_manifests_in_driver(
         self,
         driver,

@@ -1,8 +1,9 @@
 """Reference protection and progress across small, repeated cleanup turns."""
 
+import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 from digital_twin.modules.reasoning.infrastructure.graph_maintenance.manifests import (
     prune_inactive_scoped_abox_manifests_in_driver as prune,
@@ -25,7 +26,11 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
         }
         self.rows = {"old-a": 1, "old-b": 2, "live": 1, "shared": 1, "rollback-only": 1}
         self.markers = ["old-1", "old-2", "rollback", "active"]
+        self.driver = MagicMock()
+        self.imported = ((None, None, None, None, SimpleNamespace(READ="read")), None)
         self.store = SimpleNamespace(
+            database="isolated-contract",
+            read_rows_in_transaction=Mock(side_effect=self.read_presence),
             active_abox_metadata=Mock(side_effect=lambda world: self.metadata["active"]),
             pending_abox_activation=Mock(return_value={"status": "empty"}),
             worldview_manifest_marker_identity_rows=Mock(side_effect=lambda world: [
@@ -36,6 +41,13 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
             delete_box_snapshot_rows_in_batches=Mock(side_effect=self.delete_generation),
             delete_worldview_manifest_markers_batch=Mock(side_effect=self.delete_markers),
         )
+
+    def read_presence(self, tx, query, columns, **options):
+        return [
+            {"snapshotId": name, "count": count}
+            for name, count in self.rows.items()
+            if count and json.dumps(name) in query
+        ]
 
     def delete_generation(self, driver, imported, box, generation, **options):
         remaining = self.rows[generation]
@@ -48,7 +60,7 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
         return {"status": "ok", "deletedBatchCount": 1, "removedManifestIds": names}
 
     def run_cleanup(self, budget=2):
-        return prune(self.store, None, None, world_id="world", active_manifest_id="active", keep_inactive_count=1,
+        return prune(self.store, self.driver, self.imported, world_id="world", active_manifest_id="active", keep_inactive_count=1,
                      max_manifests=10, max_delete_batches=budget, delete_batch_size=50,
                      max_duration_seconds=45)
 
@@ -78,6 +90,9 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
             self.assertEqual(1, result["alreadyEmptyRetiredScopeGenerationCount"])
             self.assertTrue(result["resumeRequired"])
         self.assertEqual(2, self.rows["old-b"])
+        # Empty proof must come from fresh reads on each retry, never a cached
+        # confirmation carried across graph epochs or write turns.
+        self.assertEqual(4, self.store.read_rows_in_transaction.call_count)
 
     def test_large_later_generation_cannot_spend_reserved_marker_batch(self):
         self.rows["old-a"] = 0
@@ -99,6 +114,12 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
                     self.store.delete_box_snapshot_rows_in_batches.assert_not_called()
                     self.store.delete_worldview_manifest_markers_batch.assert_not_called()
             self.metadata[name] = original
+        # A failed second query must invalidate the first empty result too.
+        self.store.read_rows_in_transaction.side_effect = [[], RuntimeError("read interrupted")]
+        with self.assertRaises(RuntimeError):
+            self.run_cleanup()
+        self.store.delete_box_snapshot_rows_in_batches.assert_not_called()
+        self.store.delete_worldview_manifest_markers_batch.assert_not_called()
 
     def test_pending_or_unknown_activation_never_deletes(self):
         for state in [{"status": "pending"}, {"status": "invalid"}, {}]:
@@ -108,10 +129,18 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
             self.store.delete_box_snapshot_rows_in_batches.assert_not_called()
 
     def test_shared_retired_generation_is_deleted_once(self):
-        self.metadata["old-2"]["scopeGenerationIds"] = {"shared-old": "old-a"}
+        empty = ["empty-" + str(i) for i in range(130)]
+        self.rows.update({name: 0 for name in empty})
+        scopes = {str(i): name for i, name in enumerate(empty + ["old-a"])}
+        self.metadata["old-1"]["scopeGenerationIds"] = scopes
+        self.metadata["old-2"]["scopeGenerationIds"] = scopes
         result = self.run_cleanup()
         self.assertEqual(["old-1", "old-2"], result["removedManifestIds"])
         self.assertEqual(1, result["removedRetiredScopeGenerationCount"])
+        self.assertEqual(130, result["alreadyEmptyRetiredScopeGenerationCount"])
+        self.assertEqual(3, result["generationPresenceProbeCount"])
+        self.assertEqual(131, self.store.read_rows_in_transaction.call_count)
+        self.assertEqual(3, self.driver.transaction.call_count)
         self.store.delete_box_snapshot_rows_in_batches.assert_called_once()
 
     def test_external_reference_and_timeout_preserve_incomplete_marker(self):
@@ -126,6 +155,17 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
             self.assertEqual([], cleaned["removedManifestIds"])
             self.assertEqual(0, cleaned["removedRetiredScopeGenerationCount"])
             self.store.delete_worldview_manifest_markers_batch.assert_not_called()
+
+        # A relation-only result still enters the protected delete path.
+        for call in self.store.read_rows_in_transaction.call_args_list:
+            self.assertNotIn("isa ontology-node", call.args[1])
+            self.assertIn("limit 1;", call.args[1])
+        self.store.delete_box_snapshot_rows_in_batches.reset_mock()
+        with patch("digital_twin.modules.reasoning.infrastructure.graph_maintenance.manifests.time.monotonic",
+                   side_effect=[0, 0, 0, 46]):
+            with self.assertRaises(TimeoutError):
+                self.run_cleanup()
+        self.store.delete_box_snapshot_rows_in_batches.assert_not_called()
 
     def test_legacy_totals_are_preserved_separately_and_backlog_uses_cleared(self):
         runner = OntologyMaintenanceRunner(SimpleNamespace())

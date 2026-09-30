@@ -144,6 +144,24 @@ remaining write batch as soon as a Manifest is safe to retire, so later data
 deletions cannot indefinitely postpone removal of completed Manifest markers.
 Active and rollback references and external relation endpoints remain protected.
 
+Retired-generation presence checks share one read transaction for at most 64
+exact IDs. Each indexed limit-one query includes both nodes and relations;
+large disjunction/aggregation queries are deliberately avoided. Only generations
+proved empty in this turn skip the per-generation deletion path. The proof is
+never persisted or reused after a restart, rebuild or writer-lease release.
+Read errors and deadlines stop cleanup, while nonempty generations still pass
+the external-relation protection and bounded delete checks. Maintenance status
+reports `generationPresenceProbeCount` as the number of these read transactions.
+
+For a sustained backlog, the local deployment uses an adaptive maximum of eight
+delete batches (`ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun=8`).
+The default remains four. This is an upper limit, not a guaranteed eight-batch
+turn: three recent successful timings must still justify the 45-second budget;
+cold or failed timing evidence returns to the conservative two-batch limit.
+The rollback count and per-batch row limit are unchanged. Verify actual cleanup
+and subsequent native inference after changing this setting. Logical cleanup
+does not immediately reclaim TypeDB WAL/checkpoint allocation.
+
 `generationCleanupCounterVersion=physical-delete-v2` distinguishes generations
 fully cleared after a delete batch in this turn from already-empty generations.
 `clearedRetiredScopeGenerationCount` includes both for remaining-backlog

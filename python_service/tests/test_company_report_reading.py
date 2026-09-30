@@ -36,20 +36,22 @@ class CompanyReportReadingTests(unittest.TestCase):
         cards = report["reading"]["financial"]
         self.assertEqual(["operating-margin", "cash-after-investment", "earnings-basis"], [c["key"] for c in cards])
         self.assertIn("-10.00%", cards[0]["fact"])
-        self.assertIn("영업손실", cards[0]["meaning"])
+        self.assertIn("매출보다 영업비용이 큽니다", cards[0]["meaning"])
         self.assertIn("year-to-date", cards[1]["fact"])
         self.assertIn("-20 KRW", cards[1]["fact"])
         self.assertTrue(all(c["evidence"] and c["nextChecks"] and c["limitations"] for c in cards))
         rendered = render_company_change_report(report)
         self.assertIn("2026-06-30", rendered)
-        self.assertIn("영업손실", rendered)
-        self.assertIn("차입·상환·배당", rendered)
+        self.assertIn("영업적자", rendered)
+        self.assertIn("차입·상환·배당", str(report["sections"]))
         self.assertIn("OpenDART", rendered)
         self.assertLess(len(rendered), 850)
         self.assertEqual(3, len(report["brief"]["sections"]))
         self.assertEqual(report["brief"], report["notificationContent"])
         self.assertNotIn("기업의 확정 가치", rendered)
         self.assertNotIn("2025-12-31", rendered)
+        self.assertNotIn("매출 100당", rendered)
+        self.assertIn("이 숫자의 의미", rendered)
         self.assertLess(report["sections"].index(next(s for s in report["sections"] if s["key"] == "businessMeaning")),
                         report["sections"].index(next(s for s in report["sections"] if s["key"] == "annualFinancials")))
 
@@ -105,6 +107,47 @@ class CompanyReportReadingTests(unittest.TestCase):
         value["instrument"]["currentPrice"] = 150
         self.assertEqual("unchanged", build_company_change_report(value, changed)["reportKind"])
 
+    def test_valuation_driven_operating_loss_requires_same_official_filing(self):
+        from digital_twin.infrastructure.external_signal_provider_sec import ExternalSignalSecMixin
+        from digital_twin.modules.news_intelligence.domain.company_knowledge import build_company_knowledge
+        from digital_twin.modules.news_intelligence.domain.company_report_evidence import build_company_report_evidence
+        def fact(value):
+            return {"units": {"USD": [{"val": value, "start": "2026-04-01", "end": "2026-06-30",
+                "filed": "2026-07-30", "form": "10-Q", "fp": "Q2", "fy": 2026,
+                "frame": "CY2026Q2", "accn": "0000000001-26-000001"}]}}
+        source = {"facts": {"us-gaap": {"Revenues": fact(100), "OperatingIncomeLoss": fact(-6800),
+                   "CryptoAssetUnrealizedGainLossOperating": fact(-6780)}}}
+        company = build_company_knowledge("TEST", sec_filing={"provider": "SEC EDGAR", "cik": "0000000001",
+            "facts": ExternalSignalSecMixin().sec_company_facts_summary(source)}, source_references=[{
+                "datasetId": "sec.company_facts", "revisionId": "filing-revision", "subjectKey": "TEST"}])
+        evidence = build_company_report_evidence("TEST", {"companyKnowledge": {"TEST": company}})
+        value = payload()
+        value["companyReportEvidence"] = evidence
+        report = build_company_change_report(value)
+        card = report["reading"]["financial"][0]
+        self.assertEqual("digital-asset-remeasurement", card["driver"])
+        self.assertIn("-20 USD", card["fact"])
+        message = render_company_change_report(report)
+        self.assertIn("디지털자산 평가손실", message)
+        self.assertIn("같은 금액의 현금", message)
+        self.assertIn("제외해도 영업손실이 남습니다", message)
+        self.assertIn("부채·우선주", message)
+        self.assertNotIn("매출 100당", message)
+        self.assertNotIn("6800.00%", message)
+        self.assertIn("정상화 이익이나 현금흐름이 아닙니다", str(card["limitations"]))
+        metrics = evidence["recentFinancials"][0]["metrics"]
+        adjustment = next(item for item in metrics if item["key"] == "cryptoAssetUnrealizedGainLossOperating")
+        for field, other in (("official", False), ("sourceDocumentId", "other-filing"),
+                             ("periodStart", "2026-01-01"), ("durationBasis", "year-to-date")):
+            saved = adjustment[field]
+            adjustment[field] = other
+            self.assertNotEqual("digital-asset-remeasurement", financial_reading_cards(evidence)[0].get("driver"))
+            adjustment[field] = saved
+        adjustment.update(key="cryptoAssetUnrealizedLossOperating", value=6780)
+        self.assertEqual("digital-asset-remeasurement", financial_reading_cards(evidence)[0].get("driver"))
+        adjustment["value"] = -6780
+        self.assertNotEqual("digital-asset-remeasurement", financial_reading_cards(evidence)[0].get("driver"))
+
 
 class CompanyReportInsightTests(unittest.TestCase):
     def setUp(self):
@@ -117,7 +160,7 @@ class CompanyReportInsightTests(unittest.TestCase):
                         "insight": {"financialEvidence": copy.deepcopy(self.financial), "insightAssessment": {
                             "publishable": True, "dominantThesis": "수익성 변화 확인", "causalMechanism": "비용 증가가 영업이익에 반영됐습니다.",
                             "investmentImplication": "이익률 가정을 다시 확인할 필요가 있습니다.",
-                            "invalidationCondition": "다음 분기 영업이익률이 회복되는지 확인해야 합니다.", "evidenceIds": ["fact-1"]}}}
+                            "invalidationCondition": "다음 분기 영업이익률이 회복되는지 확인해야 합니다.", "risks": ["수요 둔화가 지속될 수 있습니다."], "evidenceIds": ["fact-1"]}}}
         self.reader = CompanyReportInsightQueryService(
             SimpleNamespace(latest=lambda *args: [self.case]),
             SimpleNamespace(latest_insight_episodes=lambda **kwargs: [self.episode]))
@@ -133,8 +176,10 @@ class CompanyReportInsightTests(unittest.TestCase):
         value["companyReportInsight"] = result
         report = build_company_change_report(value)
         self.assertIn(result["meaning"], str(report["sections"]))
-        self.assertIn("AI 해석의 조건·반대 근거", render_company_change_report(report))
+        self.assertIn(result["meaning"], render_company_change_report(report))
+        self.assertIn(result["invalidation"], render_company_change_report(report))
         self.assertEqual("linkedInsight", report["sections"][0]["key"])
+        self.assertIn(result["risks"][0], render_company_change_report(report))
         self.episode["insight"]["insightAssessment"]["investmentImplication"] = "바뀐 설명"
         self.assertEqual(result["meaning"], report["reading"]["insight"]["meaning"])
 

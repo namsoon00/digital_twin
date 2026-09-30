@@ -30,6 +30,8 @@ SEC_CONTACT_EMAIL_PATTERN = re.compile(
 SEC_ANNUAL_DIRECT_FACTS = {
     "revenue": (("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet"), ("USD",), True),
     "operatingIncome": (("OperatingIncomeLoss",), ("USD",), True),
+    "cryptoAssetUnrealizedGainLossOperating": (("CryptoAssetUnrealizedGainLossOperating",), ("USD",), True),
+    "cryptoAssetUnrealizedLossOperating": (("CryptoAssetUnrealizedLossOperating",), ("USD",), True),
     "netIncome": (("NetIncomeLoss", "ProfitLoss"), ("USD",), True),
     "operatingCashFlow": (("NetCashProvidedByUsedInOperatingActivities",), ("USD",), True),
     "pretaxIncome": (("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"), ("USD",), True),
@@ -372,6 +374,8 @@ class ExternalSignalSecMixin:
             ),
             "grossProfit": self.latest_sec_fact(facts, ["GrossProfit"]),
             "operatingIncome": self.latest_sec_fact(facts, ["OperatingIncomeLoss"]),
+            "cryptoAssetUnrealizedGainLossOperating": self.latest_sec_fact(facts, ["CryptoAssetUnrealizedGainLossOperating"]),
+            "cryptoAssetUnrealizedLossOperating": self.latest_sec_fact(facts, ["CryptoAssetUnrealizedLossOperating"]),
             "pretaxIncome": self.latest_sec_fact(facts, ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"]),
             "taxProvision": self.latest_sec_fact(facts, ["IncomeTaxExpenseBenefit"]),
             "interestExpense": self.latest_sec_fact(facts, ["InterestExpenseNonOperating", "InterestAndDebtExpense"]),

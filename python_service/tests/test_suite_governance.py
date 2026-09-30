@@ -202,7 +202,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # bounded cleanup while the live reasoning queue remains nonempty.
         # Nine company-report regressions protect comparable accounting inputs,
         # conditional valuation and scoped, revision-bound AI interpretation.
-        self.assertLessEqual(total, 1873)
+        # One source-bound digital-asset loss regression covers ingestion, sign,
+        # filing/period isolation and accounting-to-cash interpretation.
+        self.assertLessEqual(total, 1874)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

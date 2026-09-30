@@ -318,7 +318,8 @@ class InstrumentValuationQueryTests(unittest.TestCase):
         self.assertEqual("change", changed["reportKind"])
         self.assertEqual(100.0, changed["changes"]["factChanges"][0]["previous"]["value"])
         self.assertEqual(125.0, changed["changes"]["factChanges"][0]["current"]["value"])
-        self.assertIn("이번에 달라진 점", render_company_change_report(changed))
+        self.assertIn("이번에 달라진 점", str(changed["sections"]))
+        self.assertIn("이 숫자의 의미", render_company_change_report(changed))
 
         class Queue:
             def __init__(self):

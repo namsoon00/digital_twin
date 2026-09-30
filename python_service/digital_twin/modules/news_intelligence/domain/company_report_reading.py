@@ -23,7 +23,7 @@ def _same_basis(*metrics):
 
 def _evidence(metric):
     material = {key: metric.get(key) for key in (
-        "key", "value", "currency", "period", "durationBasis", "scope", "provider",
+        "key", "value", "currency", "period", "periodStart", "sourceMetric", "durationBasis", "scope", "provider",
         "sourceDocumentId", "sourceReferences", "comparison",
     )}
     identity = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
@@ -37,15 +37,69 @@ def _card(key, title, fact, meaning, metrics, checks, limits, **extra):
             "nextChecks": checks, "limitations": limits, **extra}
 
 
+def _compact_money(value, currency):
+    if currency == "USD" and abs(value) >= 1e8:
+        return f"{value / 1e8:,.2f}억 달러"
+    if currency == "USD" and abs(value) >= 1e4:
+        return f"{value / 1e4:,.1f}만 달러"
+    return amount(value, currency)
+
+
+def _asset_remeasurement_card(metrics):
+    revenue, operating = mapping(metrics.get("revenue")), mapping(metrics.get("operatingIncome"))
+    gain = mapping(metrics.get("cryptoAssetUnrealizedGainLossOperating"))
+    loss = mapping(metrics.get("cryptoAssetUnrealizedLossOperating"))
+    # The two SEC concepts have different signs. Do not treat a positive loss
+    # as a gain, or combine a prior filing/period with current operating income.
+    for metric, sign in ((gain, 1), (loss, -1)):
+        inputs = [revenue, operating, metric]
+        if (not _same_basis(*inputs) or not all(item.get("official") is True for item in inputs)
+                or not all(item.get("sourceDocumentId") == operating.get("sourceDocumentId")
+                           and item.get("sourceDocumentId") for item in inputs)
+                or not all(item.get("periodStart") == operating.get("periodStart")
+                           and item.get("periodStart") for item in inputs)):
+            continue
+        unrealized, reported = metric["value"] * sign, operating["value"]
+        if (not reported or unrealized * reported <= 0 or abs(unrealized) < abs(reported) / 2
+                or (sign == -1 and metric["value"] < 0)):
+            continue
+        residual = reported - unrealized
+        word = "손실" if unrealized < 0 else "이익"
+        currency = operating["currency"]
+        headline = "보고된 영업" + word + "에는 디지털자산 평가" + word + "의 영향이 큽니다."
+        meaning = ("보유자산의 가격 변화가 손익에 반영된 것이므로 같은 금액의 현금 유출·유입이나 제품 판매 수익성으로 해석하면 안 됩니다. "
+                   "미실현손실도 보유자산 가치가 줄었다는 위험은 남습니다." if unrealized < 0 else
+                   "보유자산의 가격 상승이 반영된 이익입니다. 같은 금액의 현금 유입이나 반복 가능한 제품 판매 이익으로 볼 수 없습니다.")
+        if residual < 0:
+            meaning += " 해당 평가손익만 제외해도 영업손실이 남습니다."
+        fact = (operating["basisLabel"] + " · 보고 영업손익 " + _compact_money(reported, currency)
+                + " 중 디지털자산 미실현손익 " + _compact_money(unrealized, currency)
+                + " · 해당 평가손익만 제외한 계산 " + _compact_money(residual, currency))
+        return _card("operating-margin", "평가손익과 사업 실적을 분리해서 보기", fact, meaning, inputs,
+                     ["보유 디지털자산 가치와 부채·우선주 지급 부담, 증자에 따른 주당 가치 변화를 함께 확인해야 합니다."],
+                     ["평가손익만 제외한 금액은 정상화 이익이나 현금흐름이 아닙니다. 나머지 일회성 항목은 별도 확인이 필요합니다."],
+                     headline=headline, driver="digital-asset-remeasurement",
+                     briefFact=operating["basisLabel"].replace("official-filing", "공시 기준") + " · 영업손익 " + _compact_money(reported, currency) + " 중 자산 평가손익 " + _compact_money(unrealized, currency),
+                     valuationMeaning="이 영업이익률로 본업 가치를 추정하면 왜곡될 수 있습니다. 보유자산 가치에서 부채·우선주 청구권을 고려하고 주식 수 증가의 영향을 함께 봐야 합니다.",
+                     briefCheck="디지털자산 가치, 이자·우선주 배당의 지급 여력, 증자에 따른 주당 가치 변화를 확인합니다.")
+    return None
+
+
 def _margin_card(metrics):
     revenue, operating = mapping(metrics.get("revenue")), mapping(metrics.get("operatingIncome"))
     if not _same_basis(revenue, operating) or revenue["value"] <= 0:
         return None
+    remeasurement = _asset_remeasurement_card(metrics)
+    if remeasurement:
+        return remeasurement
     margin = operating["value"] / revenue["value"] * 100
     fact = operating["basisLabel"] + f" · 영업이익률 {margin:.2f}%"
-    meaning = (f"매출 100당 영업이익이 {margin:.2f} 남았습니다." if margin >= 0
-               else f"매출 100당 영업손실이 {abs(margin):.2f} 발생했습니다.")
-    meaning += " 이 비율은 매출 전망이 얼마의 영업이익으로 이어지는지 계산하는 기준입니다."
+    headline = "영업흑자이지만 이익의 지속성은 비용 구조와 현금흐름을 함께 봐야 합니다." if margin >= 0 else "영업적자입니다. 매출 증가만으로 이익 회복을 판단할 수 없습니다."
+    meaning = ("매출에서 영업비용을 차감한 금액이 양수입니다. 같은 매출에서도 비용이 늘면 이익이 줄기 때문에 매출 성장과 이익률을 함께 확인해야 합니다."
+               if margin >= 0 else "매출보다 영업비용이 큽니다. 판매 증가로 손실을 줄일 수 있는 비용인지, 평가손실·일회성 비용인지 구분해야 회복 가능성을 판단할 수 있습니다.")
+    if abs(margin) >= 100:
+        headline = "보고 손익의 규모가 매출보다 커 영업이익률만으로 사업 수익성을 판단하기 어렵습니다."
+        meaning = "평가손익·일회성 항목이 포함됐는지 분해해야 합니다. 현재 연결된 수치만으로 손익의 원인이나 같은 금액의 현금 유출·유입을 확정할 수 없습니다."
     revenue_comparison, operating_comparison = mapping(revenue.get("comparison")), mapping(operating.get("comparison"))
     old_revenue, old_operating = number(revenue_comparison.get("previousValue")), number(operating_comparison.get("previousValue"))
     if (old_revenue is not None and old_revenue > 0 and old_operating is not None
@@ -69,7 +123,8 @@ def _margin_card(metrics):
                  [revenue, operating],
                  ["다음 동일 기준 실적에서 영업이익률의 유지·변화를 확인하고, 가격·판매량·비용 및 일회성 항목을 원문과 대조해야 합니다."],
                  ["이 계산만으로 개선·악화의 원인이나 지속 가능한 이익 수준을 확정할 수 없습니다."],
-                 briefCheck="다음 실적에서 영업이익률의 변화와 비용·일회성 항목을 확인합니다.")
+                 headline=headline,
+                 briefCheck="영업손익에 포함된 평가손익·일회성 비용과 실제 영업현금흐름을 구분해 확인합니다.")
 
 
 def _cash_card(metrics):
@@ -81,10 +136,8 @@ def _cash_card(metrics):
     fact = (cash["basisLabel"] + " · 영업현금흐름 " + amount(cash["value"], currency)
             + " − 설비투자 현금유출 " + amount(abs(capex["value"]), currency)
             + " = " + amount(remaining, currency))
-    meaning = ("이 기간 영업현금흐름에서 설비투자 현금유출을 차감한 금액이 양수입니다." if remaining > 0
-               else "이 기간 영업현금흐름에서 설비투자 현금유출을 차감한 금액이 음수입니다." if remaining < 0
-               else "이 기간 영업현금흐름과 설비투자 현금유출의 크기가 같습니다.")
-    meaning += " 이익이 나더라도 투자 지출을 반영하면 남는 현금은 달라질 수 있어 두 항목을 함께 봐야 합니다."
+    meaning = ("영업으로 들어온 현금이 설비투자 지출을 충당했습니다. 다만 차입 상환·배당·자산 매입까지 감당한다는 뜻은 아닙니다." if remaining >= 0 else
+               "영업현금만으로 설비투자 지출을 충당하지 못했습니다. 부족분의 조달 방법과 투자가 향후 현금 창출로 이어질지 확인해야 합니다.")
     return _card("cash-after-investment", "투자 후 남는 영업현금", fact, meaning,
                  [cash, capex],
                  ["다음 비교 가능한 기간에서 영업현금흐름과 설비투자를 함께 확인해야 합니다. 차감액이 음수이면 투자 확대와 영업현금 감소 중 어느 항목이 설명하는지 확인해야 합니다."],

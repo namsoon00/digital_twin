@@ -386,7 +386,7 @@ def build_company_change_report(
     financial_reading = report["reading"]["financial"]
     if financial_reading:
         first = financial_reading[0]
-        report["summary"] = first["meaning"].split(". ", 1)[0].rstrip(".") + "."
+        report["summary"] = first.get("headline") or first["meaning"]
     assessment_sections = _assessment_sections(report)
     changes_section = [section for section in assessment_sections if section["key"] == "changes"]
     if changes_section:
@@ -404,6 +404,9 @@ def build_company_change_report(
         }.get(transition, "같은 기준으로 비교할 검증된 해석이 없어 관점의 강화·약화를 판정하지 않았습니다."))
     report["sections"] = reading_sections(report["reading"]) + changes_section + company_evidence_sections(evidence)
     report["sections"].extend(section for section in assessment_sections if section["key"] != "changes")
+    insight = report["reading"]["insight"]
+    if insight.get("state") == "available":
+        report["summary"] = insight["thesis"] + " · 분석 " + _display_time(insight.get("asOf"))
     report["brief"] = _reading_notification_content(report)
     report["notificationContent"] = report["brief"]
     return report
@@ -544,11 +547,8 @@ def _reading_notification_content(report):
     financial = _rows(reading.get("financial"))[:2]
     valuation = _rows(reading.get("valuation"))
     insight = _mapping(reading.get("insight"))
-    facts = [card.get("briefFact", card["fact"]).replace("official-filing", "공시 기준") + (" · 차입·상환·배당 제외" if card.get("key") == "cash-after-investment" else "")
-             for card in financial]
-    changes = next((section for section in _rows(report.get("sections")) if section.get("key") == "changes"), {})
-    if changes:
-        facts = list(changes.get("rows") or [])[:2]
+    lead = next(iter(financial), {})
+    facts = [lead["meaning"], lead.get("briefFact", lead["fact"])] if lead else ["손익의 원인을 설명할 비교 가능한 재무 근거가 아직 없습니다."]
     value = next((card for card in valuation if card.get("key") == "price-requirements"), None)
     if value:
         value_text = value["fact"] + " · 조건부 역산이며 실제 시장 기대를 관측한 값이 아닙니다."
@@ -558,16 +558,20 @@ def _reading_notification_content(report):
         value = next(iter(valuation), {})
         value_text = (value.get("fact", "") + " · 가정에 따른 계산 범위이며 확정 가치가 아닙니다."
                       if value.get("calculationEligible") else "평가 가정 검토 전으로 저평가·고평가 판단을 보류합니다.")
+    if lead.get("valuationMeaning"):
+        value_text = lead["valuationMeaning"]
     check = next((card.get("briefCheck") or item for card in financial for item in card.get("nextChecks", [])), "비교 가능한 재무 자료를 먼저 확보해야 합니다.")
     if insight.get("state") == "available":
-        # Keep the complete qualified AI interpretation in the full report;
-        # selecting a sentence could drop its counter-evidence or conditions.
-        check += " 연결된 AI 해석의 조건·반대 근거는 상세에서 확인하세요."
+        # Interpretation is the product, not an optional appendix. Preserve
+        # counter-evidence and invalidation rather than cutting claims short.
+        facts = [insight["mechanism"], insight["meaning"],
+                 *("반대 근거·한계: " + risk for risk in insight.get("risks", []))]
+        check = insight["invalidation"]
     return {"kind": "company-change-report", "presentation": "company-report-brief-v1",
             "subject": {"symbol": report.get("symbol"), "name": report.get("name")},
             "summary": _text(report.get("summary")),
             "sections": [
-                {"title": "이번에 달라진 점" if changes else "핵심 수치", "rows": facts or ["같은 기준으로 비교할 재무 수치가 부족합니다."]},
+                {"title": "이 숫자의 의미", "rows": facts},
                 {"title": "가치 판단", "rows": [value_text]},
                 {"title": "다음 확인", "rows": [check]},
             ]}

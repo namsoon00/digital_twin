@@ -7,13 +7,29 @@ reports, simple comparable financial observations, up to six filings/IR
 documents, market context, valuation assumptions and missing evidence.
 
 The default v3 view and new notification messages show a compact captured brief:
-one sentence, up to two financial facts, one valuation condition and one next
-check. Full AI interpretations, counter-evidence, tables, sources and calculation
+a short conclusion, the economic meaning with its numerical basis, one
+valuation implication and one next check. Generic collection-change messages
+do not replace the interpretation. An available, validated AI interpretation takes
+priority in the brief, retaining its mechanism, implication, counter-evidence,
+analysis date and invalidation condition. Tables, sources and calculation
 assumptions remain in a closed full-report disclosure. Historical v3 reports
 without a captured brief use their own saved reading for the compact web view;
 already delivered message bodies are not rewritten. Shortening presentation does
 not change material fingerprints or resend unchanged reports. Qualified AI prose
-is never cut mid-claim to fit the brief; it remains complete in the detail.
+is never cut mid-claim to fit the brief or hidden solely to meet a length target.
+
+SEC collection now retains operating unrealized crypto-asset gain/loss concepts.
+When a signed gain/loss or positive loss-only concept explains at least half of
+same-direction operating results, the accounting reading separates that item
+from reported earnings. Revenue, operating results and the adjustment must all
+be official, with identical filing identity, period start/end, duration, scope
+and currency. This is a decomposition of reported accounts, not an inferred
+price cause, normalized earnings measure or investment action. The remainder
+is explicitly not cash flow. No ticker, fetched quarter or company-specific
+amount is hardcoded. Valuation implications flag asset values, senior claims,
+payment capacity and dilution without inventing NAV or a price target.
+Missing or incompatible adjustment evidence never produces a crypto-loss claim;
+outsized reported margins instead explain why the cause needs decomposition.
 
 The full sections explain comparable accounting observations: how much
 revenue remains as operating profit, how much operating cash remains after

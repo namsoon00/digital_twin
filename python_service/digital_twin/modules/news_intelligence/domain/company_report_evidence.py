@@ -16,6 +16,8 @@ from .financial_reporting import financial_report_contract_assessment, reporting
 
 METRICS = (
     ("revenue", "매출액"), ("operatingIncome", "영업이익"),
+    ("cryptoAssetUnrealizedGainLossOperating", "영업손익에 포함된 디지털자산 미실현손익"),
+    ("cryptoAssetUnrealizedLossOperating", "영업손익에 포함된 디지털자산 미실현손실"),
     ("netIncome", "당기순이익"), ("operatingCashFlow", "영업현금흐름"),
     ("capitalExpenditure", "설비투자 현금흐름"), ("freeCashFlow", "잉여현금흐름"),
     ("cash", "현금 및 현금성자산"), ("totalDebt", "이자부채"),
@@ -128,6 +130,7 @@ def _financial_row(row, company):
         metric = {
             "key": field, "label": label, "value": value, "currency": currency,
             "period": period, "durationBasis": duration, "scope": scope,
+            "periodStart": text(provenance.get("periodStart")),
             "basisLabel": " · ".join(filter(None, [period, DURATIONS.get(duration, "기간 기준 미확인"), SCOPES.get(scope, scope or "연결·별도 미확인")])),
             "provider": provider, "sourceUrl": source_url,
             "sourceReferences": references, "sourceMetric": text(provenance.get("metric") or provenance.get("tag")),

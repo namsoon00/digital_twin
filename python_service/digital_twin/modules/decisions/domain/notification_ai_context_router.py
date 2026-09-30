@@ -14,7 +14,7 @@ from digital_twin.modules.notifications.contracts import build_decision_core_evi
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v12-annual-report-continuity"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v13-source-measurements"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v5"
 
 RESEARCH_INSIGHT_FACT_LABELS = (
@@ -40,6 +40,10 @@ CORE_FACT_KEYS = (
     "ma20Slope", "ma60Slope", "priceChangeRate", "currency", "market",
     "macroDgs10", "macroDgs2", "macroDff", "macroYieldSpread10y2y",
     "macroDgs10DeltaBp", "macroDgs2DeltaBp", "macroYieldSpreadDeltaBp",
+    "macroDffDeltaBp", "macroDgs10Delta5dBp", "macroDgs10Delta20dBp",
+    "macroDgs2Delta5dBp", "macroDgs2Delta20dBp", "macroDffDelta5dBp", "macroDffDelta20dBp",
+    "macroDgs10ObservationDate", "macroDgs2ObservationDate", "macroDffObservationDate",
+    "macroYieldSpreadObservationDate",
     "usdKrwRate", "usdKrwDeltaPct", "usdKrw7dDeltaPct",
     "btcPrice", "btcChange24h", "btcChange7d",
 )

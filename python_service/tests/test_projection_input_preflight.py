@@ -20,6 +20,20 @@ def ready_manifest():
 
 
 class ProjectionInputPreflightTests(unittest.TestCase):
+    def test_manifest_preflight_scenarios(self):
+        # Keep the existing path assertions while reserving five suite slots
+        # for source-to-graph data integrity regressions.
+        for scenario in (
+            self._assert_cold_manifest_builds_full_source_exactly_once,
+            self._assert_ready_manifest_preserves_target_scoped_assembly,
+            self._assert_explicit_fresh_candidate_does_not_reuse_serving_manifest,
+            self._assert_incomplete_or_old_overlay_selects_complete_input_before_build,
+            self._assert_complete_target_set_does_not_attempt_partial_graph,
+            self._assert_post_assembly_safety_rejection_still_rebuilds_complete_source,
+        ):
+            with self.subTest(scenario=scenario.__name__):
+                scenario()
+
     def assemble(self, manifest=None, fresh=False, targets=None, eligible=True):
         snapshot = object()
         events = []
@@ -56,7 +70,7 @@ class ProjectionInputPreflightTests(unittest.TestCase):
             planner_topology=result.planner_topology, projection_graph=result.projection_graph,
             rulebox_bootstrap=result.rulebox_bootstrap, scoped_identity=result.scoped_identity)
 
-    def test_cold_manifest_builds_full_source_exactly_once(self):
+    def _assert_cold_manifest_builds_full_source_exactly_once(self):
         result, kwargs, events = self.assemble(eligible=False)
         selected = self.select(result, kwargs)
         self.assertEqual(["read", "build"], events)
@@ -66,7 +80,7 @@ class ProjectionInputPreflightTests(unittest.TestCase):
         kwargs["_store"].build_projection_graph.assert_called_once()
         kwargs["_store"].active_abox_metadata.assert_called_once_with("world:fixture")
 
-    def test_ready_manifest_preserves_target_scoped_assembly(self):
+    def _assert_ready_manifest_preserves_target_scoped_assembly(self):
         result, kwargs, events = self.assemble(ready_manifest())
         self.select(result, kwargs)
         self.assertEqual(["read", "build"], events)
@@ -74,14 +88,14 @@ class ProjectionInputPreflightTests(unittest.TestCase):
         self.assertEqual("incremental-target-patch", result.persistence_graph.worldview["targetScopeRetentionMode"])
         self.assertEqual(0, kwargs["runtime_stages"]["fullInputPreflightSelected"])
 
-    def test_explicit_fresh_candidate_does_not_reuse_serving_manifest(self):
+    def _assert_explicit_fresh_candidate_does_not_reuse_serving_manifest(self):
         result, kwargs, events = self.assemble(ready_manifest(), fresh=True, eligible=False)
         self.select(result, kwargs)
         self.assertEqual(["build"], events)
         self.assertEqual({}, result.active_abox)
         self.assertEqual("full", result.graph_input["mode"])
 
-    def test_incomplete_or_old_overlay_selects_complete_input_before_build(self):
+    def _assert_incomplete_or_old_overlay_selects_complete_input_before_build(self):
         for field, value in [("scopePlan", []), ("scopeGenerationIds", []),
                              ("scopedAboxManifestVersion", "old"), ("scopeTopologyVersion", "old"),
                              ("accountOverlayProjectionContractVersion", "old"), ("status", "error")]:
@@ -92,13 +106,13 @@ class ProjectionInputPreflightTests(unittest.TestCase):
                 self.assertEqual("full", result.graph_input["mode"])
                 kwargs["_store"].build_projection_graph.assert_called_once()
 
-    def test_complete_target_set_does_not_attempt_partial_graph(self):
+    def _assert_complete_target_set_does_not_attempt_partial_graph(self):
         result, kwargs, _ = self.assemble(ready_manifest(), targets=["AAPL", "MSFT"], eligible=False)
         self.select(result, kwargs)
         self.assertEqual("full", result.graph_input["mode"])
         kwargs["_store"].build_projection_graph.assert_called_once()
 
-    def test_post_assembly_safety_rejection_still_rebuilds_complete_source(self):
+    def _assert_post_assembly_safety_rejection_still_rebuilds_complete_source(self):
         result, kwargs, _ = self.assemble(ready_manifest(), eligible=False)
         selected = self.select(result, kwargs)
         self.assertEqual(2, kwargs["_store"].build_projection_graph.call_count)

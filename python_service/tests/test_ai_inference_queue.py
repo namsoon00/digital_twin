@@ -1394,7 +1394,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는"))
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
-        self.assertEqual("notification-ai-context-route-v12-annual-report-continuity", prompt_audit["contextRouting"]["version"])
+        self.assertEqual("notification-ai-context-route-v13-source-measurements", prompt_audit["contextRouting"]["version"])
         self.assertEqual(
             "investment-ai-judge-v35-question-scoped-report-conditions",
             prompt_audit["promptRelease"]["version"],

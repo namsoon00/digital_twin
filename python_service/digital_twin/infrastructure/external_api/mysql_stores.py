@@ -575,7 +575,9 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT * FROM external_fact_current
+                SELECT fact.*, EXISTS(SELECT 1 FROM external_fact_revision revision
+                    WHERE revision.revision_id = fact.revision_id) AS revision_available
+                FROM external_fact_current fact
                 WHERE dataset_id = %s AND subject_key = %s
                 LIMIT 1
                 """,
@@ -593,7 +595,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 "SELECT * FROM external_fact_revision WHERE revision_id = %s LIMIT 1",
                 (revision,),
             ).fetchone() or {}
-        return self._fact_row(row)
+        return self._fact_row({**row, "revision_available": True}) if row else {}
 
     def official_document_fact(self, dataset_id: str, subject_key: str, source_revision: str = "") -> Dict[str, object]:
         """Read the event's document, retaining recovery provenance across restarts."""
@@ -1108,7 +1110,11 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
 
     def list_current(self, subject_keys: Iterable[str] = None) -> List[Dict[str, object]]:
         subjects = sorted({str(item or "").strip() for item in subject_keys or [] if str(item or "").strip()})
-        sql = "SELECT * FROM external_fact_current"
+        sql = (
+            "SELECT fact.*, EXISTS(SELECT 1 FROM external_fact_revision revision "
+            "WHERE revision.revision_id = fact.revision_id) AS revision_available "
+            "FROM external_fact_current fact"
+        )
         params: List[object] = []
         if subjects:
             placeholders = ", ".join(["%s"] * len(subjects))
@@ -1344,6 +1350,9 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             "subjectKey": str(row.get("subject_key") or ""),
             "providerId": str(row.get("provider_id") or ""),
             "revisionId": str(row.get("revision_id") or ""),
+            "revisionPersistence": (
+                "retained" if row.get("revision_available") else "current-only"
+            ) if "revision_available" in row else "unverified",
             "sourceRevision": str(row.get("source_revision") or ""),
             "payloadHash": str(row.get("payload_hash") or ""),
             "sourceSchemaVersion": str(row.get("source_schema_version") or ""),

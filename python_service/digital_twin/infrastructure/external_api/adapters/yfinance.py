@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
@@ -153,10 +154,20 @@ class YFinanceProfileAdapter:
             if key in {"yfinanceData", "equityQuotes", "companyOverviews", "earningsReports"} and value
         }
         as_of = source_as_of(payload, payload.get("collectedAt"))
-        return observation(
+        result = observation(
             self.descriptor,
             job.subject.symbol,
             fragment,
             preferred_source_as_of=as_of,
             watermark={"profile": self.profile, "sourceAsOf": as_of},
         )
+        if self.profile == "analyst":
+            estimates = signals.get("companyOverviews", {}).get(job.subject.symbol, {}).get("earningsEstimates") or []
+            missing = sorted({field for row in estimates for field in row.get("missingFields") or []}) if estimates else ["earningsEstimates"]
+            # Other analyst modules contain insider transaction dates. Neither
+            # those dates nor a fetch clock date this consensus publication.
+            result = replace(result, source_as_of=str(payload.get("sourceAsOf") or ""),
+                watermark={**result.watermark, "sourceAsOf": str(payload.get("sourceAsOf") or "")},
+                quality={**result.quality, "missingFields": missing,
+                         "consensusState": "partial" if missing or not estimates else "complete"})
+        return result

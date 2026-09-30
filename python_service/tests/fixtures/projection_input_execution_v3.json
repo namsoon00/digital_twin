@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "source-measurements-and-clock-isolation-v3",
+  "contractVersion": "projection-input-execution-v3",
+  "reason": "Preserve measured macro windows and source-owned clocks; missing values no longer generate zero facts. Source projection v3 changes full/target/identity fingerprints. See test_data_utilization_contract and docs/data-utilization-repair.md.",
+  "scenarios": {
+    "full": "5e733ff6ffcc8763475dd1fdcd75b99f3e2c27b4aed82081a81bebde125b5602",
+    "target": "2f187ae9493c6096b7c127ec35378ca42c93418b4b4a1a6669332549af21c725",
+    "source-facts": "2b6c98e01487d715b86b5c530d3e2ae0f88f5653a2d894486a83410ffeb84495",
+    "live-context": "62e9ff218a898b0567de0774dc90ecfd706e997649aadf35a9ebff255442e27d",
+    "memory-hit": "d73d8aaf4b5d564cab914e1731c2562da49a435c86c11cdec2e51dabb6056d0d",
+    "persistent-hit": "0da450800eb0ad12d0cce3b3037766aa24ebf1ab081705039547c707a7128314",
+    "cache-errors": "beab49d709bea1a4d3e67db33aabc21ec7c68112f07d666546f269780b7b28a9",
+    "scoring-failure": "901a66e688d3e64d54bf3f868b571815f8c278952b23cd0f4073e5b6df680243",
+    "world-identity": "6d483764dcdd2d6e85ae7e328450162ffe03fce4d944dce6891b1ff0889e3a5a"
+  }
+}

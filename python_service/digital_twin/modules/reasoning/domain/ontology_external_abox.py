@@ -112,12 +112,9 @@ def external_observation_profile(
         or item.get("lastUpdated")
         or item.get("latestTradingDay")
         or item.get("date")
+        or item.get("observationDate")
         or item.get("publishedAt")
         or next((candidate for candidate in nested_candidates if candidate not in (None, "")), "")
-        or freshness.get("sourceAsOf")
-        or freshness.get("fetchedAt")
-        or (external_signals.get("cryptoFetchedAt") if str(domain or "").lower() == "crypto" else "")
-        or external_signals.get("fetchedAt")
         or ""
     )
     source_fetched_at = str(
@@ -131,8 +128,8 @@ def external_observation_profile(
     return {
         "observationDomain": domain,
         "freshnessRequired": True,
-        "freshnessStatus": str(item.get("freshnessStatus") or freshness.get("status") or "unknown"),
-        "freshnessAgeMinutes": item.get("ageMinutes") if item.get("ageMinutes") not in (None, "") else freshness.get("ageMinutes"),
+        "freshnessStatus": str(item.get("freshnessStatus") or "unknown"),
+        "freshnessAgeMinutes": item.get("ageMinutes"),
         "sourceAsOf": source_as_of,
         "sourceFetchedAt": source_fetched_at,
         "sourceTimestampPresent": bool(source_as_of),
@@ -368,13 +365,15 @@ def rate_series_classes(series_id: str) -> List[str]:
 
 def rate_observation_properties(item: Dict[str, object]) -> Dict[str, object]:
     properties: Dict[str, object] = {}
-    for field in ["previousValue", "deltaBp", "delta1dBp", "delta5dBp", "delta20dBp"]:
+    for field in ["previousValue", "deltaBp", "delta1dBp", "delta5dBp", "delta20dBp",
+                  "deltaPct", "deltaValue", "yearOverYearPct", "yearAgoValue"]:
         if item.get(field) in (None, ""):
             continue
         properties[field] = round(number(item.get(field)), 4)
     for field in [
         "previousDate", "observationDate", "sourceAsOf", "comparison1dDate",
-        "comparison5dDate", "comparison20dDate", "changeBasis",
+        "comparison5dDate", "comparison20dDate", "changeBasis", "unit", "currency",
+        "yearAgoPeriod", "sourceUrl", "lastChangedAtSource",
     ]:
         if item.get(field) not in (None, ""):
             properties[field] = str(item.get(field) or "")
@@ -586,7 +585,10 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "value": round(spread, 4),
             "rateSeriesId": "YIELDSPREAD10Y2Y",
             "observationDate": str(macro.get("yieldSpreadObservationDate") or ""),
-            **external_observation_profile(external_signals, macro, "macro", 4320),
+            **external_observation_profile(external_signals, {
+                "sourceAsOf": macro.get("yieldSpreadObservationDate") or "",
+                "fetchedAt": macro.get("fetchedAt") or "",
+            }, "macro", 4320),
         }
         if macro.get("previousYieldSpread10y2y") not in (None, ""):
             spread_properties["previousValue"] = round(number(macro.get("previousYieldSpread10y2y")), 4)

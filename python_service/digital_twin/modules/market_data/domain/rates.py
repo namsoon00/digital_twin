@@ -1,25 +1,25 @@
 from dataclasses import asdict, dataclass
-from typing import Dict
+from typing import Dict, Optional
 
 from digital_twin.modules.market_data.domain.market_data import number, optional_number
 
 
 @dataclass(frozen=True)
 class InterestRateContext:
-    dgs10: float = 0.0
-    dgs2: float = 0.0
-    dff: float = 0.0
-    yield_spread_10y_2y: float = 0.0
-    dgs10_delta_bp: float = 0.0
-    dgs2_delta_bp: float = 0.0
-    dff_delta_bp: float = 0.0
-    dgs10_delta_5d_bp: float = 0.0
-    dgs10_delta_20d_bp: float = 0.0
-    dgs2_delta_5d_bp: float = 0.0
-    dgs2_delta_20d_bp: float = 0.0
-    dff_delta_5d_bp: float = 0.0
-    dff_delta_20d_bp: float = 0.0
-    yield_spread_delta_bp: float = 0.0
+    dgs10: Optional[float] = None
+    dgs2: Optional[float] = None
+    dff: Optional[float] = None
+    yield_spread_10y_2y: Optional[float] = None
+    dgs10_delta_bp: Optional[float] = None
+    dgs2_delta_bp: Optional[float] = None
+    dff_delta_bp: Optional[float] = None
+    dgs10_delta_5d_bp: Optional[float] = None
+    dgs10_delta_20d_bp: Optional[float] = None
+    dgs2_delta_5d_bp: Optional[float] = None
+    dgs2_delta_20d_bp: Optional[float] = None
+    dff_delta_5d_bp: Optional[float] = None
+    dff_delta_20d_bp: Optional[float] = None
+    yield_spread_delta_bp: Optional[float] = None
     dgs10_observation_date: str = ""
     dgs2_observation_date: str = ""
     dff_observation_date: str = ""
@@ -35,7 +35,7 @@ class InterestRateContext:
     has_macro_signals: bool = False
 
     def to_facts(self) -> Dict[str, object]:
-        return {
+        facts = {
             "macroYieldSpread10y2y": self.yield_spread_10y_2y,
             "macroDgs10": self.dgs10,
             "macroDgs2": self.dgs2,
@@ -65,6 +65,8 @@ class InterestRateContext:
             "hasMacroSignals": self.has_macro_signals,
         }
 
+        return {key: value for key, value in facts.items() if value is not None}
+
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
@@ -72,7 +74,7 @@ class InterestRateContext:
 def rate_regime_for_dgs10(dgs10: float) -> str:
     # The ABox records the observed level only. Whether that level is high,
     # low, or decision-relevant is an editable TypeDB RuleBox concern.
-    return "observed_rate" if number(dgs10) else "unavailable_rate"
+    return "observed_rate" if dgs10 is not None else "unavailable_rate"
 
 
 def yield_curve_regime_for_spread(spread: float) -> str:
@@ -110,9 +112,9 @@ def _series_delta_bp(item: Dict[str, object]):
     return None
 
 
-def _series_window_delta_bp(item: Dict[str, object], field: str) -> float:
+def _series_window_delta_bp(item: Dict[str, object], field: str) -> Optional[float]:
     value = optional_number(item, [field]) if isinstance(item, dict) else None
-    return value if value is not None else 0.0
+    return value
 
 
 def _series_observation_date(item: Dict[str, object]) -> str:
@@ -140,14 +142,14 @@ def interest_rate_context_from_signals(external_signals: Dict[str, object]) -> I
     dgs10_item = series.get("DGS10") if isinstance(series.get("DGS10"), dict) else {}
     dgs2_item = series.get("DGS2") if isinstance(series.get("DGS2"), dict) else {}
     dff_item = series.get("DFF") if isinstance(series.get("DFF"), dict) else {}
-    dgs10 = number(dgs10_item.get("value")) if isinstance(dgs10_item, dict) else 0.0
-    dgs2 = number(dgs2_item.get("value")) if isinstance(dgs2_item, dict) else 0.0
-    dff = number(dff_item.get("value")) if isinstance(dff_item, dict) else 0.0
+    dgs10 = optional_number(dgs10_item, ["value"])
+    dgs2 = optional_number(dgs2_item, ["value"])
+    dff = optional_number(dff_item, ["value"])
     dgs10_delta_bp = _series_delta_bp(dgs10_item)
     dgs2_delta_bp = _series_delta_bp(dgs2_item)
     dff_delta_bp = _series_delta_bp(dff_item)
     spread_present = macro.get("yieldSpread10y2y") not in (None, "")
-    spread = number(macro.get("yieldSpread10y2y"))
+    spread = optional_number(macro, ["yieldSpread10y2y"])
     spread_delta_bp = _macro_delta_bp(macro, "yieldSpread10y2y", [
         "yieldSpread10y2yDeltaBp",
         "yieldSpreadDeltaBp",
@@ -159,16 +161,16 @@ def interest_rate_context_from_signals(external_signals: Dict[str, object]) -> I
         dgs2=dgs2,
         dff=dff,
         yield_spread_10y_2y=spread,
-        dgs10_delta_bp=dgs10_delta_bp or 0.0,
-        dgs2_delta_bp=dgs2_delta_bp or 0.0,
-        dff_delta_bp=dff_delta_bp or 0.0,
+        dgs10_delta_bp=dgs10_delta_bp,
+        dgs2_delta_bp=dgs2_delta_bp,
+        dff_delta_bp=dff_delta_bp,
         dgs10_delta_5d_bp=_series_window_delta_bp(dgs10_item, "delta5dBp"),
         dgs10_delta_20d_bp=_series_window_delta_bp(dgs10_item, "delta20dBp"),
         dgs2_delta_5d_bp=_series_window_delta_bp(dgs2_item, "delta5dBp"),
         dgs2_delta_20d_bp=_series_window_delta_bp(dgs2_item, "delta20dBp"),
         dff_delta_5d_bp=_series_window_delta_bp(dff_item, "delta5dBp"),
         dff_delta_20d_bp=_series_window_delta_bp(dff_item, "delta20dBp"),
-        yield_spread_delta_bp=spread_delta_bp or 0.0,
+        yield_spread_delta_bp=spread_delta_bp,
         dgs10_observation_date=_series_observation_date(dgs10_item),
         dgs2_observation_date=_series_observation_date(dgs2_item),
         dff_observation_date=_series_observation_date(dff_item),
@@ -179,7 +181,7 @@ def interest_rate_context_from_signals(external_signals: Dict[str, object]) -> I
         has_yield_spread_delta=spread_delta_bp is not None,
         rate_regime=rate_regime_for_dgs10(dgs10),
         yield_curve_regime=yield_curve_regime_for_spread(spread),
-        has_interest_rate_signals=bool(dgs10 or dgs2 or dff or spread_present),
+        has_interest_rate_signals=any(value is not None for value in (dgs10, dgs2, dff, spread)),
         has_interest_rate_delta_signal=has_delta,
         has_macro_signals=bool(series or spread_present),
     )

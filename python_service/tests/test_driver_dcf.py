@@ -357,6 +357,8 @@ class DriverDcfTests(unittest.TestCase):
         source["overview"] = {"fetchedAt": "2026-01-03T00:00:00Z"}
         source["yfinance"]["info"] = {}
         source["yfinance"]["fastInfo"] = {"currency": "USD"}
+        for estimate in source["yfinance"]["revenueEstimate"]:
+            estimate["currency"] = "USD"
         source["yfinance"]["quote"] = {"price": 50.0}
         source["yfinance"]["history"] = self.price_history(equity_returns)
         source["benchmark_yfinance_by_symbol"] = {
@@ -377,7 +379,7 @@ class DriverDcfTests(unittest.TestCase):
 
         self.assertEqual("ready-for-shadow", built["status"])
         self.assertEqual("validated", built["consensusEvidence"]["status"])
-        self.assertEqual("provider-fast-info-currency", built["consensusEvidence"]["rows"][0]["currencyBasis"])
+        self.assertEqual("provider-estimate-currency", built["consensusEvidence"]["rows"][0]["currencyBasis"])
         self.assertAlmostEqual(1.5, built["observedInputs"]["beta"], places=6)
         self.assertEqual(5000.0, built["observedInputs"]["marketCapitalization"])
         self.assertEqual(

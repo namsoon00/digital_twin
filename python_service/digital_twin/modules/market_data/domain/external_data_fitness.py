@@ -243,6 +243,13 @@ def _purpose_fitness(
             if not enabled_expected
             else "지원되는 데이터셋이 아직 수집되지 않았습니다."
         )
+    missing_fields = sorted({
+        str(field) for row in fresh
+        for field in _mapping(row.get("quality")).get("missingFields") or []
+    })
+    if state == "fresh" and missing_fields:
+        state = "partial"
+        reason = "조회는 최신이지만 원천의 기간·통화·기준시각 등 필수 정보가 부족합니다."
     return {
         "purpose": contract.purpose,
         "label": contract.label,
@@ -265,6 +272,7 @@ def _purpose_fitness(
         "sourceAsOf": max((_text(row.get("sourceAsOf")) for row in usable), default=""),
         "fetchedAt": max((_text(row.get("fetchedAt")) for row in usable), default=""),
         "reason": reason,
+        "missingFields": missing_fields,
     }
 
 

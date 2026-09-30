@@ -23,8 +23,8 @@ from digital_twin.modules.news_intelligence.contracts import company_knowledge_b
 from digital_twin.modules.instruments.contracts import security_lines_for_symbol
 
 
-ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v2"
-ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v2"
+ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v3"
+ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v3"
 
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",
@@ -861,7 +861,9 @@ def _compact_macro(value: object) -> Dict[str, object]:
     source = value if isinstance(value, Mapping) else {}
     result = _selected(
         source,
-        ["yieldSpread10y2y", "yieldSpread10y2yDeltaBp", "regime", "regimeLabel", "fetchedAt"],
+        ["yieldSpread10y2y", "previousYieldSpread10y2y", "yieldSpread10y2yDeltaBp",
+         "yieldSpreadObservationDate", "yieldSpreadPreviousDate", "sourceAsOf",
+         "regime", "regimeLabel", "fetchedAt"],
         text_limit=180,
         list_limit=8,
         depth=2,
@@ -873,7 +875,12 @@ def _compact_macro(value: object) -> Dict[str, object]:
         if isinstance(item, Mapping):
             compact_series[str(key)] = _selected(
                 item,
-                ["value", "deltaBp", "date", "provider", "sourceAsOf", "fetchedAt", "freshnessStatus"],
+                ["value", "previousValue", "deltaBp", "delta1dBp", "delta5dBp", "delta20dBp",
+                 "deltaPct", "deltaValue", "yearOverYearPct", "yearAgoValue", "yearAgoPeriod",
+                 "date", "observationDate", "previousDate", "comparison1dDate", "comparison5dDate",
+                 "comparison20dDate", "changeBasis", "unit", "currency", "label", "seriesId",
+                 "provider", "officialSource", "sourceUrl", "sourceAsOf", "fetchedAt",
+                 "freshnessStatus", "lastChangedAtSource"],
                 text_limit=160,
                 depth=2,
             )
@@ -970,7 +977,7 @@ def _compact_external_data_lineage(
             [
                 "datasetId", "subjectKey", "revisionId", "providerRevision",
                 "payloadHash", "sourceSchemaVersion", "sourceAsOf", "fetchedAt",
-                "availability", "freshnessState",
+                "availability", "freshnessState", "revisionPersistence",
             ],
             text_limit=220,
             depth=1,

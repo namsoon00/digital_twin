@@ -306,13 +306,8 @@ def _market_assumption(
 
 def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, object]]:
     info = yfinance.get("info") if isinstance(yfinance.get("info"), Mapping) else {}
-    fast_info = yfinance.get("fastInfo") if isinstance(yfinance.get("fastInfo"), Mapping) else {}
-    history_metadata = yfinance.get("historyMetadata") if isinstance(yfinance.get("historyMetadata"), Mapping) else {}
     currency_values = [
         (info.get("financialCurrency"), "provider-financial-currency"),
-        (info.get("currency"), "provider-listing-currency"),
-        (fast_info.get("currency"), "provider-fast-info-currency"),
-        (history_metadata.get("currency"), "provider-history-currency"),
     ]
     currency, currency_basis = next(
         ((_text(value).upper(), basis) for value, basis in currency_values if _text(value)),
@@ -332,8 +327,10 @@ def _revenue_estimates(yfinance: Mapping[str, object]) -> Dict[str, Dict[str, ob
                 "analystCount": int(_finite(row.get("numberOfAnalysts")) or 0),
                 "growth": _finite(row.get("growth")),
                 "yearAgoRevenue": _finite(row.get("yearAgoRevenue")),
-                "currency": currency,
-                "currencyBasis": currency_basis,
+                "currency": _text(row.get("currency")).upper() or currency,
+                "currencyBasis": "provider-estimate-currency" if _text(row.get("currency")) else currency_basis,
+                "targetPeriodEnd": _text(row.get("targetPeriodEnd") or row.get("endDate")),
+                "sourceAsOf": _text(row.get("sourceAsOf")),
                 "provider": _text(yfinance.get("provider") or "yfinance"),
                 "horizon": "FY1" if period == "0y" else "FY2",
             }

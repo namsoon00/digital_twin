@@ -163,6 +163,33 @@ def earnings_date_rows(frame, limit: int = 40) -> List[Dict[str, object]]:
 EARNINGS_ESTIMATE_NORMALIZATION_VERSION = "earnings-estimate-observation-v2"
 
 
+def bind_yfinance_estimate_metadata(payload: Dict[str, object], trend: object) -> None:
+    """Recover period metadata dropped by the vendor DataFrame conversion.
+
+    Join only the same response's cached period. Never infer fiscal dates from
+    a quote/calendar or substitute collection time for source publication.
+    """
+    periods = {
+        str(row.get("period") or ""): row
+        for row in trend if isinstance(row, dict)
+    } if isinstance(trend, list) else {}
+    for group in ("earningsEstimate", "revenueEstimate"):
+        for row in payload.get(group) or []:
+            if not isinstance(row, dict):
+                continue
+            source = periods.get(str(row.get("period") or ""), {})
+            estimate = source.get(group) if isinstance(source.get(group), dict) else {}
+            for target, value in (
+                ("targetPeriodEnd", source.get("endDate")),
+                ("sourceAsOf", source.get("sourceAsOf")),
+                ("currency", estimate.get("earningsCurrency") if group == "earningsEstimate" else estimate.get("revenueCurrency")),
+            ):
+                if isinstance(value, dict):
+                    value = value.get("raw")
+                if not row.get(target) and isinstance(value, str) and value.strip():
+                    row[target] = value.strip()
+
+
 def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_at: str) -> List[Dict[str, object]]:
     estimates = payload.get("earningsEstimate") if isinstance(payload.get("earningsEstimate"), list) else []
     trends = {
@@ -203,10 +230,12 @@ def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_a
         source_as_of = str(item.get("sourceAsOf") or payload.get("sourceAsOf") or "").strip()
         target_period_start = str(item.get("targetPeriodStart") or "").strip()
         target_period_end = str(item.get("targetPeriodEnd") or item.get("endDate") or "").strip()
-        currency = str(item.get("currency") or (payload.get("info") or {}).get("currency") or "").strip()
+        currency = str(item.get("currency") or "").strip()
         snapshot = {
             "provider": "yfinance", "rawPeriod": raw_period, "period": period,
             "sourceAsOf": source_as_of, "low": low, "base": base, "high": high,
+            "targetPeriodStart": target_period_start, "targetPeriodEnd": target_period_end,
+            "currency": currency,
             "analystCount": int(analyst_count) if analyst_count is not None else None,
             "growth": growth, "thirtyDaysAgo": thirty_days_ago,
             "revisionUp30d": int(revision_up) if revision_up is not None else None,
@@ -245,6 +274,10 @@ def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_a
             "sampleState": "reported" if analyst_count and analyst_count > 0 else "reported-zero" if analyst_count == 0 else "not-provided",
             "validationState": "observed-unbound-revision",
             "revisionState": "unbound-source-revision",
+            "missingFields": [key for key, value in (
+                ("sourceAsOf", source_as_of), ("targetPeriodEnd", target_period_end),
+                ("currency", currency),
+            ) if not value],
         }
         if target_period_start:
             row["targetPeriodStart"] = target_period_start
@@ -701,6 +734,12 @@ class ExternalSignalYFinanceMixin:
             value = capture(name, getter)
             if not is_empty_value(value):
                 payload[name] = value
+
+        if "analyst" in selected_profiles:
+            # Public estimate accessors above already fetched this response.
+            # Inspecting its cache performs no additional vendor request.
+            analysis = getattr(ticker, "_analysis", None)
+            bind_yfinance_estimate_metadata(payload, getattr(analysis, "_earnings_trend", None))
 
         options = []
         chains = []

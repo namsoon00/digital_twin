@@ -280,8 +280,10 @@ def bind_consensus_lineage(fragment: Dict[str, object], fact_row: Mapping[str, o
                 }
                 references[(reference["datasetId"], reference["revisionId"])] = reference
                 row["sourceReferences"] = [references[key] for key in sorted(references)]
+                row["missingFields"] = [key for key in ("targetPeriodEnd", "sourceAsOf", "currency") if not row.get(key)]
                 row["validationState"] = (
-                    "observed" if row.get("targetPeriodEnd") else "observed-partial-period"
+                    "observed-partial-period" if not row.get("targetPeriodEnd")
+                    else "observed-partial-inputs" if row["missingFields"] else "observed"
                 )
                 row["revisionState"] = "exact-source-revision"
                 rows.append(row)
@@ -397,11 +399,17 @@ class ExternalSignalsReadModelService:
         stale = set()
         requested_subjects = [str(item or "").upper().strip() for item in subject_keys or [] if str(item or "").strip()]
         fact_subjects = list(dict.fromkeys([*requested_subjects, *VALUATION_BENCHMARK_SUBJECTS]))
-        rows = [row for row in self.fact_store.list_current(fact_subjects) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
+        rows = [dict(row) for row in self.fact_store.list_current(fact_subjects) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
         for row in rows:
             fragment = row.get("payload") if isinstance(row.get("payload"), dict) else {}
             fragment = bind_external_event_lineage(fragment, row)
             fragment = bind_consensus_lineage(fragment, row)
+            if row.get("datasetId") == "yfinance.analyst":
+                estimates = [estimate for summary in (fragment.get("companyOverviews") or {}).values()
+                             if isinstance(summary, dict) for estimate in summary.get("earningsEstimates") or []
+                             if isinstance(estimate, dict)]
+                missing = sorted({field for estimate in estimates for field in estimate.get("missingFields") or []}) if estimates else ["earningsEstimates"]
+                row["quality"] = {**(row.get("quality") or {}), "missingFields": missing}
             for key, value in fragment.items():
                 if key == "statuses" and isinstance(value, list):
                     result["statuses"].extend([dict(item) for item in value if isinstance(item, dict)])
@@ -426,6 +434,7 @@ class ExternalSignalsReadModelService:
                     "datasetId": dataset_id,
                     "subjectKey": subject_key,
                     "revisionId": str(row.get("revisionId") or ""),
+                    "revisionPersistence": str(row.get("revisionPersistence") or "unverified"),
                     "providerRevision": str(row.get("sourceRevision") or ""),
                     "payloadHash": str(row.get("payloadHash") or ""),
                     "sourceSchemaVersion": str(row.get("sourceSchemaVersion") or ""),

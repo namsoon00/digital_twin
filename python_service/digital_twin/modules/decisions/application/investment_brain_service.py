@@ -1,7 +1,7 @@
 from dataclasses import fields
 from typing import Dict, List, Optional, Tuple
 
-from digital_twin.modules.decisions.domain.investment_brain import InvestmentQuestion, decision_episode_from_context, hypothesis_set_from_relation_context, hypothesis_templates_from_rulebox_snapshot, rule_claim_coverage_from_rulebox_snapshot
+from digital_twin.modules.decisions.domain.investment_brain import InvestmentQuestion, ResearchPlan, stable_id, decision_episode_from_context, hypothesis_set_from_relation_context, hypothesis_templates_from_rulebox_snapshot, rule_claim_coverage_from_rulebox_snapshot
 from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
 from digital_twin.modules.news_intelligence.contracts import ReasoningGeneration, ResearchRun, complete_reasoning_handoff
 from digital_twin.modules.outcomes.contracts import attach_abox_hypothesis_calibrations
@@ -81,11 +81,27 @@ class InvestmentBrainService:
         )
         relation_context = self.load_relation_context(state, position, source)
         if not relation_context:
+            # Collection is allowed without an existing market hypothesis.
+            # Missing graph inference still forbids an investment judgement.
+            plan = ResearchPlan(
+                plan_id=stable_id("research-plan", question.question_id),
+                question_id=question.question_id,
+                unresolved_questions=[question.text],
+            ).to_dict()
+            plan["planningSource"] = "investment-question"
+            research_run = self.run_research(question, position, {
+                "researchPlan": plan,
+                "hypothesisSet": {"hypotheses": []},
+                "missingData": ["typedb-inference-relations"],
+            }, resolved_account_id)
+            research_payload = research_run.to_dict() if research_run else {}
             return {
                 "status": "blocked",
                 "engine": "ontology-investment-brain",
                 "question": question.to_dict(),
                 "reply": "TypeDB InferenceBox에서 이 종목과 연결된 추론 관계를 찾지 못해 투자 답변을 만들지 않았습니다.",
+                "researchPlan": research_payload.get("executedPlan") or plan,
+                "researchRun": research_payload,
                 "missing": ["typedb-inference-relations"],
             }
         brain = self.brain_with_reasoning_generation(

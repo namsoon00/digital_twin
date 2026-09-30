@@ -14,7 +14,7 @@ from digital_twin.modules.notifications.contracts import build_decision_core_evi
 from digital_twin.modules.decisions.domain.prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v10-canonical-ledger"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v11-question-coverage"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v5"
 
 RESEARCH_INSIGHT_FACT_LABELS = (
@@ -798,6 +798,7 @@ def _minimum_research_review_core(value: object) -> Dict[str, object]:
         ),
         "evidenceLedger": ledger,
         "narrativeClaimContract": claim_contract,
+        "researchProgress": core.get("researchProgress") or {},
         "dataLimits": [
             _bounded_detail_bytes(item, 260)
             for item in list(core.get("dataLimits") or [])[:3]
@@ -1600,6 +1601,45 @@ def _missing_data(value: object, company_relevant: bool, linked_fact_keys: List[
     return [row for row in rows if row][:4]
 
 
+def _research_progress(value: object) -> Dict[str, object]:
+    """Keep question coverage visible without admitting new action evidence."""
+    research = _mapping(value)
+    cycle, plan = _mapping(research.get("cycle")), _mapping(research.get("plan"))
+    assessments = [dict(row) for row in (
+        cycle.get("taskAssessments") or plan.get("taskAssessments") or []
+    ) if isinstance(row, dict)]
+    stop_reason = cycle.get("stopReason") or plan.get("stopReason")
+    if not assessments and not stop_reason:
+        return {}
+    seen = {str(row.get("taskId") or "") for row in assessments}
+    for task in plan.get("tasks") or []:
+        if not isinstance(task, dict) or str(task.get("taskId") or "") in seen:
+            continue
+        assessments.append({
+            "taskId": task.get("taskId"), "question": task.get("question"),
+            "status": "unassessed", **_mapping(task.get("evidenceAssessment")),
+        })
+        seen.add(str(task.get("taskId") or ""))
+    unresolved = sum(row.get("status") != "addressed" for row in assessments)
+    # Prioritize unanswered questions when the prompt cannot show every task.
+    selected = sorted(assessments, key=lambda row: row.get("status") == "addressed")[:4]
+    return {
+        **_selected(cycle, ("runId", "status")),
+        "stopReason": _clean(stop_reason, 80),
+        "meaning": "question-coverage-not-prediction-validation",
+        "decisionEligibility": "research-only",
+        "totalTaskCount": len(assessments),
+        "unresolvedTaskCount": max(unresolved, int(cycle.get("unresolvedTaskCount") or 0)),
+        "omittedTaskCount": len(assessments) - len(selected),
+        "tasks": [{
+            **_selected(row, ("taskId", "status", "coverageState", "semanticReviewState", "assessedAt")),
+            "question": _clean(row.get("question"), 220),
+            "reason": _clean(row.get("reason"), 240),
+            "missingRequirements": [_clean(item, 100) for item in _unique(row.get("missingRequirements"), 6)],
+        } for row in selected],
+    }
+
+
 def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Dict[str, object], Dict[str, object]]:
     current = _mapping(brief.get("currentSituation"))
     inference = _mapping(brief.get("inference"))
@@ -1688,6 +1728,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
         },
         "externalEvidence": external_evidence,
         "background": company_reference,
+        "researchProgress": _research_progress(brief.get("research")),
         "dataLimits": _missing_data(data_coverage.get("missingData"), bool(company), linked_fact_keys),
         "policyScope": _selected(brief.get("decisionPolicyScope"), ("name", "portfolioRebalancePolicy")),
         "portfolioPolicy": _portfolio_policy(brief),
@@ -1903,7 +1944,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
 
     fitted = _fit_notification_ai_decision_core(core, budget_bytes)
     _validate_financial_evidence_retention(core, fitted)
-    for field in ("facts", "temporalEvidence"):
+    for field in ("facts", "temporalEvidence", "researchProgress"):
         if core.get(field) and fitted.get(field) != core.get(field):
             raise ValueError("AI prompt lost protected observed evidence: " + field)
     for field in ("reasoningTrigger", "relationLifecycle"):

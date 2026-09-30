@@ -1,9 +1,10 @@
 """Bounded AI research planning for TypeDB-derived competing hypotheses."""
 
+from datetime import date
 from typing import Dict, Iterable, List, Tuple
 
 from digital_twin.modules.decisions.contracts import stable_id
-from digital_twin.modules.news_intelligence.contracts import HypothesisResearchBrief, unique_texts
+from digital_twin.modules.news_intelligence.contracts import HypothesisResearchBrief, RESEARCH_FINANCIAL_METRICS, unique_texts
 
 
 PLANNER_SOURCE = "ai-hypothesis-research-planner"
@@ -123,11 +124,17 @@ def research_planner_input(
             "planId": str(plan.get("planId") or ""),
             "unresolvedQuestions": list(plan.get("unresolvedQuestions") or []),
             "taskCount": len(plan.get("tasks") or []),
+            "tasks": [{key: item.get(key) for key in (
+                "taskId", "question", "purpose", "requiredEvidenceTypes", "sourceTypes",
+                "requiredPeriodEnds", "requiredMetrics", "maxAgeMinutes", "evidenceAssessment",
+            )} for item in (plan.get("tasks") or [])[:16] if isinstance(item, dict)],
         },
+        "researchProgress": dict(plan.get("evidenceAssessment") or {}),
         "dataCoverageMap": {
             "knownEvidenceGaps": list(brief.evidence_gaps),
             "approvedSourceTypes": sorted(APPROVED_DISCOVERY_SOURCE_TYPES),
             "approvedEvidenceTypes": sorted(APPROVED_DISCOVERY_EVIDENCE_TYPES),
+            "supportedFinancialMetrics": list(RESEARCH_FINANCIAL_METRICS),
         },
         "guardrails": {
             "cannotAssertUncollectedFacts": True,
@@ -137,6 +144,8 @@ def research_planner_input(
             "novelQuestionMustExplainDecisionImpact": True,
             "mustUseApprovedSourceAndEvidenceTypes": True,
             "maximumAdditionalTaskCount": 3,
+            "taskReviewIsNotEmpiricalValidation": True,
+            "mustCiteExactAssessmentFingerprint": True,
         },
     }
 
@@ -180,7 +189,9 @@ def apply_ai_research_guidance(
     }
     additions: List[Dict[str, object]] = []
     raw_tasks = [item for item in raw.get("tasks") or [] if isinstance(item, dict)]
-    for index, item in enumerate(raw_tasks[:max(1, int(maximum_additional_tasks or 1))]):
+    already_added = sum(item.get("planningSource") == PLANNER_SOURCE for item in baseline.get("tasks") or [])
+    remaining = max(0, min(3, int(maximum_additional_tasks or 0)) - already_added)
+    for index, item in enumerate(raw_tasks[:remaining]):
         hypothesis_id = str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip()
         discovery_kind = str(item.get("discoveryKind") or item.get("discovery_kind") or "").strip().lower()
         rationale = clean_text(
@@ -240,6 +251,17 @@ def apply_ai_research_guidance(
             value for value in unique_texts(item.get("counterHypothesisIds") or item.get("counter_hypothesis_ids") or [], 8)
             if value in allowed_counters
         ]
+        period_ends = unique_texts(item.get("requiredPeriodEnds") or [], 12)
+        try:
+            if any(date.fromisoformat(period).isoformat() != period for period in period_ends):
+                raise ValueError("non-canonical period")
+        except (TypeError, ValueError):
+            rejected.append({"index": index, "reason": "invalid-required-period"})
+            continue
+        required_metrics = unique_texts(item.get("requiredMetrics") or [], 20)
+        if any(metric not in RESEARCH_FINANCIAL_METRICS for metric in required_metrics):
+            rejected.append({"index": index, "reason": "unsupported-financial-metric"})
+            continue
         task = {
             "taskId": stable_id("ai-hypothesis-research-task", baseline.get("planId"), hypothesis_id, question, ",".join(source_types)),
             "question": question,
@@ -259,6 +281,8 @@ def apply_ai_research_guidance(
             "decisionChangingRationale": rationale,
             "expectedDecisionImpact": unique_texts(expected_impacts, 6),
             "queryTerms": unique_texts(item.get("queryTerms") or item.get("query_terms") or [], 6),
+            "requiredPeriodEnds": period_ends,
+            "requiredMetrics": required_metrics,
         }
         additions.append(task)
         existing_questions.add(question.casefold())
@@ -289,4 +313,5 @@ def apply_ai_research_guidance(
         "unresolvedQuestions": unresolved,
         "planningSource": PLANNER_SOURCE if additions else baseline.get("planningSource") or "typedb-hypothesis-set",
         "planningAudit": audit,
+        "taskReviews": [dict(item) for item in raw.get("taskReviews") or [] if isinstance(item, dict)][:16],
     }, audit

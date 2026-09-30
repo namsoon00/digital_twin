@@ -192,6 +192,29 @@ class LifecycleBaselineConnection(LifecycleArchiveConnection):
 
 
 class MySQLMinimalRetentionTests(unittest.TestCase):
+    def _assert_research_audit_expiry_is_rechecked_at_preview_selection_and_delete(self):
+        class ResearchConnection(ApplyConnection):
+            def execute(self, sql, params=()):
+                if "SELECT run_id" in str(sql) and "investment_research_runs" in str(sql):
+                    self.calls.append((str(sql), tuple(params)))
+                    return Cursor(rows=[{"run_id": "expired-audit", "payload_bytes": 128}])
+                return super().execute(sql, params)
+
+        connection = ResearchConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({"mysqlMinimalRetentionEnabled": "1", "mysqlMinimalRetentionBatchSize": "2"})
+        now = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        repository.preview(policy, now=now)
+        result = repository.apply(policy, now=now)
+        self.assertEqual("ok", result["status"])
+        queries = [(sql, params) for sql, params in connection.calls if "investment_research_runs" in sql]
+        self.assertEqual(3, len(queries))
+        for sql, params in queries:
+            self.assertIn("$.auditRetainUntil", sql)
+            self.assertIn("status NOT IN", sql)
+            self.assertIn("2026-09-23T00:00:00Z", params)
+            self.assertEqual(sql.count("%s"), len(params))
+
     def test_reasoning_job_retention_preserves_pending_market_anchor_sources(self):
         connection = ApplyConnection()
         repository = MySQLMinimalRetentionRepository(connection)
@@ -312,6 +335,7 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertNotIn("investment_research_runs", sql_text)
 
     def test_repository_deletes_only_terminal_projection_primary_keys(self):
+        self._assert_research_audit_expiry_is_rechecked_at_preview_selection_and_delete()
         connection = ApplyConnection()
         repository = MySQLMinimalRetentionRepository(connection)
         policy = mysql_minimal_retention_policy({

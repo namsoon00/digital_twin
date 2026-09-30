@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v32-contract-normalized"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v33-question-evidence"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v22"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -233,6 +233,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "모든 입력 가설을 정확히 한 번 비교하고 selectedHypothesisId는 입력 ID만 사용한다. 가설이 없으면 hypotheses와 selectedHypothesisId를 비운다.",
     "각 가설의 모든 지지·반대 근거를 검토하고 evidenceReviewStatus=all-input-evidence-reviewed로 쓴다. blocked·quarantined 가설은 supported로 판정하지 않는다.",
     "research-only 또는 decisionUse가 execution이 아닌 가설은 비교·학습에만 사용한다. qualification pending은 관계 성립과 행동 검증 완료를 구분하고 필요한 승격·무효화 자료를 밝힌다.",
+    "researchProgress는 질문별 자료 충족·해석 검토 기록이며 예측 적중이나 행동 승인 근거가 아니다. 수집 완료와 질문 해결을 구분하고 미해결 질문·누락 기간·비교 기준을 설명에 반영한다. 행동 근거는 기존 evidenceLedger와 actionEnvelope에서만 선택한다.",
     "system readiness가 conditional/insufficient이거나 검증 근거가 연결된 causalChain이 없으면 BUY·ADD·TRIM·SELL을 선택하지 않는다. actionEnvelope의 허용·차단 행동을 지킨다.",
     "투자 관점과 실행 가능성을 분리한다. 실행이 금지돼도 가장 잘 지지되는 방향·인과 경로·투자 의미를 insightAssessment에 결론내리고, 자료 부족만으로 balanced를 선택하지 않는다.",
     "dominantThesis는 결론, causalMechanism은 원인 경로, investmentImplication은 사용자 대응 의미다. narrativeClaims의 view·mechanism·implication과 의미를 맞추되 같은 문장을 반복하지 않는다.",

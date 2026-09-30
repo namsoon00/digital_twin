@@ -632,6 +632,11 @@ def add_research_evidence_concepts(
                 else {}
             ),
             "sourceRevision": raw_payload.get("sourceRevision"),
+            **({key: raw_payload.get(key) for key in (
+                "periodEnd", "frequency", "reportedValues", "metricUnits", "metricProvenance",
+                "durationBases", "sourceReferences", "reportObservationId", "historicalReport",
+                "publicationTimeKnown", "freshnessBasis", "freshnessObservedAt",
+            )} if raw_payload.get("financialReport") else {}),
             "sourceAsOf": raw_payload.get("sourceAsOf") or item.published_at or item.observed_at,
             "disclosureAnalysis": {
                 key: (raw_payload.get("disclosureAnalysis") or {}).get(key)

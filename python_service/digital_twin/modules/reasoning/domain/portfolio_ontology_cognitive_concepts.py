@@ -258,6 +258,8 @@ def add_investment_brain_concepts(
                 "status": research_plan.get("status"),
                 "maxRounds": research_plan.get("maxRounds"),
                 "createdAt": research_plan.get("createdAt"),
+                "stopReason": research_plan.get("stopReason"),
+                "decisionEligibility": "research-only",
             })
             if question_id:
                 add_relation(graph, question_id, plan_id, "HAS_RESEARCH_PLAN", weight=1.0, properties={"source": "investment-brain-memory"})
@@ -282,6 +284,10 @@ def add_investment_brain_concepts(
                 "decisionRelevance": task.get("decisionRelevance"),
                 "executionMode": task.get("executionMode"),
                 "resultEvidenceIds": task.get("resultEvidenceIds") or [],
+                "requiredPeriodEnds": task.get("requiredPeriodEnds") or [],
+                "requiredMetrics": task.get("requiredMetrics") or [],
+                "evidenceAssessment": task.get("evidenceAssessment") or {},
+                "decisionEligibility": "research-only",
             })
             research_task_ids[task_key] = task_id
             if plan_id:

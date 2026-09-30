@@ -70,6 +70,13 @@ def _cutoff_sql() -> str:
     return "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
 
 
+def _research_audit_expired_sql() -> str:
+    # Historical rows without a research audit keep the operational policy.
+    # New question receipts survive their research horizon before that same
+    # terminal-retention window starts. Recheck this guard at DELETE time.
+    return "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.auditRetainUntil')), '') < " + _cutoff_sql()
+
+
 class MySQLMinimalRetentionRepository:
     """Low-priority, idempotent MySQL compaction adapter."""
 
@@ -183,8 +190,9 @@ class MySQLMinimalRetentionRepository:
             "terminalResearchRuns": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
                 "FROM `investment_research_runs` WHERE completed_at <> '' AND status NOT IN ("
-                + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ") AND updated_at < " + _cutoff_sql(),
-                tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoffs["researchTerminal"],),
+                + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ") AND updated_at < " + _cutoff_sql()
+                + " AND " + _research_audit_expired_sql(),
+                tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoffs["researchTerminal"], cutoffs["researchTerminal"]),
             ),
             "completedTimeSeriesProjection": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
@@ -1473,8 +1481,8 @@ class MySQLMinimalRetentionRepository:
             SELECT run_id, OCTET_LENGTH(payload_json) AS payload_bytes
             FROM `investment_research_runs`
             WHERE completed_at <> '' AND status NOT IN (""" + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ")"
-            " AND updated_at < " + _cutoff_sql() + " ORDER BY updated_at, run_id LIMIT %s",
-            tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoff_iso, policy.batch_size),
+            " AND updated_at < " + _cutoff_sql() + " AND " + _research_audit_expired_sql() + " ORDER BY updated_at, run_id LIMIT %s",
+            tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoff_iso, cutoff_iso, policy.batch_size),
             "run_id",
             policy,
             budget,
@@ -1483,8 +1491,8 @@ class MySQLMinimalRetentionRepository:
             "investment_research_runs",
             "run_id",
             candidates,
-            "completed_at <> '' AND status NOT IN (" + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ") AND updated_at < " + _cutoff_sql(),
-            tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoff_iso,),
+            "completed_at <> '' AND status NOT IN (" + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ") AND updated_at < " + _cutoff_sql() + " AND " + _research_audit_expired_sql(),
+            tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoff_iso, cutoff_iso),
             budget,
         )
         return self._result("investment_research_runs", deleted, bytes_deleted)

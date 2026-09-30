@@ -11,6 +11,7 @@ from digital_twin.modules.news_intelligence.domain.investment_research import Ne
 from digital_twin.modules.decisions.contracts import attach_prompt_evidence_admission
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
 from digital_twin.modules.news_intelligence.contracts import resolve_source_provenance
+from .financial_reporting import financial_report_contract_assessment
 
 
 PRIMARY_SOURCE_MARKERS = (
@@ -528,6 +529,11 @@ class ResearchRun:
     hypothesis_research_brief: HypothesisResearchBrief = field(default_factory=HypothesisResearchBrief)
     claim_quality: Dict[str, object] = field(default_factory=dict)
     request_context: Dict[str, object] = field(default_factory=dict)
+    executed_plan: Dict[str, object] = field(default_factory=dict)
+    task_assessments: List[Dict[str, object]] = field(default_factory=list)
+    round_history: List[Dict[str, object]] = field(default_factory=list)
+    stop_reason: str = ""
+    audit_retain_until: str = ""
     started_at: str = field(default_factory=utc_now_iso)
     completed_at: str = ""
 
@@ -593,6 +599,11 @@ class ResearchRun:
             ),
             claim_quality=dict(payload.get("claimQuality") or payload.get("claim_quality") or {}),
             request_context=dict(payload.get("requestContext") or payload.get("request_context") or {}),
+            executed_plan=dict(payload.get("executedPlan") or payload.get("executed_plan") or {}),
+            task_assessments=list(payload.get("taskAssessments") or payload.get("task_assessments") or []),
+            round_history=list(payload.get("roundHistory") or payload.get("round_history") or []),
+            stop_reason=str(payload.get("stopReason") or payload.get("stop_reason") or ""),
+            audit_retain_until=str(payload.get("auditRetainUntil") or payload.get("audit_retain_until") or ""),
             started_at=str(payload.get("startedAt") or payload.get("started_at") or utc_now_iso()),
             completed_at=str(payload.get("completedAt") or payload.get("completed_at") or ""),
         )
@@ -635,6 +646,12 @@ def source_trust_meets_policy(actual: object, required: object) -> bool:
 
 def evidence_age_minutes(item: ResearchEvidence, now=None):
     raw_timestamp = str(item.published_at or item.observed_at or "").strip()
+    payload = item.raw_payload or {}
+    if item.kind == "financial-fact" and payload.get("freshnessBasis") == "source-observation":
+        report = payload.get("financialReport") or {}
+        if not financial_report_contract_assessment(report).get("eligible"):
+            return None
+        raw_timestamp = str(payload.get("freshnessObservedAt") or item.observed_at or "").strip()
     parsed = parse_datetime(raw_timestamp)
     if not parsed and len(raw_timestamp) == 8 and raw_timestamp.isdigit():
         try:
@@ -1182,6 +1199,13 @@ def verification_for_evidence(
         minimum_source_trust_state = normalized_source_trust_state(legacy_policy["minimum_source_reliability"])
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     resolution, reasons = entity_resolution(item, target)
+    checked_at = now or datetime.now(timezone.utc)
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+    for field_name, value in (("published", item.published_at), ("observed", item.observed_at)):
+        stamp = parse_datetime(value)
+        if stamp and stamp > checked_at:
+            reasons.append(field_name + "-after-verification-cutoff")
     age = evidence_age_minutes(item, now=now)
     if age is None:
         reasons.append("reference-time-missing")
@@ -1408,6 +1432,17 @@ def governed_evidence(
         for other in records:
             other_claim = other["claim"]
             if other_claim.get("claimId") == claim.get("claimId"):
+                continue
+            if claim.get("sourceEvidenceId") and claim.get("sourceEvidenceId") == other_claim.get("sourceEvidenceId"):
+                # Different sentences of one document cannot confirm one
+                # another or turn that original document into a republication.
+                continue
+            report_id = (item.raw_payload or {}).get("reportObservationId")
+            other_report_id = (other["item"].raw_payload or {}).get("reportObservationId")
+            if (report_id or other_report_id) and report_id != other_report_id:
+                # Quarterly/annual reports and later revisions are different
+                # observations. Similar numerical prose is neither syndicated
+                # news nor independent confirmation of the same claim.
                 continue
             if not claims_within_window(claim, other_claim, window_hours):
                 continue

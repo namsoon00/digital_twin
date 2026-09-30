@@ -1538,7 +1538,7 @@ def compact_research_plan_for_ai(payload: object) -> Dict[str, object]:
         return {}
     compact = {
         key: plan.get(key)
-        for key in ["planId", "questionId", "status", "maxRounds", "createdAt"]
+        for key in ["planId", "questionId", "status", "maxRounds", "createdAt", "stopReason"]
         if plan.get(key) not in (None, "", [], {})
     }
     compact["unresolvedQuestions"] = _bounded_ai_list(plan.get("unresolvedQuestions") or [], 6, 420)
@@ -1551,13 +1551,15 @@ def compact_research_plan_for_ai(payload: object) -> Dict[str, object]:
             for key in [
                 "taskId", "status", "priority", "question",
                 "executionMode", "maxAgeMinutes", "sourceTypes", "requiredEvidenceTypes",
-                "relatedHypothesisIds", "resultEvidenceIds",
+                "relatedHypothesisIds", "resultEvidenceIds", "requiredPeriodEnds", "requiredMetrics",
             ]
             if item.get(key) not in (None, "", [], {})
         }
         for key in ["question"]:
             if row.get(key):
                 row[key] = _bounded_ai_text(row[key], 260)
+        if isinstance(item.get("evidenceAssessment"), dict):
+            row["evidenceAssessment"] = compact_task_assessment(item["evidenceAssessment"])
         tasks.append(row)
         if len(tasks) >= 4:
             break
@@ -1941,6 +1943,20 @@ def compact_relation_context_for_ai(context: object) -> Dict[str, object]:
     return compact
 
 
+def compact_task_assessment(item: Dict[str, object]) -> Dict[str, object]:
+    return {
+        **{key: item.get(key) for key in (
+            "taskId", "status", "coverageState", "semanticReviewState",
+            "assessmentFingerprint", "assessedAt", "decisionEligibility",
+        )},
+        "question": _bounded_ai_text(item.get("question"), 260),
+        "reason": _bounded_ai_text(item.get("reason"), 420),
+        "missingRequirements": _bounded_ai_list(item.get("missingRequirements"), 8, 120),
+        "resultEvidenceIds": _bounded_ai_list(item.get("resultEvidenceIds"), 12, 191),
+        "counterEvidenceIds": _bounded_ai_list(item.get("counterEvidenceIds"), 12, 191),
+    }
+
+
 def compact_research_cycle_for_ai(payload: object) -> Dict[str, object]:
     payload = payload if isinstance(payload, dict) else {}
     if not payload:
@@ -1949,9 +1965,14 @@ def compact_research_cycle_for_ai(payload: object) -> Dict[str, object]:
         "runId", "questionId", "symbol", "status", "reason", "sourceTypes", "startedAt", "completedAt",
         "roundCount", "changedEvidenceCount", "investmentJudgmentEligible", "reasoningRefreshed",
         "subjectResolutionSource", "reusedEvidenceIds", "verifiedClaims", "rejectedClaims",
-        "unappliedVerifiedClaims", "providerStatuses", "taskIds",
+        "unappliedVerifiedClaims", "providerStatuses", "taskIds", "stopReason",
     ]
     compact = {key: payload.get(key) for key in keep_keys if payload.get(key) not in (None, "", [], {})}
+    assessments = [item for item in payload.get("taskAssessments") or [] if isinstance(item, dict)]
+    if assessments:
+        compact["taskAssessments"] = [compact_task_assessment(item) for item in assessments[:8]]
+        compact["unresolvedTaskCount"] = sum(item.get("status") != "addressed" for item in assessments)
+        compact["taskAssessmentMeaning"] = "research-coverage-not-prediction-validation"
     refresh = payload.get("reasoningRefresh") if isinstance(payload.get("reasoningRefresh"), dict) else {}
     if refresh:
         compact["reasoningRefresh"] = {
@@ -2105,7 +2126,7 @@ def build_notification_ai_gate_prompt(
         "promptContext.hypothesisLifecycle이 있으면, 이는 이전 정상 TypeDB 세대와 비교한 가설 감사 기록이다. observed·maintained·strengthened·weakened·invalidated·expired 상태는 새로움과 근거의 유지 여부를 설명하는 데만 사용하고, 상태 이름만으로 매수·매도 action을 고르지 않는다. transitionReason, evidenceDelta, requiredFreshnessDomains, nextDataRequirements를 읽어 이전 알림과 무엇이 달라졌는지와 다음 확인을 구체적으로 설명한다.",
         "relationshipDatabaseInference.hypothesisDecisionBrief는 현재 TypeDB 가설의 상태 변화, 반증 조건, 필수 신선도, 사후 관측 이력을 묶은 감사용 문맥이다. market scope와 account scope를 섞지 말고, outcomeState가 지지됨·반증됨·판단 불가·표본 부족인지와 표본 수를 정확히 읽는다. outcomeContract의 필수 데이터가 비어 제외된 관측은 가설을 지지하거나 반증하는 근거로 쓰지 않는다. qualityReview의 coverage-gap·freshness-blocked·revision-required 상태는 데이터 보완 또는 설명 재검토가 필요하다는 뜻일 뿐 현재 행동을 자동으로 고르는 근거가 아니다. 이 이력은 현재 세대의 가격·수급·뉴스·공시 증거와 분리해 설명한다. strategyGuide.hypothesisUpdate에는 이전 세대 대비 실제로 바뀐 점만 한두 문장으로 쓰고, strategyGuide.hypothesisNextCheck에는 그 가설을 지지하거나 반증할 다음 확인 하나를 쓴다.",
         "입력된 TypeDB 사실, 검증 완료된 조사 주장, 제공된 출처 외의 시장 사건·실적·수치·업계 상식은 판단 근거로 새로 만들지 않는다. 입력에 없는 정보가 유용해 보이면 부족 데이터 또는 다음 조사 항목으로만 적고, 실제 사실처럼 단정하지 않는다.",
-        "researchCycle이 있으면 investmentJudgmentEligible=true이고 reasoningRefreshed=true인 verifiedClaims만 새 판단 근거로 사용한다. rejectedClaims와 unappliedVerifiedClaims는 데이터 품질·재추론 실패를 설명하는 데만 사용하고 투자 방향의 근거로 승격하지 않는다. changedEvidenceCount가 0이면 기존 TypeDB 추론 세대를 새로운 사실처럼 해석하지 않는다.",
+        "researchCycle이 있으면 investmentJudgmentEligible=true이고 reasoningRefreshed=true인 verifiedClaims만 새 판단 근거로 사용한다. rejectedClaims와 unappliedVerifiedClaims는 데이터 품질·재추론 실패를 설명하는 데만 사용하고 투자 방향의 근거로 승격하지 않는다. changedEvidenceCount가 0이면 기존 TypeDB 추론 세대를 새로운 사실처럼 해석하지 않는다. taskAssessments는 질문별 조사 충족도이며 가설의 실증 검증이나 행동 허가가 아니다. stopReason과 미해결 항목을 유지하고, 수집 성공을 질문 해결로 바꾸어 쓰지 않는다.",
         "hypotheses 배열에 모든 입력 규칙 가설을 정확히 한 번씩 빠짐없이 평가하고 selectedHypothesisId에는 그중 최종 action을 가장 잘 설명하는 가설 ID 하나를 그대로 쓴다. 입력에 없는 ID, 안전 제한 ID, 중복 가설 행을 쓰면 전체 비교가 무효가 된다.",
         "BUY·ADD·TRIM·SELL을 선택할 때는 decisionReadiness=ready로 쓰고, causalChain에 실제 입력 evidenceId가 연결된 supported 경로를 하나 이상 적는다. 이 조건이 없으면 실행 행동을 선택하지 않는다.",
         "alternativeAction에는 허용된 현실적 대안 하나와 현재 선택하지 않은 이유, 그 대안으로 바뀌는 조건을 적는다.",

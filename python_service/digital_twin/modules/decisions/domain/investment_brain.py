@@ -205,6 +205,8 @@ class ResearchTask:
     decision_relevance: str = "supporting"
     execution_mode: str = "cache-first-on-demand"
     result_evidence_ids: List[str] = field(default_factory=list)
+    required_period_ends: List[str] = field(default_factory=list)
+    required_metrics: List[str] = field(default_factory=list)
     priority: int = 50
     status: str = "ready"
 
@@ -3370,6 +3372,8 @@ def source_types_for_requirements(requirements: Iterable[object]) -> List[str]:
     sources = []
     if any(token in text for token in ["disclosure", "filing", "공시", "fundamental", "financial", "earning"]):
         sources.extend(["official-filing", "company-ir"])
+    if any(token in text for token in ["fundamental", "financial", "earning"]):
+        sources.append("financial-data")
     if any(token in text for token in ["price", "flow", "trade", "quote", "market", "volume", "수급", "가격"]):
         sources.append("market-data")
     if any(token in text for token in ["macro", "rate", "fx", "currency", "금리", "환율"]):

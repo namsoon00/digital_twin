@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List, Tuple
 
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_external_signals
+from digital_twin.modules.news_intelligence.domain.financial_research_evidence import financial_research_evidence
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
 from digital_twin.modules.portfolio.domain.portfolio import Position
 from .external_signals import ExternalSignalProvider
@@ -53,6 +54,8 @@ class ExistingApiResearchGateway:
         )
         signals = self.provider_for(requested).signals_for_positions([position])
         items = research_evidence_from_external_signals(target.normalized_symbol(), signals)
+        company = (signals.get("companyKnowledge") or {}).get(target.normalized_symbol()) or {}
+        items.extend(financial_research_evidence(target.normalized_symbol(), company))
         self.attach_target_market(items, target)
         items = self.filter_items(items, requested)
         statuses = [dict(item) for item in signals.get("statuses") or [] if isinstance(item, dict)]
@@ -105,7 +108,7 @@ class ExistingApiResearchGateway:
             return rows
         allowed_kinds = set()
         if requested.intersection({"official", "official-filing", "company-ir"}):
-            allowed_kinds.update({"disclosure", "filing", "financial-fact"})
+            allowed_kinds.update({"disclosure", "filing", "issuer-ir", "financial-fact"})
         if requested.intersection({"market-data", "financial-data"}):
             allowed_kinds.update({"market-move", "financial-fact"})
         return [item for item in rows if item.kind in allowed_kinds]

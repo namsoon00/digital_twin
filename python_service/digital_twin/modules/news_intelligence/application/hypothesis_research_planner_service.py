@@ -38,10 +38,11 @@ class HypothesisResearchPlanningService:
             brain.get("researchPlan") if isinstance(brain, dict) and isinstance(brain.get("researchPlan"), dict) else {}
         )
         brief = hypothesis_research_brief_from_brain(brain)
-        if not brief.candidate_hypotheses:
+        has_question = bool(str((question or {}).get("text") or "").strip() and symbol)
+        if not brief.candidate_hypotheses and not (brief.evidence_gaps or baseline.get("tasks") or has_question):
             audit = {
                 "status": "not-required",
-                "reason": "TypeDB 현재 세대에서 조사할 경쟁 가설을 찾지 못했습니다.",
+                "reason": "조사할 대상 질문이나 근거 공백이 없습니다.",
                 "preservesBaselineTasks": True,
                 "decisionEligibility": "research-only",
             }

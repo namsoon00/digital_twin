@@ -204,7 +204,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # conditional valuation and scoped, revision-bound AI interpretation.
         # One source-bound digital-asset loss regression covers ingestion, sign,
         # filing/period isolation and accounting-to-cash interpretation.
-        self.assertLessEqual(total, 1874)
+        # Ten retention regressions cover protected references, bounded marker
+        # completion, retry/timeout behavior and honest physical-delete counters.
+        self.assertLessEqual(total, 1884)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

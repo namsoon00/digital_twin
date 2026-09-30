@@ -128,6 +128,22 @@ Manifest marker only after all of its unprotected generations are gone. The
 maintenance status records planned and removed generation counts, duplicate
 references avoided, and the remaining generation drain backlog per world.
 
+Cleanup fails closed when the active, rollback or selected Manifest metadata
+cannot be verified, or pending activation state is unknown. It reserves one
+remaining write batch as soon as a Manifest is safe to retire, so later data
+deletions cannot indefinitely postpone removal of completed Manifest markers.
+Active and rollback references and external relation endpoints remain protected.
+
+`generationCleanupCounterVersion=physical-delete-v2` distinguishes generations
+fully cleared after a delete batch in this turn from already-empty generations.
+`clearedRetiredScopeGenerationCount` includes both for remaining-backlog
+calculation; `removedRetiredScopeGenerationCount` counts only the former.
+These are generation counts, not row or reclaimed-byte counts. Historical
+totals included repeated empty confirmations; they are preserved separately as
+`legacyGenerationClearConfirmationCountTotal` when a world's first new cleanup
+result arrives. They cannot be used as unique deletion totals. Physical disk
+recovery is still measured separately after blue/green retirement.
+
 The projection recorder injects its pure RuleBox migration function into the
 catalog adapter. The adapter must not resolve its own same-named persistence
 wrapper as the migration function: that prevents existing RuleBox rows from

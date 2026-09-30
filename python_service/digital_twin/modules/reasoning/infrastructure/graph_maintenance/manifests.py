@@ -312,6 +312,18 @@ def prune_inactive_scoped_abox_manifests_in_driver(
         or active.get("aboxSnapshotId")
         or ""
     ).strip()
+    if (
+        active.get("status") != "ok"
+        or not active_id
+        or active_id != str(active.get("worldviewManifestId") or active.get("aboxSnapshotId") or "").strip()
+        or not isinstance(active.get("scopeGenerationIds"), dict)
+    ):
+        return {
+            "status": "blocked-protection-metadata",
+            "reason": "Active Manifest references are unavailable or inconsistent; no cleanup is safe.",
+            "deletedBatchCount": 0,
+            "resumeRequired": True,
+        }
     pending = _store.pending_abox_activation(world_id)
     if str(pending.get("status") or "") == "pending":
         return {
@@ -320,6 +332,13 @@ def prune_inactive_scoped_abox_manifests_in_driver(
             "activeAboxSnapshotId": active_id,
             "pendingAboxSnapshotId": str(pending.get("candidateAboxSnapshotId") or ""),
             "deletedBatchCount": 0,
+        }
+    if pending.get("status") != "empty":
+        return {
+            "status": "blocked-protection-metadata",
+            "reason": "Pending activation state is unavailable or invalid; no cleanup is safe.",
+            "deletedBatchCount": 0,
+            "resumeRequired": True,
         }
     keep_count = (
         _store.abox_inactive_generation_keep_count()
@@ -378,7 +397,11 @@ def prune_inactive_scoped_abox_manifests_in_driver(
     def load_selected_metadata(identity: Dict[str, object]) -> Dict[str, object]:
         manifest_id = str(identity.get("worldviewManifestId") or "").strip()
         metadata = dict(_store.scoped_manifest_metadata(manifest_id, world_id) or {})
-        if str(metadata.get("status") or "") != "ok":
+        if (
+            metadata.get("status") != "ok"
+            or str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip() != manifest_id
+            or not isinstance(metadata.get("scopeGenerationIds"), dict)
+        ):
             return {}
         return {**metadata, "updatedAt": str(identity.get("updatedAt") or "")}
 
@@ -395,6 +418,17 @@ def prune_inactive_scoped_abox_manifests_in_driver(
     selected_metadata_missing = len(retained) != len(retained_identities) or len(removable) != len(
         removable_identities
     )
+    if selected_metadata_missing:
+        return {
+            "status": "blocked-protection-metadata",
+            "reason": "Rollback or selected Manifest references are unavailable; no cleanup is safe.",
+            "activeAboxSnapshotId": active_id,
+            "selectedMetadataMissing": True,
+            "completedInactiveManifestCount": len(ordered_identities),
+            "remainingInactiveManifestCount": len(ordered_identities),
+            "deletedBatchCount": 0,
+            "resumeRequired": True,
+        }
     protected_generation_ids = {
         str(item or "").strip()
         for item in dict(active.get("scopeGenerationIds") or {}).values()
@@ -408,6 +442,8 @@ def prune_inactive_scoped_abox_manifests_in_driver(
         )
     removed = []
     removed_generation_ids = []
+    cleared_generation_ids = set()
+    already_empty_generation_ids = []
     attempted_generation_ids = []
     deleted_batches = 0
     cleanup_rows = []
@@ -443,19 +479,16 @@ def prune_inactive_scoped_abox_manifests_in_driver(
     time_budget_exhausted = False
     resume_generation_id = ""
     resume_manifest_id = ""
-    marker_only_manifest_count = sum(
-        1
-        for metadata in removable
-        if not {
+    required_generations_by_manifest = [
+        {
             str(item or "").strip()
             for item in dict(metadata.get("scopeGenerationIds") or {}).values()
             if str(item or "").strip() and str(item or "").strip() not in protected_generation_ids
         }
-    )
-    marker_batch_reserve = min(
-        marker_only_manifest_count,
-        max(1, max_batch_count // 4) if max_batch_count >= 2 else 0,
-    )
+        for metadata in removable
+    ]
+    marker_only_manifest_count = sum(not required for required in required_generations_by_manifest)
+    marker_batch_reserve = 1 if marker_only_manifest_count else 0
     for generation_id in retired_generation_ids:
         if remaining_batch_budget <= marker_batch_reserve or (
             deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
@@ -473,7 +506,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(
             "ABox",
             generation_id,
             batch_size=bounded_delete_batch_size,
-            max_batches=remaining_batch_budget,
+            max_batches=remaining_batch_budget - marker_batch_reserve,
             deadline_monotonic=deadline_monotonic,
         )
         generation_cleanup_rows.append(cleanup)
@@ -481,7 +514,15 @@ def prune_inactive_scoped_abox_manifests_in_driver(
         deleted_batches += deleted
         remaining_batch_budget = max(0, remaining_batch_budget - deleted)
         if str(cleanup.get("status") or "") == "ok":
-            removed_generation_ids.append(generation_id)
+            cleared_generation_ids.add(generation_id)
+            if deleted:
+                removed_generation_ids.append(generation_id)
+            else:
+                already_empty_generation_ids.append(generation_id)
+            # Finish a reclaimable marker before later generations consume
+            # every write batch. This also works on a one-batch retry turn.
+            if any(required.issubset(cleared_generation_ids) for required in required_generations_by_manifest):
+                marker_batch_reserve = 1
         elif str(cleanup.get("status") or "") == "protected-external-relation-reference":
             # A node generation may still be a role player in a relation
             # generation selected later in this same maintenance slice, or
@@ -500,7 +541,6 @@ def prune_inactive_scoped_abox_manifests_in_driver(
     # A Manifest marker can disappear only after every physical generation
     # that it alone retained has been reclaimed. Markers whose scopes are
     # all protected or completed in this pass are safe to remove now.
-    removed_generation_set = set(removed_generation_ids)
     safe_marker_ids = []
     for metadata in removable:
         manifest_id = str(
@@ -513,7 +553,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(
             for item in dict(metadata.get("scopeGenerationIds") or {}).values()
             if str(item or "").strip() and str(item or "").strip() not in protected_generation_ids
         }
-        if not required_generations.issubset(removed_generation_set):
+        if not required_generations.issubset(cleared_generation_ids):
             cleanup_partial = True
             resume_manifest_id = resume_manifest_id or manifest_id
             continue
@@ -569,6 +609,9 @@ def prune_inactive_scoped_abox_manifests_in_driver(
         "attemptedRetiredScopeGenerationIds": attempted_generation_ids[:100],
         "removedRetiredScopeGenerationCount": len(removed_generation_ids),
         "removedRetiredScopeGenerationIds": removed_generation_ids[:100],
+        "generationCleanupCounterVersion": "physical-delete-v2",
+        "clearedRetiredScopeGenerationCount": len(cleared_generation_ids),
+        "alreadyEmptyRetiredScopeGenerationCount": len(already_empty_generation_ids),
         "protectedExternalRelationGenerationCount": len(
             protected_external_reference_generation_ids
         ),

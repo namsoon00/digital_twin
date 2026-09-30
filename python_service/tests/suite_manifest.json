@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_scoped_retention_safety.py", "tier": "contract", "core": true},
     {"file": "test_company_report_reading.py", "tier": "unit", "core": true},
     {"file": "test_question_research_progress.py", "tier": "unit", "core": true},
     {"file": "test_ontology_maintenance_fairness.py", "tier": "unit", "core": true},

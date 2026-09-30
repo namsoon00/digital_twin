@@ -145,7 +145,7 @@ def run_deferred_maintenance(
                 "configured": True,
                 "status": (
                     "partial"
-                    if statuses.intersection({"error", "partial", "deferred-write-lease"})
+                    if statuses.intersection({"error", "partial", "deferred-write-lease", "blocked-protection-metadata"})
                     else "ok"
                 ),
                 "graphStore": "typedb",
@@ -306,7 +306,7 @@ def run_deferred_maintenance(
             str(inference_result.get("status") or ""),
         }
         maintenance_partial = bool(
-            statuses.intersection({"error", "partial", "deferred-write-lease"})
+            statuses.intersection({"error", "partial", "deferred-write-lease", "blocked-protection-metadata"})
         )
         return {
             "configured": True,

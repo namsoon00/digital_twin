@@ -1280,6 +1280,8 @@ class OntologyMaintenanceRunner:
         removed_retired_generation_count: int,
         deduplicated_generation_reference_count: int,
         valid_world_ids: Iterable[str],
+        cleared_retired_generation_count: int = None,
+        generation_counter_version: str = "",
     ) -> Dict[str, Dict[str, object]]:
         rows = self.backlog_by_world(previous)
         allowed = {text(item) for item in valid_world_ids if text(item)}
@@ -1288,12 +1290,31 @@ class OntologyMaintenanceRunner:
         if not inventory_available:
             current["lastStatus"] = result_status
             current["lastMaintenanceInventoryAvailable"] = False
+            current["lastProgress"] = False
+            current["lastDeletedBatchCount"] = 0
             # A lightweight manifest read may already have corrected the
             # previous run's stale estimate. Keep that evidence visible even
             # when this turn lost the writer lease before full retention ran.
             current["inventoryAvailable"] = bool(current.get("lastInventoryObservedAt"))
             rows[world_id] = current
             return rows
+
+        if (
+            generation_counter_version == "physical-delete-v2"
+            and current.get("generationCleanupCounterVersion") != generation_counter_version
+        ):
+            # Old totals included repeated confirmations of already-empty
+            # generations. Preserve them as legacy evidence, not deletions.
+            current["legacyGenerationClearConfirmationCountTotal"] = (
+                max(0, integer(current.get("legacyGenerationClearConfirmationCountTotal")))
+                + max(0, integer(current.get("removedRetiredScopeGenerationCountTotal")))
+            )
+            current["removedRetiredScopeGenerationCountTotal"] = 0
+            current["generationCleanupCounterVersion"] = generation_counter_version
+        cleared_count = (
+            removed_retired_generation_count
+            if cleared_retired_generation_count is None else cleared_retired_generation_count
+        )
 
         critical = text(health.get("state")) == "critical"
         safe_pass = result_status in {"ok", "partial"}
@@ -1320,10 +1341,11 @@ class OntologyMaintenanceRunner:
             "lastDeletedBatchCount": deleted_batch_count,
             "lastPlannedRetiredScopeGenerationCount": planned_retired_generation_count,
             "lastRemovedRetiredScopeGenerationCount": removed_retired_generation_count,
+            "lastClearedRetiredScopeGenerationCount": cleared_count,
             "lastDeduplicatedScopeGenerationReferenceCount": deduplicated_generation_reference_count,
             "retiredScopeGenerationBacklogCount": max(
                 0,
-                planned_retired_generation_count - removed_retired_generation_count,
+                planned_retired_generation_count - cleared_count,
             ),
             "removedRetiredScopeGenerationCountTotal": (
                 max(0, integer(current.get("removedRetiredScopeGenerationCountTotal")))
@@ -1368,6 +1390,14 @@ class OntologyMaintenanceRunner:
             ),
             "removedRetiredScopeGenerationCountTotal": sum(
                 max(0, integer((value or {}).get("removedRetiredScopeGenerationCountTotal")))
+                for value in rows.values()
+                if (value or {}).get("generationCleanupCounterVersion") == "physical-delete-v2"
+            ),
+            "generationCleanupCounterVersion": "physical-delete-v2",
+            "legacyGenerationClearConfirmationCountTotal": sum(
+                max(0, integer((value or {}).get("legacyGenerationClearConfirmationCountTotal")))
+                + (max(0, integer((value or {}).get("removedRetiredScopeGenerationCountTotal")))
+                   if (value or {}).get("generationCleanupCounterVersion") != "physical-delete-v2" else 0)
                 for value in rows.values()
             ),
             "removedManifestCountTotal": sum(
@@ -1680,12 +1710,15 @@ class OntologyMaintenanceRunner:
         result_status = text(result.get("status") or "unknown")
         abox = result.get("abox") if isinstance(result.get("abox"), dict) else {}
         abox_status = text(abox.get("status") or result_status).lower()
+        protection_blocked = abox_status == "blocked-protection-metadata"
+        if protection_blocked:
+            result_status = abox_status
         # ``run_deferred_maintenance`` keeps a pending ABox activation intact
         # until native inference completes. That adapter result is a valid
         # no-delete outcome, but it has no retention counts. Treating its
         # truthy payload as an empty inventory used to overwrite the direct
         # Manifest backlog with zero and delayed the next real cleanup pass.
-        inventory_available = bool(abox) and (
+        inventory_available = bool(abox) and not protection_blocked and (
             "completedInactiveManifestCount" in abox
             or "remainingInactiveManifestCount" in abox
         )
@@ -1712,6 +1745,9 @@ class OntologyMaintenanceRunner:
                 ]),
             ),
         )
+        cleared_retired_generation_count = max(
+            0, integer(abox.get("clearedRetiredScopeGenerationCount"), removed_retired_generation_count),
+        )
         deduplicated_generation_reference_count = max(
             0,
             integer(abox.get("deduplicatedScopeGenerationReferenceCount")),
@@ -1724,7 +1760,7 @@ class OntologyMaintenanceRunner:
                 "inactiveManifestCount": inactive_remaining,
                 "retiredScopeGenerationBacklogCount": max(
                     0,
-                    planned_retired_generation_count - removed_retired_generation_count,
+                    planned_retired_generation_count - cleared_retired_generation_count,
                 ),
             }, policy)
             if inventory_available
@@ -1761,10 +1797,13 @@ class OntologyMaintenanceRunner:
             "removedManifestCount": removed_manifest_count,
             "plannedRetiredScopeGenerationCount": planned_retired_generation_count,
             "removedRetiredScopeGenerationCount": removed_retired_generation_count,
+            "clearedRetiredScopeGenerationCount": cleared_retired_generation_count,
+            "alreadyEmptyRetiredScopeGenerationCount": max(0, integer(abox.get("alreadyEmptyRetiredScopeGenerationCount"))),
+            "generationCleanupCounterVersion": text(abox.get("generationCleanupCounterVersion")),
             "deduplicatedScopeGenerationReferenceCount": deduplicated_generation_reference_count,
             "retiredScopeGenerationBacklogCount": max(
                 0,
-                planned_retired_generation_count - removed_retired_generation_count,
+                planned_retired_generation_count - cleared_retired_generation_count,
             ),
             "deletedBatchCount": max(0, integer(abox.get("deletedBatchCount"))),
             "durationMs": max(0, integer(result.get("durationMs"))),
@@ -1803,6 +1842,8 @@ class OntologyMaintenanceRunner:
             removed_retired_generation_count,
             deduplicated_generation_reference_count,
             [item.get("worldId") for item in worlds],
+            cleared_retired_generation_count=cleared_retired_generation_count,
+            generation_counter_version=compact["generationCleanupCounterVersion"],
         )
         current_backlog = dict(backlog_by_world.get(world_id) or {})
         progress_made = bool(current_backlog.get("lastProgress"))

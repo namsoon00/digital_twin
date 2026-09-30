@@ -46,5 +46,17 @@
     "bodyHash": "351a54f56c6c7e7ab0debac514e9d9153dd495b3e5596aeb64ac76d3e25f7af4",
     "reason": "Treat a generic TypeDB request failure during scoped ABox persistence as bounded transient back-pressure while preserving the active generation.",
     "regressionTest": "test_abox_candidates.ABoxCandidateTests.test_retry_only_replays_transport_failures_and_preserves_failed_scope_diagnostics"
+  },
+  "ScopedABoxManifestMixin.prune_inactive_scoped_abox_manifests_in_driver": {
+    "baselineHash": "31ad48fe532cea2cde19e4a0a7e6b2bd3df3ea8086e427520b6880ff9966b84f",
+    "bodyHash": "b08cae0e2ad8154067a6c2386a75d5fefef361d4ca7ed3c0f201d231c1ae3fbb",
+    "reason": "Fail closed on missing protection metadata, reserve marker completion budget, and distinguish physical deletes from repeated empty confirmations.",
+    "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_small_turns_finish_markers_and_preserve_live_and_rollback"
+  },
+  "ScopedABoxManifestMixin.run_deferred_maintenance": {
+    "baselineHash": "f863135f80a45e867594d5e4daa23c92944961cae3babc510596be2cc9370bf3",
+    "bodyHash": "08ebaabee48f1df32cbc567df1c3bfdddf21baeb690e6a1a96047a3708786c59",
+    "reason": "Propagate blocked protection metadata as incomplete maintenance and preserve downstream generations until reference safety is known.",
+    "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_blocked_cleanup_propagates_without_downstream_deletion"
   }
 }

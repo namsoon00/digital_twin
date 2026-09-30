@@ -37,15 +37,30 @@ writers while keeping retention outside investment latency. It follows these
 rules:
 
 1. An active inference transaction always finishes.
-2. When inactive generations remain above the priority threshold for more than
-   two minutes, maintenance receives one bounded writer turn before the next
-   inference batch.
-3. A normal hand-off stays at two delete batches. If the directly measured
-   backlog is critical, the worker uses the larger timeout-derived safe budget
-   so cleanup can catch up without crossing the isolated execution limit.
+2. Strict queue priority defaults off. With background fairness enabled,
+   maintenance deferred for 120 seconds may attempt one bounded turn when the
+   queue proves there is no active inference lease, even if jobs remain queued.
+   The single-writer delivery loop supplies this opportunity after inference.
+   Unknown active-lease counts defer the attempt. Explicit yield requests remain
+   disabled for this topology; no running inference is interrupted.
+3. Normal maintenance uses two delete batches and a 45-second cooperative
+   budget, with 300 seconds between successful fairness turns. A transaction
+   already in progress can exceed that budget. The adaptive budget is also
+   capped by the available time; it does not make cleanup unbounded.
 4. A turn never exceeds the configured manifest and batch budget.
 5. The worker records per-world inventory and progress in MySQL. Status reads
    this durable state and does not scan TypeDB.
+
+Persisted runtime settings override environment values and defaults. Existing
+deployments must explicitly save `ontologyAboxMaintenanceStrictReasoningPriority`
+as `0` and retain `ontologyBackgroundWorkFairnessEnabled=1` to adopt this policy.
+Keep `ontologyAboxMaintenanceDeferWhenReasoningPending=1`; disabling that check
+would bypass the age and active-lease admission rules. Confirm a successful
+maintenance result, retained rollback count, actual deletion progress and the
+next live inference completion after restart. A deferred or missing inventory
+is not proof that no old generations exist. Monitor queue age and maintenance
+duration together; the policy trades a bounded delay of subsequent inference
+for preventing indefinite cleanup starvation.
 
 Current-state ABox updates use copy-on-write. A changed scope is written to a
 fresh retry-stable generation and verified before the active Manifest moves.

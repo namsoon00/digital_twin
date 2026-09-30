@@ -198,7 +198,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # research, immutable valuation inputs and whole-cohort experiment storage.
         # Storage rotation additionally verifies frozen recorder composition
         # and seed-fingerprint propagation across the rebuild subprocess.
-        self.assertLessEqual(total, 1862)
+        # Maintenance admission and embedded failure/cooldown recovery protect
+        # bounded cleanup while the live reasoning queue remains nonempty.
+        self.assertLessEqual(total, 1864)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

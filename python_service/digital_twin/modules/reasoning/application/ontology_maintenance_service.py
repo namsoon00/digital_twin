@@ -94,7 +94,7 @@ class OntologyMaintenanceRunner:
 
     def strict_reasoning_priority(self) -> bool:
         value = text(
-            self.settings.get("ontologyAboxMaintenanceStrictReasoningPriority") or "1"
+            self.settings.get("ontologyAboxMaintenanceStrictReasoningPriority") or "0"
         ).lower()
         return value not in DISABLED_VALUES
 

@@ -1937,7 +1937,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyAboxMaintenanceStrictReasoningPriority": value(
             "ontologyAboxMaintenanceStrictReasoningPriority",
             "ONTOLOGY_ABOX_MAINTENANCE_STRICT_REASONING_PRIORITY",
-            "1",
+            "0",
         ),
         "ontologyAboxMaintenanceMaxReasoningDeferralSeconds": value("ontologyAboxMaintenanceMaxReasoningDeferralSeconds", "ONTOLOGY_ABOX_MAINTENANCE_MAX_REASONING_DEFERRAL_SECONDS", "120"),
         "ontologyAboxMaintenanceBusyRetrySeconds": value("ontologyAboxMaintenanceBusyRetrySeconds", "ONTOLOGY_ABOX_MAINTENANCE_BUSY_RETRY_SECONDS", "10"),

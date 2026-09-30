@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_ontology_maintenance_fairness.py", "tier": "unit", "core": true},
     {"file": "test_hypothesis_research_pipeline.py", "tier": "unit", "core": true},
     {"file": "test_hypothesis_evaluation_v2.py", "tier": "unit", "core": true},
     {"file": "test_insight_evidence_flow.py", "tier": "unit", "core": true},

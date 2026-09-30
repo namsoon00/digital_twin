@@ -224,6 +224,7 @@ class ExternalSignalSecMixin:
                 submissions = self.guarded_call("SEC EDGAR", "submissions:" + symbol, fetch_submissions)
                 filing = self.latest_sec_filing(submissions, cik)
                 recent_filings = self.recent_sec_filings(submissions, cik)
+                report_filings = self.report_sec_filings(submissions, cik)
                 if filing and document_text_enabled and filing.get("url"):
                     if not document_access_configured:
                         filing.update({
@@ -264,6 +265,7 @@ class ExternalSignalSecMixin:
                     "companyName": str(submissions.get("name") or facts.get("entityName") or symbol),
                     "latestFiling": filing,
                     "recentFilings": recent_filings,
+                    "reportFilings": report_filings,
                 }
                 if include_facts:
                     row["facts"] = self.sec_company_facts_summary(facts)
@@ -347,6 +349,20 @@ class ExternalSignalSecMixin:
             if len(result) >= max(1, int(limit or 20)):
                 break
         return result
+
+    def report_sec_filings(self, payload, cik):
+        recent = payload.get("filings", {}).get("recent", {})
+        selected, seen = [], set()
+        for index, form in enumerate(recent.get("form", [])):
+            family = "annual" if form in {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"} else "quarterly" if form in {"10-Q", "10-Q/A"} else ""
+            if not family or family in seen:
+                continue
+            one = {key: [values[index]] for key, values in recent.items() if isinstance(values, list) and index < len(values)}
+            filing = self.latest_sec_filing({"filings": {"recent": one}}, cik)
+            if filing.get("url"):
+                selected.append(filing)
+                seen.add(family)
+        return selected
 
     def sec_company_facts_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
         facts = payload.get("facts", {}).get("us-gaap", {}) if isinstance(payload.get("facts"), dict) else {}

@@ -368,5 +368,132 @@ class CompanyReportInsightTests(unittest.TestCase):
         self.assertNotIn("database", str(result))
 
 
+
+
+class CompanyTemporalResearchTests(unittest.TestCase):
+    def annual_payload(self):
+        value = payload()
+        reports = []
+        for year, net, pretax, tax, cash, capex in (
+            (2024, 93736, 123485, 29749, 118254, 9447),
+            (2025, 112010, 132729, 20719, 111482, 12715),
+        ):
+            period = str(year) + '-12-31'
+            entries = [metric(key, amount, period, 'annual', official=True,
+                              periodStart=str(year) + '-01-01', sourceDocumentId='annual-' + str(year))
+                       for key, amount in (('netIncome', net), ('pretaxIncome', pretax), ('taxProvision', tax),
+                                           ('operatingCashFlow', cash), ('capitalExpenditure', capex), ('freeCashFlow', cash-capex))]
+            reports.append({'period': period, 'frequency': 'annual', 'publishedAt': str(year+1)+'-02-01', 'metrics': entries})
+        value['companyReportEvidence'] = {'annualFinancials': reports, 'recentFinancials': []}
+        return value
+
+    def test_exact_bridges_reject_mixed_windows_sources_and_nonreconciling_earnings(self):
+        value = self.annual_payload()
+        cards = financial_reading_cards(value['companyReportEvidence'])
+        income, cash = cards[:2]
+        self.assertEqual({'totalChange':18274, 'firstContribution':9244, 'secondContribution':9030, 'residual':0}, income['components'])
+        self.assertEqual(-10040, cash['components']['totalChange'])
+        for field, bad in (('currency','USD'), ('provider','other'), ('periodStart','2025-03-01'), ('sourceDocumentId','other'), ('official',False), ('value',999)):
+            changed = copy.deepcopy(value)
+            changed['companyReportEvidence']['annualFinancials'][-1]['metrics'][1][field] = bad
+            self.assertNotIn('net-income-bridge', [c['key'] for c in financial_reading_cards(changed['companyReportEvidence'])])
+        self.assertIn('정상화 이익', income['limitations'][0])
+
+    def test_registration_correction_new_period_restart_and_no_future_evidence(self):
+        from digital_twin.modules.news_intelligence.domain.company_research_record import advance_company_research_record
+        value = self.annual_payload()
+        stamp = '2026-09-30T02:00:00Z'
+        report = build_company_change_report(value)
+        record = advance_company_research_record(report, {}, stamp)
+        self.assertEqual([], record['history'])
+        self.assertEqual(1, record['revision'])
+        baseline = copy.deepcopy(record['baseline'])
+        self.assertEqual(record, advance_company_research_record(report, copy.deepcopy(record), stamp))
+        future_doc = copy.deepcopy(report)
+        future_doc['evidence']['documents'] = [{'documentId':'future', 'publishedAt':'2025-02-01',
+                                               'observedAt':'2027-02-01', 'bodyVerified':True, 'excerpt':'unknown at cutoff'}]
+        self.assertEqual(record, advance_company_research_record(future_doc, record, stamp))
+        corrected = copy.deepcopy(value)
+        corrected['companyReportEvidence']['annualFinancials'][-1]['metrics'][0]['value'] += 1
+        next_record = advance_company_research_record(build_company_change_report(corrected), record, stamp)
+        self.assertEqual('same-period-revision', next_record['history'][-1]['kind'])
+        self.assertEqual(baseline, next_record['baseline'])
+        new = copy.deepcopy(value)
+        row = new['companyReportEvidence']['annualFinancials'][-1]
+        row.update(period='2026-12-31', publishedAt='2027-02-01')
+        for m in row['metrics']:
+            m.update(period='2026-12-31', periodStart='2026-01-01', sourceDocumentId='annual-2026')
+        # Reject future financial reports before their actual publication.
+        self.assertFalse(any(c['kind']=='new-period' for e in advance_company_research_record(build_company_change_report(new), record, stamp)['history'] for c in e['changes']))
+        new['snapshot']['generatedAt'] = '2027-02-02T00:00:00Z'
+        # Include last year's comparable report in the new read model.
+        new['companyReportEvidence']['annualFinancials'].insert(0, value['companyReportEvidence']['annualFinancials'][-1])
+        renewed = advance_company_research_record(build_company_change_report(new), next_record, '2027-02-02T01:00:00Z')
+        self.assertEqual('new-period', renewed['history'][-1]['kind'])
+        self.assertEqual('review-required', renewed['status'])
+        self.assertEqual(baseline, renewed['baseline'])
+        self.assertEqual(renewed, advance_company_research_record(report, renewed, '2027-02-02T01:00:00Z'))
+        self.assertTrue(all(c['before'] for c in renewed['history'][-1]['changes']))
+        self.assertNotIn('action', renewed)
+
+    def test_temporal_state_is_saved_quietly_and_read_on_report(self):
+        from datetime import datetime, timezone
+        from digital_twin.modules.news_intelligence.application.company_change_report_reconciliation_service import CompanyChangeReportReconciler
+        class State:
+            def __init__(self): self.value = {}
+            def load(self): return copy.deepcopy(self.value)
+            def replace(self, value): self.value = copy.deepcopy(value)
+        state = State()
+        queue = SimpleNamespace(recent_for_symbol=lambda *a,**k: [])
+        runner = CompanyChangeReportReconciler(account_repository=None, monitor_store=None,
+            valuation_query_service=None, queue=queue, now_provider=lambda:datetime(2026,10,1,tzinfo=timezone.utc))
+        value = self.annual_payload()
+        self.assertEqual('baseline-saved', runner._reconcile_subject(SimpleNamespace(account_id='a'), 'TEST', value, state))
+        stored = state.load()['researchRecord']
+        report = build_company_change_report({**value, 'companyResearchRecord': stored})
+        section = next(s for s in report['sections'] if s['key']=='researchRecord')
+        self.assertTrue(section['recordId'])
+        self.assertTrue(section['rows'])
+        self.assertFalse(report['deliveryEligible'])
+        runner._reconcile_subject(SimpleNamespace(account_id='a'), 'TEST', value, state)
+        self.assertEqual(stored, state.load()['researchRecord'])
+
+    def test_research_questions_reach_ai_memory_without_future_or_action_authority(self):
+        from digital_twin.modules.news_intelligence.domain.company_research_record import advance_company_research_record, company_research_memory
+        from digital_twin.modules.decisions.application.decision_continuity_service import DecisionContinuityService
+        from digital_twin.modules.decisions.domain.decision_continuity import compact_decision_continuity_packet
+        from digital_twin.modules.decisions.domain.notification_ai_decision_brief import _minimum_decision_continuity
+        report = build_company_change_report(self.annual_payload())
+        record = advance_company_research_record(report, {}, '2026-09-30T02:00:00Z')
+        self.assertEqual({}, company_research_memory(record, 'a', 'TEST', '2026-09-30T01:59:00Z'))
+        self.assertEqual({}, company_research_memory(record, 'other', 'TEST', '2026-10-01T00:00:00Z'))
+        service = DecisionContinuityService(company_research_reader=lambda account, symbol, cutoff: company_research_memory(record, account, symbol, cutoff))
+        packet = service.build(account_id='a', symbol='TEST', captured_at='2026-10-01T00:00:00Z')
+        self.assertTrue(packet['companyResearch']['originalQuestions'])
+        self.assertEqual('not-evaluated', packet['companyResearch']['qualification'])
+        self.assertFalse(packet['previousDecision'])
+        self.assertEqual(packet['companyResearch'], compact_decision_continuity_packet(packet)['companyResearch'])
+        self.assertTrue(_minimum_decision_continuity(packet)['companyResearch']['originalQuestions'])
+        self.assertFalse(service.build(account_id='a', symbol='TEST', captured_at='2026-09-29T00:00:00Z').get('companyResearch'))
+
+    def test_report_passages_skip_cover_and_keep_qualifying_text(self):
+        from digital_twin.infrastructure.sec_report_passages import report_passages
+        from digital_twin.infrastructure.external_signal_provider_sec import ExternalSignalSecMixin
+        body = '<p>' + 'Cover page. ' * 3000 + '</p><div>Income tax expense decreased primarily due to the prior-year charge. This change does not establish a recurring benefit in future periods.</div>'
+        passages = report_passages(body)
+        self.assertEqual(1, len(passages))
+        self.assertIn('does not establish', passages[0]['quote'])
+        self.assertIn(passages[0]['quote'], body)
+        generic = '<p>Income tax expenses primarily reflect business operations, with general uncertainty about future tax regimes and the overall economic environment.</p>'
+        specific = '<p>Income tax expense decreased compared to the prior year due to a one-time charge. Other changes partially offset this reduction in reported costs.</p>'
+        chosen = report_passages(generic * 3 + specific)
+        self.assertIn('compared to', chosen[0]['quote'])
+        self.assertEqual('income-tax', chosen[0]['topic'])
+        recent = {'form':['4']*30+['10-Q','10-K'], 'accessionNumber':['a']*30+['q','k'],
+                  'primaryDocument':['a.htm']*32, 'reportDate':['2026-06-30']*31+['2025-12-31']}
+        selected = ExternalSignalSecMixin().report_sec_filings({'filings':{'recent':recent}}, '123')
+        self.assertEqual(['10-Q','10-K'], [r['form'] for r in selected])
+
+
 if __name__ == "__main__":
     unittest.main()

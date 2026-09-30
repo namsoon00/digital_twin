@@ -713,7 +713,11 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 "AND source_revision LIKE %s AND JSON_EXTRACT(quality_json, '$.dataUsable') = true "
                 "ORDER BY fetched_at DESC LIMIT 1", (request.dataset_id, request.subject.subject_key, identity + ":%"),
             ).fetchone()
-        return self._fact_row(row) if row else None
+        fact = self._fact_row(row) if row else None
+        required_version = request.watermark.get("documentTextVersion")
+        if fact and required_version and required_version != "body-v1" and fact.get("quality", {}).get("documentTextVersion") != required_version:
+            return None
+        return fact
 
     def complete_observation(
         self,

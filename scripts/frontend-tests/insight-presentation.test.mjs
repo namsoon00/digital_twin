@@ -55,6 +55,7 @@ test("company report v3 explains recent facts and conditional value with traceab
     headline: "기업 보고서", summary: "실적 해석", sections: [
       {key: "businessMeaning", title: "실적이 의미하는 것", readingCards: [{
         kind: "accounting-observation", title: "투자 후 현금", fact: "2026-06-30 · 누적 · -20 KRW",
+        sourceStatements: [{label: "회사 공시의 설명", quote: "tax <script>issuer</script>", url: "javascript:alert(1)"}],
         meaning: "투자 후 현금이 음수입니다. <script>bad</script>", limitations: ["차입·배당은 계산에서 제외"],
         evidence: [{key: "cash", label: "영업현금흐름", value: 30, currency: "KRW", basisLabel: "2026-06-30 · 누적",
           provider: "OpenDART", sourceUrl: "javascript:alert(1)", sourceReferences: [{datasetId: "filing", revisionId: "r1"}]}]
@@ -62,6 +63,7 @@ test("company report v3 explains recent facts and conditional value with traceab
       {key: "valuationMeaning", title: "가격의 조건", readingCards: [{kind: "conditional-model", title: "가격을 설명하는 사업 조건",
         fact: "조건부 영업이익률 17.50%", meaning: "관측된 시장 기대가 아닙니다.", asOf: "2026-09-29",
         fixedAssumptions: {waccPct: 12, terminalGrowthPct: 2.5}}]},
+      {key: "researchRecord", title: "시간을 따라 확인할 기록", paragraphs: ["기준 등록 2026-10-01 · 기록 1회"]},
       {key: "judgmentConditions", title: "해석을 다시 확인할 조건", rows: ["다음 분기 원문 확인"]},
       {key: "annualFinancials", title: "연간 실적", financialReports: []}
     ]};
@@ -69,6 +71,8 @@ test("company report v3 explains recent facts and conditional value with traceab
   assert.ok(html.indexOf("실적이 의미하는 것") < html.indexOf("연간 실적"));
   const compact = html.split('<details class="company-report-full">')[0];
   assert.match(html, /<details class="company-report-full"><summary>상세 근거와 전체 보고서/);
+  assert.match(compact, /기준 등록 2026-10-01/);
+  assert.match(html, /tax &lt;script&gt;issuer&lt;\/script&gt;/);
   assert.match(compact, /핵심 수치/);
   assert.match(compact, /가치 판단/);
   assert.match(compact, /다음 확인/);

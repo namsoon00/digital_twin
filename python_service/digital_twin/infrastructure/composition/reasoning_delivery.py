@@ -68,9 +68,11 @@ def wire_v2_decision_services(
         hypothesis_proposal_request_store=stores.investment_research_store(store_settings),
         subject_case_repository=stores.subject_decision_case_store(store_settings),
     )
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_company_report_state import MySQLCompanyReportStateStore
     decision_continuity = DecisionContinuityService(
         decision_episode_store,
         stores.investment_domain_store(store_settings),
+        company_research_reader=lambda account, symbol, cutoff: MySQLCompanyReportStateStore(store_settings).research_memory(account, symbol, cutoff),
     )
     ai_context_preparer = CompositeNotificationContextEnricher(
         NotificationInstrumentIdentityEnricher(stores.symbol_universe_store(store_settings)),

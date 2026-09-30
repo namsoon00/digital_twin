@@ -1677,6 +1677,8 @@ def _minimum_relation_facts(value: object, limit: int = 24) -> Dict[str, object]
 def _minimum_decision_continuity(value: object) -> Dict[str, object]:
     packet = _mapping(value)
     payload = _selected_fields(packet, ("contractVersion", "packetId", "status", "capturedAt", "accountId", "symbol"))
+    if packet.get("companyResearch"):
+        payload["companyResearch"] = _bounded_value(packet["companyResearch"], string_limit=240, list_limit=4, dict_limit=14)
     if packet.get("reviewSummary"):
         payload["reviewSummary"] = _bounded_value(packet["reviewSummary"], string_limit=160, list_limit=2, dict_limit=14)
     previous = _selected_fields(

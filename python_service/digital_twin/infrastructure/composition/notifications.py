@@ -53,7 +53,9 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     monitor_store = stores.monitor_store(settings)
     decision_episode_store = stores.investment_decision_episode_store(settings)
     investment_domain_store = stores.investment_domain_store(settings)
-    continuity_service = DecisionContinuityService(decision_episode_store, investment_domain_store)
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_company_report_state import MySQLCompanyReportStateStore
+    continuity_service = DecisionContinuityService(decision_episode_store, investment_domain_store,
+        company_research_reader=lambda account, symbol, cutoff: MySQLCompanyReportStateStore(settings).research_memory(account, symbol, cutoff))
     investment_brain_service = build_investment_brain_service(settings)
     reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
     queue_health_service = OntologyReasoningQueueHealthService(

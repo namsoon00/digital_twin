@@ -189,6 +189,7 @@ class DecisionContinuityPacket:
     execution_feedback: Mapping[str, object] = field(default_factory=dict)
     lifecycle_feedback: Mapping[str, object] = field(default_factory=dict)
     source_status: Mapping[str, object] = field(default_factory=dict)
+    company_research: Mapping[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         previous = compact_decision_episode_memory(self.previous_decision)
@@ -252,6 +253,8 @@ class DecisionContinuityPacket:
             "sourceStatus": statuses,
             "sourceErrors": errors,
         }
+        if self.company_research:
+            payload["companyResearch"] = dict(self.company_research)
         payload["reviewSummary"] = decision_review_summary(payload)
         payload["observationState"]["outcome"] = payload["reviewSummary"]["state"]
         fingerprint = _material_fingerprint(payload)
@@ -293,6 +296,7 @@ def build_decision_continuity_packet(
     lifecycle_feedback: object = None,
     selected_hypothesis: object = None,
     source_status: object = None,
+    company_research: object = None,
 ) -> Dict[str, object]:
     return DecisionContinuityPacket(
         account_id=account_id,
@@ -336,6 +340,7 @@ def build_decision_continuity_packet(
             ("decisionReviews", "performanceAttributions"),
         ),
         source_status=_mapping(source_status),
+        company_research=_mapping(company_research),
     ).to_dict()
 
 
@@ -354,7 +359,7 @@ def compact_decision_continuity_packet(value: object) -> Dict[str, object]:
             "contractVersion", "packetId", "materialFingerprint", "accountId", "symbol",
             "capturedAt", "status", "previousDecision", "selectedHypothesis",
             "followUpConditions", "unsupportedFollowUps", "observedOutcomes",
-            "outcomeSchedule",
+            "outcomeSchedule", "companyResearch",
             "actionObservations", "currentPosition", "historicalPosition", "executionFeedback",
             "lifecycleFeedback", "observationState", "summary", "sourceStatus", "sourceErrors", "reviewSummary",
         )

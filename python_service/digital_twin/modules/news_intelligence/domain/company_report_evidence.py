@@ -6,6 +6,8 @@ Reported periods and per-metric provenance stay separate across providers.
 
 from __future__ import annotations
 
+from datetime import date
+
 import math
 import re
 from typing import Mapping
@@ -102,7 +104,7 @@ def _references(report, company, provider):
     prefix = ("opendart.xbrl_facts" if "xbrl" in key else "opendart.company_facts" if "dart" in key
               else "sec." if "sec" in key else "yfinance." if "yfinance" in key
               else "public-data." if "금융위원회" in key else "")
-    return [{key: item.get(key) for key in ("datasetId", "revisionId", "sourceAsOf") if item.get(key)}
+    return [{key: item.get(key) for key in ("datasetId", "revisionId", "sourceAsOf", "fetchedAt", "subjectKey") if item.get(key)}
             for item in references if prefix and text(item.get("datasetId")).startswith(prefix)]
 
 
@@ -164,14 +166,31 @@ def _financial_row(row, company):
             metric["comparison"] = {key: comparison.get(key) for key in ("basis", "currentPeriod", "previousPeriod", "currentValue", "previousValue", "changePct", "source", "previousSource")}
             metric["comparisonLabel"] = comparison_label(comparison)
         metrics.append(metric)
-    return {"period": assessment["period"], "frequency": assessment["frequency"], "observationId": assessment["observationId"], "metrics": metrics} if metrics else {}
+    return {"period": assessment["period"], "frequency": assessment["frequency"], "observationId": assessment["observationId"], "publishedAt": text(contract.get("publishedAt")), "metrics": metrics} if metrics else {}
 
 
 def _documents(symbol, signals):
     ir = mapping(mapping(signals.get("issuerIrDocuments")).get(symbol))
     dart = mapping(mapping(signals.get("dartDisclosures")).get(symbol))
+    sec = mapping(mapping(signals.get("secFilings")).get(symbol))
+    sec_items = []
+    for filing in [mapping(sec.get("latestFiling"))] + rows(sec.get("recentFilings")):
+        if filing.get("form") not in {"10-K", "10-K/A", "10-Q", "10-Q/A", "20-F", "40-F"}:
+            continue
+        sec_items.append({**filing, "documentId": filing.get("accessionNumber"),
+                          "title": text(filing.get("form")) + " · " + text(filing.get("reportDate")),
+                          "publishedAt": filing.get("filingDate"),
+                          "documentVerified": filing.get("documentTextStatus") == "document-verified"})
+    for item in rows(mapping(signals.get("researchEvidence")).get(symbol)):
+        source = mapping(item.get("payload"))
+        if (text(item.get("symbol")).upper() != symbol or item.get("kind") != "filing"
+                or not item.get("documentVerified") or source.get("officialDocumentType") not in {"10-K", "10-K/A", "10-Q", "10-Q/A", "20-F", "40-F"}):
+            continue
+        sec_items.insert(0, {**source, "documentId": source.get("accessionNumber"), "url": item.get("url"),
+                            "title": text(item.get("title")) + " · " + text(source.get("reportDate")),
+                            "publishedAt": item.get("publishedAt"), "documentVerified": True})
     selected, seen = [], set()
-    for kind, items in (("기업 IR", rows(ir.get("items"))), ("공시", rows(dart.get("items")))):
+    for kind, items in (("기업 IR", rows(ir.get("items"))), ("공시", rows(dart.get("items"))), ("SEC 공시", sorted(sec_items, key=lambda item: bool(item.get("documentVerified")), reverse=True))):
         for item in items:
             url = safe_url(item.get("resolvedUrl") or item.get("url"))
             title = text(item.get("title") or item.get("reportName"))
@@ -184,9 +203,14 @@ def _documents(symbol, signals):
             # Short, attributed excerpts retain the company's own wording.
             excerpt = body[:400].rsplit(" ", 1)[0] if len(body) > 400 else body
             selected.append({
-                "documentId": identity, "kind": kind,
+                "documentId": identity, "kind": kind, "reportDate": text(item.get("reportDate")),
+                "textScope": text(item.get("officialDocumentScope") or item.get("documentTextScope")),
+                "observedAt": text(item.get("officialDocumentFetchedAt") or item.get("observedAt")
+                                   or max((text(ref.get("fetchedAt")) for ref in rows(item.get("sourceReferences"))), default="")
+                                   or signals.get("fetchedAt")),
                 "title": title, "publishedAt": date_label(item.get("publishedAt") or item.get("receiptDate")),
                 "url": url, "bodyVerified": verified, "excerpt": excerpt,
+                "passages": rows(item.get("documentPassages")) if verified else [],
                 "sourceRevision": text(item.get("documentHash")) or text((rows(item.get("sourceReferences")) or [{}])[0].get("revisionId")),
                 "useLabel": ("회사 발표 · 본문 확인" if kind == "기업 IR" else "공시 문서 · 본문 확인") if verified else "문서 목록 확인 · 본문 미검증",
             })
@@ -218,7 +242,18 @@ def build_company_report_evidence(symbol, external_signals):
         old = annual_by_period.get(normalized["period"])
         if not old or score > old[0]:
             annual_by_period[normalized["period"]] = (score, normalized)
-    annual = [annual_by_period[period][1] for period in sorted(annual_by_period, reverse=True)[:3]]
+    # Vendor month-end aliases must not consume separate annual history slots.
+    # Keep the best complete row; never merge values across the two filings.
+    annual_selected = []
+    for period in sorted(annual_by_period, reverse=True):
+        candidate = annual_by_period[period]
+        nearby = next((index for index, old in enumerate(annual_selected)
+                       if abs((date.fromisoformat(old[1]["period"]) - date.fromisoformat(period)).days) <= 14), None)
+        if nearby is None:
+            annual_selected.append(candidate)
+        elif candidate[0] > annual_selected[nearby][0]:
+            annual_selected[nearby] = candidate
+    annual = [item[1] for item in sorted(annual_selected, key=lambda item: item[1]["period"], reverse=True)[:3]]
     recent = []
     for frequency in ("interim", "quarterly"):
         for row in sorted(rows(financials.get(frequency)), key=lambda row: date_label(row.get("periodEnd") or row.get("period")), reverse=True):

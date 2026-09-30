@@ -22,9 +22,11 @@ def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunn
 
     settings = runtime_settings()
     decision_episode_store = stores.investment_decision_episode_store(settings)
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_company_report_state import MySQLCompanyReportStateStore
     continuity_service = DecisionContinuityService(
         decision_episode_store,
         stores.investment_domain_store(settings),
+        company_research_reader=lambda account, symbol, cutoff: MySQLCompanyReportStateStore(settings).research_memory(account, symbol, cutoff),
     )
     return AIInferenceQueueRunner(
         queue=stores.ai_inference_queue_store(settings),

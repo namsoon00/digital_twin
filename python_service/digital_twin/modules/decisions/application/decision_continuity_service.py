@@ -32,9 +32,10 @@ def _latest_feedback(value: object, keys) -> Dict[str, object]:
 class DecisionContinuityService:
     """Read one prior decision and its observable aftermath without re-running inference."""
 
-    def __init__(self, decision_episode_store=None, investment_domain_store=None):
+    def __init__(self, decision_episode_store=None, investment_domain_store=None, company_research_reader=None):
         self.decision_episode_store = decision_episode_store
         self.investment_domain_store = investment_domain_store
+        self.company_research_reader = company_research_reader
 
     def build(
         self,
@@ -217,7 +218,15 @@ class DecisionContinuityService:
         if not known_by_cutoff(historical_position, "observedAt"):
             historical_position = {}
             source_status["accountObservation"] = "withheld-after-source-cutoff"
+        company_research = {}
+        if cutoff and callable(self.company_research_reader):
+            try:
+                company_research = self.company_research_reader(account_key, symbol_key, cutoff_iso)
+                source_status["companyResearch"] = "available" if company_research else "unavailable-at-cutoff"
+            except (OSError, RuntimeError, TypeError, ValueError):
+                source_status["companyResearch"] = "error"
         return build_decision_continuity_packet(
+            company_research=company_research,
             account_id=account_key,
             symbol=symbol_key,
             captured_at=cutoff_iso,

@@ -209,7 +209,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Three report-delivery regressions cover semantic changes, quiet source
         # updates and durable coalescing/receipt cooldown across restarts.
         # Measured retention budgets independently verify safe timing admission.
-        self.assertLessEqual(total, 1888)
+        # Five temporal-company regressions cover exact bridges, durable review,
+        # future exclusion, SEC passages and bounded AI question continuity.
+        self.assertLessEqual(total, 1893)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

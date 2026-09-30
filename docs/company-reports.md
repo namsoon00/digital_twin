@@ -149,3 +149,56 @@ presentation boundary tests and `insight-presentation.test.mjs`. Fixtures cover
 baseline/upgrade/change behavior, period/source comparison boundaries, malicious
 source text and URLs, one-time HTML escaping, reference-price disclosure and
 saved report links. Tests do not require Telegram or vendor credentials.
+
+## Temporal research records and accounting bridges
+
+The report now decomposes changes only when both official statements share
+provider, currency, scope and duration, each period has one filing identity,
+and the periods are comparable year over year. Net income reconciles to pretax
+income minus tax provision; free cash flow reconciles to operating cash flow
+minus capital expenditure. A nonzero unexplained residual withholds the bridge.
+These are accounting contributions, not established business causes or normalized
+earnings. Tax expense is not cash tax, and capital expenditure is not part of CFO.
+Vendor month-end aliases within 14 days of an official annual end date occupy one
+history slot; the higher-quality complete row wins without mixing its metrics.
+
+The SEC submissions collector prioritizes the latest annual and quarterly reports
+before other recent forms, including reports outside the first twenty filings.
+`sec.document` stores versioned, bounded, verbatim explanatory passages from the
+whole HTML document, preserving sentence qualifications and passage hashes.
+The selected passages are partial evidence, not a full-document review. They enter
+the existing official research evidence and ontology projection path; no new
+investment action or hypothesis is authored by the selector. A report bridge can
+show an issuer statement only from the exact matching filing and reporting date.
+
+Each account/symbol report state has a separate `researchRecord`, independent of
+the successful-delivery baseline. First registration freezes its real observation
+clock, official metric provenance, questions and any already validated linked AI
+interpretation. It does not backfill predictive outcomes. Later records distinguish
+new reporting periods, same-period revisions, and evidence/interpretation updates.
+New-period arithmetic is shown only against comparable prior-year windows; a new
+quarter is not compared with an annual total. Publication and source observation
+clocks after the snapshot cutoff are excluded, and an older snapshot cannot rewind
+the record. Repeated polling does not create a new revision.
+
+The original baseline remains durable. The latest 24 revisions are retained, with
+an explicit count of older omitted revisions. This is research continuity, not a
+complete historical replay archive. New observed figures require review; they do
+not mark a hypothesis correct or incorrect. The web shows actual registration
+state and review history. Reads never register a case or claim a notification was
+sent. The existing coalescing/cooldown and successful receipt policies still own
+notification delivery.
+
+The AI continuity packet includes dated original/current questions and previously
+validated interpretations through an injected read port. The memory is bounded by
+the frozen analysis cutoff and explicitly carries no action or hypothesis
+qualification authority. Current numerical facts continue to come from the frozen
+ABox source context. No synthetic future observation is written to operational
+records during verification.
+
+Validation: `test_company_report_reading` covers reconciled contributions,
+provider/currency/filing/duration mismatch, first registration, duplicate polling,
+corrections, later reports, future-data exclusion, persistence across service
+instances, read-model display, and AI continuity compression. SEC extraction tests
+check report selection beyond recent ownership filings and intact qualification
+sentences after long cover pages.

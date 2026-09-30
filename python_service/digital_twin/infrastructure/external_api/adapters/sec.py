@@ -6,6 +6,7 @@ from digital_twin.modules.market_data.public import CollectionJob, CollectionPar
 from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
 from ...external_signal_provider_sec import DEFAULT_SEC_COMPANY_CIKS, sec_document_text
 from ...external_signal_utils import symbol_assignments
+from ...sec_report_passages import REPORT_FORMS, REPORT_TEXT_VERSION, report_passages
 from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of
 
@@ -99,7 +100,8 @@ class SecSubmissionsAdapter:
         group = observation.payload.get("secFilings") if isinstance(observation.payload, dict) else {}
         row = group.get(symbol) if isinstance(group, dict) and isinstance(group.get(symbol), dict) else {}
         latest = row.get("latestFiling") if isinstance(row.get("latestFiling"), dict) else {}
-        candidates = [latest, *(row.get("recentFilings") if isinstance(row.get("recentFilings"), list) else [])]
+        reports = row.get("reportFilings") if isinstance(row.get("reportFilings"), list) else []
+        candidates = [*reports, latest, *(row.get("recentFilings") if isinstance(row.get("recentFilings"), list) else [])]
         limit = bounded_int(settings.get("externalSecDocumentMaxPerSymbol"), 3, 1, 10)
         requests = []
         seen = set()
@@ -113,7 +115,7 @@ class SecSubmissionsAdapter:
             seen.add(accession)
             requests.append(FollowupCollectionRequest(
                 dataset_id="sec.document",
-                partition_key=symbol + ":" + accession + ":body-v1",
+                partition_key=symbol + ":" + accession + (":" + REPORT_TEXT_VERSION if item.get("form") in REPORT_FORMS else ":body-v1"),
                 subject=ExternalSubject(
                     subject_key=symbol,
                     symbol=symbol,
@@ -127,6 +129,7 @@ class SecSubmissionsAdapter:
                     "cik": str(row.get("cik") or ""),
                     "companyName": str(row.get("companyName") or symbol),
                     "metadata": dict(item),
+                    "documentTextVersion": REPORT_TEXT_VERSION if item.get("form") in REPORT_FORMS else "body-v1",
                 },
                 priority=72 if not requests else 68,
             ))
@@ -174,7 +177,12 @@ class SecDocumentAdapter:
             raw,
             bounded_int(settings.get("externalSecDocumentTextMaxChars"), 6000, 500, 20000),
         )
-        assessment = assess_disclosure_document(text, "body")
+        passages = report_passages(raw, provider.sec_document_text_max_chars()) if metadata.get("form") in REPORT_FORMS else []
+        if passages:
+            text = "\n\n".join(passage["quote"] for passage in passages)
+        # SEC block/error pages are not filing evidence, even if they are long.
+        rejected = any(marker in str(raw).lower() for marker in ("undeclared automated tool", "request rate threshold exceeded", "access denied"))
+        assessment = assess_disclosure_document(text, "unavailable" if rejected else "body")
         metadata.update({
             "accessionNumber": accession,
             "url": url,
@@ -182,6 +190,10 @@ class SecDocumentAdapter:
             "documentTextPreview": assessment.document_text[:700],
             "documentTextQuality": "body" if assessment.document_verified else "insufficient",
             "documentTextStatus": assessment.state,
+            "documentTextVersion": REPORT_TEXT_VERSION,
+            "documentTextScope": "selected-passages" if passages else "prefix-only",
+            "documentPassages": passages if assessment.document_verified else [],
+            "documentHash": hashlib.sha256(str(raw).encode()).hexdigest(),
         })
         row = {
             "provider": "SEC EDGAR",
@@ -203,6 +215,7 @@ class SecDocumentAdapter:
                 "dataUsable": bool(assessment.document_verified),
                 "provider": "sec-edgar",
                 "documentState": assessment.state,
+                "documentTextVersion": REPORT_TEXT_VERSION,
             },
         )
 

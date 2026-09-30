@@ -42,7 +42,7 @@ function companyEvidenceFinancials(reports) {
 
 function companyEvidenceDocuments(documents) {
   return companyEvidenceArray(documents).map(function (document) {
-    return '<article class="company-report-document"><p class="label">' + escapeHtml([document.kind, document.publishedAt].filter(Boolean).join(" · ")) + '</p><h5>' + escapeHtml(document.title) + '</h5><p>' + escapeHtml(document.useLabel) + '</p>' + (document.excerpt && document.bodyVerified ? '<blockquote>' + escapeHtml(document.excerpt) + '</blockquote><p><small>공시·발표 원문 발췌 · 독립적인 검증 결과 아님</small></p>' : '') + companyEvidenceLink(document.url, "공시·IR 원문 보기") + '<details class="company-report-provenance"><summary>문서 식별 정보</summary><p>' + escapeHtml([document.documentId, document.sourceRevision].filter(Boolean).join(" · ")) + '</p></details></article>';
+    return '<article class="company-report-document"><p class="label">' + escapeHtml([document.kind, document.publishedAt].filter(Boolean).join(" · ")) + '</p><h5>' + escapeHtml(document.title) + '</h5><p>' + escapeHtml(document.useLabel) + '</p>' + (document.excerpt && document.bodyVerified ? '<blockquote>' + escapeHtml(document.excerpt) + '</blockquote><p><small>공시·발표 원문 발췌 · 독립적인 검증 결과 아님</small></p>' : '') + (document.bodyVerified ? companyEvidenceArray(document.passages).map(function (passage) { return '<blockquote>' + escapeHtml(passage.quote) + '</blockquote>'; }).join('') : '') + (document.textScope ? '<p>발췌 자료입니다. 문서 전체를 검토한 결과가 아닙니다.</p>' : '') + companyEvidenceLink(document.url, "공시·IR 원문 보기") + '<details class="company-report-provenance"><summary>문서 식별 정보</summary><p>' + escapeHtml([document.documentId, document.sourceRevision].filter(Boolean).join(" · ")) + '</p></details></article>';
   }).join("");
 }
 
@@ -92,6 +92,7 @@ function companyReadingCards(cards) {
       return labels[entry[0]] ? '<li>' + escapeHtml(labels[entry[0]]) + ': ' + escapeHtml(entry[1]) + '</li>' : '';
     }).join("");
     return '<article class="company-report-reading"><p class="label">' + escapeHtml(kind) + '</p><h5>' + escapeHtml(card.title) + '</h5><p><strong>확인 내용</strong> ' + escapeHtml(card.fact) + '</p><p><strong>의미</strong> ' + escapeHtml(card.meaning) + '</p>'
+      + companyEvidenceArray(card.sourceStatements).map(function (statement) { return '<p>' + escapeHtml(statement.label) + '</p><blockquote>' + escapeHtml(statement.quote) + '</blockquote>' + companyEvidenceLink(statement.url, '설명 원문'); }).join('')
       + (card.asOf ? '<p>계산에 사용한 가격 관측: ' + escapeHtml(card.asOf) + '</p>' : '')
       + companyEvidenceArray(card.limitations).map(function (line) { return '<p class="instrument-valuation-explanation">' + escapeHtml(line) + '</p>'; }).join("")
       + (evidence || assumptions ? '<details class="company-report-provenance"><summary>이 설명의 근거와 가정</summary>' + evidence + (assumptions ? '<ul>' + assumptions + '</ul>' : '') + '</details>' : '') + '</article>';
@@ -126,8 +127,10 @@ function renderCompanyEvidenceReport(report) {
   var briefHtml = brief ? companyEvidenceArray(brief.sections).map(function (section) {
     return '<section class="company-report-brief"><h4>' + escapeHtml(section.title) + '</h4><ul>' + companyEvidenceArray(section.rows).map(function (row) { return '<li>' + escapeHtml(row) + '</li>'; }).join("") + '</ul></section>';
   }).join("") : '';
+  var recordSection = companyEvidenceArray(report.sections).find(function (section) { return section.key === "researchRecord"; });
+  var researchHtml = compact && recordSection ? '<section class="company-report-brief"><h4>' + escapeHtml(recordSection.title) + '</h4>' + companyEvidenceArray(recordSection.paragraphs).map(function (line) { return '<p>' + escapeHtml(line) + '</p>'; }).join('') + '</section>' : '';
   var full = sections + '<p class="instrument-valuation-explanation">' + escapeHtml(report.boundary) + '</p>';
-  return '<section class="instrument-valuation-workspace company-change-report"><header><div><span class="label">기업 자료 보고서</span><h3>' + escapeHtml(report.headline || "기업 보고서") + '</h3><p>' + escapeHtml(brief ? brief.summary : report.summary) + '</p></div><span class="tone-chip hold">' + escapeHtml(kindLabel) + '</span></header><p class="instrument-valuation-explanation">자료 확인 ' + escapeHtml(report.sourceCutoffDisplay || report.sourceCutoffAt || "시각 미기록") + ' · 종목 ' + escapeHtml(report.symbol) + '</p>' + briefHtml + (compact ? '<details class="company-report-full"><summary>상세 근거와 전체 보고서</summary>' + full + '</details>' : full) + '</section>';
+  return '<section class="instrument-valuation-workspace company-change-report"><header><div><span class="label">기업 자료 보고서</span><h3>' + escapeHtml(report.headline || "기업 보고서") + '</h3><p>' + escapeHtml(brief ? brief.summary : report.summary) + '</p></div><span class="tone-chip hold">' + escapeHtml(kindLabel) + '</span></header><p class="instrument-valuation-explanation">자료 확인 ' + escapeHtml(report.sourceCutoffDisplay || report.sourceCutoffAt || "시각 미기록") + ' · 종목 ' + escapeHtml(report.symbol) + '</p>' + briefHtml + researchHtml + (compact ? '<details class="company-report-full"><summary>상세 근거와 전체 보고서</summary>' + full + '</details>' : full) + '</section>';
 }
 
 export { renderCompanyEvidenceReport };

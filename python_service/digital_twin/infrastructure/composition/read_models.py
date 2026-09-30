@@ -38,9 +38,11 @@ def build_instrument_valuation_query_service(settings=None) -> InstrumentValuati
 
     configured_settings = settings or runtime_settings()
     monitor_store = stores.monitor_store(configured_settings)
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_company_report_state import MySQLCompanyReportStateStore
     return InstrumentValuationQueryService(
         monitor_store=monitor_store,
         settings=configured_settings,
+        report_research_reader=lambda account_id, symbol: MySQLCompanyReportStateStore(configured_settings).research_record(account_id, symbol),
         # Optional history adapters are opened only when their bounded read runs.
         # Building a valuation reader must not initialize notification admission.
         report_history_store=SimpleNamespace(recent_for_symbol=lambda *args, **kwargs:

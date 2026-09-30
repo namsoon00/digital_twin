@@ -35,7 +35,8 @@
       "function": "wire_v2_decision_services",
       "importCount": 7,
       "returnBundle": true,
-      "bodyHash": "d3a0f0d8b58905f716df5f2e3ef26507e6206460270ce341f3e7834b8525143b"
+      "bodyHash": "6adee70b80289245f9cc132b849dd7cc05a690a84b6ba70b3ee581054f9232eb",
+      "reviewedChange": "Inject cutoff-bound dated company research memory into the existing AI continuity service without changing action authority; test_company_report_reading and test_decision_continuity."
     }
   ]
 }

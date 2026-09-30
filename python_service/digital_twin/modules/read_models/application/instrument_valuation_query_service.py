@@ -56,12 +56,14 @@ class InstrumentValuationQueryService:
         settings: Mapping[str, object] = None,
         report_history_store=None,
         report_insight_reader=None,
+        report_research_reader=None,
     ):
         self.monitor_store = monitor_store
         self.valuation_service = valuation_service or ValuationModelService()
         self.settings = dict(settings or {})
         self.report_history_store = report_history_store
         self.report_insight_reader = report_insight_reader
+        self.report_research_reader = report_research_reader
 
     def query(self, query: InstrumentValuationQuery) -> Dict[str, object]:
         request = query.normalized()
@@ -400,6 +402,11 @@ class InstrumentValuationQueryService:
                 account_id, source_symbol, compact_financial_evidence(stored_company),
                 _text(payload["snapshot"].get("generatedAt")),
             )
+        if callable(self.report_research_reader):
+            try:
+                payload["companyResearchRecord"] = self.report_research_reader(account_id, request.symbol)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                payload["companyResearchRecord"] = {}
         payload["companyChangeReport"] = build_company_change_report(
             payload,
             self._previous_delivered_company_change_report(account_id, source_symbol),

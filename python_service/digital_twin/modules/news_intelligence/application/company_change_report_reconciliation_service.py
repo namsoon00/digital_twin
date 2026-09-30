@@ -8,6 +8,7 @@ import hashlib
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.news_intelligence.domain.company_change_report import build_company_change_report, company_report_notification_content, render_company_change_report
+from digital_twin.modules.news_intelligence.domain.company_research_record import advance_company_research_record
 from digital_twin.modules.news_intelligence.domain.company_report_delivery import DELIVERY_VERSION, has_delivery_reference
 from digital_twin.modules.notifications.contracts import INFORMATION_UPDATE, NotificationJob
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
@@ -69,10 +70,9 @@ def _report_job_state(queue, account_id: str, symbol: str) -> Dict[str, object]:
 def _rotating_symbols(symbols, states, batch_size: int, now: datetime, rotation_seconds: int) -> list[str]:
     """Rotate quiet references fairly, including subjects with no outbox history."""
 
-    available = [
-        symbol for symbol in symbols
-        if states.get(symbol, {}).get("status") not in {"pending", "processing", "awaiting_ai"}
-    ]
+    # Research observations must keep advancing while delivery is pending.
+    # The subject reconciler separately prevents another queued notification.
+    available = list(symbols)
     if not available:
         return []
     batch_count = max(1, math.ceil(len(available) / batch_size))
@@ -181,6 +181,13 @@ class CompanyChangeReportReconciler:
     def _reconcile_subject(self, account, symbol, payload, state_store):
         now = self.now_provider()
         state = state_store.load()
+        record = advance_company_research_record(
+            build_company_change_report(payload), state.get("researchRecord"), now.isoformat(),
+        )
+        if record and record != state.get("researchRecord"):
+            state["researchRecord"] = record
+            state_store.replace(state)
+        payload = {**payload, "companyResearchRecord": record}
         reader = getattr(self.queue, "recent_company_reports", None) or getattr(self.queue, "recent_for_symbol", None)
         history = reader(symbol, account_id=account.account_id, limit=40) if callable(reader) else []
         jobs = [job for job in history if isinstance(getattr(job, "context", {}).get("companyChangeReport"), Mapping)]
@@ -206,7 +213,7 @@ class CompanyChangeReportReconciler:
         if state.get("version") != DELIVERY_VERSION or not state.get("baseline"):
             delivered = [job for job in jobs if job.status == "done"]
             last_sent = max((job.updated_at or job.created_at for job in delivered), default="")
-            state_store.replace({"version": DELIVERY_VERSION, "baseline": build_company_change_report(payload),
+            state_store.replace({**state, "version": DELIVERY_VERSION, "baseline": build_company_change_report(payload),
                                  "lastSentAt": last_sent, "pendingSince": ""})
             return "baseline-saved"
         if not has_delivery_reference(state["baseline"].get("evidence")):

@@ -175,7 +175,8 @@ def financial_reading_cards(evidence):
             if card and card["key"] not in seen:
                 seen.add(card["key"])
                 cards.append(card)
-    return cards[:3]
+    from .company_report_bridges import accounting_bridge_cards
+    return accounting_bridge_cards(evidence) + cards[:3]
 
 
 def valuation_reading_cards(payload):

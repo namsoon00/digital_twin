@@ -28184,6 +28184,9 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 .company-report-document h5 { font-size: 15px; margin: 8px 0; }
 .company-report-document blockquote { margin: 12px 0; padding-left: 14px; border-left: 3px solid var(--line, #d6dde4); line-height: 1.7; }
 .company-report-calculation { margin-top: 16px; }
+.company-report-reading { padding: 18px 0; border-bottom: 1px solid var(--line, #d6dde4); overflow-wrap: anywhere; }
+.company-report-reading h5 { font-size: 16px; margin: 6px 0 12px; }
+.company-report-reading p { line-height: 1.7; }
 
 .instrument-valuation-detail-grid {
   display: grid;

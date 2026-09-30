@@ -140,6 +140,8 @@ _EXPORTS.update({
     'watchlist_friendly_text': ('digital_twin.modules.decisions.domain.notification_ai_gate_validation', 'watchlist_friendly_text'),
 })
 
+_EXPORTS['narrative_presentation_errors'] = ('digital_twin.modules.decisions.domain.investment_narrative_policy', 'narrative_presentation_errors')
+
 __all__ = list(_EXPORTS)
 
 

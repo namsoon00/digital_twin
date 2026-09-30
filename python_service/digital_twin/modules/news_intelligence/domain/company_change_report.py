@@ -16,9 +16,10 @@ from typing import Dict, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from .company_report_evidence import amount, company_evidence_sections, evidence_material, profile_value
+from .company_report_reading import build_company_report_reading, reading_sections
 
 
-COMPANY_CHANGE_REPORT_VERSION = "company-change-report-v2"
+COMPANY_CHANGE_REPORT_VERSION = "company-change-report-v3"
 
 ISSUE_LABELS = {
     "financial-statements": "재무제표 기간 자료",
@@ -302,6 +303,7 @@ def build_company_change_report(
     previous = dict(previous_report or {})
     instrument = _mapping(payload.get("instrument"))
     current = _material_packet(payload)
+    current["reportContractVersion"] = COMPANY_CHANGE_REPORT_VERSION
     previous_material = _mapping(previous.get("material"))
     material_fingerprint = _digest({**current, "facts": [_fact_comparison(row) for row in current["facts"]]})
     previous_fingerprint = _text(previous.get("materialFingerprint"))
@@ -376,8 +378,30 @@ def build_company_change_report(
         "material": current,
         "boundary": "이 보고서는 확인된 사실과 계산 상태를 요약하며 매수·매도 판단을 만들지 않습니다.",
     }
-    report["sections"] = company_evidence_sections(evidence)
-    report["sections"].extend(_assessment_sections(report))
+    report["reading"] = build_company_report_reading(payload, previous)
+    report["aiInterpretationState"] = _text(report["reading"]["insight"].get("state") or "unavailable")
+    if report["aiInterpretationState"] == "available":
+        report["analysisMode"] = "source-bound-with-validated-interpretation"
+    report["changeSummary"] = summary
+    financial_reading = report["reading"]["financial"]
+    if financial_reading:
+        first = financial_reading[0]
+        report["summary"] = first["title"] + ": " + first["meaning"]
+    assessment_sections = _assessment_sections(report)
+    changes_section = [section for section in assessment_sections if section["key"] == "changes"]
+    if changes_section:
+        business_changed = bool(fact_changes or evidence_changes)
+        changes_section[0]["paragraphs"] = [
+            "기업 수치 또는 수집 문서가 바뀌었습니다. 변경 사실과 사업 영향의 해석을 구분해 확인하세요."
+            if business_changed else "기업 수치·문서의 변경 없이 보고서 구성, 평가 계산 또는 검토 상태가 갱신됐습니다. 기업 실적이나 투자 판단이 달라졌다는 뜻은 아닙니다."
+        ]
+        transition = report["reading"]["interpretationChange"]
+        changes_section[0]["rows"].append({
+            "changed": "직전 보고서에 연결된 AI 해석의 내용이 달라졌습니다. 강화·약화 방향은 연결된 근거와 해석을 확인하세요.",
+            "unchanged": "직전 보고서와 연결된 AI 해석의 핵심 내용이 같습니다.",
+        }.get(transition, "같은 기준으로 비교할 검증된 해석이 없어 관점의 강화·약화를 판정하지 않았습니다."))
+    report["sections"] = reading_sections(report["reading"]) + changes_section + company_evidence_sections(evidence)
+    report["sections"].extend(section for section in assessment_sections if section["key"] != "changes")
     report["notificationContent"] = company_report_notification_content(report)
     return report
 
@@ -469,6 +493,8 @@ def _assessment_sections(report):
 def company_report_notification_content(report):
     """Plain structured fields are escaped once by the delivery renderer."""
     evidence = _mapping(report.get("evidence"))
+    if _mapping(report.get("reading")).get("contractVersion"):
+        return _reading_notification_content(report)
     sections = [
         {"title": section["title"], "rows": section.get("rows", [])[:3]}
         for section in _rows(report.get("sections")) if section.get("key") == "changes"
@@ -503,6 +529,45 @@ def company_report_notification_content(report):
     sections.append({"title": "상세 보고서", "rows": [
         "자료 확보 수준: " + _text(coverage.get("label") or "준비 중"),
         "연간 " + str(coverage.get("annualPeriods", 0)) + "개 기간 · 최근 " + str(coverage.get("recentPeriods", 0)) + "개 보고자료 · 공시·IR " + str(coverage.get("documents", 0)) + "건의 근거와 계산 내역을 담았습니다.",
+        _text(report.get("boundary")),
+    ]})
+    return {"kind": "company-change-report", "subject": {"symbol": report.get("symbol"), "name": report.get("name")},
+            "summary": _text(report.get("summary")), "sections": sections}
+
+
+def _reading_notification_content(report):
+    """Project the captured reading; do not rerun inference or invent a summary."""
+    reading = _mapping(report.get("reading"))
+    sections = []
+    insight = _mapping(reading.get("insight"))
+    if insight.get("state") == "available":
+        sections.append({"title": "근거가 연결된 AI 해석", "rows": [
+            "분석 당시 " + _display_time(insight.get("asOf")) + " · 시세·사건 설명은 분석 당시 기준",
+            insight["thesis"], insight["mechanism"], insight["meaning"],
+        ]})
+        if insight.get("risks"):
+            sections.append({"title": "해석의 반대 근거와 한계", "rows": insight["risks"]})
+    else:
+        sections.append({"title": "종합 해석", "rows": [_text(insight.get("reason")) or "현재 재무 근거와 연결된 검증된 AI 해석이 없습니다."]})
+    for card in _rows(reading.get("financial")):
+        sections.append({"title": card["title"], "rows": [card["fact"], card["meaning"], *card.get("limitations", [])]})
+    for card in _rows(reading.get("valuation")):
+        sections.append({"title": card["title"], "rows": [card["fact"], card["meaning"], *card.get("limitations", [])]})
+    for section in _rows(report.get("sections")):
+        if section.get("key") in {"changes", "judgmentConditions"}:
+            sections.append({"title": section["title"], "rows": [*section.get("paragraphs", []), *section.get("rows", [])]})
+    if not reading.get("financial"):
+        sections.append({"title": "실적 해석의 한계", "rows": ["동일 기간·출처의 비교 가능한 재무 수치가 부족합니다. 상세 보고서에서 확보된 근거를 확인하세요."]})
+    evidence = _mapping(report.get("evidence"))
+    documents = _rows(evidence.get("documents"))
+    if documents:
+        sections.append({"title": "관련 공시·회사 발표", "rows": [
+            _text(item.get("publishedAt")) + " · " + _text(item.get("title")) + " · " + _text(item.get("useLabel"))
+            for item in documents[:2]
+        ]})
+    sections.append({"title": "보고서 기준", "rows": [
+        *([_text(report.get("changeSummary"))] if report.get("changeSummary") != report.get("summary") else []),
+        "자료 확보 수준: " + _text(_mapping(evidence.get("coverage")).get("label") or "준비 중"),
         _text(report.get("boundary")),
     ]})
     return {"kind": "company-change-report", "subject": {"symbol": report.get("symbol"), "name": report.get("name")},

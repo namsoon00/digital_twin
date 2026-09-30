@@ -31,16 +31,27 @@ def build_instrument_timeline_query_service(settings=None) -> InstrumentTimeline
 
 
 def build_instrument_valuation_query_service(settings=None) -> InstrumentValuationQueryService:
+    from types import SimpleNamespace
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.settings import runtime_settings
-    from digital_twin.modules.read_models.public import InstrumentValuationQueryService
+    from digital_twin.modules.read_models.public import CompanyReportInsightQueryService, InstrumentValuationQueryService
 
     configured_settings = settings or runtime_settings()
     monitor_store = stores.monitor_store(configured_settings)
     return InstrumentValuationQueryService(
         monitor_store=monitor_store,
         settings=configured_settings,
-        report_history_store=monitor_store,
+        # Optional history adapters are opened only when their bounded read runs.
+        # Building a valuation reader must not initialize notification admission.
+        report_history_store=SimpleNamespace(recent_for_symbol=lambda *args, **kwargs:
+            stores.notification_job_store({**configured_settings, "_skipNotificationRuleDefaultsSeed": "true"})
+            .recent_for_symbol(*args, **kwargs)),
+        report_insight_reader=CompanyReportInsightQueryService(
+            SimpleNamespace(latest=lambda *args, **kwargs:
+                stores.subject_decision_case_store(configured_settings).latest(*args, **kwargs)),
+            SimpleNamespace(latest_insight_episodes=lambda **kwargs:
+                stores.ai_inference_queue_store(configured_settings).latest_insight_episodes(**kwargs)),
+        ),
     )
 
 

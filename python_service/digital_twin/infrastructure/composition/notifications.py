@@ -153,6 +153,8 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
             cursor_store=stores.news_digest_reconciliation_state_store(settings),
         )
         company_report_queue = stores.notification_job_store(settings)
+        from digital_twin.modules.read_models.public import CompanyReportInsightQueryService
+
         company_change_report_reconciler = CompanyChangeReportReconciler(
             account_repository=stores.account_reader(settings),
             monitor_store=monitor_store,
@@ -160,6 +162,9 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
                 monitor_store=monitor_store,
                 settings=settings,
                 report_history_store=company_report_queue,
+                report_insight_reader=CompanyReportInsightQueryService(
+                    stores.subject_decision_case_store(settings), stores.ai_inference_queue_store(settings),
+                ),
             ),
             queue=company_report_queue,
             settings=settings,

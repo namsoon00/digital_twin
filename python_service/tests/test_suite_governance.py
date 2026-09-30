@@ -200,7 +200,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and seed-fingerprint propagation across the rebuild subprocess.
         # Maintenance admission and embedded failure/cooldown recovery protect
         # bounded cleanup while the live reasoning queue remains nonempty.
-        self.assertLessEqual(total, 1864)
+        # Nine company-report regressions protect comparable accounting inputs,
+        # conditional valuation and scoped, revision-bound AI interpretation.
+        self.assertLessEqual(total, 1873)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

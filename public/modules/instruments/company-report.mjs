@@ -60,7 +60,16 @@ function companyEvidenceCalculation(section, currency) {
     return '<tr><th scope="row">' + escapeHtml(cell[0]) + '</th>' + ["low", "base", "high"].map(function (key) { return '<td>' + escapeHtml(companyEvidenceNumber(cell[1][key], cell[2])) + '</td>'; }).join("") + '</tr>';
   }).join("") + '</tbody></table></div>';
   var models = companyEvidenceArray(section.models).map(function (item) {
-    return '<p><strong>' + escapeHtml(item.label || "평가 모델") + '</strong> · ' + escapeHtml(item.stateLabel || "검토 상태 미확인") + '<br>참고 계산값 ' + escapeHtml(companyEvidenceNumber(item.fairValue, item.currency || currency)) + '</p>';
+    var labels = {"fy1-revenue-consensus": "첫해 매출 전망", "fy2-revenue-consensus": "다음해 매출 전망", "risk-free-rate": "무위험 금리", "equity-risk-premium": "주식 위험 프리미엄", wacc: "할인율", "terminal-growth": "영구성장률", "years-3-to-5-growth-fade": "이후 성장률의 시작 기준", "constant-operating-margin": "유지한다고 가정한 영업이익률", "constant-reinvestment-ratios": "매출 대비 투자 비율 유지", "preferred-equity-zero": "우선주 청구권 가정", "non-controlling-interest-zero": "비지배지분 가정"};
+    var assumptions = companyEvidenceArray(item.assumptions).map(function (assumption) {
+      var value = typeof assumption.value === "boolean" ? (assumption.value ? "적용" : "미적용") : companyEvidenceNumber(assumption.value, assumption.unit === "percent" || assumption.unit === "percent-start" ? "%" : ["KRW", "USD"].includes(assumption.unit) ? assumption.unit : "");
+      var review = assumption.reviewState === "pending" ? "검토 대기" : assumption.status === "observed" ? "관측값" : "가정";
+      return '<li>' + escapeHtml(labels[assumption.id] || "평가 가정") + ': ' + escapeHtml(value) + ' · ' + escapeHtml(review) + '</li>';
+    }).join("");
+    var sensitivity = item.sensitivity || {};
+    var range = sensitivity.valueRange || {};
+    var rangeText = sensitivity.status === "calculated" && Number.isFinite(range.low) && Number.isFinite(range.high) ? '<p>할인율·영구성장률 변화에 따른 참고 범위 ' + escapeHtml(companyEvidenceNumber(range.low, item.currency || currency)) + ' ~ ' + escapeHtml(companyEvidenceNumber(range.high, item.currency || currency)) + ' · 통계적 신뢰구간이 아닙니다.</p>' : '';
+    return '<p><strong>' + escapeHtml(item.label || "평가 모델") + '</strong> · ' + escapeHtml(item.stateLabel || "검토 상태 미확인") + '<br>참고 계산값 ' + escapeHtml(companyEvidenceNumber(item.fairValue, item.currency || currency)) + '</p>' + (assumptions ? '<ul>' + assumptions + '</ul>' : '') + rangeText;
   }).join("");
   var assumptions = [
     "계산식: " + (model.formula || "자료 없음"),
@@ -70,11 +79,31 @@ function companyEvidenceCalculation(section, currency) {
   return '<details class="company-report-calculation"><summary>참고 계산과 가정 펼치기</summary><p>가정 변화에 민감한 계산입니다. 검토 대기·참고 상태의 금액을 투자 판단 기준으로 사용하지 않습니다.</p>' + models + table + '<ul>' + assumptions.map(function (line) { return '<li>' + escapeHtml(line) + '</li>'; }).join("") + '</ul></details>';
 }
 
+function companyReadingCards(cards) {
+  return companyEvidenceArray(cards).map(function (card) {
+    var kind = card.kind === "conditional-model" ? "조건부 계산" : "수치로 확인한 의미";
+    var evidence = companyEvidenceArray(card.evidence).map(function (metric) {
+      return '<article><p><strong>' + escapeHtml(metric.label || metric.key) + '</strong> · ' + escapeHtml(companyEvidenceNumber(metric.value, metric.currency)) + '</p><p>' + escapeHtml(metric.basisLabel) + '</p>' + companyEvidenceSources(metric) + '</article>';
+    }).join("");
+    var assumptions = Object.entries(card.fixedAssumptions || {}).filter(function (entry) {
+      return entry[1] !== null && typeof entry[1] !== "object";
+    }).map(function (entry) {
+      var labels = {waccPct: "할인율 (%)", terminalGrowthPct: "영구성장률 (%)", ebitMarginPct: "영업이익률 (%)", revenueGrowthPct: "매출 성장률 (%)", cash: "계산에 사용한 현금", debt: "계산에 사용한 부채", preferredEquity: "우선주 청구권", nonControllingInterest: "비지배지분", nonOperatingAssets: "비영업자산", dilutedShares: "희석주식 수"};
+      return labels[entry[0]] ? '<li>' + escapeHtml(labels[entry[0]]) + ': ' + escapeHtml(entry[1]) + '</li>' : '';
+    }).join("");
+    return '<article class="company-report-reading"><p class="label">' + escapeHtml(kind) + '</p><h5>' + escapeHtml(card.title) + '</h5><p><strong>확인 내용</strong> ' + escapeHtml(card.fact) + '</p><p><strong>의미</strong> ' + escapeHtml(card.meaning) + '</p>'
+      + (card.asOf ? '<p>계산에 사용한 가격 관측: ' + escapeHtml(card.asOf) + '</p>' : '')
+      + companyEvidenceArray(card.limitations).map(function (line) { return '<p class="instrument-valuation-explanation">' + escapeHtml(line) + '</p>'; }).join("")
+      + (evidence || assumptions ? '<details class="company-report-provenance"><summary>이 설명의 근거와 가정</summary>' + evidence + (assumptions ? '<ul>' + assumptions + '</ul>' : '') + '</details>' : '') + '</article>';
+  }).join("");
+}
+
 function renderCompanyEvidenceReport(report) {
   var kindLabel = {baseline: "첫 비교 기준", expanded: "상세 자료 보강", change: "변경 자료 확인", unchanged: "변화 없음"}[report.reportKind] || "기업 보고서";
   var sections = companyEvidenceArray(report.sections).map(function (section, index) {
     var sourceExcerpt = section.sourceExcerpt ? '<details class="company-report-provenance"><summary>' + escapeHtml(section.sourceExcerptLabel || "수집 원문 발췌") + '</summary><p>' + escapeHtml(section.sourceExcerpt) + '</p></details>' : '';
-    return '<section class="instrument-valuation-band company-report-section"><div class="instrument-valuation-section-head"><h4>' + escapeHtml(String(index + 1).padStart(2, "0") + ' · ' + section.title) + '</h4></div>' + companyEvidenceArray(section.paragraphs).map(function (paragraph) { return '<p class="instrument-valuation-explanation">' + escapeHtml(paragraph) + '</p>'; }).join("") + (companyEvidenceArray(section.rows).length ? '<ul>' + section.rows.map(function (row) { return '<li>' + escapeHtml(row) + '</li>'; }).join("") + '</ul>' : '') + sourceExcerpt + companyEvidenceFinancials(section.financialReports) + companyEvidenceDocuments(section.documents) + companyEvidenceCalculation(section, report.currency) + '</section>';
+    var insightSources = companyEvidenceArray(section.insightEvidenceIds).length ? '<details class="company-report-provenance"><summary>해석의 근거 식별자</summary><ul>' + section.insightEvidenceIds.map(function (id) { return '<li>' + escapeHtml(id) + '</li>'; }).join("") + '</ul></details>' : '';
+    return '<section class="instrument-valuation-band company-report-section"><div class="instrument-valuation-section-head"><h4>' + escapeHtml(String(index + 1).padStart(2, "0") + ' · ' + section.title) + '</h4></div>' + companyEvidenceArray(section.paragraphs).map(function (paragraph) { return '<p class="instrument-valuation-explanation">' + escapeHtml(paragraph) + '</p>'; }).join("") + (companyEvidenceArray(section.rows).length ? '<ul>' + section.rows.map(function (row) { return '<li>' + escapeHtml(row) + '</li>'; }).join("") + '</ul>' : '') + companyReadingCards(section.readingCards) + insightSources + sourceExcerpt + companyEvidenceFinancials(section.financialReports) + companyEvidenceDocuments(section.documents) + companyEvidenceCalculation(section, report.currency) + '</section>';
   }).join("");
   return '<section class="instrument-valuation-workspace company-change-report"><header><div><span class="label">기업 자료 보고서</span><h3>' + escapeHtml(report.headline || "기업 보고서") + '</h3><p>' + escapeHtml(report.summary) + '</p></div><span class="tone-chip hold">' + escapeHtml(kindLabel) + '</span></header><p class="instrument-valuation-explanation">자료 확인 ' + escapeHtml(report.sourceCutoffDisplay || report.sourceCutoffAt || "시각 미기록") + ' · 종목 ' + escapeHtml(report.symbol) + '</p>' + sections + '<p class="instrument-valuation-explanation">' + escapeHtml(report.boundary) + '</p></section>';
 }

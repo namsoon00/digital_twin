@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, Mapping, Optional
 
-from digital_twin.modules.news_intelligence.contracts import build_company_change_report, build_company_report_evidence, build_company_driver_map, company_prompt_context, company_valuation_context, evaluate_causal_attribution, latest_source_as_of
+from digital_twin.modules.news_intelligence.contracts import build_company_change_report, build_company_report_evidence, build_company_driver_map, company_prompt_context, company_valuation_context, compact_financial_evidence, evaluate_causal_attribution, latest_source_as_of
 from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
 from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state, utc_now_iso
 from digital_twin.modules.portfolio.contracts import ValuationModelRequest, ValuationModelService, valuation_snapshot_delta
@@ -55,11 +55,13 @@ class InstrumentValuationQueryService:
         valuation_service: ValuationModelService = None,
         settings: Mapping[str, object] = None,
         report_history_store=None,
+        report_insight_reader=None,
     ):
         self.monitor_store = monitor_store
         self.valuation_service = valuation_service or ValuationModelService()
         self.settings = dict(settings or {})
         self.report_history_store = report_history_store
+        self.report_insight_reader = report_insight_reader
 
     def query(self, query: InstrumentValuationQuery) -> Dict[str, object]:
         request = query.normalized()
@@ -393,6 +395,11 @@ class InstrumentValuationQueryService:
             },
         }
         payload["companyReportEvidence"] = build_company_report_evidence(source_symbol, external_signals)
+        if self.report_insight_reader is not None:
+            payload["companyReportInsight"] = self.report_insight_reader.query(
+                account_id, source_symbol, compact_financial_evidence(stored_company),
+                _text(payload["snapshot"].get("generatedAt")),
+            )
         payload["companyChangeReport"] = build_company_change_report(
             payload,
             self._previous_delivered_company_change_report(account_id, source_symbol),

@@ -1,6 +1,6 @@
 [
   {
-    "reason": "Company report notifications open their captured financial, filing and valuation evidence, with per-metric periods and sources. Reference calculations stay collapsed. Covered by company report presentation tests.",
+    "reason": "Company report v3 opens captured accounting explanations, matched validated AI interpretation, conditional valuation and next checks before source tables; v2 history remains readable. Reference amounts remain collapsed. Covered by test_company_report_reading and insight-presentation.test.mjs.",
     "functions": ["renderNotificationSummaryTab", "renderCompanyChangeReport"]
   },
   {

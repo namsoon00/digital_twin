@@ -50,6 +50,35 @@ test("both notification lanes show financial dates, comparisons and sources in c
   }
 });
 
+test("company report v3 explains recent facts and conditional value with traceable escaped evidence", () => {
+  const report = {contractVersion: "company-change-report-v3", reportKind: "change", currency: "KRW", symbol: "TEST",
+    headline: "기업 보고서", summary: "실적 해석", sections: [
+      {key: "businessMeaning", title: "실적이 의미하는 것", readingCards: [{
+        kind: "accounting-observation", title: "투자 후 현금", fact: "2026-06-30 · 누적 · -20 KRW",
+        meaning: "투자 후 현금이 음수입니다. <script>bad</script>", limitations: ["차입·배당은 계산에서 제외"],
+        evidence: [{key: "cash", label: "영업현금흐름", value: 30, currency: "KRW", basisLabel: "2026-06-30 · 누적",
+          provider: "OpenDART", sourceUrl: "javascript:alert(1)", sourceReferences: [{datasetId: "filing", revisionId: "r1"}]}]
+      }]},
+      {key: "valuationMeaning", title: "가격의 조건", readingCards: [{kind: "conditional-model", title: "가격을 설명하는 사업 조건",
+        fact: "조건부 영업이익률 17.50%", meaning: "관측된 시장 기대가 아닙니다.", asOf: "2026-09-29",
+        fixedAssumptions: {waccPct: 12, terminalGrowthPct: 2.5}}]},
+      {key: "judgmentConditions", title: "해석을 다시 확인할 조건", rows: ["다음 분기 원문 확인"]},
+      {key: "annualFinancials", title: "연간 실적", financialReports: []}
+    ]};
+  const html = renderCompanyChangeReport(report);
+  assert.ok(html.indexOf("실적이 의미하는 것") < html.indexOf("연간 실적"));
+  assert.match(html, /수치로 확인한 의미/);
+  assert.match(html, /이 설명의 근거와 가정/);
+  assert.match(html, /filing · r1/);
+  assert.match(html, /2026-06-30 · 누적/);
+  assert.match(html, /차입·배당/);
+  assert.match(html, /조건부 계산/);
+  assert.match(html, /할인율 \(%\): 12/);
+  assert.match(html, /관측된 시장 기대가 아닙니다/);
+  assert.match(html, /다음 분기 원문 확인/);
+  assert.doesNotMatch(html, /<script>|href="javascript:/);
+});
+
 test("instrument valuation separates verified changes, price-cause limits and reference models", () => {
   const html = renderInstrumentInvestmentAnalysis({
       currentVerifiedFacts: [{label: "영업이익률", value: 24, unit: "percent", period: "2025-12-31"}],

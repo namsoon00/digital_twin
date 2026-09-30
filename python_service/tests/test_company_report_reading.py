@@ -176,10 +176,18 @@ class CompanyReportInsightTests(unittest.TestCase):
         value["companyReportInsight"] = result
         report = build_company_change_report(value)
         self.assertIn(result["meaning"], str(report["sections"]))
-        self.assertIn(result["meaning"], render_company_change_report(report))
-        self.assertIn(result["invalidation"], render_company_change_report(report))
+        self.assertIn(result["invalidation"], str(report["sections"]))
+        self.assertIn("매출보다 영업비용이 큽니다", render_company_change_report(report))
+        self.assertIn("영업적자", report["summary"])
         self.assertEqual("linkedInsight", report["sections"][0]["key"])
-        self.assertIn(result["risks"][0], render_company_change_report(report))
+        self.assertIn(result["risks"][0], str(report["sections"]))
+        fallback = copy.deepcopy(report)
+        fallback["reading"]["financial"] = []
+        from digital_twin.modules.news_intelligence.domain.company_change_report import _reading_notification_content
+        fallback_brief = str(_reading_notification_content(fallback))
+        self.assertIn(result["meaning"], fallback_brief)
+        self.assertIn(result["invalidation"], fallback_brief)
+        self.assertIn(result["risks"][0], fallback_brief)
         self.episode["insight"]["insightAssessment"]["investmentImplication"] = "바뀐 설명"
         self.assertEqual(result["meaning"], report["reading"]["insight"]["meaning"])
 

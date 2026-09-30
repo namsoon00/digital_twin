@@ -405,7 +405,7 @@ def build_company_change_report(
     report["sections"] = reading_sections(report["reading"]) + changes_section + company_evidence_sections(evidence)
     report["sections"].extend(section for section in assessment_sections if section["key"] != "changes")
     insight = report["reading"]["insight"]
-    if insight.get("state") == "available":
+    if insight.get("state") == "available" and not financial_reading:
         report["summary"] = insight["thesis"] + " · 분석 " + _display_time(insight.get("asOf"))
     report["brief"] = _reading_notification_content(report)
     report["notificationContent"] = report["brief"]
@@ -561,9 +561,9 @@ def _reading_notification_content(report):
     if lead.get("valuationMeaning"):
         value_text = lead["valuationMeaning"]
     check = next((card.get("briefCheck") or item for card in financial for item in card.get("nextChecks", [])), "비교 가능한 재무 자료를 먼저 확보해야 합니다.")
-    if insight.get("state") == "available":
-        # Interpretation is the product, not an optional appendix. Preserve
-        # counter-evidence and invalidation rather than cutting claims short.
+    if insight.get("state") == "available" and not lead:
+        # A revision-bound insight can discuss price action, not these accounts.
+        # Never let it replace the meaning of reported financial numbers.
         facts = [insight["mechanism"], insight["meaning"],
                  *("반대 근거·한계: " + risk for risk in insight.get("risks", []))]
         check = insight["invalidation"]

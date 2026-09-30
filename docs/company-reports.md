@@ -9,14 +9,17 @@ documents, market context, valuation assumptions and missing evidence.
 The default v3 view and new notification messages show a compact captured brief:
 a short conclusion, the economic meaning with its numerical basis, one
 valuation implication and one next check. Generic collection-change messages
-do not replace the interpretation. An available, validated AI interpretation takes
-priority in the brief, retaining its mechanism, implication, counter-evidence,
-analysis date and invalidation condition. Tables, sources and calculation
+do not replace the interpretation. Financial explanations take priority over
+an existing validated AI interpretation, which may discuss price action even
+when it captures the same financial revision. The complete AI interpretation
+remains in the detail with counter-evidence and invalidation; when no accounting
+reading is available it supplies the brief without losing those qualifications.
+Tables, sources and calculation
 assumptions remain in a closed full-report disclosure. Historical v3 reports
 without a captured brief use their own saved reading for the compact web view;
 already delivered message bodies are not rewritten. Shortening presentation does
 not change material fingerprints or resend unchanged reports. Qualified AI prose
-is never cut mid-claim to fit the brief or hidden solely to meet a length target.
+is never cut mid-claim to fit the brief.
 
 SEC collection now retains operating unrealized crypto-asset gain/loss concepts.
 When a signed gain/loss or positive loss-only concept explains at least half of

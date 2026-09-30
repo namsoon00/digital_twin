@@ -117,3 +117,58 @@ class MaintenanceFairnessTests(unittest.TestCase):
         self.assertEqual("fairness-cooldown",
                          self.state["lastResult"]["backgroundFairness"]["reasonCode"])
         self.assertEqual(2, self.repository.run_deferred_maintenance.call_count)
+
+    def test_measured_cleanup_budget_requires_safe_recent_world_evidence(self):
+        self.queue = {"effectivePendingCount": 0, "processingCount": 0}
+        self.maintenance.settings.update({
+            "ontologyAboxMaintenanceCriticalInactiveManifestCount": 24,
+            "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": 4,
+        })
+        self.repository.run_deferred_maintenance.return_value = {
+            "status": "partial", "durationMs": 3200,
+            "abox": {
+                "status": "partial", "completedInactiveManifestCount": 55,
+                "remainingInactiveManifestCount": 55, "deletedBatchCount": 2,
+                "removedRetiredScopeGenerationCount": 2, "deleteBatchSize": 150,
+            },
+        }
+        # Exercise persistence and selection, not only the budget helper.
+        for expected_budget in [2, 2, 2, 3, 4]:
+            self.maintenance.run_once()
+            options = self.repository.run_deferred_maintenance.call_args.args[0]
+            self.assertEqual(expected_budget, options["maxAboxDeleteBatches"])
+            self.assertEqual(45, options["maxDurationSeconds"])
+            self.assertEqual(1, options["keepInactiveManifests"])
+        world = self.state["backlogByWorld"]["portfolio:test"]
+        samples = world["recentDeleteTimings"]
+        self.assertEqual(3, len(samples))
+        self.assertEqual("verified-world-turns", self.state["lastResult"]["capacityBudget"]["deleteBatchEstimateSource"])
+        policy = self.maintenance.policy()
+        adaptive = self.maintenance.adaptive_drain(policy, self.state, "portfolio:test")
+        for label, evidence in [
+            ("cold", []), ("insufficient", samples[:2]),
+            ("expired", [{**row, "observedAt": (self.now - timedelta(hours=1)).isoformat()} for row in samples]),
+            ("future", [{**row, "observedAt": (self.now + timedelta(hours=1)).isoformat()} for row in samples]),
+            ("changed-row-size", [{**row, "deleteBatchSize": 50} for row in samples]),
+            ("invalid", [None, *samples[:2]]),
+        ]:
+            with self.subTest(label=label):
+                budget = self.maintenance.capacity_maintenance_budget(policy, adaptive, {}, evidence)
+                self.assertEqual(2, budget["maxAboxDeleteBatches"])
+                self.assertEqual("configured", budget["deleteBatchEstimateSource"])
+        slow = [{**row, "durationMs": 30000} for row in samples]
+        self.assertEqual(1, self.maintenance.capacity_maintenance_budget(policy, adaptive, {}, slow)["maxAboxDeleteBatches"])
+        self.assertEqual("configured", self.maintenance.capacity_maintenance_budget(
+            policy, adaptive, {"capacityPriority": True}, samples)["deleteBatchEstimateSource"])
+        # Another world cannot inherit this world's estimate.
+        other = self.maintenance.adaptive_drain(policy, self.state, "other-world")
+        self.assertEqual(2, self.maintenance.capacity_maintenance_budget(policy, other, {})["maxAboxDeleteBatches"])
+        good = self.state["lastResult"]
+        for change in [{"status": "error"}, {"status": "timeout"},
+                       {"timeBudgetExhausted": True}, {"inventoryAvailable": False},
+                       {"deletedBatchCount": 0}, {"removedRetiredScopeGenerationCount": 0}]:
+            with self.subTest(change=change):
+                self.assertEqual([], self.maintenance.updated_delete_timings(world, {**good, **change}))
+        self.repository.run_deferred_maintenance.return_value = {"status": "error"}
+        self.maintenance.run_once()
+        self.assertEqual([], self.state["backlogByWorld"]["portfolio:test"]["recentDeleteTimings"])

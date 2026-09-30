@@ -47,6 +47,16 @@ rules:
    budget, with 300 seconds between successful fairness turns. A transaction
    already in progress can exceed that budget. The adaptive budget is also
    capped by the available time; it does not make cleanup unbounded.
+   After three recent successful physical-delete turns in the same world,
+   the time estimate uses twice the slowest observed per-batch duration,
+   including read overhead, with a five-second floor. This lets the existing
+   adaptive batch limit take effect when cleanup is consistently fast. Samples
+   expire after 30 minutes and must use the same row batch size. Errors,
+   exhausted time budgets and turns without completed physical generation
+   deletion reset the sample window. Until it is verified, and during capacity
+   emergencies, the configured conservative estimate remains in effect. The
+   writer lease, rollback protection, configured adaptive maximum and 45-second
+   cooperative deadline remain unchanged.
 4. A turn never exceeds the configured manifest and batch budget.
 5. The worker records per-world inventory and progress in MySQL. Status reads
    this durable state and does not scan TypeDB.

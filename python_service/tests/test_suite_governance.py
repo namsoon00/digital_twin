@@ -208,7 +208,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # completion, retry/timeout behavior and honest physical-delete counters.
         # Three report-delivery regressions cover semantic changes, quiet source
         # updates and durable coalescing/receipt cooldown across restarts.
-        self.assertLessEqual(total, 1887)
+        # Measured retention budgets independently verify safe timing admission.
+        self.assertLessEqual(total, 1888)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -532,7 +532,8 @@ class OntologyMaintenanceRunner:
         policy: Dict[str, object],
         adaptive_drain: Dict[str, object],
         capacity: Dict[str, object],
-    ) -> Dict[str, int]:
+        recent_delete_timings: List[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
         """Bound cleanup so an isolated turn finishes before its hard timeout."""
         base_manifests = max(1, integer(policy.get("maxManifestsPerRun"), 1))
         requested_batches = max(1, integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 1))
@@ -563,6 +564,31 @@ class OntologyMaintenanceRunner:
                 20,
             ),
         )
+        estimate_source = "configured"
+        # Require three recent physical-delete turns from this world and the
+        # same row batch size before relaxing the cold-start estimate. Include
+        # all read/marker overhead and double the slowest per-batch duration.
+        # Capacity emergencies retain their independent conservative budget.
+        timings = list(recent_delete_timings or [])[-3:]
+        verified_seconds = []
+        now = datetime.now(timezone.utc)
+        for sample in timings:
+            try:
+                observed_at = datetime.fromisoformat(text(sample.get("observedAt")).replace("Z", "+00:00"))
+                age = (now - observed_at).total_seconds()
+                duration_ms = integer(sample.get("durationMs"))
+                batches = integer(sample.get("deletedBatchCount"))
+                if not (0 <= age <= 1800 and duration_ms > 0 and batches > 0
+                        and integer(sample.get("deleteBatchSize")) == base_batch_size):
+                    break
+                verified_seconds.append((2 * duration_ms + 1000 * batches - 1) // (1000 * batches))
+            except (AttributeError, TypeError, ValueError):
+                break
+        if (len(verified_seconds) == 3 and bool(adaptive_drain.get("enabled"))
+                and bool(adaptive_drain.get("safeToIncrease"))
+                and not bool(capacity.get("capacityPriority"))):
+            estimated_batch_seconds = max(5, max(verified_seconds))
+            estimate_source = "verified-world-turns"
         safe_batch_cap = max(
             1,
             slice_seconds // estimated_batch_seconds,
@@ -579,6 +605,8 @@ class OntologyMaintenanceRunner:
                 "executionTimeoutSeconds": timeout_seconds,
                 "executionReserveSeconds": reserve_seconds,
                 "estimatedDeleteBatchSeconds": estimated_batch_seconds,
+                "deleteBatchEstimateSource": estimate_source,
+                "verifiedDeleteTimingCount": len(verified_seconds),
                 "maxDurationSeconds": slice_seconds,
             }
         capacity_requested_batches = max(
@@ -601,8 +629,27 @@ class OntologyMaintenanceRunner:
             "executionTimeoutSeconds": timeout_seconds,
             "executionReserveSeconds": reserve_seconds,
             "estimatedDeleteBatchSeconds": estimated_batch_seconds,
+            "deleteBatchEstimateSource": estimate_source,
+            "verifiedDeleteTimingCount": len(verified_seconds),
             "maxDurationSeconds": slice_seconds,
         }
+
+    @staticmethod
+    def updated_delete_timings(previous: Dict[str, object], result: Dict[str, object]) -> List[Dict[str, object]]:
+        """Keep bounded timing evidence; failed, timed-out or empty turns reset it."""
+        if (result.get("status") not in {"ok", "partial"}
+                or not result.get("inventoryAvailable") or result.get("timeBudgetExhausted")
+                or integer(result.get("durationMs")) <= 0
+                or integer(result.get("deletedBatchCount")) <= 0
+                or integer(result.get("removedRetiredScopeGenerationCount")) <= 0
+                or integer(result.get("deleteBatchSize")) <= 0):
+            return []
+        return [*list(previous.get("recentDeleteTimings") or [])[-2:], {
+            "observedAt": utc_now_iso(),
+            "durationMs": integer(result.get("durationMs")),
+            "deletedBatchCount": integer(result.get("deletedBatchCount")),
+            "deleteBatchSize": integer(result.get("deleteBatchSize")),
+        }]
 
     @staticmethod
     def queue_pending_count(state: Dict[str, object]) -> int:
@@ -1624,7 +1671,10 @@ class OntologyMaintenanceRunner:
                 "retryAfterSeconds": compact["retryAfterSeconds"],
             }
         adaptive_drain = self.adaptive_drain(policy, selection_state, world_id)
-        capacity_budget = self.capacity_maintenance_budget(policy, adaptive_drain, capacity)
+        capacity_budget = self.capacity_maintenance_budget(
+            policy, adaptive_drain, capacity,
+            self.backlog_by_world(selection_state).get(world_id, {}).get("recentDeleteTimings"),
+        )
         coordinator_lease = self.acquire_projection_coordinator_lease(world_id)
         if not bool(coordinator_lease.get("acquired")):
             result = {
@@ -1848,6 +1898,7 @@ class OntologyMaintenanceRunner:
         current_backlog = dict(backlog_by_world.get(world_id) or {})
         progress_made = bool(current_backlog.get("lastProgress"))
         current_backlog.update({
+            "recentDeleteTimings": self.updated_delete_timings(current_backlog, compact),
             "lastMaintenanceDurationMs": compact["durationMs"],
             "lastTimeBudgetExhausted": time_budget_exhausted,
             "lastResumeRequired": resume_required,

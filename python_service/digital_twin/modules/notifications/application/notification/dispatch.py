@@ -31,9 +31,22 @@ class NotificationDispatchService:
         audience = "operations" if operations_delivery else "account"
         channel = "operationsTelegram" if operations_delivery else "accountNotification"
         context = dict(job.context or {})
+        notifier = factory(accounts.get(job.account_id))
+        resumable = getattr(notifier, "supports_delivery_checkpoints", False) is True
+        persist_progress = getattr(self.queue, "save_delivery_progress", None) or getattr(self.queue, "update", None)
+        progress = dict(context.get("transportDelivery") or {})
+        if resumable:
+            # Freeze the exact artifact before the first external side effect.
+            # Later render-time clocks or enrichment cannot change chunk offsets.
+            message = str(progress.get("message") or message)
+            progress["message"] = message
+            context["transportDelivery"] = progress
+        context.pop("deliveryRetryAfterSeconds", None)
         context["deliveryAudience"] = audience
         context["deliveryChannel"] = channel
         job.context = context
+        if resumable:
+            persist_progress(job)
         attempt_id = ""
         message_bytes = str(message or "").encode("utf-8")
         rendered_audit = {"messageBytes": len(message_bytes),
@@ -50,9 +63,17 @@ class NotificationDispatchService:
                 audience,
                 rendered_audit,
             )
-        notifier = factory(accounts.get(job.account_id))
+        def save_checkpoint(checkpoint):
+            current = dict(job.context or {})
+            current["transportDelivery"] = {"message": message, "checkpoint": checkpoint}
+            job.context = current
+            persist_progress(job)
+
         try:
-            delivery = notifier.send(message)
+            delivery = (
+                notifier.send_resumable(message, checkpoint=progress.get("checkpoint"), on_checkpoint=save_checkpoint)
+                if resumable else notifier.send(message)
+            )
         except Exception as error:
             if attempt_id and hasattr(self.queue, "complete_delivery_attempt"):
                 self.queue.complete_delivery_attempt(job, attempt_id, False, reason=str(error), metadata=rendered_audit)
@@ -63,6 +84,7 @@ class NotificationDispatchService:
         receipt_metadata.update(rendered_audit)
         context = dict(job.context or {})
         context["deliveryProvider"] = provider
+        context["deliveryRetryAfterSeconds"] = receipt_metadata.get("retryAfterSeconds") or 0
         if reason:
             context["deliveryNote"] = reason
         if attempt_id:

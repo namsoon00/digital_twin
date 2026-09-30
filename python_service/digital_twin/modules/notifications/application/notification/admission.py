@@ -6,7 +6,7 @@ from typing import Dict, List, Mapping
 
 from digital_twin.modules.market_data.contracts import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
 from digital_twin.modules.notifications.domain.message_types import INVESTMENT_INSIGHT
-from digital_twin.modules.notifications.domain.notification_rules import NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, attach_previous_profit_loss_context, evaluate_notification_rule, ontology_relation_delivery_diff, ontology_relation_delivery_metadata, notification_state_group_key, material_evidence_present
+from digital_twin.modules.notifications.domain.notification_rules import NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, attach_previous_profit_loss_context, evaluate_notification_rule, ontology_relation_delivery_diff, ontology_relation_delivery_metadata, notification_state_group_key, notification_subject_group_key, material_evidence_present
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
 from digital_twin.modules.decisions.contracts import relation_context_value
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
@@ -247,6 +247,7 @@ class NotificationAdmissionPolicy:
             decision.suppression_reason = ""
         context = dict(job.context or {})
         context.update(decision.to_context())
+        context["deliverySubjectGroupKey"] = notification_subject_group_key(job)
         state_group_key = notification_state_group_key(job)
         if state_group_key:
             context["deliveryStateGroupKey"] = state_group_key

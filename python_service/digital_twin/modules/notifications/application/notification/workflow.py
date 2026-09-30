@@ -437,6 +437,16 @@ class NotificationQueueRunner:
             if not self.apply_deferred_admission_delivery_gate(job):
                 processed += 1
                 continue
+            repeat_check = getattr(self.queue, "recheck_delivery_cadence", None)
+            if job.message_type == INVESTMENT_INSIGHT and not self.dry_run and callable(repeat_check):
+                repeat = repeat_check(job)
+                job.context["dispatchRepeatPolicy"] = repeat
+                if not repeat["allowed"]:
+                    job.context["deliverySuppressionReason"] = "state_cooldown"
+                    self.eligibility_service.suppress(job, repeat["reason"])
+                    self.last_run_details.append(self.job_detail(job, "suppressed", repeat["reason"]))
+                    processed += 1
+                    continue
             if not self.apply_operational_state_gate(job, "발송 직전"):
                 processed += 1
                 continue
@@ -484,17 +494,16 @@ class NotificationQueueRunner:
         return processed
 
     def prepare_delivery_comparison(self, job):
-        if self.dry_run or job.message_type != INVESTMENT_INSIGHT or self.delivery_comparison_refresher is None:
+        if self.dry_run or job.message_type != INVESTMENT_INSIGHT:
             return True
         context = dict(job.context or {})
-        if not isinstance(context.get("notificationAiValidatedResponse"), dict):
-            return True
         symbol = notification_instrument_symbol(context)
         lock = getattr(self.queue, "delivery_subject_lock", None)
         try:
             if callable(lock) and not self.delivery_scope.enter_context(lock(job.account_id, symbol)):
                 raise RuntimeError("같은 종목의 다른 알림이 발송 중이므로 성공 이력 확인 후 재시도합니다.")
-            job.context = self.delivery_comparison_refresher(context, account_id=job.account_id)
+            if self.delivery_comparison_refresher is not None and isinstance(context.get("notificationAiValidatedResponse"), dict):
+                job.context = self.delivery_comparison_refresher(context, account_id=job.account_id)
         except Exception as error:
             self.queue.mark_failed(job, str(error))
             self.last_run_details.append(self.job_detail(job, "failed", str(error)))

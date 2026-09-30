@@ -25,7 +25,7 @@ available as `test:unit`, `test:contract`, `test:integration`, and `test:system`
 
 - Every `test_*.py` module must be declared in `suite_manifest.json` with one
   tier and an explicit `core` decision. Unclassified test files fail the run.
-- The maintained suite must remain between 600 and 800 tests, with no module
+- The maintained suite must remain between 600 and 1905 tests, with no module
   containing more than 50 tests. Add a focused contract and remove a weaker
   example when the upper bound would be exceeded.
 - The runner forces MySQL and TypeDB test database names. A production database

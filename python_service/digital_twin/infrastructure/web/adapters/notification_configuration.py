@@ -14,6 +14,7 @@ from digital_twin.infrastructure.web.common import parse_utc
 from digital_twin.infrastructure.web.common import utc_iso
 from digital_twin.infrastructure.web.events import new_domain_event
 from digital_twin.modules.market_data.domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
+from digital_twin.modules.market_data.domain.market_observations import market_observation_delivery_cadence_minutes
 from digital_twin.modules.notifications.domain.event_types import NOTIFICATION_RULE_UPDATED
 from digital_twin.modules.notifications.domain.event_types import NOTIFICATION_TEMPLATE_UPDATED
 from digital_twin.modules.notifications.domain.message_types import DEFAULT_ALERT_RULES
@@ -40,6 +41,15 @@ NON_CADENCE_MESSAGE_GUIDES = {
     "workHandoff": "작업이 끝나고 커밋, 검증, 푸시, 재시작 결과를 공유할 때 보냅니다.",
     "notification": "사용자가 직접 만든 일반 알림이나 시스템 안내가 있을 때 보냅니다.",
     "default": "타입별 템플릿이 없을 때 fallback으로 사용됩니다.",
+}
+
+EVENT_DELIVERY_GUIDES = {
+    "investmentInsight": "검증된 변화마다 즉시·중요 변화의 최소 간격을 적용합니다. 동일 판단의 정기 재확인은 웹 이력이며 정기 푸시가 아닙니다.",
+    "newsDigest": "새 기사·사건이 선별되면 보냅니다. 기사 중복 억제 시간은 정기 발송 주기가 아닙니다.",
+    "informationUpdate": "발표 결과나 1시간·24시간 후 새 관측이 확보되면 보냅니다.",
+    "portfolioActivityObservation": "새 실계좌 변화가 확인될 때 에피소드별로 한 번 보냅니다.",
+    "portfolioHoldingsSnapshot": "사용자가 명시적으로 요청한 보유 현황만 보냅니다.",
+    "investmentCalendarReminder": "이벤트별 알림 시점에 보냅니다. 기본값은 하루 전·1시간 전·시작 시각입니다.",
 }
 
 
@@ -132,6 +142,11 @@ def notification_schedules_payload(include_internal: bool = False) -> Dict[str, 
     for message_type in message_types:
         has_cadence = message_type in DEFAULT_CADENCE
         minutes = int(cadence.get(message_type, DEFAULT_CADENCE.get(message_type, 0)) or 0)
+        event_delivery = message_type in EVENT_DELIVERY_GUIDES
+        if event_delivery:
+            minutes = 0
+        elif message_type == "marketObservation":
+            minutes = market_observation_delivery_cadence_minutes(settings)
         records = cadence_records_for_type(store.sent, message_type)
         last_record = records[0] if records else {}
         last_sent_at = parse_utc(str(last_record.get("sentAt") or "")) if last_record else None
@@ -147,15 +162,17 @@ def notification_schedules_payload(include_internal: bool = False) -> Dict[str, 
                 "target": "" if target == "all" else target,
                 "sentAt": record.get("sentAt") or "",
             })
-        if not has_cadence:
-            status = "event"
-        elif not enabled:
+        if not enabled:
             status = "disabled"
+        elif event_delivery or not has_cadence:
+            status = "event"
         elif next_eligible_at and next_eligible_at > now_at:
             status = "waiting"
         else:
             status = "ready"
-        if minutes:
+        if event_delivery:
+            cadence_text = EVENT_DELIVERY_GUIDES[message_type]
+        elif minutes:
             cadence_text = "조건이 다시 충족되면 최소 " + str(max(10, minutes)) + "분 간격으로 보냅니다."
         else:
             cadence_text = "정해진 주기 없이 해당 이벤트가 생길 때만 보냅니다."
@@ -167,6 +184,8 @@ def notification_schedules_payload(include_internal: bool = False) -> Dict[str, 
             "status": status,
             "cadenceMinutes": max(10, minutes) if minutes else 0,
             "cadenceText": cadence_text,
+            "cadenceMode": "event" if event_delivery else "minimum-interval",
+            "historyBasis": "monitor-admission",
             "triggerSummary": TRIGGER_SUMMARIES.get(message_type) or NON_CADENCE_MESSAGE_GUIDES.get(message_type) or "설정한 조건이 실제 데이터에서 충족될 때 보냅니다.",
             "lastSentAt": utc_iso(last_sent_at) if last_sent_at else "",
             "nextEligibleAt": utc_iso(next_eligible_at) if next_eligible_at else "",

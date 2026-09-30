@@ -9,7 +9,7 @@ import { defaultNotificationTemplates, messageScheduleByType, notificationTempla
 import { renderNotificationDetailMetric } from "./reasoning.mjs";
 import { renderAdminMonitoringPanel, renderMonitoringDetailOverlay, renderMonitoringInstrumentPanel } from "../operations/monitoring.mjs";
 import { renderPortfolioPanel } from "../portfolio/valuation.mjs";
-import { settingsSaveButtonClass, settingsSaveButtonLabel, settingsSaveDisabledAttr } from "../settings/fields.mjs";
+import { settingValue, settingsSaveButtonClass, settingsSaveButtonLabel, settingsSaveDisabledAttr } from "../settings/fields.mjs";
 import { latestChangedFirst, recordChangedAt, renderRecordChangedAt } from "../shared/format.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { alertThresholdCatalog, labelWithNotificationIcon, notificationPolicyCatalog, notificationSections, visibleNotificationTemplateType } from "../shell/catalog.mjs";
@@ -352,6 +352,7 @@ function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
   var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
   var active = activeNotificationRule().key === rule.key;
   var editing = active && notificationsState.notificationPolicyEditorOpen;
+  var eventDelivery = ["investmentInsight", "newsDigest", "informationUpdate", "portfolioActivityObservation", "portfolioHoldingsSnapshot", "investmentCalendarReminder"].indexOf(rule.key) >= 0;
   return [
     '<div class="admin-message-row ' + (active ? "active" : "collapsed") + '">',
     '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
@@ -361,8 +362,9 @@ function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
     renderRecordChangedAt(rule, recordChangedAt(template)),
     '</label>',
     '<span class="admin-cadence-field">',
-    '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
-    '<b>분</b>',
+    eventDelivery ? '<b>이벤트 기준</b>' : rule.key === "marketObservation"
+      ? '<input aria-label="시세 변화 최소 간격" data-setting="marketObservationImmediateCadenceMinutes" type="number" min="10" step="10" value="' + escapeHtml(settingValue("marketObservationImmediateCadenceMinutes") || 10) + '" /><b>분</b>'
+      : '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" /><b>분</b>',
     '</span>',
     '<button class="admin-message-toggle" type="button" data-message-select="' + escapeHtml(rule.key) + '" aria-pressed="' + escapeHtml(editing ? "true" : "false") + '">',
     '<span>' + escapeHtml(editing ? "편집 중" : "상세 편집") + '</span>',

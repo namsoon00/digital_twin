@@ -75,15 +75,44 @@ decision continuity.
 - `material`: a new important source document or material TypeDB relation
   transition. The default repeat floor is 60 minutes.
 - `summary`: an unchanged but still active state. The default review interval
-  is 360 minutes.
+  is 360 minutes. This permits re-evaluation, not an automatic push: an unchanged
+  final investment decision remains web-only under final publication policy.
 - `web-only`: reference or unchanged state with no user decision value. It is
   retained for audit without interrupting the user.
 
 The admin notification rule stores all three time intervals. A verified
 immediate or material change is evaluated before unchanged-relation
-suppression, and an unchanged relation becomes eligible for a scheduled summary
-after the configured interval. This prevents a stable TypeDB fingerprint from
-silencing a position forever.
+suppression, and an unchanged relation becomes eligible for scheduled review
+after the configured interval. Material changes must still satisfy their repeat
+floor; neither completed AI authority nor the subsequent P/L similarity bypass
+may clear a cooldown rejection.
+
+Cooldown history is account/subject scoped before the bounded SQL limit and
+uses successful transport `completed_at`, never job `created_at`. A `done` job
+without a receipt is not a sent baseline. A receipt remains authoritative if
+the job-completion write failed. Immediately before investment dispatch, the
+worker holds the subject send lock and rechecks the latest receipt against the
+current cadence configuration. Admission alone cannot authorize a burst of
+concurrently queued decisions.
+Count and age retention protect successful jobs throughout the longest enabled
+repeat window. The usual recent-history count applies outside that window so
+a burst of other messages cannot erase the cooldown baseline.
+
+Portfolio activity uses the immutable activity episode identity for duplicate
+checks; equal titles must not merge different instruments or quantity changes.
+External connection alerts retain a provider-scoped incident ID in monitor
+snapshot metadata. Changing failure counts does not open a new incident.
+Recovery requires an observed successful provider response; a missing source
+does not imply recovery. A relapse receives a new incident ID. Operations
+messages still use the configured operations destination, with the existing
+default-destination fallback when no separate destination is configured.
+
+The settings screen distinguishes event-driven news, account changes, manual
+holdings requests, calendar reminders and investment decisions from minimum
+interval polling. Raw quote delivery displays and edits its dedicated
+`marketObservationImmediateCadenceMinutes` (default 10), not the older deferred
+observation cadence. Quiet hours remain suppression rather than next-morning
+rescheduling; market hours and freshness remain advisory.
 
 Completed AI insights use the same `final_ai_insight_delivery_is_authorized`
 contract at outbox admission and dispatch. A reconciled semantic send with
@@ -166,6 +195,19 @@ The old `application/notification_service.py` and
 8. `/api/notification-jobs/{id}` returns the complete lifecycle and delivery
    timeline. The notification detail UI displays it in stored chronological
    order and exposes the full JSON audit payload.
+
+Telegram dispatch freezes the message and checkpoints each confirmed chunk in
+the durable job context before continuing. A retry resumes the unsent suffix;
+a complete checkpoint can recover a failed completion write without sending
+again. Checkpoints bind the exact body and bot/destination identity. HTML falls
+back to plain text only for confirmed parse errors. HTTP sends have no hidden
+automatic retry, and Telegram `retry_after` is a lower bound on queue retry time.
+Ready retries, abandoned claims and new jobs are merged by readiness time so
+new arrivals cannot indefinitely displace due retries.
+
+Telegram has no idempotency key: a process loss between server acceptance and
+durable checkpointing, or a lost HTTP response, still leaves an ambiguous send.
+This recovery protects confirmed chunks; it does not claim exactly-once delivery.
 
 Every admission result also stores `notification-delivery-trigger-ledger-v2`.
 This ledger keeps the configured condition, TypeDB relation-state change,

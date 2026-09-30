@@ -9,6 +9,7 @@ from digital_twin.modules.notifications.public import NotificationAdmissionPolic
 from digital_twin.modules.read_models.contracts import investment_decision_key
 from digital_twin.modules.notifications.domain.message_types import HOLDING_TIMING, INVESTMENT_CALENDAR_REMINDER, INVESTMENT_INSIGHT, MODEL_BUY, MODEL_SELL, NEWS_DIGEST, OPERATOR_REASONING_REPORT, WATCHLIST_BUY_CANDIDATE, WATCHLIST_ONTOLOGY_SIGNAL
 from digital_twin.modules.notifications.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, notification_fingerprint, ontology_relation_delivery_metadata, notification_subject_group_key, notification_state_group_key
+from digital_twin.modules.notifications.domain.notification.lifecycle import age_minutes_since
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.delivery_recovery import (
     notification_failure_retry_at,
@@ -256,12 +257,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, %s)) AS cadence_key,
-                       MAX(updated_at) AS delivered_at
-                FROM notification_jobs
-                WHERE message_type = %s
-                  AND status IN ('done', 'sent')
-                  AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, %s)) IN ("""
+                SELECT JSON_UNQUOTE(JSON_EXTRACT(j.payload_json, %s)) AS cadence_key,
+                       MAX(a.completed_at) AS delivered_at
+                FROM notification_jobs j
+                JOIN notification_delivery_attempts a ON a.job_id = j.job_id AND a.status = 'delivered'
+                WHERE j.message_type = %s
+                  AND JSON_UNQUOTE(JSON_EXTRACT(j.payload_json, %s)) IN ("""
                 + placeholders
                 + ") GROUP BY cadence_key",
                 [cadence_path, INVESTMENT_INSIGHT, cadence_path, *keys],
@@ -1842,6 +1843,76 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             return True
         return False
 
+    def delivery_history_with_connection(self, connection, job, cutoff_text, *, fingerprint="", subject_group="", include_suppressed=False, delivered_only=False):
+        """Scope before LIMIT and use transport completion, never enqueue time.
+
+        Historical jobs without cached identity retain the bounded compatibility
+        comparison below. New jobs persist these keys at the admission boundary.
+        """
+        clauses = ["message_type = %s", "account_id = %s", "job_id <> %s", "updated_at >= %s"]
+        params = [job.message_type, job.account_id, job.job_id, cutoff_text]
+        symbol = self.notification_linkage(job)["symbol"]
+        if symbol:
+            clauses.append("symbol = %s")
+            params.append(symbol)
+        def leaf(name):
+            return "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.context." + name + "')), '')"
+        if subject_group:
+            clauses.append("(" + leaf("deliverySubjectGroupKey") + " IN ('', %s))")
+            params.append(subject_group)
+        elif fingerprint:
+            stored_fingerprint = "COALESCE(NULLIF(" + leaf("deliveryFingerprint") + ", ''), " + leaf("honeyFingerprint") + ")"
+            identity = [stored_fingerprint + " IN ('', %s)"]
+            params.append(fingerprint)
+            state_key = notification_state_group_key(job)
+            if state_key:
+                identity.extend([leaf("deliveryStateGroupKey") + " = %s", leaf("honeyStateGroupKey") + " = %s"])
+                params.extend([state_key, state_key])
+            clauses.append("(" + " OR ".join(identity) + ")")
+        statuses = "'done', 'processing', 'failed'" if delivered_only else "'pending', 'processing', 'awaiting_ai', 'done', 'failed'" + (", 'suppressed'" if include_suppressed else "")
+        clauses.append("status IN (" + statuses + ")")
+        clock_filter = "delivered_at >= %s" if delivered_only else "(delivered_at >= %s OR (status <> 'done' AND created_at >= %s))"
+        clock_params = [cutoff_text] if delivered_only else [cutoff_text, cutoff_text]
+        return connection.execute(
+            "SELECT text, payload_json, created_at, updated_at, delivered_at, "
+            "CASE WHEN delivered_at IS NOT NULL AND delivered_at <> '' THEN 'done' ELSE status END AS status "
+            "FROM (SELECT text, payload_json, created_at, updated_at, status, "
+            "(SELECT MAX(a.completed_at) FROM notification_delivery_attempts a "
+            "WHERE a.job_id = notification_jobs.job_id AND a.status = 'delivered') AS delivered_at "
+            "FROM notification_jobs WHERE " + " AND ".join(clauses) + ") history "
+            "WHERE " + clock_filter + " "
+            "ORDER BY COALESCE(NULLIF(delivered_at, ''), created_at) DESC LIMIT %s",
+            (*params, *clock_params, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
+        ).fetchall()
+
+    def recheck_delivery_cadence(self, job):
+        """Last receipt check while the workflow holds the subject send lock."""
+        with self.connect() as connection:
+            rule = self.rule_for_connection(connection, job.message_type)
+            if not rule.enabled or not rule.state_cooldown_enabled:
+                return {"allowed": True, "reason": "repeat-policy-disabled"}
+            tier = str((job.context or {}).get("deliveryCadenceTier") or "material")
+            minutes = {"immediate": rule.immediate_cooldown_minutes,
+                       "material": rule.material_cooldown_minutes,
+                       "summary": rule.state_cooldown_minutes}.get(tier, rule.material_cooldown_minutes)
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(0, minutes) + 1)).isoformat().replace("+00:00", "Z")
+            group = notification_subject_group_key(job)
+            rows = self.delivery_history_with_connection(connection, job, cutoff,
+                subject_group=group, fingerprint=notification_fingerprint(job, rule), delivered_only=True)
+        last_sent = ""
+        for row in rows:
+            previous = self.job_from_row(row)
+            if group and notification_subject_group_key(previous) != group:
+                continue
+            if not group and notification_fingerprint(previous, rule) != notification_fingerprint(job, rule):
+                continue
+            last_sent = str(row.get("delivered_at") or "")
+            if last_sent:
+                break
+        allowed = not last_sent or minutes <= 0 or age_minutes_since(last_sent) >= minutes
+        return {"allowed": allowed, "tier": tier, "minutes": minutes, "lastDeliveredAt": last_sent,
+                "reason": "발송 직전 성공 영수증 기준 최소 간격 " + str(minutes) + "분 " + ("충족" if allowed else "미충족")}
+
     def similar_history_with_connection(
         self,
         connection,
@@ -1868,22 +1939,14 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             return 0, {}, ""
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=history_minutes)
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
-        rows = connection.execute(
-            """
-            SELECT text, payload_json, created_at, status FROM notification_jobs
-            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'awaiting_ai', 'done')
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            (job.message_type, cutoff_text, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
-        ).fetchall()
+        rows = self.delivery_history_with_connection(connection, job, cutoff_text, fingerprint=fingerprint)
         count = 0
         most_recent_context: Dict[str, object] = {}
         most_recent_at = ""
         state_group_key = notification_state_group_key(job)
         for row in rows:
             previous = self.job_from_row(row)
-            if previous.job_id == job.job_id:
+            if previous.job_id == job.job_id or previous.account_id != job.account_id:
                 continue
             previous_context = previous.context or {}
             previous_fingerprint = str(
@@ -1899,13 +1962,15 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             if previous_fingerprint != fingerprint and (not state_group_key or previous_state_group_key != state_group_key):
                 continue
             status = str(row["status"] or "").strip()
+            if status == "done" and not row.get("delivered_at"):
+                continue
             if status != "done" and not notification_history_is_recent_in_flight(row):
                 continue
             count += 1
             if not most_recent_context:
                 most_recent_context = dict(previous_context)
             if status == "done" and not most_recent_at:
-                most_recent_at = row["created_at"] or previous.created_at
+                most_recent_at = str(row["delivered_at"])
         return count, most_recent_context, most_recent_at
 
     def relation_predecessor_with_connection(
@@ -1939,15 +2004,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         current_group = notification_subject_group_key(job)
         if not current_group:
             return {}
-        rows = connection.execute(
-            """
-            SELECT text, payload_json, created_at, status FROM notification_jobs
-            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'awaiting_ai', 'done', 'suppressed')
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            (job.message_type, cutoff_text, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
-        ).fetchall()
+        rows = self.delivery_history_with_connection(
+            connection, job, cutoff_text, subject_group=current_group, include_suppressed=True,
+        )
         selected_context: Dict[str, object] = {}
         selected_at = ""
         selected_status = ""
@@ -1963,6 +2022,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             if notification_subject_group_key(previous) != current_group:
                 continue
             status = str(row["status"] or "").strip()
+            if status == "done" and not row.get("delivered_at"):
+                continue
             context = dict(previous.context or {})
             if status == "suppressed":
                 if not suppressed_relation_context_is_comparable(context):
@@ -1992,7 +2053,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             if status == "done" and not cooldown_boundary_at:
                 # Suppressed candidates remain useful for semantic diffs, but
                 # only a successfully delivered job may start cooldown.
-                cooldown_boundary_at = created_at
+                cooldown_boundary_at = str(row["delivered_at"])
                 cooldown_boundary_status = status
             if not selected_context:
                 selected_context = context
@@ -2149,11 +2210,11 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             query_specs = [
                 (
                     """
-                    SELECT job_id, text, payload_json FROM notification_jobs
+                    SELECT job_id, text, payload_json, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
                     WHERE status = 'pending'
                       AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
-                    ORDER BY created_at, job_id
+                    ORDER BY ready_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
@@ -2161,11 +2222,11 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, text, payload_json FROM notification_jobs
+                    SELECT job_id, text, payload_json, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
                     WHERE status = 'processing'
                       AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= %s
                     """ + lane_sql + """
-                    ORDER BY created_at, job_id
+                    ORDER BY ready_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
@@ -2173,70 +2234,81 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, text, payload_json FROM notification_jobs
+                    SELECT job_id, text, payload_json, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
                     WHERE status = 'failed' AND attempts < %s
                       AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
-                    ORDER BY attempts, created_at, job_id
+                    ORDER BY ready_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
                     (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, stamp, *lane_params),
                 ),
             ]
+            # Lock bounded heads from each eligible lane, then merge by readiness.
+            # A continuous stream of new jobs cannot starve due transport retries.
+            candidates = []
             for sql, params in query_specs:
-                remaining = requested - len(claimed)
-                if remaining <= 0:
-                    break
-                rows = connection.execute(sql, tuple(params) + (remaining,)).fetchall()
-                for row in rows:
-                    job = self.job_from_row(row)
-                    if not job.job_id:
-                        continue
-                    job.status = "processing"
-                    job.attempts += 1
-                    job.updated_at = stamp
-                    job.last_error = ""
-                    payload = self.compact_job_payload(job)
-                    cursor = connection.execute(
-                        """
-                        UPDATE notification_jobs
-                        SET status = %s, attempts = %s, updated_at = %s, last_error = %s,
-                            processing_started_at = %s, retry_at = '', payload_json = %s
-                        WHERE job_id = %s
-                          AND (
-                            status = 'pending'
-                            OR (status = 'failed' AND attempts < %s)
-                            OR (
-                              status = 'processing'
-                              AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= %s
-                            )
-                          )
-                        """,
-                        (
-                            job.status,
-                            job.attempts,
-                            job.updated_at,
-                            job.last_error,
-                            stamp,
-                            json_dumps(payload),
-                            job.job_id,
-                            MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
-                            cutoff,
-                        ),
-                    )
-                    if cursor.rowcount:
-                        self.record_lifecycle_with_connection(
-                            connection,
-                            job,
-                            "eligibility_checked",
-                            "claimed",
+                candidates.extend(connection.execute(sql, tuple(params) + (requested,)).fetchall())
+            candidates.sort(key=lambda row: (str(row.get("ready_at") or ""), str(row.get("job_id") or "")))
+            for row in candidates[:requested]:
+                job = self.job_from_row(row)
+                if not job.job_id:
+                    continue
+                job.status = "processing"
+                job.attempts += 1
+                job.updated_at = stamp
+                job.last_error = ""
+                payload = self.compact_job_payload(job)
+                cursor = connection.execute(
+                    """
+                    UPDATE notification_jobs
+                    SET status = %s, attempts = %s, updated_at = %s, last_error = %s,
+                        processing_started_at = %s, retry_at = '', payload_json = %s
+                    WHERE job_id = %s
+                      AND (
+                        status = 'pending'
+                        OR (status = 'failed' AND attempts < %s)
+                        OR (
+                          status = 'processing'
+                          AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= %s
                         )
-                        claimed.append(job)
+                      )
+                    """,
+                    (
+                        job.status,
+                        job.attempts,
+                        job.updated_at,
+                        job.last_error,
+                        stamp,
+                        json_dumps(payload),
+                        job.job_id,
+                        MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
+                        cutoff,
+                    ),
+                )
+                if cursor.rowcount:
+                    self.record_lifecycle_with_connection(
+                        connection,
+                        job,
+                        "eligibility_checked",
+                        "claimed",
+                    )
+                    claimed.append(job)
         return claimed
 
     def update(self, updated: NotificationJob) -> None:
         self.upsert_job(updated)
+
+    def save_delivery_progress(self, job: NotificationJob) -> None:
+        job.updated_at = utc_now()
+        with self.transaction() as connection:
+            self.upsert_job_with_connection(connection, job)
+            # A long split message is active work, not an abandoned claim.
+            connection.execute(
+                "UPDATE notification_jobs SET processing_started_at = %s WHERE job_id = %s AND status = 'processing'",
+                (job.updated_at, job.job_id),
+            )
 
     def mark_processing(self, job: NotificationJob) -> NotificationJob:
         job.status = "processing"
@@ -2264,7 +2336,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         job.status = "failed"
         job.last_error = error
         job.updated_at = utc_now()
-        retry_at = notification_failure_retry_at(error, job.attempts)
+        retry_at = notification_failure_retry_at(error, job.attempts,
+            retry_after_seconds=int((job.context or {}).get("deliveryRetryAfterSeconds") or 0))
         with self.transaction() as connection:
             self.upsert_job_with_connection(connection, job)
             connection.execute(

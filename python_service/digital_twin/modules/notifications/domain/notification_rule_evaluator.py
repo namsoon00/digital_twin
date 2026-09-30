@@ -476,7 +476,11 @@ def apply_typedb_profit_loss_delivery(
     previous_context: Dict[str, object] = None,
     allow_without_previous: bool = True,
 ) -> bool:
-    # 손익 구간은 반복·쿨다운만 우회할 수 있다. TypeDB, 데이터, AI 검증
+    # Semantic novelty may release similarity suppression, but never undo the
+    # minimum repeat interval or an already-running delivery for this subject.
+    if decision.suppression_reason in {"state_cooldown", "in_flight_duplicate"}:
+        return False
+    # 손익 구간은 유사 메시지 억제만 우회할 수 있다. TypeDB, 데이터, AI 검증
     # 같은 필수 관문이 막힌 알림을 다시 살리면 ontology-first 계약이 깨진다.
     if not decision.should_send and decision.suppression_reason not in {"similar_repeat", "state_cooldown"}:
         return False
@@ -540,6 +544,18 @@ def normalize_fingerprint_part(value) -> str:
 
 
 def notification_fingerprint(job: NotificationJob, config: NotificationRuleConfig) -> str:
+    if job.message_type == "portfolioActivityObservation":
+        episode = (job.context or {}).get("portfolioActivityEpisode") or {}
+        identity = episode.get("episodeId") or job.dedupe_key or job.source_event_id or job.job_id
+        return "|".join([job.message_type, str(job.account_id), str(identity)])
+    if job.message_type == "externalDataConnection":
+        context = job.context or {}
+        metadata = context.get("metadata") or {}
+        provider = context.get("provider") or metadata.get("provider")
+        incident = context.get("connectionIncidentId") or metadata.get("connectionIncidentId")
+        state = context.get("connectionState") or metadata.get("connectionState") or "failed"
+        if provider:
+            return "|".join([job.message_type, str(job.account_id), str(provider), str(incident or "legacy"), str(state)])
     parts = []
     for field in config.similarity_fields or DEFAULT_SIMILARITY_FIELDS:
         normalized = normalize_fingerprint_part(fingerprint_field_value(job, field))
@@ -1184,7 +1200,13 @@ def apply_state_cooldown_rule(
     # the same initial graph transition as a pre-AI baseline.
     if final_ai_insight_delivery_is_authorized(job_context):
         reason = "검증된 최종 AI 투자 인사이트의 발송 결정"
-        apply_delivery_cadence(decision, "material", material_minutes, reason)
+        policy = (job_context.get("decisionReconciliation") or {}).get("deliveryPolicy") or {}
+        immediate = policy.get("pushValueClass") in {
+            "final-action-change", "verified-market-threshold-transition", "verified-threshold-transition",
+        }
+        tier, minutes = ("immediate", immediate_minutes) if immediate else ("material", material_minutes)
+        if not delivery_cadence_allows(decision, tier, minutes, reason):
+            return decision
         decision.state_decision = (
             "new-condition"
             if decision.state_recent_sent_count <= 0

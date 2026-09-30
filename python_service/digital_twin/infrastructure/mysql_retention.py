@@ -556,6 +556,18 @@ def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
+def _notification_cooldown_history_cutoff(connection) -> str:
+    """Count/time retention must not erase active receipt-based repeat floors."""
+    row = _execute(connection,
+        "SELECT COALESCE(MAX(GREATEST("
+        "CASE WHEN similarity_enabled = 1 THEN similarity_window_minutes ELSE 0 END, "
+        "CASE WHEN state_cooldown_enabled = 1 THEN GREATEST(immediate_cooldown_minutes, "
+        "material_cooldown_minutes, state_cooldown_minutes) ELSE 0 END)), 0) AS minutes "
+        "FROM notification_rules WHERE enabled = 1", ()).fetchone()
+    minutes = int((row.get("minutes") if isinstance(row, dict) else row[0]) or 0) if row else 0
+    return (datetime.now(timezone.utc) - timedelta(minutes=max(0, minutes) + 1)).isoformat().replace("+00:00", "Z")
+
+
 def _delete_terminal_notification_rows(connection, cutoff_iso: str, batch_size: int) -> int:
     """Delete only delivered legacy/current notifications, never a retryable job."""
 
@@ -565,9 +577,11 @@ def _delete_terminal_notification_rows(connection, cutoff_iso: str, batch_size: 
         " WHERE `status` IN ('done', 'sent')"
         " AND `created_at` < "
         + cutoff_sql
+        + " AND NOT EXISTS (SELECT 1 FROM notification_delivery_attempts a "
+        "WHERE a.job_id = notification_jobs.job_id AND a.status = 'delivered' AND a.completed_at >= %s)"
         + " ORDER BY `created_at`, `job_id` LIMIT %s"
     )
-    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+    return _delete_one_batch(connection, sql, (cutoff_iso, _notification_cooldown_history_cutoff(connection), batch_size))
 
 
 def _delete_completed_model_review_rows(connection, cutoff_iso: str, batch_size: int) -> int:
@@ -628,6 +642,7 @@ def _delete_delivered_notification_rows_over_keep_count(
     while the canonical decision and evidence records live in their own tables.
     Delivery history therefore must not grow with every realtime cycle.
     """
+    protected_since = _notification_cooldown_history_cutoff(connection)
     account_rows = _execute(
         connection,
         "SELECT DISTINCT account_id FROM `notification_jobs` WHERE `status` = 'done' ORDER BY account_id",
@@ -640,8 +655,10 @@ def _delete_delivered_notification_rows_over_keep_count(
         rows = _execute(
             connection,
             "SELECT job_id FROM `notification_jobs` WHERE account_id = %s AND `status` = 'done' "
+            "AND NOT EXISTS (SELECT 1 FROM notification_delivery_attempts a "
+            "WHERE a.job_id = notification_jobs.job_id AND a.status = 'delivered' AND a.completed_at >= %s) "
             "ORDER BY updated_at DESC, job_id DESC LIMIT %s OFFSET %s",
-            (account_id, batch_size - len(job_ids), keep_count),
+            (account_id, protected_since, batch_size - len(job_ids), keep_count),
         ).fetchall()
         job_ids.extend(_row_identifiers(rows, "job_id"))
     job_ids = list(dict.fromkeys(job_ids))[:batch_size]

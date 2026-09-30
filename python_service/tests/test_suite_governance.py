@@ -213,7 +213,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # future exclusion, SEC passages and bounded AI question continuity.
         # Three retention regressions cover cross-window relation dependencies,
         # interrupted scans and durable worker cursor recovery.
-        self.assertLessEqual(total, 1896)
+        # Receipt-clock cooldowns, incident identity and resumable chunk delivery
+        # protect distinct loss/duplication failures reproduced by the audit.
+        self.assertLessEqual(total, 1905)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

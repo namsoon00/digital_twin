@@ -65,8 +65,9 @@ function renderMessageScheduleSummary(schedule, compact) {
     '<div class="message-schedule-summary">',
     '<span class="tone-chip ' + escapeHtml(scheduleStatusClass(schedule)) + '">' + escapeHtml(scheduleStatusLabel(schedule)) + '</span>',
     '<span>' + escapeHtml(schedule.cadenceText || "조건 충족 시 발송") + '</span>',
-    '<span>마지막 ' + escapeHtml(scheduleTimeText(schedule.lastSentAt)) + '</span>',
-    '<span>다음 가능 ' + escapeHtml(scheduleTimeText(schedule.nextEligibleAt)) + '</span>',
+    '<span>' + (schedule.historyBasis === "monitor-admission" ? '최근 감지·접수 ' : '마지막 전송 ') + escapeHtml(scheduleTimeText(schedule.lastSentAt)) + '</span>',
+    '<span>' + (schedule.historyBasis === "monitor-admission" ? '다음 감지 가능 ' : '다음 가능 ') + escapeHtml(scheduleTimeText(schedule.nextEligibleAt)) + '</span>',
+    schedule.historyBasis === "monitor-admission" ? '<span>전송 완료 여부는 알림 이력에서 확인합니다.</span>' : '',
     '</div>',
     compact ? '' :
     '<div class="message-schedule-detail">',
@@ -194,7 +195,7 @@ function renderNotificationSimilarityEditor(messageType, rule, disabled) {
 function renderNotificationStateCooldownEditor(messageType, rule, disabled) {
   var summary = rule.stateCooldownEnabled === false
     ? "상태 지속 억제 꺼짐"
-    : "같은 임계값 상태는 " + String(rule.stateCooldownMinutes || 0) + "분 뒤 요약만 발송";
+    : "같은 상태는 " + String(rule.stateCooldownMinutes || 0) + "분 뒤 재확인 · 최종 발송 조건 별도 적용";
   return [
     '<div class="notification-rule-state">',
     '<div class="notification-rule-head notification-rule-subhead">',
@@ -204,9 +205,9 @@ function renderNotificationStateCooldownEditor(messageType, rule, disabled) {
     '<div class="notification-rule-state-grid">',
     '<label><span>즉시 변화 재알림</span><input type="number" min="0" max="10080" step="5" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="immediateCooldownMinutes" value="' + escapeHtml(rule.immediateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
     '<label><span>중요 근거 재알림</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="materialCooldownMinutes" value="' + escapeHtml(rule.materialCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-    '<label><span>같은 상태 요약</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="stateCooldownMinutes" value="' + escapeHtml(rule.stateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+    '<label><span>같은 상태 재확인</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="stateCooldownMinutes" value="' + escapeHtml(rule.stateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
     '</div>',
-    '<p class="subtle">즉시 변화는 손익·행동·주요 기준선 전환, 중요 근거는 새 뉴스·공시와 관계 변화입니다. 같은 상태는 요약 시간이 지난 뒤 한 번만 다시 알리고, 참고 정보는 웹 이력에 저장합니다.</p>',
+    '<p class="subtle">즉시 변화는 손익·행동·주요 기준선 전환, 중요 근거는 새 뉴스·공시와 관계 변화입니다. 모든 변화는 성공 전송 이후 최소 간격을 지켜야 합니다. 재확인 시간이 지나도 동일한 최종 판단은 웹 이력에만 남을 수 있습니다.</p>',
     '</div>'
   ].join("");
 }

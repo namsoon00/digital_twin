@@ -62,20 +62,22 @@ def notification_failure_retry_at(
     attempts: int,
     *,
     now: datetime = None,
+    retry_after_seconds: int = 0,
 ) -> str:
     """Return the next safe retry clock for a transient transport failure."""
 
     text = str(error or "").strip()
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    server_floor = current + timedelta(seconds=max(0, int(retry_after_seconds or 0)))
     match = _CIRCUIT_UNTIL.search(text)
     if match:
         parsed = _parse_time(match.group(1))
         if parsed and parsed > current:
-            return parsed.isoformat().replace("+00:00", "Z")
+            return max(parsed, server_floor).isoformat().replace("+00:00", "Z")
     if not transient_delivery_failure(text):
-        return ""
+        return server_floor.isoformat().replace("+00:00", "Z") if retry_after_seconds else ""
     delay_seconds = min(900, 15 * (2 ** max(0, min(6, int(attempts or 1) - 1))))
-    return (current + timedelta(seconds=delay_seconds)).isoformat().replace("+00:00", "Z")
+    return max(server_floor, current + timedelta(seconds=delay_seconds)).isoformat().replace("+00:00", "Z")
 
 
 def terminal_delivery_recovery_decision(
@@ -99,7 +101,8 @@ def terminal_delivery_recovery_decision(
     recovery = context.get("deliveryRecovery") if isinstance(context.get("deliveryRecovery"), Mapping) else {}
     recovery_count = int(recovery.get("count") or 0)
     error = str(values.get("lastError") or values.get("last_error") or "")
-    retry_at = notification_failure_retry_at(error, int(values.get("attempts") or 0), now=current)
+    retry_at = notification_failure_retry_at(error, int(values.get("attempts") or 0), now=current,
+        retry_after_seconds=int(context.get("deliveryRetryAfterSeconds") or 0))
     if not transient_delivery_failure(error):
         action, reason = "retain-failed", "non-transient-delivery-failure"
     elif age_minutes > ttl_minutes:

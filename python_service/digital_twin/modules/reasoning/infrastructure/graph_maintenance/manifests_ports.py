@@ -85,6 +85,7 @@ class GraphMaintenanceManifestsStore(Protocol):
         delete_batch_size: int = None,
         world_id: str = "",
         max_duration_seconds: int = None,
+        candidate_cursor: Dict[str, str] = None,
     ) -> Dict[str, object]: ...
 
     def scoped_manifest_metadata(

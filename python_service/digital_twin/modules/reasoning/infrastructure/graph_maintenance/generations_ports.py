@@ -97,6 +97,7 @@ class GraphMaintenanceGenerationsStore(Protocol):
         delete_batch_size: int = None,
         world_id: str = "",
         max_duration_seconds: int = None,
+        candidate_cursor: Dict[str, str] = None,
     ) -> Dict[str, object]: ...
 
     def read_rows_in_transaction(

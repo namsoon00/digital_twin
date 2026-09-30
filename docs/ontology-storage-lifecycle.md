@@ -144,6 +144,19 @@ remaining write batch as soon as a Manifest is safe to retire, so later data
 deletions cannot indefinitely postpone removal of completed Manifest markers.
 Active and rollback references and external relation endpoints remain protected.
 
+Routine maintenance persists a candidate cursor per world and scans retired
+Manifests in bounded chronological windows. A fully inspected window advances
+even when external relations protect every remaining node. This lets later
+retired relation generations drain before the next sweep revisits their old
+endpoints. The cursor contains the immutable timestamp and Manifest ID, so
+removing its marker or restarting the worker does not reset selection. At the
+end of the eligible inventory, selection wraps to the oldest retired Manifest.
+Interrupted or write-budget-limited windows keep their cursor; unavailable
+protection metadata never advances it. Every turn reloads active, rollback and
+pending state under the existing writer leases. The cursor is scheduling state,
+never evidence that a generation is safe to delete. Status exposes the selected
+Manifest IDs and `candidateScanComplete`; rotation alone is not deletion progress.
+
 Retired-generation presence checks share one read transaction for at most 64
 exact IDs. Each indexed limit-one query includes both nodes and relations;
 large disjunction/aggregation queries are deliberately avoided. Only generations

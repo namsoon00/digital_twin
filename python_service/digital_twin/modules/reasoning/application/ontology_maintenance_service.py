@@ -1750,6 +1750,9 @@ class OntologyMaintenanceRunner:
                 "aboxDeleteBatchSize": run_budget["aboxDeleteBatchSize"],
                 "maxDurationSeconds": run_budget["maxDurationSeconds"],
                 "keepInactiveManifests": integer(policy.get("keepInactiveManifestCount"), 0),
+                "candidateCursor": dict(
+                    self.backlog_by_world(selection_state).get(world_id, {}).get("candidateCursor") or {}
+                ),
             }) or {})
         except Exception as error:  # noqa: BLE001 - a maintenance fault must not affect native inference.
             result = {"status": "error", "reason": str(error)[:220]}
@@ -1862,6 +1865,9 @@ class OntologyMaintenanceRunner:
             "resumeRequired": resume_required,
             "resumeGenerationId": text(abox.get("resumeGenerationId")),
             "resumeManifestId": text(abox.get("resumeManifestId")),
+            "candidateSelectionMode": text(abox.get("candidateSelectionMode")),
+            "selectedManifestIds": list(abox.get("selectedManifestIds") or []),
+            "candidateScanComplete": bool(abox.get("candidateScanComplete")),
             "maxDeleteBatches": max(
                 0,
                 integer(abox.get("maxDeleteBatches"), integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 0)),
@@ -1897,6 +1903,8 @@ class OntologyMaintenanceRunner:
             generation_counter_version=compact["generationCleanupCounterVersion"],
         )
         current_backlog = dict(backlog_by_world.get(world_id) or {})
+        if inventory_available and isinstance(abox.get("nextCandidateCursor"), dict):
+            current_backlog["candidateCursor"] = dict(abox["nextCandidateCursor"])
         progress_made = bool(current_backlog.get("lastProgress"))
         current_backlog.update({
             "recentDeleteTimings": self.updated_delete_timings(current_backlog, compact),

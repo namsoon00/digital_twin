@@ -2072,6 +2072,7 @@ class ScopedABoxManifestMixin:
         delete_batch_size: int = None,
         world_id: str = "",
         max_duration_seconds: int = None,
+        candidate_cursor: Dict[str, str] = None,
     ) -> Dict[str, object]:
         return _graph_maintenance_manifests.prune_inactive_scoped_abox_manifests_in_driver(
             self,
@@ -2084,6 +2085,7 @@ class ScopedABoxManifestMixin:
             delete_batch_size,
             world_id,
             max_duration_seconds,
+            candidate_cursor,
         )
 
     def prune_inactive_scoped_abox_manifests(
@@ -2094,6 +2096,7 @@ class ScopedABoxManifestMixin:
         max_delete_batches: int = None,
         delete_batch_size: int = None,
         max_duration_seconds: int = None,
+        candidate_cursor: Dict[str, str] = None,
     ) -> Dict[str, object]:
         return _graph_maintenance_manifests.prune_inactive_scoped_abox_manifests(
             self,
@@ -2103,6 +2106,7 @@ class ScopedABoxManifestMixin:
             max_delete_batches,
             delete_batch_size,
             max_duration_seconds,
+            candidate_cursor,
             _bindings=_graph_maintenance_manifests_ports.GraphMaintenanceManifestsRuntime(
                 typedb_error_code=typedb_error_code,
                 typedb_operation_timeout=typedb_operation_timeout,

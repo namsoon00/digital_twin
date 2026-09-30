@@ -228,11 +228,18 @@ class BackendOwnershipTests(unittest.TestCase):
 
     def test_facade_keeps_signatures_and_coordinator_decorators(self):
         tree = ast.parse((ROOT / 'digital_twin/infrastructure/typedb_ontology.py').read_text())
+        changes = json.loads((ROOT / 'tests/fixtures/backend_semantic_changes.json').read_text())
         methods = {c.name + '.' + n.name: n for c in tree.body if isinstance(c, ast.ClassDef)
                    for n in c.body if isinstance(n, ast.FunctionDef)}
         for name, entry in self.contract['methods'].items():
             method = methods[name]
-            self.assertEqual(entry['signature'], ast.dump(method.args, include_attributes=False), name)
+            args = copy.deepcopy(method.args)
+            # Declared semantic changes may append optional parameters only;
+            # all original parameters and coordinator decorators stay frozen.
+            for parameter in reversed(changes.get(name, {}).get('optionalParameters', [])):
+                self.assertEqual(parameter, args.args.pop().arg, name)
+                self.assertEqual(ast.dump(ast.Constant(value=None)), ast.dump(args.defaults.pop()), name)
+            self.assertEqual(entry['signature'], ast.dump(args, include_attributes=False), name)
             self.assertEqual(entry['decorators'], [ast.unparse(n) for n in method.decorator_list], name)
             self.assertEqual(1, len(method.body), name)
             call = method.body[0].value

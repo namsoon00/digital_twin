@@ -326,6 +326,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(
     delete_batch_size: int = None,
     world_id: str = "",
     max_duration_seconds: int = None,
+    candidate_cursor: Dict[str, str] = None,
 ) -> Dict[str, object]:
     """Prune immutable Manifests without deleting generations still referenced.
 
@@ -426,7 +427,17 @@ def prune_inactive_scoped_abox_manifests_in_driver(
         reverse=True,
     )
     retained_identities = ordered_identities[:keep_count]
-    removable_identities = list(reversed(ordered_identities[keep_count:]))[:max_count]
+    eligible_identities = list(reversed(ordered_identities[keep_count:]))
+    cursor = dict(candidate_cursor or {})
+    cursor_key = (str(cursor.get("updatedAt") or ""), str(cursor.get("manifestId") or ""))
+    # Resume by immutable sort key, not a list offset or a marker that may
+    # have been deleted. Only selection rotates; every turn reloads active,
+    # rollback and pending protection before touching any physical rows.
+    after_cursor = [
+        item for item in eligible_identities
+        if (str(item.get("updatedAt") or ""), str(item.get("worldviewManifestId") or "")) > cursor_key
+    ] if all(cursor_key) else eligible_identities
+    removable_identities = (after_cursor or eligible_identities)[:max_count]
 
     def load_selected_metadata(identity: Dict[str, object]) -> Dict[str, object]:
         manifest_id = str(identity.get("worldviewManifestId") or "").strip()
@@ -526,6 +537,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(
     presence_checked_ids = set()
     present_generation_ids = set()
     presence_probe_count = 0
+    candidate_scan_complete = True
     for generation_index, generation_id in enumerate(retired_generation_ids):
         if remaining_batch_budget <= marker_batch_reserve or (
             deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
@@ -535,6 +547,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(
                 deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
             )
             resume_generation_id = generation_id
+            candidate_scan_complete = False
             break
         attempted_generation_ids.append(generation_id)
         if generation_id not in presence_checked_ids:
@@ -587,6 +600,7 @@ def prune_inactive_scoped_abox_manifests_in_driver(
             cleanup_partial = True
             time_budget_exhausted = bool(cleanup.get("timeBudgetExhausted"))
             resume_generation_id = generation_id
+            candidate_scan_complete = False
             break
 
     # A Manifest marker can disappear only after every physical generation
@@ -632,18 +646,36 @@ def prune_inactive_scoped_abox_manifests_in_driver(
         else:
             cleanup_partial = True
             resume_manifest_id = safe_marker_ids[0]
+            candidate_scan_complete = False
     elif safe_marker_ids:
         cleanup_partial = True
+        candidate_scan_complete = False
         time_budget_exhausted = bool(
             deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
         )
         resume_manifest_id = safe_marker_ids[0]
+    # A fully inspected window can contain only externally referenced nodes.
+    # Move on so later retired relation generations get a chance to drain.
+    # Interrupted/budget-limited windows keep their place for the next turn.
+    next_cursor = cursor
+    if candidate_scan_complete and removable_identities:
+        last_identity = removable_identities[-1]
+        next_cursor = {
+            "updatedAt": str(last_identity.get("updatedAt") or ""),
+            "manifestId": str(last_identity.get("worldviewManifestId") or ""),
+        }
+    if not eligible_identities:
+        next_cursor = {}
     return {
         "status": "partial" if cleanup_partial else "ok",
         "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
         "activeAboxSnapshotId": active_id,
         "keepInactiveManifestCount": keep_count,
         "maxManifestsPerRun": max_count,
+        "candidateSelectionMode": "rotating-retired-manifests-v1",
+        "selectedManifestIds": [str(item.get("worldviewManifestId") or "") for item in removable_identities],
+        "candidateScanComplete": candidate_scan_complete,
+        "nextCandidateCursor": next_cursor,
         "maxDeleteBatches": max_batch_count,
         "deleteBatchSize": bounded_delete_batch_size,
         "remainingDeleteBatchBudget": remaining_batch_budget,
@@ -696,6 +728,7 @@ def prune_inactive_scoped_abox_manifests(
     max_delete_batches: int = None,
     delete_batch_size: int = None,
     max_duration_seconds: int = None,
+    candidate_cursor: Dict[str, str] = None,
     *,
     _bindings: GraphMaintenanceManifestsRuntime
 ) -> Dict[str, object]:
@@ -728,6 +761,7 @@ def prune_inactive_scoped_abox_manifests(
                     delete_batch_size=delete_batch_size,
                     world_id=world_id,
                     max_duration_seconds=max_duration_seconds,
+                    candidate_cursor=candidate_cursor,
                 )
             finally:
                 _store.close_driver(driver)

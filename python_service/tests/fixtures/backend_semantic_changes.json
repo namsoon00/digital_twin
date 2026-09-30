@@ -49,14 +49,26 @@
   },
   "ScopedABoxManifestMixin.prune_inactive_scoped_abox_manifests_in_driver": {
     "baselineHash": "31ad48fe532cea2cde19e4a0a7e6b2bd3df3ea8086e427520b6880ff9966b84f",
-    "bodyHash": "745e02cb4546d29689ecb7b2e3fe3d0e4d7b875319d5ae247f35f55007f17ffb",
-    "reason": "Fail closed on missing protection metadata, reserve marker completion budget, and distinguish physical deletes from repeated empty confirmations. Bound fresh exact-ID presence reads to 64 generations per read transaction, skip only proven-empty generations, and fail closed on read errors or deadlines without caching across turns.",
-    "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_shared_retired_generation_is_deleted_once"
+    "bodyHash": "995f302adcf6e827ac4ec1af91c5c0bb5d185faf1e5dfdc8b64a839211a4ba23",
+    "reason": "Fail closed on missing protection metadata, reserve marker completion budget, and distinguish physical deletes from repeated empty confirmations. Bound fresh exact-ID presence reads to 64 generations per read transaction, skip only proven-empty generations, and fail closed on read errors or deadlines without caching across turns. Rotate fully scanned retired Manifest windows with a durable sort-key cursor so later retired relations can release protected old endpoints; reload protection each turn and retain the cursor on interrupted scans.",
+    "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_rotation_reaches_later_relations_then_reclaims_old_nodes",
+    "optionalParameters": [
+      "candidate_cursor"
+    ]
   },
   "ScopedABoxManifestMixin.run_deferred_maintenance": {
     "baselineHash": "f863135f80a45e867594d5e4daa23c92944961cae3babc510596be2cc9370bf3",
-    "bodyHash": "08ebaabee48f1df32cbc567df1c3bfdddf21baeb690e6a1a96047a3708786c59",
-    "reason": "Propagate blocked protection metadata as incomplete maintenance and preserve downstream generations until reference safety is known.",
+    "bodyHash": "957541b9dad3bdc728e993442bd43fd1e75ea407ca67fba6562519832fafed32",
+    "reason": "Propagate blocked protection metadata as incomplete maintenance and preserve downstream generations until reference safety is known. Forward the per-world candidate cursor into bounded scoped cleanup.",
     "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_blocked_cleanup_propagates_without_downstream_deletion"
+  },
+  "ScopedABoxManifestMixin.prune_inactive_scoped_abox_manifests": {
+    "baselineHash": "8e307eb190ac32472b6fe2e45b6063ae6a91f5b78d7283dc2521668d8170e088",
+    "reason": "Forward an optional maintenance candidate cursor through the retry boundary without changing active/rollback protection or lease ownership.",
+    "bodyHash": "e62b2751532f4250665b307c0d0ae06c9c145aaff64c66064ef77517db410c05",
+    "regressionTest": "test_scoped_retention_safety.ScopedRetentionSafetyTests.test_interrupted_rotation_keeps_cursor_and_unknown_protection_blocks",
+    "optionalParameters": [
+      "candidate_cursor"
+    ]
   }
 }

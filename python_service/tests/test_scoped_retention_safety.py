@@ -26,6 +26,7 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
         }
         self.rows = {"old-a": 1, "old-b": 2, "live": 1, "shared": 1, "rollback-only": 1}
         self.markers = ["old-1", "old-2", "rollback", "active"]
+        self.timestamps = {name: str(i) for i, name in enumerate(self.markers)}
         self.driver = MagicMock()
         self.imported = ((None, None, None, None, SimpleNamespace(READ="read")), None)
         self.store = SimpleNamespace(
@@ -34,8 +35,8 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
             active_abox_metadata=Mock(side_effect=lambda world: self.metadata["active"]),
             pending_abox_activation=Mock(return_value={"status": "empty"}),
             worldview_manifest_marker_identity_rows=Mock(side_effect=lambda world: [
-                {"worldviewManifestId": name, "updatedAt": str(i)}
-                for i, name in enumerate(self.markers)
+                {"worldviewManifestId": name, "updatedAt": self.timestamps[name]}
+                for name in self.markers
             ]),
             scoped_manifest_metadata=Mock(side_effect=lambda name, world: self.metadata.get(name, {})),
             delete_box_snapshot_rows_in_batches=Mock(side_effect=self.delete_generation),
@@ -59,10 +60,66 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
         self.markers = [name for name in self.markers if name not in names]
         return {"status": "ok", "deletedBatchCount": 1, "removedManifestIds": names}
 
-    def run_cleanup(self, budget=2):
+    def run_cleanup(self, budget=2, cursor=None, max_manifests=10):
         return prune(self.store, self.driver, self.imported, world_id="world", active_manifest_id="active", keep_inactive_count=1,
-                     max_manifests=10, max_delete_batches=budget, delete_batch_size=50,
-                     max_duration_seconds=45)
+                     max_manifests=max_manifests, max_delete_batches=budget, delete_batch_size=50,
+                     max_duration_seconds=45, candidate_cursor=cursor)
+
+    def test_rotation_reaches_later_relations_then_reclaims_old_nodes(self):
+        self.markers.insert(2, "old-3")
+        self.timestamps = {name: str(i) for i, name in enumerate(self.markers)}
+        self.metadata["old-3"] = {
+            "status": "ok", "worldviewManifestId": "old-3",
+            "scopeGenerationIds": {"relation": "retired-relation"},
+        }
+        self.rows["retired-relation"] = 1
+
+        def guarded_delete(driver, imported, box, generation, **options):
+            if generation in {"old-a", "old-b"} and self.rows["retired-relation"]:
+                return {"status": "protected-external-relation-reference", "deletedBatchCount": 0}
+            return self.delete_generation(driver, imported, box, generation, **options)
+
+        self.store.delete_box_snapshot_rows_in_batches.side_effect = guarded_delete
+        first = self.run_cleanup(budget=4, max_manifests=2)
+        self.assertEqual(["old-1", "old-2"], first["selectedManifestIds"])
+        self.assertEqual(0, first["deletedBatchCount"])
+        self.assertEqual(2, first["protectedExternalRelationGenerationCount"])
+        self.assertTrue(first["candidateScanComplete"])
+        second = self.run_cleanup(budget=4, max_manifests=2, cursor=first["nextCandidateCursor"])
+        self.assertEqual(["old-3"], second["removedManifestIds"])
+        self.assertEqual(0, self.rows["retired-relation"])
+        # A deleted cursor marker still wraps using its immutable sort key.
+        # Fresh active protection also applies if a previously retired scope
+        # becomes live between turns.
+        self.metadata["active"]["scopeGenerationIds"]["new-live"] = "old-a"
+        third = self.run_cleanup(budget=4, max_manifests=2, cursor=second["nextCandidateCursor"])
+        self.assertEqual(["old-1", "old-2"], third["removedManifestIds"])
+        self.assertEqual(1, self.rows["old-a"])
+        self.assertEqual(0, self.rows["old-b"])
+        self.assertEqual(["rollback", "active"], self.markers)
+        self.assertTrue(all(self.rows[key] == 1 for key in ["live", "shared", "rollback-only"]))
+        self.assertEqual({}, self.run_cleanup(cursor=third["nextCandidateCursor"])["nextCandidateCursor"])
+
+    def test_interrupted_rotation_keeps_cursor_and_unknown_protection_blocks(self):
+        cursor = {"updatedAt": "0", "manifestId": "old-1"}
+        for cleanup in [
+            {"status": "partial", "deletedBatchCount": 1},
+            {"status": "partial", "deletedBatchCount": 0, "timeBudgetExhausted": True},
+            {"status": "error", "deletedBatchCount": 0},
+        ]:
+            self.store.delete_box_snapshot_rows_in_batches.side_effect = None
+            self.store.delete_box_snapshot_rows_in_batches.return_value = cleanup
+            result = self.run_cleanup(cursor=cursor, max_manifests=1)
+            self.assertEqual(["old-2"], result["selectedManifestIds"])
+            self.assertFalse(result["candidateScanComplete"])
+            self.assertEqual(cursor, result["nextCandidateCursor"])
+            self.store.delete_worldview_manifest_markers_batch.assert_not_called()
+        self.store.delete_box_snapshot_rows_in_batches.reset_mock()
+        self.metadata["rollback"] = {}
+        result = self.run_cleanup(cursor=cursor, max_manifests=1)
+        self.assertEqual("blocked-protection-metadata", result["status"])
+        self.assertNotIn("nextCandidateCursor", result)
+        self.store.delete_box_snapshot_rows_in_batches.assert_not_called()
 
     def test_small_turns_finish_markers_and_preserve_live_and_rollback(self):
         first = self.run_cleanup()
@@ -89,6 +146,8 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
             self.assertEqual(1, result["clearedRetiredScopeGenerationCount"])
             self.assertEqual(1, result["alreadyEmptyRetiredScopeGenerationCount"])
             self.assertTrue(result["resumeRequired"])
+            self.assertFalse(result["candidateScanComplete"])
+            self.assertEqual({}, result["nextCandidateCursor"])
         self.assertEqual(2, self.rows["old-b"])
         # Empty proof must come from fresh reads on each retry, never a cached
         # confirmation carried across graph epochs or write turns.
@@ -223,9 +282,12 @@ class ScopedRetentionSafetyTests(unittest.TestCase):
         result = run_deferred_maintenance(store, {
             "worldId": "world", "maxInactiveManifests": 10,
             "maxAboxDeleteBatches": 2, "aboxDeleteBatchSize": 50,
+            "candidateCursor": {"updatedAt": "1", "manifestId": "old-2"},
         }, _bindings=SimpleNamespace(typedb_error_code=lambda error: type(error).__name__))
         self.assertEqual("partial", result["status"])
         self.assertEqual("blocked-protection-metadata", result["abox"]["status"])
+        self.assertEqual({"updatedAt": "1", "manifestId": "old-2"},
+                         store.prune_inactive_scoped_abox_manifests.call_args.kwargs["candidate_cursor"])
         store.read_inference_generation_records.assert_not_called()
         store.prune_inferencebox_generations.assert_not_called()
         store.release_scoped_abox_write_lease.assert_called_once()

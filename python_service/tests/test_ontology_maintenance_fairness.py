@@ -40,6 +40,36 @@ class MaintenanceFairnessTests(unittest.TestCase):
     def replace_state(self, value):
         self.state = dict(value)
 
+    def test_candidate_cursor_survives_worker_recreation_and_failed_turns(self):
+        self.queue = {"effectivePendingCount": 0, "processingCount": 0}
+        cursor = {"updatedAt": "2026-09-30T01:00:00Z", "manifestId": "retired-2"}
+        self.repository.run_deferred_maintenance.return_value = {
+            "status": "partial", "abox": {
+                "status": "partial", "completedInactiveManifestCount": 10,
+                "remainingInactiveManifestCount": 10, "deletedBatchCount": 0,
+                "nextCandidateCursor": cursor, "candidateScanComplete": True,
+                "candidateSelectionMode": "rotating-retired-manifests-v1",
+            },
+        }
+        self.maintenance.run_once()
+        self.assertEqual({}, self.repository.run_deferred_maintenance.call_args.args[0]["candidateCursor"])
+        self.assertEqual(cursor, self.state["backlogByWorld"]["portfolio:test"]["candidateCursor"])
+        self.assertFalse(self.state["backlogByWorld"]["portfolio:test"]["lastProgress"])
+        restarted = OntologyMaintenanceRunner(
+            self.repository,
+            state_store=SimpleNamespace(load=lambda: dict(self.state), replace=self.replace_state),
+            reasoning_queue_probe=lambda: dict(self.queue),
+        )
+        for abox in [
+            {"status": "blocked-protection-metadata", "nextCandidateCursor": {}},
+            {"status": "skipped"},
+            {"status": "error"},
+        ]:
+            self.repository.run_deferred_maintenance.return_value = {"status": "partial", "abox": abox}
+            restarted.run_once()
+            self.assertEqual(cursor, self.repository.run_deferred_maintenance.call_args.args[0]["candidateCursor"])
+            self.assertEqual(cursor, self.state["backlogByWorld"]["portfolio:test"]["candidateCursor"])
+
     def test_fairness_preserves_active_lease_age_and_cooldown_guards(self):
         scenarios = [
             ({"processingCount": 1}, {}, "active-reasoning-lease"),

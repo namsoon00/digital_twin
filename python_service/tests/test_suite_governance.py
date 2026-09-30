@@ -211,7 +211,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Measured retention budgets independently verify safe timing admission.
         # Five temporal-company regressions cover exact bridges, durable review,
         # future exclusion, SEC passages and bounded AI question continuity.
-        self.assertLessEqual(total, 1893)
+        # Three retention regressions cover cross-window relation dependencies,
+        # interrupted scans and durable worker cursor recovery.
+        self.assertLessEqual(total, 1896)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

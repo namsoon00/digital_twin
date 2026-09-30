@@ -43,6 +43,7 @@ class GraphMaintenanceRunnerStore(Protocol):
         max_delete_batches: int = None,
         delete_batch_size: int = None,
         max_duration_seconds: int = None,
+        candidate_cursor: Dict[str, str] = None,
     ) -> Dict[str, object]: ...
 
     def prune_inferencebox_generations(

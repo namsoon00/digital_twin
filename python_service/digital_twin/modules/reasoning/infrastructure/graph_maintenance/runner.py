@@ -209,6 +209,7 @@ def run_deferred_maintenance(
             max_delete_batches=maintenance_delete_batch_limit,
             delete_batch_size=maintenance_delete_batch_size,
             max_duration_seconds=maintenance_duration_limit,
+            candidate_cursor=options.get("candidateCursor"),
         )
         abox_slice_incomplete = bool(
             abox_result.get("timeBudgetExhausted")

@@ -395,6 +395,31 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
             "기준금리가 3.5%로 내려가면 다시 확인합니다.",
             [{"evidenceId": "fact:krBaseRate", "value": 3.5}],
         ))
+        annual = [{"kind": "financial-report", "evidenceId": f"financial:annual:{year}",
+                   "value": {"periodEnd": f"{year}-09-30", "values": {
+                       "operatingCashFlow": 111482000000, "freeCashFlow": 98767000000}}}
+                  for year in (2023, 2024, 2025)]
+        for text in (
+            "최근 3개 회계연도의 현금흐름을 비교합니다.",
+            "2025년 영업현금흐름은 1,114억8,200만 달러입니다.",
+            "잉여현금흐름은 987억 6,700만 달러입니다.",
+            "영업현금흐름은 약 1,114.8억 달러입니다.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual([], ungrounded_narrative_numbers(text, annual))
+        for text in (
+            "최근 4개 회계연도를 비교합니다.",
+            "2026년 현금흐름입니다.",
+            "영업현금흐름은 1,114억8,300만 달러입니다.",
+            "영업현금흐름은 1,114.9억 달러입니다.",
+            "영업현금흐름은 1,114.8만 달러입니다.",
+            "잉여현금흐름은 -987억6,700만 달러입니다.",
+            "금액은 1억 2억 달러입니다.",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(ungrounded_narrative_numbers(text, annual))
+        self.assertTrue(ungrounded_narrative_numbers("3개 회계연도입니다.", [annual[0]] * 3))
+        self.assertTrue(ungrounded_narrative_numbers("금액은 3원입니다.", annual))
 
     def test_grounded_display_rounding_does_not_request_a_second_model_turn(self):
         context = investment_context()

@@ -8,7 +8,7 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v34-annual-report-continuity"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v35-question-scoped-report-conditions"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v22"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 AI_DECISION_OUTPUT_SCHEMA_VERSION = "notification-ai-output-schema-v1"
@@ -34,7 +34,7 @@ AI_DECISION_RESPONSE_SCHEMA = {
     "invalidationCondition": "검증 근거가 연결된 구체적인 현재 판단 무효화 조건",
     "nextChecks": ["판단을 바꿀 다음 확인 최대 2개"],
     "followUpConditions": [{
-        "field": "facts.marketEvidenceProfile.observableFollowUpFields의 필드",
+        "field": "질문에 맞는 companyEvidence.annualReportFollowUpFields 또는 facts.marketEvidenceProfile.observableFollowUpFields의 필드",
         "operator": ">|>=|<|<=|==|!=",
         "threshold": "입력에서 재현 가능한 숫자",
         "purpose": "strengthen|weaken|invalidate|switch",
@@ -136,7 +136,7 @@ AI_DECISION_OUTPUT_JSON_SCHEMA = {
         "followUpConditions": {
             "type": "array",
             "items": _object_schema({
-                "field": {"type": "string"},
+                "field": {"type": "string", "description": AI_DECISION_RESPONSE_SCHEMA["followUpConditions"][0]["field"]},
                 "operator": {"type": "string", "enum": [">", ">=", "<", "<=", "==", "!="]},
                 "threshold": {"type": "number"},
                 "purpose": {
@@ -249,10 +249,11 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "externalEvidence는 evidenceUse=action만 행동을 바꿀 수 있다. 사건 흡수·반응은 사건 ID·시각, 전후 가격, 벤치마크가 있을 때만 판단하고 누락 창은 unresolved로 둔다.",
     "invalidationCondition은 실제 관측 대상과 변화 방향을 쓰고 next-condition 근거를 연결한다. 입력에 있는 수치형 observable만 followUpConditions로 구조화하며 새 임계값을 만들지 않는다.",
     "companyEvidence.financialEvidence.annualHistory의 공식 연간 수치로 여러 해의 변화와 이익·현금흐름의 차이를 설명한다. 수치만으로 일회성 원인을 단정하지 않는다. annualReportFollowUpFields는 다음 연간 보고서의 확인 조건이다. 이 필드를 쓰면 threshold는 가장 최근 연간 보고서의 동일 지표 값, operator는 < 또는 >만 사용한다. 분기·누적 수치를 연간 기준과 비교하지 않으며 새로운 보고서의 실측으로만 평가한다.",
+    "question이 연간 보고서의 다음 확인 조건을 요청하고 companyEvidence.annualReportFollowUpFields가 있으면 그 질문에 답하는 연간 조건을 followUpConditions에 구조화한다. 단기 가격·거래량 조건으로 연간 실적 검증을 대체하지 않는다. 지원하지 않는 조건은 자동 추적으로 약속하지 말고 누락 자료와 수동 확인 대상으로 설명한다.",
     "시스템이 자동으로 확인한다고 표현할 조건은 반드시 followUpConditions에 구조화한다. 이는 관찰 등록 요청일 뿐 등록 완료가 아니며, 검증된 transitionId가 있으면 도달값·관측시각과 이전 해석을 비교한다.",
     "같은 사실을 summary·evidence·narrativeClaims에 반복하지 않는다. summary는 결론, evidence는 최대 3개 근거, counterEvidence는 최대 2개, nextChecks는 최대 2개다.",
     "changeAnalysis는 직전 판단 이후 실제로 달라진 값·방향·기간·근거·행동만 쓴다. 변화가 없으면 명시하고 상투적인 '추가 확인 필요'만 쓰지 않는다.",
-    "currentActionPlan은 지금 할 일과 보류할 일을, nextActionPlan은 다음에 볼 가격·거래량·외국인·기관 매매 흐름·실적·공시·거시 지표와 그 결과의 판단 변화를 쓴다.",
+    "currentActionPlan은 지금 할 일과 보류할 일을, nextActionPlan은 question의 투자 기간과 논점에 필요한 다음 관측과 그 결과의 판단 변화를 쓴다. 가격·거래량·수급·실적·공시·거시 지표를 질문과 무관하게 나열하지 않는다.",
     "사용자 문장은 쉬운 한국어 존댓말 완결문으로 쓴다. 내부 변수명·TypeDB 식별자·구현 용어는 사용자 표시 필드에 노출하지 않고 수급=외국인·기관 매매 흐름, 추세=가격 흐름, 밸류에이션=현재 가격 수준, 펀더멘털=실적과 재무 상태로 풀어 쓴다.",
     "설명 문장 없이 응답 스키마를 따르는 JSON 객체 하나만 출력한다.",
 )

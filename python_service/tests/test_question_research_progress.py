@@ -3,12 +3,14 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+import json
 import unittest
 
 from digital_twin.modules.decisions.contracts import InvestmentQuestion, utc_now_iso
 from digital_twin.modules.decisions.application.investment_brain_service import InvestmentBrainService
 from digital_twin.modules.portfolio.contracts import Position, AccountSnapshot
-from digital_twin.modules.decisions.domain.notification_ai_gate_validation import compact_research_cycle_for_ai
+from digital_twin.modules.decisions.domain.notification_ai_gate_validation import compact_research_cycle_for_ai, validated_response_from_payload
+from digital_twin.modules.decisions.application.notification_ai_judgement_service import ai_response_contract_error
 from digital_twin.modules.decisions.domain.notification_ai_context_router import fit_notification_ai_decision_core
 from digital_twin.modules.decisions.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet
@@ -199,6 +201,7 @@ class QuestionResearchProgressTests(unittest.TestCase):
         core = packet.decision_core
         self.assertEqual(history, core["companyEvidence"]["financialEvidence"]["annualHistory"])
         self.assertTrue(any(row["evidenceId"] == "financial:annual:2025-09-30" for row in core["evidenceLedger"]))
+        self.assertIn("companyEvidence.annualReportFollowUpFields", packet.prompt)
         question = InvestmentQuestion.create("애플의 장기 현금흐름을 검토해줘", subject_symbol="AAPL").to_dict()
         requested = deepcopy(native)
         requested["investmentBrainQuestion"] = question
@@ -207,6 +210,15 @@ class QuestionResearchProgressTests(unittest.TestCase):
         self.assertEqual(question["text"], question_core["question"]["text"])
         self.assertEqual(history, question_core["companyEvidence"]["financialEvidence"]["annualHistory"])
         self.assertFalse(question_core["decision"]["actionEnvelope"].get("allowedActions"))
+        bound = packet.bind_context(native)
+        abstention = {"action": "NO_ACTION", "summary": "이익과 현금흐름의 차이를 검토합니다.",
+                      "opinion": "다음 공식 보고서에서 확인합니다.", "validationState": "conditional"}
+        response = validated_response_from_payload(bound, abstention, raw_response=json.dumps(abstention), source="test AI")
+        self.assertEqual("NO_ACTION", response.action)
+        self.assertEqual("NO_ACTION", response.execution_action)
+        self.assertTrue(ai_response_contract_error(bound, response))
+        response.validation_state = "conditional"
+        self.assertEqual("", ai_response_contract_error(bound, response))
         core["background"] = {"unused": "x" * 100000}
         core["hypothesisSet"]["comparisonMode"] = "research-only"
         fitted = fit_notification_ai_decision_core(core, 24 * 1024)

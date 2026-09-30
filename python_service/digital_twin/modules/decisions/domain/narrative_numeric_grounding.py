@@ -1,12 +1,21 @@
 """Validate displayed quantities, not digits embedded in provenance IDs."""
 
+from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from typing import Mapping
 
 
 NUMBER = re.compile(r"(?<![0-9A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?")
+MONEY = re.compile(
+    r"(?<![0-9A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?\s*(?:조|억|만)"
+    r"(?:\s*\d[\d,]*(?:\.\d+)?\s*(?:억|만))*"
+    r"(?:\s*\d[\d,]*(?:\.\d+)?)?\s*(?=원|달러|USD\b|KRW\b)"
+)
+MONEY_PART = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(조|억|만)?")
+MONEY_UNITS = {"조": Decimal("1e12"), "억": Decimal("1e8"), "만": Decimal("1e4"), "": Decimal(1)}
 PERIOD = re.compile(r"^\s*(개월|시간|분기|일|년|분)(?![A-Za-z])")
+ANNUAL_COUNT = re.compile(r"^\s*개\s*(?:회계)?연도")
 NEGATIVE = re.compile(r"낮|밑[돌도]|하락|감소|하회|순매도|손실|줄[어었]|내[려렸리린릴림]|떨어|약세")
 POSITIVE = re.compile(r"높|웃[돌도]|상승|증가|상회|순매수|늘[어었]|올[라랐]|오[르른를름]|강세")
 SKIP_FIELDS = {
@@ -36,8 +45,37 @@ def _periods_from_field(field):
     return set()
 
 
+def _display_quantities(text):
+    """Normalize Korean money units, preserving the last displayed precision."""
+    consumed = 0
+    for match in NUMBER.finditer(text):
+        if match.start() < consumed:
+            continue
+        money = MONEY.match(text, match.start())
+        if money:
+            total, quantum, previous_unit = Decimal(0), Decimal(1), Decimal("Infinity")
+            for part in MONEY_PART.finditer(money.group()):
+                raw, unit = part.group(1).replace(",", ""), MONEY_UNITS[part.group(2) or ""]
+                if unit >= previous_unit:
+                    consumed = money.end()
+                    yield money, None, quantum
+                    break
+                total += Decimal(raw) * unit
+                quantum = unit.scaleb(-len(raw.split(".", 1)[1]) if "." in raw else 0)
+                previous_unit = unit
+            else:
+                consumed = money.end()
+                yield money, -total if money.group().startswith("-") else total, quantum
+                continue
+            if consumed == money.end():
+                continue
+        raw = match.group().replace(",", "")
+        places = len(raw.split(".", 1)[1]) if "." in raw else 0
+        yield match, _decimal(raw), Decimal(1).scaleb(-places)
+
+
 def _evidence_quantities(rows):
-    numbers, periods = set(), set()
+    numbers, periods, annual_ends = set(), set(), set()
 
     def collect(value, field=""):
         periods.update(_periods_from_field(field))
@@ -66,17 +104,24 @@ def _evidence_quantities(rows):
                         numbers.add((number, signed_change))
 
     for row in rows:
+        if row.get("kind") == "financial-report" and isinstance(row.get("value"), Mapping):
+            try:
+                period_end = date.fromisoformat(str(row["value"].get("periodEnd") or ""))
+            except ValueError:
+                pass
+            else:
+                annual_ends.add(period_end)
+                periods.add((Decimal(period_end.year), "년"))
         periods.update(_periods_from_field(str(row.get("evidenceId") or "")))
         field = str(row.get("field") or row.get("evidenceId") or "")
         collect(row.get("value"), field)
         collect(row.get("observedValue"), field)
         collect(row.get("label"))
-    return numbers, periods
+    return numbers, periods, len(annual_ends)
 
 
-def _displayed_signed_value(text, match, signed_change):
+def _displayed_signed_value(text, match, signed_change, value):
     raw = match.group().replace(",", "")
-    value = _decimal(raw)
     if not signed_change:
         return value
     # A direction applies only to this quantity's immediate phrase. Do not
@@ -104,24 +149,26 @@ def ungrounded_narrative_numbers(text, evidence_rows):
     """
 
     text = str(text or "")
-    numbers, periods = _evidence_quantities(evidence_rows)
+    numbers, periods, annual_count = _evidence_quantities(evidence_rows)
     missing = []
-    for match in NUMBER.finditer(text):
+    for match, number, quantum in _display_quantities(text):
         raw = match.group().replace(",", "")
-        number = _decimal(raw)
+        count_period = ANNUAL_COUNT.match(text[match.end():])
+        if count_period:
+            if not annual_count or number != annual_count:
+                missing.append(raw + count_period.group().strip())
+            continue
         period = PERIOD.match(text[match.end():])
         if period:
             if (number, period.group(1)) not in periods:
                 missing.append(raw + period.group(1))
             continue
-        places = len(raw.split(".", 1)[1]) if "." in raw else 0
-        quantum = Decimal(1).scaleb(-places)
         matched = False
         for observed, signed_change in numbers:
-            displayed = _displayed_signed_value(text, match, signed_change)
+            displayed = _displayed_signed_value(text, match, signed_change, number)
             if displayed is not None:
                 try:
-                    rounded = observed.quantize(quantum, rounding=ROUND_HALF_UP)
+                    rounded = (observed / quantum).quantize(Decimal(1), rounding=ROUND_HALF_UP) * quantum
                 except InvalidOperation:
                     continue
                 if displayed == rounded:

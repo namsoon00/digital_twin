@@ -71,7 +71,7 @@ def ai_response_contract_error(
         return "AI judgment validation state blocks publication."
     prepared_core = context.get("_notificationAiPreparedDecisionCore")
     if isinstance(prepared_core, dict):
-        narrative_only = str(
+        narrative_only = response.action == "NO_ACTION" or str(
             context.get("notificationAiReviewMode") or ""
         ).strip().lower() == "context-narrative"
         hypothesis_set = prepared_core.get("hypothesisSet")

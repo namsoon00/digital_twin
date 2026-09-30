@@ -2295,7 +2295,7 @@ def validated_response_from_payload(
         return fallback
 
     submitted_action = str(payload.get("action") or "").strip().upper()
-    narrative_only = str(
+    narrative_only = submitted_action == "NO_ACTION" or str(
         (context or {}).get("notificationAiReviewMode") or ""
     ).strip().lower() == "context-narrative"
     action = submitted_action

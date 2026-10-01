@@ -15,6 +15,10 @@ from digital_twin.modules.reasoning.domain.ontology_external_abox import (
 )
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import _revenue_estimates
+from digital_twin.modules.portfolio.domain.valuation.evidence import collect_earnings_observations, collect_multiple_observations
+from digital_twin.modules.portfolio.domain.valuation.dcf import driver_dcf_valuation_row
+from digital_twin.modules.portfolio.domain.portfolio import Position
+from digital_twin.modules.portfolio.domain.valuation.projection import add_position_valuation_concepts
 from digital_twin.modules.decisions.domain.notification_ai_context_router import _relation_facts
 
 
@@ -84,6 +88,58 @@ class DataUtilizationContractTests(unittest.TestCase):
             "revenueEstimate": [{"period": "0y", "avg": 100}]})
         self.assertEqual("", revenue["0y"]["currency"])
         self.assertEqual("missing", revenue["0y"]["currencyBasis"])
+        reference = {"datasetId": "yfinance.analyst", "revisionId": "original-revision"}
+        current = {**reference, "revisionId": "newer-revision"}
+        estimate = {**row, "sourceReferences": [reference], "validationState": "observed-partial-inputs"}
+        overview = {"provider": "yfinance", "fetchedAt": "2026-10-01", "earningsEstimates": [estimate],
+                    "multipleObservations": [{"value": 20, "basis": "historical", "asOf": "2026-09-01"}],
+                    "growthData": {"revenueGrowthPct": 3, "asOf": "2026-09-01"}}
+        source = {"companyOverviews": {"TEST": overview}, "earningsReports": {"TEST": deepcopy(overview)}}
+        compact = compact_external_signals_for_ontology(source)
+        before = collect_earnings_observations(overview, overview, source_references=[current])
+        after = collect_earnings_observations(compact["companyOverviews"]["TEST"], compact["earningsReports"]["TEST"], source_references=[current])
+        self.assertEqual(before, after)
+        self.assertEqual("", after[0]["asOf"])
+        self.assertEqual([reference], after[0]["sourceReferences"])
+        self.assertEqual(["sourceAsOf"], after[0]["missingFields"])
+        self.assertEqual(collect_multiple_observations(overview, overview),
+                         collect_multiple_observations(compact["companyOverviews"]["TEST"], compact["earningsReports"]["TEST"]))
+        self.assertEqual(overview["growthData"], compact["companyOverviews"]["TEST"]["growthData"])
+        alternate = {**estimate, "targetPeriodEnd": "2028-03-31"}
+        self.assertEqual(2, len(collect_earnings_observations({"earningsEstimates": [estimate, alternate]}, {})))
+        compact["companyOverviews"]["TEST"]["earningsEstimates"][0]["base"] = 999
+        self.assertEqual(estimate, source["companyOverviews"]["TEST"]["earningsEstimates"][0])
+
+        from test_driver_dcf import DriverDcfTests
+        bundle = DriverDcfTests().inputs()
+        bundle["modelApprovalState"] = "shadow"
+        source = {"driverDcfInputs": {"TEST": bundle, "OTHER": bundle},
+                  "driverDcfReadiness": {"TEST": {"status": "ready-for-shadow", "decisionEligible": False}}}
+        compact = compact_external_signals_for_ontology(source, target_symbols=["TEST"])
+        self.assertEqual({"TEST"}, set(compact["driverDcfInputs"]))
+        position = Position("TEST", "Fixture", currency="USD", current_price=12)
+        self.assertEqual(driver_dcf_valuation_row(position, source, {}), driver_dcf_valuation_row(position, compact, {}))
+        graph = PortfolioOntology("fixture")
+        add_position_valuation_concepts(graph, "stock:TEST", position, compact, {})
+        dcf = [node for node in graph.entities if node.kind == "valuation-assessment"]
+        self.assertTrue(dcf)
+        self.assertTrue(all(not node.properties.get("valuationDecisionEligible") for node in dcf))
+        from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import (
+            _external_for_symbol, _changed_external_groups, _reasoning_external_groups, _fact_types_for_change,
+        )
+        changed = deepcopy(compact)
+        changed["driverDcfInputs"]["TEST"]["waccPct"] = 12
+        groups = _changed_external_groups(_external_for_symbol(compact, "TEST"), _external_for_symbol(changed, "TEST"))
+        self.assertEqual(["driverDcfInputs"], _reasoning_external_groups(groups))
+        self.assertEqual(["ValuationObservation"], _fact_types_for_change([], groups))
+        refreshed = deepcopy(compact)
+        refreshed["driverDcfInputs"]["TEST"].update(valuationAt="2026-10-02", inputBundleId="new-audit-id")
+        self.assertEqual([], _changed_external_groups(_external_for_symbol(compact, "TEST"), _external_for_symbol(refreshed, "TEST")))
+        self.assertEqual([], _reasoning_external_groups(_changed_external_groups({}, {"companyOverviews": {"TEST": {"currentPrice": 12}}})))
+        changed = {"companyOverviews": {"TEST": {"earningsEstimates": [estimate]}}}
+        groups = _reasoning_external_groups(_changed_external_groups({}, changed))
+        self.assertEqual(["companyOverviews.valuation"], groups)
+        self.assertEqual(["ValuationObservation"], _fact_types_for_change([], groups))
 
     def test_lineage_distinguishes_current_only_from_retained_revision(self):
         rows = [MySQLExternalDataStore._fact_row({"dataset_id": "yfinance.price", "subject_key": "TEST",
@@ -99,6 +155,12 @@ class DataUtilizationContractTests(unittest.TestCase):
             signals = ExternalSignalsReadModelService(store).signals_for_subjects(["TEST"])
             compact = compact_external_signals_for_ontology(signals)
             self.assertEqual(expected, compact["externalDataLineage"]["yfinance.price:TEST"]["revisionPersistence"])
+        lineage = {f"dataset-{i}:{symbol}": {"datasetId": f"dataset-{i}", "subjectKey": symbol,
+                    "revisionId": f"revision-{symbol}-{i}"} for i in range(20) for symbol in ["AAA", "BBB", "CCC", "DDD", "EEE"]}
+        self.assertEqual(lineage, compact_external_signals_for_ontology({"externalDataLineage": lineage})["externalDataLineage"])
+        target = compact_external_signals_for_ontology({"externalDataLineage": lineage}, target_symbols=["EEE"])
+        self.assertEqual(20, len(target["externalDataLineage"]))
+        self.assertTrue(all(row["subjectKey"] == "EEE" for row in target["externalDataLineage"].values()))
 
     def test_collection_freshness_does_not_claim_complete_consensus(self):
         fitness = evaluate_external_data_fitness([{"datasetId": "yfinance.analyst", "subjectKey": "TEST",

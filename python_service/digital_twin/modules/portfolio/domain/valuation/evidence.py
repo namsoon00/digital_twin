@@ -17,7 +17,7 @@ from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.portfolio.domain.valuation.contracts import normalize_valuation_period, period_is_annual_per_share
 
 
-FUNDAMENTAL_MODEL_VERSION = "fundamental-evidence-per-v4"
+FUNDAMENTAL_MODEL_VERSION = "fundamental-evidence-per-v5"
 MULTIPLE_SELECTION_POLICY_VERSION = "multiple-comparability-v2"
 SUPPORTED_TARGET_MULTIPLE_BASES = {"historical", "peer"}
 
@@ -102,17 +102,19 @@ def _observation(
     if base is None:
         return {}
     analyst_count = number(raw.get("analystCount") if "analystCount" in raw else raw.get("numberOfAnalysts"))
+    is_estimate = bool(raw.get("isEstimate", default_estimate))
     result = {
         "observationId": _text(raw.get("observationId") or raw.get("id")),
         "metric": "earnings-per-share",
         "value": round(base, 6),
         "base": round(base, 6),
         "period": period,
-        "asOf": _text(raw.get("sourceAsOf") or raw.get("asOf") or raw.get("fiscalDateEnding") or raw.get("fetchedAt") or default_as_of),
+        "asOf": _text(raw.get("sourceAsOf") or raw.get("asOf") or
+                      (raw.get("fiscalDateEnding") or raw.get("fetchedAt") if not is_estimate else "") or default_as_of),
         "provider": provider_text,
         "source": source_text,
         "sourceType": _source_type(provider_text, raw.get("sourceType")),
-        "isEstimate": bool(raw.get("isEstimate", default_estimate)),
+        "isEstimate": is_estimate,
     }
     if low is not None:
         result["low"] = round(low, 6)
@@ -131,6 +133,7 @@ def _observation(
         "accountingBasis", "estimateBasis", "rangeKind", "revisionKind", "revisionFrom",
         "revisionTo", "fetchedAt", "epsBasis", "securityLine", "splitAdjustmentState",
         "securityAdjustmentState", "calculationMethod", "formula",
+        "sourceAsOf", "missingFields",
     ):
         if raw.get(field) not in (None, ""):
             result[field] = raw.get(field)
@@ -384,7 +387,7 @@ def collect_earnings_observations(
             if not isinstance(raw, Mapping):
                 continue
             provider = _text(raw.get("provider") or owner.get("provider")).casefold()
-            consensus_refs = [
+            consensus_refs = [dict(item) for item in raw.get("sourceReferences") or [] if isinstance(item, Mapping)] or [
                 reference for reference in references
                 if _text(reference.get("datasetId")) == "yfinance.analyst" and "yfinance" in provider
             ]
@@ -392,7 +395,7 @@ def collect_earnings_observations(
                 {**dict(raw), **({"sourceReferences": consensus_refs} if consensus_refs else {})},
                 provider=owner.get("provider"),
                 source=default_source,
-                default_as_of=owner.get("fetchedAt"),
+                default_as_of=owner.get("sourceAsOf"),
                 default_estimate=True,
             )
             if item and item.get("period") in {"annual", "annualized", "ttm", "trailing-12m", "forward-12m", "fy1", "fy2"}:
@@ -453,6 +456,7 @@ def collect_earnings_observations(
             )
         raw_observation = {
                 "value": raw_value, "period": period, "isEstimate": is_estimate,
+                "sourceAsOf": owner.get("sourceAsOf"), "fetchedAt": owner.get("fetchedAt"),
                 "currency": owner.get("currency"),
                 "epsBasis": owner.get("epsBasis") or owner.get("perShareBasis"),
                 "accountingBasis": owner.get("accountingBasis"),
@@ -478,7 +482,7 @@ def collect_earnings_observations(
             raw_observation,
             provider=owner.get("provider"),
             source=source,
-            default_as_of=owner.get("fetchedAt") or owner.get("latestQuarter"),
+            default_as_of=owner.get("sourceAsOf") if is_estimate else owner.get("fetchedAt") or owner.get("latestQuarter"),
             default_estimate=is_estimate,
         )
         if item and period_is_annual_per_share(item.get("period")):
@@ -496,6 +500,8 @@ def collect_earnings_observations(
             _text(item.get("asOf")),
             _text(item.get("calculationMethod")),
             _text(item.get("epsBasis")),
+            _text(item.get("targetPeriodStart")), _text(item.get("targetPeriodEnd")),
+            _text(item.get("currency")), _text(item.get("securityLine")),
         )
         if key in seen:
             continue

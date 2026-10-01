@@ -340,6 +340,21 @@ class DriverDcfTests(unittest.TestCase):
         self.assertIn("working-capital-change-missing", built["missingInputs"])
         self.assertNotIn("input", built)
 
+        # Equal dates in provider-specific formats must not select a sparse
+        # report ahead of a more complete, same-period source-bound filing.
+        from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import _latest_verified_annual
+        detailed = copy.deepcopy(source["company"]["financials"]["annual"][0])
+        sparse = copy.deepcopy(detailed)
+        sparse.update(period="20251231", periodEnd="20251231")
+        for key in ("cash", "capitalExpenditure", "pretaxIncome", "taxProvision"):
+            sparse.pop(key)
+        sparse = bind_financial_report_contract(sparse, [{"datasetId": "yfinance.fundamental", "revisionId": "sparse"}])
+        for candidates in ([sparse, detailed], [detailed, sparse]):
+            selected, assessment = _latest_verified_annual({"financials": {"annual": candidates}})
+            self.assertTrue(assessment["eligible"])
+            self.assertEqual(detailed, selected)
+            self.assertNotIn("changeInWorkingCapital", selected)
+
     def test_market_inputs_use_price_facts_and_reproducible_benchmark_beta(self):
         market_returns = [0.006 if index % 3 == 0 else -0.003 if index % 3 == 1 else 0.001 for index in range(70)]
         equity_returns = [value * 1.5 for value in market_returns]

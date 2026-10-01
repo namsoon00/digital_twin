@@ -18,6 +18,7 @@ _EXPORTS = {
  'financial_evidence_use': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'financial_evidence_use'),
  'current_financial_state': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'current_financial_state'),
  'financial_period_sort_key': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'financial_period_sort_key'),
+ 'reporting_period_end': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'reporting_period_end'),
  'financial_report_contract_assessment': ('digital_twin.modules.news_intelligence.domain.financial_reporting', 'financial_report_contract_assessment'),
  'COMPANY_ALIASES': ('digital_twin.modules.news_intelligence.domain.entity', 'COMPANY_ALIASES'),
  'NEWS_INTELLIGENCE_VERSION': ('digital_twin.modules.news_intelligence.domain.version',

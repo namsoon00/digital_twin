@@ -23,8 +23,8 @@ from digital_twin.modules.news_intelligence.contracts import company_knowledge_b
 from digital_twin.modules.instruments.contracts import security_lines_for_symbol
 
 
-ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v3"
-ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v3"
+ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v4"
+ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v4"
 
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",
@@ -39,6 +39,9 @@ SYMBOL_SIGNAL_GROUPS = {
     "companyOverviews",
     "researchEvidence",
     "companyKnowledge",
+    "driverDcfInputs",
+    "driverDcfReadiness",
+    "valuationEvidenceFeeds",
 }
 
 RESEARCH_ITEM_LIMIT = 12
@@ -516,7 +519,7 @@ def _compact_yfinance(value: object) -> Dict[str, object]:
 
 
 def _compact_company_overview(value: object) -> Dict[str, object]:
-    return _selected(
+    result = _selected(
         value,
         [
             "symbol", "name", "provider", "currency", "sector", "industry", "fetchedAt",
@@ -527,11 +530,32 @@ def _compact_company_overview(value: object) -> Dict[str, object]:
             "operatingCashFlow", "totalDebt", "totalCash", "sharesOutstanding", "ceoName",
             "dividendYield", "analystTargetPrice", "analystRatingStrongBuy", "analystRatingBuy",
             "analystRatingHold", "analystRatingSell", "analystRatingStrongSell",
+            "analystTargetMedianPrice", "analystTargetLowPrice", "analystTargetHighPrice",
+            "analystOpinionCount", "sourceAsOf", "fundamentalSourceAsOf", "sourceType",
+            "forwardEPS", "epsPeriod", "securityLine", "epsBasis", "accountingBasis",
+            "splitAdjustmentState", "securityAdjustmentState", "dividendYieldUnit",
         ],
         text_limit=300,
         list_limit=8,
         depth=2,
     )
+    _copy_normalized_valuation_evidence(value, result)
+    return result
+
+
+def _copy_normalized_valuation_evidence(value: object, result: Dict[str, object]) -> None:
+    """Keep source-bound model inputs intact, including nested revision refs.
+
+    These are normalized observations, bounded by their producing services.
+    Truncating a sample list or stringifying a nested contract changes the
+    valuation. Raw price history, statements and documents remain excluded.
+    """
+    source = value if isinstance(value, Mapping) else {}
+    for key in ("earningsEstimates", "multipleObservations", "historicalPERs", "peerMultiples",
+                "growthData", "cycleData", "sourceReferences"):
+        item = source.get(key)
+        if isinstance(item, (list, Mapping)):
+            result[key] = deepcopy(item)
 
 
 def _compact_earnings_report(value: object) -> Dict[str, object]:
@@ -540,15 +564,21 @@ def _compact_earnings_report(value: object) -> Dict[str, object]:
         "symbol", "provider", "fetchedAt", "retrievedAt", "effectiveAt", "validFrom", "validUntil",
         "eventLifecycleState", "eventFreshnessClass", "eventDecisionEligible", "eventDecisionReason",
         "eventTimeContractVersion", "eventAgeMinutes", "eventMaxAgeMinutes",
+        "currency", "trailingEPS", "forwardEPS", "epsPeriod", "sourceAsOf",
+        "sourceType", "securityLine", "epsBasis", "accountingBasis",
+        "splitAdjustmentState", "securityAdjustmentState",
     ], text_limit=240, depth=2)
     latest = _selected(
         source.get("latestQuarter"),
-        ["fiscalDateEnding", "reportedDate", "reportedEPS", "estimatedEPS", "surprise", "surprisePercentage"],
+        ["fiscalDateEnding", "reportedDate", "reportedEPS", "estimatedEPS", "surprise", "surprisePercentage", "epsPeriod"],
         text_limit=160,
         depth=2,
     )
     if latest:
         result["latestQuarter"] = latest
+    if isinstance(source.get("latestAnnual"), Mapping):
+        result["latestAnnual"] = deepcopy(source["latestAnnual"])
+    _copy_normalized_valuation_evidence(source, result)
     return result
 
 
@@ -843,6 +873,10 @@ def _compact_symbol_group(
             compact = _compact_news_headlines(item)
         elif group == "companyKnowledge":
             compact = _compact_company_knowledge(item)
+        elif group in {"driverDcfInputs", "driverDcfReadiness", "valuationEvidenceFeeds"}:
+            # Canonical, source-bound contracts already normalized upstream.
+            # Keep approval/missing-data state and all cash-flow years intact.
+            compact = deepcopy(item) if isinstance(item, Mapping) else {}
         elif group == "researchEvidence":
             rows = item if isinstance(item, list) else []
             compact = [
@@ -984,8 +1018,8 @@ def _compact_external_data_lineage(
         )
         if compact:
             selected[str(key)[:320]] = compact
-        if len(selected) >= 80:
-            break
+        # Scope by subject above. A portfolio-wide count cap silently removed
+        # entire vendors from larger portfolios, including exact EPS revisions.
     return selected
 
 

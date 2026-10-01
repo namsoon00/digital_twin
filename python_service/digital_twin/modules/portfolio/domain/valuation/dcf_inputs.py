@@ -14,10 +14,10 @@ import json
 import math
 from typing import Dict, Mapping
 
-from digital_twin.modules.news_intelligence.contracts import financial_report_contract_assessment
+from digital_twin.modules.news_intelligence.contracts import financial_report_contract_assessment, reporting_period_end
 
 
-DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v4-consensus-validation"
+DRIVER_DCF_INPUT_VERSION = "driver-dcf-input-evidence-v5-report-selection"
 DRIVER_DCF_ASSUMPTION_VERSION = "driver-dcf-shadow-assumptions-v3-market-currency"
 DRIVER_DCF_FINANCIAL_EVIDENCE_VERSION = "driver-dcf-financial-evidence-v1"
 DRIVER_DCF_ASSUMPTION_REVIEW_VERSION = "driver-dcf-assumption-review-v1"
@@ -144,7 +144,13 @@ def _annual_candidates(company: Mapping[str, object]) -> list[Dict[str, object]]
             result[identity] = dict(row)
     return sorted(
         result.values(),
-        key=lambda item: _text(item.get("periodEnd") or item.get("period")),
+        key=lambda item: (
+            (reporting_period_end(item.get("periodEnd") or item.get("period")).toordinal()
+             if reporting_period_end(item.get("periodEnd") or item.get("period")) else 0),
+            sum(bool((item.get("metricProvenance") or {}).get(metric, {}).get("official"))
+                for metric in FINANCIAL_INPUT_METRICS if _finite(item.get(metric)) is not None),
+            sum(_finite(item.get(metric)) is not None for metric in FINANCIAL_INPUT_METRICS),
+        ),
         reverse=True,
     )
 
@@ -157,7 +163,7 @@ def _latest_verified_annual(company: Mapping[str, object]):
     ]
     if complete:
         row = complete[0]
-        latest_period = _timestamp(row.get("periodEnd") or row.get("period"))
+        latest_period = reporting_period_end(row.get("periodEnd") or row.get("period"))
         official_complete = []
         for candidate in complete:
             provenance = candidate.get("metricProvenance") if isinstance(candidate.get("metricProvenance"), Mapping) else {}
@@ -168,7 +174,7 @@ def _latest_verified_annual(company: Mapping[str, object]):
                 official_complete.append(candidate)
         if official_complete:
             official = official_complete[0]
-            official_period = _timestamp(official.get("periodEnd") or official.get("period"))
+            official_period = reporting_period_end(official.get("periodEnd") or official.get("period"))
             if (
                 latest_period is None
                 or official_period is None

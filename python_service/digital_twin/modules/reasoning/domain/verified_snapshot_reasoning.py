@@ -34,7 +34,7 @@ from digital_twin.modules.reasoning.domain.reasoning_source_facts import reasoni
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
 VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY = "VerifiedMonitorSnapshot"
-VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v5-persisted-material-routing"
+VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v6-valuation-inputs"
 
 
 # Deliberately keep the source contract close to the Position domain object.
@@ -490,6 +490,7 @@ def _external_for_symbol(
         "secFilings", "equityQuotes", "yfinanceData", "newsHeadlines", "dartDisclosures",
         "earningsReports", "companyOverviews", "companyKnowledge", "researchEvidence",
         "securityMaster", "corporateActions",
+        "driverDcfInputs",
     ):
         rows = compact.get(group)
         if not isinstance(rows, Mapping) or symbol not in rows:
@@ -510,13 +511,41 @@ def _external_for_symbol(
 def _changed_external_groups(previous: Mapping[str, object], current: Mapping[str, object]) -> List[str]:
     groups = []
     for key in sorted(set(previous) | set(current)):
+        if key == "companyOverviews":
+            # Quotes still use Position admission. Source-bound valuation
+            # observations have no Position equivalent and must not be skipped.
+            def valuation_inputs(value):
+                selected = {}
+                for symbol, row in (value or {}).items():
+                    if not isinstance(row, Mapping):
+                        continue
+                    fields = {field: row[field] for field in (
+                        "earningsEstimates", "multipleObservations", "growthData", "cycleData",
+                    ) if row.get(field) not in (None, {}, [])}
+                    if fields:
+                        selected[symbol] = fields
+                return selected
+            before = fact_signature(valuation_inputs(previous.get(key)), EXTERNAL_REFRESH_FIELDS)
+            after = fact_signature(valuation_inputs(current.get(key)), EXTERNAL_REFRESH_FIELDS)
+            if before != after:
+                groups.append("companyOverviews.valuation")
         if key == "companyKnowledge":
             groups.extend(_changed_company_knowledge_groups(previous.get(key), current.get(key)))
             continue
         before_value = previous.get(key)
         after_value = current.get(key)
-        before = fact_signature({key: before_value}, EXTERNAL_REFRESH_FIELDS)
-        after = fact_signature({key: after_value}, EXTERNAL_REFRESH_FIELDS)
+        refresh_fields = EXTERNAL_REFRESH_FIELDS
+        if key == "driverDcfInputs":
+            # Rebuilding an identical bundle at a newer fetch clock changes
+            # its audit IDs. Preserve those IDs in the source, but admit work
+            # for numerical/accounting/approval changes rather than poll time.
+            refresh_fields = EXTERNAL_REFRESH_FIELDS | {
+                "valuationAt", "knowledgeCutoffAt", "quoteAsOf", "inputBundleId",
+                "subjectInputBundleId", "releasedInputBundleId", "activeInputBundleId",
+                "reviewId", "evidenceId", "sourceReferences",
+            }
+        before = fact_signature({key: before_value}, refresh_fields)
+        after = fact_signature({key: after_value}, refresh_fields)
         if before != after:
             groups.append(key)
     return groups
@@ -590,6 +619,8 @@ def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]
         selected.add("FxRate")
     if groups & {"equityQuotes"}:
         selected.add("MarketQuote")
+    if groups & {"driverDcfInputs", "companyOverviews.valuation"}:
+        selected.add("ValuationObservation")
     if groups & {"securityMaster"}:
         selected.add("CompanyProfile")
     if groups & {"corporateActions"}:

@@ -26,6 +26,7 @@ from digital_twin.modules.portfolio.domain.portfolio import account_snapshot_fro
 from digital_twin.modules.portfolio.domain.valuation.service import evaluate_valuation_models
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import DRIVER_DCF_INPUT_VERSION
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_value_match
+from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology
 
 
 class ReadOnlyGraph(TypeDBOntologyGraphRepository):
@@ -63,7 +64,9 @@ def frozen_signals(cursor, run):
                     assert row[field] == after.get(group, {}).get(symbol, {}).get(field), "Frozen financial evidence was truncated"
     assert set(before.get("externalDataLineage") or {}) == set(after.get("externalDataLineage") or {}), "Frozen source references missing"
     assert interest_rate_facts(before) == interest_rate_facts(after), "Frozen macro inputs differ"
-    return source
+    # Replay the persisted worker input, after checking preservation against
+    # the raw archive above. Capture assembles company knowledge once more.
+    return projection
 
 
 def verify_native(cursor, revision):
@@ -128,20 +131,23 @@ def verify_ai(cursor, runs, sources):
             run["abox_snapshot_id"], run["inference_generation_id"], run["account_id"], row["symbol"]), "Subject case mismatch"
         prompt = str(audit.get("prompt") or "")
         assert prompt and hashlib.sha256(prompt.encode()).hexdigest() == row["prompt_hash"], "Executed prompt mismatch"
-        assert row["ai_authored"] and row["publication_contract_passed"], "AI publication contract did not pass"
+        counts["linkedExecutionsChecked"] += 1
         source = sources[run["run_id"]]
         for key, value in interest_rate_facts(source["externalSignals"]).items():
             if key.startswith("macro") and value not in (None, ""):
                 assert core.get("facts", {}).get(key) == value, "AI macro fact differs from frozen source"
                 counts["macroFieldsCompared"] += 1
         response = json.loads(row["response_json"])
+        if not (row["ai_authored"] and row["publication_contract_passed"]):
+            counts["publicationContractFailures"] += 1
+            continue
         _, validation = normalize_narrative_claims({"_notificationAiPreparedDecisionCore": core,
             "notificationAiReviewMode": audit.get("reviewMode"), "messageType": "investmentInsight"}, response, writer_kind="ai")
         assert not validation.get("rejectedClaimCount"), "AI claims failed frozen-evidence replay"
         counts["verifiedClaims"] += validation.get("verifiedClaimCount", 0)
         counts["aiExecutionsVerified"] += 1
         counts["companyEvidenceIncluded"] += bool(core.get("companyEvidence"))
-    assert counts["aiExecutionsVerified"], "No completed AI executions linked to this revision"
+    assert counts["linkedExecutionsChecked"], "No completed executions linked to this revision"
     return dict(counts)
 
 
@@ -170,7 +176,8 @@ def verify_live_graph(cursor, runs, sources):
                 snapshot = account_snapshot_from_monitor_state(source)
                 position = next((p for p in [*snapshot.positions, *snapshot.watchlist] if p.symbol == key[1]), None)
                 assert position, "Live valuation subject missing from exact source"
-                model_cache[key] = evaluate_valuation_models(position, source["externalSignals"], {})
+                prepared_signals = compact_external_signals_for_ontology(snapshot.external_signals)
+                model_cache[key] = evaluate_valuation_models(position, prepared_signals, {})
             payload = value.get("payload") or {}
             field = {"earnings-scenario-observation": "epsScenario", "valuation-assessment": "valuationAssessment",
                      "valuation-input-bundle": "valuationBundle"}[row["kind"]]
@@ -205,9 +212,12 @@ def main():
             runs, sources, native = verify_native(cursor, args.revision)
             ai = verify_ai(cursor, runs, sources)
             live = verify_live_graph(cursor, runs, sources)
-            print(json.dumps({"status": "passed", "revision": args.revision, "mode": "read-only-no-send",
+            passed = bool(ai.get("aiExecutionsVerified")) and not ai.get("publicationContractFailures")
+            print(json.dumps({"status": "passed" if passed else "failed-ai-publication", "revision": args.revision, "mode": "read-only-no-send",
                 "native": native, "ai": ai, "liveTypeDb": live,
                 "limits": "Latest 100 retained successful projections and 100 AI executions; exact linked sources only. Live graph is a later read of active scopes. Unchanged older scopes are counted separately. Financial inputs need not appear in unrelated AI narratives; no new AI call or outcome validation."}, ensure_ascii=False))
+            if not passed:
+                raise SystemExit(1)
     finally:
         connection.rollback()
         connection.close()

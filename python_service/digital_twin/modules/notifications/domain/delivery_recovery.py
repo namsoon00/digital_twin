@@ -36,6 +36,7 @@ _RECOVERY_TTL_MINUTES = {
     "monitorConnection": 30,
     "monitorHeartbeat": 15,
     "workHandoff": 1440,
+    "aiObservationDiagnostic": 1440,
 }
 
 

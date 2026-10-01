@@ -17,11 +17,13 @@ async function request(url, options) {
 }
 function card(task, scheduling = {}) {
   const r = task.result || {};
+  const diagnostic = r.publication?.diagnostic;
   const facts = r.input?.facts || [];
   const quote = facts.find((fact) => fact.currentPrice != null && Number(fact.currentPrice) > 0);
   const section = (name, text) => text ? `<div><h4>${name}</h4><p>${escape(text)}</p></div>` : "";
   return `<article><header><div><h3>${escape(r.input?.name || task.name || task.symbol)} · ${escape(labels[task.capability] || task.capability)}</h3><small>${escape(task.symbol)} · ${escape(date(task.updatedAt))}</small></div><span>${escape(labels[task.status] || task.status)}</span></header>
   ${r.publication ? `<p class="muted">알림: ${escape(publicationLabels[r.publication.deliveryStatus || r.publication.status] || r.publication.status)} · ${escape(r.publication.reason)}</p>` : ""}
+  ${diagnostic ? `<p class="muted">검증 미통과 초안 · 운영 알림: ${escape(publicationLabels[diagnostic.deliveryStatus || diagnostic.status] || diagnostic.status)} · ${escape(diagnostic.reason)}</p>` : ""}
   ${r.quality ? `<p class="muted">설명 검증: ${escape(qualityLabels[r.quality.status] || r.quality.status)}${r.quality.errors?.length ? " · " + escape(r.quality.errors.join(" / ")) : ""}</p>` : ""}
   ${r.summary ? `<p>${escape(r.summary)}</p>` : `<p class="muted">${escape(reasons[r.stopReason] || r.reason || (task.status === "pending" && scheduling.status === "budget-wait" ? "오늘 AI 사용 한도로 관찰을 기다리고 있습니다." : task.lastError?.startsWith("ai-call-budget") ? "AI 호출 여유가 생기면 관찰을 다시 시작합니다." : task.lastError ? "작업에 실패해 재확인이 필요합니다." : task.status === "pending" ? "예약된 시점에 확인합니다." : "아직 분석 결과가 없습니다."))}</p>`}
   ${quote ? `<p>근거 시점 가격 <strong>${escape(Number(quote.currentPrice).toLocaleString("ko-KR"))} ${escape(quote.currency)}</strong>${quote.changeRate != null ? ` · 등락 ${escape(quote.changeRate)}%` : ""}<br><small>시세 기준 ${escape(date(quote.sourceAsOf || quote.asOf || quote.updatedAt))}</small></p>` : ""}
@@ -29,6 +31,7 @@ function card(task, scheduling = {}) {
   ${r.followUpConditions?.length ? `<details><summary>등록한 확인 조건 ${r.followUpConditions.length}개</summary>${r.followUpConditions.map((row) => `<p>${escape(row.description)}<br><small>${escape(date(row.expiresAt))}까지 다음 관찰에서 확인</small></p>`).join("")}</details>` : ""}
   ${r.followUpEvaluations?.length ? `<details><summary>이전 설명의 확인 결과</summary>${r.followUpEvaluations.map((row) => `<p>${escape(row.description)} · ${escape(followUpLabels[row.status] || row.status)}<br><small>${escape(row.reason)}</small></p>`).join("")}</details>` : ""}
   ${r.publication?.receipt ? `<details><summary>실제 발송 원문 · ${escape(date(r.publication.receipt.deliveredAt))}</summary><pre>${escape(r.publication.receipt.body || "원문 보존 기간이 지나 본문을 표시할 수 없습니다.")}</pre></details>` : ""}
+  ${diagnostic?.receipt ? `<details><summary>운영 채널로 보낸 미검증 원문 · ${escape(date(diagnostic.receipt.deliveredAt))}</summary><pre>${escape(diagnostic.receipt.body || "원문 보존 기간이 지나 본문을 표시할 수 없습니다.")}</pre></details>` : ""}
   ${r.claimEvidence ? `<details><summary>문장별 인용과 검토 기록</summary><pre>${escape(JSON.stringify({claims:r.claimEvidence,review:r.quality?.review},null,2))}</pre></details>` : ""}
   ${task.status === "pending" ? `<p class="muted">다음 확인 ${escape(date(scheduling.status === "budget-wait" && Date.parse(scheduling.nextCheckAt) > Date.parse(task.nextCheckAt) ? scheduling.nextCheckAt : task.nextCheckAt))}</p>` : ""}
   ${facts.length ? `<details><summary>사용한 사실 ${facts.length}개 · 시점과 출처 보기</summary><pre>${escape(JSON.stringify(r.input,null,2))}</pre></details>` : ""}</article>`;

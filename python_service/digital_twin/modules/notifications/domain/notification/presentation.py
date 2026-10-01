@@ -33,6 +33,7 @@ NOTIFICATION_KINDS = {
 
 LEGACY_KINDS = {
     "aiObservation": "ai-interpretation",
+    "aiObservationDiagnostic": "report",
     "marketObservation": "price-change",
     "newsDigest": "news",
     "informationUpdate": "news",

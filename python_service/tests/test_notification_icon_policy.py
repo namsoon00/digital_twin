@@ -19,6 +19,7 @@ from digital_twin.modules.portfolio.domain.portfolio import AlertEvent  # noqa: 
 EXPECTED_BASE_ICONS = {
     "default": "🔔",
     "aiObservation": "🧠",
+    "aiObservationDiagnostic": "🧪",
     "investmentInsight": "🧭",
     "marketObservation": "↔️",
     "portfolioHoldingsSnapshot": "📋",

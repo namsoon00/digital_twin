@@ -125,7 +125,10 @@ def ai_control_status(settings=None, account_id=""):
     configured = settings if settings is not None else runtime_settings()
     status = MySQLAIControlStore(configured).status(account_id)
     from digital_twin.infrastructure.operational_store import notification_job_store
-    publications = [task["result"].get("publication") for task in status["tasks"] if task["result"].get("publication", {}).get("jobId")]
+    publications = []
+    for task in status["tasks"]:
+        publication = task["result"].get("publication") or {}
+        publications.extend(item for item in (publication, publication.get("diagnostic") or {}) if item.get("jobId"))
     if publications:
         with notification_job_store(configured).connect() as connection:
             ids = [publication["jobId"] for publication in publications]

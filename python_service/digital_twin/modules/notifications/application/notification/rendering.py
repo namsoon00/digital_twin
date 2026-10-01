@@ -40,6 +40,11 @@ class NotificationRenderingService:
         self.link_base_resolver = link_base_resolver
 
     def render(self, job: NotificationJob) -> str:
+        if job.message_type == "aiObservationDiagnostic":
+            from digital_twin.modules.notifications.application.ai_observation_diagnostic import render_ai_observation_diagnostic
+            job.text = render_ai_observation_diagnostic(job.context["aiObservationDiagnostic"],
+                debug_number=notification_debug_number(job.job_id))
+            return job.text
         if job.message_type == "aiObservation":
             from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
             job.context["aiControlRenderedAt"] = self.now_provider().isoformat()

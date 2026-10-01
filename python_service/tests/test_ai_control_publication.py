@@ -7,11 +7,15 @@ from unittest.mock import Mock, patch
 
 from digital_twin.modules.ai_orchestration.domain.planning import identity, stamp, validate_plan
 from digital_twin.modules.ai_orchestration.domain.publication import publication_block, repeat_block
+from digital_twin.modules.ai_orchestration.domain.observation_diagnostic import observation_diagnostic
+from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
 from digital_twin.infrastructure.transactions.ai_control_publication import AIControlPublication, validate_narrative
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
+from digital_twin.modules.notifications.application.ai_observation_diagnostic import render_ai_observation_diagnostic
+from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATION_DIAGNOSTIC
 from test_ai_control import SUBJECT, PLAN
 
 
@@ -19,7 +23,7 @@ from ai_insight_fixtures import observation, persist_review
 
 
 class CentralPublicationPolicyTests(unittest.TestCase):
-    def test_silence_stale_quotes_and_ungrounded_numbers_remain_internal(self):
+    def test_silence_stays_internal_but_rejected_send_drafts_are_diagnostic(self):
         result = observation()
         self.assertEqual("", publication_block(result))
         self.assertEqual("", validate_narrative(result))
@@ -30,9 +34,29 @@ class CentralPublicationPolicyTests(unittest.TestCase):
         self.assertTrue(validate_narrative(compared))
         result["notification"]["send"] = False
         self.assertTrue(publication_block(result))
+        self.assertEqual({}, observation_diagnostic(result, "task", publication_block(result)))
         result["notification"]["send"] = True
         result["input"]["facts"][0]["sourceAsOf"] = "2000-01-01T00:00:00Z"
         self.assertTrue(publication_block(result))
+        result["summary"] = '내일은 900원입니다. <b>확정</b>'
+        result["quality"] = local_quality(result)
+        diagnostic = observation_diagnostic(result, "task", publication_block(result))
+        self.assertEqual(result["summary"], diagnostic["draft"]["summary"])
+        rendered = render_ai_observation_diagnostic(diagnostic, debug_number="N-TEST")
+        self.assertIn("검증 미통과 초안", rendered)
+        self.assertIn("현재가: 100원", rendered)
+        self.assertIn("900원입니다. &lt;b&gt;확정&lt;/b&gt;", rendered)
+        self.assertIn("01/01 09:00 KST", rendered)
+        self.assertIn("오차단", rendered)
+        self.assertEqual({}, observation_diagnostic(result, "task", ""))
+        for malformed_review in ("invalid JSON contract", {"sections": ["invalid section"]}):
+            result["quality"]["review"] = malformed_review
+            self.assertIn("900원", render_ai_observation_diagnostic(observation_diagnostic(result, "task", "검토 응답 형식 오류")))
+        from digital_twin.modules.accounts.contracts import AccountConfig
+        account = AccountConfig("test", "test", "toss", "", "", "", "", [])
+        night = datetime(2026, 10, 1, 14, tzinfo=timezone.utc)
+        self.assertTrue(account.quiet_hours_active(night, "aiObservation"))
+        self.assertFalse(account.quiet_hours_active(night, AI_OBSERVATION_DIAGNOSTIC))
 
     def test_repeat_policy_uses_successful_subject_receipts_and_exact_boundaries(self):
         result = observation()
@@ -98,15 +122,16 @@ class CentralPublicationStorageTests(unittest.TestCase):
     def tearDown(self):
         self.clean()
 
-    def publish(self, result=None):
+    def publish(self, result=None, expected="queued"):
         self.control.seed(SUBJECT)
         task = self.control.claim()
         result = result or observation()
         persist_review(self.control, task, result)
         self.assertTrue(self.control.complete(task, result, []))
-        self.assertEqual("queued", result["publication"]["status"], result.get("publication"))
+        self.assertEqual(expected, result["publication"]["status"], result.get("publication"))
+        publication = result["publication"] if expected == "queued" else result["publication"]["diagnostic"]
         with self.queue.connect() as connection:
-            row = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s", (result["publication"]["jobId"],)).fetchone()
+            row = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s", (publication["jobId"],)).fetchone()
         return task, result, self.queue.job_from_row(row)
 
     def test_successful_send_is_only_baseline_and_cannot_be_replayed(self):
@@ -159,6 +184,49 @@ class CentralPublicationStorageTests(unittest.TestCase):
             self.assertEqual("done", connection.execute("SELECT status FROM notification_jobs WHERE job_id=%s", (job.job_id,)).fetchone()["status"])
         old_ai.enqueue.assert_not_called()
         notifier.send.assert_called_once()
+        baseline = self.publication.memory(job.account_id, "TEST")
+        # A separate task produces an unsupported draft. Its operations delivery
+        # cannot advance the real customer baseline, limits or follow-up memory.
+        with self.control.transaction() as connection:
+            self.control.insert(connection, {**SUBJECT, "taskId": "rejected-task", "capability": "observe", "availableAt": stamp()})
+        rejected = observation()
+        rejected["summary"] = "이 종목은 내일 900원에 도달합니다."
+        rejected["repair"] = {"status": "rejected", "initialErrors": ["확인되지 않은 수치"]}
+        task, rejected, diagnostic_job = self.publish(rejected, expected="recorded")
+        self.assertEqual(AI_OBSERVATION_DIAGNOSTIC, diagnostic_job.message_type)
+        account.quiet_hours_active = lambda _now, kind: kind not in {AI_OBSERVATION_DIAGNOSTIC}
+        operations = Mock(supports_delivery_checkpoints=False)
+        operations.send.return_value = SimpleNamespace(delivered=True, label="test operations", reason="", metadata={})
+        operations_factory = Mock(return_value=operations)
+        account_factory = Mock(side_effect=AssertionError("unverified draft reached an account transport"))
+        renderer = NotificationRenderingService(template_renderer=Mock(side_effect=AssertionError("must preserve failed prose")))
+        diagnostic_message = renderer.render(diagnostic_job)
+        with self.assertRaises(RuntimeError):
+            NotificationDispatchService(self.queue, account_factory).deliver(diagnostic_job, {job.account_id: account}, diagnostic_message)
+        with self.assertRaises(NotificationDeliverySuppressed), self.publication.delivery_guard(diagnostic_job, diagnostic_message + "extra"):
+            self.fail("tampered diagnostic")
+        runner = NotificationQueueRunner(self.queue, SimpleNamespace(load_all=lambda: [account]), account_factory,
+            operations_notifier_factory=operations_factory, settings=self.settings,
+            include_message_types=[AI_OBSERVATION_DIAGNOSTIC], ai_request_enqueuer=old_ai,
+            delivery_guard=self.publication.delivery_guard)
+        self.assertEqual(1, runner.run_once())
+        account_factory.assert_not_called()
+        operations_factory.assert_called_once_with(None)
+        operations.send.assert_called_once()
+        self.assertIn(rejected["summary"], operations.send.call_args.args[0])
+        self.assertIn("한 차례 수정 후에도", operations.send.call_args.args[0])
+        self.assertEqual(baseline, self.publication.memory(job.account_id, "TEST"))
+        self.assertEqual(1, len(self.publication.receipts(job.account_id)))
+        old_ai.enqueue.assert_not_called()
+        with self.assertRaises(NotificationDeliverySuppressed), self.publication.delivery_guard(diagnostic_job, diagnostic_message):
+            self.fail("duplicate diagnostic")
+        import json
+        with self.queue.connect() as connection:
+            receipt = connection.execute("SELECT channel,metadata_json FROM notification_delivery_attempts WHERE job_id=%s AND status='delivered'", (diagnostic_job.job_id,)).fetchone()
+        self.assertEqual("operationsTelegram", receipt["channel"])
+        metadata = json.loads(receipt["metadata_json"])
+        self.assertNotIn("aiControlObservation", metadata)
+        self.assertEqual(task["taskId"], metadata["aiObservationDiagnostic"]["taskId"])
 
     def test_tampered_subject_body_or_retired_subject_cannot_reach_transport(self):
         _, result, job = self.publish()
@@ -181,13 +249,16 @@ class CentralPublicationStorageTests(unittest.TestCase):
             self.publication.publish(connection, task, result)
             raise RuntimeError("transaction crash")
         self.control.outbox_writer = failing_writer
-        with self.assertRaises(RuntimeError):
-            result = observation()
-            persist_review(self.control, task, result)
-            self.control.complete(task, result, [])
-        with self.control.connect() as connection:
-            self.assertEqual("processing", connection.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s", (task["taskId"],)).fetchone()["status"])
-            self.assertEqual(0, connection.execute("SELECT COUNT(*) AS n FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],)).fetchone()["n"])
+        for rejected in (False, True):
+            with self.subTest(rejected=rejected), self.assertRaises(RuntimeError):
+                result = observation()
+                if rejected:
+                    result["summary"] = "근거 없는 900원 전망입니다."
+                persist_review(self.control, task, result)
+                self.control.complete(task, result, [])
+            with self.control.connect() as connection:
+                self.assertEqual("processing", connection.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s", (task["taskId"],)).fetchone()["status"])
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) AS n FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],)).fetchone()["n"])
 
     def test_retirement_preserves_history_and_prevents_direct_enqueue_and_claim(self):
         from digital_twin.infrastructure.transactions.ai_publication import MySQLAIInferenceQueueStore

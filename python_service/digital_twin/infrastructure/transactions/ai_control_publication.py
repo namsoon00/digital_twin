@@ -10,9 +10,12 @@ from digital_twin.modules.ai_orchestration.domain.planning import enabled, ident
 from digital_twin.modules.ai_orchestration.domain.publication import MESSAGE_TYPE, RETIRED_REASON, legacy_route_retired, publication_block, repeat_block
 from digital_twin.modules.ai_orchestration.domain.insight_quality import quality_block
 from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt
+from digital_twin.modules.ai_orchestration.domain.observation_diagnostic import observation_diagnostic
 from digital_twin.modules.decisions.domain.investment_narrative_policy import narrative_presentation_errors
 from digital_twin.modules.decisions.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
+from digital_twin.modules.notifications.application.ai_observation_diagnostic import render_ai_observation_diagnostic
+from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATION_DIAGNOSTIC
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
 
@@ -90,7 +93,20 @@ class AIControlPublication:
     def publish(self, connection, task, result):
         reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result)
         if reason:
-            return {"status": "recorded", "reason": " / ".join((result.get("quality") or {}).get("errors", [])) or reason}
+            publication = {"status": "recorded", "reason": reason}
+            diagnostic = observation_diagnostic(result, task["taskId"], reason)
+            if diagnostic:
+                job_id = identity("ai-control-diagnostic", task["taskId"])[:48]
+                body = render_ai_observation_diagnostic(diagnostic, debug_number=notification_debug_number(job_id))
+                context = {"messageType": AI_OBSERVATION_DIAGNOSTIC, "accountId": task["accountId"],
+                    "symbol": task["symbol"], "name": task["name"], "aiControlTaskId": task["taskId"],
+                    "aiObservationDiagnostic": diagnostic, "notificationContent": {"kind": "report", "body": body}}
+                job = NotificationJob(job_id=job_id, account_id=task["accountId"], account_label="",
+                    message_type=AI_OBSERVATION_DIAGNOSTIC, text=body, context=context, dedupe_key=job_id)
+                accepted = self.notifications.enqueue_with_connection(connection, job)
+                publication["diagnostic"] = {"status": "queued" if accepted else "suppressed", "jobId": job_id,
+                                             "reason": "검증 미통과 초안을 운영 채널로 보냅니다." if accepted else job.last_error}
+            return publication
         job_id = identity("ai-control", task["taskId"])[:48]
         body = render_ai_observation(result)
         context = {"accountId": task["accountId"], "symbol": task["symbol"], "name": task["name"],
@@ -115,6 +131,13 @@ class AIControlPublication:
     def delivery_guard(self, job, message):
         if job.message_type == "investmentInsight" and legacy_route_retired(self.settings):
             raise NotificationDeliverySuppressed(RETIRED_REASON)
+        if job.message_type == AI_OBSERVATION_DIAGNOSTIC:
+            with self.notifications.delivery_subject_lock(job.account_id, "ai-control-diagnostic") as acquired:
+                if not acquired:
+                    raise RuntimeError("다른 AI 진단 알림이 발송 중이므로 잠시 후 다시 확인합니다.")
+                self.check_diagnostic_delivery(job, message)
+                yield
+            return
         if job.message_type != MESSAGE_TYPE:
             yield
             return
@@ -162,3 +185,26 @@ class AIControlPublication:
                 **{key: result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison", "portfolioImpact", "insightVersion", "followUpConditions", "observations")},
                 "insightFingerprint": result["quality"]["insightFingerprint"], "facts": receipt_facts(result)}
             yield
+
+    def check_diagnostic_delivery(self, job, message):
+        task_id = (job.context or {}).get("aiControlTaskId", "")
+        with self.control.connect() as connection:
+            row = connection.execute("SELECT status,account_id,symbol,result_json FROM ai_control_tasks WHERE task_id=%s", (task_id,)).fetchone()
+        if not row or row["status"] != "completed" or row["account_id"] != job.account_id:
+            raise NotificationDeliverySuppressed("완료된 AI 관찰의 검증 미통과 초안이 아닙니다.")
+        result = json.loads(row["result_json"])
+        publication = result.get("publication") or {}
+        queued = publication.get("diagnostic") or {}
+        diagnostic = observation_diagnostic(result, task_id, publication.get("reason", ""))
+        if (not diagnostic or publication.get("status") != "recorded" or queued.get("status") != "queued"
+                or queued.get("jobId") != job.job_id or job.job_id != identity("ai-control-diagnostic", task_id)[:48]
+                or diagnostic["accountId"] != job.account_id or diagnostic["symbol"] != row["symbol"]
+                or (job.context or {}).get("aiObservationDiagnostic") != diagnostic):
+            raise NotificationDeliverySuppressed("저장된 AI 초안과 진단 알림의 출처가 일치하지 않습니다.")
+        expected = render_ai_observation_diagnostic(diagnostic, debug_number=notification_debug_number(job.job_id))
+        if message != expected or ((job.context or {}).get("transportDelivery") or {}).get("message", message) != expected:
+            raise NotificationDeliverySuppressed("진단 본문이 저장된 AI 초안과 다릅니다.")
+        with self.notifications.connect() as connection:
+            receipt = connection.execute("SELECT job_id FROM notification_delivery_attempts WHERE job_id=%s AND status='delivered' LIMIT 1", (job.job_id,)).fetchone()
+        if receipt:
+            raise NotificationDeliverySuppressed("이미 전달한 AI 검증 미통과 초안입니다.")

@@ -127,6 +127,24 @@ Priority is research follow-up before new observations, then oldest due work.
 
 ## Operator surfaces
 
+An explicit send candidate that fails final publication validation now creates
+one `aiObservationDiagnostic` operations notification in the same transaction as
+the completed observation. It shows the rejected prose, validator/reviewer
+reasons, correction status and the original captured quote. The prominent
+`검증 미통과 초안` label also makes possible validator false positives visible;
+it does not claim every rejected sentence is false. Ordinary `send=false`
+observations remain silent, and an accepted corrected draft follows the normal
+observation route. Parse/provider failures without a completed usable draft stay
+in the task error ledger; this is not a fallback that invents an AI message.
+
+Diagnostics use the configured operations/global-owner destination, never the
+observed account's notification destination. They bypass account quiet hours and
+investor cooldowns/quotas; the stable task-based outbox key and successful receipt
+prevent duplicate sends. They do not update the investment delivery baseline,
+follow-up conditions, decision outcomes or notification quota. The final transport
+guard compares the exact diagnostic body with the completed task. An unavailable
+operations transport remains a visible delivery failure, without account fallback.
+
 - `/ai-control.html`: owner-only data, recent analyses, dated facts, schedules,
   process counts, enable switch and daily limits; linked from Operations.
 - `GET /api/ai-control/status`: bounded owner-only task and call summary.

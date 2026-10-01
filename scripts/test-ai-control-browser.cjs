@@ -56,6 +56,16 @@ const server = http.createServer((req,res) => {
    assert.match(await page.locator('article').innerText(),/기간 만료 · 평가 불가/);
    await page.getByText('문장별 인용과 검토 기록',{exact:true}).click();
    assert.equal(await page.locator('article script').count(),0);
+   const diagnosticResult = {...result, publication:{status:'recorded',reason:'검증 보류',diagnostic:{status:'queued',deliveryStatus:'done',reason:'운영 채널 발송 완료',
+    receipt:{body:'검증되지 않은 AI 원문 <script>bad</script>',deliveredAt:'2026-10-01T04:00:00Z'}}}};
+   await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,budgetEnabled:false,
+    observationScheduling:{status:'ready'},tasks:[{taskId:'diagnostic',symbol:'TEST',status:'completed',capability:'observe',result:diagnosticResult}],callsToday:[]}}));
+   await page.locator('#refresh').click();
+   await page.getByText(/검증 미통과 초안 · 운영 알림: 발송 완료/).waitFor();
+   await page.getByText(/운영 채널로 보낸 미검증 원문 ·/).click();
+   assert.match(await page.locator('article').innerText(),/검증되지 않은 AI 원문 <script>bad<\/script>/);
+   assert.equal(await page.locator('article script').count(),0);
+   assert.equal(await page.getByText(/실제 발송 원문 ·/).count(),0);
    assert(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1));
    assert.deepEqual(errors,[]);
    await page.screenshot({path:'/tmp/orbit-ai-control-'+width+'.png',fullPage:true});

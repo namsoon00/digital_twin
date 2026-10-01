@@ -5,7 +5,7 @@ from copy import deepcopy
 import hashlib
 from contextlib import nullcontext
 
-from digital_twin.modules.notifications.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
+from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATION_DIAGNOSTIC, ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 
 
@@ -31,7 +31,7 @@ class NotificationDispatchService:
         if not operations_delivery and job.account_id and job.account_id not in accounts:
             raise RuntimeError("알림 수신 계정을 찾을 수 없어 다른 계정으로 대체 발송하지 않았습니다.")
         if operations_delivery:
-            if str(job.message_type or "") == ONTOLOGY_REASONING_QUEUE and not self.operations_notifier_factory:
+            if job.message_type in {ONTOLOGY_REASONING_QUEUE, AI_OBSERVATION_DIAGNOSTIC} and not self.operations_notifier_factory:
                 raise RuntimeError("운영 알림 전송기가 구성되지 않아 계정 채널로 대체 발송하지 않았습니다.")
             factory = self.operations_notifier_factory or self.notifier_factory
         else:
@@ -39,7 +39,8 @@ class NotificationDispatchService:
         audience = "operations" if operations_delivery else "account"
         channel = "operationsTelegram" if operations_delivery else "accountNotification"
         context = dict(job.context or {})
-        notifier = factory(accounts.get(job.account_id))
+        # Unverified drafts must never fall back to an account's destination.
+        notifier = factory(None if job.message_type == AI_OBSERVATION_DIAGNOSTIC else accounts.get(job.account_id))
         resumable = getattr(notifier, "supports_delivery_checkpoints", False) is True
         persist_progress = getattr(self.queue, "save_delivery_progress", None) or getattr(self.queue, "update", None)
         progress = dict(context.get("transportDelivery") or {})
@@ -73,6 +74,10 @@ class NotificationDispatchService:
         relation_change = context.get("relationChangeEvidence") or {}
         if context.get("aiControlDeliverySnapshot"):
             rendered_audit["aiControlObservation"] = context["aiControlDeliverySnapshot"]
+        if job.message_type == AI_OBSERVATION_DIAGNOSTIC:
+            diagnostic = context.get("aiObservationDiagnostic") or {}
+            rendered_audit["aiObservationDiagnostic"] = {
+                key: diagnostic.get(key) for key in ("version", "taskId", "symbol", "reasons", "executionInputId")}
         if relation_change.get("version") and relation_change.get("current"):
             # The receipt outlives the large job payload. Preserve the exact
             # last-delivered facts for the next customer comparison.

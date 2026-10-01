@@ -88,6 +88,7 @@ CUSTOMER_FACING_MESSAGE_TYPES = {
 
 DEFAULT_NOTIFICATION_TEMPLATES = {
     "aiObservation": {"template": BODY_TEMPLATE, "description": "중앙 AI의 독립 관찰과 새로운 해석"},
+    "aiObservationDiagnostic": {"template": BODY_TEMPLATE, "description": "검증 미통과 AI 초안과 보류 이유를 운영 채널에 전달"},
     "informationUpdate": {"template": BODY_TEMPLATE, "description": "공식 발표 결과와 공개 이후 가격의 사실 확인 알림"},
     "default": {
         "template": DEFAULT_TEMPLATE,

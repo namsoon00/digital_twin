@@ -179,14 +179,9 @@ function renderRuntimeSettingsSummary() {
       configuredChip("Bot token", isConfiguredSetting("operationsTelegramBotToken")),
       configuredChip("Chat ID", isConfiguredSetting("operationsTelegramChatId"), isConfiguredSetting("operationsTelegramChatId") ? "저장됨" : "계정 채널 사용")
     ]),
-    renderSettingsApiCard("AI 투자판단", settingEnabled("notificationAiGateEnabled") && String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0" ? "사용" : "중지", [
-      configuredChip("AI 판단", settingEnabled("notificationAiGateEnabled") && String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0"),
-      configuredChip(
-        "병렬 워커",
-        String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0",
-        String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") + "개"
-      ),
-      configuredChip("Codex", settingValue("notificationAiUseCodex") !== "0", settingValue("notificationAiReasoningEffort") || defaultSettings.notificationAiReasoningEffort || "max")
+    renderSettingsApiCard("AI 관찰", "중앙 AI에서 관리", [
+      configuredChip("이전 규칙 기반 알림", false, "종료"),
+      '<a href="/ai-control.html">관찰 기록·알림·운영 설정 보기 →</a>'
     ]),
     renderSettingsApiCard("외부 데이터", externalEnabledCount + "/6개 수집 사용", [
       configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),

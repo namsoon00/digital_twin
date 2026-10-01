@@ -242,43 +242,10 @@ function renderSettingsGroup(title, description, content, tone) {
 }
 
 function renderSettingsAiRuntimeGroup(tone) {
-  return renderSettingsGroup("AI 투자판단", "TypeDB 추론 결과를 AI가 검증하고 투자 의견으로 작성하는 실행 설정입니다.", [
-    renderSettingSelect("notificationAiGateEnabled", "AI 투자판단", [
-      { value: "1", label: "사용" },
-      { value: "0", label: "사용 안 함" }
-    ]),
-    renderSettingSelect("notificationAiQueueWorkerCount", "병렬 AI 워커", [
-      { value: "0", label: "중지" },
-      { value: "1", label: "1개" },
-      { value: "2", label: "2개 (권장)" },
-      { value: "3", label: "3개" },
-      { value: "4", label: "4개" }
-    ]),
-    renderSettingSelect("notificationAiUseCodex", "AI 실행 엔진", [
-      { value: "1", label: "Codex AI" },
-      { value: "0", label: "로컬 검증만" }
-    ]),
-    renderSettingSelect("notificationAiReasoningEffort", "AI 추론 깊이", [
-      { value: "auto", label: "자동 (표준 높음·복합 최대, 권장)" },
-      { value: "max", label: "최대" },
-      { value: "high", label: "항상 높음" },
-      { value: "medium", label: "보통" },
-      { value: "low", label: "낮음" }
-    ]),
-    renderSettingSelect("notificationAiDeliveryDeadlineSeconds", "알림 AI 제한시간", [
-      { value: "0", label: "완료까지 대기 (권장)" },
-      { value: "300", label: "비상 제한 300초" },
-      { value: "600", label: "비상 제한 600초" }
-    ]),
-    renderSettingSelect("localAiInvestmentReservedProcesses", "투자 판단 전용 슬롯", [
-      { value: "0", label: "예약 없음" },
-      { value: "1", label: "1개 (권장)" }
-    ]),
-    renderSettingSelect("notificationAiTypeDbFallbackEnabled", "AI 실패 시 TypeDB 알림", [
-      { value: "1", label: "웹 이력에 저장 (권장)" },
-      { value: "0", label: "실패 처리" }
-    ])
-  ].join(""), tone || "ai");
+  return renderSettingsGroup("중앙 AI 관찰", "규칙 성립과 별개로 추세를 관찰하고 새로운 해석이 있을 때 알립니다.", [
+    '<p>이전 규칙 기반 AI 알림과 관계 변화 알림은 종료했습니다.</p>',
+    '<a class="button" href="/ai-control.html">중앙 AI 관찰·알림 설정 열기 →</a>'
+  ].join(""), tone);
 }
 
 function renderSettingsOverviewPanel() {
@@ -414,9 +381,9 @@ function settingsOperationsNotificationsWorkDetailPayload() {
 function settingsAiRuntimeWorkDetailPayload() {
   return editorWorkDetailPayload(
     "AI Runtime",
-    "AI 추론 실행 설정",
-    "시스템 전체 · AI 사용 여부와 워커 실행량",
-    renderSettingsScopeEditorIntro("시스템 전체", "AI 추론 런타임", "TypeDB 추론 결과를 검증하는 실행 엔진과 처리량에 적용됩니다.")
+    "중앙 AI 관찰 설정",
+    "독립 관찰 · 알림과 조사 기록",
+    renderSettingsScopeEditorIntro("중앙 AI", "독립 관찰 운영", "관찰 사용 여부와 조사 한도는 중앙 AI 화면에서 관리합니다.")
       + renderSettingsAiOperationsPanel()
   );
 }

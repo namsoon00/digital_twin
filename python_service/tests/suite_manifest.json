@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_ai_control.py", "tier": "integration", "core": true},
     {"file": "test_data_utilization_contract.py", "tier": "contract", "core": true},
     {"file": "test_scoped_retention_safety.py", "tier": "contract", "core": true},
     {"file": "test_company_report_reading.py", "tier": "unit", "core": true},

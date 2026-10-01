@@ -174,7 +174,8 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
             if lease is None:
                 from contextlib import nullcontext
                 lease = nullcontext()
-            with lease:
+            from digital_twin.modules.ai_orchestration.public import ai_execution
+            with lease, ai_execution("investment-judgement", prompt, self.settings):
                 capacity_wait_ms = int((time.monotonic() - capacity_started) * 1000)
                 if self.cancel_event.is_set():
                     raise RuntimeError("notification AI execution was cancelled before process start")

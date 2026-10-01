@@ -54,7 +54,7 @@ class CommandNewsAiAnalyzer(NewsAiAnalyzer):
             self.command,
             prompt,
             max(1, min(self.timeout_seconds, int(timeout_seconds or self.timeout_seconds))),
-            self.settings,
+            {**self.settings, "aiWorkload": "news-analysis"},
         )
         output = completed.stdout.strip()
         if completed.returncode != 0:

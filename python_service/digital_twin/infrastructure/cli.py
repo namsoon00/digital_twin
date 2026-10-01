@@ -456,6 +456,24 @@ def notifications_command(args) -> int:
     return 1
 
 
+def ai_control_command(args) -> int:
+    from digital_twin.infrastructure.service_factory import build_ai_control_service, ai_control_status
+    import threading
+    if args.ai_control_action == "status":
+        print(json.dumps(ai_control_status(), ensure_ascii=False))
+        return 0
+    stop = threading.Event()
+    while True:
+        try:
+            result = build_ai_control_service().run_once()
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+        except Exception as error:
+            print(json.dumps({"status": "unavailable", "reason": type(error).__name__}), flush=True)
+        if args.ai_control_action == "once":
+            return 0
+        stop.wait(60)
+
+
 def ai_inference_command(args) -> int:
     store = stores.ai_inference_queue_store()
     if args.ai_inference_action == "status":
@@ -2416,6 +2434,12 @@ def build_parser() -> argparse.ArgumentParser:
     notify_watch.add_argument("--limit", default="")
     notification_actions.add_parser("status")
     notifications.set_defaults(func=notifications_command)
+
+    ai_control = subparsers.add_parser("ai-control", help="Run independent central AI observation and research")
+    ai_control_actions = ai_control.add_subparsers(dest="ai_control_action", required=True)
+    for action in ("once", "watch", "status"):
+        ai_control_actions.add_parser(action)
+    ai_control.set_defaults(func=ai_control_command)
 
     ai_inference = subparsers.add_parser("ai-inference", help="Run deferred notification AI inference")
     ai_inference_actions = ai_inference.add_subparsers(dest="ai_inference_action", required=True)

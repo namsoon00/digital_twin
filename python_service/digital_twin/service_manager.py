@@ -1066,6 +1066,15 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         0,
     )
     workers.update(notification_ai_worker_specs(ai_worker_count))
+    if ai_worker_count > 0:
+        workers["ai-control"] = {
+            "label": "Central AI observation and research",
+            "pid": data_dir() / "python-ai-control.pid",
+            "log": data_dir() / "python-ai-control.log",
+            "command": [sys.executable, "-u", "python_service/service.py", "ai-control", "watch"],
+            "needle": "python_service/service.py ai-control watch",
+        }
+
     background_nice = str((settings or {}).get("managedBackgroundProcessNice") or "5")
     local_ai_environment = {
         "ORBIT_LOCAL_AI_MAX_CONCURRENT": str(

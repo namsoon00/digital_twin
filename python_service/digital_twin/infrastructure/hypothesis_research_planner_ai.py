@@ -31,7 +31,7 @@ class CommandHypothesisResearchPlanningAdvisor(HypothesisResearchPlanningAdvisor
             self.command,
             hypothesis_research_planning_prompt(context),
             self.timeout_seconds,
-            self.settings,
+            {**self.settings, "aiWorkload": "research-planning"},
         )
         if completed.returncode != 0:
             raise RuntimeError((completed.stderr or completed.stdout or "hypothesis research planner failed").strip())

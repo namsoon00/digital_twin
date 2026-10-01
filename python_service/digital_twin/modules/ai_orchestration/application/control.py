@@ -1,0 +1,66 @@
+"""Durable independent research loop, with capabilities supplied by composition."""
+from datetime import datetime, timedelta, timezone
+from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
+
+
+class AIControlService:
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None):
+        self.store, self.subjects, self.evidence = store, subjects, evidence
+        self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
+        self.settings = dict(settings or {})
+
+    def run_once(self):
+        if not enabled(self.settings):
+            return {"status": "paused"}
+        subjects = list(self.subjects())
+        for subject in subjects:
+            self.store.seed(subject)
+        job = self.store.claim()
+        if not job:
+            return {"status": "idle"}
+        try:
+            if not any(all(subject[key] == job[key] for key in ("accountId", "symbol", "worldId")) for subject in subjects):
+                self.store.complete(job, {"status": "retired", "reason": "subject-no-longer-observed"}, [])
+                return {"status": "retired", "taskId": job["taskId"]}
+            with self.store.keep_alive(job):
+                if job["capability"] == "observe":
+                    packet = self.evidence(job)
+                    if not packet.get("facts") or not packet.get("sourceSnapshotId"):
+                        raise ValueError("current verified graph facts unavailable")
+                    history = self.store.memory(job["accountId"], job["symbol"])
+                    research = self.research_memory(job["accountId"], job["symbol"])
+                    packet["taskId"] = job["taskId"]
+                    packet["questionsToCheck"] = job.get("watchQuestions", [])
+                    fingerprint = observation_fingerprint(packet, research)
+                    previous = history[0] if history else {}
+                    if previous.get("inputFingerprint") == fingerprint and previous.get("observedAt"):
+                        age = (datetime.now(timezone.utc) - datetime.fromisoformat(previous["observedAt"].replace("Z", "+00:00"))).total_seconds()
+                        if 0 <= age < 21600:
+                            due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+                            child = {**self.subject(job), "capability": "observe", "watchQuestions": job.get("watchQuestions", []), "taskId": identity(job["taskId"], "unchanged"), "availableAt": due}
+                            saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다."}, [child])
+                            return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
+                    plan = validate_plan(self.planner(packet, history, research), packet)
+                    result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp()}
+                    children = []
+                    for question in plan["researchQuestions"]:
+                        children.append({**self.subject(job), "capability": "research", "priority": 5, "question": question,
+                                         "taskId": identity(job["taskId"], question), "availableAt": stamp()})
+                    due = (datetime.now(timezone.utc) + timedelta(minutes=plan["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
+                    children.append({**self.subject(job), "capability": "observe", "watchQuestions": plan["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})
+                elif job["capability"] == "research":
+                    result = self.researcher(job)
+                    children = []
+                else:
+                    raise ValueError("unsupported AI capability")
+                if not self.store.complete(job, result, children):
+                    return {"status": "lease-lost", "taskId": job["taskId"]}
+            return {"status": "completed", "taskId": job["taskId"], "capability": job["capability"]}
+        except Exception as error:
+            # Persist a safe category, never raw provider/credential-bearing errors.
+            self.store.fail(job, type(error).__name__)
+            return {"status": "deferred", "taskId": job["taskId"], "reason": type(error).__name__}
+
+    @staticmethod
+    def subject(job):
+        return {key: job[key] for key in ("accountId", "symbol", "name", "worldId")}

@@ -44,7 +44,7 @@ class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
                 self.command,
                 prompt,
                 self.timeout_seconds,
-                self.settings,
+                {**self.settings, "aiWorkload": "rule-change-proposal"},
             )
         except LocalAICapacityUnavailable as error:
             raise HypothesisAuthoringDeferred(str(error)) from error

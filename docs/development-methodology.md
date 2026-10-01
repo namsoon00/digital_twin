@@ -8,7 +8,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Keep use-case orchestration in `application/`.
 - Keep database, files, HTTP APIs, external vendors, process management, and runtime composition in `infrastructure/`.
 - Use domain events as contracts between feature slices.
-- Organize business implementations under the twelve packages in
+- Organize business implementations under the thirteen packages in
   `digital_twin/modules/`; see [Business Module Architecture](module-architecture.md).
   Call another module through its explicit `public.py` or `contracts.py` only.
   Keep immediate reads and transactional edits synchronous; use durable events
@@ -447,7 +447,7 @@ Ontology projection is a read-model boundary, not the source of truth. Aggregate
 
 ## Parallel Development Slices
 
-Use the twelve ownership packages and sync/async table in
+Use the thirteen ownership packages and sync/async table in
 [Business Module Architecture](module-architecture.md) when multiple sessions
 work independently. Shared ontology contracts and runtime composition still
 need coordination; moving an application service does not isolate every shared
@@ -560,3 +560,9 @@ npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev
 ```
 
 The notification is sent through the configured local notifier, usually the account-level Telegram channel, and its message body must include `타입: workHandoff`. Do not include API keys, Telegram tokens, client secrets, raw account numbers, or private account data in the summary or details. If the notifier is unavailable, use `--dry-run`, keep the console output in the final response, and state that no external notification was delivered. The final response must include the validation, commit, push, restart, and handoff results.
+
+## Central AI orchestration
+
+`ai_orchestration` owns independent observation/research work, model execution accounting,
+recurring plans and scoped research memory. Domain prompts, evidence verification and
+publication authority remain in their owning modules. See [Central AI control](ai-control.md).

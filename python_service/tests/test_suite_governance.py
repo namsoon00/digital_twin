@@ -216,7 +216,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Receipt-clock cooldowns, incident identity and resumable chunk delivery
         # protect distinct loss/duplication failures reproduced by the audit.
         # Relation authorization, frozen explanations and successful-receipt baselines.
-        self.assertLessEqual(total, 1908)
+        # Central AI: independent planning, scope retirement, process audit, durable leases and budget transactions.
+        self.assertLessEqual(total, 1921)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

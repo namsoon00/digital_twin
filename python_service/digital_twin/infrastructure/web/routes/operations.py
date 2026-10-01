@@ -42,6 +42,19 @@ class OperationsRoutes:
         return NOT_HANDLED
 
     def route_operations_health(self, request, path: str, query: Query):
+        if path == "/api/ai-control/settings" and request.command == "PUT":
+            if not request.ensure_writable("중앙 AI 설정은 소유자만 변경할 수 있습니다."):
+                return
+            from digital_twin.infrastructure.composition.ai_orchestration import save_ai_control_settings
+            try:
+                return request.send_payload(200, save_ai_control_settings(request.read_json_body()))
+            except (ValueError, TypeError):
+                return request.send_payload(400, {"error": "중앙 AI 설정값을 확인하세요."})
+        if path == "/api/ai-control/status" and request.command == "GET":
+            if request.share_access().role not in {"owner", "local-owner"}:
+                return request.send_payload(403, {"error": "중앙 AI 기록은 소유자만 확인할 수 있습니다."})
+            from digital_twin.infrastructure.service_factory import ai_control_status
+            return request.send_payload(200, ai_control_status(account_id=first_query(query, "accountId")), cache_control="no-store")
         if path == "/api/operations/health" and request.command == "GET":
             return request.send_payload(200, self.console_operations_health_api_payload(
                 force=request_bool(first_query(query, "refresh"), False),

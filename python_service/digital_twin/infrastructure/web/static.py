@@ -26,6 +26,9 @@ def serve_static(self, path: str):
     data = file_path.read_bytes()
     etag = '"' + hashlib.sha256(data).hexdigest()[:20] + '"'
     mutable_app_assets = {
+        "ai-control.html",
+        "ai-control.mjs",
+        "ai-control.css",
         "index.html",
         "service-worker.js",
         "manifest.webmanifest",

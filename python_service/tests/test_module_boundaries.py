@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 MODULES = {
     "accounts", "instruments", "portfolio", "market_data", "news_intelligence",
     "investment_calendar", "model_registry", "reasoning", "decisions", "outcomes",
-    "notifications", "read_models",
+    "notifications", "read_models", "ai_orchestration",
 }
 
 

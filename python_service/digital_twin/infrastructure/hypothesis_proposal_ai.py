@@ -29,7 +29,7 @@ class CommandHypothesisProposalAdvisor(HypothesisProposalAdvisor):
             self.command,
             hypothesis_proposal_prompt(context),
             self.timeout_seconds,
-            self.settings,
+            {**self.settings, "aiWorkload": "hypothesis-proposal"},
         )
         if completed.returncode != 0:
             raise RuntimeError((completed.stderr or completed.stdout or "hypothesis proposal AI failed").strip())

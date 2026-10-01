@@ -40,7 +40,7 @@ class CommandModelReviewer(ModelReviewer):
             self.command,
             prompt,
             self.timeout_seconds,
-            self.settings,
+            {**self.settings, "aiWorkload": "model-review"},
         )
         output = completed.stdout.strip()
         if completed.returncode != 0:
@@ -199,7 +199,8 @@ def run_background_ai_prompt(
         1,
         900,
     )
-    return run_ai_prompt_command(
+    from digital_twin.modules.ai_orchestration.public import execute_ai_work
+    return execute_ai_work(str(configured.get("aiWorkload") or "background"), prompt, lambda: run_ai_prompt_command(
         command,
         prompt,
         lock_dir=data_dir() / "local-ai-capacity",
@@ -210,7 +211,7 @@ def run_background_ai_prompt(
         timeout_seconds=timeout_seconds,
         cwd=background_ai_runtime_dir(),
         env=dict(os.environ),
-    )
+    ), configured)
 
 
 def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str:

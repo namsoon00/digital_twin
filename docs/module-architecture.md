@@ -777,3 +777,9 @@ retries or failure isolation justify it. Module count is not an async mandate.
   fixtures cover only their explicitly stated boundaries. Managed TypeDB
   interruption, whole-engine crash recovery and exhaustive mobile/network
   outage testing are not part of these ownership batches.
+
+## Central AI orchestration
+
+`ai_orchestration` owns independent observation/research work, model execution accounting,
+recurring plans and scoped research memory. Domain prompts, evidence verification and
+publication authority remain in their owning modules. See [Central AI control](ai-control.md).

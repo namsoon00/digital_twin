@@ -325,30 +325,32 @@ def run_local_codex(message: str) -> str:
     with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8") as output:
         output_path = output.name
     try:
-        result = subprocess.run(
-            [
-                codex,
-                *codex_cli_arguments(),
-                "-a",
-                "never",
-                "--sandbox",
-                "read-only",
-                "--cd",
-                str(ROOT_DIR),
-                "exec",
-                "--skip-git-repo-check",
-                "--ephemeral",
-                "--output-last-message",
-                output_path,
-                "-",
-            ],
-            input=prompt,
-            text=True,
-            cwd=str(ROOT_DIR),
-            env={**os.environ, "NO_COLOR": "1"},
-            timeout=int(os.environ.get("CODEX_TIMEOUT_MS") or "90000") / 1000,
-            capture_output=True,
-        )
+        from digital_twin.modules.ai_orchestration.public import ai_execution
+        with ai_execution("interactive-chat", prompt):
+            result = subprocess.run(
+                [
+                    codex,
+                    *codex_cli_arguments(),
+                    "-a",
+                    "never",
+                    "--sandbox",
+                    "read-only",
+                    "--cd",
+                    str(ROOT_DIR),
+                    "exec",
+                    "--skip-git-repo-check",
+                    "--ephemeral",
+                    "--output-last-message",
+                    output_path,
+                    "-",
+                ],
+                input=prompt,
+                text=True,
+                cwd=str(ROOT_DIR),
+                env={**os.environ, "NO_COLOR": "1"},
+                timeout=int(os.environ.get("CODEX_TIMEOUT_MS") or "90000") / 1000,
+                capture_output=True,
+            )
         if result.returncode != 0:
             return ""
         return Path(output_path).read_text(encoding="utf-8").strip()

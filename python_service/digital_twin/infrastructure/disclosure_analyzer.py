@@ -29,7 +29,7 @@ class CommandDisclosureAnalyzer(DisclosureAnalyzer):
             self.command,
             build_disclosure_analysis_prompt(context),
             self.timeout_seconds,
-            self.settings,
+            {**self.settings, "aiWorkload": "disclosure-analysis"},
         )
         output = completed.stdout.strip()
         if completed.returncode != 0:

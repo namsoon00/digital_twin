@@ -15,7 +15,7 @@ function renderOperationsHealthConsole() {
         webPerformance: webPerformance
       })
     : renderConsoleEmpty("운영 화면을 준비하지 못했습니다", "웹 자산을 새로고침하세요.");
-  return '<div class="managed-page oa-console-page oa-console-page-operations" data-console-workspace="operations">' + body + '</div>';
+  return '<div class="managed-page oa-console-page oa-console-page-operations" data-console-workspace="operations">' + '<p><a href="/ai-control.html">중앙 AI · 관찰과 조사 기록 보기 →</a></p>' + body + '</div>';
 }
 
 export { renderOperationsHealthConsole };

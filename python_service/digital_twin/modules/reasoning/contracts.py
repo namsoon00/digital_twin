@@ -121,6 +121,8 @@ _EXPORTS.update({
     'world_type_from_id': ('digital_twin.modules.reasoning.domain.ontology_worlds', 'world_type_from_id'),
 })
 
+_EXPORTS["world_from_snapshot"] = ("digital_twin.modules.reasoning.domain.ontology_worlds", "world_from_snapshot")
+
 __all__ = list(_EXPORTS)
 
 

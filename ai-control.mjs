@@ -5,6 +5,7 @@ const workloads = {"independent-observation":"독립 관찰", "news-analysis":"�
 const qualityLabels = {accepted:"문장·새로움 검토 통과",rejected:"품질 검토 보류","awaiting-review":"독립 검토 미완료","observation-only":"관찰 기록 · 발송 제안 없음"};
 const followUpLabels = {pending:"관찰 중",triggered:"조건 전환 확인",expired:"기간 만료 · 평가 불가",unavailable:"자료 부족 · 평가 불가"};
 const publicationLabels = {queued:"발송 검증 대기",recorded:"관찰 기록",suppressed:"발송 보류",done:"발송 완료",failed:"전송 재시도",processing:"전송 중",pending:"전송 대기"};
+const developmentLabels = {pending:"가설 제안 대기",processing:"가설 개발 중",completed:"제안 처리 완료",failed:"제안 처리 실패",blocked:"검증 보류",unavailable:"현재 진행 기록 없음",proposed:"가설 접수",screening:"가설 구조 검토",compiled:"후보 작성",validating:"검증 중",validated:"검증 통과",rejected:"후보 기각","needs-data":"자료 대기","needs-revision":"명세 수정 필요","approval-required":"검토 대기","shadow-observing":"격리 실험 관측 중","adoption-ready":"운영 반영 검증 중","evolution-monitoring":"채택 후 검증 중",strengthened:"사후 검증 완료",superseded:"기준 버전 변경으로 종료","rolled-back":"이전 버전 복원",retired:"실험 종료"};
 const reasons = {"no-new-research-path":"추가로 조사할 자료 경로를 찾지 못했습니다. 다음 관찰에서 다시 확인합니다.", "requirements-met":"요청한 자료 확인을 마쳤습니다.", "round-budget-exhausted":"이번 조사 한도까지 확인했습니다.", "cooldown":"최근 조사 결과를 활용하고 다음 확인을 기다립니다."};
 const date = (value) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString("ko-KR") : "미정";
 let loading = false;
@@ -18,6 +19,7 @@ async function request(url, options) {
 function card(task, scheduling = {}) {
   const r = task.result || {};
   const diagnostic = r.publication?.diagnostic;
+  const development = task.developmentProgress;
   const facts = r.input?.facts || [];
   const quote = facts.find((fact) => fact.currentPrice != null && Number(fact.currentPrice) > 0);
   const section = (name, text) => text ? `<div><h4>${name}</h4><p>${escape(text)}</p></div>` : "";
@@ -25,6 +27,7 @@ function card(task, scheduling = {}) {
   ${r.publication ? `<p class="muted">알림: ${escape(publicationLabels[r.publication.deliveryStatus || r.publication.status] || r.publication.status)} · ${escape(r.publication.reason)}</p>` : ""}
   ${diagnostic ? `<p class="muted">검증 미통과 초안 · 운영 알림: ${escape(publicationLabels[diagnostic.deliveryStatus || diagnostic.status] || diagnostic.status)} · ${escape(diagnostic.reason)}</p>` : ""}
   ${r.quality ? `<p class="muted">설명 검증: ${escape(qualityLabels[r.quality.status] || r.quality.status)}${r.quality.errors?.length ? " · " + escape(r.quality.errors.join(" / ")) : ""}</p>` : ""}
+  ${r.development?.requestId ? `<details><summary>온톨로지 개선 · ${escape(developmentLabels[development?.status || "unavailable"] || development.status)}</summary><p>${escape(development?.question || (r.developmentQuestions || []).join(" / "))}</p>${r.development.reused ? '<p class="muted">같은 날의 기존 요청에 연결했습니다.</p>' : ''}${(development?.cases || []).map((row) => `<p>${escape(developmentLabels[row.status] || row.status)}${row.blockedReason ? " · " + escape(row.blockedReason) : ""}</p>`).join("")}<p class="muted">요청 접수와 실험 준비는 개선 효과의 입증이 아닙니다. 실제 결과 비교와 운영 검증을 거쳐 반영하며, 진행 결과는 다음 AI 분석에 전달됩니다.</p></details>` : r.development?.status === "blocked" ? `<p class="muted">온톨로지 개선 보류 · ${escape(r.development.reason)}</p>` : ""}
   ${r.summary ? `<p>${escape(r.summary)}</p>` : `<p class="muted">${escape(reasons[r.stopReason] || r.reason || (task.status === "pending" && scheduling.status === "budget-wait" ? "오늘 AI 사용 한도로 관찰을 기다리고 있습니다." : task.lastError?.startsWith("ai-call-budget") ? "AI 호출 여유가 생기면 관찰을 다시 시작합니다." : task.lastError ? "작업에 실패해 재확인이 필요합니다." : task.status === "pending" ? "예약된 시점에 확인합니다." : "아직 분석 결과가 없습니다."))}</p>`}
   ${quote ? `<p>근거 시점 가격 <strong>${escape(Number(quote.currentPrice).toLocaleString("ko-KR"))} ${escape(quote.currency)}</strong>${quote.changeRate != null ? ` · 등락 ${escape(quote.changeRate)}%` : ""}<br><small>시세 기준 ${escape(date(quote.sourceAsOf || quote.asOf || quote.updatedAt))}</small></p>` : ""}
   <div class="analysis">${section("가능한 설명 · 가설",r.hypothesis)}${section("이전 알림과 비교",r.comparison)}${section("내 보유·관심 상황에서의 의미",r.portfolioImpact)}${section("반대 근거와 한계",r.counterEvidence)}${section("다음에 확인할 질문",(r.questions || []).join(" / "))}</div>

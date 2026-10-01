@@ -4,15 +4,17 @@ import hashlib
 import json
 
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash, validate_evidence_packet
-from digital_twin.modules.ai_orchestration.domain.planning import planning_prompt, legacy_planning_prompt
-from digital_twin.modules.ai_orchestration.domain.insight_schema import planning_schema, legacy_planning_schema, review_schema
+from digital_twin.modules.ai_orchestration.domain.planning import planning_prompt, bounded_planning_prompt, legacy_planning_prompt
+from digital_twin.modules.ai_orchestration.domain.insight_schema import planning_schema, bounded_planning_schema, legacy_planning_schema, review_schema
 
 
 EXECUTION_INPUT_PROTOCOL = "ai-observation-execution-v1"
 LEGACY_PROMPT_VERSION = "independent-observation-v3-insight-contract"
 PREVIOUS_PROMPT_VERSION = "independent-observation-v4-scoped-evidence"
-PROMPT_VERSION = "independent-observation-v5-bounded-memory"
-REPAIR_PROMPT_VERSION = "independent-observation-repair-v1"
+BOUNDED_PROMPT_VERSION = "independent-observation-v5-bounded-memory"
+PROMPT_VERSION = "independent-observation-v6-ontology-development"
+LEGACY_REPAIR_PROMPT_VERSION = "independent-observation-repair-v1"
+REPAIR_PROMPT_VERSION = "independent-observation-repair-v2-ontology-development"
 REVIEW_PROMPT_VERSION = "independent-observation-review-v1"
 DEFAULT_PROMPT_BYTES = 256 * 1024
 
@@ -58,7 +60,7 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
-    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, REPAIR_PROMPT_VERSION, REVIEW_PROMPT_VERSION}:
+    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, REVIEW_PROMPT_VERSION}:
         raise EvidenceContractError("unsupported AI execution input")
     validate_evidence_packet(envelope["current"])
     if envelope["promptVersion"] == REVIEW_PROMPT_VERSION:
@@ -69,11 +71,13 @@ def validate_execution_input(envelope):
         prompt = legacy_planning_prompt(envelope["current"], envelope["previousAnalyses"], envelope["researchResults"])
         schema = legacy_planning_schema(envelope["current"])
     else:
-        prompt = planning_prompt(envelope["current"], envelope["previousAnalyses"], envelope["researchResults"])
-        if envelope["promptVersion"] == REPAIR_PROMPT_VERSION:
+        old = envelope["promptVersion"] in {PREVIOUS_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}
+        builder = bounded_planning_prompt if old else planning_prompt
+        prompt = builder(envelope["current"], envelope["previousAnalyses"], envelope["researchResults"])
+        if envelope["promptVersion"] in {REPAIR_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}:
             from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
             prompt = repair_prompt(prompt, envelope["repair"])
-        schema = planning_schema(envelope["current"])
+        schema = (bounded_planning_schema if old else planning_schema)(envelope["current"])
     if prompt != envelope["prompt"] or hashlib.sha256(prompt.encode()).hexdigest() != envelope["promptHash"]:
         raise EvidenceContractError("frozen AI prompt does not match input")
     if envelope.get("outputSchema") != schema:

@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_ai_ontology_development.py", "tier": "integration", "core": true},
     {"file": "test_ai_insight_quality.py", "tier": "contract", "core": true},
     {"file": "test_observation_evidence_protocol.py", "tier": "contract", "core": true},
     {"file": "test_ai_control_publication.py", "tier": "integration", "core": true},

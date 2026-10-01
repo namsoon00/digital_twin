@@ -67,6 +67,12 @@ class InsightGroundingTests(unittest.TestCase):
         self.assertLessEqual(len(envelope['prompt'].encode()), 120000)
         validate_execution_input(envelope)
         old = copy.deepcopy(envelope); old['promptVersion'] = PREVIOUS_PROMPT_VERSION
+        import hashlib
+        from digital_twin.modules.ai_orchestration.domain.planning import bounded_planning_prompt
+        from digital_twin.modules.ai_orchestration.domain.insight_schema import bounded_planning_schema
+        old['prompt'] = bounded_planning_prompt(old['current'], old['previousAnalyses'], old['researchResults'])
+        old['promptHash'] = hashlib.sha256(old['prompt'].encode()).hexdigest()
+        old['outputSchema'] = bounded_planning_schema(old['current'])
         validate_execution_input(old)
         p['lastDeliveredNotification'] = {'facts': [{**p['facts'][0], 'sourceDetails': 'x' * 70000}]}
         with self.assertRaisesRegex(ValueError, 'exceeds context budget'):
@@ -322,7 +328,7 @@ class InsightControlTests(unittest.TestCase):
         self.assertEqual('original', result['repair']['initialInputId'])
         self.assertTrue(result['repair']['initialErrors'])
         correction = planner.call_args.args[0]
-        self.assertEqual('independent-observation-repair-v1', correction['promptVersion'])
+        self.assertEqual('independent-observation-repair-v2-ontology-development', correction['promptVersion'])
         self.assertEqual(bad, correction['repair']['rejectedDraft'])
         self.assertTrue(correction['repair']['comparisons'])
         validate_execution_input(correction)

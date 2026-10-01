@@ -114,8 +114,13 @@ def build_ai_control_service(settings=None):
     publication = AIControlPublication(configured, store, notification_job_store(configured), subjects)
     publication.retire_legacy_work()
     store.outbox_writer = publication.publish
+    from digital_twin.infrastructure.transactions.ai_control_development import AIControlDevelopment
+    from digital_twin.infrastructure.operational_store import hypothesis_development_store
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_observation_development import MySQLObservationDevelopmentStore
+    development = AIControlDevelopment(MySQLObservationDevelopmentStore(configured), lambda case_id: hypothesis_development_store(configured).get(case_id))
+    store.development_writer = development.record
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
-                            delivery_memory=publication.memory, reviewer=planner)
+                            delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory)
 
 
 def ai_control_status(settings=None, account_id=""):
@@ -124,6 +129,18 @@ def ai_control_status(settings=None, account_id=""):
     from digital_twin.modules.ai_orchestration.contracts import CAPABILITIES, enabled
     configured = settings if settings is not None else runtime_settings()
     status = MySQLAIControlStore(configured).status(account_id)
+    from digital_twin.infrastructure.transactions.ai_control_development import AIControlDevelopment
+    from digital_twin.infrastructure.operational_store import hypothesis_development_store
+    from digital_twin.modules.news_intelligence.infrastructure.mysql_observation_development import MySQLObservationDevelopmentStore
+    development = AIControlDevelopment(MySQLObservationDevelopmentStore(configured), lambda case_id: hypothesis_development_store(configured).get(case_id))
+    development_records = {}
+    for task in status["tasks"]:
+        request_id = task["result"].get("development", {}).get("requestId")
+        if request_id:
+            subject = (task["accountId"], task["symbol"])
+            if subject not in development_records:
+                development_records[subject] = {row["requestId"]: row for row in development.memory(*subject)}
+            task["developmentProgress"] = development_records[subject].get(request_id, {"status": "unavailable"})
     from digital_twin.infrastructure.operational_store import notification_job_store
     publications = []
     for task in status["tasks"]:

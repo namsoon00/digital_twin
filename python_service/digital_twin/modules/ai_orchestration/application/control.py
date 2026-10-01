@@ -10,12 +10,13 @@ from digital_twin.modules.outcomes.contracts import evaluate_observation_conditi
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
         self.delivery_memory = delivery_memory or (lambda account, symbol: {})
         self.reviewer = reviewer
+        self.development_memory = development_memory or (lambda account, symbol: [])
 
     def run_once(self):
         if not enabled(self.settings):
@@ -39,7 +40,8 @@ class AIControlService:
                     if not packet.get("facts") or not packet.get("sourceSnapshotId"):
                         raise ValueError("current verified graph facts unavailable")
                     history = self.store.memory(job["accountId"], job["symbol"])
-                    research = self.research_memory(job["accountId"], job["symbol"])
+                    research = list(self.research_memory(job["accountId"], job["symbol"]))
+                    research.extend(self.development_memory(job["accountId"], job["symbol"]))
                     packet["taskId"] = job["taskId"]
                     packet["questionsToCheck"] = job.get("watchQuestions", [])
                     packet["lastDeliveredNotification"] = self.delivery_memory(job["accountId"], job["symbol"])

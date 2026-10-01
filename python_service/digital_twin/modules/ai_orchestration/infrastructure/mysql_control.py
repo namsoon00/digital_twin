@@ -128,11 +128,14 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                                         (json.dumps(result, ensure_ascii=False), now, job["taskId"], job["leaseToken"], now))
             if not cursor.rowcount:
                 return False
+            development = getattr(self, "development_writer", None)
+            if development is not None and job["capability"] == "observe" and result.get("summary"):
+                result["development"] = development(connection, job, result)
             writer = getattr(self, "outbox_writer", None)
             if writer is not None and job["capability"] == "observe" and result.get("summary"):
                 result["publication"] = writer(connection, job, result)
-                connection.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s",
-                                   (json.dumps(result, ensure_ascii=False), job["taskId"]))
+            connection.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s",
+                               (json.dumps(result, ensure_ascii=False), job["taskId"]))
             for child in children:
                 self.insert(connection, child)
             return True

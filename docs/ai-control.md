@@ -30,11 +30,86 @@ checks remain observations and wait for the existing collectors; they do not
 launch unrelated news searches. Documentary research questions call the existing research orchestration service, retaining
 source verification, durable ResearchRun records, and source-change events into
 graph projection. AI-generated account IDs, commands, URLs, trading actions or
-unregistered capabilities are rejected. No automatic rule or model promotion is
-introduced. The owner-requested central AI cutover retires the former
+unregistered capabilities are rejected. Hypothesis development requests now enter
+the existing governed experiment lifecycle described below; the central AI does
+not acquire rule or model promotion authority. The owner-requested central AI cutover retires the former
 `investmentInsight` customer route, including relation-change and AI review
 messages. Graph collection, RuleBox inference and internal case history continue
 as evidence; they cannot trigger the former customer AI queue.
+
+## AI and ontology development
+
+The ontology is the shared model of facts, meanings and evidence. Central AI
+compares explanations, identifies missing knowledge and chooses the next bounded
+research task. TypeDB owns semantic rules and action envelopes; the existing
+evolution control plane owns empirical admission, deployment and rollback.
+
+```mermaid
+flowchart LR
+  F[Immutable ontology facts] --> A[AI observation and questions]
+  A --> R[Source research]
+  R --> F
+  A --> P[Evidence-bound development request]
+  P --> H[Existing hypothesis design worker]
+  H --> X[Isolated candidate experiment]
+  X --> V[Paired future outcomes and release checks]
+  V --> D[Adopt, reject or restore]
+  D --> M[Scoped development memory]
+  X --> M
+  M --> A
+```
+
+`develop-hypothesis` is a third planner capability, limited to one question in
+the existing two-question budget. It is intended for a concrete explanatory gap
+or contradiction, including the observed follow-up of a previous explanation.
+Missing documents remain source research, and future prices remain observation.
+AI chooses whether a development question is warranted; a condition transition
+alone does not automatically create a new rule or count as predictive success.
+
+The observation must pass its local evidence checks; a rejected draft cannot
+create development work. Customer delivery is independent: a valid internal
+observation with `send=false` can request an experiment. Completion verifies the
+exact persisted generation/correction input and completed model call, then saves
+the request and observation in one lease-fenced MySQL transaction. Delivery
+outbox and successor failures roll back that handoff as well.
+
+The versioned `observation-development-v1` request preserves the complete bounded
+evidence packet, source snapshots, selected evidence IDs, question, tentative
+explanation, follow-up results and execution-input identity. It never fabricates
+a matched rule, inference generation or DecisionEpisode. The existing
+`investment_hypothesis_proposal_requests` queue consumes it, verifies its content
+and subject, and passes proposed hypotheses to `HypothesisDevelopmentService`.
+Only usable captured evidence can support a proposal. The initial explanation
+and observed condition transitions remain explicitly empirically unverified.
+
+At most one request per account/symbol/UTC capture date is admitted. Same-day
+rewordings coalesce onto the first immutable request without resetting its
+attempts or replacing evidence, including while it is pending or failed. The
+existing proposal/development workers retain their workload accounting, capacity
+limits and bounded authoring policy; they do not use the independent-observation
+call quota. No worker or external scheduler is added.
+
+Before the next observation, up to three scoped development records are read
+alongside source-research memory. Linked cases are read at their current state,
+including validation blockers and adoption/rollback. Changes participate in the
+observation input identity and the exact selected memory is frozen before a
+model call. This is experiment-status memory, not fresh investment evidence or
+proof that a model improved. Missing case records stay unavailable. The owner
+page shows the current progress separately from the original handoff receipt.
+
+The executable improvement scope remains the one in
+[ontology evolution](ontology-evolution.md): new conditional hypotheses using
+registered models and existing ontology vocabulary, isolated trials, empirical
+comparison, governed adoption and post-adoption recovery. New collectors, new
+TBox types, model implementations and service-code changes require development.
+This loop does not train the underlying LLM weights or let it rewrite its own
+validation criteria. Actual improvement still requires future observations.
+
+Generation v6 and correction v2 introduce the capability. Historical v3–v5 and
+correction v1 inputs retain their original prompts and schemas. Tests in
+`test_ai_ontology_development.py` cover the existing worker handoff, immutable
+evidence, scope isolation, historical input compatibility, feedback memory,
+daily coalescing and transactional failure/lease-loss behavior.
 
 ## Independent observation notifications
 

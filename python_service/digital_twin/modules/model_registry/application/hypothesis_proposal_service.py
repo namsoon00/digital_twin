@@ -3,6 +3,7 @@ import uuid
 from typing import Dict, List
 
 from digital_twin.modules.model_registry.domain.events import hypothesis_proposed_event, hypothesis_reviewed_event
+from digital_twin.modules.model_registry.domain.observation_development import validate_observation_development_context
 from digital_twin.modules.decisions.contracts import NovelHypothesisProposal, stable_id
 
 
@@ -22,6 +23,7 @@ class HypothesisProposalService:
         hypothesis_set: Dict[str, object],
         research_run: Dict[str, object] = None,
         relation_context: Dict[str, object] = None,
+        observation_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
         if not self.advisor or not hasattr(self.advisor, "propose"):
             return {"status": "disabled", "proposalCount": 0, "proposals": []}
@@ -35,7 +37,14 @@ class HypothesisProposalService:
             "inferenceTraces": list(((relation_context or {}).get("graphStoreInference") or {}).get("traces") or [])[:20],
             "inferenceRelations": list(((relation_context or {}).get("graphStoreInference") or {}).get("relations") or [])[:40],
         }
+        observation_evidence = set()
+        if observation_context is not None:
+            if hypothesis_set or research_run or relation_context:
+                raise ValueError("observation development cannot mix unrelated reasoning evidence")
+            observation_evidence = validate_observation_development_context(observation_context, account_id, str(symbol).upper())
+            context["observationContext"] = observation_context
         known_evidence_ids = self.known_evidence_ids(context)
+        known_evidence_ids.update(observation_evidence)
         existing_claims = {
             str(item.get("claim") or "").strip().casefold()
             for item in (hypothesis_set or {}).get("hypotheses") or []
@@ -70,7 +79,7 @@ class HypothesisProposalService:
                 required_evidence_types=[str(value or "").strip() for value in item.get("requiredEvidenceTypes") or [] if str(value or "").strip()][:12],
                 invalidation_conditions=[str(value or "").strip() for value in item.get("invalidationConditions") or [] if str(value or "").strip()][:8],
                 source_question_id=str((question or {}).get("questionId") or ""),
-                source=str(item.get("source") or "ai-research-planner"),
+                source="ai-control-observation" if observation_context else str(item.get("source") or "ai-research-planner"),
             )
             if self.store and hasattr(self.store, "save_hypothesis_proposal"):
                 self.store.save_hypothesis_proposal(proposal)
@@ -173,6 +182,7 @@ class HypothesisProposalQueueRunner:
                     dict(request.get("hypothesisSet") or {}),
                     dict(request.get("researchRun") or {}),
                     dict(request.get("relationContext") or {}),
+                    **({"observation_context": request["observationContext"]} if "observationContext" in request else {}),
                 )
                 self.store.complete_hypothesis_proposal_request(request_id, result)
                 self.last_results.append({"requestId": request_id, **dict(result or {})})

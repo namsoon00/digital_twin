@@ -6,6 +6,7 @@ const { once } = require('node:events');
 const { frontendDependency } = require('./frontend-toolchain.cjs');
 const root = path.resolve(__dirname, '../public');
 const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 안의 단기 회복일 수 있습니다.',portfolioImpact:'보유 손실의 회복 여부를 구분해 봅니다.',
+  development:{requestId:'development-fixture',status:'pending'},developmentQuestions:['가설 개선 질문 <script>bad</script>'],
   quality:{status:'rejected',errors:['가격과 매입가 항목이 다릅니다.'],review:{reason:'<script>bad</script>'}},
   claimEvidence:{summary:[{factId:'fact',field:'currentPrice',period:'current'}]},
   followUpEvaluations:[{description:'평균 가격 회복을 확인합니다.',status:'expired',reason:'기간 내 자료 없음'}],
@@ -31,6 +32,9 @@ const server = http.createServer((req,res) => {
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto('http://127.0.0.1:'+server.address().port+'/ai-control.html');
    await page.locator('article').waitFor();
+   await page.getByText('온톨로지 개선 · 현재 진행 기록 없음',{exact:true}).click();
+   assert.match(await page.locator('article').innerText(),/가설 개선 질문 <script>bad<\/script>/);
+   assert.equal(await page.locator('article script').count(),0);
    assert.match(await page.locator('#overview').innerText(),/사용 한도로 대기/);
    assert.match(await page.locator('#overview').innerText(),/24 \/ 24/);
    assert.match(await page.locator('#overview').innerText(),/한도 갱신/);

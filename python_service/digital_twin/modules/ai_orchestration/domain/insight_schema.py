@@ -73,7 +73,7 @@ def evidence_references(packet, *, usable=False, numeric=False, current_only=Fal
     return variants[0] if len(variants) == 1 else {"anyOf": variants}
 
 
-def planning_schema(packet):
+def bounded_planning_schema(packet):
     result = legacy_planning_schema(packet)
     result["$defs"] = {
         "evidence": evidence_references(packet, usable=True),
@@ -87,6 +87,13 @@ def planning_schema(packet):
     for key, definition in (("observations", "numeric"), ("followUpConditions", "currentNumeric")):
         for side in ("left", "right"):
             result["properties"][key]["items"]["properties"][side] = {"$ref": "#/$defs/" + definition}
+    return result
+
+
+def planning_schema(packet):
+    from digital_twin.modules.ai_orchestration.domain.planning import CAPABILITIES
+    result = bounded_planning_schema(packet)
+    result["properties"]["questions"]["items"]["properties"]["capability"] = choice(CAPABILITIES)
     return result
 
 

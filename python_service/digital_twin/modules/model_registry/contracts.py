@@ -150,6 +150,7 @@ _EXPORTS['rulebox_semantic_violations'] = ('digital_twin.modules.model_registry.
 _EXPORTS['validate_evolution_plan'] = ('digital_twin.modules.model_registry.domain.ontology_evolution', 'validate_plan')
 _EXPORTS['evolution_fingerprint'] = ('digital_twin.modules.model_registry.domain.ontology_evolution', 'fingerprint')
 _EXPORTS['comparison_measurement'] = ('digital_twin.modules.model_registry.domain.ontology_evolution', 'comparison_measurement')
+_EXPORTS['validate_observation_development_context'] = ('digital_twin.modules.model_registry.domain.observation_development', 'validate_observation_development_context')
 
 __all__ = list(_EXPORTS)
 

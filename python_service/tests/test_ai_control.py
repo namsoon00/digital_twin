@@ -23,7 +23,7 @@ PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesi
 
 
 class AIControlTests(unittest.TestCase):
-    def test_execution_metrics_survive_timeout_without_private_error_output(self):
+    def assert_execution_metrics_survive_timeout_without_private_error_output(self):
         from digital_twin.modules.ai_orchestration.infrastructure.execution import current_execution_metrics
         store = Mock(); store.begin_call.return_value = 'call-timing'
         with self.assertRaises(TimeoutError):
@@ -60,8 +60,9 @@ class AIControlTests(unittest.TestCase):
         self.assertNotIn("candidate", PACKET)
         observation = validate_plan({**PLAN, "questions": [{"question": "다음 관측에서 매도 수급이 지속되는가?", "capability": "observe"}]}, PACKET)
         self.assertEqual([], observation["researchQuestions"])
+        self.assert_unknown_fact_and_self_authorized_action_are_rejected()
 
-    def test_unknown_fact_and_self_authorized_action_are_rejected(self):
+    def assert_unknown_fact_and_self_authorized_action_are_rejected(self):
         for patch in ({"evidenceIds": ["invented"]}, {"action": "BUY"}, {"accountId": "another"}, {"questions": ["x"]}):
             with self.subTest(patch=patch), self.assertRaises(ValueError):
                 validate_plan({**PLAN, **patch}, PACKET)
@@ -82,8 +83,9 @@ class AIControlTests(unittest.TestCase):
         planner.assert_not_called()
         store.complete.assert_not_called()
         store.fail.assert_called_once()
+        self.assert_removed_account_subject_is_retired_before_read_or_ai()
 
-    def test_removed_account_subject_is_retired_before_read_or_ai(self):
+    def assert_removed_account_subject_is_retired_before_read_or_ai(self):
         service, store, planner = self.runner(subjects=lambda: [])
         self.assertEqual("retired", service.run_once()["status"])
         service.evidence.assert_not_called()
@@ -111,6 +113,7 @@ class AIControlTests(unittest.TestCase):
                 raise ValueError("private provider details")
         store.finish_call.assert_called_once_with("call-1", "ValueError")
         self.assertNotIn("private", repr(store.begin_call.call_args))
+        self.assert_execution_metrics_survive_timeout_without_private_error_output()
 
     def test_unchanged_inputs_skip_call_but_schedule_durable_recheck(self):
         from digital_twin.modules.ai_orchestration.domain.planning import observation_fingerprint

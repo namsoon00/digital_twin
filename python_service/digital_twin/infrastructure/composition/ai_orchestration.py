@@ -35,9 +35,9 @@ def build_ai_control_service(settings=None):
     from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
     from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, run_background_ai_prompt
     from digital_twin.modules.ai_orchestration.public import AIControlService
-    from digital_twin.modules.ai_orchestration.domain.planning import planning_prompt, identity, stamp
+    from digital_twin.modules.ai_orchestration.domain.planning import identity, stamp
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
-    from digital_twin.modules.ai_orchestration.infrastructure.execution import CURRENT_TASK
+    from digital_twin.modules.ai_orchestration.infrastructure.execution import CURRENT_TASK, CURRENT_INPUT
 
     configured = dict(settings if settings is not None else runtime_settings())
     store = MySQLAIControlStore(configured)
@@ -50,18 +50,16 @@ def build_ai_control_service(settings=None):
         from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
         return GraphObservationReader(typedb_repository_from_settings(configured))(job)
 
-    def planner(packet, history, research):
-        token = CURRENT_TASK.set(packet["taskId"])
+    def planner(envelope, input_id):
+        token = CURRENT_TASK.set(envelope["current"]["taskId"])
+        input_token = CURRENT_INPUT.set(input_id)
         try:
-            prompt = planning_prompt(packet, history, research)
-            if len(prompt.encode()) > 120000:
-                prompt = planning_prompt(packet, history[:1], research[:1])
-            if len(prompt.encode()) > 120000:
-                raise ValueError("research memory exceeds AI context budget")
+            prompt = envelope["prompt"]
             completed = run_background_ai_prompt(background_codex_process_arguments("high"),
                 prompt, 240, {**configured, "aiWorkload": "independent-observation"})
             return first_json_object(completed.stdout)
         finally:
+            CURRENT_INPUT.reset(input_token)
             CURRENT_TASK.reset(token)
 
     def research_memory(account_id, symbol):

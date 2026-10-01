@@ -1,5 +1,6 @@
 """Central work ledger; completion and successor scheduling share one transaction."""
 import json
+import gzip
 import threading
 import uuid
 from contextlib import contextmanager
@@ -7,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.modules.ai_orchestration.domain.planning import bounded, identity, stamp
+from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
 
 
 SCHEMA = (
@@ -27,6 +29,16 @@ SCHEMA = (
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS ai_control_budget (
     day_key VARCHAR(32) PRIMARY KEY, used_count INT NOT NULL DEFAULT 0
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS ai_control_inputs (
+    input_id VARCHAR(64) PRIMARY KEY, task_id VARCHAR(64) NOT NULL, attempt INT NOT NULL,
+    protocol_version VARCHAR(64) NOT NULL, input_hash VARCHAR(64) NOT NULL, prompt_hash VARCHAR(64) NOT NULL,
+    artifact_gzip LONGBLOB NOT NULL, created_at VARCHAR(40) NOT NULL,
+    INDEX ai_input_task(task_id, attempt)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS ai_control_input_calls (
+    call_id VARCHAR(64) PRIMARY KEY, input_id VARCHAR(64) NOT NULL,
+    INDEX ai_input_call(input_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
 )
 
@@ -142,9 +154,32 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             result.append({**saved, "completedAt": row["updated_at"]})
         return result
 
-    def begin_call(self, workload, prompt_hash, task_id=""):
+    def save_execution_input(self, job, envelope):
+        digest = validate_execution_input(envelope)
+        packet = envelope["current"]
+        if any(packet.get(key) != job[key] for key in ("accountId", "symbol", "worldId", "taskId")):
+            raise ValueError("execution input task ownership mismatch")
+        input_id = identity(job["taskId"], job["attempts"], digest)
+        artifact = gzip.compress(json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode(), mtime=0)
+        with self.transaction() as connection:
+            owned = connection.execute("SELECT task_id FROM ai_control_tasks WHERE task_id=%s AND status='processing' "
+                "AND lease_token=%s AND lease_until>=%s FOR UPDATE", (job["taskId"], job["leaseToken"], stamp())).fetchone()
+            if not owned:
+                return ""
+            connection.execute("INSERT IGNORE INTO ai_control_inputs "
+                "(input_id,task_id,attempt,protocol_version,input_hash,prompt_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (input_id, job["taskId"], job["attempts"], envelope["protocolVersion"], digest, envelope["promptHash"], artifact, stamp()))
+        return input_id
+
+    def begin_call(self, workload, prompt_hash, task_id="", input_id=""):
         call_id = uuid.uuid4().hex
         with self.transaction() as connection:
+            if workload == "independent-observation":
+                frozen = connection.execute("SELECT i.task_id,i.prompt_hash FROM ai_control_inputs i "
+                    "JOIN ai_control_tasks t ON t.task_id=i.task_id AND t.attempts=i.attempt "
+                    "WHERE i.input_id=%s AND t.status='processing' AND t.lease_until>=%s", (input_id, stamp())).fetchone()
+                if not frozen or frozen["task_id"] != task_id or frozen["prompt_hash"] != prompt_hash:
+                    raise ValueError("independent AI call requires exact persisted input")
             if task_id:
                 day = "calls:" + stamp()[:10]
                 maximum = bounded(self.runtime_settings.get("aiControlDailyCallBudget"), 24, 0, 300)
@@ -154,6 +189,8 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                     raise RuntimeError("central AI daily call budget exhausted")
                 connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
             connection.execute("INSERT INTO ai_control_calls (call_id,workload,status,task_id,prompt_hash,started_at) VALUES (%s,%s,'running',%s,%s,%s)", (call_id, workload[:64], task_id[:64], prompt_hash, stamp()))
+            if input_id:
+                connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
         return call_id
 
     def finish_call(self, call_id, error_kind=""):

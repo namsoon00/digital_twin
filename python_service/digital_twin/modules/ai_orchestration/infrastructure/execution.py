@@ -8,6 +8,7 @@ from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import M
 
 
 CURRENT_TASK = ContextVar("ai_control_task", default="")
+CURRENT_INPUT = ContextVar("ai_control_input", default="")
 
 
 @lru_cache(maxsize=4)
@@ -22,7 +23,7 @@ def ai_execution(workload, prompt="", settings=None, store=None):
         from digital_twin.infrastructure.settings import runtime_settings
         configured = settings if settings is not None else runtime_settings()
         store = _store(tuple(sorted((key, str(value)) for key, value in configured.items())))
-    call_id = store.begin_call(workload, hashlib.sha256(prompt.encode()).hexdigest(), CURRENT_TASK.get())
+    call_id = store.begin_call(workload, hashlib.sha256(prompt.encode()).hexdigest(), CURRENT_TASK.get(), CURRENT_INPUT.get())
     try:
         capacity = nullcontext()
         if workload == "interactive-chat":

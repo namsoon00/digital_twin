@@ -12,6 +12,8 @@ from persisted monitoring snapshots. It seeds one durable observation chain per
 account and symbol. A matching RuleBox rule or a decision candidate is **not** a
 prerequisite. Each observation reads bounded facts from the portfolio ABox and
 its shared premise ABox, recording both snapshot identities and source clocks.
+The versioned [observation evidence protocol](observation-evidence-protocol.md)
+owns subject/linked/shared discovery, category budgets and explicit coverage.
 Changing graph generations, missing facts and ownership mismatches defer work.
 
 An observation compares those facts with up to three prior analyses (including
@@ -19,9 +21,9 @@ their dated numeric facts) and three research results. It produces an explicitly
 unverified hypothesis, counter-evidence, comparison, up to two research questions
 and a next-check interval of 60–1440 minutes. Identical monitored inputs and
 research memory skip the model for up to six hours, with another check in three
-hours. The fingerprint deliberately covers supported quote/trend, flow,
-position, claim and source-quality fields; it is not a universal materiality
-classifier or a promise to react to every graph field.
+hours. The fingerprint covers supplied business fields by default, including
+nested source revisions, quality and eligibility. Only declared polling/storage
+metadata is ignored. Excluded and unsupported facts retain an inventory digest.
 
 Questions explicitly select an allowed capability. Future price/order-flow
 checks remain observations and wait for the existing collectors; they do not
@@ -79,6 +81,9 @@ there is no production UI switch back to that route.
 
 ## Execution and limits
 
+Independent observation calls first persist their exact input, selected memories
+and prompt locally, including failed attempts; calls require a matching task and
+prompt hash. Existing domain workloads retain their own audit contracts.
 All existing background Codex adapters, investment judgement and interactive
 chat enter the central execution ledger. The ledger records workload, prompt
 hash, start/completion state and a safe error category, never the prompt or raw

@@ -6,10 +6,15 @@ from unittest.mock import Mock, patch
 from digital_twin.modules.ai_orchestration.domain.planning import validate_plan, enabled, identity, stamp
 from digital_twin.modules.ai_orchestration.application.control import AIControlService
 from digital_twin.modules.ai_orchestration.infrastructure.execution import ai_execution
+from digital_twin.modules.reasoning.domain.observation_evidence import EVIDENCE_PROTOCOL, EVIDENCE_PROFILE, select_evidence
 
 
 SUBJECT = {"accountId": "control-test", "symbol": "TEST", "name": "Test", "worldId": "portfolio:local:control-test"}
-PACKET = {**SUBJECT, "sourceSnapshotId": "snapshot-1", "facts": [{"id": "quote-1", "price": 100}]}
+_FACTS, _COVERAGE = select_evidence([{"id": "quote-1", "kind": "stock", "currentPrice": 100,
+    "sourceEntityId": "quote", "sourceWorldId": SUBJECT["worldId"], "sourceSnapshotId": "snapshot-1"}])
+PACKET = {**SUBJECT, "protocolVersion": EVIDENCE_PROTOCOL, "profile": EVIDENCE_PROFILE,
+          "sourceSnapshotId": "snapshot-1", "sourceSnapshots": {SUBJECT["worldId"]: "snapshot-1"},
+          "capturedAt": stamp(), "facts": _FACTS, "coverage": _COVERAGE}
 PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesis": "실적 변화가 가격 흐름과 연관될 수 있습니다.",
         "counterEvidence": "기간별 실적이 없어 확인이 필요합니다.", "comparison": "첫 관찰입니다.",
         "notification": {"send": False, "reason": "첫 관찰이라 이전 흐름을 더 확인합니다."},
@@ -23,6 +28,7 @@ class AIControlTests(unittest.TestCase):
         store.keep_alive.return_value = nullcontext()
         store.memory.return_value = [{"summary": "이전 관찰", "observedAt": "2026-01-01T00:00:00Z"}]
         store.complete.return_value = True
+        store.save_execution_input.return_value = "frozen-input"
         planner = Mock(return_value=PLAN)
         service = AIControlService(store, lambda: [SUBJECT], Mock(return_value=dict(PACKET)), planner,
                                    Mock(return_value={"status": "completed"}), Mock(return_value=[]),
@@ -52,7 +58,8 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual("snapshot-1", result["input"]["sourceSnapshotId"])
         self.assertEqual(["research", "observe"], [child["capability"] for child in children])
         self.assertTrue(all(child["accountId"] == SUBJECT["accountId"] for child in children))
-        self.assertEqual("이전 관찰", planner.call_args.args[1][0]["summary"])
+        self.assertEqual("이전 관찰", planner.call_args.args[0]["previousAnalyses"][0]["summary"])
+        self.assertEqual("frozen-input", result["executionInputId"])
 
     def test_missing_facts_do_not_call_ai_or_schedule_followups(self):
         service, store, planner = self.runner(evidence=Mock(return_value={}))
@@ -95,20 +102,19 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual("observe", store.complete.call_args.args[2][0]["capability"])
 
     def test_graph_reader_rejects_scope_mismatch_and_changing_generation(self):
-        from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
+        from digital_twin.modules.reasoning.public import ObservationEvidenceReader
         repository = Mock()
-        repository.active_abox_metadata.return_value = {"status": "ok", "aboxSnapshotId": "snap-1", "accountId": SUBJECT["accountId"]}
-        repository.active_abox_snapshot_id.return_value = "snap-1"
-        repository.active_abox_rule_context.return_value = {"status": "ok", "sourceIdsBySymbol": {"TEST": ["quote"]}}
-        repository.read_entity_rows_by_ids.return_value = [{"id": "quote", "symbol": "OTHER", "currentPrice": 100}]
+        repository.metadata.return_value = {"status": "ok", "aboxSnapshotId": "snap-1", "accountId": SUBJECT["accountId"]}
+        repository.snapshot_id.return_value = "snap-1"
+        repository.candidates.return_value = [{"id": "quote", "kind": "stock", "symbol": "OTHER", "currentPrice": 100}]
         with self.assertRaises(ValueError):
-            GraphObservationReader(repository)(SUBJECT)
-        repository.read_entity_rows_by_ids.return_value = [{"id": "quote", "symbol": "TEST", "currentPrice": 100}]
-        repository.active_abox_snapshot_id.side_effect = ["snap-1", "snap-2"]
+            ObservationEvidenceReader(repository)(SUBJECT)
+        repository.candidates.return_value = [{"id": "quote", "kind": "stock", "symbol": "TEST", "currentPrice": 100}]
+        repository.snapshot_id.side_effect = ["snap-1", "snap-2"]
         with self.assertRaises(ValueError):
-            GraphObservationReader(repository)(SUBJECT)
-        repository.active_abox_snapshot_id.side_effect = None
-        packet = GraphObservationReader(repository)(SUBJECT)
+            ObservationEvidenceReader(repository)(SUBJECT)
+        repository.snapshot_id.side_effect = None
+        packet = ObservationEvidenceReader(repository)(SUBJECT)
         self.assertEqual(100, packet["facts"][0]["currentPrice"])
         self.assertEqual("snap-1", packet["facts"][0]["sourceSnapshotId"])
         self.assertFalse(packet["requiresMatchedRule"])
@@ -139,7 +145,7 @@ class AIControlStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.store.transaction() as c:
-            for table in ("ai_control_tasks", "ai_control_budget", "ai_control_calls"):
+            for table in ("ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):
@@ -187,3 +193,27 @@ class AIControlStorageTests(unittest.TestCase):
         self.store.runtime_settings["aiControlDailyTaskBudget"] = 0
         self.store.seed(SUBJECT)
         self.assertIsNone(self.store.claim())
+
+    def test_central_model_requires_frozen_input_and_keeps_failed_attempt_replay(self):
+        import gzip
+        import json
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, validate_execution_input
+        self.store.seed(SUBJECT)
+        job = self.store.claim()
+        envelope = freeze_execution_input({**PACKET, "taskId": job["taskId"]}, [{"summary": "old analysis"}], [{"runId": "research-1"}])
+        with self.assertRaises(ValueError):
+            self.store.begin_call("independent-observation", envelope["promptHash"], job["taskId"])
+        input_id = self.store.save_execution_input(job, envelope)
+        with self.assertRaises(ValueError):
+            self.store.begin_call("independent-observation", "wrong-hash", job["taskId"], input_id)
+        call_id = self.store.begin_call("independent-observation", envelope["promptHash"], job["taskId"], input_id)
+        self.store.finish_call(call_id, "TimeoutError")
+        with self.store.connect() as connection:
+            row = connection.execute("SELECT i.input_hash,i.artifact_gzip FROM ai_control_inputs i JOIN ai_control_input_calls c ON c.input_id=i.input_id WHERE c.call_id=%s", (call_id,)).fetchone()
+        saved = json.loads(gzip.decompress(row["artifact_gzip"]))
+        self.assertEqual(envelope, saved)
+        self.assertEqual(row["input_hash"], validate_execution_input(saved))
+        self.store.complete(job, {"summary": "completed"}, [])
+        self.assertEqual("", self.store.save_execution_input(job, envelope))
+        with self.assertRaises(ValueError):
+            self.store.begin_call("independent-observation", envelope["promptHash"], job["taskId"], input_id)

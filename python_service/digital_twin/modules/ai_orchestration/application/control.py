@@ -1,6 +1,8 @@
 """Durable independent research loop, with capabilities supplied by composition."""
 from datetime import datetime, timedelta, timezone
+from digital_twin.modules.reasoning.contracts import EvidenceContractError
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
+from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input
 
 
 class AIControlService:
@@ -42,9 +44,14 @@ class AIControlService:
                             child = {**self.subject(job), "capability": "observe", "watchQuestions": job.get("watchQuestions", []), "taskId": identity(job["taskId"], "unchanged"), "availableAt": due}
                             saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다."}, [child])
                             return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
-                    plan = validate_plan(self.planner(packet, history, research), packet)
+                    envelope = freeze_execution_input(packet, history, research)
+                    input_id = self.store.save_execution_input(job, envelope)
+                    if not input_id:
+                        return {"status": "lease-lost", "taskId": job["taskId"]}
+                    plan = validate_plan(self.planner(envelope, input_id), packet)
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
-                              "comparisonFacts": [fact for previous in history[:3] for fact in previous.get("previousFacts", [])[:20]]}
+                              "executionInputId": input_id,
+                              "comparisonFacts": [fact for previous in envelope["previousAnalyses"] for fact in previous.get("previousFacts", [])[:20]]}
                     children = []
                     for question in plan["researchQuestions"]:
                         children.append({**self.subject(job), "capability": "research", "priority": 5, "question": question,
@@ -61,8 +68,9 @@ class AIControlService:
             return {"status": "completed", "taskId": job["taskId"], "capability": job["capability"]}
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
-            self.store.fail(job, type(error).__name__)
-            return {"status": "deferred", "taskId": job["taskId"], "reason": type(error).__name__}
+            reason = error.code if isinstance(error, EvidenceContractError) else type(error).__name__
+            self.store.fail(job, reason)
+            return {"status": "deferred", "taskId": job["taskId"], "reason": reason}
 
     @staticmethod
     def subject(job):

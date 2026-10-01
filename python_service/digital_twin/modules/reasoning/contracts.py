@@ -122,6 +122,8 @@ _EXPORTS.update({
 })
 
 _EXPORTS["world_from_snapshot"] = ("digital_twin.modules.reasoning.domain.ontology_worlds", "world_from_snapshot")
+for _name in ("EvidenceContractError", "validate_evidence_packet", "evidence_change_identity", "content_hash", "canonical_json"):
+    _EXPORTS[_name] = ("digital_twin.modules.reasoning.domain.observation_evidence", _name)
 
 __all__ = list(_EXPORTS)
 

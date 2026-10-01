@@ -102,6 +102,12 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   investment action, mutate a rule or create a decision episode. The former
   `investmentInsight` transport and rule-triggered AI queue are retired in
   runtime composition. See `docs/ai-control.md` for the full publication contract.
+- Independent observations must consume the versioned evidence contract in
+  `docs/observation-evidence-protocol.md`. Planner topology is not an evidence
+  inventory. The producing owner accounts for included, missing, budget-excluded
+  and unsupported evidence. Consumers reuse its material-change identity instead
+  of maintaining private field allowlists. Persist the exact selected memories
+  and prompt before a model call; a successful result alone is not an input audit.
 - Preserve the historical AI insight contract for replay and internal analysis.
   Keep AI insight generation independent from notification transport. Persist
   the `SubjectDecisionCase` and publish its inference-completed event before

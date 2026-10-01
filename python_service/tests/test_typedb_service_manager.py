@@ -1100,6 +1100,164 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             self.assertFalse(marker_payload["blueGreenCutoverPending"])
             self.assertTrue(marker_payload["graphStoreEpoch"].startswith("rollback:"))
 
+class TypeDBReclaimAdmissionTests(unittest.TestCase):
+    def decision(self, root, active_mb=8000, wal_mb=0, size_mb=None):
+        active = Path(root) / 'typedb-data'
+        active.mkdir(exist_ok=True)
+        spec = {'dataPath': active, 'maxSizeMb': 32768, 'autoRotationEnabled': '1',
+                'autoRotationPercent': 65, 'writeBlockPercent': 75,
+                'autoRotationWalMb': 4096, 'autoRotationFreeSpaceMb': 24576,
+                'blueGreenEstimatedCandidateMaxMb': 4096, 'blueGreenRetiredRetentionMinutes': 120}
+        with patch.object(service_manager, 'read_typedb_retention_marker', return_value={}), \
+                patch.object(service_manager, 'storage_directory_physical_size_bytes', return_value=active_mb * 1024**2):
+            return service_manager.typedb_auto_rotation_needed(
+                spec, now_epoch=20000,
+                size_provider=lambda _: (size_mb if size_mb is not None else active_mb) * 1024**2,
+                disk_usage_provider=lambda _: SimpleNamespace(free=20000 * 1024**2),
+                inventory_provider=lambda *a, **k: {'typedbWalMb': wal_mb})
+
+    def test_shared_pressure_needs_material_gain_and_no_retained_copy(self):
+        with tempfile.TemporaryDirectory() as root:
+            for size in (1024, 4400):
+                d = self.decision(root, active_mb=size)
+                self.assertFalse(d['needed'])
+                self.assertEqual('shared-disk-no-reclaim-benefit', d['reason'])
+            d = self.decision(root)
+            self.assertTrue(d['needed'])
+            self.assertEqual(3904, d['estimatedReclaimMb'])
+            self.assertTrue(d['reclaimRequiresRetiredCleanup'])
+            (Path(root) / 'typedb-data-retired-19000').mkdir()
+            d = self.decision(root)
+            self.assertFalse(d['needed'])
+            self.assertEqual('shared-disk-awaiting-retired-cleanup', d['reason'])
+            for kwargs in ({'size_mb': 24000}, {'wal_mb': 5000}, {'size_mb': 33000}):
+                with self.subTest(kwargs=kwargs):
+                    self.assertTrue(self.decision(root, **kwargs)['needed'])
+
+    def test_cleanup_precedes_both_measurements_but_waits_for_safe_runtime(self):
+        for ready, rotating, maintenance in [(True, False, False), (False, False, False), (True, True, False), (True, False, True)]:
+            calls = []
+            with self.subTest(ready=ready, rotating=rotating, maintenance=maintenance), \
+                    patch.object(service_manager, 'typedb_auto_rotation_worker_running', return_value={'running': rotating, 'pid': 123 if rotating else 0}), \
+                    patch.object(service_manager, 'supervisor_maintenance_active', return_value=maintenance), \
+                    patch.object(service_manager, 'prune_retired_typedb_data_paths', side_effect=lambda _: calls.append('prune')), \
+                    patch.object(service_manager, 'typedb_reset_needed', side_effect=lambda *a, **k: calls.append('reset') or {}), \
+                    patch.object(service_manager, 'typedb_auto_rotation_needed', side_effect=lambda _: calls.append('automatic') or {}):
+                service_manager.typedb_capacity_maintenance_decisions({}, graph_ready=ready)
+            expected = ['prune'] if ready and not rotating and not maintenance else []
+            self.assertEqual(expected + ['reset', 'automatic'], calls)
+
+    def test_pruning_preserves_active_recent_failed_staged_and_unknown_paths(self):
+        from digital_twin.infrastructure.typedb_retired_storage import prune_retired_stores
+        with tempfile.TemporaryDirectory() as root:
+            paths = {}
+            for name in ['typedb-data', 'typedb-data-retired-1000', 'typedb-data-retired-19900',
+                         'typedb-data-retired-1001', 'typedb-data-retired-unknown',
+                         'typedb-data-failed-1000', 'typedb-data-candidate']:
+                p = Path(root) / name
+                p.mkdir()
+                (p / 'data').write_bytes(b'x' * 8192)
+                os.utime(p, (1000, 1000))
+                paths[name] = p
+            os.utime(paths['typedb-data-retired-1001'], (19900, 19900))
+            alias = Path(root) / 'typedb-data-retired-1002'
+            alias.symlink_to(paths['typedb-data'], target_is_directory=True)
+            result = prune_retired_stores(paths['typedb-data'], 120, 20000)
+            self.assertEqual([str(paths['typedb-data-retired-1000'])], result['removedPaths'])
+            for name, p in paths.items():
+                self.assertEqual(name != 'typedb-data-retired-1000', p.exists(), name)
+            self.assertTrue(alias.is_symlink())
+            self.assertTrue(result['spaceReclaimed'])
+            self.assertGreater(result['removedAllocatedBytes'], 0)
+            self.assertIn('diskFreeDeltaBytes', result)
+
+    def test_failed_removal_is_reported_and_still_blocks_shared_rotation(self):
+        from digital_twin.infrastructure import typedb_retired_storage as storage
+        with tempfile.TemporaryDirectory() as root:
+            active = Path(root) / 'typedb-data'
+            active.mkdir()
+            old = Path(root) / 'typedb-data-retired-1000'
+            old.mkdir()
+            (old / 'data').write_bytes(b'x')
+            os.utime(old, (1000, 1000))
+            with patch.object(storage.shutil, 'rmtree', side_effect=PermissionError('denied')):
+                result = storage.prune_retired_stores(active, 120, 20000)
+            self.assertTrue(old.exists())
+            self.assertFalse(result['spaceReclaimed'])
+            self.assertEqual(1, result['retiredStoreCount'])
+            self.assertEqual('PermissionError', result['errors'][0]['errorType'])
+            self.assertFalse(self.decision(root)['needed'])
+
+    def test_pending_cutover_keeps_rollback_directory(self):
+        with patch.object(service_manager, 'read_typedb_retention_marker', return_value={'blueGreenCutoverPending': True}), \
+                patch.object(service_manager, 'prune_retired_stores') as prune:
+            self.assertEqual([], service_manager.prune_retired_typedb_data_paths({}))
+            prune.assert_not_called()
+
+    def test_expired_cleanup_relief_cancels_shared_disk_rotation(self):
+        from digital_twin.infrastructure import typedb_retired_storage as storage
+        with tempfile.TemporaryDirectory() as root:
+            active = Path(root) / 'typedb-data'
+            active.mkdir()
+            (active / 'data').write_bytes(b'x')
+            old = Path(root) / 'typedb-data-retired-1000'
+            old.mkdir()
+            (old / 'data').write_bytes(b'x' * 8192)
+            os.utime(old, (1000, 1000))
+            spec = {'dataPath': active, 'maxSizeMb': 32768, 'autoRotationEnabled': '1',
+                    'autoRotationWalMb': 0, 'autoRotationFreeSpaceMb': 24576,
+                    'blueGreenRetiredRetentionMinutes': 120}
+            def usage(_):
+                return SimpleNamespace(free=(20000 if old.exists() else 26000) * 1024**2)
+            with patch.object(service_manager, 'read_typedb_retention_marker', return_value={}), \
+                    patch.object(service_manager, 'typedb_auto_rotation_worker_running', return_value={'running': False}), \
+                    patch.object(service_manager, 'supervisor_maintenance_active', return_value=False), \
+                    patch.object(service_manager, 'record_typedb_auto_rotation_state') as record, \
+                    patch.object(service_manager, 'append_log'), \
+                    patch.object(service_manager, 'typedb_reset_needed', return_value={}), \
+                    patch.object(storage.shutil, 'disk_usage', side_effect=usage):
+                before = service_manager.typedb_auto_rotation_needed(spec)
+                _, after = service_manager.typedb_capacity_maintenance_decisions(spec, graph_ready=True)
+            self.assertTrue(before['diskPressureReached'])
+            self.assertEqual('below-threshold', after['reason'])
+            self.assertFalse(after['needed'])
+            self.assertFalse(old.exists())
+            self.assertTrue((active / 'data').exists())
+            proof = record.call_args.kwargs['lastRetiredCleanup']
+            self.assertTrue(proof['spaceReclaimed'])
+            self.assertEqual(6000 * 1024**2, proof['diskFreeDeltaBytes'])
+
+    def test_seed_disabled_pending_flag_requires_a_completed_swap(self):
+        marker = {'blueGreenCutoverPending': True, 'blueGreenCutoverAt': '2026-10-01T05:04:10Z',
+                  'lastAutoRotationFinishedAt': '2026-10-01T05:04:39Z', 'lastAutoRotationStatus': 'ok',
+                  'lastAutoRotationResult': {'status': 'swapped', 'restartStatus': 'ok'}}
+        for status, finish, allowed in [('ok', '2026-10-01T05:04:39Z', True),
+                                         ('running', '2026-10-01T05:04:39Z', False),
+                                         ('ok', '2026-10-01T04:00:00Z', False)]:
+            with self.subTest(status=status, finish=finish), \
+                    patch.object(service_manager, 'read_typedb_retention_marker', return_value={
+                        **marker, 'lastAutoRotationStatus': status, 'lastAutoRotationFinishedAt': finish}), \
+                    patch.object(service_manager, 'prune_retired_stores', return_value={'removedPaths': [], 'errors': []}) as prune:
+                service_manager.prune_retired_typedb_data_paths({})
+                self.assertEqual(allowed, prune.called)
+
+    def test_shared_disk_inventory_failure_defers_rotation(self):
+        with tempfile.TemporaryDirectory() as root, \
+                patch.object(service_manager, 'retired_stores', side_effect=PermissionError('denied')):
+            result = self.decision(root)
+        self.assertFalse(result['needed'])
+        self.assertEqual('shared-disk-retired-inventory-unavailable', result['reason'])
+
+    def test_missing_active_store_never_deletes_rollback_copy(self):
+        from digital_twin.infrastructure.typedb_retired_storage import prune_retired_stores
+        with tempfile.TemporaryDirectory() as root:
+            old = Path(root) / 'typedb-data-retired-1000'
+            old.mkdir()
+            os.utime(old, (1000, 1000))
+            result = prune_retired_stores(Path(root) / 'typedb-data', 0, 20000)
+            self.assertEqual([], result['removedPaths'])
+            self.assertTrue(old.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

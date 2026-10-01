@@ -14,6 +14,31 @@ from typing import Dict, Mapping
 TYPEDB_CAPACITY_POLICY_VERSION = "typedb-capacity-pressure-v1"
 
 
+def shared_disk_rotation_admission(
+    active_mb: float, candidate_estimate_mb: float, retired_count: int,
+) -> Dict[str, object]:
+    """Admit shared-disk-only rebuilding when it can plausibly reclaim space.
+
+    This estimate is not a measured saving. Reclamation happens only after
+    rollback retention expires. TypeDB size/WAL emergencies use their own
+    admission path and must not be suppressed by this policy.
+    """
+    estimated_gain = max(0.0, active_mb - candidate_estimate_mb)
+    reason = (
+        "shared-disk-awaiting-retired-cleanup" if retired_count
+        else "shared-disk-no-reclaim-benefit" if estimated_gain < 512
+        else "shared-disk-reclaim-estimated"
+    )
+    return {
+        "needed": reason == "shared-disk-reclaim-estimated",
+        "reason": reason,
+        "estimatedReclaimMb": round(estimated_gain, 1),
+        "minimumEstimatedReclaimMb": 512,
+        "retiredStoreCount": retired_count,
+        "reclaimRequiresRetiredCleanup": True,
+    }
+
+
 def _number(value: object, fallback: float = 0.0) -> float:
     try:
         return float(value or 0)

@@ -51,3 +51,28 @@ intended independent-channel lifetime. Tests preserve the existing query,
 commit, verification and activation contracts while rejecting shared-channel
 reuse. This is a transport-isolation fix; runtime recovery still requires the
 native completion and delivery evidence above.
+
+## Disk reclamation before automatic rotation
+
+The supervisor removes expired retired stores before reading capacity and
+deciding to rotate. This also runs before the low-staging-space and rotation
+dispatch branches, which previously skipped cleanup. Cleanup requires a ready
+active runtime, no automatic rotation worker or supervisor maintenance, and no
+pending cutover. It preserves active, candidate, failed, recent rollback and
+unrecognised/symlink paths. The later of the retired path timestamp and its mtime
+starts the configured rollback retention window (runtime default 120 minutes).
+
+Shared disk pressure alone no longer justifies another replacement while a
+retired store remains. Once cleanup finishes, the shared-disk-only path requires
+at least 512 MiB estimated gain over the configured candidate size estimate.
+This uses allocated active bytes; the estimate is not a promise of reclaimed
+space, and any benefit occurs after rollback retention. TypeDB's own size/WAL
+thresholds retain their existing cooldown, staging and recovery-source gates.
+Disk safety write guards remain active even when a rebuild would not help.
+
+`lastRetiredCleanup` in the retention marker and supervisor log records removed
+paths, removal failures, active/retired/failed/candidate allocated bytes before
+and after, and the shared filesystem's free-space delta. Service status reports
+the latest cleanup result. Restart success remains separate from space recovery;
+other writers can reduce free disk space while a retired directory is removed.
+No rollback retention period is shortened by this change.

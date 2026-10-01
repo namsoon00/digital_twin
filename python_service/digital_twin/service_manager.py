@@ -21,6 +21,8 @@ from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.share_runtime import fixed_entry_url, share_credentials_environment
 from .infrastructure.typedb_storage_guard import typedb_storage_health, typedb_storage_inventory
 from .infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
+from .infrastructure.typedb_retired_storage import retired_stores, prune_retired_stores
+from .platform.domain.typedb_capacity_policy import shared_disk_rotation_admission
 from digital_twin.modules.market_data.domain.time_series_storage import canonical_json
 
 
@@ -1977,7 +1979,7 @@ def typedb_auto_rotation_needed(
             "stagingReady": staging_ready,
             "requiredStagingMb": required_staging_mb,
         }
-    return {
+    result = {
         "needed": True,
         "reason": (
             "insufficient blue-green staging headroom: free "
@@ -2023,6 +2025,22 @@ def typedb_auto_rotation_needed(
         "estimatedCandidateMb": estimated_candidate_mb,
         "minimumHeadroomMb": minimum_headroom_mb,
     }
+
+    if disk_pressure_reached and not threshold_reached and not wal_pressure_reached:
+        try:
+            retained = retired_stores(
+                data_path, int_value(configured.get("blueGreenRetiredRetentionMinutes"), 120, 0), now,
+            )
+        except OSError:
+            return {**result, "needed": False, "reason": "shared-disk-retired-inventory-unavailable"}
+        # directory_size_bytes already measures allocated, hard-link-deduped
+        # bytes. Reuse that sample instead of walking the active store twice.
+        physical_mb = size_bytes / 1024 / 1024
+        admission = shared_disk_rotation_admission(physical_mb, float(candidate_max_mb), len(retained))
+        result.update({k: v for k, v in admission.items() if k not in {"needed", "reason"}})
+        if not admission["needed"]:
+            result.update(needed=False, reason=admission["reason"])
+    return result
 
 
 def typedb_auto_rotation_recovery_preflight(
@@ -2518,6 +2536,13 @@ def status_worker(spec: Dict[str, object]) -> int:
             + " · cooldown=" + str(capacity.get("cooldownRemainingSeconds") or 0) + "s"
             + " · last-attempt=" + str(capacity.get("lastAttemptStatus") or "none")
         )
+        cleanup = read_typedb_retention_marker().get("lastRetiredCleanup") or {}
+        if cleanup:
+            print("Retired cleanup: at=" + str(cleanup.get("at") or "unknown")
+                  + " · removed=" + str(len(cleanup.get("removedPaths") or []))
+                  + " · allocated-bytes=" + str(cleanup.get("removedAllocatedBytes") or 0)
+                  + " · shared-free-delta=" + str(cleanup.get("diskFreeDeltaBytes") or 0)
+                  + " · errors=" + str(len(cleanup.get("errors") or [])))
     if log_path.exists():
         print("Log: " + str(log_path))
         print("Log updated: " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(log_path.stat().st_mtime)))
@@ -4940,8 +4965,10 @@ def supervise() -> int:
                         + "s cleanup="
                         + str(bool(orphan_cleanup.get("cleaned"))).lower(),
                     )
-                decision = typedb_reset_needed(typedb_spec, ignore_auto_reset=True) if typedb_spec else {}
-                automatic = typedb_auto_rotation_needed(typedb_spec) if typedb_spec else {}
+                decision, automatic = (
+                    typedb_capacity_maintenance_decisions(typedb_spec, graph_ready=graph_store_ready)
+                    if typedb_spec else ({}, {})
+                )
                 if automatic.get("needed"):
                     if not bool(automatic.get("stagingReady", True)):
                         notice = str(
@@ -4987,6 +5014,11 @@ def supervise() -> int:
                             "typedb automatic rotation deferred; " + combined,
                         )
                         last_typedb_auto_rotation_notice = combined
+                elif str(automatic.get("reason") or "").startswith("shared-disk-"):
+                    notice = str(automatic["reason"])
+                    if notice != last_typedb_auto_rotation_notice:
+                        append_log(supervisor_log_path(), "typedb automatic rotation deferred; " + notice)
+                        last_typedb_auto_rotation_notice = notice
                 elif str(automatic.get("reason") or "") != "below-threshold":
                     last_typedb_auto_rotation_notice = ""
                 if decision.get("needed"):
@@ -4999,13 +5031,6 @@ def supervise() -> int:
                         last_typedb_capacity_notice = notice
                 else:
                     last_typedb_capacity_notice = ""
-                if typedb_spec:
-                    removed_retired = prune_retired_typedb_data_paths(typedb_spec)
-                    if removed_retired:
-                        append_log(
-                            supervisor_log_path(),
-                            "typedb retired blue-green stores removed count=" + str(len(removed_retired)),
-                        )
                 last_maintenance_at = time.monotonic()
             time.sleep(5)
     finally:
@@ -5780,27 +5805,38 @@ def rollback_typedb_blue_green_data_paths(spec: Dict[str, object], retired_path:
 
 
 def prune_retired_typedb_data_paths(spec: Dict[str, object]) -> List[str]:
+    marker = read_typedb_retention_marker()
+    # seedOnStart=0 can leave the seed's pending flag set after a successful
+    # swap. Require the completed swap record, not that stale flag alone.
+    if marker.get("blueGreenCutoverPending"):
+        completed = marker.get("lastAutoRotationResult") or {}
+        cutover_at = str(marker.get("blueGreenCutoverAt") or "")
+        finished_at = str(marker.get("lastAutoRotationFinishedAt") or "")
+        if not (cutover_at and finished_at >= cutover_at
+                and marker.get("lastAutoRotationStatus") == "ok"
+                and completed.get("status") == "swapped"
+                and completed.get("restartStatus") == "ok"):
+            return []
     active_path = Path(spec.get("dataPath") or data_dir() / "typedb-data")
-    retention_minutes = int_value(spec.get("blueGreenRetiredRetentionMinutes"), 30, 0)
-    cutoff = time.time() - retention_minutes * 60
-    removed = []
-    for path in active_path.parent.glob(active_path.name + "-retired-*"):
-        try:
-            suffix = path.name.rsplit("-retired-", 1)[-1]
-            try:
-                retired_at = float(int(suffix))
-            except (TypeError, ValueError):
-                retired_at = 0.0
-            # Prefer the later trustworthy boundary. Existing directories may
-            # have a legacy suffix but a corrected mtime, while newly swapped
-            # paths carry both the cutover epoch and the explicit stamp.
-            retention_boundary = max(float(path.stat().st_mtime), retired_at)
-            if retention_boundary <= cutoff:
-                shutil.rmtree(path)
-                removed.append(str(path))
-        except OSError:
-            continue
-    return removed
+    retention_minutes = int_value(spec.get("blueGreenRetiredRetentionMinutes"), 120, 0)
+    try:
+        result = prune_retired_stores(active_path, retention_minutes, time.time())
+    except OSError as error:
+        result = {"removedPaths": [], "errors": [{"errorType": type(error).__name__}]}
+    if result.get("removedPaths") or result.get("errors"):
+        record_typedb_auto_rotation_state(lastRetiredCleanup={"at": iso_now(), **result})
+        append_log(supervisor_log_path(), "typedb retired cleanup " + json.dumps(result, sort_keys=True))
+    return result["removedPaths"]
+
+
+def typedb_capacity_maintenance_decisions(spec: Dict[str, object], *, graph_ready: bool):
+    """Reclaim expired rollback stores before measuring/dispatching replacement."""
+    if (graph_ready and not typedb_auto_rotation_worker_running().get("running")
+            and not supervisor_maintenance_active()):
+        prune_retired_typedb_data_paths(spec)
+    # Both decisions read fresh disk usage after cleanup, including on paths
+    # that dispatch or defer a rotation and skip the rest of the supervisor tick.
+    return (typedb_reset_needed(spec, ignore_auto_reset=True), typedb_auto_rotation_needed(spec))
 
 
 def typedb_rotate(

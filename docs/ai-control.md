@@ -158,12 +158,19 @@ The output JSON schema is generated from captured fact IDs and scalar paths and
 persisted alongside the exact prompt. Model generation uses this schema; local
 validation still checks field ownership, time, comparison truth/units, unsupported
 flows, reference-only evidence and selected unsupported causal/certainty language.
+Generation v4 binds each reference to its actual fact, field and period. Reference
+facts are available only to the limitation section; numeric comparisons exclude
+monetary facts without a recorded currency. Historical generation v3 inputs retain
+their original prompt/schema validation and are never rewritten for this upgrade.
+Period shorthand such as `5·20·60일선`, explicit negated certainty and statements
+about limited data reliability do not by themselves assert a quantity or a price
+cause. Unsupported quantities, asserted causes and investment directives still fail.
 The draft's natural-language meaning is then independently critiqued with
 `observation-review-v1`. Every section must be supported; generic or repeated
 explanations remain internal. This critique is another AI assessment, not proof
 of every possible semantic claim or commercial usefulness.
 
-Both generation and review consume the existing central call budget. Only an
+Generation, correction and review consume the existing central call budget. Only an
 explicit send candidate that passes local checks receives a critique. Each review
 has a frozen draft/input/schema, persisted execution record and completed model
 call. Admission and final transport recheck that proof and the draft hash. Legacy
@@ -171,6 +178,25 @@ observations without this contract cannot pass the new final gate. Successful
 receipts preserve the cited fields, explanation fingerprint and registered
 conditions. Exact price jitter with the same cited relationships does not create
 a new explanation; the reviewer also compares meaning with the last receipt.
+
+If a send candidate fails deterministic validation, or independent review finds
+grounding errors in an otherwise useful new explanation, it gets at most one correction
+on the same frozen facts. The original draft, validation errors, comparison
+diagnostics, any independent critique and parent input ID are persisted before that call. The correction may
+choose silence and still needs full validation and independent review before
+publication. Repetition and generic content do not trigger review-driven correction.
+A failed correction never grants delivery permission. Rejected work
+and results from an older generation prompt cannot activate the six-hour unchanged
+input shortcut; only validated observations or accepted drafts from the current
+prompt may reuse an unchanged input. No historical failed alert is auto-delivered.
+
+Legacy receipt summaries omitted some quote fields, including currency and the
+five-day average. For a new observation only, memory may recover those fields from
+the original completed delivery task's frozen stock facts. Account, subject, task,
+receipt job, input fingerprint, source/capture clocks and every retained scalar
+must agree. Missing originals or mismatches remain incomplete. Added fields carry
+explicit original-input provenance; neither receipt rows nor historical execution
+inputs are rewritten, and current market data is never used for this recovery.
 
 Follow-up evaluation belongs to `outcomes`. It compares the next collected stock
 values with the two registered fields, using source clocks and a fixed horizon.

@@ -2,7 +2,8 @@
 from datetime import datetime, timedelta, timezone
 from digital_twin.modules.reasoning.contracts import EvidenceContractError
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
-from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input
+from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
+from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
 from digital_twin.modules.outcomes.contracts import evaluate_observation_conditions
@@ -47,6 +48,8 @@ class AIControlService:
                     fingerprint = observation_fingerprint(packet, research)
                     previous = history[0] if history else {}
                     if (previous.get("inputFingerprint") == fingerprint and previous.get("observedAt")
+                            and previous.get("executionPromptVersion") == PROMPT_VERSION
+                            and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
                         age = (datetime.now(timezone.utc) - datetime.fromisoformat(previous["observedAt"].replace("Z", "+00:00"))).total_seconds()
                         if 0 <= age < 21600:
@@ -59,29 +62,49 @@ class AIControlService:
                     input_id = self.store.save_execution_input(job, envelope)
                     if not input_id:
                         return {"status": "lease-lost", "taskId": job["taskId"]}
-                    plan = validate_plan(self.planner(envelope, input_id), packet)
+                    raw = self.planner(envelope, input_id)
+                    plan = validate_plan(raw, packet)
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
-                              "executionInputId": input_id,
+                              "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
                               "followUpEvaluations": packet["followUpEvaluations"],
                               "comparisonFacts": [fact for previous in envelope["previousAnalyses"] for fact in previous.get("previousFacts", [])[:20]]}
-                    result["quality"] = local_quality(result)
-                    if result["notification"]["send"] and result["quality"]["status"] == "awaiting-review" and self.reviewer:
-                        review_input = freeze_review_input(result)
-                        review_id = self.store.save_execution_input(job, review_input)
-                        if not review_id:
-                            return {"status": "lease-lost", "taskId": job["taskId"]}
+                    for verification in range(2):
+                        result["quality"] = local_quality(result)
+                        if result["notification"]["send"] and result["quality"]["status"] == "awaiting-review" and self.reviewer:
+                            review_input = freeze_review_input(result)
+                            review_id = self.store.save_execution_input(job, review_input)
+                            if not review_id:
+                                return {"status": "lease-lost", "taskId": job["taskId"]}
+                            try:
+                                result["quality"] = accept_review(result, self.reviewer(review_input, review_id), review_id)
+                            except AIControlBudgetWait:
+                                raise
+                            except Exception:
+                                result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
+                        if verification or not correction_warranted(result):
+                            break
+                        result["repair"] = {"initialInputId": input_id, "initialErrors": result["quality"]["errors"], "status": "pending"}
                         try:
-                            result["quality"] = accept_review(result, self.reviewer(review_input, review_id), review_id)
+                            correction = freeze_repair_input(envelope, raw, result["quality"]["errors"], input_id, result["quality"].get("review"))
+                            repair_id = self.store.save_execution_input(job, correction)
+                            if not repair_id:
+                                return {"status": "lease-lost", "taskId": job["taskId"]}
+                            result["repair"]["inputId"] = repair_id
+                            repaired = validate_plan(self.planner(correction, repair_id), packet)
+                            result.update(repaired, executionInputId=repair_id, observedAt=stamp())
                         except AIControlBudgetWait:
                             raise
-                        except Exception:
-                            result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
+                        except Exception as error:
+                            result["repair"].update(status="failed", errorKind=type(error).__name__)
+                            break
+                    if result.get("repair", {}).get("status") == "pending":
+                        result["repair"]["status"] = result["quality"]["status"]
                     children = []
-                    for question in plan["researchQuestions"]:
+                    for question in result["researchQuestions"]:
                         children.append({**self.subject(job), "capability": "research", "priority": 5, "question": question,
                                          "taskId": identity(job["taskId"], question), "availableAt": stamp()})
-                    due = (datetime.now(timezone.utc) + timedelta(minutes=plan["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
-                    children.append({**self.subject(job), "capability": "observe", "watchQuestions": plan["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})
+                    due = (datetime.now(timezone.utc) + timedelta(minutes=result["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
+                    children.append({**self.subject(job), "capability": "observe", "watchQuestions": result["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})
                 elif job["capability"] == "research":
                     result = self.researcher(job)
                     children = []

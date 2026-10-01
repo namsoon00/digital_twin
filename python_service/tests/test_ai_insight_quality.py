@@ -5,10 +5,10 @@ import unittest
 from unittest.mock import Mock
 
 from ai_insight_fixtures import observation, packet, plan, ref, review
-from digital_twin.modules.ai_orchestration.domain.insight_contract import insight_errors, insight_fingerprint, instant
+from digital_twin.modules.ai_orchestration.domain.insight_contract import insight_errors, insight_fingerprint, instant, resolve_ref
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review, quality_block
-from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts
-from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, validate_execution_input
+from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt
+from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, validate_execution_input, freeze_execution_input, freeze_repair_input, LEGACY_PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
 from digital_twin.modules.ai_orchestration.domain.publication import repeat_block
 from digital_twin.modules.outcomes.domain.observation_followup import evaluate_observation_conditions, prepare_observation_conditions
@@ -17,7 +17,88 @@ import test_ai_control as control_helpers
 
 
 class InsightGroundingTests(unittest.TestCase):
+    def assert_readable_forms_keep_causal_guards(self):
+        result = observation()
+        for section, text in (
+            ('summary', '현재 주가는 5·20·60일선과 비교해 관찰합니다.'),
+            ('comparison', '현재 자료로 확정적 전환으로 보지는 않습니다.'),
+            ('portfolioImpact', '높은 집중도 때문에 가격 변동이 계정 전체에 크게 전달될 수 있다.'),
+            ('counterEvidence', '개인 수급 부재와 장중 추정치, 마감 호가 참고값 때문에 수급 정렬의 신뢰도는 제한됩니다.'),
+        ):
+            checked = copy.deepcopy(result); checked[section] = text
+            self.assertFalse(insight_errors(checked, checked['input']), text)
+        for text in ('현재 주가는 5·20·60일선 위이고 10% 상승했습니다.',
+                     '확정적 전환으로 보지는 않습니다. 하지만 반등은 확정됐습니다.',
+                     '자료 부재 때문에 가격이 하락했습니다. 신뢰도는 제한됩니다.',
+                     '상승 기울기의 5·20·60일선은 흐름을 지지합니다.'):
+            checked = copy.deepcopy(result); checked['counterEvidence'] = text
+            self.assertTrue(insight_errors(checked, checked['input']), text)
+
+    def assert_generated_references_preserve_fact_period_and_eligibility(self):
+        from itertools import product
+        from digital_twin.modules.ai_orchestration.domain.insight_schema import planning_schema
+        p = packet()
+        baseline = copy.deepcopy(p['facts'][0]); baseline['id'] = 'old-quote'
+        del baseline['currency']; del baseline['ma60']
+        p['lastDeliveredNotification'] = {'facts': [baseline]}
+        p['facts'].append({'id': 'reference-only', 'kind': 'valuation', 'value': 200, 'valuationDecisionEligible': False})
+        schema = planning_schema(p)
+        references = {}
+        for name, definition in schema['$defs'].items():
+            references[name] = set()
+            for branch in definition.get('anyOf', [definition]):
+                fields = branch['properties']
+                for fact_id, field, period in product(*(fields[key]['enum'] for key in ('factId', 'field', 'period'))):
+                    resolve_ref(p, {'factId': fact_id, 'field': field, 'period': period})
+                    references[name].add((fact_id, field, period))
+        self.assertNotIn(('old-quote', 'ma60', 'baseline'), references['evidence'])
+        self.assertNotIn(('old-quote', 'currentPrice', 'current'), references['evidence'])
+        self.assertNotIn(('old-quote', 'currentPrice', 'baseline'), references['numeric'])
+        self.assertNotIn(('reference-only', 'value', 'current'), references['evidence'])
+        self.assertIn(('reference-only', 'value', 'current'), references['limitation'])
+
+    def assert_legacy_input_and_repair_remain_frozen(self):
+        import hashlib
+        from digital_twin.modules.ai_orchestration.domain.planning import legacy_planning_prompt
+        from digital_twin.modules.ai_orchestration.domain.insight_schema import legacy_planning_schema
+        envelope = freeze_execution_input(packet(), [], [])
+        old = copy.deepcopy(envelope)
+        old.update(promptVersion=LEGACY_PROMPT_VERSION, prompt=legacy_planning_prompt(old['current'], [], []),
+                   outputSchema=legacy_planning_schema(old['current']))
+        old['promptHash'] = hashlib.sha256(old['prompt'].encode()).hexdigest()
+        validate_execution_input(old)
+        correction = freeze_repair_input(envelope, plan(), ['비교 항목 확인 필요'], 'original-input')
+        validate_execution_input(correction)
+        self.assertEqual(envelope['current'], correction['current'])
+        correction['current']['facts'][0]['currentPrice'] = 999
+        with self.assertRaises(ValueError):
+            validate_execution_input(correction)
+
+    def assert_legacy_receipt_uses_original_delivered_source(self):
+        original = observation(); original['input']['taskId'] = 'old-task'
+        original['publication'] = {'jobId': 'sent-job'}
+        source = original['input']['facts'][0]
+        receipt = {'jobId': 'sent-job', 'taskId': 'old-task', 'accountId': 'control-test', 'symbol': 'TEST',
+                   'inputFingerprint': original['inputFingerprint'], 'deliveredAt': original['observedAt'],
+                   'facts': [{key: source[key] for key in ('id', 'currentPrice', 'sourceAsOf')}]}
+        restored = restore_legacy_receipt(receipt, original)
+        self.assertEqual('KRW', restored['facts'][0]['currency'])
+        self.assertEqual(98, restored['facts'][0]['ma5'])
+        self.assertEqual('old-task', restored['evidenceRestoration']['taskId'])
+        self.assertNotIn('currency', receipt['facts'][0])
+        for mutation in ('account', 'task', 'job', 'fingerprint', 'time', 'conflicting-value', 'modern'):
+            altered = copy.deepcopy(receipt)
+            if mutation == 'account': altered['accountId'] = 'other-account'
+            elif mutation == 'task': altered['taskId'] = 'different-task'
+            elif mutation == 'job': altered['jobId'] = 'never-delivered'
+            elif mutation == 'fingerprint': altered['inputFingerprint'] = 'unrelated-source'
+            elif mutation == 'time': altered['deliveredAt'] = '2000-01-01T00:00:00Z'
+            elif mutation == 'conflicting-value': altered['facts'][0]['currentPrice'] = 999
+            else: altered['insightVersion'] = 'observation-insight-v1'
+            self.assertEqual(altered, restore_legacy_receipt(altered, original), mutation)
+
     def test_wrong_quantities_causes_certainty_and_missing_slope_cannot_publish(self):
+        self.assert_readable_forms_keep_causal_guards()
         original = observation()
         for text in ("현재가는 110원입니다.", "이 종목의 포트폴리오 비중은 9.09%입니다.",
                      "현재 하락은 기관의 대규모 매도 때문에 발생했습니다.", "추세 전환으로 반등이 확정됐습니다.",
@@ -37,8 +118,9 @@ class InsightGroundingTests(unittest.TestCase):
         self.assertFalse(insight_errors(original, original['input']))
 
     def test_exact_field_period_units_and_source_clock_are_checked(self):
+        self.assert_generated_references_preserve_fact_period_and_eligibility()
         original = observation()
-        for mutation in ('missing-field', 'wrong-period', 'wrong-unit', 'future', 'reference-only', 'reversed-time', 'unset-policy'):
+        for mutation in ('missing-field', 'wrong-period', 'wrong-unit', 'missing-currency', 'future', 'reference-only', 'reversed-time', 'unset-policy'):
             result = copy.deepcopy(original); p = result['input']
             if mutation == 'missing-field':
                 result['claimEvidence']['summary'][0]['field'] = 'ma5Slope'
@@ -46,6 +128,8 @@ class InsightGroundingTests(unittest.TestCase):
                 result['claimEvidence']['summary'][0]['period'] = 'baseline'
             elif mutation == 'wrong-unit':
                 result['observations'][0]['right']['field'] = 'volumeRatio'
+            elif mutation == 'missing-currency':
+                p['facts'][0].pop('currency')
             elif mutation == 'future':
                 p['facts'][0]['sourceAsOf'] = (instant(p['capturedAt']) + timedelta(hours=1)).isoformat()
             elif mutation == 'reference-only':
@@ -79,6 +163,7 @@ class InsightGroundingTests(unittest.TestCase):
         self.assertTrue(repeat_block(result, [prior], 'control-test', 'TEST', now))
 
     def test_price_jitter_does_not_create_new_insight_and_review_is_frozen(self):
+        self.assert_legacy_input_and_repair_remain_frozen()
         original = observation()
         changed = copy.deepcopy(original)
         changed['input']['facts'][0]['currentPrice'] = 100.1
@@ -113,6 +198,7 @@ class InsightGroundingTests(unittest.TestCase):
         self.assertIn('20일 평균 가격 기울기: -0.2%', text)
 
     def test_legacy_result_cannot_use_new_publication_gate(self):
+        self.assert_legacy_receipt_uses_original_delivered_source()
         result = observation(); result.pop('insightVersion'); result.pop('quality')
         self.assertTrue(quality_block(result))
 
@@ -163,7 +249,63 @@ class ObservationConditionTests(unittest.TestCase):
 
 
 class InsightControlTests(unittest.TestCase):
+    def assert_repair_is_once_audited_and_reviewed(self):
+        service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
+        bad = plan(); bad['observations'][0]['right']['field'] = 'missing'
+        planner.side_effect = [bad, plan()]
+        store.save_execution_input.side_effect = ['original', 'correction', 'review']
+        service.reviewer = Mock(return_value=review())
+        self.assertEqual('completed', service.run_once()['status'])
+        result = store.complete.call_args.args[1]
+        self.assertEqual('accepted', result['quality']['status'])
+        self.assertEqual('correction', result['executionInputId'])
+        self.assertEqual('original', result['repair']['initialInputId'])
+        self.assertTrue(result['repair']['initialErrors'])
+        correction = planner.call_args.args[0]
+        self.assertEqual('independent-observation-repair-v1', correction['promptVersion'])
+        self.assertEqual(bad, correction['repair']['rejectedDraft'])
+        self.assertTrue(correction['repair']['comparisons'])
+        validate_execution_input(correction)
+        self.assertEqual(2, planner.call_count)
+        self.assertEqual(3, store.save_execution_input.call_count)
+        critique = review(); critique['sections']['summary']['supported'] = False
+        for final_review in (review(), critique):
+            service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
+            planner.return_value = plan(); service.reviewer = Mock(side_effect=[critique, final_review])
+            self.assertEqual('completed', service.run_once()['status'])
+            self.assertEqual(2, planner.call_count)
+            self.assertEqual(2, service.reviewer.call_count)
+            self.assertEqual(4, store.save_execution_input.call_count)
+            correction = planner.call_args.args[0]
+            self.assertEqual(critique, correction['repair']['independentReview'])
+            validate_execution_input(correction)
+            self.assertEqual('accepted' if final_review['sections']['summary']['supported'] else 'rejected',
+                             store.complete.call_args.args[1]['quality']['status'])
+
+    def assert_failed_repair_and_lost_ownership_cannot_publish(self):
+        from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
+        bad = plan(); bad['summary'] = '기관 매도 때문에 가격이 하락했습니다.'
+        silent = plan(); silent['notification']['send'] = False
+        for correction in (bad, silent, TimeoutError(), AIControlBudgetWait('call', '2026-10-02T00:00:00Z')):
+            service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
+            planner.side_effect = [bad, correction]; service.reviewer = Mock(return_value=review())
+            outcome = service.run_once()
+            self.assertEqual(2, planner.call_count)
+            service.reviewer.assert_not_called()
+            if isinstance(correction, AIControlBudgetWait):
+                self.assertEqual('budget-wait', outcome['status']); store.complete.assert_not_called()
+                store.defer_budget.assert_called_once()
+            else:
+                self.assertEqual('completed', outcome['status'])
+                saved = store.complete.call_args.args[1]
+                self.assertNotEqual('accepted', saved['quality']['status'])
+        service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
+        planner.return_value = bad; store.save_execution_input.side_effect = ['original', '']
+        self.assertEqual('lease-lost', service.run_once()['status'])
+        planner.assert_called_once(); store.complete.assert_not_called()
+
     def test_actual_controller_persists_review_before_admission_and_keeps_rejection(self):
+        self.assert_repair_is_once_audited_and_reviewed()
         service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
         planner.return_value = plan()
         service.reviewer = Mock(return_value=review())
@@ -178,6 +320,7 @@ class InsightControlTests(unittest.TestCase):
         self.assertEqual('rejected', store.complete.call_args.args[1]['quality']['status'])
 
     def test_review_failure_and_legacy_model_output_never_approve_delivery(self):
+        self.assert_failed_repair_and_lost_ownership_cannot_publish()
         from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
         service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
         planner.return_value = plan()

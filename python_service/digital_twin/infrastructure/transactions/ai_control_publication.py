@@ -9,7 +9,7 @@ import json
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp
 from digital_twin.modules.ai_orchestration.domain.publication import MESSAGE_TYPE, RETIRED_REASON, legacy_route_retired, publication_block, repeat_block
 from digital_twin.modules.ai_orchestration.domain.insight_quality import quality_block
-from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts
+from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt
 from digital_twin.modules.decisions.domain.investment_narrative_policy import narrative_presentation_errors
 from digital_twin.modules.decisions.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
@@ -78,7 +78,14 @@ class AIControlPublication:
         return result
 
     def memory(self, account_id, symbol):
-        return next(iter(self.receipts(account_id, symbol)), {})
+        receipt = next(iter(self.receipts(account_id, symbol)), {})
+        if not receipt or receipt.get("insightVersion") or not receipt.get("taskId"):
+            return receipt
+        with self.control.connect() as connection:
+            row = connection.execute("SELECT result_json FROM ai_control_tasks WHERE task_id=%s AND account_id=%s "
+                                     "AND symbol=%s AND status='completed'",
+                                     (receipt["taskId"], account_id, symbol)).fetchone()
+        return restore_legacy_receipt(receipt, json.loads(row["result_json"])) if row else receipt
 
     def publish(self, connection, task, result):
         reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result)

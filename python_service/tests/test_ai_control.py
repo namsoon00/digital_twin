@@ -100,12 +100,20 @@ class AIControlTests(unittest.TestCase):
 
     def test_unchanged_inputs_skip_call_but_schedule_durable_recheck(self):
         from digital_twin.modules.ai_orchestration.domain.planning import observation_fingerprint
+        from digital_twin.modules.ai_orchestration.domain.execution_input import PROMPT_VERSION
         service, store, planner = self.runner()
-        store.memory.return_value = [{"inputFingerprint": observation_fingerprint(PACKET, []), "observedAt": stamp()}]
+        store.memory.return_value = [{"inputFingerprint": observation_fingerprint(PACKET, []), "observedAt": stamp(),
+                                      "executionPromptVersion": PROMPT_VERSION, "quality": {"status": "observation-only"}}]
         self.assertEqual("unchanged", service.run_once()["status"])
         planner.assert_not_called()
         self.assertEqual("observe", store.complete.call_args.args[2][0]["capability"])
         self.assertIn("followUpEvaluations", store.complete.call_args.args[1])
+        for patch in ({"quality": {"status": "rejected"}}, {"executionPromptVersion": "older-prompt"}):
+            with self.subTest(patch=patch):
+                store.memory.return_value[0].update(patch)
+                planner.reset_mock()
+                self.assertEqual("completed", service.run_once()["status"])
+                planner.assert_called_once()
 
     def test_graph_reader_rejects_scope_mismatch_and_changing_generation(self):
         from digital_twin.modules.reasoning.public import ObservationEvidenceReader

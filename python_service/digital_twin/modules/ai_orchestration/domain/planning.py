@@ -85,5 +85,17 @@ def validate_plan(value, packet):
 
 
 def planning_prompt(packet, history, research):
+    instructions = """근거 계약 보완 규칙:
+참고용(judgementEvidenceUsable=false 또는 valuationDecisionEligible=false) 자료는 counterEvidence에서 한계를 설명할 때만 인용하세요.
+과거 가격과 비교하려면 양쪽 facts에 같은 currency와 관측 시점이 보존되어 있어야 합니다. 과거 통화를 현재 값으로 추정하지 마세요.
+누락된 과거 가격/통화가 있으면 현재의 검증 가능한 관계만 비교하고, 이전 수치 비교가 제한됨을 명시하세요.
+observations는 참인 비교만 포함하고, 가설의 미래 확인 조건은 followUpConditions에 분리하세요.
+관심 종목도 검증된 변화가 관찰 이유를 바꾸면 알릴 수 있습니다. 미보유 자체는 보류 사유가 아닙니다.
+기존 분석은 검증 거절 여부를 확인하세요. 거절된 문장이나 발송되지 않은 분석을 고객에게 전달한 설명으로 취급하지 마세요.
+"""
+    return instructions + legacy_planning_prompt(packet, history, research)
+
+
+def legacy_planning_prompt(packet, history, research):
     from digital_twin.modules.ai_orchestration.domain.insight_prompt import insight_prompt
     return insight_prompt(packet, history, research)

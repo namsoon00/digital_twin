@@ -28,6 +28,7 @@ METRICS = {
 }
 CERTAINTY = re.compile(r"확정[됐되적]|반드시|무조건|보장|틀림없|확실[히한].*(?:상승|하락|반등)")
 NEGATED_CERTAINTY = re.compile(r"(?:확정|보장|단정)(?:(?:되|하)?지(?:는)?\s*않|적이지\s*않|(?:할|될)\s*수(?:는)?\s*없|(?:된|적이라는)\s*(?:것이\s*)?아니|(?:은|이)\s*없)")
+NEGATED_INTERPRETATION = re.compile(r"확정적(?:인)?\s*(?:전환|추세|변화|신호|상승|하락)?(?:으로|이라고|이라고는)\s*(?:보|판단하|해석하)지(?:는)?\s*않(?:습니다|는다|는다거나|아요)?")
 PERIOD = re.compile(r"(?<!\d)(5|20|60)일(?:선|\s*(?:이동)?평균)")
 _PERIOD_NAME = r"(?:5|20|60)일(?:선|\s*(?:이동)?평균(?:\s*가격)?)"
 _PERIOD_SERIES = _PERIOD_NAME + r"(?:\s*(?:과|와|및|,|·)\s*" + _PERIOD_NAME + r")*"
@@ -89,7 +90,7 @@ def comparable_refs(packet, left, right):
     second, _ = resolve_ref(packet, right)
     first_unit = METRICS.get(left["field"], ("", left["field"]))[1]
     second_unit = METRICS.get(right["field"], ("", right["field"]))[1]
-    if first_unit != second_unit or first_unit == "money" and first.get("currency") != second.get("currency"):
+    if first_unit != second_unit or first_unit == "money" and (not first.get("currency") or first.get("currency") != second.get("currency")):
         raise ValueError("comparison unit mismatch")
     for ref, fact in ((left, first), (right, second)):
         if ref["field"] in {"policyLimitRatio", "strategyMaxPositionWeightPct"} and (finite(field_value(fact, ref["field"])) or 0) <= 0:
@@ -106,7 +107,25 @@ def section_text(result, section):
 
 
 def asserts_certainty(text):
-    return bool(CERTAINTY.search(NEGATED_CERTAINTY.sub("", text)))
+    return bool(CERTAINTY.search(NEGATED_CERTAINTY.sub("", NEGATED_INTERPRETATION.sub("", text))))
+
+
+def expand_period_names(text):
+    """Read '5·20·60일선' as period names, without accepting arbitrary quantities."""
+    pattern = r"(?<!\d)((?:(?:5|20|60)\s*[,·]\s*)+)(5|20|60)(일(?:선|\s*(?:이동)?평균(?:\s*가격)?))"
+    return re.sub(pattern, lambda m: "·".join(period + m[3] for period in re.findall(r"\d+", m[1]) + [m[2]]), text)
+
+
+def unsupported_cause(sentence, section):
+    if not re.search(r"때문|원인으로|원인입니다|원인은", sentence):
+        return False
+    if re.search(r"(?:확정|단정|확인|판단|알).{0,12}(?:없|못|않|어렵)|가능|일 수|될 수", sentence):
+        return False
+    # A stated data limitation is not a claim about what caused a price move.
+    limitation = (section == "counterEvidence"
+        and re.search(r"(?:부재|추정치|참고값|부족|누락).{0,30}때문에.{0,30}(?:신뢰도|비교|해석|검증).{0,12}(?:제한|어렵|불가|한계)", sentence)
+        and not re.search(r"(?:상승|하락|반등|급등|급락|회복|발생)(?:했|하였|했습|한 것|했다)|(?:올랐|내렸|떨어졌)", sentence))
+    return not limitation
 
 
 def insight_errors(result, packet):
@@ -122,13 +141,14 @@ def insight_errors(result, packet):
         if not isinstance(text, str) or not 8 <= len(text.strip()) <= 400 or not isinstance(refs, list) or not 1 <= len(refs) <= 8:
             errors.append(section + ": 설명 또는 근거가 부족합니다.")
             continue
+        text = expand_period_names(text)
         # Quantities belong to the deterministic fact panel, never free prose.
         if re.search(r"\d", PERIOD.sub("평균 가격", text)):
             errors.append(section + ": 수치는 직접 쓰지 않고 근거 표시에 맡겨야 합니다.")
         if asserts_certainty(text) or narrative_presentation_errors("NO_ACTION", [text]):
             errors.append(section + ": 확정적 전망 또는 행동 지시가 포함됐습니다.")
         for sentence in re.split(r"[.!?。\n]", text):
-            if re.search(r"때문|원인으로|원인입니다|원인은", sentence) and not re.search(r"(?:확정|단정|확인|판단|알).{0,12}(?:없|못|않|어렵)|가능|일 수", sentence):
+            if unsupported_cause(sentence, section):
                 errors.append(section + ": 관측 사실을 확인된 원인으로 단정할 수 없습니다.")
         resolved = []
         for ref in refs:
@@ -168,7 +188,7 @@ def insight_errors(result, packet):
             except (ValueError, TypeError, KeyError):
                 errors.append("관측 비교가 실제 항목·시점·수치와 일치하지 않습니다.")
     for row in result.get("followUpConditions", []):
-        if re.search(r"\d", PERIOD.sub("평균 가격", row.get("description", ""))) or asserts_certainty(row.get("description", "")):
+        if re.search(r"\d", PERIOD.sub("평균 가격", expand_period_names(row.get("description", "")))) or asserts_certainty(row.get("description", "")):
             errors.append("확인 조건 설명에 직접 작성한 수치나 확정적 전망이 있습니다.")
     return list(dict.fromkeys(errors))
 

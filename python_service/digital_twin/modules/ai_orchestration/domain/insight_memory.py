@@ -1,7 +1,42 @@
 """Successful-delivery memory retains exactly the fields cited by explanations."""
 import copy
 
-from digital_twin.modules.ai_orchestration.domain.insight_contract import resolve_ref
+from digital_twin.modules.ai_orchestration.domain.insight_contract import resolve_ref, instant
+
+
+def restore_legacy_receipt(receipt, original):
+    """Recover omitted fields from that delivery's frozen input, never today's quote.
+
+    This creates memory for a new analysis. Stored receipts and historical model
+    inputs remain unchanged, and every restored field retains its source task.
+    """
+    packet = original.get("input", {})
+    if (not receipt or receipt.get("insightVersion") or not receipt.get("inputFingerprint")
+            or receipt["inputFingerprint"] != original.get("inputFingerprint")
+            or any(packet.get(key) != receipt.get(key) for key in ("accountId", "symbol", "taskId"))
+            or original.get("publication", {}).get("jobId") != receipt.get("jobId")):
+        return receipt
+    captured, delivered = instant(packet.get("capturedAt")), instant(receipt.get("deliveredAt"))
+    if not captured or not delivered or captured > delivered:
+        return receipt
+    facts = {fact["id"]: fact for fact in packet.get("facts", []) if fact.get("id")}
+    result, restored = copy.deepcopy(receipt), []
+    for index, saved in enumerate(result.get("facts", [])):
+        source = facts.get(saved.get("id"), {})
+        source_at = instant(source.get("sourceAsOf") or source.get("asOf"))
+        if (source.get("kind") != "stock" or source.get("symbol") != receipt["symbol"]
+                or saved.get("id") not in original.get("evidenceIds", [])
+                or not source_at or source_at > captured
+                or any(key not in source or source[key] != value for key, value in saved.items())):
+            continue
+        added = sorted(set(source) - set(saved))
+        if added:
+            result["facts"][index] = copy.deepcopy(source)
+            restored.append({"factId": saved["id"], "fields": added})
+    if restored:
+        result["evidenceRestoration"] = {"source": "original-delivered-task-input", "taskId": receipt["taskId"],
+            "inputFingerprint": receipt["inputFingerprint"], "capturedAt": packet["capturedAt"], "facts": restored}
+    return result
 
 
 def receipt_facts(result):

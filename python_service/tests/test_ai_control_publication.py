@@ -128,6 +128,20 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertEqual(job.job_id, baseline["jobId"])
         self.assertEqual(100, baseline["facts"][0]["currentPrice"])
         self.assertEqual({}, self.publication.memory("another", "TEST"))
+        # Simulate a pre-contract receipt that kept only a compact price tuple.
+        # The actual completed task remains the only source of missing fields.
+        import json
+        with self.queue.transaction() as connection:
+            row = connection.execute("SELECT metadata_json FROM notification_delivery_attempts WHERE job_id=%s AND status='delivered'", (job.job_id,)).fetchone()
+            metadata = json.loads(row['metadata_json'])
+            legacy = metadata['aiControlObservation']; legacy.pop('insightVersion')
+            legacy['facts'] = [{key: baseline['facts'][0][key] for key in ('id', 'currentPrice', 'sourceAsOf')}]
+            connection.execute("UPDATE notification_delivery_attempts SET metadata_json=%s WHERE job_id=%s AND status='delivered'", (json.dumps(metadata), job.job_id))
+        restored = self.publication.memory(job.account_id, 'TEST')
+        self.assertEqual('KRW', restored['facts'][0]['currency'])
+        self.assertEqual(98, restored['facts'][0]['ma5'])
+        self.assertEqual(task['taskId'], restored['evidenceRestoration']['taskId'])
+        self.assertNotIn('currency', self.publication.receipts(job.account_id, 'TEST')[0]['facts'][0])
 
     def test_notification_worker_delivers_new_type_without_legacy_ai_review(self):
         from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner

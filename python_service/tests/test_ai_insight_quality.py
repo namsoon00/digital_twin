@@ -21,12 +21,16 @@ class InsightGroundingTests(unittest.TestCase):
         original = observation()
         for text in ("현재가는 110원입니다.", "이 종목의 포트폴리오 비중은 9.09%입니다.",
                      "현재 하락은 기관의 대규모 매도 때문에 발생했습니다.", "추세 전환으로 반등이 확정됐습니다.",
+                     "기관 매도 때문에 하락했습니다. 원인은 확인할 수 없습니다.",
                      "5일선의 기울기가 음수라 하락 압력을 보여 줍니다."):
             result = copy.deepcopy(original); result['summary'] = text
             self.assertTrue(insight_errors(result, result['input']), text)
             self.assertTrue(quality_block(result))
         original['counterEvidence'] = '현재 자료가 부분 상태라 원인은 판단할 수 없습니다.'
         self.assertFalse(insight_errors(original, original['input']))
+        for text in ('약세 원인은 확정되지 않는다.', '방향은 확정적이지 않으며 반등을 보장할 수 없습니다.'):
+            original['counterEvidence'] = text
+            self.assertFalse(insight_errors(original, original['input']), text)
         original['hypothesis'] = '상승 기울기의 20일선과 60일선은 흐름 유지를 시사하며, 5일선 위 위치는 단기 반등일 수 있습니다.'
         original['input']['facts'][0]['ma20Slope'] = 0.2
         original['claimEvidence']['hypothesis'] += [ref('ma20Slope'), ref('ma60Slope')]

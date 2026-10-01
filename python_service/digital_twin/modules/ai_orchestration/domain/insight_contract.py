@@ -27,6 +27,7 @@ METRICS = {
     "foreignNetVolume": ("외국인 순매수", "주"), "institutionNetVolume": ("기관 순매수", "주"),
 }
 CERTAINTY = re.compile(r"확정[됐되적]|반드시|무조건|보장|틀림없|확실[히한].*(?:상승|하락|반등)")
+NEGATED_CERTAINTY = re.compile(r"(?:확정|보장|단정)(?:(?:되|하)?지(?:는)?\s*않|적이지\s*않|(?:할|될)\s*수(?:는)?\s*없|(?:된|적이라는)\s*(?:것이\s*)?아니|(?:은|이)\s*없)")
 PERIOD = re.compile(r"(?<!\d)(5|20|60)일(?:선|\s*(?:이동)?평균)")
 _PERIOD_NAME = r"(?:5|20|60)일(?:선|\s*(?:이동)?평균(?:\s*가격)?)"
 _PERIOD_SERIES = _PERIOD_NAME + r"(?:\s*(?:과|와|및|,|·)\s*" + _PERIOD_NAME + r")*"
@@ -104,6 +105,10 @@ def section_text(result, section):
     return result.get("notification", {}).get("reason", "") if section == "notificationReason" else result.get(section, "")
 
 
+def asserts_certainty(text):
+    return bool(CERTAINTY.search(NEGATED_CERTAINTY.sub("", text)))
+
+
 def insight_errors(result, packet):
     errors = []
     if result.get("insightVersion") != INSIGHT_VERSION:
@@ -120,10 +125,11 @@ def insight_errors(result, packet):
         # Quantities belong to the deterministic fact panel, never free prose.
         if re.search(r"\d", PERIOD.sub("평균 가격", text)):
             errors.append(section + ": 수치는 직접 쓰지 않고 근거 표시에 맡겨야 합니다.")
-        if CERTAINTY.search(text) or narrative_presentation_errors("NO_ACTION", [text]):
+        if asserts_certainty(text) or narrative_presentation_errors("NO_ACTION", [text]):
             errors.append(section + ": 확정적 전망 또는 행동 지시가 포함됐습니다.")
-        if re.search(r"때문|원인으로|원인입니다|원인은", text) and not re.search(r"(?:단정|확인|판단|알).{0,12}(?:없|못|어렵)|가능|일 수", text):
-            errors.append(section + ": 관측 사실을 확인된 원인으로 단정할 수 없습니다.")
+        for sentence in re.split(r"[.!?。\n]", text):
+            if re.search(r"때문|원인으로|원인입니다|원인은", sentence) and not re.search(r"(?:확정|단정|확인|판단|알).{0,12}(?:없|못|않|어렵)|가능|일 수", sentence):
+                errors.append(section + ": 관측 사실을 확인된 원인으로 단정할 수 없습니다.")
         resolved = []
         for ref in refs:
             try:
@@ -162,7 +168,7 @@ def insight_errors(result, packet):
             except (ValueError, TypeError, KeyError):
                 errors.append("관측 비교가 실제 항목·시점·수치와 일치하지 않습니다.")
     for row in result.get("followUpConditions", []):
-        if re.search(r"\d", PERIOD.sub("평균 가격", row.get("description", ""))) or CERTAINTY.search(row.get("description", "")):
+        if re.search(r"\d", PERIOD.sub("평균 가격", row.get("description", ""))) or asserts_certainty(row.get("description", "")):
             errors.append("확인 조건 설명에 직접 작성한 수치나 확정적 전망이 있습니다.")
     return list(dict.fromkeys(errors))
 

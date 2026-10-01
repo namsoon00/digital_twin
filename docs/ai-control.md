@@ -95,7 +95,21 @@ remain in effect. News, disclosure and model-review queues retain their own jobs
 rule-triggered investment AI workers are retired.
 
 Independent work defaults to **48 task starts and 24 model calls per UTC day**.
-Retries consume budget too. Tasks use MySQL leases, heartbeat renewal, fenced
+The owner can set `aiControlBudgetEnabled=false` to remove both daily limits.
+Usage accounting, duplicate-input suppression, leases, process concurrency and
+notification quality/frequency policies still apply. Numeric limits remain saved
+for re-enabling; zero keeps its existing meaning of no capacity when limits are
+enabled. Unlimited operation does not erase consumed calls or task history.
+Retries that execute work consume budget too. Admission checks both budgets
+before claiming a task; a new observation needs room for generation and an
+independent critique. Exhaustion is `budget-wait`, not an idle worker or a
+failed analysis. It preserves the pending job without using task attempts.
+A call-budget race during execution defers the same leased task until the next
+UTC day and does not consume its failure allowance; a raised limit lets that
+task resume earlier. Counters and frozen input history are never reset to
+manufacture capacity. The owner page shows the independent call counter,
+remaining capacity, limit wait and next reset separately from other AI workloads.
+Tasks use MySQL leases, heartbeat renewal, fenced
 completion, stable root identities and transactional successor creation. A
 completed ResearchRun is reused after retry. Source-provider work is at-least-once
 when a process dies before its result is saved; this is not exactly-once external

@@ -13,6 +13,7 @@ const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 
   input:{name:'테스트 종목',facts:[{currentPrice:100,currency:'KRW',sourceAsOf:'2026-10-01T03:00:00Z'}]}};
 const server = http.createServer((req,res) => {
   if (req.url === '/api/ai-control/status') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,configuredEnabled:true,tasksStartedToday:2,dailyTaskBudget:48,activeTaskCount:1,dailyCallBudget:24,
+    modelCallsUsedToday:24,observationScheduling:{status:'budget-wait',reason:'ai-call-budget-exhausted',nextCheckAt:'2026-10-02T00:00:00Z'},
     qualitySummary:{accepted:0,rejected:1},tasks:[{taskId:'fixture',symbol:'TEST',status:'completed',capability:'observe',result}],callsToday:[]}));return;}
   const file = path.resolve(root,'.'+req.url);
   if (!file.startsWith(root+path.sep) || !fs.existsSync(file)) {res.writeHead(404);res.end();return;}
@@ -30,6 +31,24 @@ const server = http.createServer((req,res) => {
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto('http://127.0.0.1:'+server.address().port+'/ai-control.html');
    await page.locator('article').waitFor();
+   assert.match(await page.locator('#overview').innerText(),/사용 한도로 대기/);
+   assert.match(await page.locator('#overview').innerText(),/24 \/ 24/);
+   assert.match(await page.locator('#overview').innerText(),/한도 갱신/);
+   await page.route('**/api/ai-control/settings', async route => {
+    assert.equal(route.request().postDataJSON().aiControlBudgetEnabled,'false');
+    await route.fulfill({json:{saved:true}});
+   });
+   await page.locator('#budgetEnabled').uncheck();
+   assert(await page.locator('#callBudget').isDisabled());
+   assert(await page.locator('#taskBudget').isDisabled());
+   await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,configuredEnabled:true,budgetEnabled:false,
+    tasksStartedToday:50,dailyTaskBudget:48,modelCallsUsedToday:30,dailyCallBudget:24,activeTaskCount:1,
+    observationScheduling:{status:'ready'},qualitySummary:{accepted:0,rejected:1},
+    tasks:[{taskId:'fixture',symbol:'TEST',status:'completed',capability:'observe',result}],callsToday:[]}}));
+   await page.locator('#settings button').click();
+   await page.getByText('30 / 제한 없음',{exact:true}).waitFor();
+   assert.match(await page.locator('#overview').innerText(),/50 \/ 제한 없음/);
+   assert.doesNotMatch(await page.locator('#overview').innerText(),/사용 한도로 대기/);
    assert.match(await page.locator('article').innerText(),/품질 검토 보류/);
    await page.getByText(/실제 발송 원문 ·/).click();
    assert.match(await page.locator('article').innerText(),/실제 전송된 과거 원문 <b>증거<\/b>/);
@@ -42,6 +61,6 @@ const server = http.createServer((req,res) => {
    await page.screenshot({path:'/tmp/orbit-ai-control-'+width+'.png',fullPage:true});
    await page.close();
   }
-  console.log('AI control browser: desktop/mobile, exact receipt, rejected claims, expired checks and escaping passed');
+  console.log('AI control browser: desktop/mobile, limit wait/removal, exact receipt, rejected claims, expired checks and escaping passed');
  } finally {if(browser) await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

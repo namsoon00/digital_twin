@@ -178,8 +178,14 @@ class InsightControlTests(unittest.TestCase):
         self.assertEqual('rejected', store.complete.call_args.args[1]['quality']['status'])
 
     def test_review_failure_and_legacy_model_output_never_approve_delivery(self):
+        from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
         service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
         planner.return_value = plan()
+        wait = AIControlBudgetWait('call', '2026-10-02T00:00:00Z')
+        service.reviewer = Mock(side_effect=wait)
+        self.assertEqual('budget-wait', service.run_once()['status'])
+        store.complete.assert_not_called(); store.fail.assert_not_called()
+        store.defer_budget.assert_called_once()
         service.reviewer = Mock(side_effect=TimeoutError)
         self.assertEqual('completed', service.run_once()['status'])
         self.assertEqual('rejected', store.complete.call_args.args[1]['quality']['status'])

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.modules.ai_orchestration.domain.planning import bounded, identity, stamp
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
+from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
 
 
 SCHEMA = (
@@ -73,18 +74,21 @@ class MySQLAIControlStore(MySQLOperationalConnection):
     def claim(self):
         now = stamp()
         day = now[:10]
-        maximum = bounded(self.runtime_settings.get("aiControlDailyTaskBudget"), 48, 0, 200)
         with self.transaction() as connection:
             connection.execute("INSERT IGNORE INTO ai_control_budget (day_key,used_count) VALUES (%s,0)", (day,))
             budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s FOR UPDATE", (day,)).fetchone()
-            if int(budget["used_count"]) >= maximum:
-                return None
             row = connection.execute(
-                "SELECT * FROM ai_control_tasks WHERE (status='pending' AND available_at<=%s) OR (status='processing' AND lease_until<%s) ORDER BY priority DESC,available_at,task_id LIMIT 1 FOR UPDATE SKIP LOCKED",
+                "SELECT * FROM ai_control_tasks WHERE (status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')) OR (status='processing' AND lease_until<%s) ORDER BY priority DESC,available_at,task_id LIMIT 1 FOR UPDATE SKIP LOCKED",
                 (now, now),
             ).fetchone()
             if not row:
                 return None
+            calls = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
+            state = budget_state(self.runtime_settings, budget["used_count"], (calls or {}).get("used_count", 0),
+                                 datetime.fromisoformat(now.replace("Z", "+00:00")))
+            wait = admission_wait(state, row["capability"])
+            if wait:
+                raise wait
             token = uuid.uuid4().hex
             until = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
             connection.execute("UPDATE ai_control_tasks SET status='processing',lease_token=%s,lease_until=%s,attempts=attempts+1,updated_at=%s WHERE task_id=%s", (token, until, now, row["task_id"]))
@@ -131,8 +135,9 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             return True
 
     def fail(self, job, error_kind):
-        terminal = job["attempts"] >= 3
-        due = (datetime.now(timezone.utc) + timedelta(minutes=30 * min(job["attempts"], 3))).isoformat().replace("+00:00", "Z")
+        failures = job["attempts"] - int(job.get("budgetDeferrals", 0))
+        terminal = failures >= 3
+        due = (datetime.now(timezone.utc) + timedelta(minutes=30 * min(failures, 3))).isoformat().replace("+00:00", "Z")
         with self.transaction() as connection:
             changed = connection.execute("UPDATE ai_control_tasks SET status=%s,last_error=%s,available_at=%s,updated_at=%s,lease_token='',lease_until='' WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
                 ("failed" if terminal else "pending", error_kind[:100], due, stamp(), job["taskId"], job["leaseToken"], stamp())).rowcount
@@ -140,6 +145,16 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                 next_due = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
                     "capability": "observe", "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
+
+    def defer_budget(self, job, wait):
+        # Keep attempt identities immutable for frozen input/call audit. Budget
+        # waits are separately counted so they cannot exhaust failure retries.
+        with self.transaction() as connection:
+            return bool(connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
+                "payload_json=JSON_SET(payload_json,'$.budgetDeferrals',%s),updated_at=%s,lease_token='',lease_until='' "
+                "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
+                (wait.code, wait.reset_at, int(job.get("budgetDeferrals", 0)) + 1, stamp(),
+                 job["taskId"], job["leaseToken"], stamp())).rowcount)
 
     def memory(self, account_id, symbol):
         with self.connect() as connection:
@@ -178,6 +193,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
 
     def begin_call(self, workload, prompt_hash, task_id="", input_id=""):
         call_id = uuid.uuid4().hex
+        now = stamp()
         with self.transaction() as connection:
             if workload == "independent-observation":
                 frozen = connection.execute("SELECT i.task_id,i.prompt_hash FROM ai_control_inputs i "
@@ -186,14 +202,15 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                 if not frozen or frozen["task_id"] != task_id or frozen["prompt_hash"] != prompt_hash:
                     raise ValueError("independent AI call requires exact persisted input")
             if task_id:
-                day = "calls:" + stamp()[:10]
+                day = "calls:" + now[:10]
                 maximum = bounded(self.runtime_settings.get("aiControlDailyCallBudget"), 24, 0, 300)
                 connection.execute("INSERT IGNORE INTO ai_control_budget (day_key,used_count) VALUES (%s,0)", (day,))
                 row = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s FOR UPDATE", (day,)).fetchone()
-                if int(row["used_count"]) >= maximum:
-                    raise RuntimeError("central AI daily call budget exhausted")
+                if budgets_enabled(self.runtime_settings) and int(row["used_count"]) >= maximum:
+                    reset = budget_state(self.runtime_settings, 0, row["used_count"], datetime.fromisoformat(now.replace("Z", "+00:00")))["budgetResetAt"]
+                    raise AIControlBudgetWait("call", reset)
                 connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
-            connection.execute("INSERT INTO ai_control_calls (call_id,workload,status,task_id,prompt_hash,started_at) VALUES (%s,%s,'running',%s,%s,%s)", (call_id, workload[:64], task_id[:64], prompt_hash, stamp()))
+            connection.execute("INSERT INTO ai_control_calls (call_id,workload,status,task_id,prompt_hash,started_at) VALUES (%s,%s,'running',%s,%s,%s)", (call_id, workload[:64], task_id[:64], prompt_hash, now))
             if input_id:
                 connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
         return call_id
@@ -219,17 +236,21 @@ class MySQLAIControlStore(MySQLOperationalConnection):
         return {"taskId": row["task_id"], "draftHash": narrative_digest({**envelope["draft"], "input": envelope["current"]})}
 
     def status(self, account_id=""):
+        now = datetime.now(timezone.utc)
+        day = now.date().isoformat()
         with self.connect() as connection:
             rows = connection.execute("SELECT * FROM ai_control_tasks WHERE (%s='' OR account_id=%s) ORDER BY updated_at DESC LIMIT 60", (account_id, account_id)).fetchall()
-            calls = connection.execute("SELECT workload,status,COUNT(*) AS count FROM ai_control_calls WHERE started_at>=%s GROUP BY workload,status", (stamp()[:10],)).fetchall()
-            budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", (stamp()[:10],)).fetchone()
+            calls = connection.execute("SELECT workload,status,COUNT(*) AS count FROM ai_control_calls WHERE started_at>=%s GROUP BY workload,status", (day,)).fetchall()
+            budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", (day,)).fetchone()
+            call_budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
             active = connection.execute("SELECT COUNT(*) AS count FROM ai_control_tasks WHERE status IN ('pending','processing') AND (%s='' OR account_id=%s)", (account_id, account_id)).fetchone()
+        state = budget_state(self.runtime_settings, (budget or {}).get("used_count", 0), (call_budget or {}).get("used_count", 0), now)
+        wait = admission_wait(state)
         return {"tasks": [{"taskId": row["task_id"], "accountId": row["account_id"], "symbol": row["symbol"],
                            "name": json.loads(row["payload_json"]).get("name", row["symbol"]),
                            "capability": row["capability"], "status": row["status"], "nextCheckAt": row["available_at"],
                            "attempts": row["attempts"], "lastError": row["last_error"], "updatedAt": row["updated_at"],
                            "result": json.loads(row["result_json"])} for row in rows],
-                "callsToday": list(calls), "tasksStartedToday": int((budget or {}).get("used_count", 0)),
-                "activeTaskCount": int(active["count"]),
-                "dailyCallBudget": bounded(self.runtime_settings.get("aiControlDailyCallBudget"), 24, 0, 300),
-                "dailyTaskBudget": bounded(self.runtime_settings.get("aiControlDailyTaskBudget"), 48, 0, 200)}
+                "callsToday": list(calls), **state,
+                "observationScheduling": wait.result() if wait else {"status": "ready"},
+                "activeTaskCount": int(active["count"])}

@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from unittest.mock import Mock, patch
 
 from digital_twin.modules.ai_orchestration.domain.planning import validate_plan, enabled, identity, stamp
+from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, budget_state
 from digital_twin.modules.ai_orchestration.application.control import AIControlService
 from digital_twin.modules.ai_orchestration.infrastructure.execution import ai_execution
 from digital_twin.modules.reasoning.domain.observation_evidence import EVIDENCE_PROTOCOL, EVIDENCE_PROFILE, select_evidence
@@ -83,6 +84,10 @@ class AIControlTests(unittest.TestCase):
         service.settings["aiControlEnabled"] = "true"
         store.complete.return_value = False
         self.assertEqual("lease-lost", service.run_once()["status"])
+        store.claim.side_effect = AIControlBudgetWait("call", "2026-10-02T00:00:00Z")
+        planner.reset_mock(); store.fail.reset_mock()
+        self.assertEqual("budget-wait", service.run_once()["status"])
+        planner.assert_not_called(); store.fail.assert_not_called()
 
     def test_execution_audit_records_failure_without_prompt_or_error_contents(self):
         store = Mock()
@@ -128,12 +133,12 @@ class AIControlTests(unittest.TestCase):
         OperationsRoutes().route_operations_health(request, "/api/ai-control/status", {})
         self.assertEqual(403, request.send_payload.call_args.args[0])
         with patch("digital_twin.infrastructure.settings.save_runtime_settings") as save:
-            for payload in ({"aiControlDailyTaskBudget": -1}, {"command": "anything"}, {"aiControlEnabled": "maybe"}):
+            for payload in ({"aiControlDailyTaskBudget": -1}, {"command": "anything"}, {"aiControlEnabled": "maybe"}, {"aiControlBudgetEnabled": "maybe"}):
                 with self.assertRaises(ValueError):
                     save_ai_control_settings(payload)
             save.assert_not_called()
-            save_ai_control_settings({"aiControlEnabled": "false", "aiControlDailyCallBudget": "0"})
-            save.assert_called_once()
+            save_ai_control_settings({"aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiControlDailyCallBudget": "0"})
+            save.assert_called_once_with({"aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiControlDailyCallBudget": "0"})
 
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
@@ -141,7 +146,7 @@ class AIControlStorageTests(unittest.TestCase):
     def setUp(self):
         from digital_twin.infrastructure.settings import runtime_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
-        self.store = MySQLAIControlStore({**runtime_settings(), "aiControlDailyTaskBudget": 10, "aiControlDailyCallBudget": 1})
+        self.store = MySQLAIControlStore({**runtime_settings(), "aiControlDailyTaskBudget": 10, "aiControlDailyCallBudget": 2})
         self.clean()
 
     def clean(self):
@@ -195,15 +200,63 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertEqual([], self.store.memory(SUBJECT["accountId"], "TEST"))
 
     def test_budgets_survive_new_store_and_failed_calls_consume_admission(self):
+        from datetime import datetime, timezone
+        reset = budget_state({}, 0, 24, datetime(2026, 10, 1, 23, 59, tzinfo=timezone.utc))["budgetResetAt"]
+        self.assertEqual("2026-10-02T00:00:00Z", reset)
+        self.store.seed(SUBJECT)
         call = self.store.begin_call("research", "hash", "task")
         self.store.finish_call(call, "TimeoutError")
-        with self.assertRaises(RuntimeError):
-            self.store.begin_call("research", "hash", "next-task")
+        # One call remains, but a draft must leave room for its critique. The
+        # wait must not claim work, use task budget or exhaust failure retries.
+        for _ in range(3):
+            with self.assertRaises(AIControlBudgetWait):
+                self.store.claim()
+        state = self.store.status()
+        self.assertEqual(0, state["tasksStartedToday"])
+        self.assertEqual(0, state["tasks"][0]["attempts"])
+        self.assertEqual(1, state["modelCallsUsedToday"])
+        self.assertEqual("budget-wait", state["observationScheduling"]["status"])
+        self.store.runtime_settings["aiControlDailyCallBudget"] = 3
+        job = self.store.claim()
+        self.assertEqual(1, job["attempts"])
+        # Another admitted worker can consume the last call after preflight.
+        for _ in range(2):
+            self.store.begin_call("research", "hash", "other-task")
+        with self.assertRaises(AIControlBudgetWait) as blocked:
+            self.store.begin_call("research", "hash", job["taskId"])
+        self.assertTrue(self.store.defer_budget(job, blocked.exception))
+        self.assertFalse(self.store.defer_budget(job, blocked.exception))
+        self.store.runtime_settings["aiControlDailyCallBudget"] = 5
+        resumed = self.store.claim()  # A raised limit resumes before tomorrow.
+        self.assertEqual(job["taskId"], resumed["taskId"])
+        self.assertEqual(1, resumed["budgetDeferrals"])
+        self.store.fail(resumed, "TimeoutError")
+        self.assertEqual("pending", self.store.status()["tasks"][0]["status"])
         # Legacy domain workloads retain their own budgets but share the execution ledger.
         self.store.begin_call("model-review", "hash")
+        self.assertEqual(3, self.store.status()["modelCallsUsedToday"])
         self.store.runtime_settings["aiControlDailyTaskBudget"] = 0
-        self.store.seed(SUBJECT)
-        self.assertIsNone(self.store.claim())
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET available_at='2000'")
+        with self.assertRaises(AIControlBudgetWait) as blocked:
+            self.store.claim()
+        self.assertEqual("ai-task-budget-exhausted", blocked.exception.code)
+        # Removing limits admits work even beyond both numeric settings while
+        # preserving all usage counters; re-enabling resumes enforcement.
+        self.store.runtime_settings.update(aiControlBudgetEnabled="false", aiControlDailyCallBudget=0)
+        unlimited = self.store.claim()
+        self.store.begin_call("research", "hash", unlimited["taskId"])
+        status = self.store.status()
+        self.assertFalse(status["budgetEnabled"])
+        self.assertEqual(4, status["modelCallsUsedToday"])
+        self.assertIsNone(status["modelCallsRemainingToday"])
+        self.assertEqual("ready", status["observationScheduling"]["status"])
+        self.store.fail(unlimited, "TimeoutError")
+        self.store.runtime_settings.update(aiControlBudgetEnabled="true", aiControlDailyCallBudget=5)
+        # A new UTC day admits due work without a counter reset or lost task.
+        self.store.runtime_settings["aiControlDailyTaskBudget"] = 10
+        with patch("digital_twin.modules.ai_orchestration.infrastructure.mysql_control.stamp", return_value=reset):
+            self.assertEqual(job["taskId"], self.store.claim()["taskId"])
 
     def test_central_model_requires_frozen_input_and_keeps_failed_attempt_replay(self):
         import gzip

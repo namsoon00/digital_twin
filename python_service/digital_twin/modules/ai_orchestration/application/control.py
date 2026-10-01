@@ -4,6 +4,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review
+from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
 from digital_twin.modules.outcomes.contracts import evaluate_observation_conditions
 
 
@@ -21,7 +22,10 @@ class AIControlService:
         subjects = list(self.subjects())
         for subject in subjects:
             self.store.seed(subject)
-        job = self.store.claim()
+        try:
+            job = self.store.claim()
+        except AIControlBudgetWait as wait:
+            return wait.result()
         if not job:
             return {"status": "idle"}
         try:
@@ -68,6 +72,8 @@ class AIControlService:
                             return {"status": "lease-lost", "taskId": job["taskId"]}
                         try:
                             result["quality"] = accept_review(result, self.reviewer(review_input, review_id), review_id)
+                        except AIControlBudgetWait:
+                            raise
                         except Exception:
                             result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
                     children = []
@@ -84,6 +90,9 @@ class AIControlService:
                 if not self.store.complete(job, result, children):
                     return {"status": "lease-lost", "taskId": job["taskId"]}
             return {"status": "completed", "taskId": job["taskId"], "capability": job["capability"]}
+        except AIControlBudgetWait as wait:
+            saved = self.store.defer_budget(job, wait)
+            return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
             reason = error.code if isinstance(error, EvidenceContractError) else type(error).__name__

@@ -1,4 +1,5 @@
 [
+  {"reason": "Retire legacy investment AI controls and direct users to independent central observation settings. Covered by test_ai_control_publication and test_ai_inference_worker_runtime.", "functions": ["renderRuntimeSettingsSummary", "renderSettingsAiRuntimeGroup", "settingsAiRuntimeWorkDetailPayload"]},
   {"reason": "Expose central AI observation, research and execution records from operations. Covered by test_ai_control.", "functions": ["renderOperationsHealthConsole"]},
   {
     "reason": "Company report v3 defaults to a compact captured brief with two facts, one valuation condition and one next check. Full evidence and qualified AI interpretations stay in a closed disclosure; frozen v3 history uses its captured reading and v2 stays readable. Covered by test_company_report_reading and insight-presentation.test.mjs.",

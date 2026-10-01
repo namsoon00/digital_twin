@@ -313,6 +313,10 @@ class NotificationAIRequestEnqueuer:
         self.reasoning_orchestrator = reasoning_orchestrator
 
     def enqueue(self, job: NotificationJob) -> Dict[str, object]:
+        from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired, RETIRED_REASON
+        if legacy_route_retired(self.settings):
+            return {"status": "retired", "reason": RETIRED_REASON}
+
         if self.context_preparer:
             self.context_preparer(job)
         context = dict(job.context or {})
@@ -499,6 +503,9 @@ class NotificationAIRequestEnqueuer:
 
     def enqueue_subject_decision(self, job: NotificationJob) -> Dict[str, object]:
         """Start AI interpretation before a notification job exists."""
+        from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired, RETIRED_REASON
+        if legacy_route_retired(self.settings):
+            return {"status": "retired", "reason": RETIRED_REASON}
 
         review_mode = notification_ai_review_mode(dict(job.context or {}))
         if self.context_preparer:
@@ -831,6 +838,9 @@ class AIInferenceQueueRunner:
             stopper()
 
     def run_once(self, limit: int = 1) -> int:
+        from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired
+        if legacy_route_retired(self.settings):
+            return 0
         self.last_run_details = []
         self.last_claim_retry = {}
         try:

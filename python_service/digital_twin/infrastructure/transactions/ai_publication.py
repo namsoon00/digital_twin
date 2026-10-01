@@ -10,6 +10,8 @@ from digital_twin.modules.outcomes.infrastructure.follow_up_read_model import hy
 """MySQL-backed, per-subject single-flight queue for notification AI inference."""
 
 
+from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired
+
 import gzip
 import hashlib
 import json
@@ -180,6 +182,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         self.notification_store = MySQLNotificationJobStore(self.runtime_settings)
 
     def enqueue(self, job: NotificationJob, request: AIInferenceRequest) -> Dict[str, object]:
+        if legacy_route_retired(self.runtime_settings):
+            return {"status": "retired", "reason": "legacy-investment-route-retired"}
         stamp = utc_now()
         superseded_case_ids = []
         with self.transaction() as connection:
@@ -449,6 +453,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         request: AIInferenceRequest,
     ) -> Dict[str, object]:
         """Queue AI analysis without creating a notification outbox row."""
+        if legacy_route_retired(self.runtime_settings):
+            return {"status": "retired", "reason": "legacy-investment-route-retired"}
 
         handoff = ai_insight_handoff(request.context)
         if request.origin_kind != SUBJECT_DECISION_ORIGIN or handoff is None:
@@ -737,6 +743,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         return reasoning_case_id
 
     def claim(self, worker_id: str, limit: int = 1, lease_seconds: int = 360) -> List[AIInferenceRequest]:
+        if legacy_route_retired(self.runtime_settings):
+            return []
         worker = _clean(worker_id) or "notification-ai"
         bounded_limit = max(1, min(10, int(limit or 1)))
         bounded_lease = max(30, min(3600, int(lease_seconds or 360)))
@@ -1071,6 +1079,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         delivery_projection=None,
         after_complete=None,
     ) -> bool:
+        if legacy_route_retired(self.runtime_settings):
+            return False
         stamp = utc_now()
         detached = request.detached_from_notification
         with self.transaction() as connection:

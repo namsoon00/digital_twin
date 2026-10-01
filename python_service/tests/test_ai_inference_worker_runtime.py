@@ -24,7 +24,7 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
         registry.control.side_effect = RuntimeError("db unavailable")
         self.assertFalse(service_manager.candidate_reasoning_worker_enabled(settings, lambda _: registry))
 
-    def test_service_manager_builds_configured_parallel_ai_workers(self):
+    def test_service_manager_retires_legacy_ai_workers_and_runs_independent_control(self):
         with patch.object(service_manager, "runtime_settings", return_value={
             "notificationAiQueueWorkerCount": "3",
             "ontologyTypeDbEnabled": "0",
@@ -33,18 +33,20 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             specs = service_manager.worker_specs()
 
         names = [name for name in specs if name.startswith("notification-ai")]
-        self.assertEqual(["notification-ai", "notification-ai-2", "notification-ai-3"], names)
-        self.assertIn("ai-inference watch --worker-id ai-1 --limit 1", " ".join(specs["notification-ai"]["command"]))
+        self.assertEqual([], names)
+        self.assertIn("ai-control watch", " ".join(specs["ai-control"]["command"]))
 
-    def test_service_manager_allows_ai_workers_to_be_paused(self):
+    def test_service_manager_keeps_control_scheduler_available_for_pause_and_resume(self):
         with patch.object(service_manager, "runtime_settings", return_value={
-            "notificationAiQueueWorkerCount": "0",
+            "notificationAiQueueWorkerCount": "3",
+            "aiControlEnabled": "false",
             "ontologyTypeDbEnabled": "0",
             "mysqlRuntimeManaged": "0",
         }):
             specs = service_manager.worker_specs()
 
         self.assertFalse([name for name in specs if name.startswith("notification-ai")])
+        self.assertIn("ai-control", specs)
 
     def test_service_manager_manages_cloudflare_evidence_share_when_enabled(self):
         with patch.object(service_manager, "runtime_settings", return_value={

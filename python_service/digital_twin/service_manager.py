@@ -1055,18 +1055,11 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         )
         and not (name == "reasoning-engine-shadow" and not candidate_worker_enabled)
     })
-    # Zero is an explicit operational pause: keep collection and deterministic
-    # notifications running without launching external AI inference workers.
-    # The operational settings store can be unavailable while MySQL itself is
-    # starting.  Failing closed prevents an old/default configuration from
-    # issuing AI requests before the persisted pause setting is readable.
-    ai_worker_count = int_value(
-        (settings or {}).get("notificationAiQueueWorkerCount"),
-        0,
-        0,
-    )
-    workers.update(notification_ai_worker_specs(ai_worker_count))
-    if ai_worker_count > 0:
+    # The retired rule-triggered AI queue has no managed execution workers.
+    # Central observation has its own independent enable switch.
+    # Keep the scheduler available for UI pause/resume; it gates every task.
+    # If persisted settings cannot be read, do not start new AI work.
+    if settings:
         workers["ai-control"] = {
             "label": "Central AI observation and research",
             "pid": data_dir() / "python-ai-control.pid",

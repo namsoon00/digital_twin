@@ -109,6 +109,11 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                                         (json.dumps(result, ensure_ascii=False), now, job["taskId"], job["leaseToken"], now))
             if not cursor.rowcount:
                 return False
+            writer = getattr(self, "outbox_writer", None)
+            if writer is not None and job["capability"] == "observe" and result.get("summary"):
+                result["publication"] = writer(connection, job, result)
+                connection.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s",
+                                   (json.dumps(result, ensure_ascii=False), job["taskId"]))
             for child in children:
                 self.insert(connection, child)
             return True
@@ -131,6 +136,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
         for row in rows:
             saved = json.loads(row["result_json"])
             previous = saved.pop("input", {})
+            saved.pop("comparisonFacts", None)
             keys = ("id", "label", "symbol", "currentPrice", "changeRate", "ma20", "ma60", "volumeRatio", "profitLossRate", "sourceAsOf", "asOf", "sourceSnapshotId", "source", "freshnessStatus")
             saved["previousFacts"] = [{key: fact[key] for key in keys if key in fact} for fact in previous.get("facts", [])[:20]]
             result.append({**saved, "completedAt": row["updated_at"]})

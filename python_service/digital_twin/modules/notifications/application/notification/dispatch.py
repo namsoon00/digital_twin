@@ -3,6 +3,7 @@
 from typing import Callable, Dict
 from copy import deepcopy
 import hashlib
+from contextlib import nullcontext
 
 from digital_twin.modules.notifications.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
@@ -14,12 +15,18 @@ class NotificationDispatchService:
         queue,
         notifier_factory: Callable,
         operations_notifier_factory: Callable = None,
+        delivery_guard: Callable = None,
     ):
         self.queue = queue
         self.notifier_factory = notifier_factory
         self.operations_notifier_factory = operations_notifier_factory
+        self.delivery_guard = delivery_guard
 
     def deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
+        with self.delivery_guard(job, message) if self.delivery_guard else nullcontext():
+            self._deliver(job, accounts, message)
+
+    def _deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
         operations_delivery = is_operations_delivery_message_type(job.message_type)
         if not operations_delivery and job.account_id and job.account_id not in accounts:
             raise RuntimeError("알림 수신 계정을 찾을 수 없어 다른 계정으로 대체 발송하지 않았습니다.")
@@ -41,6 +48,8 @@ class NotificationDispatchService:
             # Later render-time clocks or enrichment cannot change chunk offsets.
             message = str(progress.get("message") or message)
             progress["message"] = message
+            if context.get("aiControlRenderedAt"):
+                progress["aiControlRenderedAt"] = context["aiControlRenderedAt"]
             if progress.get("relationChangeEvidence"):
                 context["relationChangeEvidence"] = deepcopy(progress["relationChangeEvidence"])
             elif context.get("relationChangeEvidence"):
@@ -62,6 +71,8 @@ class NotificationDispatchService:
             "inferenceGenerationId": context.get("inferenceGenerationId") or "",
             "deliveryBaseline": context.get("investmentInsightDeliveryHistory") or {}}
         relation_change = context.get("relationChangeEvidence") or {}
+        if context.get("aiControlDeliverySnapshot"):
+            rendered_audit["aiControlObservation"] = context["aiControlDeliverySnapshot"]
         if relation_change.get("version") and relation_change.get("current"):
             # The receipt outlives the large job payload. Preserve the exact
             # last-delivered facts for the next customer comparison.

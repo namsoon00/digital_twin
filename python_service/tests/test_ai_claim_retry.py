@@ -93,7 +93,7 @@ class AIClaimRetryTests(unittest.TestCase):
         return patcher.start()
 
     def runner(self, store):
-        return SimpleNamespace(queue=store, worker_id="worker", lease_seconds=60,
+        return SimpleNamespace(queue=store, settings={}, worker_id="worker", lease_seconds=60,
                                process_request=Mock(return_value="processed"), recover_request=Mock())
 
     def test_deadlock_before_selection_retries_in_a_fresh_transaction(self):
@@ -245,7 +245,9 @@ class AIClaimRetryTests(unittest.TestCase):
         source = ast.parse(Path(inspect.getsourcefile(MySQLAIInferenceQueueStore)).read_text())
         owner = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == "MySQLAIInferenceQueueStore")
         method = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "claim")
-        self.assertEqual(6, len(method.body))
+        self.assertEqual(7, len(method.body))
+        self.assertEqual("legacy_route_retired", method.body[0].test.func.id)
+        method.body = method.body[1:]  # Historical SQL remains unchanged behind the retirement gate.
         callback = method.body[3]
         self.assertEqual("claim_transaction", callback.name)
         self.assertEqual("transaction_with_deadlock_retry", method.body[-1].value.func.attr)

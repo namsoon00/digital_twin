@@ -201,6 +201,11 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
 
         alert_coverage_reconciler = reconcile_alert_coverage
 
+    from digital_twin.infrastructure.composition.ai_orchestration import ai_control_subjects
+    from digital_twin.infrastructure.transactions.ai_control_publication import AIControlPublication
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
+    publication = AIControlPublication(settings, MySQLAIControlStore(settings), stores.notification_job_store(settings),
+                                       lambda: ai_control_subjects(settings))
     return NotificationQueueRunner(
         queue=stores.notification_job_store(settings),
         account_repository=stores.account_reader(settings),
@@ -227,4 +232,5 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         fresh_data_recheck_requester=request_fresh_data_recheck,
         link_base_resolver=ActiveShareNotificationLinkResolver(),
         delivery_comparison_refresher=delivery_comparison_refresher,
+        delivery_guard=publication.delivery_guard,
     )

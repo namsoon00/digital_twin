@@ -2,14 +2,35 @@
 import json
 
 
+def ai_control_subjects(configured):
+    from digital_twin.infrastructure.operational_store import monitor_store
+    from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state
+    from digital_twin.modules.reasoning.contracts import world_from_snapshot
+    from digital_twin.modules.accounts.infrastructure.mysql_watchlist_account_reader import MySQLWatchlistAccountReader
+    accounts = {account.account_id: account for account in MySQLWatchlistAccountReader(configured).load_all() if account.enabled}
+    result = {}
+    for account_id, state in monitor_store(configured).load_previous().items():
+        if account_id not in accounts:
+            continue
+        snapshot = account_snapshot_from_monitor_state(state)
+        if not snapshot or not snapshot.has_live_account_data():
+            continue
+        world = world_from_snapshot(snapshot, configured)
+        watchlist = [position for position in snapshot.watchlist if position.symbol in accounts[account_id].watchlist_symbols]
+        for position in snapshot.positions + watchlist:
+            symbol = str(position.symbol or "").upper().strip()
+            if symbol:
+                result[(account_id, symbol)] = {"accountId": account_id, "symbol": symbol,
+                    "name": position.name, "worldId": world.world_id}
+    return list(result.values())
+
+
 def build_ai_control_service(settings=None):
     from digital_twin.infrastructure.settings import runtime_settings
-    from digital_twin.infrastructure.operational_store import monitor_store, investment_research_store
+    from digital_twin.infrastructure.operational_store import investment_research_store
     from digital_twin.infrastructure.typedb_ontology import typedb_repository_from_settings
     from digital_twin.infrastructure.composition.news_intelligence import build_investment_research_orchestrator
     from digital_twin.infrastructure.news_ai_analyzer import first_json_object
-    from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state
-    from digital_twin.modules.reasoning.contracts import world_from_snapshot
     from digital_twin.modules.decisions.contracts import InvestmentQuestion
     from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
     from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, run_background_ai_prompt
@@ -23,23 +44,7 @@ def build_ai_control_service(settings=None):
     research_store = investment_research_store(configured)
 
     def subjects():
-        from digital_twin.modules.accounts.infrastructure.mysql_watchlist_account_reader import MySQLWatchlistAccountReader
-        accounts = {account.account_id: account for account in MySQLWatchlistAccountReader(configured).load_all() if account.enabled}
-        result = {}
-        for account_id, state in monitor_store(configured).load_previous().items():
-            if account_id not in accounts:
-                continue
-            snapshot = account_snapshot_from_monitor_state(state)
-            if not snapshot or not snapshot.has_live_account_data():
-                continue
-            world = world_from_snapshot(snapshot, configured)
-            watchlist = [position for position in snapshot.watchlist if position.symbol in accounts[account_id].watchlist_symbols]
-            for position in snapshot.positions + watchlist:
-                symbol = str(position.symbol or "").upper().strip()
-                if symbol:
-                    result[(account_id, symbol)] = {"accountId": account_id, "symbol": symbol,
-                        "name": position.name, "worldId": world.world_id}
-        return list(result.values())
+        return ai_control_subjects(configured)
 
     def evidence(job):
         from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
@@ -94,7 +99,13 @@ def build_ai_control_service(settings=None):
         return {"runId": run.run_id, "status": run.status, "changedEvidenceCount": run.changed_evidence_count,
                 "stopReason": run.stop_reason, "authority": "research-only"}
 
-    return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured)
+    from digital_twin.infrastructure.transactions.ai_control_publication import AIControlPublication
+    from digital_twin.infrastructure.operational_store import notification_job_store
+    publication = AIControlPublication(configured, store, notification_job_store(configured), subjects)
+    publication.retire_legacy_work()
+    store.outbox_writer = publication.publish
+    return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
+                            delivery_memory=publication.memory)
 
 
 def ai_control_status(settings=None, account_id=""):
@@ -102,10 +113,25 @@ def ai_control_status(settings=None, account_id=""):
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
     from digital_twin.modules.ai_orchestration.contracts import CAPABILITIES, enabled
     configured = settings if settings is not None else runtime_settings()
-    return {"enabled": enabled(configured),
+    status = MySQLAIControlStore(configured).status(account_id)
+    from digital_twin.infrastructure.operational_store import notification_job_store
+    publications = [task["result"].get("publication") for task in status["tasks"] if task["result"].get("publication", {}).get("jobId")]
+    if publications:
+        with notification_job_store(configured).connect() as connection:
+            ids = [publication["jobId"] for publication in publications]
+            rows = connection.execute("SELECT job_id,status,last_error FROM notification_jobs WHERE job_id IN (" + ",".join(["%s"] * len(ids)) + ")", tuple(ids)).fetchall()
+        deliveries = {row["job_id"]: row for row in rows}
+        for publication in publications:
+            delivery = deliveries.get(publication["jobId"], {})
+            publication["deliveryStatus"] = delivery.get("status", "unknown")
+            if delivery.get("last_error"):
+                publication["reason"] = delivery["last_error"]
+    return {"notificationRoute": "ai-control", "legacyInvestmentNotifications": "retired",
+            "notificationPolicy": {"cooldownMinutes": 180, "dailySubjectLimit": 2, "dailyAccountLimit": 8},
+            "enabled": enabled(configured),
             "configuredEnabled": str(configured.get("aiControlEnabled", "true")).lower() not in {"false", "0", "off"},
             "capabilities": CAPABILITIES,
-            **MySQLAIControlStore(configured).status(account_id)}
+            **status}
 
 
 def save_ai_control_settings(payload):

@@ -12,6 +12,7 @@ SUBJECT = {"accountId": "control-test", "symbol": "TEST", "name": "Test", "world
 PACKET = {**SUBJECT, "sourceSnapshotId": "snapshot-1", "facts": [{"id": "quote-1", "price": 100}]}
 PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesis": "실적 변화가 가격 흐름과 연관될 수 있습니다.",
         "counterEvidence": "기간별 실적이 없어 확인이 필요합니다.", "comparison": "첫 관찰입니다.",
+        "notification": {"send": False, "reason": "첫 관찰이라 이전 흐름을 더 확인합니다."},
         "evidenceIds": ["quote-1"], "questions": [{"question": "공식 발표에서 최근 분기 실적이 개선되었는가?", "capability": "research"}], "nextCheckMinutes": 1}
 
 
@@ -68,11 +69,11 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual([], store.complete.call_args.args[2])
 
     def test_pause_and_lost_lease_do_not_claim_success(self):
-        service, store, planner = self.runner(settings={"notificationAiQueueWorkerCount": 0})
+        service, store, planner = self.runner(settings={"aiControlEnabled": "false", "notificationAiQueueWorkerCount": 0})
         self.assertEqual("paused", service.run_once()["status"])
         store.claim.assert_not_called()
-        self.assertFalse(enabled({}))
-        service.settings["notificationAiQueueWorkerCount"] = 1
+        self.assertTrue(enabled({"notificationAiQueueWorkerCount": 0}))
+        service.settings["aiControlEnabled"] = "true"
         store.complete.return_value = False
         self.assertEqual("lease-lost", service.run_once()["status"])
 

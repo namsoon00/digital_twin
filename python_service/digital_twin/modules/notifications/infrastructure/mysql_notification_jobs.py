@@ -2128,6 +2128,14 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     ) -> bool:
         from digital_twin.modules.notifications.public import NotificationIngressService
 
+        from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired, RETIRED_REASON
+        if job.message_type == "investmentInsight" and legacy_route_retired(self.runtime_settings):
+            job.status, job.last_error = "suppressed", RETIRED_REASON
+            job.context["deliverySuppressionReason"] = "legacy-investment-route-retired"
+            if persist_suppressed and not connection.execute("SELECT job_id FROM notification_jobs WHERE job_id=%s", (job.job_id,)).fetchone():
+                self.upsert_job_with_connection(connection, job)
+                self.record_lifecycle_with_connection(connection, job, "suppressed", "suppressed", RETIRED_REASON)
+            return False
         NotificationIngressService.prepare_job(job)
         if not job.text.strip():
             job.last_error = "empty notification content"

@@ -239,6 +239,7 @@ class NotificationQueueRunner:
         fresh_data_recheck_requester=None,
         link_base_resolver: Callable = None,
         delivery_comparison_refresher: Callable = None,
+        delivery_guard: Callable = None,
     ):
         self.queue = queue
         self.delivery_comparison_refresher = delivery_comparison_refresher
@@ -275,6 +276,7 @@ class NotificationQueueRunner:
             queue=queue,
             notifier_factory=notifier_factory,
             operations_notifier_factory=operations_notifier_factory,
+            delivery_guard=delivery_guard,
         )
         self.eligibility_service = NotificationDispatchEligibilityService(
             queue=queue,
@@ -367,6 +369,13 @@ class NotificationQueueRunner:
             self.active_job = job
             self.active_job_index = index
             self.active_job_stage = "claimed"
+            from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired, RETIRED_REASON
+            if job.message_type == INVESTMENT_INSIGHT and legacy_route_retired(self.settings):
+                job.context["deliverySuppressionReason"] = "legacy-investment-route-retired"
+                self.queue.mark_suppressed(job, RETIRED_REASON)
+                self.last_run_details.append(self.job_detail(job, "suppressed", RETIRED_REASON))
+                processed += 1
+                continue
             if str(job.message_type or "") == OPERATOR_REASONING_REPORT and not self.operator_reports_enabled:
                 reason = "운영자 추론 보고서 알림이 비활성화되어 발송하지 않았습니다."
                 if hasattr(self.queue, "mark_suppressed"):
@@ -474,8 +483,13 @@ class NotificationQueueRunner:
                 processed += 1
                 continue
             self.active_job_stage = "delivering"
+            from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
             try:
                 self.deliver(job, accounts, message)
+            except NotificationDeliverySuppressed as error:
+                self.queue.mark_suppressed(job, str(error))
+                self.last_run_details.append(self.job_detail(job, "suppressed", str(error)))
+                processed += 1
             except Exception as error:  # noqa: BLE001 - one failed delivery must not stop the queue.
                 self.queue.mark_failed(job, str(error))
                 self.record_operational_delivery(job, "failed", str(error))

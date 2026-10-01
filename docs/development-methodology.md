@@ -94,7 +94,16 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   Observations, suppressions, AI failures, and incomplete comparisons persist
   abstention or review-only outcomes and must never manufacture `HOLD`,
   `WATCH`, or `NO_ACTION` decision history.
-- Keep AI insight generation independent from notification transport. Persist
+- Owner-approved central AI cutover (2026-10-01): `aiObservation` is an
+  actionless, independently scheduled explanation of immutable ABox facts. It
+  may notify without a matched RuleBox rule or SubjectDecisionCase, after
+  evidence/numeric validation and receipt-backed delivery controls. This is an
+  explicit exception for observation narratives, not authority to choose an
+  investment action, mutate a rule or create a decision episode. The former
+  `investmentInsight` transport and rule-triggered AI queue are retired in
+  runtime composition. See `docs/ai-control.md` for the full publication contract.
+- Preserve the historical AI insight contract for replay and internal analysis.
+  Keep AI insight generation independent from notification transport. Persist
   the `SubjectDecisionCase` and publish its inference-completed event before
   creating an `AIInsightHandoff`; this handoff may enter the AI queue without
   any notification outbox row. Persist the validated result as an

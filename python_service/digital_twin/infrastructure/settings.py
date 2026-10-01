@@ -1764,6 +1764,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "notificationAiFallbackOnFirstFailure": value("notificationAiFallbackOnFirstFailure", "NOTIFICATION_AI_FALLBACK_ON_FIRST_FAILURE", DEFAULT_STRATEGY_SETTINGS["notificationAiFallbackOnFirstFailure"]),
         "notificationAiComparisonRepairReasoningEffort": value("notificationAiComparisonRepairReasoningEffort", "NOTIFICATION_AI_COMPARISON_REPAIR_REASONING_EFFORT", DEFAULT_STRATEGY_SETTINGS["notificationAiComparisonRepairReasoningEffort"]),
         "notificationAiComparisonRepairTimeoutSeconds": value("notificationAiComparisonRepairTimeoutSeconds", "NOTIFICATION_AI_COMPARISON_REPAIR_TIMEOUT_SECONDS", DEFAULT_STRATEGY_SETTINGS["notificationAiComparisonRepairTimeoutSeconds"]),
+        "investmentNotificationRoute": "ai-control",
         "aiControlEnabled": value("aiControlEnabled", "AI_CONTROL_ENABLED", "true"),
         "aiControlDailyTaskBudget": value("aiControlDailyTaskBudget", "AI_CONTROL_DAILY_TASK_BUDGET", "48"),
         "aiControlDailyCallBudget": value("aiControlDailyCallBudget", "AI_CONTROL_DAILY_CALL_BUDGET", "24"),

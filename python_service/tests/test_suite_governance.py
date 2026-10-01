@@ -217,7 +217,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # protect distinct loss/duplication failures reproduced by the audit.
         # Relation authorization, frozen explanations and successful-receipt baselines.
         # Central AI: independent planning, scope retirement, process audit, durable leases and budget transactions.
-        self.assertLessEqual(total, 1921)
+        self.assertLessEqual(total, 1929)  # Eight central AI cutover, outbox and receipt regressions.
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

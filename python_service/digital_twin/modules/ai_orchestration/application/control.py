@@ -4,10 +4,11 @@ from digital_twin.modules.ai_orchestration.domain.planning import enabled, ident
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
+        self.delivery_memory = delivery_memory or (lambda account, symbol: {})
 
     def run_once(self):
         if not enabled(self.settings):
@@ -31,6 +32,7 @@ class AIControlService:
                     research = self.research_memory(job["accountId"], job["symbol"])
                     packet["taskId"] = job["taskId"]
                     packet["questionsToCheck"] = job.get("watchQuestions", [])
+                    packet["lastDeliveredNotification"] = self.delivery_memory(job["accountId"], job["symbol"])
                     fingerprint = observation_fingerprint(packet, research)
                     previous = history[0] if history else {}
                     if previous.get("inputFingerprint") == fingerprint and previous.get("observedAt"):
@@ -41,7 +43,8 @@ class AIControlService:
                             saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다."}, [child])
                             return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
                     plan = validate_plan(self.planner(packet, history, research), packet)
-                    result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp()}
+                    result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
+                              "comparisonFacts": [fact for previous in history[:3] for fact in previous.get("previousFacts", [])[:20]]}
                     children = []
                     for question in plan["researchQuestions"]:
                         children.append({**self.subject(job), "capability": "research", "priority": 5, "question": question,

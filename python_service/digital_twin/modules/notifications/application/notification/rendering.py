@@ -40,6 +40,16 @@ class NotificationRenderingService:
         self.link_base_resolver = link_base_resolver
 
     def render(self, job: NotificationJob) -> str:
+        if job.message_type == "aiObservation":
+            from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
+            job.context["aiControlRenderedAt"] = self.now_provider().isoformat()
+            progress = job.context.get("transportDelivery") or {}
+            if progress.get("message") and progress.get("aiControlRenderedAt"):
+                job.context["aiControlRenderedAt"] = progress["aiControlRenderedAt"]
+            rendered = render_ai_observation(job.context["aiControlObservation"],
+                sent_at=job.context["aiControlRenderedAt"], debug_number=notification_debug_number(job.job_id))
+            job.text = rendered
+            return rendered
         self.apply_send_time_context(job)
         if bool((job.context or {}).get("notificationReplayPreserveOriginal")):
             rendered = str(job.text or "").strip()

@@ -11,6 +11,7 @@ CRYPTO_ONTOLOGY_SIGNAL = "cryptoOntologySignal"
 PORTFOLIO_ONTOLOGY_SIGNAL = "portfolioOntologySignal"
 PORTFOLIO_REBALANCE_REVIEW = "portfolioRebalanceReview"
 HOLDING_TIMING = "holdingTiming"
+AI_OBSERVATION = "aiObservation"
 INVESTMENT_INSIGHT = "investmentInsight"
 MARKET_OBSERVATION = "marketObservation"
 ONTOLOGY_OBSERVATION_FOLLOWUP = "ontologyObservationFollowup"
@@ -45,6 +46,7 @@ DEFAULT_MESSAGE = "default"
 
 MONITORING_MESSAGE_TYPES = [
     INFORMATION_UPDATE,
+    AI_OBSERVATION,
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
@@ -78,6 +80,7 @@ SYSTEM_MESSAGE_TYPES = {
 
 USER_MANAGED_NOTIFICATION_TYPES = [
     INFORMATION_UPDATE,
+    AI_OBSERVATION,
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
@@ -127,6 +130,7 @@ MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
     INFORMATION_UPDATE: 1,
+    AI_OBSERVATION: 1,
     INVESTMENT_INSIGHT: 1,
     MARKET_OBSERVATION: 1,
     PORTFOLIO_HOLDINGS_SNAPSHOT: 1,
@@ -211,6 +215,7 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
 }
 
 DEFAULT_CADENCE = {
+    AI_OBSERVATION: 180,
     INVESTMENT_INSIGHT: 10,
     MARKET_OBSERVATION: 60,
     PORTFOLIO_HOLDINGS_SNAPSHOT: 10,
@@ -234,7 +239,8 @@ DEFAULT_CADENCE = {
 MESSAGE_TYPE_LABELS = {
     INFORMATION_UPDATE: "뉴스·공시·발표 후속 확인",
     DEFAULT_MESSAGE: "기본 알림",
-    INVESTMENT_INSIGHT: "투자 인사이트",
+    AI_OBSERVATION: "AI 관찰",
+    INVESTMENT_INSIGHT: "이전 투자 인사이트",
     MARKET_OBSERVATION: "시세 변동",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "전체 보유 주식",
     PORTFOLIO_ACTIVITY_OBSERVATION: "실계좌 보유 변화",
@@ -277,6 +283,7 @@ MESSAGE_TYPE_LABELS = {
 
 MESSAGE_TYPE_EMOJIS = {
     DEFAULT_MESSAGE: "🔔",
+    AI_OBSERVATION: "🧠",
     INVESTMENT_INSIGHT: "🧭",
     MARKET_OBSERVATION: "↔️",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "📋",
@@ -320,7 +327,8 @@ MESSAGE_TYPE_EMOJIS = {
 
 TRIGGER_SUMMARIES = {
     INFORMATION_UPDATE: "등록된 정보의 발표 결과나 이후 가격 관측이 새로 확보됐을 때 보냅니다. 투자 판단을 만들지 않습니다.",
-    INVESTMENT_INSIGHT: "온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 보냅니다.",
+    AI_OBSERVATION: "AI가 추세와 이전 발송을 비교해 새로운 해석을 제안할 때 보냅니다.",
+    INVESTMENT_INSIGHT: "종료된 규칙 기반 투자 알림의 과거 기록입니다.",
     MARKET_OBSERVATION: "마지막 알림 기준 시세와 비교해 설정한 폭 이상 누적 변동하면 가격 변동 사실을 즉시 알립니다. 매수·매도 판단은 TypeDB 추론 완료 후 별도로 보냅니다.",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "사용자가 명시적으로 요청한 경우에만 투자 판단 없이 모든 보유 종목의 현재 상태를 한 번에 보여줍니다.",
     PORTFOLIO_ACTIVITY_OBSERVATION: "완전한 실계좌 잔고 두 시점 사이에서 수량 또는 현금 변화가 확인되면 사실 알림으로 보냅니다.",

@@ -394,9 +394,11 @@ class MySQLOperationalConnection:
         schema_key = self.schema_key()
         if schema_key in MySQLOperationalConnection._schema_ready:
             return
+        from .mysql_snapshot_storage import compression_supported, snapshot_schema_statement
         with self.transaction() as connection:
+            compressed = compression_supported(connection)
             for statement in MYSQL_SCHEMA:
-                connection.execute(statement)
+                connection.execute(snapshot_schema_statement(statement, compressed))
             ensure_mysql_operational_schema_tuning(connection, self.runtime_settings)
         MySQLOperationalConnection._schema_ready.add(schema_key)
 
@@ -2927,6 +2929,13 @@ MYSQL_SCHEMA = [
         KEY idx_decision_outcome_targets_due (account_id, status, target_at, target_id),
         KEY idx_decision_outcome_targets_subject (account_id, symbol, status, target_at),
         KEY idx_decision_outcome_targets_episode (episode_id, status, horizon_minutes)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS mysql_retention_progress (
+        profile VARCHAR(96) PRIMARY KEY,
+        next_policy VARCHAR(96) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

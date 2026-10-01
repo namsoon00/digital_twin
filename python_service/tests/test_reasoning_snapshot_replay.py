@@ -104,6 +104,15 @@ def monitor_state(generated_at="2026-07-29T00:02:00Z"):
 class ReasoningSnapshotReplayTests(unittest.TestCase):
     def test_reasoning_delta_uses_the_exact_persisted_snapshot_boundary(self):
         previous = monitor_state("2026-07-29T00:01:00Z")
+        current = monitor_state()
+        original = deepcopy(current)
+        frozen = build_reasoning_source_snapshot("acct", current, previous_state=previous)
+        self.assertEqual(original, current)
+        current["positions"]["AAPL"]["current_price"] = 999.0
+        previous["portfolio"]["total"] = 999.0
+        self.assertEqual(100.0, frozen["payload"]["positions"]["AAPL"]["current_price"])
+        self.assertEqual(1000.0, frozen["payload"]["metadata"]["previousMonitorState"]["portfolio"]["total"])
+        previous = monitor_state("2026-07-29T00:01:00Z")
         corporate_action = {
             "dividend:AAPL:20260730": {
                 "eventId": "dividend:AAPL:20260730",

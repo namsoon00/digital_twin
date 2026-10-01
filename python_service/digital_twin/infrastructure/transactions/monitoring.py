@@ -690,7 +690,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT payload_json, projection_payload_json
+                SELECT COALESCE(NULLIF(projection_payload_json, ''), payload_json) AS payload_json
                 FROM monitor_snapshot_history
                 WHERE account_id = %s AND generated_at = %s
                 LIMIT 1
@@ -698,7 +698,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 (str(account_id or ""), str(generated_at or "")),
             ).fetchone() or {}
         payload = _json_loads(
-            row.get("projection_payload_json") or row.get("payload_json"),
+            row.get("payload_json"),
             {},
         )
         return dict(payload or {}) if isinstance(payload, dict) else {}

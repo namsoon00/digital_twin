@@ -1542,7 +1542,11 @@ def run_mysql_operational_cleanup(
     # A completed world-projection row can still carry a multi-megabyte result.
     # Keep this local to the maintenance worker and isolate its pool key so a
     # previously opened 10-second realtime connection cannot be reused here.
-    settings["mysqlOperationTimeoutSeconds"] = str(max(60, mysql_operation_timeout_seconds(settings)))
+    operation_timeout = mysql_operation_timeout_seconds(settings)
+    settings["mysqlOperationTimeoutSeconds"] = str(
+        max(60, operation_timeout) if include_legacy else min(10, max(5, operation_timeout)))
+    if not include_legacy:
+        settings["_effectiveMysqlMinimalRetentionMaxRunSeconds"] = "5"
     # A connection can be dropped after the server-side read timeout.  A
     # normal pass is idempotent and uses a fresh pooled connection on retry;
     # explicit compaction is intentionally excluded because it is operator-led.
@@ -1613,7 +1617,10 @@ def run_mysql_operational_cleanup(
                     )
             from digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs import MySQLDecisionCalibrationInputStore
 
-            result["decisionCalibrationInputs"] = MySQLDecisionCalibrationInputStore(settings).repair()
+            result["decisionCalibrationInputs"] = (
+                MySQLDecisionCalibrationInputStore(settings).repair()
+                if include_legacy else {"status": "deferred", "reason": "bounded-retention-turn"}
+            )
             if connection_retries:
                 result["transientConnectionRetryCount"] = connection_retries
             if deadlock_retries:
@@ -1964,6 +1971,12 @@ def maintenance_command(args) -> int:
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "ok") != "error" else 1
+    if args.maintenance_action == "mysql-snapshot-compression":
+        from .mysql_snapshot_storage import run_snapshot_compression
+        result = run_snapshot_compression(settings, apply=bool(args.apply),
+            tables=[value.strip() for value in args.tables.split(",") if value.strip()])
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result["status"] in {"preview", "compressed"} else 1
     if args.maintenance_action == "mysql-cleanup":
         result = run_mysql_operational_cleanup(
             settings,
@@ -2005,15 +2018,21 @@ def maintenance_command(args) -> int:
             except (TypeError, ValueError):
                 pending_count = 0
             now_epoch = time.time()
+            admission_settings = dict(settings)
+            if minimal_policy.enabled and minimal_policy.mode == "apply":
+                admission_settings["mysqlMaintenanceMaxRealtimeDeferralSeconds"] = min(
+                    int(settings.get("mysqlMaintenanceMaxRealtimeDeferralSeconds") or 900),
+                    minimal_policy.interval_seconds,
+                )
             admission = mysql_maintenance_admission(
-                settings,
+                admission_settings,
                 pending_count=pending_count,
                 now_epoch=now_epoch,
                 deferral_started_at=maintenance_state["deferralStartedAt"],
                 last_legacy_at=maintenance_state["lastLegacyAt"],
             )
-            maintenance_state["deferralStartedAt"] = admission.deferral_started_at
             if not admission.run_cleanup:
+                maintenance_state["deferralStartedAt"] = admission.deferral_started_at
                 return {
                     "status": admission.status,
                     "skipped": "realtime-reasoning-active",
@@ -2023,7 +2042,12 @@ def maintenance_command(args) -> int:
                     "nextIntervalSeconds": admission.next_interval_seconds,
                     "reasoningQueue": queue_state,
                 }
-            with workload_guard.maintenance_turn() as workload_lease:
+            # Admission is not execution: a lost lock must not restart the
+            # deferral clock. An overdue turn reserves the next monitor gap.
+            maintenance_state["deferralStartedAt"] = maintenance_state["deferralStartedAt"] or now_epoch
+            with workload_guard.maintenance_turn(
+                wait_seconds=60 if admission.status == "bounded-cleanup-after-max-deferral" else 0,
+            ) as workload_lease:
                 if not workload_lease.acquired:
                     return {
                         "status": "realtime-monitor-deferred",
@@ -2037,6 +2061,8 @@ def maintenance_command(args) -> int:
                     settings,
                     include_legacy=admission.include_legacy,
                 )
+            if result.get("minimalRetention", {}).get("status") in {"ok", "disabled", "preview"}:
+                maintenance_state["deferralStartedAt"] = time.time() if pending_count else 0.0
             if admission.include_legacy:
                 maintenance_state["lastLegacyAt"] = now_epoch
             result["status"] = admission.status
@@ -2761,6 +2787,10 @@ def build_parser() -> argparse.ArgumentParser:
     mysql_cleanup = maintenance_actions.add_parser("mysql-cleanup")
     mysql_cleanup.add_argument("--optimize", action="store_true")
     mysql_cleanup.add_argument("--drop-ephemeral-databases", action="store_true")
+    snapshot_compression = maintenance_actions.add_parser("mysql-snapshot-compression",
+        help="Preview lossless snapshot compression; --apply requires managed writers paused")
+    snapshot_compression.add_argument("--apply", action="store_true")
+    snapshot_compression.add_argument("--tables", default="")
     mysql_minimal_retention = maintenance_actions.add_parser(
         "mysql-minimal-retention",
         help="Preview bounded MySQL data retention, or apply it explicitly with --apply",

@@ -71,6 +71,7 @@ class MySQLMinimalRetentionService:
             "estimatedBytes": int(applied.get("estimatedBytes") or 0),
             "tables": dict(applied.get("tables") or {}),
             "policies": dict(applied.get("policies") or {}),
+            "progress": dict(applied.get("progress") or {}),
             "skipped": str(applied.get("skipped") or ""),
         })
         self.repository.record_run(result, now=current)

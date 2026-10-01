@@ -223,7 +223,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # unreadable storage and preserving live workers on a deferred swap.
         # Five regressions cover JSON-order delivery, oversized optional memory,
         # repair headroom, timeout diagnostics and capacity sampling under load.
-        self.assertLessEqual(total, 1963)
+        # Five storage regressions protect overdue admission, fair lock turns,
+        # durable retention progress, active source SQL and lossless compression.
+        self.assertLessEqual(total, 1968)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

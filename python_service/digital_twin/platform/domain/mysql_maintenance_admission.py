@@ -72,9 +72,9 @@ def mysql_maintenance_admission(
     )
     now = max(0.0, float(now_epoch or 0.0))
     pending = max(0, int(pending_count or 0))
+    started = float(deferral_started_at or now)
+    deferred_seconds = max(0, int(now - started))
     if pending:
-        started = float(deferral_started_at or now)
-        deferred_seconds = max(0, int(now - started))
         if deferred_seconds < maximum_deferral_seconds:
             return MySQLMaintenanceAdmission(
                 run_cleanup=False,
@@ -85,13 +85,16 @@ def mysql_maintenance_admission(
                 deferral_started_at=started,
                 deferred_seconds=deferred_seconds,
             )
+    # Monitor lock contention can also starve cleanup with an empty reasoning
+    # queue. A previously failed attempt receives the same bounded next turn.
+    if deferred_seconds >= maximum_deferral_seconds:
         return MySQLMaintenanceAdmission(
             run_cleanup=True,
             include_legacy=False,
             status="bounded-cleanup-after-max-deferral",
             reason="지속적인 실시간 부하 중에도 용량을 보호하도록 제한된 정리만 실행합니다.",
             next_interval_seconds=busy_retry_seconds,
-            deferral_started_at=now,
+            deferral_started_at=started,
             deferred_seconds=deferred_seconds,
         )
 

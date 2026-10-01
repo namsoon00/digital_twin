@@ -111,6 +111,65 @@ python3 python_service/service.py maintenance mysql-minimal-retention --apply --
 python3 python_service/service.py maintenance mysql-cleanup --optimize
 ```
 
+### Sustained MySQL retention and snapshot compression
+
+An admitted maintenance attempt is not a completed turn. Losing the realtime
+monitor lock must preserve the original deferral clock. When minimal retention
+is enabled in apply mode, the maximum deferral is capped by its configured
+interval (normally 120 seconds). An overdue attempt reserves the next monitor
+gap for up to 60 seconds, then runs a five-second cooperative retention pass
+with a ten-second SQL connection timeout. An already-running SQL operation can
+exceed the cooperative budget. Calibration repair and broad legacy scans stay
+in idle maintenance turns. The next monitor waits; an active collection is never
+interrupted to grant maintenance access.
+
+`mysql_retention_progress` stores the next policy before each expensive action.
+A timeout, exhausted budget or worker restart therefore resumes at the next
+policy instead of repeatedly starving later tables. The failed policy is
+revisited on the next complete round. The maintenance result includes attempted
+policies, the next policy and remaining policies. Verify actual deleted rows
+and queue age alongside these counters; admission alone is not cleanup proof.
+Snapshot history preserves the newest rows and source boundaries referenced by
+unresolved reasoning jobs or pending mailbox events. These references are
+rechecked at deletion time. Large snapshot candidate reads are capped at eight
+rows so measuring payload lengths does not scan hundreds of megabytes per turn.
+
+Large immutable JSON tables use native InnoDB `ROW_FORMAT=COMPRESSED` with an
+8 KiB key block on supported local servers. The allowlist is snapshot history,
+verified reasoning sources, statistical signal snapshots and reasoning run
+stages. JSON text, SQL readers, fingerprints and replay contracts stay the
+same. New tables adopt this format during schema bootstrap; existing tables
+require an explicit migration with all managed application writers paused:
+
+```bash
+python3 python_service/service.py maintenance mysql-snapshot-compression
+python3 python_service/service.py maintenance mysql-snapshot-compression --apply
+```
+
+The apply command refuses running managed writers, unsupported page sizes and
+insufficient shared-disk headroom. Use the supervisor maintenance handshake to
+prevent workers from restarting during migration, retain MySQL and TypeDB, and
+restart application workers afterward. For every changed table, the command
+compares all-row hashes and row counts before and after rebuilding. Measure
+actual file allocation, not `DATA_LENGTH`: off-page `LONGTEXT` can make allocator
+estimates misleading. `OPTIMIZE TABLE` alone does not make live JSON smaller.
+
+An isolated MySQL pilot with representative source and history packets reduced
+allocated files by about 86%, preserved every row hash and round-tripped new
+writes exactly. This is a sample measurement, not a guaranteed ratio. Native
+compression adds CPU and buffer work; monitor collection latency and resource
+pressure after deployment, as described in the
+[MySQL compression documentation](https://dev.mysql.com/doc/refman/9.7/en/innodb-compression-internals.html).
+Logical retention is still required: physical compression reduces each write,
+but does not replace age and reference policies.
+
+Historical reasoning reads select the compact projection directly, falling
+back to the full payload only when it is absent. Source assembly copies the
+selected frozen facts without first deep-copying the entire provider archive.
+Replay tests protect input immutability and independence from subsequent source
+mutation. These changes reduce avoidable allocations; they do not establish
+that every long-running process is free from memory leaks.
+
 ## Blue/Green TypeDB Rotation
 
 Automatic TypeDB rotation prepares an isolated candidate on a different port

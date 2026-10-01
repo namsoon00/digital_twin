@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from copy import deepcopy
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, frozen_monitor_state_for_reasoning, reasoning_snapshot_symbols
@@ -50,7 +49,9 @@ def build_reasoning_source_snapshot(
 ) -> Dict[str, object]:
     """Freeze the exact bounded facts that V1 and V2 may replay later."""
 
-    source = deepcopy(dict(state or {}))
+    # The projection copies selected facts. Avoid cloning the full provider
+    # archive before discarding most of it; keep the caller immutable.
+    source = dict(state or {})
     clean_account_id = _text(account_id) or _text(source.get("accountId"))
     generated_at = _text(source.get("generatedAt"))
     source["accountId"] = clean_account_id
@@ -94,4 +95,3 @@ def build_reasoning_source_snapshot(
         "symbols": selected_symbols,
         "payload": payload,
     }
-

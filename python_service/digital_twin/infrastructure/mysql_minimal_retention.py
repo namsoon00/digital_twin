@@ -18,6 +18,23 @@ from .mysql_schema_tuning import quote_identifier
 
 
 MYSQL_MINIMAL_RETENTION_LOCK_NAME = "orbit_alpha_minimal_mysql_retention"
+
+
+def _history_unreferenced_sql():
+    # Retain exact historical input while either delivery or shadow still owns
+    # it. Recheck at DELETE time; latest-two retention alone is insufficient.
+    return ("NOT EXISTS (SELECT 1 FROM verified_reasoning_source_snapshots source "
+        "JOIN reasoning_engine_jobs job ON job.source_snapshot_id = source.snapshot_id "
+        "WHERE source.account_id = monitor_snapshot_history.account_id "
+        "AND source.generated_at = monitor_snapshot_history.generated_at "
+        "AND job.job_status NOT IN ('completed','superseded','cancelled')) "
+        "AND NOT EXISTS (SELECT 1 FROM verified_reasoning_source_snapshots source "
+        "JOIN ontology_reasoning_mailbox_events mailbox ON mailbox.source_snapshot_id = source.snapshot_id "
+        "WHERE source.account_id = monitor_snapshot_history.account_id "
+        "AND source.generated_at = monitor_snapshot_history.generated_at "
+        "AND mailbox.state IN ('pending','direct-pending'))")
+
+
 TERMINAL_NOTIFICATION_STATUSES = ("done", "suppressed", "superseded", "sent")
 TERMINAL_WORLD_PROJECTION_STATUSES = ("completed", "superseded")
 # Research status values evolve with the collection workflow.  Completed-at is
@@ -316,6 +333,8 @@ class MySQLMinimalRetentionRepository:
         compacted = 0
         archived_total = 0
         estimated_bytes = 0
+        attempted = []
+        next_policy = ""
         try:
             actions = [
                 ("worldProjection:obsoletePayload", self._compact_obsolete_world_projection_payloads, ()),
@@ -402,10 +421,26 @@ class MySQLMinimalRetentionRepository:
                 ),
                 ("audit:runs", self._delete_audit_runs, (policy.audit_keep_count,)),
             ]
-            for name, action, arguments in actions:
+            actions.extend(("marketTimeSeries:" + granularity, self._delete_market_time_series,
+                            (granularity, cutoffs["marketTimeSeries:" + granularity]))
+                           for granularity in policy.market_time_series_retention_days)
+            row = _fetchone(_execute(self.connection,
+                "SELECT next_policy FROM mysql_retention_progress WHERE profile = %s", (policy.profile,)))
+            resume = str(_row_value(row, "next_policy", fallback="") or "")
+            offset = next((index for index, action in enumerate(actions) if action[0] == resume), 0)
+            ordered = actions[offset:] + actions[:offset]
+            next_policy = ordered[0][0]
+            for index, (name, action, arguments) in enumerate(ordered):
                 if not self._has_budget(budget):
-                    policies[name] = 0
-                    continue
+                    break
+                # Advance before expensive SQL so a timeout or worker restart
+                # cannot strand every later table behind the same policy.
+                next_policy = ordered[(index + 1) % len(ordered)][0]
+                _execute(self.connection,
+                    "INSERT INTO mysql_retention_progress (profile,next_policy,updated_at) VALUES (%s,%s,%s) "
+                    "ON DUPLICATE KEY UPDATE next_policy=VALUES(next_policy),updated_at=VALUES(updated_at)",
+                    (policy.profile, next_policy, self._iso()))
+                attempted.append(name)
                 result = action(policy, budget, *arguments)
                 changed = _integer(result.get("deleted"))
                 deleted_total += changed
@@ -420,22 +455,6 @@ class MySQLMinimalRetentionRepository:
                 for table, count in dict(result.get("tables") or {}).items():
                     tables[table] = tables.get(table, 0) + _integer(count)
 
-            for granularity in policy.market_time_series_retention_days:
-                name = "marketTimeSeries:" + granularity
-                if not self._has_budget(budget):
-                    policies[name] = 0
-                    continue
-                result = self._delete_market_time_series(
-                    policy,
-                    budget,
-                    granularity,
-                    cutoffs["marketTimeSeries:" + granularity],
-                )
-                policies[name] = _integer(result.get("deleted"))
-                deleted_total += _integer(result.get("deleted"))
-                estimated_bytes += _integer(result.get("estimatedBytes"))
-                for table, count in dict(result.get("tables") or {}).items():
-                    tables[table] = tables.get(table, 0) + _integer(count)
         finally:
             self._release_lock()
 
@@ -447,6 +466,8 @@ class MySQLMinimalRetentionRepository:
             "estimatedBytes": estimated_bytes,
             "tables": tables,
             "policies": policies,
+            "progress": {"attemptedPolicies": attempted, "nextPolicy": next_policy,
+                         "remainingPolicies": len(actions) - len(attempted)},
         }
 
     def compact_delivered_payloads(
@@ -791,7 +812,7 @@ class MySQLMinimalRetentionRepository:
             "SELECT snapshot_id, OCTET_LENGTH(payload_json) AS payload_bytes "
             "FROM `statistical_model_signal_snapshots` WHERE " + current_guard
             + " ORDER BY created_at, snapshot_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
+            (cutoff_iso, min(8, policy.batch_size)),
             "snapshot_id",
             policy,
             budget,
@@ -880,7 +901,7 @@ class MySQLMinimalRetentionRepository:
             "WHERE mailbox.source_snapshot_id = source.snapshot_id "
             "AND mailbox.state IN ('pending', 'direct-pending')) "
             "ORDER BY source.created_at, source.snapshot_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
+            (cutoff_iso, min(8, policy.batch_size)),
             "snapshot_id",
             policy,
             budget,
@@ -1179,8 +1200,9 @@ class MySQLMinimalRetentionRepository:
                 "SELECT account_id, generated_at, "
                 "OCTET_LENGTH(payload_json) + COALESCE(OCTET_LENGTH(projection_payload_json), 0) AS payload_bytes "
                 "FROM `monitor_snapshot_history` WHERE account_id = %s AND generated_at < %s "
+                "AND " + _history_unreferenced_sql() + " "
                 "ORDER BY generated_at LIMIT %s",
-                (account_id, boundary_at, policy.batch_size - len(candidate_rows)),
+                (account_id, boundary_at, min(8, policy.batch_size - len(candidate_rows))),
             ))
             candidate_rows.extend(rows)
         candidates = self._bounded_candidate_rows(
@@ -1201,7 +1223,8 @@ class MySQLMinimalRetentionRepository:
                 continue
             cursor = _execute(
                 self.connection,
-                "DELETE FROM `monitor_snapshot_history` WHERE account_id = %s AND generated_at = %s",
+                "DELETE FROM `monitor_snapshot_history` WHERE account_id = %s AND generated_at = %s AND "
+                + _history_unreferenced_sql(),
                 (account_id, generated_at),
             )
             if _integer(getattr(cursor, "rowcount", 0)):

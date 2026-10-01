@@ -215,6 +215,64 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             self.assertIn("2026-09-23T00:00:00Z", params)
             self.assertEqual(sql.count("%s"), len(params))
 
+    def test_snapshot_history_preserves_live_sources_and_rechecks_before_delete(self):
+        from mysql_fixtures import mysql_test_connection
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.cursors import DictCursor
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {'MYSQL_TEST_DATABASE': 'orbit_alpha_test_retention_guard'}):
+            raw = mysql_test_connection()
+        raw.cursorclass = DictCursor
+        connection = MySQLConnectionProxy(raw)
+        tables = ('monitor_snapshot_history', 'verified_reasoning_source_snapshots',
+                  'reasoning_engine_jobs', 'ontology_reasoning_mailbox_events')
+        try:
+            for table in tables:
+                connection.execute('DROP TABLE IF EXISTS `' + table + '`')
+            connection.execute("CREATE TABLE monitor_snapshot_history (account_id VARCHAR(40), generated_at VARCHAR(40), payload_json TEXT, projection_payload_json TEXT, PRIMARY KEY(account_id,generated_at))")
+            connection.execute("CREATE TABLE verified_reasoning_source_snapshots (snapshot_id VARCHAR(40) PRIMARY KEY, account_id VARCHAR(40), generated_at VARCHAR(40))")
+            connection.execute("CREATE TABLE reasoning_engine_jobs (job_id VARCHAR(40) PRIMARY KEY, source_snapshot_id VARCHAR(40), job_status VARCHAR(40))")
+            connection.execute("CREATE TABLE ontology_reasoning_mailbox_events (event_id VARCHAR(40) PRIMARY KEY, source_snapshot_id VARCHAR(40), state VARCHAR(40))")
+            for index in range(1, 7):
+                clock = '2026-09-01T00:0' + str(index) + ':00Z'
+                connection.execute("INSERT INTO monitor_snapshot_history VALUES ('acct',%s,'{}','{}')", (clock,))
+                connection.execute("INSERT INTO verified_reasoning_source_snapshots VALUES (%s,'acct',%s)", (str(index), clock))
+            from contextlib import nullcontext
+            from digital_twin.infrastructure.transactions.monitoring import MySQLMonitorStore
+            reader = object.__new__(MySQLMonitorStore)
+            reader.connect = lambda: nullcontext(connection)
+            connection.execute("UPDATE monitor_snapshot_history SET payload_json=%s,projection_payload_json=%s WHERE generated_at=%s",
+                               ('{"kind":"full"}', '{"kind":"compact"}', clock))
+            self.assertEqual({'kind': 'compact'}, reader.reasoning_snapshot_state_at('acct', clock))
+            connection.execute("UPDATE monitor_snapshot_history SET projection_payload_json=NULL WHERE generated_at=%s", (clock,))
+            self.assertEqual({'kind': 'full'}, reader.reasoning_snapshot_state_at('acct', clock))
+            connection.execute("INSERT INTO reasoning_engine_jobs VALUES ('queued','2','queued')")
+            connection.execute("INSERT INTO ontology_reasoning_mailbox_events VALUES ('mailbox','3','pending')")
+            class ConcurrentReference:
+                def execute(self, sql, params=()):
+                    if sql.startswith('DELETE FROM `monitor_snapshot_history`'):
+                        connection.execute("INSERT IGNORE INTO reasoning_engine_jobs VALUES ('raced','4','processing')")
+                    return connection.execute(sql, params)
+            repository = MySQLMinimalRetentionRepository(ConcurrentReference())
+            policy = mysql_minimal_retention_policy({'mysqlMinimalRetentionEnabled': '1'})
+            def budget():
+                return {'started': time.monotonic(), 'maxSeconds': 30, 'remainingBytes': 1024, 'deletedBytes': 0}
+            first = repository._delete_snapshot_history(policy, budget(), 2)
+            self.assertEqual(1, first['deleted'])
+            self.assertEqual(5, connection.execute('SELECT COUNT(*) AS n FROM monitor_snapshot_history').fetchone()['n'])
+            connection.execute("UPDATE reasoning_engine_jobs SET job_status='completed'")
+            connection.execute("UPDATE ontology_reasoning_mailbox_events SET state='completed'")
+            second = repository._delete_snapshot_history(policy, budget(), 2)
+            self.assertEqual(3, second['deleted'])
+            self.assertEqual(2, connection.execute('SELECT COUNT(*) AS n FROM monitor_snapshot_history').fetchone()['n'])
+        finally:
+            try:
+                for table in tables:
+                    connection.execute('DROP TABLE IF EXISTS `' + table + '`')
+            finally:
+                connection.close()
+
     def test_reasoning_job_retention_preserves_pending_market_anchor_sources(self):
         connection = ApplyConnection()
         repository = MySQLMinimalRetentionRepository(connection)

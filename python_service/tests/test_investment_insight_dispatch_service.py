@@ -121,6 +121,13 @@ def context_observation(case):
                 "volume": 178072,
                 "volumeRatio": 0.004,
             },
+            "hypothesisLifecycle": {"transitions": [{
+                "transitionId": "transition:mstr:observed", "lifecycleKey": "mstr:beta",
+                "currentState": "observed", "previousState": "", "materialChange": True,
+                "inferenceGenerationId": case.inference_generation_id,
+                "occurredAt": "2026-10-01T00:00:00Z",
+                "reason": "새 가설 관계가 성립했습니다.",
+            }]},
             "activeRules": [rule],
             "matchedRules": [rule],
             "decision": {
@@ -324,6 +331,7 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
 
         material_context["ontologyInsight"] = {"semanticComponents": {}}
         material_context["reasoningDeliveryTrigger"] = {}
+        material_context["ontologyRelationContext"]["hypothesisLifecycle"] = {}
         self.assertEqual(
             ARCHIVE,
             inference_dispatch_decision(material_context, observation).route,

@@ -277,7 +277,7 @@ def _signal_transition_rows(trigger: Dict[str, object]) -> List[str]:
             )
         elif signal_id == "trade-strength" and observed is not None:
             rows.append(
-                "체결강도가 " + _decimal(observed, 1)
+                "체결강도가 " + _decimal(observed + 100, 1)
                 + "로 바뀌어 거래 관계를 다시 계산했습니다."
             )
         elif signal_id == "orderbook" and observed is not None:
@@ -906,15 +906,22 @@ def typedb_observation_telegram_message(
         "aiFallback": ai_fallback,
         "newsExclusion": news_exclusion,
     }
+    relation_packet = _mapping(context.get("relationChangeEvidence"))
+    relation_sections = None
+    if relation_packet.get("version") == "relation-change-evidence-v1":
+        from digital_twin.modules.notifications.domain.relation_change import relation_change_summary
+        summary = relation_change_summary(relation_packet)
+        lead = summary["lead"]
+        relation_sections = summary["sections"]
     document = CustomerInvestmentDocument(
         role="typedb-observation",
         headline=headline,
         target=target,
-        role_label="관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
+        role_label="룰박스 관계 변화 · 가설, 규칙, 관측 사실을 연결한 결과입니다." if relation_sections else "관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
         lead=lead,
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
-            for key, title, rows in (
+            for key, title, rows in (relation_sections or (
                 ("change", "무엇이 달라졌나요", [*trigger_rows, *relation_rows]),
                 ("relation-status", "관계 판단", relation_unchanged_rows),
                 (
@@ -948,7 +955,7 @@ def typedb_observation_telegram_message(
                     if news_exclusion.get("excludedCount") or news_exclusion.get("omittedForBudgetCount")
                     else [],
                 ),
-            )
+            ))
             if rows
         ),
         detail_url=detail_url,

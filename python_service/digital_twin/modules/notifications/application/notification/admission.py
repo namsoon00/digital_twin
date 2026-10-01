@@ -2,6 +2,7 @@
 
 import hashlib
 from dataclasses import dataclass
+from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
 from typing import Dict, List, Mapping
 
 from digital_twin.modules.market_data.contracts import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
@@ -149,6 +150,13 @@ class NotificationAdmissionPolicy:
             )
             job.context = context
         relation_diff = ontology_relation_delivery_diff(job.context or {}, relation_previous_context)
+        if typedb_context_observation_contract(job.context or {}):
+            context = dict(job.context or {})
+            baseline = context.pop("_relationDeliveredSnapshot", None)
+            if baseline is None:
+                baseline = (context.get("relationChangeEvidence") or {}).get("previous")
+            context["relationChangeEvidence"] = relation_change_evidence(context, baseline)
+            job.context = context
         if ontology_relation_delivery_metadata(job.context or {}):
             context = dict(job.context or {})
             context["ontologyRelationDiff"] = relation_diff
@@ -226,6 +234,8 @@ class NotificationAdmissionPolicy:
                 "unresolved_material_evidence",
                 "참고 관계를 만든 정확한 뉴스 원문을 연결하지 못해 사용자 알림을 보내지 않습니다.",
             )
+        elif observation and not (job.context.get("relationChangeEvidence") or {}).get("eligible"):
+            decision.mark_suppressed("unchanged_rulebox_relation", "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다.")
         return decision
 
     def apply_result(

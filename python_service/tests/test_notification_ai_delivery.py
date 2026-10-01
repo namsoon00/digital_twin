@@ -429,14 +429,14 @@ class FinalAIDeliveryTests(unittest.TestCase):
             self.assertEqual(reconciled["reasonCode"], reconciled["deliveryOutcome"]["reasonCode"])
             self.assertEqual(reconciled, reconciliation_after_delivery(reconciled, outcome) | {"reconciledAt": reconciled["reconciledAt"]})
 
-    def _assert_relation_lifecycle_observation_is_web_only_without_user_evidence(self):
+    def _assert_relation_lifecycle_observation_requires_a_new_transition(self):
         decision = final_ai_delivery_decision(lifecycle_observation_context())
 
-        self.assertEqual("suppress", decision["decision"])
+        self.assertEqual("send", decision["decision"])
         self.assertEqual("NO_ACTION", decision.get("finalAction"))
-        self.assertEqual([], decision["authorizationSources"])
+        self.assertEqual(["typedb-relation-transition"], decision["authorizationSources"])
         self.assertEqual(
-            "context_observation_web_history",
+            "",
             decision["suppressionReason"],
         )
         self.assertEqual(
@@ -457,7 +457,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
         triggered_decision = final_ai_delivery_decision(triggered)
         self.assertEqual("send", triggered_decision["decision"])
         self.assertEqual(
-            ["verified-reasoning-trigger"],
+            ["typedb-relation-transition"],
             triggered_decision["authorizationSources"],
         )
 
@@ -500,6 +500,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
         )
 
         triggered["reasoningDeliveryTrigger"]["materialRevisionKeys"] = []
+        triggered["ontologyRelationContext"]["hypothesisLifecycle"] = {}
         unverified_job = NotificationJob.create(
             "검증 식별자 없는 시장 전환",
             account_id="main",
@@ -523,7 +524,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
         )
 
     def test_unchanged_graph_is_deferred_until_follow_up_conditions_are_loaded(self):
-        self._assert_relation_lifecycle_observation_is_web_only_without_user_evidence()
+        self._assert_relation_lifecycle_observation_requires_a_new_transition()
         policy = NotificationAdmissionPolicy()
         context = graph_risk_context(material=False)
         context["investmentSubjectDecisionCaseId"] = "subject-case:unchanged"
@@ -1005,9 +1006,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
         material = final_ai_delivery_decision(
             context_observation_context(material_sources=["news:MSTR:material-1"])
         )
-        self.assertEqual("send", material["decision"])
-        self.assertEqual("material-context-observation", material["pushValueClass"])
-        self.assertEqual(["material-source-event"], material["authorizationSources"])
+        self.assertEqual("suppress", material["decision"])
+        self.assertEqual("web-only-context-observation", material["pushValueClass"])
+        self.assertEqual([], material["authorizationSources"])
 
         crypto_transition = context_observation_context()
         crypto_transition.update({
@@ -1031,9 +1032,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
             },
         })
         crypto_decision = final_ai_delivery_decision(crypto_transition)
-        self.assertEqual("send", crypto_decision["decision"])
+        self.assertEqual("suppress", crypto_decision["decision"])
         self.assertEqual(
-            ["verified-reasoning-trigger"],
+            [],
             crypto_decision["authorizationSources"],
         )
         crypto_explanation = build_customer_delivery_explanation(
@@ -1042,15 +1043,8 @@ class FinalAIDeliveryTests(unittest.TestCase):
             source_event_id="event:eth:threshold",
             context=crypto_transition,
         )
-        self.assertEqual("valid", crypto_explanation["validation"]["state"])
-        self.assertEqual(
-            "threshold-crossing",
-            crypto_explanation["primaryCause"]["category"],
-        )
-        self.assertIn(
-            "이더리움 7일 변동률 +4.0%",
-            crypto_explanation["primaryCause"]["summary"],
-        )
+        self.assertEqual("invalid", crypto_explanation["validation"]["state"])
+        self.assertEqual({}, crypto_explanation["primaryCause"])
 
         material_in_cooldown = context_observation_context(
             material_sources=["news:MSTR:material-1"]

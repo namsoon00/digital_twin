@@ -1,3 +1,4 @@
+import { renderRelationChangeEvidence } from "./relation-change.mjs";
 import { relatedDecisionForNotification } from "../decisions/actions.mjs";
 import { inferKnownStockSymbolFromText, stockDisplayName, textWithKnownDisplaySymbols } from "../instruments/catalog.mjs";
 import { renderWorkDetailButton } from "../navigation/detail.mjs";
@@ -268,6 +269,7 @@ function renderNotificationSummaryTab(job, context) {
     renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)),
     hasCustomerDocument ? '' :
     '</div>',
+    renderRelationChangeEvidence(job.relationChangeEvidence),
     customerDocumentBody || '<section class="notification-detail-section primary">',
     customerDocumentBody ? '' :
     '<strong>판단 요약</strong>',

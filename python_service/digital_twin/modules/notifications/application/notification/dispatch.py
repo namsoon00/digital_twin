@@ -1,6 +1,7 @@
 """Channel selection and delivery isolated from workflow orchestration."""
 
 from typing import Callable, Dict
+from copy import deepcopy
 import hashlib
 
 from digital_twin.modules.notifications.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
@@ -40,6 +41,10 @@ class NotificationDispatchService:
             # Later render-time clocks or enrichment cannot change chunk offsets.
             message = str(progress.get("message") or message)
             progress["message"] = message
+            if progress.get("relationChangeEvidence"):
+                context["relationChangeEvidence"] = deepcopy(progress["relationChangeEvidence"])
+            elif context.get("relationChangeEvidence"):
+                progress["relationChangeEvidence"] = deepcopy(context["relationChangeEvidence"])
             context["transportDelivery"] = progress
         context.pop("deliveryRetryAfterSeconds", None)
         context["deliveryAudience"] = audience
@@ -56,6 +61,12 @@ class NotificationDispatchService:
             "renderedMessageStatus": "complete" if len(message_bytes) <= 65536 else "oversize-hash-only",
             "inferenceGenerationId": context.get("inferenceGenerationId") or "",
             "deliveryBaseline": context.get("investmentInsightDeliveryHistory") or {}}
+        relation_change = context.get("relationChangeEvidence") or {}
+        if relation_change.get("version") and relation_change.get("current"):
+            # The receipt outlives the large job payload. Preserve the exact
+            # last-delivered facts for the next customer comparison.
+            rendered_audit["relationChangeSnapshot"] = relation_change["current"]
+            rendered_audit["relationChangeSubjectKey"] = context.get("deliverySubjectGroupKey") or ""
         if hasattr(self.queue, "start_delivery_attempt"):
             attempt_id = self.queue.start_delivery_attempt(
                 job,
@@ -65,7 +76,7 @@ class NotificationDispatchService:
             )
         def save_checkpoint(checkpoint):
             current = dict(job.context or {})
-            current["transportDelivery"] = {"message": message, "checkpoint": checkpoint}
+            current["transportDelivery"] = {**progress, "message": message, "checkpoint": checkpoint}
             job.context = current
             persist_progress(job)
 

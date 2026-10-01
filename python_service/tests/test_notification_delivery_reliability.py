@@ -32,6 +32,60 @@ def receipt(message_id="1"):
 
 
 class DeliveryReliabilityTests(unittest.TestCase):
+    def test_relation_push_requires_graph_transition_and_rejects_ticks_or_id_churn(self):
+        from test_notification_ai_delivery import lifecycle_observation_context, context_observation_context
+        from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+        from digital_twin.modules.notifications.domain.context_observation_notifications import context_observation_delivery_decision
+        context = context_observation_context(material_sources=["news:changed"])
+        context["reasoningDeliveryTrigger"] = {"status": "verified-material-transition", "material": True,
+            "userObservable": True, "materialRevisionKeys": ["price:changed"]}
+        self.assertEqual("suppress", context_observation_delivery_decision(context)["decision"])
+        context = lifecycle_observation_context()
+        self.assertEqual("send", context_observation_delivery_decision(context)["decision"])
+        from digital_twin.modules.notifications.domain.notification_delivery_explanation import build_customer_delivery_explanation
+        explanation = build_customer_delivery_explanation(message_type="investmentInsight", source_event_name="investment.inference_episode_completed", source_event_id="test", context=context)
+        self.assertEqual("valid", explanation["validation"]["state"])
+        self.assertEqual("relation-transition", explanation["primaryCause"]["category"])
+        packet = relation_change_evidence(context)
+        context["relationChangeEvidence"] = relation_change_evidence(context, packet["current"])
+        self.assertFalse(context["relationChangeEvidence"]["eligible"])
+        self.assertEqual("suppress", context_observation_delivery_decision(context)["decision"])
+        transition = context["ontologyRelationContext"]["hypothesisLifecycle"]["transitions"][0]
+        transition.update(transitionId="changed-id", currentState="strengthened", evidenceDelta={"addedEvidenceIds": ["generation:2"]})
+        transition["evidenceDelta"] = {}
+        self.assertFalse(relation_change_evidence(context)["eligible"])
+        transition.update(currentState="maintained", materialChange=True)
+        self.assertFalse(relation_change_evidence(context)["eligible"])
+        transition.update(currentState="invalidated", inferenceGenerationId="other-generation")
+        self.assertFalse(relation_change_evidence(context)["eligible"])
+
+    def test_relation_explanation_freezes_hypotheses_rules_facts_and_trade_strength(self):
+        from test_notification_ai_delivery import lifecycle_observation_context
+        from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+        from digital_twin.modules.notifications.application.typedb_observation_message import typedb_observation_telegram_message, _signal_transition_rows
+        context = lifecycle_observation_context()
+        relation = context["ontologyRelationContext"]
+        relation["hypothesisSet"] = {"hypotheses": [{"hypothesisId": "h1", "claim": "위험 관계 해소", "evidenceState": "invalidated",
+            "supportingRuleIds": ["r1"], "supportingEvidenceIds": ["e1"], "counterEvidenceIds": ["e2"], "invalidationConditions": ["가격 재하락"]}]}
+        relation["activeRules"] = [{"ruleId": "r1", "label": "가격 조건", "matched": True, "matchedConditions": [{"field": "currentPrice", "operator": ">", "expectedValue": 100, "observedValue": 132.38}]}]
+        previous = relation_change_evidence(context)["current"]
+        previous["facts"] = [{"id": "currentPrice", "label": "현재가", "value": 100}]
+        previous["deliveredAt"] = "2026-09-30T00:00:00Z"
+        previous["transitions"] = []
+        packet = relation_change_evidence(context, previous)
+        context["relationChangeEvidence"] = packet
+        context["messageDeliveryLevel"] = "intermediate"
+        message = typedb_observation_telegram_message(context)
+        for value in ("가설", "판정 규칙", "100 → 132.38", "반대 근거", "확인 시점"):
+            self.assertIn(value, message)
+        relation["facts"]["currentPrice"] = 999
+        self.assertEqual(132.38, next(row["value"] for row in packet["current"]["facts"] if row["id"] == "currentPrice"))
+        self.assertEqual(["e2"], packet["current"]["hypotheses"][0]["counterEvidenceIds"])
+        self.assertEqual("2026-09-30T00:00:00Z", packet["baselineDeliveredAt"])
+        rows = _signal_transition_rows({"facts": {"confirmedSignalTransitions": [{"signalId": "trade-strength", "observedValue": -84.06}]}})
+        self.assertIn("15.9", rows[0])
+        self.assertNotIn("-84", rows[0])
+
     def test_verified_ai_and_profit_loss_cannot_undo_repeat_floor(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create("verified", account_id="fixture", message_type=rule.message_type,
@@ -79,17 +133,20 @@ class DeliveryReliabilityTests(unittest.TestCase):
         queue = Queue()
         body = "a" * 2500 + "\n" + "b" * 2500
         job = NotificationJob.create(body, account_id="fixture", message_type="newsDigest")
+        job.context["relationChangeEvidence"] = {"version": "relation-change-evidence-v1", "current": {"symbol": "FROZEN"}}
         first = TelegramNotifier("123:fake", "456")
         first.post_message = Mock(side_effect=[receipt("one"), NotificationResult(False, "fake", "HTTP 503")])
         with self.assertRaisesRegex(RuntimeError, "503"):
             NotificationDispatchService(queue, lambda _: first).deliver(job, {"fixture": object()}, body)
         restarted = NotificationJob.from_dict(queue.saved)
         self.assertEqual(["one"], restarted.context["transportDelivery"]["checkpoint"]["messageIds"])
+        restarted.context["relationChangeEvidence"]["current"]["symbol"] = "CHANGED"
         second = TelegramNotifier("123:rotated", "456")
         second.post_message = Mock(return_value=receipt("two"))
         service = NotificationDispatchService(queue, lambda _: second)
         service.deliver(restarted, {"fixture": object()}, "render changed during retry")
         self.assertEqual(1, second.post_message.call_count)
+        self.assertEqual("FROZEN", restarted.context["relationChangeEvidence"]["current"]["symbol"])
         self.assertTrue(second.post_message.call_args.args[0]["text"].startswith("(2/2)"))
         service.deliver(NotificationJob.from_dict(queue.saved), {"fixture": object()}, body)
         self.assertEqual(1, second.post_message.call_count, "completion persistence retry must not resend")
@@ -208,6 +265,41 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
         for row in store.jobs():
             if row.account_id in {"fixture", "other"}:
                 store.mark_suppressed(row, "fixture cleanup")
+
+    def test_relation_baseline_uses_success_receipt_and_rechecks_duplicate_under_lock(self):
+        from test_notification_ai_delivery import lifecycle_observation_context
+        from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+        from digital_twin.modules.notifications.domain.notification_rules import notification_subject_group_key
+        store = self.notifications
+        first = NotificationJob.create("relation", account_id="relation-fixture", message_type="investmentInsight", context=lifecycle_observation_context())
+        first.context["relationChangeEvidence"] = relation_change_evidence(first.context)
+        first.context["deliverySubjectGroupKey"] = notification_subject_group_key(first)
+        store.upsert_job(first)
+        transport = Mock()
+        transport.send.return_value = receipt()
+        NotificationDispatchService(store, lambda _: transport).deliver(first, {first.account_id: object()}, "captured relation")
+        attempts = store.delivery_attempts_for_job(first.job_id)
+        self.assertEqual("delivered", attempts[0]["status"])
+        self.assertEqual("MSTR", attempts[0]["metadata"]["relationChangeSnapshot"]["symbol"])
+        second = NotificationJob.create("same", account_id=first.account_id, message_type=first.message_type, context=lifecycle_observation_context())
+        with store.connect() as connection:
+            baseline = store.relation_delivery_snapshot_with_connection(connection, second)
+            self.assertTrue(baseline["deliveredAt"])
+            self.assertEqual({}, store.relation_delivery_snapshot_with_connection(connection, first), "exclude own completion retry")
+            other = deepcopy(second)
+            other.account_id = "other-account"
+            self.assertEqual({}, store.relation_delivery_snapshot_with_connection(connection, other))
+        self.assertEqual("unchanged_rulebox_relation", store.recheck_delivery_cadence(second)["suppressionReason"])
+        failed = deepcopy(second)
+        failed.job_id += "-failed"
+        store.upsert_job(failed)
+        attempt = store.start_delivery_attempt(failed, "test", "account")
+        store.complete_delivery_attempt(failed, attempt, False, metadata={"accountId": first.account_id,
+            "relationChangeSubjectKey": first.context["deliverySubjectGroupKey"], "relationChangeSnapshot": {"symbol": "WRONG"}})
+        with store.connect() as connection:
+            self.assertEqual("MSTR", store.relation_delivery_snapshot_with_connection(connection, second)["symbol"])
+        store.mark_suppressed(first, "fixture cleanup")
+        store.mark_suppressed(failed, "fixture cleanup")
 
     def test_due_retries_are_not_starved_by_new_pending_jobs(self):
         store = self.notifications

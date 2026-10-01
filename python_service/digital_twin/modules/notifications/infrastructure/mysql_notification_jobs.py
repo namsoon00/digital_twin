@@ -10,6 +10,8 @@ from digital_twin.modules.read_models.contracts import investment_decision_key
 from digital_twin.modules.notifications.domain.message_types import HOLDING_TIMING, INVESTMENT_CALENDAR_REMINDER, INVESTMENT_INSIGHT, MODEL_BUY, MODEL_SELL, NEWS_DIGEST, OPERATOR_REASONING_REPORT, WATCHLIST_BUY_CANDIDATE, WATCHLIST_ONTOLOGY_SIGNAL
 from digital_twin.modules.notifications.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, notification_fingerprint, ontology_relation_delivery_metadata, notification_subject_group_key, notification_state_group_key
 from digital_twin.modules.notifications.domain.notification.lifecycle import age_minutes_since
+from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.delivery_recovery import (
     notification_failure_retry_at,
@@ -1888,6 +1890,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     def recheck_delivery_cadence(self, job):
         """Last receipt check while the workflow holds the subject send lock."""
         with self.connect() as connection:
+            if typedb_context_observation_contract(job.context or {}):
+                baseline = self.relation_delivery_snapshot_with_connection(connection, job)
+                packet = relation_change_evidence(job.context, baseline)
+                job.context["relationChangeEvidence"] = packet
+                if not packet["eligible"]:
+                    return {"allowed": False, "suppressionReason": "unchanged_rulebox_relation", "reason": packet["reason"]}
             rule = self.rule_for_connection(connection, job.message_type)
             if not rule.enabled or not rule.state_cooldown_enabled:
                 return {"allowed": True, "reason": "repeat-policy-disabled"}
@@ -2072,10 +2080,28 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             selected_context["_relationBaselineFingerprint"] = current_fingerprint
         return selected_context
 
+    def relation_delivery_snapshot_with_connection(self, connection, job):
+        """Successful receipt scoped to account and subject, surviving job retention."""
+        row = connection.execute(
+            "SELECT completed_at, JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot') AS snapshot "
+            "FROM notification_delivery_attempts WHERE status='delivered' AND job_id != %s "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.accountId')) = %s "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSubjectKey')) = %s "
+            "AND JSON_CONTAINS_PATH(metadata_json, 'one', '$.relationChangeSnapshot') "
+            "ORDER BY completed_at DESC, attempt_id DESC LIMIT 1",
+            (job.job_id, job.account_id, notification_subject_group_key(job)),
+        ).fetchone()
+        baseline = _json_loads(row.get("snapshot"), {}) if row else {}
+        if baseline:
+            baseline["deliveredAt"] = str(row["completed_at"])
+        return baseline
+
     def evaluate_job_with_connection(self, connection, job: NotificationJob):
         policy = getattr(self, "admission_policy", None) or NotificationAdmissionPolicy()
         rule = self.rule_for_connection(connection, job.message_type)
         decision = policy.prepare(job, rule)
+        if typedb_context_observation_contract(job.context or {}):
+            job.context["_relationDeliveredSnapshot"] = self.relation_delivery_snapshot_with_connection(connection, job)
         recent_count, previous_context, last_sent_at = self.similar_history_with_connection(
             connection,
             job,

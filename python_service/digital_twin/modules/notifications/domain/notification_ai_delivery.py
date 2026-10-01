@@ -6,6 +6,7 @@ from typing import Dict, Mapping
 
 from digital_twin.modules.notifications.domain.context_observation_notifications import context_observation_delivery_decision, review_observation_delivery_decision, typedb_context_observation_contract, typedb_review_observation_contract
 from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract
+from digital_twin.modules.notifications.domain.relation_change import relation_change_authority
 from digital_twin.modules.decisions.contracts import investment_decision_actionability
 from digital_twin.modules.decisions.contracts import DecisionDelta
 from digital_twin.modules.decisions.contracts import reasoning_disposition_delivery
@@ -234,7 +235,8 @@ def verified_typedb_direct_delivery_authorization(
             "typedb-notification-intent",
         })
     )
-    if not common_authorization or not (verified_trigger or verified_stage_source):
+    verified_relation = bool("typedb-relation-transition" in authorization_sources and relation_change_authority(payload))
+    if not common_authorization or not (verified_trigger or verified_stage_source or verified_relation):
         return {}
 
     matched_conditions = [
@@ -250,7 +252,7 @@ def verified_typedb_direct_delivery_authorization(
     reasons = [_text(item) for item in trigger.get("reasons") or [] if _text(item)]
     return {
         "status": "authorized",
-        "reason": reasons[0] if reasons else _text(semantic.get("reason")),
+        "reason": _text(semantic.get("reason")) if verified_relation else reasons[0] if reasons else _text(semantic.get("reason")),
         "cadenceTier": "immediate" if immediate else "material",
         "stageObservation": stage_observation,
         "matchedConditions": matched_conditions,

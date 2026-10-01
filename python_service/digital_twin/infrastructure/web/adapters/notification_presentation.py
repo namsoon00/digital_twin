@@ -484,6 +484,7 @@ def notification_job_public_payload(
         if isinstance(report, dict):
             payload["companyChangeReport"] = report
     if detail:
+        payload["relationChangeEvidence"] = dict(context.get("relationChangeEvidence") or {})
         configured_settings = configured_settings or operational_read_settings()
         payload["fullText"] = full_notification_text(customer_text)
         payload["actionFlow"] = notification_action_flow(context)

@@ -22,6 +22,7 @@ VALID_CAUSE_CATEGORIES = {
     "scheduled-repeat",
     "initial-actionable",
     "insight-transition",
+    "relation-transition",
 }
 ACTION_LABELS = {
     "BUY": "매수 검토",
@@ -380,6 +381,21 @@ def _context_observation_cause(context: Mapping[str, object]) -> CustomerDeliver
         for item in _items(decision.get("authorizationSources"))
         if _text(item)
     }
+    if "typedb-relation-transition" in authorizations:
+        from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+        packet = relation_change_evidence(context, _mapping(context.get("relationChangeEvidence")).get("previous"))
+        transitions = packet["transitions"]
+        if not transitions:
+            return None
+        transition = transitions[0]
+        return _cause(
+            "verified-rulebox-relation-transition", "relation-transition",
+            (transition.get("previousStateLabel") or "이전 상태 미기록") + " → " + str(transition.get("currentStateLabel") or "변경"),
+            label="가설 근거 변화", previous_value=transition.get("previousState"),
+            current_value=transition.get("currentState"), observed_at=transition.get("occurredAt"),
+            source_references=[row["transitionId"] for row in transitions],
+            basis="typedb-hypothesis-lifecycle",
+        )
     if "verified-reasoning-trigger" not in authorizations:
         return None
     trigger = _mapping(decision.get("reasoningDeliveryTrigger"))
@@ -408,6 +424,9 @@ def _context_observation_cause(context: Mapping[str, object]) -> CustomerDeliver
 
 
 def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCause | None:
+    relation_cause = _context_observation_cause(context)
+    if relation_cause is not None:
+        return relation_cause
     values = _transition_values(context)
     previous_action = str(values["previousAction"] or "")
     current_action = str(values["currentAction"] or "")

@@ -215,7 +215,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # interrupted scans and durable worker cursor recovery.
         # Receipt-clock cooldowns, incident identity and resumable chunk delivery
         # protect distinct loss/duplication failures reproduced by the audit.
-        self.assertLessEqual(total, 1905)
+        # Relation authorization, frozen explanations and successful-receipt baselines.
+        self.assertLessEqual(total, 1908)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

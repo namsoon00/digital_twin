@@ -442,7 +442,7 @@ class NotificationQueueRunner:
                 repeat = repeat_check(job)
                 job.context["dispatchRepeatPolicy"] = repeat
                 if not repeat["allowed"]:
-                    job.context["deliverySuppressionReason"] = "state_cooldown"
+                    job.context["deliverySuppressionReason"] = repeat.get("suppressionReason") or "state_cooldown"
                     self.eligibility_service.suppress(job, repeat["reason"])
                     self.last_run_details.append(self.job_detail(job, "suppressed", repeat["reason"]))
                     processed += 1

@@ -112,5 +112,6 @@
   {
     "reason": "Notification audit: distinguish event delivery from cadence, edit the actual quote interval, identify monitor admission clocks, and stop promising periodic unchanged-decision pushes. Backend schedule and cadence contracts are covered by test_notification_delivery_reliability.",
     "functions": ["renderAdminMessageRow", "renderMessageScheduleSummary", "renderNotificationStateCooldownEditor"]
-  }
+  },
+  {"reason": "Show immutable relation-change hypothesis, rule and ABox comparisons from the last delivered snapshot with explicit missing evidence and counter-evidence. notification-evidence-audit.test.mjs.", "functions": ["renderNotificationSummaryTab"]}
 ]

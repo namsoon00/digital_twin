@@ -9,11 +9,12 @@ from typing import Dict, Iterable, List, Mapping
 from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
 from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
+from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
 
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
-CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v5"
+CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v6"
 TYPEDB_AI_HANDOFF_OBSERVATION_VERSION = "typedb-ai-handoff-observation-v2"
 REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v3"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
@@ -685,13 +686,7 @@ def context_observation_evidence_presentation(value: object) -> Dict[str, object
 
 
 def context_observation_delivery_decision(value: object) -> Dict[str, object]:
-    """Allow a reference-only push only when a material change is auditable.
-
-    A semantic relation such as benchmark beta is useful graph context, but a
-    newly materialized relation is not by itself useful enough for a customer
-    push.  A concrete source event, verified follow-up transition, verified
-    disclosure, or TypeDB notification-intent rule must also be present.
-    """
+    """Push a verified RuleBox relation transition; raw ticks only start reasoning."""
 
     payload = _mapping(value)
     contract = typedb_context_observation_contract(payload)
@@ -726,32 +721,14 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     verified_evidence = context_observation_evidence_presentation(payload)
     lifecycle_transition = relation_lifecycle_transition_contract(relation)
     reasoning_trigger = _reasoning_delivery_trigger(payload)
-    authorization_sources = []
-    if material_source_keys:
-        authorization_sources.append("material-source-event")
-    if verified_follow_ups:
-        authorization_sources.append("verified-follow-up-transition")
-    if verified_evidence:
-        authorization_sources.append("verified-source-document")
-    if notification_intent_rule_ids:
-        authorization_sources.append("typedb-notification-intent")
-    if (
-        reasoning_trigger.get("material") is True
-        and reasoning_trigger.get("userObservable") is True
-        and bool(reasoning_trigger.get("facts"))
-    ):
-        authorization_sources.append("verified-reasoning-trigger")
-    # Lifecycle changes remain visible in the graph audit, but do not grant a
-    # push by themselves. A source document, verified threshold, or explicit
-    # TypeDB notification-intent rule must provide the user-facing reason.
+    saved = _mapping(payload.get("relationChangeEvidence"))
+    relation_change = relation_change_evidence(payload, saved.get("previous"))
+    authorization_sources = ["typedb-relation-transition"] if relation_change["eligible"] else []
 
     decision = {
         "version": CONTEXT_OBSERVATION_DELIVERY_VERSION,
         "decision": "suppress",
-        "reason": (
-            "참고 관계만 새로 성립했고 사용자에게 알릴 새 원문이나 검증된 조건 전환이 없어 "
-            "웹 관계 이력에만 저장합니다."
-        ),
+        "reason": relation_change["reason"],
         "suppressionReason": "context_observation_web_history",
         "pushValueClass": "web-only-context-observation",
         "publicationOutcome": outcome,
@@ -764,6 +741,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "reasoningDeliveryTrigger": reasoning_trigger,
         "relationLifecycleTransition": lifecycle_transition,
         "stageObservation": contract.get("decisionEligibility") == "stage-observation",
+        "relationTransitionIds": [item["transitionId"] for item in relation_change["transitions"]],
     }
     if decision["stageObservation"]:
         decision.pop("selectedRuleId", None)
@@ -784,14 +762,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         stage_observation = contract.get("decisionEligibility") == "stage-observation"
         decision.update({
             "decision": "send",
-            "reason": (
-                str(lifecycle_transition.get("changeLabel") or "관계 변화")
-                + "이 정상 TypeDB 추론 세대에서 확인됐습니다."
-                if lifecycle_transition
-                else "TypeDB가 AI 판단에 전달한 관계 변화와 근거 수치가 확인됐습니다."
-                if stage_observation
-                else "검증된 참고 관찰에 사용자에게 알릴 구체적인 새 근거가 연결됐습니다."
-            ),
+            "reason": "룰박스 관계 변화: " + relation_change["reason"],
             "suppressionReason": "",
             "pushValueClass": (
                 "material-typedb-stage-observation"

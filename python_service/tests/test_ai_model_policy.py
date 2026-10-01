@@ -287,6 +287,7 @@ class AiModelPolicyTests(unittest.TestCase):
                 "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
                 "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
             )
+            metrics = {}
             with self.assertRaises(subprocess.TimeoutExpired):
                 run_ai_prompt_command(
                     [sys.executable, "-c", script, str(child_pid_path)],
@@ -297,7 +298,13 @@ class AiModelPolicyTests(unittest.TestCase):
                     lane="background",
                     reserved_priority_slots=0,
                     timeout_seconds=0.2,
+                    execution_metrics=metrics,
                 )
+            self.assertEqual('timeout', metrics['terminationReason'])
+            self.assertEqual(0.2, metrics['configuredTimeoutSeconds'])
+            self.assertGreaterEqual(metrics['modelProcessMs'], 190)
+            self.assertGreaterEqual(metrics['capacityWaitMs'], 0)
+            self.assertIsNotNone(metrics['returnCode'])
             child_pid = int(child_pid_path.read_text())
             time.sleep(0.05)
             with self.assertRaises(ProcessLookupError):

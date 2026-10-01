@@ -221,7 +221,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # shared-disk rotation, rollback preservation and measured reclamation.
         # Four cutover regressions cover measured gain, staging estimates,
         # unreadable storage and preserving live workers on a deferred swap.
-        self.assertLessEqual(total, 1958)
+        # Five regressions cover JSON-order delivery, oversized optional memory,
+        # repair headroom, timeout diagnostics and capacity sampling under load.
+        self.assertLessEqual(total, 1963)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

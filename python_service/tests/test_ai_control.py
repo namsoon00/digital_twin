@@ -23,6 +23,20 @@ PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesi
 
 
 class AIControlTests(unittest.TestCase):
+    def test_execution_metrics_survive_timeout_without_private_error_output(self):
+        from digital_twin.modules.ai_orchestration.infrastructure.execution import current_execution_metrics
+        store = Mock(); store.begin_call.return_value = 'call-timing'
+        with self.assertRaises(TimeoutError):
+            with ai_execution('independent-observation', store=store):
+                current_execution_metrics().update(stage='model-process', capacityWaitMs=5, modelProcessMs=240000,
+                                                   terminationReason='timeout')
+                raise TimeoutError('private model output')
+        metrics = store.finish_call.call_args.kwargs['metrics']
+        self.assertEqual(5, metrics['capacityWaitMs'])
+        self.assertEqual(240000, metrics['modelProcessMs'])
+        self.assertNotIn('private', repr(store.finish_call.call_args))
+        self.assertIsNone(current_execution_metrics())
+
     def runner(self, **kwargs):
         store = Mock()
         store.claim.return_value = {**SUBJECT, "taskId": "task-1", "capability": "observe", "attempts": 1, "leaseToken": "lease"}
@@ -141,12 +155,12 @@ class AIControlTests(unittest.TestCase):
         OperationsRoutes().route_operations_health(request, "/api/ai-control/status", {})
         self.assertEqual(403, request.send_payload.call_args.args[0])
         with patch("digital_twin.infrastructure.settings.save_runtime_settings") as save:
-            for payload in ({"aiControlDailyTaskBudget": -1}, {"command": "anything"}, {"aiControlEnabled": "maybe"}, {"aiControlBudgetEnabled": "maybe"}):
+            for payload in ({"aiControlDailyTaskBudget": -1}, {"command": "anything"}, {"aiControlEnabled": "maybe"}, {"aiControlBudgetEnabled": "maybe"}, {"aiObservationPromptMaxBytes": 1}, {"aiObservationPromptMaxBytes": 524289}):
                 with self.assertRaises(ValueError):
                     save_ai_control_settings(payload)
             save.assert_not_called()
-            save_ai_control_settings({"aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiControlDailyCallBudget": "0"})
-            save.assert_called_once_with({"aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiControlDailyCallBudget": "0"})
+            save_ai_control_settings({"aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiControlDailyCallBudget": "0", "aiObservationPromptMaxBytes": "262144"})
+            save.assert_called_once_with({"aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiControlDailyCallBudget": "0", "aiObservationPromptMaxBytes": "262144"})
 
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
@@ -159,7 +173,7 @@ class AIControlStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.store.transaction() as c:
-            for table in ("ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls"):
+            for table in ("ai_control_call_metrics", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):
@@ -213,7 +227,11 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertEqual("2026-10-02T00:00:00Z", reset)
         self.store.seed(SUBJECT)
         call = self.store.begin_call("research", "hash", "task")
-        self.store.finish_call(call, "TimeoutError")
+        self.store.finish_call(call, "TimeoutError", metrics={"modelProcessMs": 240001, "terminationReason": "timeout", "stderr": "private"})
+        with self.store.connect() as connection:
+            import json
+            metrics = json.loads(connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call,)).fetchone()["metrics_json"])
+        self.assertEqual({"modelProcessMs": 240001, "terminationReason": "timeout"}, metrics)
         # One call remains, but a draft must leave room for its critique. The
         # wait must not claim work, use task budget or exhaust failure retries.
         for _ in range(3):

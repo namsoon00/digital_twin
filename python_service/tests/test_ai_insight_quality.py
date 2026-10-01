@@ -17,6 +17,66 @@ import test_ai_control as control_helpers
 
 
 class InsightGroundingTests(unittest.TestCase):
+    def test_repair_rebudgets_memory_but_preserves_required_facts_and_parent(self):
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, prompt_budget
+        self.assertEqual(256 * 1024, prompt_budget('invalid'))
+        self.assertEqual(512 * 1024, prompt_budget(9999999))
+        envelope = freeze_execution_input(packet(), [{'summary': 'a' * 30000}],
+                                          [{'result': 'b' * 23000}], max_prompt_bytes=65536)
+        original = copy.deepcopy(envelope)
+        rejected = plan(); rejected['summary'] = 'c' * 30000
+        repair = freeze_repair_input(envelope, rejected, ['invalid summary'], 'parent')
+        self.assertEqual(original, envelope)
+        self.assertEqual(envelope['current'], repair['current'])
+        self.assertEqual(rejected, repair['repair']['rejectedDraft'])
+        self.assertLess(len(repair['researchResults']), len(envelope['researchResults']))
+        self.assertLessEqual(len(repair['prompt'].encode()), 65536)
+        validate_execution_input(repair)
+        review = freeze_review_input(observation(), max_prompt_bytes=65536)
+        self.assertEqual(65536, review['promptBudgetBytes'])
+        validate_execution_input(review)
+
+    def test_render_is_identical_after_json_object_reordering(self):
+        import json
+        result = observation()
+        for index, section in enumerate(result['claimEvidence']):
+            fact_id = 'evidence-' + str(index)
+            result['input']['facts'].append({'id': fact_id, 'kind': 'research-evidence',
+                'label': fact_id, 'source': 'official', 'value': index})
+            result['claimEvidence'][section].append(ref('value', fact_id=fact_id))
+        reordered = json.loads(json.dumps(result, sort_keys=True))
+        self.assertEqual(result, reordered)
+        self.assertEqual(render_ai_observation(result), render_ai_observation(reordered))
+        reordered['input']['facts'][-1]['label'] = 'changed evidence'
+        # Data equality, not object serialization order, is the prerequisite.
+        self.assertNotEqual(result, reordered)
+
+    def test_oversized_memory_is_omitted_with_proof_without_changing_current_facts(self):
+        import json
+        from digital_twin.modules.ai_orchestration.domain.execution_input import PREVIOUS_PROMPT_VERSION
+        p = packet()
+        history = [{'summary': '가' * 50000}, {'summary': '최근 분석', 'quality': {'status': 'rejected'}}]
+        research = [{'runId': 'too-large', 'claims': 'a' * 150000}, {'runId': 'small', 'status': 'completed'}]
+        before = copy.deepcopy((p, history, research))
+        envelope = freeze_execution_input(p, history, research, max_prompt_bytes=120000)
+        self.assertEqual(before, (p, history, research))
+        self.assertEqual(p, envelope['current'])
+        self.assertEqual([history[1]], envelope['previousAnalyses'])
+        self.assertEqual([research[1]], envelope['researchResults'])
+        self.assertEqual('context-budget', envelope['memoryCoverage']['excluded']['analyses'][0]['reason'])
+        self.assertLessEqual(len(envelope['prompt'].encode()), 120000)
+        validate_execution_input(envelope)
+        old = copy.deepcopy(envelope); old['promptVersion'] = PREVIOUS_PROMPT_VERSION
+        validate_execution_input(old)
+        p['lastDeliveredNotification'] = {'facts': [{**p['facts'][0], 'sourceDetails': 'x' * 70000}]}
+        with self.assertRaisesRegex(ValueError, 'exceeds context budget'):
+            freeze_execution_input(p, [], [], max_prompt_bytes=65536)
+        enlarged = freeze_execution_input(p, [{'summary': 'a' * 50000}], [])
+        self.assertEqual(256 * 1024, enlarged['promptBudgetBytes'])
+        self.assertEqual(p, enlarged['current'])
+        self.assertGreater(len(enlarged['prompt'].encode()), 120000)
+        validate_execution_input(enlarged)
+
     def assert_readable_forms_keep_causal_guards(self):
         result = observation()
         for section, text in (

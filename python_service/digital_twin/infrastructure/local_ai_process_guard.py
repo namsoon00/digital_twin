@@ -145,6 +145,7 @@ def run_ai_prompt_command(
     timeout_seconds: Optional[float] = None,
     cwd: Optional[Path] = None,
     env: Optional[Dict[str, str]] = None,
+    execution_metrics: Optional[Dict[str, object]] = None,
 ) -> subprocess.CompletedProcess:
     """Run one prompt with capacity control and process-group cleanup.
 
@@ -160,6 +161,10 @@ def run_ai_prompt_command(
         timeout_value = float(timeout_seconds)
         if timeout_value <= 0:
             timeout_value = None
+    metrics = execution_metrics if execution_metrics is not None else {}
+    started = time.monotonic()
+    metrics.update(stage="capacity-wait", configuredTimeoutSeconds=timeout_value,
+                   promptBytes=len(prompt.encode()), modelProcessMs=0, returnCode=None)
     with local_ai_capacity_lease(
         lock_dir,
         max_concurrent=max_concurrent,
@@ -167,6 +172,7 @@ def run_ai_prompt_command(
         lane=lane,
         reserved_priority_slots=reserved_priority_slots,
     ):
+        metrics.update(capacityWaitMs=round((time.monotonic() - started) * 1000, 3), stage="process-start")
         process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -178,10 +184,13 @@ def run_ai_prompt_command(
             env=env,
             start_new_session=os.name != "nt",
         )
+        process_started = time.monotonic()
+        metrics["stage"] = "model-process"
         try:
             with forward_termination_signals(process):
                 stdout, stderr = process.communicate(input=prompt, timeout=timeout_value)
         except subprocess.TimeoutExpired as error:
+            metrics["terminationReason"] = "timeout"
             terminate_process_group(process, force=False)
             try:
                 process.wait(timeout=2)
@@ -191,6 +200,7 @@ def run_ai_prompt_command(
             process.communicate()
             raise error
         except BaseException:
+            metrics["terminationReason"] = "interrupted"
             terminate_process_group(process, force=False)
             try:
                 process.wait(timeout=2)
@@ -199,6 +209,10 @@ def run_ai_prompt_command(
                 process.wait(timeout=2)
             process.communicate()
             raise
+        finally:
+            metrics.update(modelProcessMs=round((time.monotonic() - process_started) * 1000, 3),
+                           returnCode=process.poll())
+        metrics.update(stage="process-completed", terminationReason="completed" if process.returncode == 0 else "process-failed")
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 

@@ -3,12 +3,18 @@ import hashlib
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import lru_cache
+import time
 
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
 
 
 CURRENT_TASK = ContextVar("ai_control_task", default="")
 CURRENT_INPUT = ContextVar("ai_control_input", default="")
+CURRENT_CALL_METRICS = ContextVar("ai_control_call_metrics", default=None)
+
+
+def current_execution_metrics():
+    return CURRENT_CALL_METRICS.get()
 
 
 @lru_cache(maxsize=4)
@@ -24,6 +30,17 @@ def ai_execution(workload, prompt="", settings=None, store=None):
         configured = settings if settings is not None else runtime_settings()
         store = _store(tuple(sorted((key, str(value)) for key, value in configured.items())))
     call_id = store.begin_call(workload, hashlib.sha256(prompt.encode()).hexdigest(), CURRENT_TASK.get(), CURRENT_INPUT.get())
+    metrics = {}
+    token = CURRENT_CALL_METRICS.set(metrics)
+    started = time.monotonic()
+    def finish(error_kind=""):
+        if metrics:
+            metrics["totalMs"] = round((time.monotonic() - started) * 1000, 3)
+            if metrics.get("stage") == "capacity-wait":
+                metrics["capacityWaitMs"] = metrics["totalMs"]
+            store.finish_call(call_id, error_kind, metrics=metrics)
+        else:
+            store.finish_call(call_id, error_kind) if error_kind else store.finish_call(call_id)
     try:
         capacity = nullcontext()
         if workload == "interactive-chat":
@@ -36,10 +53,12 @@ def ai_execution(workload, prompt="", settings=None, store=None):
         with capacity:
             yield call_id
     except BaseException as error:
-        store.finish_call(call_id, type(error).__name__)
+        finish(type(error).__name__)
         raise
     else:
-        store.finish_call(call_id)
+        finish()
+    finally:
+        CURRENT_CALL_METRICS.reset(token)
 
 
 def execute_ai_work(workload, prompt, invoke, settings=None):

@@ -13,6 +13,9 @@ from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetW
 
 
 SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS ai_control_call_metrics (
+    call_id VARCHAR(64) PRIMARY KEY, metrics_json TEXT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS ai_control_tasks (
     task_id VARCHAR(64) PRIMARY KEY, account_id VARCHAR(191) NOT NULL, symbol VARCHAR(64) NOT NULL,
     capability VARCHAR(32) NOT NULL, status VARCHAR(24) NOT NULL, priority INT NOT NULL DEFAULT 0,
@@ -215,8 +218,13 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                 connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
         return call_id
 
-    def finish_call(self, call_id, error_kind=""):
-        with self.connect() as connection:
+    def finish_call(self, call_id, error_kind="", metrics=None):
+        with self.transaction() as connection:
+            if metrics:
+                safe = {key: metrics[key] for key in ("stage", "configuredTimeoutSeconds", "promptBytes",
+                    "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason") if key in metrics}
+                connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s) "
+                    "ON DUPLICATE KEY UPDATE metrics_json=VALUES(metrics_json)", (call_id, json.dumps(safe)))
             connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))
 
     def review_proof(self, input_id):

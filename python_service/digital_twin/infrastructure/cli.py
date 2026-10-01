@@ -1995,6 +1995,10 @@ def maintenance_command(args) -> int:
         )
 
         def cleanup_once():
+            # Capacity is observable even when queue priority or the realtime
+            # lease defers retention. Otherwise critical state can remain stale
+            # for hours precisely while inference is blocked by disk pressure.
+            observe_operational_storage_capacity(settings, snapshot=operational_storage_inventory(settings))
             queue_state = dict(reasoning_queue_probe() or {})
             try:
                 pending_count = int(queue_state.get("effectivePendingCount") or 0)

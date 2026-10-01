@@ -199,7 +199,7 @@ def run_background_ai_prompt(
         1,
         900,
     )
-    from digital_twin.modules.ai_orchestration.public import execute_ai_work
+    from digital_twin.modules.ai_orchestration.public import execute_ai_work, current_execution_metrics
     return execute_ai_work(str(configured.get("aiWorkload") or "background"), prompt, lambda: run_ai_prompt_command(
         command,
         prompt,
@@ -211,6 +211,7 @@ def run_background_ai_prompt(
         timeout_seconds=timeout_seconds,
         cwd=background_ai_runtime_dir(),
         env=dict(os.environ),
+        execution_metrics=current_execution_metrics(),
     ), configured)
 
 

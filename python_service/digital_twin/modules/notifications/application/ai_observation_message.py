@@ -83,7 +83,11 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         if result.get(key):
             lines += ["", title, result[key]]
     citations, seen = [], set()
-    for refs in result.get("claimEvidence", {}).values():
+    # JSON object order differs across task/outbox persistence. Select the same
+    # three citations before the delivery guard reconstructs the exact body.
+    evidence = result.get("claimEvidence", {})
+    for section in sorted(evidence):
+        refs = evidence[section]
         for ref in refs:
             fact, value = resolve_observation_ref(packet, ref)
             if ref["period"] != "current" or fact.get("kind") == "stock" or fact["id"] in seen:

@@ -7,6 +7,23 @@ from digital_twin.infrastructure.mysql_realtime_workload_guard import MySQLRealt
 
 
 class MySQLMaintenanceAdmissionTests(unittest.TestCase):
+    def test_capacity_refresh_runs_even_when_busy_queue_defers_retention(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from digital_twin.infrastructure import cli
+        scheduler = Mock()
+        with patch.object(cli, 'runtime_settings', return_value={}), \
+             patch.object(cli, 'build_ontology_reasoning_queue_probe', return_value=lambda: {'effectivePendingCount': 3}), \
+             patch.object(cli, 'operational_storage_inventory', return_value={'freeMb': 8000}) as inventory, \
+             patch.object(cli, 'observe_operational_storage_capacity') as observe, \
+             patch.object(cli, 'run_mysql_operational_cleanup') as cleanup, \
+             patch.object(cli, 'OperationalHistoryRetentionScheduler', return_value=scheduler) as factory:
+            scheduler.run_forever.side_effect = lambda: factory.call_args.args[0]()
+            cli.maintenance_command(SimpleNamespace(maintenance_action='watch', interval='60'))
+        inventory.assert_called_once()
+        observe.assert_called_once_with({}, snapshot={'freeMb': 8000})
+        cleanup.assert_not_called()
+
     def test_realtime_queue_defers_cleanup_until_maximum_deferral(self):
         settings = {"mysqlMaintenanceMaxRealtimeDeferralSeconds": "900"}
 

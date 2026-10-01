@@ -58,7 +58,8 @@ class AIControlService:
                             saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다.",
                                 "followUpEvaluations": packet["followUpEvaluations"]}, [child])
                             return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
-                    envelope = freeze_execution_input(packet, history, research)
+                    envelope = freeze_execution_input(packet, history, research,
+                        max_prompt_bytes=self.settings.get("aiObservationPromptMaxBytes", 256 * 1024))
                     input_id = self.store.save_execution_input(job, envelope)
                     if not input_id:
                         return {"status": "lease-lost", "taskId": job["taskId"]}
@@ -71,7 +72,8 @@ class AIControlService:
                     for verification in range(2):
                         result["quality"] = local_quality(result)
                         if result["notification"]["send"] and result["quality"]["status"] == "awaiting-review" and self.reviewer:
-                            review_input = freeze_review_input(result)
+                            review_input = freeze_review_input(result,
+                                max_prompt_bytes=envelope["promptBudgetBytes"])
                             review_id = self.store.save_execution_input(job, review_input)
                             if not review_id:
                                 return {"status": "lease-lost", "taskId": job["taskId"]}

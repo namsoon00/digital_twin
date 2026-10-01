@@ -84,6 +84,18 @@ there is no production UI switch back to that route.
 
 ## Execution and limits
 
+Observation, repair and independent review prompts default to **256 KiB of UTF-8
+text**. Set `aiObservationPromptMaxBytes` or `AI_OBSERVATION_PROMPT_MAX_BYTES` to
+override this operational limit (64–512 KiB). It is a byte budget, not the model's
+token context window. Current evidence and the delivered comparison baseline are
+preserved intact. Prior analyses (64 KiB) and research memory (48 KiB) are admitted
+as whole records in recency order, subject to the total budget. Oversized optional
+records are skipped with hashes and exclusion reasons in the frozen input.
+Repairs can drop optional memory to fit the rejected draft and feedback; an
+oversized required packet fails explicitly instead of silently losing facts.
+The producing evidence contract retains its own category and 96,000-byte packet
+limits; increasing the prompt budget does not override evidence admission.
+
 Independent observation calls first persist their exact input, selected memories
 and prompt locally, including failed attempts; calls require a matching task and
 prompt hash. Existing domain workloads retain their own audit contracts.
@@ -93,6 +105,14 @@ hash, start/completion state and a safe error category, never the prompt or raw
 provider errors. Existing capacity reservations and domain-specific validation
 remain in effect. News, disclosure and model-review queues retain their own jobs. The former
 rule-triggered investment AI workers are retired.
+
+Background process calls also persist safe timing metadata in
+`ai_control_call_metrics`: capacity wait, model process lifetime (including
+termination cleanup), total execution time, configured timeout, UTF-8 prompt size,
+return code and termination reason. These distinguish capacity contention from a
+process timeout without storing raw process errors. Historical calls do not have
+these timings. Rendering observation citations sorts section keys so equivalent
+JSON objects produce the same message after database round trips.
 
 Independent work defaults to **48 task starts and 24 model calls per UTC day**.
 The owner can set `aiControlBudgetEnabled=false` to remove both daily limits.

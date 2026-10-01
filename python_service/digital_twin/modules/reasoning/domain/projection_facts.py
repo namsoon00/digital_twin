@@ -45,6 +45,13 @@ ABOX_STRUCTURAL_RELATION_TYPES = {
 }
 
 
+VALUATION_LINEAGE_RELATION_TYPES = {
+    "DERIVED_FROM_VALUATION_ASSUMPTION", "USES_VALUATION_MODEL",
+    "USES_VALUATION_INPUT", "USES_EARNINGS_SCENARIO", "USES_MULTIPLE_BAND",
+    "HAS_VALUATION_CALCULATION_TRACE", "AWAITS_USER_REVIEW",
+}
+
+
 def rule_id_from_payload(rule: Dict[str, object]) -> str:
     return str((rule or {}).get("rule_id") or (rule or {}).get("ruleId") or "").strip()
 
@@ -305,6 +312,15 @@ def graph_for_graph_store_persistence(
         if str(item.relation_type or "").upper().strip()
         in ABOX_STRUCTURAL_RELATION_TYPES
     ]
+    # Preserve the source contract behind a retained valuation. Follow only
+    # assessment/assumption -> evidence edges: shared model nodes must not
+    # pull another subject's assumptions into this projection.
+    valuation_relations = [
+        item for item in abox_relations
+        if str(item.relation_type or "").upper().strip() in VALUATION_LINEAGE_RELATION_TYPES
+        and item.source in entity_by_id
+        and entity_by_id[item.source].kind in {"valuation-assumption", "valuation-assessment"}
+    ]
 
     def equality_key(value):
         if isinstance(value, dict):
@@ -346,11 +362,12 @@ def graph_for_graph_store_persistence(
     while True:
         additions = [
             item
-            for item in structural_relations
+            for item in [*structural_relations, *valuation_relations]
             if relation_equality_key(item) not in retained_relation_keys
             and (
                 item.source in persisted_endpoint_ids
-                or item.target in persisted_endpoint_ids
+                or (str(item.relation_type or "").upper().strip() in ABOX_STRUCTURAL_RELATION_TYPES
+                    and item.target in persisted_endpoint_ids)
             )
         ]
         if not additions:

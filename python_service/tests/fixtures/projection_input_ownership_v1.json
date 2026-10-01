@@ -154,10 +154,11 @@
     "graph_for_graph_store_persistence": {
       "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
       "owner": "",
-      "bodyHash": "15cccbdd68f233961a20a55409ce5ec1bccce19fcb188a47c91bbb39d196d197",
+      "bodyHash": "039e1bb244d115b4090f31c6653e1b43a65af2fab85912661456a55ab2820477",
       "restore": {
         "list(fallback_rules or [])": "self.rulebox_rules_for_impact()"
-      }
+      },
+      "reason": "Retain directed valuation source lineage without pulling foreign assumptions through shared model nodes; test_data_utilization_contract; docs/data-utilization-repair.md."
     },
     "decision_episode_projection_context": {
       "path": "digital_twin/modules/reasoning/application/projection_input/decision_memory.py",

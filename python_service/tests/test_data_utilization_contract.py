@@ -124,6 +124,33 @@ class DataUtilizationContractTests(unittest.TestCase):
         dcf = [node for node in graph.entities if node.kind == "valuation-assessment"]
         self.assertTrue(dcf)
         self.assertTrue(all(not node.properties.get("valuationDecisionEligible") for node in dcf))
+        from digital_twin.modules.reasoning.domain.projection_facts import graph_for_graph_store_persistence
+        from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation
+        graph = PortfolioOntology("persisted-valuation-fixture")
+        graph.entities.append(OntologyEntity("stock:TEST", "Fixture", "stock", {"ontologyBox": "ABox"}))
+        add_position_valuation_concepts(graph, "stock:TEST", position,
+            {**compact, "companyOverviews": {"TEST": {**overview, "currency": "USD"}}}, {})
+        model = next(node for node in graph.entities if node.kind == "valuation-model")
+        graph.entities.extend([
+            OntologyEntity("foreign-assumption", "Foreign", "valuation-assumption", {"ontologyBox": "ABox"}),
+            OntologyEntity("foreign-eps", "Foreign", "earnings-scenario-observation", {"ontologyBox": "ABox"}),
+        ])
+        graph.relations.extend([
+            OntologyRelation("foreign-assumption", model.entity_id, "USES_VALUATION_MODEL"),
+            OntologyRelation(model.entity_id, "foreign-eps", "USES_EARNINGS_SCENARIO"),
+            OntologyRelation("foreign-assumption", "foreign-eps", "USES_EARNINGS_SCENARIO"),
+        ])
+        persisted = graph_for_graph_store_persistence(graph, {"inputRelationTypes": ["HAS_VALUATION"]})
+        by_id = {node.entity_id: node for node in persisted.entities}
+        self.assertNotIn("foreign-assumption", by_id)
+        self.assertNotIn("foreign-eps", by_id)
+        for kind in ("valuation-input-bundle", "earnings-scenario-observation", "valuation-calculation-trace"):
+            expected = [node for node in graph.entities if node.kind == kind and node.entity_id != "foreign-eps"]
+            self.assertTrue(expected, kind)
+            for node in expected:
+                self.assertEqual(node.properties, by_id[node.entity_id].properties)
+        self.assertTrue(all(not node.properties.get("valuationDecisionEligible") for node in persisted.entities
+                            if node.kind == "valuation-assessment"))
         from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import (
             _external_for_symbol, _changed_external_groups, _reasoning_external_groups, _fact_types_for_change,
         )

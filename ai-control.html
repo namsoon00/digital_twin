@@ -8,10 +8,11 @@
 <p id="error" role="alert" hidden></p><section id="overview" aria-live="polite">기록을 불러오는 중입니다.</section>
 <section class="panel"><h2>운영 설정</h2><form id="settings">
 <label><input type="checkbox" id="enabled"> 독립 관찰 사용</label>
+<label><input type="checkbox" id="budgetEnabled" checked> AI 일일 사용 한도 적용</label>
 <label>하루 작업 한도 <input id="taskBudget" type="number" min="0" max="200" value="48" required></label>
 <label>독립 연구 AI 호출 한도 <input id="callBudget" type="number" min="0" max="300" value="24" required></label>
 <button type="submit">저장</button><span id="saveStatus" role="status"></span></form>
-<p class="muted">한도는 UTC 날짜 기준입니다. 설정은 다음 작업부터 적용됩니다. 중지하면 새 관찰과 대기 중인 AI 관찰 알림이 멈춥니다. 진행 중인 분석은 기록으로 남고 뉴스·공시 분석은 각 기능의 한도를 따릅니다.</p></section>
+<p class="muted">일일 사용 한도를 해제하면 호출과 작업 시작 횟수로 관찰을 중단하지 않습니다. 사용 기록, 중복 분석 생략과 동시 실행 제어는 유지됩니다. 한도를 적용할 때는 UTC 날짜 기준이며 설정은 다음 작업부터 적용됩니다. 독립 관찰을 중지하면 새 관찰과 대기 중인 AI 관찰 알림이 멈춥니다. 뉴스·공시 분석은 각 기능의 한도를 따릅니다.</p></section>
 <section><h2>관찰과 조사 기록</h2><p class="muted">아래 내용은 연구 기록입니다. 알림은 별도의 근거·새로움·발송 간격 검증을 통과해야 발송됩니다. 가격은 표시된 근거 시점의 값입니다.</p><div id="tasks"></div></section>
 <section class="panel"><h2>오늘의 AI 실행</h2><p class="muted">뉴스, 공시, 가설 제안, 모델 검토, 투자 판단과 대화의 실행 기록을 함께 확인합니다.</p><div id="calls"></div></section>
 </main><script type="module" src="/ai-control.mjs"></script></body></html>

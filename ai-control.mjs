@@ -15,7 +15,7 @@ async function request(url, options) {
   if (!response.ok) throw new Error(payload.error || "AI 기록을 불러오지 못했습니다.");
   return payload;
 }
-function card(task) {
+function card(task, scheduling = {}) {
   const r = task.result || {};
   const facts = r.input?.facts || [];
   const quote = facts.find((fact) => fact.currentPrice != null && Number(fact.currentPrice) > 0);
@@ -23,14 +23,14 @@ function card(task) {
   return `<article><header><div><h3>${escape(r.input?.name || task.name || task.symbol)} · ${escape(labels[task.capability] || task.capability)}</h3><small>${escape(task.symbol)} · ${escape(date(task.updatedAt))}</small></div><span>${escape(labels[task.status] || task.status)}</span></header>
   ${r.publication ? `<p class="muted">알림: ${escape(publicationLabels[r.publication.deliveryStatus || r.publication.status] || r.publication.status)} · ${escape(r.publication.reason)}</p>` : ""}
   ${r.quality ? `<p class="muted">설명 검증: ${escape(qualityLabels[r.quality.status] || r.quality.status)}${r.quality.errors?.length ? " · " + escape(r.quality.errors.join(" / ")) : ""}</p>` : ""}
-  ${r.summary ? `<p>${escape(r.summary)}</p>` : `<p class="muted">${escape(reasons[r.stopReason] || r.reason || (task.lastError ? "작업에 실패해 재확인이 필요합니다." : task.status === "pending" ? "예약된 시점에 확인합니다." : "아직 분석 결과가 없습니다."))}</p>`}
+  ${r.summary ? `<p>${escape(r.summary)}</p>` : `<p class="muted">${escape(reasons[r.stopReason] || r.reason || (task.status === "pending" && scheduling.status === "budget-wait" ? "오늘 AI 사용 한도로 관찰을 기다리고 있습니다." : task.lastError?.startsWith("ai-call-budget") ? "AI 호출 여유가 생기면 관찰을 다시 시작합니다." : task.lastError ? "작업에 실패해 재확인이 필요합니다." : task.status === "pending" ? "예약된 시점에 확인합니다." : "아직 분석 결과가 없습니다."))}</p>`}
   ${quote ? `<p>근거 시점 가격 <strong>${escape(Number(quote.currentPrice).toLocaleString("ko-KR"))} ${escape(quote.currency)}</strong>${quote.changeRate != null ? ` · 등락 ${escape(quote.changeRate)}%` : ""}<br><small>시세 기준 ${escape(date(quote.sourceAsOf || quote.asOf || quote.updatedAt))}</small></p>` : ""}
   <div class="analysis">${section("가능한 설명 · 가설",r.hypothesis)}${section("이전 알림과 비교",r.comparison)}${section("내 보유·관심 상황에서의 의미",r.portfolioImpact)}${section("반대 근거와 한계",r.counterEvidence)}${section("다음에 확인할 질문",(r.questions || []).join(" / "))}</div>
   ${r.followUpConditions?.length ? `<details><summary>등록한 확인 조건 ${r.followUpConditions.length}개</summary>${r.followUpConditions.map((row) => `<p>${escape(row.description)}<br><small>${escape(date(row.expiresAt))}까지 다음 관찰에서 확인</small></p>`).join("")}</details>` : ""}
   ${r.followUpEvaluations?.length ? `<details><summary>이전 설명의 확인 결과</summary>${r.followUpEvaluations.map((row) => `<p>${escape(row.description)} · ${escape(followUpLabels[row.status] || row.status)}<br><small>${escape(row.reason)}</small></p>`).join("")}</details>` : ""}
   ${r.publication?.receipt ? `<details><summary>실제 발송 원문 · ${escape(date(r.publication.receipt.deliveredAt))}</summary><pre>${escape(r.publication.receipt.body || "원문 보존 기간이 지나 본문을 표시할 수 없습니다.")}</pre></details>` : ""}
   ${r.claimEvidence ? `<details><summary>문장별 인용과 검토 기록</summary><pre>${escape(JSON.stringify({claims:r.claimEvidence,review:r.quality?.review},null,2))}</pre></details>` : ""}
-  ${task.status === "pending" ? `<p class="muted">다음 확인 ${escape(date(task.nextCheckAt))}</p>` : ""}
+  ${task.status === "pending" ? `<p class="muted">다음 확인 ${escape(date(scheduling.status === "budget-wait" && Date.parse(scheduling.nextCheckAt) > Date.parse(task.nextCheckAt) ? scheduling.nextCheckAt : task.nextCheckAt))}</p>` : ""}
   ${facts.length ? `<details><summary>사용한 사실 ${facts.length}개 · 시점과 출처 보기</summary><pre>${escape(JSON.stringify(r.input,null,2))}</pre></details>` : ""}</article>`;
 }
 async function load() {
@@ -39,21 +39,24 @@ async function load() {
   try {
     const data = await request("/api/ai-control/status");
     $("error").hidden = true;
-    $("overview").innerHTML = `<p>문장 검토 통과 ${escape(data.qualitySummary?.accepted ?? 0)}건 · 보류 ${escape(data.qualitySummary?.rejected ?? 0)}건. 검토 통과는 투자 가설의 적중이나 유료 가치 인증을 뜻하지 않습니다.</p><p>기존 규칙 기반 투자 알림은 종료했습니다. AI가 마지막 발송과 비교해 새로운 해석이 있을 때 알립니다. 같은 종목은 일반 관찰 3시간, 등록한 반증 조건의 새 전환은 1시간 간격이며 하루 최대 2회 · 계정당 하루 최대 8회입니다. 일일 한도는 UTC 기준입니다.</p><div class="metrics"><div class="metric">독립 관찰 설정<strong>${data.enabled ? "사용" : "일시 중지"}</strong></div><div class="metric">오늘 시작한 작업<strong>${escape(data.tasksStartedToday)} / ${escape(data.dailyTaskBudget)}</strong></div><div class="metric">대기·진행 작업<strong>${escape(data.activeTaskCount)}</strong></div></div>`;
-    if (!dirty) { $("enabled").checked = data.configuredEnabled; $("taskBudget").value = data.dailyTaskBudget; $("callBudget").value = data.dailyCallBudget; }
+    const scheduling = data.observationScheduling || {};
+    const waiting = data.enabled && scheduling.status === "budget-wait";
+    $("overview").innerHTML = `${waiting ? `<p role="status"><strong>AI 관찰이 사용 한도로 대기 중입니다.</strong> ${scheduling.reason === "ai-task-budget-exhausted" ? "오늘 작업 시작 한도에 도달했습니다." : "새 분석과 독립 검토에 필요한 호출 여유가 없습니다."} 한도 갱신 ${escape(date(scheduling.nextCheckAt))}. 설정에서 한도를 늘리면 다음 실행부터 다시 확인합니다.</p>` : ""}<p>문장 검토 통과 ${escape(data.qualitySummary?.accepted ?? 0)}건 · 보류 ${escape(data.qualitySummary?.rejected ?? 0)}건. 검토 통과는 투자 가설의 적중이나 유료 가치 인증을 뜻하지 않습니다.</p><p>기존 규칙 기반 투자 알림은 종료했습니다. AI가 마지막 발송과 비교해 새로운 해석이 있을 때 알립니다. 같은 종목은 일반 관찰 3시간, 등록한 반증 조건의 새 전환은 1시간 간격이며 하루 최대 2회 · 계정당 하루 최대 8회입니다. 일일 한도는 UTC 기준입니다.</p><div class="metrics"><div class="metric">독립 관찰 상태<strong>${!data.enabled ? "일시 중지" : waiting ? "사용 한도 대기" : "사용"}</strong></div><div class="metric">오늘 시작한 작업<strong>${escape(data.tasksStartedToday)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyTaskBudget)}</strong></div><div class="metric">오늘 독립 AI 호출<strong>${escape(data.modelCallsUsedToday ?? 0)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyCallBudget)}</strong></div><div class="metric">대기·진행 작업<strong>${escape(data.activeTaskCount)}</strong></div></div><p class="muted">관찰 분석과 발송 전 검토는 각각 호출을 사용합니다. 뉴스 분석 등 별도 작업의 호출은 아래 이력에 표시되며 독립 AI 한도와 구분됩니다.</p>`;
+    if (!dirty) { $("enabled").checked = data.configuredEnabled; $("budgetEnabled").checked = data.budgetEnabled !== false; syncBudgetFields(); $("taskBudget").value = data.dailyTaskBudget; $("callBudget").value = data.dailyCallBudget; }
     const analyses = data.tasks.filter((task) => task.result?.summary);
     const queue = data.tasks.filter((task) => !task.result?.summary);
-    $("tasks").innerHTML = (analyses.map(card).join("") || '<p class="panel">첫 관찰을 준비하고 있습니다. 유효한 계정·종목·그래프 근거가 준비되면 작업을 시작합니다.</p>') + `<details><summary>예약·조사·처리 기록 ${queue.length}개</summary>${queue.map(card).join("")}</details>`;
+    $("tasks").innerHTML = (analyses.map((task) => card(task, scheduling)).join("") || '<p class="panel">첫 관찰을 준비하고 있습니다. 유효한 계정·종목·그래프 근거가 준비되면 작업을 시작합니다.</p>') + `<details><summary>예약·조사·처리 기록 ${queue.length}개</summary>${queue.map((task) => card(task, scheduling)).join("")}</details>`;
     $("calls").innerHTML = '<table><thead><tr><th>작업</th><th>실행 상태</th><th>횟수</th></tr></thead><tbody>' + data.callsToday.map((row) => `<tr><td>${escape(workloads[row.workload] || row.workload)}</td><td>${escape(labels[row.status] || row.status)}</td><td>${escape(row.count)}</td></tr>`).join("") + '</tbody></table>';
   } catch (error) { $("error").hidden = false; $("error").textContent = error.message; }
   finally { loading = false; }
 }
 $("refresh").addEventListener("click", load);
-$("settings").addEventListener("input", () => { dirty = true; });
+function syncBudgetFields() { for (const id of ["taskBudget", "callBudget"]) $(id).disabled = !$("budgetEnabled").checked; }
+$("settings").addEventListener("input", () => { dirty = true; syncBudgetFields(); });
 $("settings").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    await request("/api/ai-control/settings", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({aiControlEnabled:$("enabled").checked ? "true" : "false",aiControlDailyTaskBudget:$("taskBudget").value,aiControlDailyCallBudget:$("callBudget").value})});
+    await request("/api/ai-control/settings", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({aiControlEnabled:$("enabled").checked ? "true" : "false",aiControlBudgetEnabled:$("budgetEnabled").checked ? "true" : "false",aiControlDailyTaskBudget:$("taskBudget").value,aiControlDailyCallBudget:$("callBudget").value})});
     dirty = false; $("saveStatus").textContent = "저장했습니다. 다음 작업부터 적용됩니다."; await load();
   } catch (error) { $("saveStatus").textContent = error.message; }
 });

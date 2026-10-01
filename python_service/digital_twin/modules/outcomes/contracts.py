@@ -10,6 +10,8 @@ _EXPORTS = {'evaluate_hypothesis_outcome': ('digital_twin.modules.outcomes.domai
 
 
 _EXPORTS.update({
+    'prepare_observation_conditions': ('digital_twin.modules.outcomes.domain.observation_followup', 'prepare_observation_conditions'),
+    'evaluate_observation_conditions': ('digital_twin.modules.outcomes.domain.observation_followup', 'evaluate_observation_conditions'),
     'select_independent_observations': ('digital_twin.modules.outcomes.domain.observation_independence', 'select_independent_observations'),
     'ai_follow_up_registration_admission': ('digital_twin.modules.outcomes.domain.follow_up_tracking', 'ai_follow_up_registration_admission'),
     'follow_up_is_registered': ('digital_twin.modules.outcomes.domain.follow_up_tracking', 'follow_up_is_registered'),

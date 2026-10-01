@@ -2,6 +2,23 @@
 import json
 
 
+def call_observation_model(envelope, configured):
+    import os
+    import tempfile
+    from pathlib import Path
+    from digital_twin.modules.model_registry.infrastructure.model_reviewer import codex_process_arguments, background_ai_runtime_dir, run_background_ai_prompt
+    from digital_twin.infrastructure.news_ai_analyzer import first_json_object
+    from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
+    validate_execution_input(envelope)
+    with tempfile.TemporaryDirectory(prefix="orbit-observation-schema-") as directory:
+        schema = Path(directory) / "response.json"
+        schema.write_text(json.dumps(envelope["outputSchema"], ensure_ascii=False))
+        os.chmod(schema, 0o600)
+        command = codex_process_arguments("high", background_ai_runtime_dir(), output_schema_path=schema)
+        completed = run_background_ai_prompt(command, envelope["prompt"], 240, configured)
+        return first_json_object(completed.stdout)
+
+
 def ai_control_subjects(configured):
     from digital_twin.infrastructure.operational_store import monitor_store
     from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state
@@ -30,10 +47,8 @@ def build_ai_control_service(settings=None):
     from digital_twin.infrastructure.operational_store import investment_research_store
     from digital_twin.infrastructure.typedb_ontology import typedb_repository_from_settings
     from digital_twin.infrastructure.composition.news_intelligence import build_investment_research_orchestrator
-    from digital_twin.infrastructure.news_ai_analyzer import first_json_object
     from digital_twin.modules.decisions.contracts import InvestmentQuestion
     from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
-    from digital_twin.modules.model_registry.infrastructure.model_reviewer import background_codex_process_arguments, run_background_ai_prompt
     from digital_twin.modules.ai_orchestration.public import AIControlService
     from digital_twin.modules.ai_orchestration.domain.planning import identity, stamp
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
@@ -54,10 +69,7 @@ def build_ai_control_service(settings=None):
         token = CURRENT_TASK.set(envelope["current"]["taskId"])
         input_token = CURRENT_INPUT.set(input_id)
         try:
-            prompt = envelope["prompt"]
-            completed = run_background_ai_prompt(background_codex_process_arguments("high"),
-                prompt, 240, {**configured, "aiWorkload": "independent-observation"})
-            return first_json_object(completed.stdout)
+            return call_observation_model(envelope, {**configured, "aiWorkload": "independent-observation"})
         finally:
             CURRENT_INPUT.reset(input_token)
             CURRENT_TASK.reset(token)
@@ -103,7 +115,7 @@ def build_ai_control_service(settings=None):
     publication.retire_legacy_work()
     store.outbox_writer = publication.publish
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
-                            delivery_memory=publication.memory)
+                            delivery_memory=publication.memory, reviewer=planner)
 
 
 def ai_control_status(settings=None, account_id=""):
@@ -118,14 +130,27 @@ def ai_control_status(settings=None, account_id=""):
         with notification_job_store(configured).connect() as connection:
             ids = [publication["jobId"] for publication in publications]
             rows = connection.execute("SELECT job_id,status,last_error FROM notification_jobs WHERE job_id IN (" + ",".join(["%s"] * len(ids)) + ")", tuple(ids)).fetchall()
+            receipts = connection.execute("SELECT job_id,completed_at,JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.renderedMessage')) AS body "
+                "FROM notification_delivery_attempts WHERE status='delivered' AND job_id IN (" + ",".join(["%s"] * len(ids)) + ") "
+                "ORDER BY completed_at DESC", tuple(ids)).fetchall()
         deliveries = {row["job_id"]: row for row in rows}
+        delivered = {}
+        for receipt in receipts:
+            delivered.setdefault(receipt["job_id"], {"deliveredAt": receipt["completed_at"], "body": receipt["body"] or "", "source": "transport-receipt"})
         for publication in publications:
             delivery = deliveries.get(publication["jobId"], {})
             publication["deliveryStatus"] = delivery.get("status", "unknown")
+            if publication["jobId"] in delivered:
+                publication["receipt"] = delivered[publication["jobId"]]
             if delivery.get("last_error"):
                 publication["reason"] = delivery["last_error"]
+    results = [task["result"] for task in status["tasks"] if task["result"].get("summary")]
     return {"notificationRoute": "ai-control", "legacyInvestmentNotifications": "retired",
-            "notificationPolicy": {"cooldownMinutes": 180, "dailySubjectLimit": 2, "dailyAccountLimit": 8},
+            "qualitySummary": {"scope": "최근 관찰 기록", "reviewed": sum(bool(row.get("quality", {}).get("reviewInputId")) for row in results),
+                "accepted": sum(row.get("quality", {}).get("status") == "accepted" for row in results),
+                "rejected": sum(row.get("quality", {}).get("status") == "rejected" for row in results),
+                "valueQualification": "사용자 유용성과 유료 가치는 별도 평가가 필요합니다."},
+            "notificationPolicy": {"cooldownMinutes": 180, "invalidationCooldownMinutes": 60, "dailySubjectLimit": 2, "dailyAccountLimit": 8},
             "enabled": enabled(configured),
             "configuredEnabled": str(configured.get("aiControlEnabled", "true")).lower() not in {"false", "0", "off"},
             "capabilities": CAPABILITIES,

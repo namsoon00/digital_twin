@@ -43,7 +43,8 @@ It sees the last **successfully delivered** observation, including its dated fac
 as well as prior internal analyses. It should notify only for a useful new
 interpretation: a hypothesis-changing trend, conflicting signals or important
 new evidence. Price changes, polling timestamps or repeated missing data alone
-are insufficient. There is no rule-match trigger and no second AI rewrite call.
+are insufficient. There is no rule-match trigger. A second call critiques admitted
+drafts against their exact evidence; it does not rewrite the customer message.
 
 An actionless `aiObservation` outbox entry is committed in the same transaction as
 the lease-fenced observation and successors. Unknown evidence IDs, trading
@@ -62,8 +63,10 @@ recording the transport receipt. Quotes must have a known source time no more th
 message labels the price's own time, not the send time. A pending alert that ages
 out remains in history and the normal next observation reconsiders the subject.
 
-Initial frequency policy: **at least 180 minutes per account/symbol, at most two
-per symbol and eight per account per UTC day**. Only successful delivery receipts
+Frequency policy: **180 minutes per account/symbol, at most two per symbol and
+eight per account per UTC day**. A newly verified false-to-true transition of a
+previously delivered `invalidates` condition may use a 60-minute interval. Daily
+limits still apply. A price movement or model-authored urgency cannot waive them. Only successful delivery receipts
 consume these limits and become the next comparison baseline. Identical input
 fingerprints, an advanced comparison baseline, replay of delivered jobs and
 retired subjects are suppressed. Policy/validation silence remains visible on
@@ -125,3 +128,65 @@ AI model, module-boundary and runtime-composition tests cover compatibility.
 quotes, numeric/actionless validation, account isolation, cooldown boundaries,
 atomic outbox rollback, successful-receipt memory and end-to-end worker delivery
 without invoking the legacy reviewer.
+
+## Evidence-bound customer explanations
+
+`observation-insight-v1` requires a current/baseline fact ID and exact field path
+for each of six explanation sections, observed numeric comparisons and one to
+three executable follow-up conditions. Free prose cannot supply quantities;
+values, labels, units and clocks are rendered from frozen facts. Small nonzero
+ratios display as less than 0.01 instead of zero. Missing zero/default changes
+are omitted when the quote is partial. The source is the provider, not the
+holding/watchlist role. Daily-volume ratios are explicitly not same-time-of-day
+comparisons.
+
+The output JSON schema is generated from captured fact IDs and scalar paths and
+persisted alongside the exact prompt. Model generation uses this schema; local
+validation still checks field ownership, time, comparison truth/units, unsupported
+flows, reference-only evidence and selected unsupported causal/certainty language.
+The draft's natural-language meaning is then independently critiqued with
+`observation-review-v1`. Every section must be supported; generic or repeated
+explanations remain internal. This critique is another AI assessment, not proof
+of every possible semantic claim or commercial usefulness.
+
+Both generation and review consume the existing central call budget. Only an
+explicit send candidate that passes local checks receives a critique. Each review
+has a frozen draft/input/schema, persisted execution record and completed model
+call. Admission and final transport recheck that proof and the draft hash. Legacy
+observations without this contract cannot pass the new final gate. Successful
+receipts preserve the cited fields, explanation fingerprint and registered
+conditions. Exact price jitter with the same cited relationships does not create
+a new explanation; the reviewer also compares meaning with the last receipt.
+
+Follow-up evaluation belongs to `outcomes`. It compares the next collected stock
+values with the two registered fields, using source clocks and a fixed horizon.
+An already-true condition must become false before a new true transition counts.
+Unchanged clocks, unavailable data and expired windows cannot become a success or
+failure. Conditions support/weakening/invalidation describe an observation
+contract, not calibrated prediction performance, and do not create investment
+DecisionEpisodes. Checks run at scheduled observations, not on every market tick.
+The next delivered explanation supersedes the prior receipt's active conditions.
+Skipped model calls still persist condition state. Source currency changes and
+unusable observations cannot trigger a check; cross-period comparisons require
+chronological source timestamps.
+
+The owner page shows rejection reasons, sentence references, condition results and
+the actual transported text from the receipt (not a freshly rendered replacement).
+Its review counts are operational quality diagnostics, not paid-service or return
+qualification. User usefulness and willingness to pay still require a pilot.
+
+Verification:
+
+- `test_ai_insight_quality.py`: wrong price/cost and return/weight claims, unsupported
+  causes and moving-average slopes, timestamps, units, critique tampering, semantic
+  repetition, durable follow-up state and review failure.
+- `test_ai_control_publication.py`: actual isolated MySQL review proof, atomic
+  outbox, delivery receipt and retirement boundaries.
+- `node scripts/test-ai-control-browser.cjs`: desktop/mobile receipt display,
+  rejected explanations, expired checks, escaping and layout.
+- `python3 scripts/replay-ai-observation.py /private/capture.json --output /private/output`:
+  real model generation/critique from preserved historical facts, with zero queue
+  writes or transport calls. Historical evidence is never enriched with later
+  facts. It writes private local inputs, outputs and rendered messages. Central
+  execution audit rows are recorded for model calls. Passing this replay is not
+  a live delivery receipt.

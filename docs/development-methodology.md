@@ -97,7 +97,10 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Owner-approved central AI cutover (2026-10-01): `aiObservation` is an
   actionless, independently scheduled explanation of immutable ABox facts. It
   may notify without a matched RuleBox rule or SubjectDecisionCase, after
-  evidence/numeric validation and receipt-backed delivery controls. This is an
+  evidence/numeric validation and receipt-backed delivery controls.
+  Observation explanations also require the versioned per-section evidence,
+  frozen independent review, receipt comparison and follow-up contract in that
+  document. Review acceptance is not empirical qualification. This is an
   explicit exception for observation narratives, not authority to choose an
   investment action, mutate a rule or create a decision episode. The former
   `investmentInsight` transport and rule-triggered AI queue are retired in

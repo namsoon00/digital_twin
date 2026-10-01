@@ -58,9 +58,16 @@ def repeat_block(result, receipts, account_id, symbol, now=None):
     subject = [row for row in receipts if row.get("accountId") == account_id and row.get("symbol") == symbol]
     if any(row.get("inputFingerprint") == result.get("inputFingerprint") for row in subject):
         return "이미 전달한 근거와 같아 반복 발송하지 않습니다."
+    meaning = result.get("quality", {}).get("insightFingerprint")
+    latest = max(subject, key=lambda row: instant(row.get("deliveredAt")) or datetime.min.replace(tzinfo=timezone.utc), default={})
+    if meaning and latest.get("insightFingerprint") == meaning:
+        return "이미 전달한 설명과 관측 관계가 같아 반복 발송하지 않습니다."
     recent = [row for row in subject if instant(row.get("deliveredAt")) is not None]
-    if recent and (now - max(instant(row["deliveredAt"]) for row in recent)).total_seconds() < COOLDOWN_MINUTES * 60:
-        return "같은 종목의 알림 간격 3시간이 지나지 않았습니다."
+    invalidated = any(row.get("transitionVerified") and row.get("effect") == "invalidates"
+                      for row in result.get("input", {}).get("followUpEvaluations", []))
+    gap = 60 if invalidated else COOLDOWN_MINUTES
+    if recent and (now - max(instant(row["deliveredAt"]) for row in recent)).total_seconds() < gap * 60:
+        return "반증 조건 전환의 최소 간격 1시간이 지나지 않았습니다." if invalidated else "같은 종목의 알림 간격 3시간이 지나지 않았습니다."
     today = [row for row in receipts if row.get("accountId") == account_id and str(row.get("deliveredAt", ""))[:10] == now.date().isoformat()]
     if len([row for row in today if row.get("symbol") == symbol]) >= DAILY_SUBJECT_LIMIT:
         return "오늘 이 종목의 알림 한도에 도달했습니다."

@@ -144,6 +144,9 @@ class MySQLAIControlStore(MySQLOperationalConnection):
     def memory(self, account_id, symbol):
         with self.connect() as connection:
             rows = connection.execute("SELECT result_json,updated_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='completed' AND JSON_EXTRACT(result_json,'$.summary') IS NOT NULL ORDER BY updated_at DESC LIMIT 3", (account_id, symbol)).fetchall()
+            condition_state = connection.execute("SELECT result_json FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
+                "AND capability='observe' AND status='completed' AND JSON_EXTRACT(result_json,'$.followUpEvaluations') IS NOT NULL "
+                "ORDER BY updated_at DESC,task_id DESC LIMIT 1", (account_id, symbol)).fetchone()
         result = []
         for row in rows:
             saved = json.loads(row["result_json"])
@@ -152,6 +155,8 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             keys = ("id", "label", "symbol", "currentPrice", "changeRate", "ma20", "ma60", "volumeRatio", "profitLossRate", "sourceAsOf", "asOf", "sourceSnapshotId", "source", "freshnessStatus")
             saved["previousFacts"] = [{key: fact[key] for key in keys if key in fact} for fact in previous.get("facts", [])[:20]]
             result.append({**saved, "completedAt": row["updated_at"]})
+        if result and condition_state:
+            result[0]["followUpEvaluations"] = json.loads(condition_state["result_json"])["followUpEvaluations"]
         return result
 
     def save_execution_input(self, job, envelope):
@@ -196,6 +201,22 @@ class MySQLAIControlStore(MySQLOperationalConnection):
     def finish_call(self, call_id, error_kind=""):
         with self.connect() as connection:
             connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))
+
+    def review_proof(self, input_id):
+        from digital_twin.modules.ai_orchestration.domain.execution_input import REVIEW_PROMPT_VERSION
+        from digital_twin.modules.ai_orchestration.domain.insight_contract import narrative_digest
+        with self.connect() as connection:
+            row = connection.execute("SELECT i.task_id,i.artifact_gzip FROM ai_control_inputs i "
+                "JOIN ai_control_input_calls l ON l.input_id=i.input_id "
+                "JOIN ai_control_calls c ON c.call_id=l.call_id AND c.task_id=i.task_id AND c.prompt_hash=i.prompt_hash "
+                "WHERE i.input_id=%s AND c.status='completed' LIMIT 1", (input_id,)).fetchone()
+        if not row:
+            return {}
+        envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
+        validate_execution_input(envelope)
+        if envelope["promptVersion"] != REVIEW_PROMPT_VERSION:
+            return {}
+        return {"taskId": row["task_id"], "draftHash": narrative_digest({**envelope["draft"], "input": envelope["current"]})}
 
     def status(self, account_id=""):
         with self.connect() as connection:

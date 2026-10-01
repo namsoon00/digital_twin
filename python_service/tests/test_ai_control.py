@@ -100,6 +100,7 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual("unchanged", service.run_once()["status"])
         planner.assert_not_called()
         self.assertEqual("observe", store.complete.call_args.args[2][0]["capability"])
+        self.assertIn("followUpEvaluations", store.complete.call_args.args[1])
 
     def test_graph_reader_rejects_scope_mismatch_and_changing_generation(self):
         from digital_twin.modules.reasoning.public import ObservationEvidenceReader
@@ -166,6 +167,16 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertEqual(2, len(self.store.status()["tasks"]))
         self.assertEqual("saved", self.store.memory(SUBJECT["accountId"], "TEST")[0]["summary"])
         self.assertEqual([], self.store.memory("other-account", "TEST"))
+        # A skipped model call still records condition state, without replacing
+        # the last real analysis or resetting its six-hour reuse window.
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET available_at='2000' WHERE task_id=%s", (child["taskId"],))
+        skipped = self.store.claim()
+        state = [{"conditionId": "check", "status": "expired", "transitionVerified": False}]
+        self.assertTrue(self.store.complete(skipped, {"status": "unchanged", "followUpEvaluations": state}, []))
+        remembered = self.store.memory(SUBJECT["accountId"], "TEST")[0]
+        self.assertEqual("saved", remembered["summary"])
+        self.assertEqual(state, remembered["followUpEvaluations"])
         other = {**SUBJECT, "symbol": "RETURNING"}
         self.store.seed(other)
         retired = self.store.claim()

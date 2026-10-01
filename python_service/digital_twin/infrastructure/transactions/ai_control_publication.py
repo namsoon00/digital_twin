@@ -8,6 +8,8 @@ import json
 
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp
 from digital_twin.modules.ai_orchestration.domain.publication import MESSAGE_TYPE, RETIRED_REASON, legacy_route_retired, publication_block, repeat_block
+from digital_twin.modules.ai_orchestration.domain.insight_quality import quality_block
+from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts
 from digital_twin.modules.decisions.domain.investment_narrative_policy import narrative_presentation_errors
 from digital_twin.modules.decisions.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
@@ -16,6 +18,8 @@ from digital_twin.modules.notifications.domain.notifications import Notification
 
 
 def validate_narrative(result):
+    if result.get("insightVersion"):
+        return quality_block(result)
     fields = [result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison")]
     fields += [result["notification"]["reason"], *result.get("questions", [])]
     if any(len(text) > 700 for text in fields) or narrative_presentation_errors("NO_ACTION", fields):
@@ -77,9 +81,9 @@ class AIControlPublication:
         return next(iter(self.receipts(account_id, symbol)), {})
 
     def publish(self, connection, task, result):
-        reason = publication_block(result) or validate_narrative(result)
+        reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result)
         if reason:
-            return {"status": "recorded", "reason": reason}
+            return {"status": "recorded", "reason": " / ".join((result.get("quality") or {}).get("errors", [])) or reason}
         job_id = identity("ai-control", task["taskId"])[:48]
         body = render_ai_observation(result)
         context = {"accountId": task["accountId"], "symbol": task["symbol"], "name": task["name"],
@@ -92,6 +96,13 @@ class AIControlPublication:
         accepted = self.notifications.enqueue_with_connection(connection, job)
         return {"status": "queued" if accepted else "suppressed", "jobId": job_id,
                 "reason": "AI가 새 해석을 제안해 발송 검증을 기다립니다." if accepted else job.last_error}
+
+    def review_block(self, task_id, result):
+        quality = result.get("quality") or {}
+        proof = self.control.review_proof(quality.get("reviewInputId", ""))
+        if not isinstance(proof, dict) or proof.get("taskId") != task_id or proof.get("draftHash") != quality.get("draftHash"):
+            return "저장된 원문과 일치하는 독립 검토 실행을 확인하지 못했습니다."
+        return ""
 
     @contextmanager
     def delivery_guard(self, job, message):
@@ -131,7 +142,7 @@ class AIControlPublication:
                 receipts.append(last_delivered)
             if any(receipt["jobId"] == job.job_id for receipt in receipts):
                 raise NotificationDeliverySuppressed("이미 성공적으로 전달한 AI 관찰입니다.")
-            reason = publication_block(result) or validate_narrative(result) or repeat_block(result, receipts, job.account_id, row["symbol"])
+            reason = publication_block(result) or quality_block(result) or self.review_block(task_id, result) or repeat_block(result, receipts, job.account_id, row["symbol"])
             baseline = (packet.get("lastDeliveredNotification") or {}).get("jobId", "")
             latest = last_delivered.get("jobId", "")
             if latest != baseline:
@@ -141,7 +152,6 @@ class AIControlPublication:
             # Receipt stores exactly the facts and explanation actually delivered.
             job.context["aiControlDeliverySnapshot"] = {"accountId": job.account_id, "symbol": row["symbol"],
                 "taskId": task_id, "inputFingerprint": result["inputFingerprint"], "observedAt": result["observedAt"],
-                **{key: result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison")},
-                "facts": [{key: value for key, value in fact.items() if key in {"id", "currentPrice", "changeRate", "ma20", "ma60", "volumeRatio", "tradeStrength", "averagePrice", "profitLossRate", "foreignNetVolume", "institutionNetVolume", "sourceAsOf", "asOf"}}
-                          for fact in packet.get("facts", []) if fact.get("id") in result["evidenceIds"]]}
+                **{key: result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison", "portfolioImpact", "insightVersion", "followUpConditions", "observations")},
+                "insightFingerprint": result["quality"]["insightFingerprint"], "facts": receipt_facts(result)}
             yield

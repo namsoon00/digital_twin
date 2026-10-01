@@ -15,14 +15,7 @@ from digital_twin.modules.notifications.application.notification.dispatch import
 from test_ai_control import SUBJECT, PLAN
 
 
-def observation():
-    packet = {**SUBJECT, "sourceSnapshotId": "verified-snapshot", "capturedAt": stamp(),
-              "facts": [{"id": "quote-1", "currentPrice": 100, "changeRate": -1.2, "currency": "KRW",
-                         "quantity": 2, "averagePrice": 110, "profitLossRate": -9.09, "ma20": 108,
-                         "foreignNetVolume": -30, "sourceAsOf": stamp()}]}
-    plan = {**PLAN, "summary": "주가가 100원으로 내려왔지만 수급과의 관계는 더 확인해야 합니다.",
-            "notification": {"send": True, "reason": "가격과 수급이 함께 약해져 가설을 다시 확인할 시점입니다."}}
-    return {**validate_plan(plan, packet), "input": packet, "observedAt": stamp(), "inputFingerprint": identity(packet["facts"])}
+from ai_insight_fixtures import observation, persist_review
 
 
 class CentralPublicationPolicyTests(unittest.TestCase):
@@ -34,7 +27,7 @@ class CentralPublicationPolicyTests(unittest.TestCase):
             self.assertTrue(validate_narrative({**result, key: value}))
         compared = {**result, "comparison": "지난 관찰의 102원보다 낮아졌습니다.",
                     "comparisonFacts": [{"id": "past-quote", "currentPrice": 102, "sourceAsOf": "2026-09-01T00:00:00Z"}]}
-        self.assertEqual("", validate_narrative(compared))
+        self.assertTrue(validate_narrative(compared))
         result["notification"]["send"] = False
         self.assertTrue(publication_block(result))
         result["notification"]["send"] = True
@@ -54,6 +47,14 @@ class CentralPublicationPolicyTests(unittest.TestCase):
         self.assertFalse(repeat_block(result, [receipt], "other-account", "TEST", now))
         today = [{**receipt, "inputFingerprint": str(i), "deliveredAt": now.replace(hour=0, minute=0, second=0).isoformat()} for i in range(8)]
         self.assertTrue(repeat_block(result, today, SUBJECT["accountId"], "OTHER", now))
+        latest = {**receipt, "inputFingerprint": "last", "insightFingerprint": "opposite-state",
+                  "deliveredAt": (now - timedelta(days=1)).isoformat()}
+        older = {**latest, "inputFingerprint": "older", "insightFingerprint": result["quality"]["insightFingerprint"],
+                 "deliveredAt": (now - timedelta(days=2)).isoformat()}
+        # A return to an older state after a different delivered explanation is
+        # eligible for review; only a repeat of the latest meaning is silent.
+        self.assertFalse(repeat_block(result, [older, latest], SUBJECT["accountId"], "TEST", now))
+        self.assertTrue(repeat_block(result, [older], SUBJECT["accountId"], "TEST", now))
 
     def test_legacy_manual_analysis_and_replayed_delivery_are_blocked(self):
         from digital_twin.modules.decisions.application.ai_inference_queue_service import NotificationAIRequestEnqueuer, AIInferenceQueueRunner
@@ -101,6 +102,7 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.control.seed(SUBJECT)
         task = self.control.claim()
         result = result or observation()
+        persist_review(self.control, task, result)
         self.assertTrue(self.control.complete(task, result, []))
         self.assertEqual("queued", result["publication"]["status"], result.get("publication"))
         with self.queue.connect() as connection:
@@ -112,7 +114,7 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertEqual({}, self.publication.memory(job.account_id, "TEST"))
         renderer = NotificationRenderingService(context_enricher=Mock(side_effect=AssertionError("must not enrich")))
         message = renderer.render(job)
-        self.assertIn("시세: 100원", message)
+        self.assertIn("현재가: 100원", message)
         self.assertIn("평가 손익률: -9.09%", message)
         notifier = Mock(supports_delivery_checkpoints=False)
         notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
@@ -166,7 +168,9 @@ class CentralPublicationStorageTests(unittest.TestCase):
             raise RuntimeError("transaction crash")
         self.control.outbox_writer = failing_writer
         with self.assertRaises(RuntimeError):
-            self.control.complete(task, observation(), [])
+            result = observation()
+            persist_review(self.control, task, result)
+            self.control.complete(task, result, [])
         with self.control.connect() as connection:
             self.assertEqual("processing", connection.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s", (task["taskId"],)).fetchone()["status"])
             self.assertEqual(0, connection.execute("SELECT COUNT(*) AS n FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],)).fetchone()["n"])

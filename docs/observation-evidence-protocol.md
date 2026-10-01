@@ -11,7 +11,7 @@
 | 그래프 → 근거 | reasoning의 `ObservationEvidenceReader`와 `ObservationEvidenceSource` | 규칙 성립과 무관한 종목 근거, 연결된 직접 근거, 명시된 거시 근거 조회 |
 | 근거 → AI | `observation-evidence-v1`, `independent-observation-v1` | 소유 계정·종목·스냅샷·출처와 영역별 포함/제외 보고서 |
 | 변경 → 재분석 | reasoning의 `evidence_change_identity` | 소비자가 별도 필드 목록을 작성하지 않고 동일 계약으로 변경 판정 |
-| 호출 → 감사 기록 | ai_orchestration의 `ai-observation-execution-v1` | 실제 프롬프트·현재 근거·선택한 과거 분석·연구 결과를 호출 전에 고정 저장 |
+| 호출 → 감사 기록 | ai_orchestration의 `ai-observation-execution-v1` | 실제 프롬프트·응답 스키마·현재 근거·선택한 과거 분석·연구 결과를 호출 전에 고정 저장 |
 
 현재 모듈의 `public.py`/`contracts.py`를 통해 호출한다. 별도 HTTP 서비스나 큐를
 추가하지 않는다. 저장소와 TypeQL은 reasoning 어댑터가 소유하며 AI는 계약을
@@ -71,3 +71,9 @@ AI 호출 한도와 관찰 간격은 별도 운영 정책으로 유지한다.
 독립 AI가 첫 적용 대상이다. 수집→정규화→ABox의 기존 계약을 전면 교체한 것은
 아니다. 해당 경계를 변경할 때도 소유자가 포함·제외 회계와 버전 검증을 제공해야 한다.
 모델/규칙 승인, RuleBox 릴리스, 거래 지시 금지, 알림 쿨다운은 유지한다.
+
+
+설명 품질 개선에서는 생성 입력과 별도로 검토 입력을 저장한다. 검토 대상 문장과
+인용 항목, 후속 조건 및 응답 스키마가 원본 초안과 일치해야 한다. 발송 시 완료된
+검토 호출과 초안 해시를 다시 확인하며, 필수 계약이 없는 과거 초안을 재발송하지 않는다.
+자세한 발송·검토·후속 조건 계약은 `docs/ai-control.md`에 있다.

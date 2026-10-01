@@ -129,7 +129,7 @@ def storage_directory_size_bytes(path: Path) -> int:
     return total
 
 
-def storage_directory_physical_size_bytes(path: Path) -> int:
+def storage_directory_physical_size_bytes(path: Path, *, strict: bool = False) -> int:
     """Return allocated filesystem bytes, deduplicating hard-linked files.
 
     TypeDB checkpoints commonly hard-link immutable SST files from ``storage``.
@@ -139,12 +139,16 @@ def storage_directory_physical_size_bytes(path: Path) -> int:
     """
 
     target = Path(path)
+    if strict:
+        target.stat()  # Missing/unreadable roots cannot prove a reclaim benefit.
     try:
         if target.is_file():
             stat = target.stat()
             blocks = int(getattr(stat, "st_blocks", 0) or 0)
             return max(0, blocks * 512 if blocks > 0 else int(stat.st_size))
     except OSError:
+        if strict:
+            raise
         return 0
     if not target.exists():
         return 0
@@ -170,8 +174,12 @@ def storage_directory_physical_size_bytes(path: Path) -> int:
                         blocks = int(getattr(stat, "st_blocks", 0) or 0)
                         total += max(0, blocks * 512 if blocks > 0 else int(stat.st_size))
                     except OSError:
+                        if strict:
+                            raise
                         continue
         except OSError:
+            if strict:
+                raise
             continue
     return total
 

@@ -76,3 +76,27 @@ and after, and the shared filesystem's free-space delta. Service status reports
 the latest cleanup result. Restart success remains separate from space recovery;
 other writers can reduce free disk space while a retired directory is removed.
 No rollback retention period is shortened by this change.
+
+After candidate validation and shutdown, automatic cutover measures both stores
+again using allocated, hard-link-deduplicated bytes. A shared-disk-only swap
+requires at least 512 MiB measured difference. A smaller or negative
+benefit preserves the active workers and removes only the isolated candidate;
+it does not retire a logical reasoning deployment. Current TypeDB size/WAL
+pressure and an explicit manual rotation can still justify a swap without a
+space benefit. Unreadable storage blocks automatic cutover rather than being
+counted as an empty candidate, and preserves that staging path for inspection.
+
+`lastValidatedCandidateStorage` records the candidate allocation, active
+allocation, signed projected reduction, shared free bytes and operation ID.
+Subsequent admission and staging reserve use the larger of the configured
+estimate and the latest validated candidate measurement for that active path.
+A deferred candidate also supplies this measurement, preventing the same
+optimistic estimate from repeatedly building an ineffective replacement.
+Measurements from another active path are ignored. The estimate cannot predict
+future growth and does not certify disk reclamation: the old active store is
+retained for rollback, and only `lastRetiredCleanup` measures its later removal.
+
+Every new dispatch/preparation clears the preceding completion/result and
+sets its current stage, so a previous cutover stage cannot masquerade as the
+new candidate's progress. `lastAutoRotationResult.storagePreflight` retains the
+measured cutover decision independently from restart success.

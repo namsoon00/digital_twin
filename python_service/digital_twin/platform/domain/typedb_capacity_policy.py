@@ -8,10 +8,20 @@ otherwise recoverable projection backlog into an ENOSPC outage.
 
 from __future__ import annotations
 
+import math
 from typing import Dict, Mapping
 
 
 TYPEDB_CAPACITY_POLICY_VERSION = "typedb-capacity-pressure-v1"
+
+
+def rotation_candidate_estimate_mb(configured_mb: float, measured_bytes: object) -> float:
+    """Never reduce staging headroom using a smaller or invalid measurement."""
+    try:
+        measured_mb = float(measured_bytes) / 1024**2
+    except (TypeError, ValueError, OverflowError):
+        measured_mb = 0.0
+    return max(configured_mb, measured_mb) if math.isfinite(measured_mb) else configured_mb
 
 
 def shared_disk_rotation_admission(

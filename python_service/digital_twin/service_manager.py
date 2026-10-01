@@ -22,7 +22,7 @@ from .infrastructure.share_runtime import fixed_entry_url, share_credentials_env
 from .infrastructure.typedb_storage_guard import typedb_storage_health, typedb_storage_inventory
 from .infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
 from .infrastructure.typedb_retired_storage import retired_stores, prune_retired_stores
-from .platform.domain.typedb_capacity_policy import shared_disk_rotation_admission
+from .platform.domain.typedb_capacity_policy import shared_disk_rotation_admission, rotation_candidate_estimate_mb
 from digital_twin.modules.market_data.domain.time_series_storage import canonical_json
 
 
@@ -1857,11 +1857,17 @@ def typedb_auto_rotation_needed(
         free_space_mb = round(int(getattr(disk_usage, "free", 0) or 0) / 1024 / 1024, 1)
     except OSError:
         free_space_mb = None
-    estimated_candidate_mb = min(size_mb, float(candidate_max_mb)) if size_mb > 0 else 0.0
+    marker = read_typedb_retention_marker()
+    measured_candidate = marker.get("lastValidatedCandidateStorage") or {}
+    learned_candidate_mb = rotation_candidate_estimate_mb(
+        float(candidate_max_mb),
+        measured_candidate.get("candidateAllocatedBytes")
+        if measured_candidate.get("activePath") == str(data_path) else None,
+    )
+    estimated_candidate_mb = learned_candidate_mb
     required_staging_mb = round(minimum_headroom_mb + estimated_candidate_mb, 1)
     staging_ready = free_space_mb is not None and free_space_mb >= required_staging_mb
     now = float(now_epoch if now_epoch is not None else time.time())
-    marker = read_typedb_retention_marker()
     try:
         last_attempt_epoch = float(marker.get("lastAutoRotationAttemptEpoch") or 0)
     except (TypeError, ValueError):
@@ -2036,7 +2042,7 @@ def typedb_auto_rotation_needed(
         # directory_size_bytes already measures allocated, hard-link-deduped
         # bytes. Reuse that sample instead of walking the active store twice.
         physical_mb = size_bytes / 1024 / 1024
-        admission = shared_disk_rotation_admission(physical_mb, float(candidate_max_mb), len(retained))
+        admission = shared_disk_rotation_admission(physical_mb, learned_candidate_mb, len(retained))
         result.update({k: v for k, v in admission.items() if k not in {"needed", "reason"}})
         if not admission["needed"]:
             result.update(needed=False, reason=admission["reason"])
@@ -2268,6 +2274,9 @@ def launch_supervisor_owned_typedb_rotation(rotation_reason: str) -> Dict[str, o
         lastAutoRotationAttemptEpoch=now,
         lastAutoRotationReason=reason,
         lastAutoRotationStatus="dispatching",
+        lastAutoRotationStage="dispatching",
+        lastAutoRotationFinishedAt="",
+        lastAutoRotationResult={},
     )
     log_path = typedb_auto_rotation_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5839,6 +5848,48 @@ def typedb_capacity_maintenance_decisions(spec: Dict[str, object], *, graph_read
     return (typedb_reset_needed(spec, ignore_auto_reset=True), typedb_auto_rotation_needed(spec))
 
 
+def typedb_cutover_storage_preflight(spec, candidate, *, supervisor_owned):
+    """Measure a validated, stopped candidate before disrupting active workers."""
+    active_path = Path(spec.get("dataPath") or "")
+    candidate_path = Path(candidate.get("dataPath") or "")
+    try:
+        if (candidate.get("role") != "typedb-stage"
+                or candidate_path != active_path.with_name(active_path.name + "-candidate")
+                or any(p.is_symlink() or not p.is_dir() for p in (active_path, candidate_path))):
+            raise ValueError("unverified storage paths")
+        active_bytes = storage_directory_physical_size_bytes(active_path, strict=True)
+        candidate_bytes = storage_directory_physical_size_bytes(candidate_path, strict=True)
+        if min(active_bytes, candidate_bytes) <= 0:
+            raise ValueError("empty storage measurement")
+        wal_bytes = sum(storage_directory_physical_size_bytes(p, strict=True)
+                        for p in active_path.glob("*/wal") if p.is_dir())
+        free_bytes = shutil.disk_usage(active_path).free
+    except (OSError, ValueError) as error:
+        return {"ready": not supervisor_owned, "measured": False,
+                "reason": "cutover-storage-measurement-unavailable",
+                "errorType": type(error).__name__}
+    maximum_mb = int_value(spec.get("maxSizeMb"), 8192, 1)
+    threshold = min(100, int_value(spec.get("autoRotationPercent"), 75, 50),
+                    int_value(spec.get("writeBlockPercent"), 75, 50))
+    wal_trigger_mb = int_value(spec.get("autoRotationWalMb"), 4096, 0)
+    usage_percent = round(active_bytes / (maximum_mb * 1024**2) * 100.0, 1)
+    wal_mb = round(wal_bytes / 1024**2, 1)
+    intrinsic_pressure = (usage_percent >= threshold
+                          or (wal_trigger_mb > 0 and wal_mb >= wal_trigger_mb))
+    benefit = shared_disk_rotation_admission(active_bytes / 1024**2, candidate_bytes / 1024**2, 0)
+    return {
+        "ready": not supervisor_owned or intrinsic_pressure or benefit["needed"],
+        "measured": True, "activePath": str(active_path),
+        "activeAllocatedBytes": active_bytes, "candidateAllocatedBytes": candidate_bytes,
+        "projectedReductionBytes": active_bytes - candidate_bytes,
+        "sharedFreeBytesBeforeCutover": free_bytes,
+        "reclaimRequiresRetiredCleanup": True, "intrinsicPressure": intrinsic_pressure,
+        "reason": ("explicit-rotation" if not supervisor_owned else "typedb-intrinsic-pressure"
+                   if intrinsic_pressure else "measured-reclaim-benefit" if benefit["needed"]
+                   else "insufficient-measured-reclaim-benefit"),
+    }
+
+
 def typedb_rotate(
     force: bool = False,
     supervisor_owned: bool = False,
@@ -5934,6 +5985,7 @@ def typedb_rotate(
     candidate = {}
     operation_id = uuid.uuid4().hex
     candidate_validation = {}
+    storage_preflight = {}
     services_stopped = False
     restart_attempted = False
     try:
@@ -5951,6 +6003,9 @@ def typedb_rotate(
                 or ("capacity" if supervisor_owned else "manual")
             ),
             lastAutoRotationStatus="running",
+            lastAutoRotationStage="candidate-preparing",
+            lastAutoRotationFinishedAt="",
+            lastAutoRotationResult={},
         )
         if truthy(spec.get("blueGreenRotationEnabled")):
             record_typedb_rulebox_deployment_event(
@@ -6041,6 +6096,26 @@ def typedb_rotate(
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
             cleanup_typedb_candidate(candidate, remove_data=False)
+            storage_preflight = typedb_cutover_storage_preflight(
+                spec, candidate, supervisor_owned=supervisor_owned,
+            )
+            if storage_preflight.get("measured"):
+                record_typedb_auto_rotation_state(lastValidatedCandidateStorage={
+                    **storage_preflight, "at": iso_now(), "operationId": operation_id,
+                })
+            if not storage_preflight.get("ready"):
+                # Delete an ineffective measured staging copy, but preserve
+                # unknown/unreadable paths for inspection.
+                cleanup_typedb_candidate(candidate, remove_data=bool(storage_preflight.get("measured")))
+                result = {"status": "cutover-deferred-active-preserved",
+                          "operationId": operation_id, "activeStorePreserved": True,
+                          "storagePreflight": storage_preflight}
+                record_typedb_auto_rotation_state(
+                    lastAutoRotationFinishedAt=iso_now(),
+                    lastAutoRotationStatus=result["status"], lastAutoRotationResult=result,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 0
             record_typedb_auto_rotation_state(
                 lastAutoRotationStatus="running",
                 lastAutoRotationStage="cutover-starting",
@@ -6051,6 +6126,7 @@ def typedb_rotate(
             result = swap_typedb_blue_green_data_paths(spec, candidate)
             result["operationId"] = operation_id
             result["candidateValidation"] = candidate_validation
+            result["storagePreflight"] = storage_preflight
         else:
             services_stopped = True
             stop(include_supervisor=False)
@@ -6123,6 +6199,7 @@ def typedb_rotate(
                 "previousSizeBytes": result.get("previousSizeBytes"),
                 "operationId": result.get("operationId"),
                 "candidateValidation": candidate_validation,
+                "storagePreflight": storage_preflight,
                 "ruleboxPrewarmActivation": result.get("ruleboxPrewarmActivation"),
             },
         )

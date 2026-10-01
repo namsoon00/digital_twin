@@ -1261,3 +1261,109 @@ class TypeDBReclaimAdmissionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TypeDBMeasuredCutoverTests(unittest.TestCase):
+    def test_cutover_requires_real_savings_but_preserves_intrinsic_and_manual_recovery(self):
+        with tempfile.TemporaryDirectory() as root:
+            active = Path(root) / "typedb-data"
+            staged = Path(root) / "typedb-data-candidate"
+            active.mkdir()
+            staged.mkdir()
+            (active / "db" / "wal").mkdir(parents=True)
+            spec = {"dataPath": active, "maxSizeMb": 32768,
+                    "autoRotationPercent": 65, "autoRotationWalMb": 4096}
+            candidate = {"dataPath": staged, "role": "typedb-stage"}
+            for active_mb, candidate_mb, wal_mb, automatic, expected in [
+                (5000, 4800, 0, True, False), (5000, 5200, 0, True, False),
+                (5000, 4488, 0, True, True), (24000, 23800, 0, True, True),
+                (5000, 4800, 4500, True, True), (5000, 4800, 0, False, True),
+            ]:
+                with self.subTest(active=active_mb, candidate=candidate_mb, wal=wal_mb, automatic=automatic):
+                    sizes = {active: active_mb, staged: candidate_mb, active / "db" / "wal": wal_mb}
+                    with patch.object(service_manager, "storage_directory_physical_size_bytes",
+                                      side_effect=lambda p, **k: sizes[p] * 1024**2):
+                        result = service_manager.typedb_cutover_storage_preflight(
+                            spec, candidate, supervisor_owned=automatic)
+                    self.assertEqual(expected, result["ready"])
+                    self.assertEqual((active_mb - candidate_mb) * 1024**2, result["projectedReductionBytes"])
+                    self.assertTrue(result["reclaimRequiresRetiredCleanup"])
+            with patch.object(service_manager, "storage_directory_physical_size_bytes", side_effect=PermissionError):
+                self.assertFalse(service_manager.typedb_cutover_storage_preflight(
+                    spec, candidate, supervisor_owned=True)["ready"])
+            candidate["dataPath"] = active
+            self.assertFalse(service_manager.typedb_cutover_storage_preflight(
+                spec, candidate, supervisor_owned=True)["ready"])
+
+    def test_measured_candidate_updates_admission_and_staging_reserve(self):
+        from digital_twin.platform.domain.typedb_capacity_policy import rotation_candidate_estimate_mb
+        for invalid in (None, "invalid", float("nan"), float("inf"), -1):
+            self.assertEqual(4096, rotation_candidate_estimate_mb(4096, invalid))
+        with tempfile.TemporaryDirectory() as root:
+            active = Path(root) / "typedb-data"
+            active.mkdir()
+            spec = {"dataPath": active, "autoRotationEnabled": "1", "maxSizeMb": 32768,
+                    "autoRotationFreeSpaceMb": 24576, "blueGreenEstimatedCandidateMaxMb": 4096}
+            marker = {"lastValidatedCandidateStorage": {
+                "activePath": str(active), "candidateAllocatedBytes": 7000 * 1024**2}}
+            with patch.object(service_manager, "read_typedb_retention_marker", return_value=marker):
+                result = service_manager.typedb_auto_rotation_needed(
+                    spec, size_provider=lambda _: 7200 * 1024**2,
+                    disk_usage_provider=lambda _: SimpleNamespace(free=19000 * 1024**2),
+                    inventory_provider=lambda *a, **k: {"typedbWalMb": 0})
+            self.assertFalse(result["needed"])
+            self.assertEqual(200, result["estimatedReclaimMb"])
+            self.assertEqual(19288, result["requiredStagingMb"])
+            self.assertFalse(result["stagingReady"])
+
+    def test_strict_storage_scan_never_turns_read_failure_into_small_candidate(self):
+        from digital_twin.infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root)
+            original = path / "sst"
+            original.write_bytes(b"x" * 8192)
+            os.link(original, path / "checkpoint-sst")
+            self.assertEqual(original.stat().st_blocks * 512,
+                             storage_directory_physical_size_bytes(path, strict=True))
+            with patch("digital_twin.infrastructure.operational_storage_guard.os.scandir", side_effect=PermissionError):
+                with self.assertRaises(PermissionError):
+                    storage_directory_physical_size_bytes(path, strict=True)
+                self.assertEqual(0, storage_directory_physical_size_bytes(path))
+            with self.assertRaises(FileNotFoundError):
+                storage_directory_physical_size_bytes(path / "missing", strict=True)
+
+    def test_unhelpful_validated_candidate_never_stops_active_workers(self):
+        from contextlib import ExitStack, redirect_stdout
+        from io import StringIO
+        spec = {"dataPath": Path("/tmp/isolated/typedb-data"), "blueGreenRotationEnabled": "1"}
+        candidate = {"dataPath": Path("/tmp/isolated/typedb-data-candidate"), "role": "typedb-stage"}
+        measured = {"ready": False, "measured": True, "activePath": str(spec["dataPath"]),
+                    "candidateAllocatedBytes": 7000 * 1024**2}
+        patches = {
+            "worker_specs": {"typedb": spec}, "runtime_settings": {},
+            "typedb_rotation_database_inventory": {"ready": True},
+            "typedb_reset_needed": {"needed": True},
+            "typedb_rotation_resource_preflight": {"ready": True},
+            "acquire_typedb_rotation_lock": {"acquired": True},
+            "supervisor_running": False, "begin_supervisor_maintenance": "owned",
+            "prepare_typedb_blue_green_candidate": {"status": "prepared", "candidate": candidate},
+            "renew_typedb_maintenance_lock": {"renewed": True}, "typedb_maintenance_lock_owned": True,
+            "typedb_candidate_validation_summary": {}, "typedb_cutover_storage_preflight": measured,
+            "record_typedb_rulebox_deployment_event": {}, "record_typedb_auto_rotation_state": {},
+            "cleanup_typedb_candidate": None, "stop": None, "start": 0,
+            "swap_typedb_blue_green_data_paths": {}, "end_supervisor_maintenance": None,
+            "release_typedb_rotation_lock": None, "read_pid": 0,
+        }
+        with ExitStack() as stack, redirect_stdout(StringIO()):
+            mocks = {name: stack.enter_context(patch.object(service_manager, name, return_value=value))
+                     for name, value in patches.items()}
+            self.assertEqual(0, service_manager.typedb_rotate(force=True, supervisor_owned=True))
+        for name in ("stop", "start", "swap_typedb_blue_green_data_paths"):
+            mocks[name].assert_not_called()
+        mocks["cleanup_typedb_candidate"].assert_any_call(candidate, remove_data=True)
+        calls = mocks["record_typedb_auto_rotation_state"].call_args_list
+        self.assertEqual("candidate-preparing", calls[0].kwargs["lastAutoRotationStage"])
+        self.assertEqual("", calls[0].kwargs["lastAutoRotationFinishedAt"])
+        self.assertEqual("cutover-deferred-active-preserved", calls[-1].kwargs["lastAutoRotationStatus"])
+        mocks["release_typedb_rotation_lock"].assert_called_once()
+        mocks["end_supervisor_maintenance"].assert_called_once()

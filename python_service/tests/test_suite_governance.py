@@ -219,7 +219,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Central AI: independent planning, scope retirement, process audit, durable leases and budget transactions.
         # Nine storage regressions cover cleanup-first admission, ineffective
         # shared-disk rotation, rollback preservation and measured reclamation.
-        self.assertLessEqual(total, 1954)
+        # Four cutover regressions cover measured gain, staging estimates,
+        # unreadable storage and preserving live workers on a deferred swap.
+        self.assertLessEqual(total, 1958)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

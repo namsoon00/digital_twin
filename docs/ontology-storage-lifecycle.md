@@ -218,6 +218,14 @@ and data directory while the active server continues to serve inference:
 8. If startup fails, restore the retained previous directory and restart.
 9. Remove the retired directory after the rollback retention window.
 
+Operational capacity exposes `typedbSizeMb` for the active directory and
+`typedbRetiredSizeMb`, `typedbCandidateSizeMb`, `typedbFailedSizeMb` for its owned
+sibling directories. `typedbTotalSizeMb` includes all four physical categories;
+symlink aliases are not counted again. Rotation limits use the active size and
+disk-pressure protection still uses real filesystem free space. A swap alone
+does not reclaim its retained rollback copy. Verify actual removal after the
+retention window before reporting recovered disk capacity.
+
 Scoped ABox retention first deduplicates generation IDs across removable
 Manifests, deletes each retired physical generation once, and removes a
 Manifest marker only after all of its unprotected generations are gone. The

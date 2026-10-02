@@ -10,6 +10,35 @@ from stabilization_database import StabilizationDatabaseCase
 
 
 class ReasoningJobFenceTests(StabilizationDatabaseCase):
+    def test_claim_looks_past_incompatible_boundary_without_leasing_or_changing_it(self):
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        boundary = now.isoformat().replace("+00:00", "Z")
+        other_boundary = (now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+        for index, (symbol, at) in enumerate((("AAPL", boundary), ("NVDA", other_boundary), ("MSFT", boundary))):
+            event = self.source(symbol, stamp=at)
+            self.events.handle(event)
+            self.sql("UPDATE reasoning_engine_jobs SET created_at=%s WHERE deployment_id=%s AND source_event_id=%s",
+                     ((now + timedelta(milliseconds=index)).isoformat().replace("+00:00", "Z"), self.deployment, event.event_id))
+        untouched = self.sql("SELECT * FROM reasoning_engine_jobs WHERE deployment_id=%s AND source_snapshot_at=%s",
+                             (self.deployment, other_boundary))
+        selected = self.jobs.claim(self.deployment, "bounded-worker", 2, 60)
+        self.assertEqual(2, len(selected))
+        self.assertTrue(all(row["sourceSnapshotAt"] == boundary for row in selected))
+        self.assertEqual(untouched, self.sql("SELECT * FROM reasoning_engine_jobs WHERE job_id=%s", (untouched["job_id"],)))
+
+    def test_claim_honors_aged_job_before_new_high_priority_work(self):
+        from datetime import datetime, timezone, timedelta
+        for symbol in ("AAPL", "NVDA"):
+            self.events.handle(self.source(symbol))
+        rows = self.sql("SELECT job_id FROM reasoning_engine_jobs WHERE deployment_id=%s ORDER BY created_at",
+                        (self.deployment,), all_rows=True)
+        old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+        self.sql("UPDATE reasoning_engine_jobs SET created_at=%s, priority=1 WHERE job_id=%s", (old, rows[0]["job_id"]))
+        self.sql("UPDATE reasoning_engine_jobs SET priority=100 WHERE job_id=%s", (rows[1]["job_id"],))
+        selected = self.jobs.claim(self.deployment, "fair-worker", 1, 60)
+        self.assertEqual(rows[0]["job_id"], selected[0]["jobId"])
+
     def test_fenced_job_rejects_every_late_transition_without_changing_new_owner(self):
         job = self.claimed_job("old-worker")
         job_id = job["jobId"]

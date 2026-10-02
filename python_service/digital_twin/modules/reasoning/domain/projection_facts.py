@@ -130,16 +130,17 @@ def factual_runtime_metadata(
             if str(symbol or "").upper().strip() in selected_symbols
         }
 
+    omitted_metadata = {
+        "ontology",
+        "hypothesisLifecycle",
+        "reasoningSnapshotReplay",
+        "previousMonitorState",
+        "previousState",
+        "monitorStateHistory",
+    }
     values = {}
     for key, value in source.items():
-        if key in {
-            "ontology",
-            "hypothesisLifecycle",
-            "reasoningSnapshotReplay",
-            "previousMonitorState",
-            "previousState",
-            "monitorStateHistory",
-        }:
+        if key in omitted_metadata:
             continue
         values[key] = bounded_transition_rows(str(key), value)
 
@@ -151,7 +152,7 @@ def factual_runtime_metadata(
         result = {
             key: deepcopy(value)
             for key, value in state.items()
-            if key not in {"decisions", "externalSignals"}
+            if key not in {"decisions", "externalSignals", "metadata"}
         }
         signals = state.get("externalSignals")
         if isinstance(signals, dict):
@@ -160,19 +161,17 @@ def factual_runtime_metadata(
                 target_symbols=target_symbols,
                 settings=settings,
             )
-        nested = result.get("metadata")
+        # Filter before copying: discarded graph/replay/history payloads can
+        # dwarf the retained market facts and recursively contain old states.
+        nested = state.get("metadata")
         if isinstance(nested, dict):
-            nested = {
+            result["metadata"] = {
                 key: bounded_transition_rows(str(key), value)
                 for key, value in nested.items()
+                if key not in omitted_metadata
             }
-            nested.pop("ontology", None)
-            nested.pop("hypothesisLifecycle", None)
-            nested.pop("reasoningSnapshotReplay", None)
-            nested.pop("previousMonitorState", None)
-            nested.pop("previousState", None)
-            nested.pop("monitorStateHistory", None)
-            result["metadata"] = nested
+        elif "metadata" in state:
+            result["metadata"] = deepcopy(nested)
         return result
 
     if "previousMonitorState" in source:

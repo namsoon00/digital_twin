@@ -41,6 +41,9 @@ ADDED_METHODS = {
         "repair_completed_receipts",
         "_completed_comparison_pairs_locked",
         "source_event_already_materialized_with_connection",
+        # Share the existing wait threshold between lane choice and claim;
+        # real MySQL fairness/boundary tests live in test_reasoning_job_fences.
+        "lane_aged_cutoff",
     }
 }
 

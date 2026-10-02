@@ -206,9 +206,13 @@ class OperationalStorageCapacityNotificationEnqueuer:
             + " · 운영 알림 " + str(values.get("alertFreeMb") or 0) + "MB"
             + " · 제한 " + str(values.get("minimumFreeMb") or 0) + "MB"
             + " · 심각 " + str(values.get("criticalFreeMb") or 0) + "MB",
-            "• TypeDB 실제 점유: " + str(values.get("typedbSizeMb") or 0) + "MB / 한도 " + str(values.get("typedbLimitMb") or 0) + "MB"
+            "• TypeDB 활성 저장소: " + str(values.get("typedbSizeMb") or 0) + "MB / 한도 " + str(values.get("typedbLimitMb") or 0) + "MB"
             + " · WAL " + str(values.get("typedbWalMb") or 0) + "MB"
             + " · checkpoint 참조 " + str(values.get("typedbCheckpointReferencedMb") or values.get("typedbCheckpointMb") or 0) + "MB",
+            "• TypeDB 저장소 합계: " + str(values.get("typedbTotalSizeMb", values.get("typedbSizeMb")) or 0) + "MB"
+            + " · 복구 보관 " + str(values.get("typedbRetiredSizeMb") or 0) + "MB"
+            + " · 준비 중 " + str(values.get("typedbCandidateSizeMb") or 0) + "MB"
+            + " · 실패 보관 " + str(values.get("typedbFailedSizeMb") or 0) + "MB",
             "• MySQL 실제 점유: " + str(values.get("mysqlSizeMb") or 0) + "MB / 운영 한도 "
             + str(values.get("mysqlLimitMb") or 0) + "MB ("
             + str(values.get("mysqlUsagePercent") or 0) + "%)",

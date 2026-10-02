@@ -1,5 +1,13 @@
 {
   "domain": {
+    "platform/domain/operational_storage_capacity.py::evaluate_operational_storage_capacity": {
+      "hash": "617ea7bff8389ec7b08e7ad35c4dd3547526c509678b9c075c41f48b9b46ab26",
+      "reason": "Expose active, retired, candidate and failed TypeDB physical sizes plus their total without changing rotation or free-disk pressure policy; test_operational_storage_capacity."
+    },
+    "platform/application/operational_storage_capacity_service.py::OperationalStorageCapacityNotificationEnqueuer": {
+      "hash": "c984c32cb0841abd21e07f7bffccfd395e95a1613151ca052dd4351a12ca76ec",
+      "reason": "Distinguish active TypeDB rotation size from total physical occupancy and retained rollback/candidate/failed stores in the operational alert; test_operational_storage_capacity; docs/ontology-storage-lifecycle.md."
+    },
     "modules/reasoning/domain/ontology_scopes.py::_EPISODE_ITEM_KINDS": {"hash": "a7cb7c0251e00a3c99b625c18bdeadeca5342601c8b9ee4b902cd934ec839892", "reason": "Versioned per-item scopes for hypothesis templates, family definitions and portfolio cycles prevent partial subjects replacing the shared episode inventory; test_abox_lifecycle verifies untouched generations and endpoint closure."},
     "modules/reasoning/domain/ontology_scopes.py::SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION": {"hash": "50ffe6e6f180cfd547f7c2eafb632995d823372fadcf523343f88c16ed567ea5", "reason": "Versioned per-item scopes for hypothesis templates, family definitions and portfolio cycles prevent partial subjects replacing the shared episode inventory; test_abox_lifecycle verifies untouched generations and endpoint closure."},
     "modules/notifications/domain/notification_templates.py::render_notification": {"hash": "74d62b0fcbcbeda172933fbe278b6fde96671bf088dd27b46a2d6c5009fd5855", "reason": "Keep normalized TypeDB hypothesis names stable through the final configured notification template; other templates retain existing normalization; test_typedb_independent_observation and docs/notification-terminology.md."},
@@ -470,6 +478,14 @@
     }
   },
   "storage": {
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.next_lane": {
+      "hash": "00ab215e2c38d330a5a9f3d04be0a1f82200c48571c24fd3fc983b61cfe5eaee",
+      "reason": "Extract the unchanged, bounded lane wait threshold for reuse by claims; test_reasoning_job_fences verifies old-work priority."
+    },
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.claim": {
+      "hash": "a55523155aab34c831733178f47b8745bf6238c3778930401508e9a8c223f6cc",
+      "reason": "Use bounded identity/request lookahead and the shared exact snapshot/lane batch key before leasing, hydrate selected results only, and honor aged work; real MySQL boundary and fairness cases in test_reasoning_job_fences; docs/backend-operational-stabilization.md."
+    },
     "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.claim": {"hash": "cb66dd0fbece46db8ad7642973db5210752a6df0ea9fbc499ccde84c676bd60e", "reason": "Fence retired rule-triggered AI queue admission, claim and completion; test_ai_control_publication and preserved SQL in test_ai_claim_retry."},
     "infrastructure/transactions/ai_publication.py::MySQLAIInferenceQueueStore.enqueue": {"hash": "5b03b3e9d726165669d65ea31ac14adb458dd6748e0ddb24902ca5565aa00747", "reason": "Fence retired rule-triggered AI queue admission, claim and completion; test_ai_control_publication and preserved SQL in test_ai_claim_retry."},
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::reasoning_failure_recovery_allowed": {

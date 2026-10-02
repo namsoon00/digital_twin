@@ -1,30 +1,57 @@
 """Bounded ABox reads; planner source indexes are not evidence inventories."""
 import json
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
+from contextvars import ContextVar
 
 from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS
 from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.modules.reasoning.application.observation_evidence.reads import read_evidence_stage
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string, typedb_value_match
+from .observation_inventory import scoped_candidates
+
+
+_CAPTURE_METADATA = ContextVar("observation_capture_metadata", default=())
 
 
 class TypeDBObservationEvidenceSource:
     def __init__(self, repository):
         self.repository = repository
 
+    @contextmanager
     def capture(self):
         # Explicit capability lookup avoids treating optional mock/legacy
         # attributes as a native consistency guarantee.
         scope = getattr(type(self.repository), "read_snapshot_scope", None)
-        return scope(self.repository) if callable(scope) else nullcontext()
+        with scope(self.repository) if callable(scope) else nullcontext():
+            # Cache only inside a real native snapshot, never between captures
+            # or across repositories/threads. Exceptions clear the cache too.
+            token = _CAPTURE_METADATA.set((*_CAPTURE_METADATA.get(), (self, {}))) if callable(scope) else None
+            try:
+                yield
+            finally:
+                if token is not None:
+                    _CAPTURE_METADATA.reset(token)
 
     def metadata(self, world_id):
-        return self.repository.active_abox_metadata(world_id)
+        cache = next((cache for source, cache in reversed(_CAPTURE_METADATA.get()) if source is self), None)
+        if cache is None:
+            return self.repository.active_abox_metadata(world_id)
+        if world_id not in cache:
+            cache[world_id] = self.repository.active_abox_metadata(world_id)
+        return cache[world_id]
 
     def snapshot_id(self, world_id):
         return self.repository.active_abox_snapshot_id(world_id)
 
     def candidates(self, world_id, symbol):
+        metadata = read_evidence_stage("inventory-metadata", lambda: self.metadata(world_id))
+        if (isinstance(metadata, dict) and metadata.get("status") == "ok"
+                and metadata.get("scopedAboxManifestVersion") == SCOPED_ABOX_MANIFEST_VERSION
+                and metadata.get("scopeGenerationIds")):
+            return scoped_candidates(self.repository, world_id, symbol, metadata)
+        return self.legacy_candidates(world_id, symbol)
+
+    def legacy_candidates(self, world_id, symbol):
         repository = self.repository
         scope = read_evidence_stage("inventory-membership", lambda: repository.active_abox_members_clause([("$n", "observationEvidence")], world_id))
         # Mixing the symbol and macro-kind predicates in one disjunction makes

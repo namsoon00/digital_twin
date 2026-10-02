@@ -196,3 +196,43 @@ Remaining limits: minute-spaced samples cannot prove availability between
 polls or 24-hour stability. Live TypeDB execution, a new AI-to-delivery chain,
 model quality, and every account/provider's freshness remain separate from
 the verified storage/queue contracts and sampled infrastructure result.
+
+## 2026-10-03 queue and evidence read improvements
+
+Reasoning claims now use the same account, lane and exact source-snapshot
+compatibility key as execution batches. A bounded lookahead selects compatible
+jobs before leasing them, so unrelated snapshot boundaries remain queued with
+their attempts and availability unchanged. Only selected jobs load their full
+retry results. Jobs beyond the existing lane wait threshold precede newly
+arriving high-priority work; no snapshot boundary is discarded or merged away.
+
+Native observation reads select active physical identities first and hydrate
+their union with linked facts once. Native READ snapshot isolation and explicit
+world/scope/generation/identity checks remain mandatory. Metadata is cached only
+within that capture, including exception cleanup. In one read-only production
+comparison, US/KR inventories contained 219/268 facts and matched the previous
+inventories, selected evidence and coverage exactly. The candidate pipelines
+took 2.011/2.187 seconds versus 4.814/2.875 seconds for the previous pipelines.
+These are two samples, not a throughput or long-duration guarantee.
+
+Historical market metadata filters derived graph/replay/history content before
+copying it. Retained facts remain independent copies and the factual contract
+fixture remains identical. One production snapshot comparison preserved the
+729,416-byte output from 4,086,266 bytes of input metadata. Its short timings
+(0.075/0.087 seconds) do not establish a runtime speedup; the regression checks
+that discarded recursive payloads are never traversed.
+
+Capacity reports separately expose active, retired, candidate and failed TypeDB
+directories plus their total physical size. Rotation sizing continues to use the
+active directory, while free-disk pressure still uses the filesystem. A retained
+rollback copy is not reported as reclaimed capacity; symlink aliases are excluded.
+
+MySQL claim tests cover boundary isolation and aging; evidence tests cover exact
+identity, missing/rebound facts, stale generations and capture cache lifetime.
+Storage tests cover all physical categories and symlink exclusion. The historical
+metadata regression verifies fact preservation and copy isolation without walking
+discarded output. These checks do not prove a 72-hour run or a new AI-to-customer
+delivery. A pre-change production projection still took 142.7 seconds, including
+30.8 seconds preparing runtime context and 26.9 seconds in native inference.
+Post-deployment latency, backlog, retries and linked delivery must be measured
+under the new code boundary while retaining previous failures and observation gaps.

@@ -328,6 +328,25 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertFalse(health["nonEssentialWritesAllowed"])
         self.assertFalse(health["coreWritesOnly"])
 
+    def test_rotation_capacity_keeps_retired_candidate_and_failed_bytes_visible(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            sizes = {"typedb-data": 2, "typedb-data-retired-123": 19,
+                     "typedb-data-candidate": 1, "typedb-data-failed-122": 3}
+            for name in sizes:
+                (root / name).mkdir()
+            (root / "typedb-data-retired-alias").symlink_to(root / "typedb-data-retired-123")
+            inventory = operational_storage_inventory({}, data_path=root,
+                disk_usage_provider=lambda _: SimpleNamespace(free=80 * 1024**3, total=100 * 1024**3),
+                size_provider=lambda path: sizes.get(path.name, 0) * 1024**2,
+                mysql_metadata_provider=lambda _: {})
+            health, _ = OperationalStorageCapacityService(store=StateStore()).record(inventory)
+        self.assertEqual(2, health["typedbSizeMb"])
+        self.assertEqual(19, health["typedbRetiredSizeMb"])
+        self.assertEqual(1, health["typedbCandidateSizeMb"])
+        self.assertEqual(3, health["typedbFailedSizeMb"])
+        self.assertEqual(25, health["typedbTotalSizeMb"])
+
     def test_mysql_hard_limit_marks_core_only_without_disabling_core_history(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

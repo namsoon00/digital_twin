@@ -31,6 +31,8 @@ from digital_twin.modules.reasoning.domain.projection_input_policy import (
 from digital_twin.modules.reasoning.domain.reasoning_shadow import (
     pack_projection_runtime_contexts,
 )
+from digital_twin.modules.reasoning.domain.projection_facts import factual_runtime_metadata
+from digital_twin.modules.market_data.contracts import MARKET_SIGNAL_TRANSITION_STATE_KEY
 from projection_input_fixture import (
     AS_OF,
     RULES,
@@ -52,6 +54,47 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
     def setUp(self):
         clear_caches(api)
         self.addCleanup(clear_caches, api)
+
+    def test_historical_facts_skip_derived_payloads_before_copy_and_remain_isolated(self):
+        class DiscardedGraph:
+            def __deepcopy__(self, memo):
+                raise AssertionError("discarded historical output was traversed")
+
+        prior = {
+            "positions": [{"symbol": "AAPL", "price": 100}],
+            "decisions": DiscardedGraph(),
+            "metadata": {
+                "ontology": DiscardedGraph(),
+                "hypothesisLifecycle": DiscardedGraph(),
+                "reasoningSnapshotReplay": DiscardedGraph(),
+                "previousMonitorState": DiscardedGraph(),
+                "previousState": DiscardedGraph(),
+                "monitorStateHistory": DiscardedGraph(),
+                "sourceClock": {"asOf": "2026-10-02T00:00:00Z"},
+                MARKET_SIGNAL_TRANSITION_STATE_KEY: {
+                    "AAPL": {"value": 1}, "MSFT": DiscardedGraph(),
+                },
+            },
+        }
+        expected = {
+            "positions": [{"symbol": "AAPL", "price": 100}],
+            "metadata": {
+                "sourceClock": {"asOf": "2026-10-02T00:00:00Z"},
+                MARKET_SIGNAL_TRANSITION_STATE_KEY: {"AAPL": {"value": 1}},
+            },
+        }
+        result = factual_runtime_metadata({
+            "previousMonitorState": prior, "previousState": prior,
+            "monitorStateHistory": [prior, None],
+        }, target_symbols=["AAPL"])
+        self.assertEqual(expected, result["previousMonitorState"])
+        self.assertEqual(expected, result["previousState"])
+        self.assertEqual([expected], result["monitorStateHistory"])
+        result["previousMonitorState"]["positions"][0]["price"] = 999
+        result["previousState"]["metadata"]["sourceClock"]["asOf"] = "changed"
+        self.assertEqual(100, prior["positions"][0]["price"])
+        self.assertEqual("2026-10-02T00:00:00Z", prior["metadata"]["sourceClock"]["asOf"])
+        self.assertEqual(expected, result["monitorStateHistory"][0])
 
     def test_projection_input_leaf_bodies_match_frozen_source(self):
         contract = json.loads(

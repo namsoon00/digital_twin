@@ -279,6 +279,13 @@ def operational_storage_inventory(
     typedb_root = root / "typedb-data"
     mysql_root = root / "mysql-runtime"
     typedb_physical = physical_size(typedb_root)
+    # A successful swap leaves a rollback store on disk. Report all owned
+    # stores separately so a smaller active path cannot masquerade as reclaim.
+    typedb_siblings = {
+        kind: sum(physical_size(path) for path in root.glob("typedb-data-" + kind + "*")
+                  if path.is_dir() and not path.is_symlink())
+        for kind in ("retired", "candidate", "failed")
+    }
     typedb_apparent = apparent_size(typedb_root)
     typedb_wal = sum(physical_size(path) for path in typedb_root.glob("*/wal"))
     # This is a useful TypeDB diagnostic, but checkpoint files can be hard
@@ -345,6 +352,10 @@ def operational_storage_inventory(
         "cleanupMode": cleanup_mode,
         "reason": reason,
         "typedbSizeMb": round(typedb_physical / 1024 / 1024, 1),
+        "typedbRetiredSizeMb": round(typedb_siblings["retired"] / 1024 / 1024, 1),
+        "typedbCandidateSizeMb": round(typedb_siblings["candidate"] / 1024 / 1024, 1),
+        "typedbFailedSizeMb": round(typedb_siblings["failed"] / 1024 / 1024, 1),
+        "typedbTotalSizeMb": round((typedb_physical + sum(typedb_siblings.values())) / 1024 / 1024, 1),
         "typedbApparentSizeMb": round(typedb_apparent / 1024 / 1024, 1),
         "typedbSharedLinkedMb": round(max(0, typedb_apparent - typedb_physical) / 1024 / 1024, 1),
         "typedbWalMb": round(typedb_wal / 1024 / 1024, 1),

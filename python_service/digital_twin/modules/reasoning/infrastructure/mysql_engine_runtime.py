@@ -1,4 +1,5 @@
 from .job_ownership import lock_job_claim
+from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key
 from .job_receipts import publish_job_receipts
 import os
 import socket
@@ -1926,13 +1927,16 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "availableAt": stamp if released else "",
         }
 
-    def next_lane(self, deployment_id: str) -> str:
-        stamp = iso_utc()
+    def lane_aged_cutoff(self):
         try:
             maximum_wait = int(float(str(self.runtime_settings.get("reasoningEngineV2LaneMaxWaitSeconds") or "120")))
         except (TypeError, ValueError):
             maximum_wait = 120
-        aged_cutoff = iso_utc(utc_now() - timedelta(seconds=max(30, min(1800, maximum_wait))))
+        return iso_utc(utc_now() - timedelta(seconds=max(30, min(1800, maximum_wait))))
+
+    def next_lane(self, deployment_id: str) -> str:
+        stamp = iso_utc()
+        aged_cutoff = self.lane_aged_cutoff()
         boundary_filter = (
             " AND source_boundary_json IS NOT NULL AND source_boundary_json NOT IN ('', '[]') "
             if str(self.runtime_settings.get("reasoningEngineV2RequireSourceBoundary") or "1").strip().lower()
@@ -1964,6 +1968,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         stamp = iso_utc()
         lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 600))))
         bounded = max(1, min(20, int(limit or 1)))
+        # Look past an incompatible boundary without claiming and deferring it.
+        # Locks and deserialization stay bounded even during a large backlog.
+        lookahead = min(100, bounded * 5) if bounded > 1 else 1
+        aged_cutoff = self.lane_aged_cutoff()
         boundary_filter = (
             " AND source_boundary_json IS NOT NULL AND source_boundary_json NOT IN ('', '[]')"
             if str(self.runtime_settings.get("reasoningEngineV2RequireSourceBoundary") or "1").strip().lower()
@@ -1987,24 +1995,46 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             )
             lane_filter = " AND reasoning_lane = %s" if str(reasoning_lane or "") else ""
             lane_params = (str(reasoning_lane or ""),) if lane_filter else ()
+            columns = "job_id, request_json" if bounded > 1 else "*"
             rows = connection.execute(
-                """
-                SELECT * FROM reasoning_engine_jobs
+                "SELECT " + columns + """ FROM reasoning_engine_jobs
                 WHERE deployment_id = %s
                   AND job_status IN ('queued', 'retry', 'awaiting_world_projection')
                   AND (available_at = '' OR available_at <= %s)
                   AND (lease_expires_at = '' OR lease_expires_at < %s)
                 """ + boundary_filter + lane_filter + """
-                ORDER BY priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0
+                ORDER BY CASE WHEN created_at <= %s THEN 0 ELSE 1 END,
+                    CASE WHEN created_at <= %s THEN created_at ELSE '' END,
+                    priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0
                     WHEN 'CONTEXT' THEN 1 ELSE 2 END, created_at, job_id
                 LIMIT %s FOR UPDATE SKIP LOCKED
                 """,
-                (str(deployment_id or ""), stamp, stamp, *lane_params, bounded),
+                (str(deployment_id or ""), stamp, stamp, *lane_params, aged_cutoff, aged_cutoff, lookahead),
             ).fetchall()
+            if rows and bounded > 1:
+                def compatible_key(row):
+                    event = self.stored_source_event(row)
+                    if event is None:
+                        return ("unbound-job", str(row.get("job_id") or ""))
+                    lane = FactDelta.from_request(independent_reasoning_request(deployment_id, [event])).lane
+                    return reasoning_batch_key(event.to_dict(), lane)
+                anchor_key = compatible_key(rows[0])
+                rows = [row for row in rows if compatible_key(row) == anchor_key][:bounded]
             job_ids = [str(row.get("job_id") or "") for row in rows or []]
             if not job_ids:
                 return []
             placeholders = ",".join(["%s"] * len(job_ids))
+            if bounded > 1:
+                # Retry results may hold full graph packets. Read them only
+                # for the selected claims, never for the lookahead window.
+                hydrated = connection.execute(
+                    "SELECT * FROM reasoning_engine_jobs WHERE job_id IN (" + placeholders + ")",
+                    tuple(job_ids),
+                ).fetchall()
+                by_id = {str(row.get("job_id") or ""): row for row in hydrated or []}
+                if set(by_id) != set(job_ids):
+                    raise RuntimeError("Locked reasoning claim inventory changed")
+                rows = [by_id[job_id] for job_id in job_ids]
             connection.execute(
                 "UPDATE reasoning_engine_jobs SET job_status = 'processing', lease_owner = %s, "
                 "lease_expires_at = %s, heartbeat_at = %s, claimed_at = %s, "

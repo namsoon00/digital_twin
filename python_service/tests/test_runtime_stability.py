@@ -136,6 +136,66 @@ class RuntimeStabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceContractError, "storage identity incomplete"):
             source.candidates(SUBJECT["worldId"], "TEST")
 
+    def test_scoped_evidence_hydrates_shared_and_linked_facts_once_with_generation_fences(self):
+        from digital_twin.modules.reasoning.infrastructure.observation_evidence import TypeDBObservationEvidenceSource
+        from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+        repository = Mock()
+        repository.active_abox_metadata.return_value = {"status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeGenerationIds": {"scope": "active"}}
+        def row(identity, kind, **values):
+            return {"storageId": identity, "id": identity, "kind": kind, "label": identity,
+                    "scopeId": "scope", "generationId": "active", "json": json.dumps(values)}
+        quote = row("quote", "stock", symbol="TEST", currentPrice=100)
+        macro = row("macro", "interest-rate", value=3)
+        report = row("report", "evidence:filing", value=1)
+        retired = {**row("retired", "evidence:filing"), "generationId": "retired"}
+        other = row("other", "stock", symbol="OTHER", currentPrice=200)
+        compact = lambda value: {key: value[key] for key in ("id", "storageId", "kind")}
+        repository.read_rows.side_effect = [[compact(quote), compact(macro)], [compact(macro)],
+            [{"storageId": "report"}, {"storageId": "quote"}],
+            [{"storageId": "report"}, {"storageId": "retired"}, {"storageId": "other"}],
+            [macro, other, quote, report, retired]]
+        result = TypeDBObservationEvidenceSource(repository).candidates(SUBJECT["worldId"], "TEST")
+        self.assertEqual({"quote", "macro", "report"}, {value["id"] for value in result})
+        self.assertEqual(5, repository.read_rows.call_count)
+        self.assertNotIn("ontology-json", repository.read_rows.call_args_list[0].args[0])
+        self.assertNotIn("ontology-json", repository.read_rows.call_args_list[1].args[0])
+        repository.active_abox_members_clause.assert_not_called()
+
+    def test_scoped_evidence_missing_or_rebound_native_fact_fails_closed(self):
+        from digital_twin.modules.reasoning.infrastructure.observation_inventory import scoped_candidates
+        identity = {"id": "quote", "storageId": "physical", "kind": "stock"}
+        fact = {**identity, "label": "quote", "json": '{"symbol":"TEST"}', "scopeId": "scope", "generationId": "active"}
+        for rows in ([], [{**fact, "generationId": "retired"}], [{**fact, "id": "wrong"}],
+                     [fact, fact], [{**fact, "storageId": "unsolicited"}]):
+            repository = Mock()
+            repository.read_rows.side_effect = [[identity], [], [], [], rows]
+            with self.subTest(rows=rows), self.assertRaises(EvidenceContractError):
+                scoped_candidates(repository, SUBJECT["worldId"], "TEST", {"scopeGenerationIds": {"scope": "active"}})
+
+    def test_evidence_metadata_cache_is_scoped_to_capture_and_cleared_after_failure(self):
+        from contextlib import contextmanager
+        from digital_twin.modules.reasoning.infrastructure.observation_evidence import TypeDBObservationEvidenceSource
+        class Repository:
+            reads = 0
+            @contextmanager
+            def read_snapshot_scope(self):
+                yield
+            def active_abox_metadata(self, world):
+                self.reads += 1
+                return {"world": world, "capture": self.reads}
+        repository = Repository()
+        source = TypeDBObservationEvidenceSource(repository)
+        with self.assertRaises(ValueError):
+            with source.capture():
+                self.assertEqual(source.metadata("world"), source.metadata("world"))
+                self.assertEqual(1, repository.reads)
+                raise ValueError("capture failed")
+        with source.capture():
+            self.assertEqual(2, source.metadata("world")["capture"])
+        self.assertEqual(3, source.metadata("world")["capture"])
+
     def test_diagnostic_is_identical_after_json_key_reordering(self):
         diagnostic = {"review": {"sections": {"summary": "reason 1", "comparison": "reason 2", "notificationReason": "reason 3"}}}
         expected = render_ai_observation_diagnostic(diagnostic)

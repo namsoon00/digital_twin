@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
 
 from .job_transitions import ClaimedJobTransitions
+from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key
 
 from digital_twin.modules.notifications.contracts import is_typedb_context_observation_notification, typedb_review_observation_contract
 from digital_twin.shared_kernel.events import DomainEvent
@@ -2872,37 +2873,8 @@ class IndependentReasoningJobRunner:
 
     @staticmethod
     def batch_compatibility_key(job: Mapping[str, object]):
-        event = dict(job.get("sourceEvent") or {})
-        payload = dict(event.get("payload") or {})
-        raw_account_ids = payload.get("accountIds") or []
-        if isinstance(raw_account_ids, str):
-            raw_account_ids = [raw_account_ids]
-        account_ids = tuple(sorted({
-            str(value or "").strip()
-            for value in [*raw_account_ids, payload.get("accountId")]
-            if str(value or "").strip()
-        }))
-        boundary = payload.get("verifiedSourceSnapshot")
-        boundary = dict(boundary or {}) if isinstance(boundary, Mapping) else {}
-        boundaries = [
-            dict(value)
-            for value in payload.get("verifiedSourceSnapshots") or []
-            if isinstance(value, Mapping) and value
-        ]
-        boundary_key = tuple(sorted(
-            (
-                str(value.get("accountId") or ""),
-                str(value.get("snapshotId") or ""),
-                str(value.get("generatedAt") or ""),
-            )
-            for value in boundaries
-        ))
-        return (
-            account_ids,
-            str(boundary.get("accountId") or ""),
-            str(boundary.get("snapshotId") or ""),
-            str(boundary.get("generatedAt") or ""),
-            boundary_key,
+        return reasoning_batch_key(
+            dict(job.get("sourceEvent") or {}),
             IndependentReasoningJobRunner.reasoning_lane(job),
         )
 

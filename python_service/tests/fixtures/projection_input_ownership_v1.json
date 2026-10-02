@@ -142,8 +142,9 @@
     "factual_runtime_metadata": {
       "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
       "owner": "",
-      "bodyHash": "22ae2f89cd2247bfc9c7bf4a7b27645c372e98aa09a9b458efe5894533198958",
-      "restore": {}
+      "bodyHash": "8cfcb80685a2122e3bc396cb56b70822243cd645a2982feb1dddc73525d1a708",
+      "restore": {},
+      "reason": "Filter derived historical payloads before copying while preserving factual output and isolation; test_historical_facts_skip_derived_payloads_before_copy_and_remain_isolated; docs/backend-operational-stabilization.md."
     },
     "data_pipeline_health_context": {
       "path": "digital_twin/modules/reasoning/domain/projection_facts.py",

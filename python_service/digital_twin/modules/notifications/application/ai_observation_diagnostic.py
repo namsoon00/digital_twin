@@ -24,7 +24,13 @@ def render_ai_observation_diagnostic(diagnostic, *, debug_number=""):
     review = diagnostic.get("review") or {}
     if review.get("reason"):
         lines.append("• 독립 검토: " + text(review["reason"]))
-    for key, reason in (review.get("sections") or {}).items():
+    sections = review.get("sections") or {}
+    # MySQL JSON storage can reorder object keys. The delivery guard must
+    # reproduce identical bytes from equal diagnostic values after reload.
+    order = [key for key in SECTION_LABELS if key in sections]
+    order.extend(sorted(key for key in sections if key not in SECTION_LABELS))
+    for key in order:
+        reason = sections[key]
         lines.append("• " + text(SECTION_LABELS.get(key, key)) + ": " + text(reason))
     repair = diagnostic.get("repair") or {}
     lines += ["", "자동 수정: " + ({"failed": "수정 시도를 완료하지 못했습니다.",

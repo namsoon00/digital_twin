@@ -2884,6 +2884,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def ensure_schema(self, driver, imported) -> None:
         return _typedb_lifecycle.ensure_schema(self, driver, imported, runtime=self._typedb_runtime())
 
+    def read_snapshot_scope(self, timeout_seconds: float = None):
+        return _graph_reads_execution.read_snapshot_scope(self, timeout_seconds)
+
     def read_rows(
         self,
         query: str,

@@ -133,7 +133,10 @@ def market_snapshot_sections(current, previous=None):
         if old is not None and old > 0 and before.get("currency", currency) == currency:
             quote.append("이전 알림 " + price_money(old, currency) + " → " + price_money(price, currency)
                          + " (" + decimal((price / old - 1) * 100, signed=True) + "%)")
-        quote.append(clock(current.get("observedAt")))
+        observed_clock = clock(current.get("observedAt"))
+        quote.append(("시세 " if observed_clock == "기준 시각 미확인" else "시세 기준 ") + observed_clock)
+        if facts.get("freshnessStatus") in {"stale", "expired"}:
+            quote.append("과거 시세 참고")
     else:
         quote.append("가격 미확인")
     trend = []

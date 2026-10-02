@@ -10,6 +10,7 @@ from digital_twin.infrastructure.mysql_operational_connection import MySQLOperat
 from digital_twin.modules.ai_orchestration.domain.planning import bounded, identity, stamp
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
+from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 
 
 SCHEMA = (
@@ -146,7 +147,9 @@ class MySQLAIControlStore(MySQLOperationalConnection):
     def fail(self, job, error_kind):
         failures = job["attempts"] - int(job.get("budgetDeferrals", 0))
         terminal = failures >= 3
-        due = (datetime.now(timezone.utc) + timedelta(minutes=30 * min(failures, 3))).isoformat().replace("+00:00", "Z")
+        delay, recovery_delay = retry_delays(job["capability"], error_kind, failures)
+        now = datetime.now(timezone.utc)
+        due = (now + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
         with self.transaction() as connection:
             changed = connection.execute("UPDATE ai_control_tasks SET status=%s,last_error=%s,available_at=%s,updated_at=%s,lease_token='',lease_until='' WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
                 ("failed" if terminal else "pending", error_kind[:100], due, stamp(), job["taskId"], job["leaseToken"], stamp())).rowcount
@@ -154,7 +157,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             if changed and terminal and failure is not None:
                 failure(connection, job, error_kind[:100])
             if changed and terminal and job["capability"] == "observe":
-                next_due = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+                next_due = (now + timedelta(seconds=recovery_delay)).isoformat().replace("+00:00", "Z")
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
                     "capability": "observe", "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
 

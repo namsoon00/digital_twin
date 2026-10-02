@@ -283,6 +283,32 @@ The Python test runner pins TypeDB tests to port `1739`, HTTP port `8010`, the
 `orbit_alpha_ontology_test` database, and `data/test-runtime/typedb-data`.
 Infrastructure environment overrides are enabled only for that test process.
 Tests must not read or write the production TypeDB endpoint.
+The web smoke runner pins the same test graph endpoint and uses a unique MySQL
+schema per fixture; it does not inherit a production MySQL URL from local env.
+
+## Notification payloads and process memory
+
+Notification storage uses `shared-metadata-v1` aliases only when a whitelisted
+metadata object exactly equals its canonical top-level context. Reads restore
+independent copies for existing consumers. Distinct values, full graph evidence,
+rendered messages and receipts remain intact; older rows need no migration.
+Canonical top-level context remains queryable by SQL. Existing rows compact on
+their next ordinary state write; this change does not rewrite historical
+deliveries or purge active evidence. Three production payloads replayed locally
+on 2026-10-02 shrank by 46.84–47.15% with exact value equality after expansion.
+
+Queue claims lock small IDs from each eligible lane, merge their readiness, and
+load full context only for the selected jobs. Article duplicate checks read a
+small captured identity summary for new rows. Compatibility reads load one old
+payload at a time, including startup ledger backfill, instead of buffering up
+to hundreds of complete graphs. The successful-delivery ledger and duplicate
+policy remain in force.
+
+Projection context and graph assembly caches retain at most an estimated 64 MiB
+and 128 MiB of object data respectively, alongside their existing TTL/LRU and
+entry limits. Oversized inputs execute normally without being cached; they are
+never truncated. These are cache admission budgets, not an RSS or swap limit.
+Long-duration observation still needs to establish steady-state process memory.
 
 ## Operational Verification
 

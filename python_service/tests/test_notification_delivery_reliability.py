@@ -214,6 +214,45 @@ class DeliveryReliabilityTests(unittest.TestCase):
 
 
 class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
+    def test_article_duplicate_history_keeps_cached_and_legacy_keys_without_bulk_bodies(self):
+        import json
+        from digital_twin.modules.notifications.domain.sent_article_filter import collect_article_identity_keys_from_context
+        cached = NotificationJob.create("cached", account_id="fixture", message_type="newsDigest",
+            context={"articles": [{"kind": "news", "title": "Cached release", "url": "https://example.com/cached"}]})
+        legacy = NotificationJob.create("legacy", account_id="fixture", message_type="newsDigest",
+            context={"articles": [{"kind": "news", "title": "Legacy release", "url": "https://example.com/legacy"}]})
+        for job in (cached, legacy):
+            self.notifications.upsert_job(job)
+        probe = NotificationJob.create("probe", account_id="fixture", message_type="newsDigest")
+        with self.notifications.transaction() as connection:
+            connection.execute("UPDATE notification_jobs SET payload_json=JSON_REMOVE(payload_json,'$.articleIdentitySummary') WHERE job_id=%s", (legacy.job_id,))
+            with patch.object(connection, "execute", wraps=connection.execute) as execute:
+                keys = self.notifications.sent_article_history_keys_with_connection(connection, probe)
+                body_reads = [call for call in execute.call_args_list if call.args[0].startswith("SELECT payload_json FROM notification_jobs")]
+        expected = collect_article_identity_keys_from_context(cached.context) | collect_article_identity_keys_from_context(legacy.context)
+        self.assertEqual(expected, keys)
+        self.assertEqual([(legacy.job_id,)], [call.args[1] for call in body_reads])
+
+    def test_shared_context_storage_claim_and_reload_are_lossless(self):
+        import json
+        context = {"symbol": "TEST", "ontologyRelationContext": {"proof": "full frozen graph " * 10000}}
+        context["metadata"] = deepcopy(context)
+        job = NotificationJob.create("unchanged body", message_type="fixture-context-storage", context=context)
+        self.notifications.upsert_job(job)
+        with self.notifications.connect() as connection:
+            stored = connection.execute("SELECT payload_json FROM notification_jobs WHERE job_id=%s", (job.job_id,)).fetchone()
+        self.assertLess(len(stored["payload_json"]), len(json.dumps(job.to_dict())) * .6)
+        claimed = self.notifications.claim_pending(limit=1, include_message_types=(job.message_type,))
+        self.assertEqual([job.job_id], [row.job_id for row in claimed])
+        self.assertEqual(context, claimed[0].context)
+        self.notifications.mark_done(claimed[0])
+        with self.notifications.connect() as connection:
+            stored = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s", (job.job_id,)).fetchone()
+        restored = self.notifications.job_from_row(stored)
+        self.assertEqual("done", restored.status)
+        self.assertEqual(context, restored.context)
+        self.assertEqual(job.text, restored.text)
+
     def test_receipt_clock_and_scoped_history_survive_other_subject_traffic(self):
         store = self.notifications
         rule = default_notification_rule("monitorConnection")

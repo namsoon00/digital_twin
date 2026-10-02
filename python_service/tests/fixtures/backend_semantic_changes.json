@@ -1,9 +1,9 @@
 {
   "TypeDBOntologyGraphRepository.read_rows": {
     "baselineHash": "d51fdedacecbb55ddc91da233d192eb6cfe1dcc190a2d8d017d27bfe4666e110",
-    "bodyHash": "bed1b35d085c88a1bd6a9d6990a42242f2929313b1e637d024acafccca2bb18d",
-    "reason": "Do not immediately repeat timed-out reads; retain transport retry and let the owning worker back off.",
-    "regressionTest": "test_ontology_lab_read_path.InferenceReadTests.test_timeout_is_not_immediately_retried_but_connection_error_is"
+    "bodyHash": "3d34161302440183104ac7a669db7cd29fbe5409fe3cbd0ae70277243e803761",
+    "reason": "Reuse the repository's bounded native READ snapshot during observation capture, preserving nested/thread isolation and normal transport retry outside the scope; timed-out reads still defer to the owning worker.",
+    "regressionTest": "test_runtime_stability.RuntimeStabilityTests.test_capture_reads_share_native_snapshot_and_release_on_error"
   },
   "TypeDBOntologyGraphRepository.read_inferencebox_entity_rows": {
     "baselineHash": "0cce8f563bf9c4152cad37795c3f8ea9089df9587750888447c6d7481af789f9",

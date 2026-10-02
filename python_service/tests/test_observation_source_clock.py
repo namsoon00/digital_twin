@@ -150,15 +150,16 @@ class ObservationSourceClockTests(unittest.TestCase):
         from digital_twin.modules.reasoning.infrastructure.observation_evidence import TypeDBObservationEvidenceSource
         repository = Mock()
         repository.active_abox_members_clause.return_value = ""
-        repository.read_rows.side_effect = [[], [], TimeoutError("secret credential / private query")]
+        quote = {"id": "quote", "kind": "stock", "label": "quote", "json": json.dumps({"symbol": "TEST", "currentPrice": 100})}
+        repository.read_rows.side_effect = [[quote], [], [{"id": "quote", "storageId": "active-quote"}], TimeoutError("secret credential / private query")]
         source = TypeDBObservationEvidenceSource(repository)
         with self.assertRaises(EvidenceReadError) as failure:
             source.candidates(SUBJECT["worldId"], "TEST")
-        self.assertEqual("evidence-read:linked:TimeoutError", str(failure.exception))
+        self.assertEqual("evidence-read:linked-outgoing:TimeoutError", str(failure.exception))
         service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(side_effect=failure.exception))
         outcome = service.run_once()
         self.assertEqual("deferred", outcome["status"])
-        self.assertEqual("evidence-read:linked:TimeoutError", outcome["reason"])
+        self.assertEqual("evidence-read:linked-outgoing:TimeoutError", outcome["reason"])
         self.assertNotIn("secret", repr(store.fail.call_args))
         planner.assert_not_called()
         store.save_execution_input.assert_not_called()
@@ -170,11 +171,12 @@ class ObservationSourceClockTests(unittest.TestCase):
         repository.active_abox_members_clause.return_value = ""
         quote = {"id": "quote", "kind": "stock", "label": "quote", "json": json.dumps({"currentPrice": 100, "symbol": "TEST"})}
         macro = {"id": "macro", "kind": "interest-rate", "label": "rate", "json": json.dumps({"rate": 4})}
-        repository.read_rows.side_effect = [[quote, macro], [macro], [quote]]
+        repository.read_rows.side_effect = [[quote, macro], [macro], [{"id": "quote", "storageId": "active-quote"}],
+                                           [{"storageId": "active-quote"}], [], [quote]]
         source = TypeDBObservationEvidenceSource(repository)
         result = source.candidates(SUBJECT["worldId"], "TEST")
         self.assertEqual({"quote", "macro"}, {row["id"] for row in result})
-        self.assertEqual(3, repository.read_rows.call_count)
+        self.assertEqual(6, repository.read_rows.call_count)
         repository.read_rows.side_effect = [[macro], [{**macro, "json": json.dumps({"rate": 5})}]]
         with self.assertRaisesRegex(ValueError, "conflicting observation inventory"):
             source.candidates(SUBJECT["worldId"], "TEST")

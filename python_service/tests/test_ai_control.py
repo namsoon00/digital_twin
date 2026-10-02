@@ -182,6 +182,34 @@ class AIControlStorageTests(unittest.TestCase):
     def tearDown(self):
         self.clean()
 
+    def test_capture_retries_are_bounded_and_stale_leases_cannot_schedule_recovery(self):
+        from datetime import datetime, timezone
+        self.store.seed(SUBJECT)
+        reason = "evidence-read:inventory-subject:TimeoutError"
+        original = None
+        for attempt, delay in ((1, 30), (2, 120), (3, 120)):
+            job = self.store.claim()
+            original = original or dict(job)
+            self.assertEqual(attempt, job["attempts"])
+            before = datetime.now(timezone.utc)
+            self.store.fail(job, reason)
+            with self.store.connect() as connection:
+                row = connection.execute("SELECT status,available_at FROM ai_control_tasks WHERE task_id=%s", (job["taskId"],)).fetchone()
+                wait = (datetime.fromisoformat(row["available_at"].replace("Z", "+00:00")) - before).total_seconds()
+                self.assertGreaterEqual(wait, delay)
+                self.assertLess(wait, delay + 5)
+                self.assertEqual("failed" if attempt == 3 else "pending", row["status"])
+                if attempt < 3:
+                    connection.execute("UPDATE ai_control_tasks SET available_at='2000' WHERE task_id=%s", (job["taskId"],))
+        self.store.fail(original, reason)
+        with self.store.connect() as connection:
+            rows = connection.execute("SELECT status,available_at FROM ai_control_tasks WHERE task_id<>%s", (job["taskId"],)).fetchall()
+        self.assertEqual(1, len(rows))
+        self.assertEqual("pending", rows[0]["status"])
+        recovery = (datetime.fromisoformat(rows[0]["available_at"].replace("Z", "+00:00")) - before).total_seconds()
+        self.assertGreaterEqual(recovery, 1800)
+        self.assertLess(recovery, 1805)
+
     def test_idempotent_seed_lease_recovery_and_atomic_successors(self):
         self.store.seed(SUBJECT)
         self.store.seed(SUBJECT)

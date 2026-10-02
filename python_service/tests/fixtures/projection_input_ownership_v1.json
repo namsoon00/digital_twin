@@ -223,13 +223,15 @@
     "SharedProjectionRuntimeContextCache": {
       "path": "digital_twin/modules/reasoning/infrastructure/projection_input_cache.py",
       "owner": "",
-      "bodyHash": "5a414e8a1a897061a73150eb52330c2259d21d8fa50fc698f9b14a12dd9b2e7e",
+      "bodyHash": "e77d66b2d08c3284f0fa40c864a8031424bb7704105cbb91796c8c2d318d62b3",
+      "reviewedChange": {"baselineHash": "5a414e8a1a897061a73150eb52330c2259d21d8fa50fc698f9b14a12dd9b2e7e", "reason": "Bound retained bytes as well as entry count while preserving TTL, LRU and copy isolation; test_runtime_stability."},
       "restore": {}
     },
     "SharedPortfolioGraphAssemblyCache": {
       "path": "digital_twin/modules/reasoning/infrastructure/projection_input_cache.py",
       "owner": "",
-      "bodyHash": "0edd3b2b034af41373c79f63650b285847e152f120383cbb31abedb0c06f2aa0",
+      "bodyHash": "60054c4c6b278ef16d10589fd9ad2d2ef1380986aed7a02c99f054b74e92dc9f",
+      "reviewedChange": {"baselineHash": "0edd3b2b034af41373c79f63650b285847e152f120383cbb31abedb0c06f2aa0", "reason": "Skip oversized graph cache entries without truncation and evict by retained bytes; preserve TTL, LRU and copy isolation; test_runtime_stability."},
       "restore": {}
     },
     "persistent_graph_assembly_cache_get": {

@@ -26,6 +26,7 @@ from digital_twin.infrastructure.mysql_retention import sent_article_delivery_le
 from digital_twin.infrastructure.mysql_operational_helpers import _is_duplicate_key_error, _json_loads
 from digital_twin.infrastructure.operational_common import MAX_NOTIFICATION_DELIVERY_ATTEMPTS, NOTIFICATION_HISTORY_LOOKBACK_LIMIT, json_dumps, notification_history_is_recent_in_flight, rule_from_row
 from digital_twin.infrastructure.settings import utc_now
+from .notification_payload import article_history_summary, compact_payload, expand_payload
 
 
 NOTIFICATION_LIST_PRESENTATION_PATHS = (
@@ -1004,11 +1005,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         """
         payload = job.to_dict()
         payload.pop("text", None)
-        return payload
+        if job.message_type in {NEWS_DIGEST, INVESTMENT_INSIGHT}:
+            payload["articleIdentitySummary"] = article_history_summary(payload["context"])
+        return compact_payload(payload)
 
     @staticmethod
     def job_from_row(row) -> NotificationJob:
-        payload = _json_loads(row.get("payload_json"), {})
+        payload = expand_payload(_json_loads(row.get("payload_json"), {}))
         if not payload.get("text"):
             payload["text"] = str(row.get("text") or "")
         return NotificationJob.from_dict(payload)
@@ -1251,6 +1254,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         context: Dict[str, object],
         source_job_id: str = "",
         delivered_at: str = "",
+        identity_keys=None,
     ) -> int:
         """Persist only article identity keys once delivery succeeds.
 
@@ -1270,7 +1274,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             return 0
         keys = sorted({
             str(key or "").strip()[:191]
-            for key in collect_article_identity_keys_from_context(probe.context, max_depth=7, max_nodes=600, max_keys=800)
+            for key in (collect_article_identity_keys_from_context(probe.context, max_depth=7, max_nodes=600, max_keys=800)
+                        if identity_keys is None else identity_keys)
             if str(key or "").strip()
         })[: self.sent_article_delivery_ledger_key_limit()]
         if not keys:
@@ -1312,7 +1317,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             rows = connection.execute(
                 """
-                SELECT job_id, account_id, message_type, updated_at, created_at, payload_json
+                SELECT job_id, account_id, message_type, updated_at, created_at,
+                       JSON_EXTRACT(payload_json, '$.articleIdentitySummary') AS article_summary
                 FROM notification_jobs
                 WHERE status IN ('done', 'sent')
                   AND message_type IN (%s, %s)
@@ -1323,8 +1329,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             ).fetchall()
             written = 0
             for row in rows:
-                payload = _json_loads(row["payload_json"], {})
-                context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+                context, keys = self.article_history_row_with_connection(connection, row)
                 written += self.record_article_delivery_context_with_connection(
                     connection,
                     row["account_id"],
@@ -1332,6 +1337,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     context,
                     source_job_id=row["job_id"],
                     delivered_at=row["updated_at"] or row["created_at"],
+                    identity_keys=keys,
                 )
             return written
 
@@ -1730,6 +1736,18 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 )
             return result
 
+    @staticmethod
+    def article_history_row_with_connection(connection, row):
+        summary = _json_loads(row.get("article_summary"), {})
+        if isinstance(summary, dict) and summary.get("version") == 1 and isinstance(summary.get("keys"), list):
+            return dict(summary.get("context") or {}), set(summary["keys"])
+        # Legacy rows remain readable without collecting hundreds of full
+        # graphs in a buffered MySQL result. One selected payload at a time.
+        stored = connection.execute("SELECT payload_json FROM notification_jobs WHERE job_id=%s", (row["job_id"],)).fetchone()
+        payload = expand_payload(_json_loads((stored or {}).get("payload_json"), {}))
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        return context, collect_article_identity_keys_from_context(context, max_depth=7, max_nodes=600, max_keys=800)
+
     def sent_article_history_keys_with_connection(self, connection, job: NotificationJob):
         if not self.sent_article_filter_enabled():
             return set()
@@ -1743,7 +1761,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         params.append(self.sent_article_history_limit())
         rows = connection.execute(
             """
-            SELECT job_id, status, account_id, message_type, updated_at, created_at, payload_json
+            SELECT job_id, status, account_id, message_type, updated_at, created_at,
+                   JSON_EXTRACT(payload_json, '$.articleIdentitySummary') AS article_summary
             FROM notification_jobs
             WHERE """ + " AND ".join(clauses) + """
             ORDER BY created_at DESC, job_id DESC
@@ -1752,11 +1771,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             params,
         ).fetchall()
         for row in rows:
-            previous_payload = _json_loads(row["payload_json"], {})
             if str(row["job_id"] or "") == job.job_id:
                 continue
-            context = previous_payload.get("context") if isinstance(previous_payload.get("context"), dict) else {}
-            previous_keys = collect_article_identity_keys_from_context(context, max_depth=7, max_nodes=600, max_keys=800)
+            context, previous_keys = self.article_history_row_with_connection(connection, row)
             keys.update(previous_keys)
             if str(row["status"] or "") in {"done", "sent"} and previous_keys:
                 self.record_article_delivery_context_with_connection(
@@ -1766,6 +1783,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     context,
                     source_job_id=row["job_id"],
                     delivered_at=row["updated_at"] or row["created_at"],
+                    identity_keys=previous_keys,
                 )
             if len(keys) >= 800:
                 break
@@ -2245,7 +2263,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             query_specs = [
                 (
                     """
-                    SELECT job_id, text, payload_json, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
+                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
                     WHERE status = 'pending'
                       AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
@@ -2257,7 +2275,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, text, payload_json, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
+                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
                     WHERE status = 'processing'
                       AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= %s
                     """ + lane_sql + """
@@ -2269,7 +2287,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, text, payload_json, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
+                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
                     WHERE status = 'failed' AND attempts < %s
                       AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
@@ -2287,6 +2305,10 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 candidates.extend(connection.execute(sql, tuple(params) + (requested,)).fetchall())
             candidates.sort(key=lambda row: (str(row.get("ready_at") or ""), str(row.get("job_id") or "")))
             for row in candidates[:requested]:
+                # The locked lane heads contain IDs only. Large frozen graph
+                # packets are loaded for selected jobs, never all three lanes.
+                row = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s",
+                                         (row["job_id"],)).fetchone()
                 job = self.job_from_row(row)
                 if not job.job_id:
                     continue

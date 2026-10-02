@@ -11,6 +11,7 @@ from digital_twin.modules.ai_orchestration.domain.brain_management import (
 )
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input, PROMPT_VERSION, REPAIR_PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
+from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 
 
 SCHEMA = (
@@ -183,13 +184,14 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             self.research_completed(connection, job, {"status": "failed", "stopReason": error_kind})
         elif job["capability"] == "observe":
             now = stamp()
+            recovery_minutes = retry_delays(job["capability"], error_kind, 3)[1] // 60
             rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='question' "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s "
                 "AND status IN ('open','waiting','review-needed','blocked') AND next_check_at<=%s FOR UPDATE",
                 (job["accountId"], job["symbol"], job["worldId"], now)).fetchall()
             for row in rows:
                 case = json.loads(row["payload_json"])
-                case.update(nextCheckAt=later(now, 360), reason="관찰 처리가 반복 실패해 복구 시점에 과제를 다시 확인합니다.")
+                case.update(nextCheckAt=later(now, recovery_minutes), reason="관찰 처리가 반복 실패해 복구 시점에 과제를 다시 확인합니다.")
                 self.save(connection, case, job["taskId"], "review-failed", {"errorKind": error_kind})
 
     def feedback(self, connection, job, result, source, now):

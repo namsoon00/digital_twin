@@ -11,14 +11,16 @@ import time
 from digital_twin.modules.reasoning.application.projection_input.ports import (
     PersistentCacheInputs,
 )
+from .cache_size import retained_size, trim_entries
 
 
 class SharedProjectionRuntimeContextCache:
     """Reuse immutable runtime context for one exact source boundary briefly."""
 
-    def __init__(self):
+    def __init__(self, max_bytes=64 * 1024 * 1024):
         self.lock = Lock()
         self.entries: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
+        self.max_bytes = max(0, int(max_bytes))
 
     def get(self, key: str, ttl_seconds: float) -> Dict[str, object]:
         if not key or ttl_seconds <= 0:
@@ -47,14 +49,17 @@ class SharedProjectionRuntimeContextCache:
     def put(self, key: str, context: Dict[str, object], max_entries: int) -> None:
         if not key or max_entries <= 0:
             return
+        size = retained_size(context or {}, self.max_bytes)
         with self.lock:
             self.entries.pop(key, None)
+            if size > self.max_bytes:
+                return
             self.entries[key] = {
                 "createdMonotonic": time.monotonic(),
                 "context": deepcopy(context or {}),
+                "retainedBytes": size,
             }
-            while len(self.entries) > max_entries:
-                self.entries.popitem(last=False)
+            trim_entries(self.entries, max_entries, self.max_bytes)
 
 
 class SharedPortfolioGraphAssemblyCache:
@@ -70,9 +75,10 @@ class SharedPortfolioGraphAssemblyCache:
     observation or configuration change cannot reuse an old graph.
     """
 
-    def __init__(self):
+    def __init__(self, max_bytes=128 * 1024 * 1024):
         self.lock = Lock()
         self.entries: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
+        self.max_bytes = max(0, int(max_bytes))
 
     def get(self, key: str, ttl_seconds: float) -> Dict[str, object]:
         if not key or ttl_seconds <= 0:
@@ -112,16 +118,23 @@ class SharedPortfolioGraphAssemblyCache:
     ) -> None:
         if not key or max_entries <= 0:
             return
+        # The two graphs are copied independently, so count both even when
+        # callers pass the same object. Oversized work still runs uncached.
+        size = (retained_size(graph, self.max_bytes)
+                + retained_size(persistence_graph, self.max_bytes)
+                + retained_size(runtime_context_packet or {}, self.max_bytes))
         with self.lock:
             self.entries.pop(key, None)
+            if size > self.max_bytes:
+                return
             self.entries[key] = {
                 "createdMonotonic": time.monotonic(),
                 "graph": deepcopy(graph),
                 "persistenceGraph": deepcopy(persistence_graph),
                 "runtimeContextPacket": deepcopy(runtime_context_packet or {}),
+                "retainedBytes": size,
             }
-            while len(self.entries) > max_entries:
-                self.entries.popitem(last=False)
+            trim_entries(self.entries, max_entries, self.max_bytes)
 
 
 SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE = SharedProjectionRuntimeContextCache()

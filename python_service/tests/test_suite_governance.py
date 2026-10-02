@@ -234,7 +234,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six independent-observation regressions cover proof-scoped cutover,
         # unchanged archival, complete source-clocked display, observed zero,
         # small/unsupported measurements and real queue/worker delivery.
-        self.assertLessEqual(total, 1988)
+        # Seventeen stability regressions cover snapshot/lease isolation,
+        # generation membership, safe retries and agenda clocks, quote lineage,
+        # deterministic diagnostics, lossless storage and bounded cache/history
+        # reads. These include four real MySQL lifecycle regressions.
+        self.assertLessEqual(total, 2005)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

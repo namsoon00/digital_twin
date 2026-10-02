@@ -149,6 +149,7 @@ class CentralPublicationStorageTests(unittest.TestCase):
             with self.assertRaises(NotificationDeliverySuppressed):
                 dispatcher.deliver(job, {job.account_id: object()}, message)
         notifier.send.assert_called_once()
+
         baseline = self.publication.memory(job.account_id, "TEST")
         self.assertEqual(job.job_id, baseline["jobId"])
         self.assertEqual(100, baseline["facts"][0]["currentPrice"])
@@ -167,6 +168,26 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertEqual(98, restored['facts'][0]['ma5'])
         self.assertEqual(task['taskId'], restored['evidenceRestoration']['taskId'])
         self.assertNotIn('currency', self.publication.receipts(job.account_id, 'TEST')[0]['facts'][0])
+
+    def test_rejected_sections_survive_mysql_object_order_and_exact_delivery_guard(self):
+        self.control.seed(SUBJECT)
+        task = self.control.claim()
+        result = observation()
+        persist_review(self.control, task, result)
+        result["quality"].update(status="rejected", errors=["인용된 시세 시각과 수급 시각이 다릅니다."])
+        for section in ("summary", "comparison", "notificationReason"):
+            result["quality"]["review"]["sections"][section] = {"supported": False, "reason": section + " clock mismatch"}
+        self.assertTrue(self.control.complete(task, result, []))
+        job_id = result["publication"]["diagnostic"]["jobId"]
+        with self.queue.connect() as connection:
+            connection.execute("UPDATE notification_jobs SET payload_json=JSON_SET(payload_json,'$.updatedAt',updated_at) WHERE job_id=%s", (job_id,))
+            row = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s", (job_id,)).fetchone()
+        job = self.queue.job_from_row(row)
+        message = NotificationRenderingService().render(job)
+        with self.publication.delivery_guard(job, message):
+            pass
+        with self.assertRaises(NotificationDeliverySuppressed), self.publication.delivery_guard(job, message + "tampered"):
+            self.fail("changed diagnostic body must stay blocked")
 
     def test_aged_quote_receipt_preserves_capture_and_send_clocks(self):
         from digital_twin.modules.reasoning.contracts import quote_clock_assessment

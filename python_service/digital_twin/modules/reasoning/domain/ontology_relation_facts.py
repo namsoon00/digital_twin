@@ -1033,6 +1033,13 @@ def position_signal_facts(
         "quoteMessage": position.quote_message,
         "dataQuality": position.data_quality,
         "updatedAt": position.updated_at,
+        # Collection time is not the provider's quote time. Keep both clocks
+        # when converting the captured position into notification evidence.
+        "sourceAsOf": position.source_as_of,
+        "sourceFetchedAt": position.source_fetched_at,
+        "sourceTimestampState": position.source_timestamp_state,
+        "freshnessStatus": position.freshness_status,
+        "freshnessMaxAgeMinutes": position.freshness_max_age_minutes,
         "marketSignalCoverage": market_signal_coverage,
         "isHolding": str(position.source or "holding") != "watchlist",
         "isWatchlist": str(position.source or "") == "watchlist",

@@ -1,5 +1,6 @@
 """Public read use case for independent observation evidence."""
 from datetime import datetime, timezone
+from contextlib import nullcontext
 from typing import Protocol
 
 from digital_twin.modules.reasoning.domain.observation_evidence import (
@@ -21,6 +22,14 @@ class ObservationEvidenceReader:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def __call__(self, request):
+        return read_evidence_stage("snapshot", lambda: self._read_snapshot(request))
+
+    def _read_snapshot(self, request):
+        capture = getattr(type(self.source), "capture", None)
+        with capture(self.source) if callable(capture) else nullcontext():
+            return self._capture(request)
+
+    def _capture(self, request):
         world = request["worldId"]
         metadata = read_evidence_stage("metadata", lambda: self.source.metadata(world))
         if metadata.get("status") != "ok" or not metadata.get("aboxSnapshotId"):

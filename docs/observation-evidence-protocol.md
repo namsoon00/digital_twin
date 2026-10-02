@@ -45,6 +45,23 @@
 목록 조회 합산 시간은 각각 약 3.80→2.20초, 3.53→1.82초였다. 이는 제한된
 시점의 비교이며 장기 처리량이나 모든 조회의 시간 초과 해소를 보증하지 않는다.
 
+### 일관된 캡처와 연결 근거 조회
+
+운영 TypeDB 어댑터는 메타데이터, 종목·거시 목록, 양방향 연결 근거와 마지막
+세대 확인을 하나의 native READ transaction에서 수행한다. TypeDB의
+[snapshot isolation](https://typedb.com/docs/core-concepts/typedb/transactions/)으로
+캡처 중 writer가 다음 세대를 활성화해도 처음 읽은 세대가 유지된다. 전용 연결은
+캡처가 끝나거나 실패하면 닫히며, AI 호출까지 열어 두지 않는다. 전체 읽기 예산은
+기존 쿼리 제한의 두 배(최소 30초, 최대 60초)이고 각 쿼리의 기존 제한도 유지한다.
+scope가 없는 호환 어댑터도 전후 세대·계정·종목 검증을 통과해야 한다.
+
+연결 탐색은 활성 종목의 정확한 physical storage ID를 고정하고, 활성 관계의
+양방향 endpoint ID를 찾은 뒤 최대 64개씩 원문을 읽는다. scoped Manifest의
+`scopeGenerationIds`와 원문의 `(world, scope, physical generation)`이 일치하는
+endpoint만 포함한다. 하나의 쿼리에서 종목·관계·endpoint의 scope pointer를
+모두 조인하지 않아도 같은 활성 범위를 보장한다. 다른 종목, 퇴역 세대, 내용 충돌,
+2,000개를 초과하는 연결 목록에 대한 보호를 유지한다.
+
 ## 변경 감지
 
 새 필드는 기본적으로 변경 감지에 포함한다. 저장 세대 ID·조회 시각 같은 명시된

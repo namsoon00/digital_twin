@@ -146,7 +146,8 @@ marks the original question for reassessment and wakes an unstarted observation;
 it does not mean the question was answered. Due dates can also wake observations
 without a user prompt or a market-data change. Existing budgets, pause controls
 and lease fencing still apply. Wake-ups preserve failed-task retry intervals;
-terminal observation failure defers due cases to the six-hour recovery window.
+terminal observation failure defers due cases to the same recovery window as its
+successor task (30 minutes for input capture failures, otherwise six hours).
 
 Work is bounded to twelve active questions per account/symbol/world, three
 research tasks per question and at least six hours between new research tasks.
@@ -233,6 +234,22 @@ without enqueueing AI; unchanged relationships remain archived. TypeDB delivery
 does not advance central AI receipts, memory or cooldowns. Historical component tests can
 still exercise old contracts using an explicit non-runtime settings fixture;
 there is no production UI switch back to that route.
+
+## Capture recovery and diagnostic reproducibility
+
+Observation input-read failures (`evidence-read:*`) and a changed capture
+generation retry after 30 seconds, then 120 seconds. The third failure terminates
+that task and schedules its idempotent observation successor after 30 minutes.
+These errors precede the model call. Model failures and ownership/validation
+errors retain the general 30/60-minute retries and six-hour recovery window.
+Lease fencing, three-attempt limits, immutable input attempt IDs and separate
+budget deferrals apply to both policies. This is bounded recovery, not an inline
+loop repeatedly running an expensive read or model.
+
+Operations diagnostic section order is canonical, including after MySQL JSON
+normalization. Equal frozen values reproduce identical text for the exact-body
+delivery guard; modified drafts or messages remain blocked. Existing suppressed
+history is not rewritten or resent automatically.
 
 ## Execution and limits
 

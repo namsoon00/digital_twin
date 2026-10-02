@@ -2952,7 +2952,12 @@ async function withServer(extraEnv, callback) {
     HOST: "127.0.0.1",
     PORT: String(randomPort()),
     LOCAL_CODEX_ENABLED: "0",
+    ORBIT_RUNTIME_ENV: "test",
+    ORBIT_RUNTIME_REVISION: "web-smoke-test",
     WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
+    // Do not inherit a production URL or graph endpoint from .env.local.
+    // Keep ordinary setting precedence so the settings API is still tested.
+    MYSQL_URL: "",
     MYSQL_HOST: process.env.MYSQL_HOST || "127.0.0.1",
     MYSQL_PORT: process.env.MYSQL_PORT || "3306",
     MYSQL_DATABASE: process.env.MYSQL_SMOKE_DATABASE || mysqlDatabase,
@@ -2960,6 +2965,10 @@ async function withServer(extraEnv, callback) {
     MYSQL_PASSWORD: process.env.MYSQL_PASSWORD || "",
     MYSQL_UNIX_SOCKET: process.env.MYSQL_UNIX_SOCKET || "",
     MYSQL_TABLE_PARTITIONING: "off",
+    TYPEDB_ADDRESS: "127.0.0.1:1739",
+    TYPEDB_HTTP_ADDRESS: "127.0.0.1:8010",
+    TYPEDB_DATABASE: "orbit_alpha_ontology_test",
+    TYPEDB_DATA_PATH: path.join(rootDir, "data", "test-runtime", "typedb-data"),
     KIS_MARKET_SIGNALS_ENABLED: "0",
     EXTERNAL_ALPHA_ENABLED: "0",
     EXTERNAL_COINGECKO_ENABLED: "0",

@@ -237,7 +237,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))
 
     def review_proof(self, input_id):
-        from digital_twin.modules.ai_orchestration.domain.execution_input import REVIEW_PROMPT_VERSION
+        from digital_twin.modules.ai_orchestration.domain.execution_input import REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION
         from digital_twin.modules.ai_orchestration.domain.insight_contract import narrative_digest
         with self.connect() as connection:
             row = connection.execute("SELECT i.task_id,i.artifact_gzip FROM ai_control_inputs i "
@@ -248,7 +248,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             return {}
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] != REVIEW_PROMPT_VERSION:
+        if envelope["promptVersion"] not in {REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
             return {}
         return {"taskId": row["task_id"], "draftHash": narrative_digest({**envelope["draft"], "input": envelope["current"]})}
 

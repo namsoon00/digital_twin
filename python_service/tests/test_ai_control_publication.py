@@ -168,6 +168,29 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertEqual(task['taskId'], restored['evidenceRestoration']['taskId'])
         self.assertNotIn('currency', self.publication.receipts(job.account_id, 'TEST')[0]['facts'][0])
 
+    def test_aged_quote_receipt_preserves_capture_and_send_clocks(self):
+        from digital_twin.modules.reasoning.contracts import quote_clock_assessment
+        result = observation()
+        now = datetime.now(timezone.utc)
+        result["input"]["capturedAt"] = (now - timedelta(minutes=10)).isoformat()
+        result["input"]["facts"][0].update(sourceAsOf=(now - timedelta(minutes=19)).isoformat(), maxAgeMinutes=10)
+        result["input"]["quoteAssessment"] = quote_clock_assessment(result["input"]["facts"], result["input"]["capturedAt"])
+        task, result, job = self.publish(result)
+        message = NotificationRenderingService().render(job)
+        self.assertIn("기준 시점 가격: 100원", message)
+        self.assertIn("과거 시점 참고 자료", message)
+        notifier = Mock(supports_delivery_checkpoints=False)
+        notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
+        dispatcher = NotificationDispatchService(self.queue, lambda _: notifier, delivery_guard=self.publication.delivery_guard)
+        with patch("digital_twin.infrastructure.settings.runtime_settings", return_value=self.settings):
+            dispatcher.deliver(job, {job.account_id: object()}, message)
+        baseline = self.publication.memory(job.account_id, "TEST")
+        self.assertEqual("fresh", baseline["captureQuoteAssessment"]["quotes"][0]["status"])
+        self.assertEqual("stale", baseline["deliveryQuoteAssessment"]["quotes"][0]["status"])
+        self.assertEqual("fresh", baseline["facts"][0]["freshnessStatus"])
+        self.assertEqual("fresh", result["input"]["quoteAssessment"]["quotes"][0]["status"])
+        notifier.send.assert_called_once()
+
     def test_notification_worker_delivers_new_type_without_legacy_ai_review(self):
         from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner
         _, result, job = self.publish()

@@ -2,6 +2,7 @@
 from datetime import datetime
 import math
 from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, resolve_observation_ref
+from digital_twin.modules.reasoning.contracts import quote_clock_assessment
 from zoneinfo import ZoneInfo
 
 
@@ -40,6 +41,10 @@ def metric(fact, field):
 def render_ai_observation(result, *, sent_at="", debug_number=""):
     packet = result["input"]
     quote = next((row for row in packet["facts"] if figure(row.get("currentPrice")) and float(row["currentPrice"]) > 0), {})
+    assessment = {}
+    if "quoteAssessment" in packet:
+        current = quote_clock_assessment(packet["facts"], sent_at or result["observedAt"])
+        assessment = next((row for row in current["quotes"] if row["evidenceId"] == quote.get("id")), {})
     lines = [f"🧠 AI 관찰 · {packet['name']} ({packet['symbol']})", "", result["summary"]]
     lines += ["", "이전 알림과 비교", result["comparison"]]
     compared = set()
@@ -53,7 +58,7 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         current, baseline = [resolve_observation_ref(packet, next(ref for ref in refs if ref["period"] == period))[0] for period in ("current", "baseline")]
         lines.append("• " + metric(baseline, field) + " → " + metric(current, field).split(": ", 1)[1])
         compared.add(field)
-    lines += ["", "확인한 현재 데이터"]
+    lines += ["", "확인한 데이터" if assessment else "확인한 현재 데이터"]
     fields = ["currentPrice", "changeRate", "averagePrice", "profitLossRate", "positionWeight", "ma5", "ma20", "ma60", "volume", "volumeRatio"]
     cited_fields = {ref["field"] for refs in result.get("claimEvidence", {}).values() for ref in refs if ref["period"] == "current" and ref["factId"] == quote.get("id")}
     fields += [field for field in OBSERVATION_METRICS if field in cited_fields and field not in fields]
@@ -72,12 +77,27 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
                 continue
         if key == "changeRate" and value == 0 and quote.get("dataState") == "partial":
             continue
-        lines.append("• " + metric(quote, key))
+        text = metric(quote, key)
+        if key == "currentPrice" and assessment and assessment["status"] != "fresh":
+            text = "기준 시점 가격: " + text.split(": ", 1)[1]
+        lines.append("• " + text)
     if quote.get("volumeRatio"):
         lines.append("거래량 비율은 같은 장중 시각끼리의 비교가 아닙니다.")
-    session = " · 장 마감 자료" if quote.get("marketSessionStatus") == "closed" else ""
+    session = (" · 출처의 마감 참고값" if assessment.get("referenceState") == "last-close" else "") if assessment else (
+        " · 장 마감 자료" if quote.get("marketSessionStatus") == "closed" else "")
     lines += ["시세 기준 " + clock_label(quote.get("sourceAsOf") or quote.get("asOf")) + session,
               "출처 " + source_label(quote)]
+    if assessment:
+        status = assessment["status"]
+        if status == "stale":
+            lines.append("시세 경과 " + figure(assessment["ageMinutes"], "분") + " · 갱신 기준 "
+                         + figure(assessment["maxAgeMinutes"], "분") + " 초과 · 과거 시점 참고 자료")
+        elif status == "fresh":
+            lines.append("시세 경과 " + figure(assessment["ageMinutes"], "분") + " · 갱신 기준 이내")
+        elif status == "unknown-budget":
+            lines.append("시세 경과 " + figure(assessment["ageMinutes"], "분") + " · 갱신 기준 미확인")
+        else:
+            lines.append("시세 기준 시각 확인 필요 · 현재 상황으로 해석할 수 없습니다.")
     for title, key in (("가능한 설명", "hypothesis"), ("내 보유·관심 상황에서의 의미", "portfolioImpact"),
                        ("반대 근거와 확인 한계", "counterEvidence")):
         if result.get(key):

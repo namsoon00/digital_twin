@@ -11,6 +11,7 @@ from digital_twin.modules.ai_orchestration.domain.publication import MESSAGE_TYP
 from digital_twin.modules.ai_orchestration.domain.insight_quality import quality_block
 from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt
 from digital_twin.modules.ai_orchestration.domain.observation_diagnostic import observation_diagnostic
+from digital_twin.modules.reasoning.contracts import quote_clock_assessment
 from digital_twin.modules.decisions.domain.investment_narrative_policy import narrative_presentation_errors
 from digital_twin.modules.decisions.domain.narrative_numeric_grounding import ungrounded_narrative_numbers
 from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
@@ -184,6 +185,10 @@ class AIControlPublication:
                 "taskId": task_id, "inputFingerprint": result["inputFingerprint"], "observedAt": result["observedAt"],
                 **{key: result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison", "portfolioImpact", "insightVersion", "followUpConditions", "observations")},
                 "insightFingerprint": result["quality"]["insightFingerprint"], "facts": receipt_facts(result)}
+            if "quoteAssessment" in packet:
+                job.context["aiControlDeliverySnapshot"].update(
+                    captureQuoteAssessment=packet["quoteAssessment"],
+                    deliveryQuoteAssessment=quote_clock_assessment(packet["facts"], stamp()))
             yield
 
     def check_diagnostic_delivery(self, job, message):

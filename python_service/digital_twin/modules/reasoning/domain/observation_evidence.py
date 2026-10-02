@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 
 
 EVIDENCE_PROTOCOL = "observation-evidence-v1"
@@ -18,6 +19,53 @@ class EvidenceContractError(ValueError):
     def __init__(self, reason):
         super().__init__(reason)
         self.code = "evidence-contract:" + reason.replace(" ", "-")
+
+
+class EvidenceReadError(RuntimeError):
+    """Safe read-stage identity without a query, account or provider message."""
+    def __init__(self, stage, error):
+        self.code = "evidence-read:" + stage + ":" + type(error).__name__
+        super().__init__(self.code)
+
+
+def quote_clock_assessment(facts, checked_at):
+    """Assess source age without changing frozen ABox facts or delivery policy.
+
+    Capture/fetch time cannot renew an old quote. Last-close is retained as a
+    source reference, never inferred from a cached market-session label.
+    """
+    def instant(value):
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    checked = instant(checked_at)
+    if checked is None:
+        raise EvidenceContractError("quote assessment clock invalid")
+    rows = []
+    for fact in facts:
+        if fact.get("kind") != "stock":
+            continue
+        source = fact.get("sourceAsOf") or fact.get("asOf") or ""
+        observed = instant(source)
+        age = (checked - observed).total_seconds() / 60 if observed else None
+        try:
+            maximum = float(fact.get("maxAgeMinutes"))
+            if not math.isfinite(maximum) or maximum <= 0 or isinstance(fact.get("maxAgeMinutes"), bool):
+                maximum = None
+        except (TypeError, ValueError, OverflowError):
+            maximum = None
+        status = ("missing-time" if not source else "invalid-time" if observed is None or age < 0
+                  else "unknown-budget" if maximum is None else "stale" if age > maximum else "fresh")
+        rows.append({"evidenceId": fact["id"], "sourceAsOf": source,
+            "ageMinutes": round(age, 3) if age is not None else None,
+            "maxAgeMinutes": maximum, "status": status,
+            "sourceFreshnessStatus": str(fact.get("freshnessStatus") or "unknown"),
+            "referenceState": str(fact.get("freshnessReferenceState") or "")})
+    return {"version": "observation-quote-clock-v1", "checkedAt": checked_at,
+            "policy": "advisory", "quotes": sorted(rows, key=lambda row: row["evidenceId"])}
 
 
 @dataclass(frozen=True)
@@ -73,10 +121,17 @@ def material_fact(fact):
 
 def evidence_change_identity(packet, research, questions=()):
     facts = sorted((material_fact(row) for row in packet.get("facts", [])), key=canonical_json)
-    return content_hash({"protocol": packet.get("protocolVersion", EVIDENCE_PROTOCOL),
+    value = {"protocol": packet.get("protocolVersion", EVIDENCE_PROTOCOL),
         "profile": packet.get("profile", EVIDENCE_PROFILE), "accountId": packet.get("accountId"),
         "symbol": packet.get("symbol"), "worldId": packet.get("worldId"), "facts": facts,
-        "coverage": packet.get("coverage", {}), "research": research, "questions": list(questions)})
+        "coverage": packet.get("coverage", {}), "research": research, "questions": list(questions)}
+    if "quoteAssessment" in packet:
+        # A fresh/stale transition is material; another minute of ageing is not
+        # a new source event and must not cause an AI call on every poll.
+        value["quoteAssessment"] = {"version": packet["quoteAssessment"]["version"], "quotes": [
+            {key: row[key] for key in ("evidenceId", "status", "maxAgeMinutes", "referenceState")}
+            for row in packet["quoteAssessment"]["quotes"]]}
+    return content_hash(value)
 
 
 def source_clock(row):
@@ -176,5 +231,7 @@ def validate_evidence_packet(packet):
             raise EvidenceContractError("evidence kind coverage mismatch")
     if not coverage["quote"]["included"]:
         raise EvidenceContractError("required quote evidence missing")
+    if "quoteAssessment" in packet and packet["quoteAssessment"] != quote_clock_assessment(facts, packet["capturedAt"]):
+        raise EvidenceContractError("quote assessment does not match source clock")
     if len(canonical_json(packet).encode()) > 96000:
         raise EvidenceContractError("observation evidence exceeds context budget")

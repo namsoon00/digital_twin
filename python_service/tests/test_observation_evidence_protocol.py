@@ -22,7 +22,8 @@ class ObservationEvidenceProtocolTests(unittest.TestCase):
                   {"id": "eps", "kind": "earnings-scenario-observation", "symbol": "TEST", "payload": {"base": 10}},
                   {"id": "dcf", "kind": "valuation-input-bundle", "symbol": "TEST", "payload": {"sourceReferences": ["annual-report"]}},
                   {"id": "rate", "kind": "interest-rate", "rate": 4.0}]
-        repository.read_rows.side_effect = [[{"id": x["id"], "kind": x["kind"], "label": x["id"], "json": json.dumps(x)} for x in values], []]
+        repository.read_rows.side_effect = [[{"id": x["id"], "kind": x["kind"], "label": x["id"], "json": json.dumps(x)} for x in values[:-1]],
+                                            [{"id": "rate", "kind": "interest-rate", "label": "rate", "json": json.dumps(values[-1])}], []]
         repository.active_abox_members_clause.return_value = ""
         packet = GraphObservationReader(repository)(SUBJECT)
         validate_evidence_packet(packet)

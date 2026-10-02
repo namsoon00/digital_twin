@@ -1,6 +1,6 @@
 """Durable independent research loop, with capabilities supplied by composition."""
 from datetime import datetime, timedelta, timezone
-from digital_twin.modules.reasoning.contracts import EvidenceContractError
+from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceReadError
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
@@ -127,7 +127,7 @@ class AIControlService:
             return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
-            reason = error.code if isinstance(error, EvidenceContractError) else type(error).__name__
+            reason = error.code if isinstance(error, (EvidenceContractError, EvidenceReadError)) else type(error).__name__
             self.store.fail(job, reason)
             return {"status": "deferred", "taskId": job["taskId"], "reason": reason}
 

@@ -227,7 +227,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # durable retention progress, active source SQL and lossless compression.
         # Four agenda contracts cover scoped memory, due review, transactional
         # research feedback, and owner review without inventing empirical success.
-        self.assertLessEqual(total, 1972)
+        # Ten source-clock/read regressions preserve immutable quotes, distinguish
+        # invalid/stale clocks, audit input and receipt times, retain legacy
+        # replay, keep read-stage failures out of model execution, and bound
+        # the union of separately queried subject and macro evidence.
+        self.assertLessEqual(total, 1982)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

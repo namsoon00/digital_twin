@@ -35,7 +35,11 @@ test("relation detail explains model proof and source coverage without losing ob
     investor: {sourceAsOf: "2026-10-02T10:00:00+09:00", measurementType: "intraday-estimate", observedFields: ["institutionNetVolume", "<script>x</script>"]}
   }}, changes: {
     hypotheses: [{id: "h", current: {claim: "verbose old claim", expectedOutcome: "반등이 이어지지 않을 가능성", falsificationContract: "회복 유지", qualification: {reason: "표본 부족"}, claimContract: {outcomeContract: {outcomeHorizonMinutes: [60, 1440], criteria: [{role: "cause", metric: "ma20DistanceChangePp", operator: "<", threshold: 0, horizonMinutes: 0}]}}}}],
-    rules: [{id: "r", current: {conditions: [{modelSignalMatched: true, observedValue: {contractMatched: true}, measuredFactIds: ["ma20Distance"]}]}}],
+    rules: [{id: "r", current: {conditions: [{modelSignalMatched: true, observedValue: {contractMatched: true}, measuredFactIds: ["ma20Distance"],
+      sourceFeatureSnapshotId: "source:frozen", knowledgeCutoffAt: "2026-10-02T01:10:00Z", modelEvidenceIds: ["stock:MSTR|HAS_TEMPORAL_WINDOW|window"],
+      sourceTemporalWindows: [{windowKey: "3D", startPrice: 153.09, currentPrice: 156.72, priceChangePct: 2.37, priceVelocityChangePct: -7.2,
+        hasSufficientHistory: false, knowledgeCutoffAt: "2026-10-02T01:10:00Z", sourceFeatureSnapshotId: "source:frozen", provider: "<script>untrusted</script>"}]
+    }]}}],
     facts: [{id: "institutionNetVolume", current: {value: 0}}]
   }};
   const html = renderRelationChangeEvidence(packet);
@@ -44,12 +48,15 @@ test("relation detail explains model proof and source coverage without losing ob
   assert.match(html, /<details><summary>전체 추론 근거/);
   assert.match(html, /원인 확인.*20일 평균 가격과의 거리 변화/);
   assert.doesNotMatch(html, /0분 뒤/);
+  for (const value of ["가설에 연결된 기간별 측정값", "source:frozen", "153.09", "156.72", "등락률 변화(%p): -7.2", "기간 자료 충분 여부: false"]) assert.ok(html.includes(value), value);
   const { renderNotificationCustomerDocument } = await import("../../public/modules/notifications/customer-document.mjs");
-  const compact = renderNotificationCustomerDocument({customerInvestmentDocument: {role: "typedb-observation", sections: [
+  const compact = renderNotificationCustomerDocument({customerInvestmentDocument: {role: "typedb-observation", lead: "현재가와 보유 손익을 함께 설명합니다.", sections: [
     {key: "current-price", title: "시세", rows: ["11000원"]},
+    {key: "holding", title: "내 보유 상황", rows: ["평균 매입가 10000원 · 평가 수익률 +10%"]},
+    {key: "trading", title: "체결", rows: ["체결 기준"]},
     {key: "hypotheses", title: "회복 가설", rows: ["설명", "규칙", "다음 확인: 회복 유지", "아직 검증 중"]},
     {key: "hypotheses-2", title: "외부 영향 가설", rows: ["설명", "규칙", "다음 확인: 충격 완화", "아직 검증 중"]}
   ]}}, true);
-  for (const value of ["11000원", "회복 유지", "충격 완화"]) assert.ok(compact.includes(value), value);
+  for (const value of ["11000원", "회복 유지", "충격 완화", "평균 매입가 10000원", "종합해서 보면"]) assert.ok(compact.includes(value), value);
   assert.equal((compact.match(/아직 검증 중/g) || []).length, 2);
 });

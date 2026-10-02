@@ -13,7 +13,7 @@ function renderNotificationCustomerDocument(job, compact) {
   var customerLinks = Array.isArray(customerDocument.links) ? customerDocument.links : [];
   if (compact) {
     var compactKeys = customerDocument.role === "typedb-observation"
-      ? ["current-price", "hypotheses", "hypotheses-2", "hypotheses-3", "change", "importance", "financial-evidence", "tracking", "next-update"]
+      ? ["current-price", "holding", "hypotheses", "hypotheses-2", "hypotheses-3", "change", "importance", "financial-evidence", "tracking", "next-update"]
       : ["change", "action", "reasons", "financial-evidence", "counter", "tracking", "next-update"];
     customerSections = customerSections.filter(function (section) {
       return compactKeys.indexOf(String((section || {}).key || "")) >= 0;
@@ -22,7 +22,9 @@ function renderNotificationCustomerDocument(job, compact) {
   return [
     '<section class="notification-detail-section primary notification-customer-document">',
     '<div class="notification-reasoning-head"><div><strong>' + escapeHtml(customerDocument.headline || "투자 인사이트") + '</strong><span>' + escapeHtml(customerDocument.roleLabel || "") + '</span></div></div>',
-    customerDocument.lead ? '<div class="notification-detail-reasons"><p><b>한눈에 보기</b> ' + escapeHtml(customerDocument.lead) + '</p></div>' : '',
+    customerDocument.lead ? '<div class="notification-detail-reasons"><p><b>'
+      + (customerDocument.role === "typedb-observation" && (customerDocument.sections || []).some(function (section) { return section.key === "trading"; }) ? '종합해서 보면' : '한눈에 보기')
+      + '</b> ' + escapeHtml(customerDocument.lead) + '</p></div>' : '',
     customerSections.map(function (section) {
       var rows = Array.isArray(section.rows) ? section.rows : [];
       if (!rows.length) return "";

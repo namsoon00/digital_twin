@@ -186,10 +186,16 @@ def market_snapshot_sections(current, previous=None):
         executions.append(" · ".join(book) + " · 호가 기준 " + source_note(current, "orderbook").replace("기준 시각", "시각"))
     holding = []
     if (numeric(facts.get("quantity")) or 0) > 0 or facts.get("isHolding") is True:
+        average = numeric(facts.get("averagePrice"))
+        if average is not None and average > 0:
+            holding.append("평균 매입가 " + price_money(average, currency))
         for field, label, unit in (("quantity", "보유", quantity_unit), ("profitLossRate", "평가 수익률", "%"), ("positionWeight", "계좌 비중", "%")):
             value = numeric(facts.get(field))
             if value is not None:
                 holding.append(label + " " + decimal(value, signed=field == "profitLossRate") + unit)
+        pnl = numeric(facts.get("profitLoss"))
+        if pnl is not None:
+            holding.append("평가손익 " + ("+" if pnl > 0 else "") + price_money(pnl, currency))
     return [
         ("current-price", "가격 · 이전 알림과 비교", quote),
         ("investor-flow", "외국인·기관·개인", investor_rows(current)),

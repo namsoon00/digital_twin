@@ -2,6 +2,7 @@
   "tests": [
     {"file": "test_runtime_stability.py", "tier": "contract", "core": true},
     {"file": "test_typedb_independent_observation.py", "tier": "contract", "core": true},
+    {"file": "test_relation_observation_narrative.py", "tier": "contract", "core": true},
     {"file": "test_ai_brain_agenda.py", "tier": "integration", "core": true},
     {"file": "test_ai_ontology_development.py", "tier": "integration", "core": true},
     {"file": "test_ai_insight_quality.py", "tier": "contract", "core": true},

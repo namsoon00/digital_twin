@@ -244,7 +244,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Hypothesis-scoped wording preserves distinct changes, checks and qualification through transport.
         # Pool discard/factory recovery, bounded broken sockets, atomic AI
         # completion/retry, and independent episode endpoints add six cases.
-        self.assertLessEqual(total, 2017)
+        # Frozen temporal proof, subject/version/cutoff isolation, unavailable
+        # comparisons and outcome-unit prose need independent alert contracts.
+        self.assertLessEqual(total, 2021)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

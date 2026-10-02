@@ -11,7 +11,7 @@ function renderRelationChangeEvidence(packet) {
   function outcome(row) {
     var contract = (row.claimContract || {}).outcomeContract || {};
     var periods = contract.outcomeHorizonMinutes || contract.horizonMinutes || [];
-    var labels = { instrumentReturnPct: "확인 이후 주가 등락률(%)", ma20DistanceChangePp: "20일 평균 가격과의 거리 변화(%p)" };
+    var labels = { instrumentReturnPct: "확인 이후 주가 등락률(%)", ma20DistanceChangePp: "20일 평균 가격과의 거리 변화(%p)", excessReturnPct: "같은 기간 비교 기준 대비 수익률 차이(%p)" };
     var criteria = Array.isArray(contract.criteria) ? contract.criteria : [];
     if (!criteria.length && !periods.length) return "";
     return '<details><summary>검증 기준과 확인 기간</summary>'
@@ -20,8 +20,22 @@ function renderRelationChangeEvidence(packet) {
         var field = item.field || item.metric;
         return '<p>' + text({ result: "결과 확인", invalidation: "반대 결과 확인", cause: "원인 확인" }[item.role] || item.role)
           + ': ' + text(labels[field] || field) + ' ' + text(item.operator) + ' ' + text(item.value === undefined ? item.threshold : item.value)
+          + (item.benchmarkSymbol ? ' · 비교 기준 ' + text(item.benchmarkSymbol) : '')
           + (Number(item.horizonMinutes) > 0 ? ' · ' + text(item.horizonMinutes) + '분 뒤' : ' · 위 확인 기간 적용') + '</p>';
       }).join('') + '</details>';
+  }
+  function modelProof(condition) {
+    var fields = { windowKey: "관측 구간", symbol: "종목", sampleCount: "저장 관측 수", hasSufficientHistory: "기간 자료 충분 여부",
+      startPrice: "시작 가격", currentPrice: "구간 마지막 가격", priceChangePct: "구간 등락률(%)", recentPriceChangePct: "후반 구간 등락률(%)",
+      drawdownFromPeakPct: "구간 고점 대비(%)", reboundFromTroughPct: "구간 저점 대비(%)", priceVelocityChangePct: "앞 구간 대비 후반 등락률 변화(%p)",
+      evidenceId: "근거 연결", sourceFeatureSnapshotId: "원본 자료 버전", knowledgeCutoffAt: "자료 기준 시각" };
+    var windows = Array.isArray(condition.sourceTemporalWindows) ? condition.sourceTemporalWindows : [];
+    return "<br>연결된 분석 신호 조건 확인 · 근거 항목: " + text((condition.measuredFactIds || []).join(", "))
+      + "<br>원본 자료 버전: " + text(condition.sourceFeatureSnapshotId) + " · 자료 기준: " + text(condition.knowledgeCutoffAt)
+      + "<br>전체 근거 연결: " + text((condition.modelEvidenceIds || []).join(", "))
+      + (windows.length ? '<details><summary>가설에 연결된 기간별 측정값</summary>' + windows.map(function (window) {
+        return '<p>' + Object.entries(window).map(function (entry) { return text(fields[entry[0]] || entry[0]) + ': ' + text(entry[1]); }).join('<br>') + '</p>';
+      }).join('') + '</details>' : "");
   }
   function values(row, kind) {
     if (!row) return "기록 없음";
@@ -36,11 +50,12 @@ function renderRelationChangeEvidence(packet) {
     return text(row.label) + " · " + (row.matched === true ? "성립" : row.matched === false ? "불성립" : "성립 여부 미기록")
       + (row.referenceOnly ? " · 참고 규칙" : "")
       + (row.conditions || []).map(function (c) {
-        if (c.modelSignalMatched) return "<br>연결된 분석 신호 조건 확인 · 근거 항목: " + text((c.measuredFactIds || []).join(", "));
+        if (c.modelSignalMatched) return modelProof(c);
         return "<br>" + text(c.label || c.field) + " " + text(c.operator) + " " + text(c.expectedValue)
           + " / 관측 " + text(c.observedValue) + " / 성립 " + text(c.matched === undefined ? c.matchedByTypeDB : c.matched)
           + " / 근거 " + text((c.evidenceIds || []).join(", "));
-      }).join("") + "<br>추론 기록: " + text(row.traceId);
+      }).join("") + (row.evidenceUsableForJudgement === false ? "<br>판단 근거 사용 보류: " + text(row.freshnessGateReason) : "")
+      + "<br>추론 기록: " + text(row.traceId);
   }
   return '<section class="notification-detail-section"><details><summary>전체 추론 근거 · 가설·규칙·측정값</summary><p>'
     + text(packet.reason) + '</p><p>' + (packet.baselineAvailable

@@ -17,15 +17,17 @@ def render_customer_investment_document(
         parts.append("<code>" + html.escape(document.target, quote=False) + "</code>")
     if document.role_label:
         parts.append("<i>" + html.escape(document.role_label, quote=False) + "</i>")
+    prose = document.role == "typedb-observation" and any(section.key == "trading" for section in document.sections)
     if document.lead:
-        parts.extend(["", "<b>한눈에 보기</b>", "• " + html.escape(document.lead, quote=False)])
+        parts.extend(["", "<b>종합해서 보면</b>" if prose else "<b>한눈에 보기</b>", ("" if prose else "• ") + html.escape(document.lead, quote=False)])
     for section in document.sections:
         if not section.rows:
             continue
         parts.extend([
             "",
             "<b>" + html.escape(section.title, quote=False) + "</b>",
-            *["• " + html.escape(row, quote=False) for row in section.rows],
+            *(["\n\n".join(html.escape(row, quote=False) for row in section.rows)]
+              if prose and section.key.startswith("hypotheses") else ["• " + html.escape(row, quote=False) for row in section.rows]),
         ])
     if document.links:
         parts.extend([

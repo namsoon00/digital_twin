@@ -276,7 +276,7 @@ def customer_safe_text(value: object) -> str:
     if separator:
         left_key = re.sub(r"[^0-9a-z가-힣]+", "", left.casefold())
         right_key = re.sub(r"[^0-9a-z가-힣]+", "", right.casefold())
-        if left_key and right_key.startswith(left_key):
+        if left_key and right_key == left_key:
             text = left
     text = re.sub(r"\s+", " ", text).strip(" ·,;/: ")
     if any(pattern.search(text) for pattern in _GENERIC_FILLER_PATTERNS):

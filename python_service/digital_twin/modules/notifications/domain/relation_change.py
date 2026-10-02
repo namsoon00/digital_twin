@@ -5,6 +5,7 @@ from typing import Mapping
 
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
+from digital_twin.modules.notifications.domain.relation_observation_proof import capture_model_proof
 
 
 VERSION = "relation-change-evidence-v1"
@@ -71,6 +72,7 @@ def relation_change_snapshot(context):
     """Capture only authored subject facts and proof links from this generation."""
     relation = relation_context(context)
     subject = mapping(relation.get("subject"))
+    symbol = str(subject.get("symbol") or context.get("symbol") or "")
     case = mapping(context.get("investmentSubjectDecisionCase"))
     graph = mapping(relation.get("graphStoreInference"))
     facts = mapping(relation.get("facts"))
@@ -116,7 +118,7 @@ def relation_change_snapshot(context):
             ) if isinstance(condition.get(key), (str, int, float, bool, list, dict))}
             captured["expectedValue"] = deepcopy(condition.get("expectedValue", condition.get("value")))
             measured = mapping(condition.get("matchedTargetProperties"))
-            captured["measuredFactIds"] = [value.rsplit("#", 1)[-1] for value in strings(measured.get("modelEvidenceIds")) if "#" in value]
+            captured.update(capture_model_proof(measured, symbol))
             captured["modelSignalMatched"] = bool(measured.get("contractMatched") or condition.get("matchedByModelSignalInterpretationPolicy"))
             conditions[str(condition.get("conditionId") or len(conditions))] = captured
         rules[identity] = {"id": identity, "label": existing.get("label") or str(item.get("label") or item.get("ruleLabel") or identity),
@@ -124,6 +126,8 @@ def relation_change_snapshot(context):
                            "referenceOnly": bool(existing.get("referenceOnly") or item.get("referenceOnly") or item.get("reference_only")) or mapping(item.get("knowledgeBasis")).get("decisionEligibility") == "reference-only",
                            "conditions": list(conditions.values()),
                            "traceId": str(item.get("inferenceTraceId") or item.get("id") or existing.get("traceId") or ""),
+                           "evidenceUsableForJudgement": item.get("evidenceUsableForJudgement", existing.get("evidenceUsableForJudgement")),
+                           "freshnessGateReason": str(item.get("freshnessGateReason") or existing.get("freshnessGateReason") or ""),
                            "nextChecks": strings(item.get("nextChecks")) or existing.get("nextChecks", []),
                            "claimContract": deepcopy(mapping(item.get("claimContract"))) or existing.get("claimContract", {})}
     fact_rows = []
@@ -149,7 +153,7 @@ def relation_change_snapshot(context):
                    price_source.get("sourceAsOf") or facts.get("quoteUpdatedAt") or facts.get("observedAt"))
     fetched_at = facts.get("sourceFetchedAt") if selected_quote else price_source.get("fetchedAt")
     return {
-        "version": VERSION, "symbol": str(subject.get("symbol") or context.get("symbol") or ""),
+        "version": VERSION, "symbol": symbol,
         "market": str(subject.get("market") or facts.get("market") or ""),
         "sourceAboxSnapshotId": str(case.get("sourceAboxSnapshotId") or graph.get("sourceAboxSnapshotId") or relation.get("sourceAboxSnapshotId") or ""),
         "inferenceGenerationId": str(case.get("inferenceGenerationId") or relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId") or ""),

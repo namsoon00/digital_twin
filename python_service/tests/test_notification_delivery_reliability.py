@@ -354,3 +354,40 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
             store.upsert_job(NotificationJob.create("new", message_type=kind))
         claimed = store.claim_pending(limit=1, include_message_types=(kind,))
         self.assertEqual([retry.job_id], [row.job_id for row in claimed])
+
+    def test_claim_byte_budget_preserves_large_messages_and_queue_progress(self):
+        store = self.notifications
+        kind = "fixture-byte-budget"
+        jobs = [NotificationJob.create("body", message_type=kind, context={"proof": "x" * size})
+                for size in (5000, 1000, 1000)]
+        for index, job in enumerate(jobs):
+            job.created_at = "2026-10-01T00:00:0" + str(index) + "Z"
+            store.upsert_job(job)
+        with patch("digital_twin.modules.notifications.infrastructure.mysql_notification_jobs.NOTIFICATION_CLAIM_PAYLOAD_BYTES", 4000):
+            first = store.claim_pending(limit=10, include_message_types=(kind,))
+            self.assertEqual([jobs[0].job_id], [job.job_id for job in first])
+            self.assertEqual(jobs[0].context, first[0].context, "oversized evidence must not be truncated or dropped")
+            store.mark_done(first[0])
+            remaining = store.claim_pending(limit=10, include_message_types=(kind,))
+            self.assertEqual([job.job_id for job in jobs[1:]], [job.job_id for job in remaining])
+            for job in remaining:
+                store.mark_done(job)
+
+    def test_delivery_history_decodes_one_frozen_body_at_a_time(self):
+        kind = "fixture-history-stream"
+        for index in range(3):
+            job = NotificationJob.create("history", message_type=kind,
+                account_id="stream-test", context={"proof": str(index) * 50000})
+            job.updated_at = job.created_at
+            self.notifications.upsert_job(job)
+        current = NotificationJob.create("current", message_type=kind, account_id="stream-test")
+        with self.notifications.connect() as connection, patch.object(connection, "execute", wraps=connection.execute) as execute:
+            rows = self.notifications.delivery_history_with_connection(connection, current, "2020-01-01T00:00:00Z")
+            first = next(rows)
+            self.assertEqual(50000, len(self.notifications.job_from_row(first).context["proof"]))
+            body_reads = lambda: [call for call in execute.call_args_list
+                                  if call.args[0].startswith("SELECT text,payload_json FROM notification_jobs WHERE job_id=")]
+            self.assertEqual(1, len(body_reads()), "finding history must not load every frozen packet")
+            self.assertTrue(execute.call_args_list[0].args[0].startswith("SELECT job_id,"))
+            self.assertEqual(2, sum(1 for _ in rows))
+            self.assertEqual(3, len(body_reads()))

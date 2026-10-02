@@ -2056,6 +2056,32 @@ class KISMarketSignalProvider:
             return incoming if incoming is not None else existing
 
         preserve_fresh_quote = keep_fresh_position_quote(position, signal)
+        use_signal_price = current_price is not None and not preserve_fresh_quote
+        quote_clocks = {}
+        if use_signal_price:
+            incoming_coverage = signal.get("marketSignalCoverage") or {}
+            price_stage = incoming_coverage.get("price") or {}
+            execution_stage = incoming_coverage.get("ccnl") or {}
+            if ("currentPrice" in (execution_stage.get("fields") or [])
+                    and (execution_stage.get("transport") == "websocket" or execution_stage.get("cadence") == "websocket")):
+                price_stage = execution_stage
+            # The chosen value and its provenance are one observation. Missing
+            # incoming metadata must not inherit the previous provider's clock.
+            quote_clocks = {
+                "source_as_of": str(price_stage.get("sourceAsOf") or ""),
+                "source_fetched_at": str(price_stage.get("fetchedAt") or ""),
+                "source_timestamp_state": str(price_stage.get("sourceTimestampState") or "missing"),
+                "freshness_status": str(price_stage.get("freshnessStatus") or "unknown"),
+                "freshness_reason": str(price_stage.get("freshnessReason") or ""),
+                "freshness_age_minutes": price_stage.get("ageMinutes"),
+                "freshness_max_age_minutes": price_stage.get("maxAgeMinutes"),
+                "latency_status": str(price_stage.get("latencyStatus") or ""),
+                "latency_reason": str(price_stage.get("latencyReason") or ""),
+                "market_session": str(price_stage.get("marketSession") or ""),
+                "market_session_label": str(price_stage.get("marketSessionLabel") or ""),
+                "source_transport": str(price_stage.get("transport") or ""),
+                "real_time": price_stage.get("realTime") is True,
+            }
 
         merged_price = current_price if current_price is not None and not preserve_fresh_quote else position.current_price
         market_value = position.market_value
@@ -2066,7 +2092,7 @@ class KISMarketSignalProvider:
         ma5_distance = pct_distance(merged_price, position.ma5) if merged_price and position.ma5 else position.ma5_distance
         ma20_distance = pct_distance(merged_price, position.ma20) if merged_price and position.ma20 else position.ma20_distance
         ma60_distance = pct_distance(merged_price, position.ma60) if merged_price and position.ma60 else position.ma60_distance
-        quote_source = position.quote_source if preserve_fresh_quote else append_source(position.quote_source, str(signal.get("quoteSource") or ""))
+        quote_source = str(signal.get("quoteSource") or "KIS Open API") if use_signal_price else position.quote_source
         quote_status = position.quote_status if preserve_fresh_quote else str(signal.get("quoteStatus") or position.quote_status)
         quote_message = append_message(
             position.quote_message,
@@ -2088,6 +2114,7 @@ class KISMarketSignalProvider:
             data_quality=data_quality or position.data_quality,
             market_signal_coverage=dict(market_signal_coverage or {}) if isinstance(market_signal_coverage, dict) else {},
             updated_at=updated_at,
+            **quote_clocks,
             market_value=market_value,
             trade_strength=trade_strength if trade_strength is not None else position.trade_strength,
             trading_value=trading_value if trading_value is not None and not preserve_fresh_quote else position.trading_value,

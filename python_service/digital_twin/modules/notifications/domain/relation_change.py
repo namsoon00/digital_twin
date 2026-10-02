@@ -135,13 +135,21 @@ def relation_change_snapshot(context):
                      "measurementType", "isEstimate", "provider", "freshnessStatus", "judgementEvidenceUsable",
                      "tradeStrengthQualityState", "providerUpdateSlot", "nextProviderUpdateAt", "validUntil")
     price_source = mapping(coverage.get("price"))
+    # Position clocks belong to the selected currentPrice. KIS coverage can
+    # describe a different last-close quote retained alongside a Toss quote.
+    # Keep a missing source clock missing; never borrow another feed's fetch.
+    selected_quote = "sourceAsOf" in facts or "sourceFetchedAt" in facts
+    observed_at = (facts.get("sourceAsOf") if selected_quote else
+                   price_source.get("sourceAsOf") or facts.get("quoteUpdatedAt") or facts.get("observedAt"))
+    fetched_at = facts.get("sourceFetchedAt") if selected_quote else price_source.get("fetchedAt")
     return {
         "version": VERSION, "symbol": str(subject.get("symbol") or context.get("symbol") or ""),
         "market": str(subject.get("market") or facts.get("market") or ""),
         "sourceAboxSnapshotId": str(case.get("sourceAboxSnapshotId") or graph.get("sourceAboxSnapshotId") or relation.get("sourceAboxSnapshotId") or ""),
         "inferenceGenerationId": str(case.get("inferenceGenerationId") or relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId") or ""),
-        "observedAt": str(price_source.get("sourceAsOf") or facts.get("sourceAsOf") or facts.get("quoteUpdatedAt") or facts.get("observedAt") or ""),
-        "sourceFetchedAt": str(price_source.get("fetchedAt") or facts.get("sourceFetchedAt") or ""),
+        "observedAt": str(observed_at or ""),
+        "sourceFetchedAt": str(fetched_at or ""),
+        "sourceClockOrigin": "selected-price" if selected_quote else "legacy-price-coverage",
         "capturedAt": str(source.get("generatedAt") or ""),
         "source": str(facts.get("quoteSource") or facts.get("apiSource") or ""),
         "dataState": str(mapping(relation.get("decisionState")).get("dataState") or "미기록"),

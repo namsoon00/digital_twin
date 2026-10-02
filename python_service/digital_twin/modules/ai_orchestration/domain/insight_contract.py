@@ -64,12 +64,15 @@ def field_value(fact, path):
 
 
 def resolve_ref(packet, ref):
-    if not isinstance(ref, dict) or set(ref) != {"factId", "field", "period"} or ref["period"] not in {"current", "baseline"}:
+    if not isinstance(ref, dict) or set(ref) != {"factId", "field", "period"} or ref["period"] not in {"current", "baseline", "assessment"}:
         raise ValueError("invalid evidence reference")
-    facts = packet.get("facts", []) if ref["period"] == "current" else (packet.get("lastDeliveredNotification") or {}).get("facts", [])
+    facts = packet.get("facts", []) if ref["period"] != "baseline" else (packet.get("lastDeliveredNotification") or {}).get("facts", [])
     fact = next((row for row in facts if row.get("id") == ref["factId"]), None)
     if not fact:
         raise ValueError("evidence reference not captured")
+    if ref["period"] == "assessment":
+        from digital_twin.modules.ai_orchestration.domain.observation_clock import verified_quote_assessments
+        return fact, field_value(verified_quote_assessments(packet).get(ref["factId"], {}), ref["field"])
     value = field_value(fact, ref["field"])
     clock = instant(fact.get("sourceAsOf") or fact.get("asOf") or fact.get("publishedAt"))
     cutoff = instant(packet.get("capturedAt"))
@@ -86,6 +89,8 @@ def compare_values(left, operator, right):
 
 
 def comparable_refs(packet, left, right):
+    if any(ref.get("period") == "assessment" for ref in (left, right)):
+        raise ValueError("quote assessment is not a market comparison")
     first, _ = resolve_ref(packet, left)
     second, _ = resolve_ref(packet, right)
     first_unit = METRICS.get(left["field"], ("", left["field"]))[1]
@@ -155,8 +160,10 @@ def insight_errors(result, packet):
             try:
                 fact, value = resolve_ref(packet, ref)
                 resolved.append((ref, fact, value))
-                if ref["period"] == "current" and fact["id"] not in result.get("evidenceIds", []):
+                if ref["period"] != "baseline" and fact["id"] not in result.get("evidenceIds", []):
                     raise ValueError("uncited field")
+                if ref["period"] == "assessment" and section != "counterEvidence":
+                    raise ValueError("quote assessment is limitation metadata only")
                 if section != "counterEvidence" and (fact.get("judgementEvidenceUsable") is False or fact.get("valuationDecisionEligible") is False):
                     raise ValueError("reference-only evidence")
                 if ref["field"] in {"foreignNetVolume", "institutionNetVolume"}:

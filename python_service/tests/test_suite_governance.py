@@ -238,7 +238,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # generation membership, safe retries and agenda clocks, quote lineage,
         # deterministic diagnostics, lossless storage and bounded cache/history
         # reads. These include four real MySQL lifecycle regressions.
-        self.assertLessEqual(total, 2005)
+        # Five incident regressions cover verifiable clock metadata and legacy
+        # prompt replay, coupled provider/price clocks, lossless byte-bounded
+        # claims and one-at-a-time history reads against isolated MySQL.
+        self.assertLessEqual(total, 2010)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

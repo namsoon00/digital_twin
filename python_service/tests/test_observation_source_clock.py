@@ -15,6 +15,7 @@ from digital_twin.modules.ai_orchestration.domain.execution_input import (
     freeze_execution_input, freeze_repair_input, freeze_review_input, validate_execution_input,
 )
 from digital_twin.modules.ai_orchestration.domain.brain_management import management_prompt
+from digital_twin.modules.ai_orchestration.domain.brain_management import management_schema
 from digital_twin.modules.ai_orchestration.domain.insight_quality import review_prompt
 from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
 from digital_twin.modules.ai_orchestration.domain.publication import publication_block
@@ -38,6 +39,61 @@ def aged_packet():
 
 
 class ObservationSourceClockTests(unittest.TestCase):
+    def test_clock_metadata_is_citable_without_fabricating_a_native_fact(self):
+        from digital_twin.modules.ai_orchestration.domain.insight_contract import resolve_ref, insight_errors
+        from digital_twin.modules.ai_orchestration.domain.observation_clock import citable_management_schema
+        value = aged_packet()
+        original = copy.deepcopy(value)
+        result = {**observation(), "input": value}
+        result["counterEvidence"] = "재대조한 원천 시세는 갱신 기준을 넘었으므로 현재 상황은 추가 확인이 필요합니다."
+        result["claimEvidence"]["counterEvidence"] = [
+            {"factId": "quote-1", "period": "assessment", "field": field}
+            for field in ("status", "checkedAt", "ageMinutes", "maxAgeMinutes")]
+        self.assertEqual([], insight_errors(result, value))
+        self.assertEqual("stale", resolve_ref(value, result["claimEvidence"]["counterEvidence"][0])[1])
+        self.assertEqual(CAPTURE, resolve_ref(value, result["claimEvidence"]["counterEvidence"][1])[1])
+        schema = citable_management_schema(value, [])
+        self.assertIn('"assessment"', json.dumps(schema["$defs"]["limitation"]))
+        self.assertNotIn('"assessment"', json.dumps(schema["$defs"]["numeric"]))
+        self.assertEqual(original, value)
+        for invalid in ("sourceAsOf", "capturedAt", "status"):
+            corrupt = copy.deepcopy(value)
+            if invalid == "sourceAsOf":
+                corrupt["facts"][0][invalid] = CAPTURE
+            elif invalid == "capturedAt":
+                corrupt[invalid] = "2026-10-01T23:15:08Z"
+            else:
+                corrupt["quoteAssessment"]["quotes"][0][invalid] = "fresh"
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                resolve_ref(corrupt, result["claimEvidence"]["counterEvidence"][0])
+        result["claimEvidence"]["hypothesis"] = result["claimEvidence"]["counterEvidence"]
+        self.assertTrue(insight_errors(result, value), "clock metadata cannot support a market hypothesis")
+
+    def test_prior_source_clock_prompt_schema_and_hash_remain_replayable(self):
+        from digital_twin.modules.ai_orchestration.domain.execution_input import (
+            SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION,
+        )
+        from digital_twin.modules.ai_orchestration.domain.observation_clock import clocked_management_prompt, clocked_review_prompt
+        value = aged_packet()
+        author = freeze_execution_input(value, [], [])
+        correction = freeze_repair_input(author, {}, ["시점 확인"], "original")
+        reviewer = freeze_review_input({**observation(), "input": value})
+        for envelope, version in ((author, SOURCE_CLOCK_PROMPT_VERSION), (correction, SOURCE_CLOCK_REPAIR_PROMPT_VERSION),
+                                  (reviewer, SOURCE_CLOCK_REVIEW_PROMPT_VERSION)):
+            old = copy.deepcopy(envelope)
+            old["promptVersion"] = version
+            if version == SOURCE_CLOCK_REVIEW_PROMPT_VERSION:
+                prompt = clocked_review_prompt(value, old["draft"])
+            else:
+                prompt = clocked_management_prompt(value, old["previousAnalyses"], old["researchResults"])
+                old["outputSchema"] = management_schema(value, old["researchResults"])
+                if version == SOURCE_CLOCK_REPAIR_PROMPT_VERSION:
+                    prompt = repair_prompt(prompt, old["repair"])
+            old.update(prompt=prompt, promptHash=hashlib.sha256(prompt.encode()).hexdigest())
+            validate_execution_input(old)
+            self.assertNotIn("시세 시점 근거 인용 확장 계약", prompt)
+            validate_execution_input(envelope)
+
     def test_new_capture_does_not_renew_quote_or_rewrite_native_fact(self):
         original = aged_packet()["facts"][0]
         source = Mock()
@@ -114,6 +170,7 @@ class ObservationSourceClockTests(unittest.TestCase):
                 prompt = review_prompt(old["current"], old["draft"])
             else:
                 prompt = management_prompt(old["current"], old["previousAnalyses"], old["researchResults"])
+                old["outputSchema"] = management_schema(old["current"], old["researchResults"])
                 if version == AGENDA_REPAIR_PROMPT_VERSION:
                     prompt = repair_prompt(prompt, old["repair"])
             old.update(prompt=prompt, promptHash=hashlib.sha256(prompt.encode()).hexdigest())

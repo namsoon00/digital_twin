@@ -329,7 +329,7 @@ class InsightControlTests(unittest.TestCase):
         self.assertEqual('original', result['repair']['initialInputId'])
         self.assertTrue(result['repair']['initialErrors'])
         correction = planner.call_args.args[0]
-        self.assertEqual('independent-observation-repair-v4-source-clock', correction['promptVersion'])
+        self.assertEqual('independent-observation-repair-v5-clock-citations', correction['promptVersion'])
         self.assertEqual(bad, correction['repair']['rejectedDraft'])
         self.assertTrue(correction['repair']['comparisons'])
         validate_execution_input(correction)
@@ -381,7 +381,7 @@ class InsightControlTests(unittest.TestCase):
         saved = store.complete.call_args.args[1]
         self.assertEqual('accepted', saved['quality']['status'])
         self.assertTrue(saved['followUpConditions'])
-        self.assertEqual('independent-observation-review-v2-source-clock', service.reviewer.call_args.args[0]['promptVersion'])
+        self.assertEqual('independent-observation-review-v3-clock-citations', service.reviewer.call_args.args[0]['promptVersion'])
         service.reviewer.return_value = {**review(), 'usefulness': 'generic'}
         self.assertEqual('completed', service.run_once()['status'])
         self.assertEqual('rejected', store.complete.call_args.args[1]['quality']['status'])

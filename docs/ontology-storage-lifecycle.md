@@ -170,6 +170,16 @@ Replay tests protect input immutability and independence from subsequent source
 mutation. These changes reduce avoidable allocations; they do not establish
 that every long-running process is free from memory leaks.
 
+Notification claims now bound the sum of stored payload/body bytes to 8 MiB
+per batch, in readiness order across pending and retry lanes. An oversized
+first job is processed intact by itself, so this is not a message size limit
+or an evidence truncation policy. Delivery history and exhausted-failure
+reconciliation inventory IDs first and read each full packet separately;
+they no longer fetch an entire history window of graph payloads into memory.
+Receipt clocks, same-subject filtering and frozen comparison baselines remain
+unchanged. JSON expansion and a single large graph can exceed the stored-byte
+budget in RSS. Confirm long-running memory and disk trends independently.
+
 ## Blue/Green TypeDB Rotation
 
 Automatic TypeDB rotation prepares an isolated candidate on a different port

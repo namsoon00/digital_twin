@@ -22,3 +22,51 @@ def clocked_management_prompt(packet, history, research):
 def clocked_review_prompt(packet, draft):
     from digital_twin.modules.ai_orchestration.domain.insight_quality import review_prompt
     return CLOCK_INSTRUCTIONS + review_prompt(packet, draft)
+
+
+CITATION_INSTRUCTIONS = """시세 시점 근거 인용 확장 계약:
+counterEvidence의 시세 시점 설명은 period=assessment, factId=해당 stock의 id로 인용하세요.
+field는 status, checkedAt, sourceAsOf, ageMinutes, maxAgeMinutes, referenceState 중 기록된 항목입니다.
+이는 current.quoteAssessment.quotes의 evidenceId로 연결한 평가와 공통 checkedAt을 읽는 형식입니다.
+facts에 quoteAssessment 필드를 만들거나 current/baseline의 field로 인용하지 마세요.
+assessment는 원천 시세와 capturedAt으로 재계산해 검증한 참고 메타데이터이며 새로운 시장 사실이 아닙니다.
+이 확장 형식은 counterEvidence만 허용합니다. 수치 비교·가설 근거·미래 확인 조건에는 사용할 수 없습니다.
+독립 검토는 이 인용을 current.quoteAssessment와 대조하세요. 사실에 없는 quoteAssessment 필드를 요구하지 마세요.
+기존 sourceAsOf/maxAgeMinutes 인용도 평가와 일치하는 시점 한계를 설명하면 메타데이터 진술로 검증하세요.
+이 예외는 시점 설명에만 적용하며 다른 주장의 근거 검증·독립 검토·발송 기준을 완화하지 않습니다.
+"""
+
+ASSESSMENT_FIELDS = ("status", "checkedAt", "sourceAsOf", "ageMinutes", "maxAgeMinutes", "referenceState")
+
+
+def verified_quote_assessments(packet):
+    """Expose only recomputable captured metadata, never an invented ABox fact."""
+    from digital_twin.modules.reasoning.contracts import content_hash, quote_clock_assessment
+    assessment = packet.get("quoteAssessment")
+    if not assessment:
+        return {}
+    expected = quote_clock_assessment(packet.get("facts", []), packet.get("capturedAt"))
+    if content_hash(assessment) != content_hash(expected):
+        raise ValueError("quote assessment does not match captured facts")
+    return {row["evidenceId"]: {key: value for key, value in {**row, "checkedAt": expected["checkedAt"]}.items()
+                               if key in ASSESSMENT_FIELDS and value is not None and value != ""}
+            for row in expected["quotes"]}
+
+
+def citable_management_prompt(packet, history, research):
+    return CITATION_INSTRUCTIONS + clocked_management_prompt(packet, history, research)
+
+
+def citable_review_prompt(packet, draft):
+    return CITATION_INSTRUCTIONS + clocked_review_prompt(packet, draft)
+
+
+def citable_management_schema(packet, research):
+    from digital_twin.modules.ai_orchestration.domain.brain_management import management_schema
+    from digital_twin.modules.ai_orchestration.domain.insight_schema import obj, choice
+    schema = management_schema(packet, research)
+    variants = [obj({"factId": choice([identity]), "field": choice(sorted(values)), "period": choice(["assessment"])})
+                for identity, values in sorted(verified_quote_assessments(packet).items())]
+    if variants:
+        schema["$defs"]["limitation"] = {"anyOf": [schema["$defs"]["limitation"], *variants]}
+    return schema

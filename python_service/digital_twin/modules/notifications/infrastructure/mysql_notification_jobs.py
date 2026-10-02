@@ -29,6 +29,9 @@ from digital_twin.infrastructure.settings import utc_now
 from .notification_payload import article_history_summary, compact_payload, expand_payload
 
 
+NOTIFICATION_CLAIM_PAYLOAD_BYTES = 8 * 1024 * 1024
+
+
 NOTIFICATION_LIST_PRESENTATION_PATHS = (
     "notificationContent.kind", "notificationContent.subject", "notificationSubject",
     "symbolDisplayName", "displayTarget", "target", "rawSymbol",
@@ -1893,10 +1896,10 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         clauses.append("status IN (" + statuses + ")")
         clock_filter = "delivered_at >= %s" if delivered_only else "(delivered_at >= %s OR (status <> 'done' AND created_at >= %s))"
         clock_params = [cutoff_text] if delivered_only else [cutoff_text, cutoff_text]
-        return connection.execute(
-            "SELECT text, payload_json, created_at, updated_at, delivered_at, "
+        heads = connection.execute(
+            "SELECT job_id, created_at, updated_at, delivered_at, "
             "CASE WHEN delivered_at IS NOT NULL AND delivered_at <> '' THEN 'done' ELSE status END AS status "
-            "FROM (SELECT text, payload_json, created_at, updated_at, status, "
+            "FROM (SELECT job_id, created_at, updated_at, status, "
             "(SELECT MAX(a.completed_at) FROM notification_delivery_attempts a "
             "WHERE a.job_id = notification_jobs.job_id AND a.status = 'delivered') AS delivered_at "
             "FROM notification_jobs WHERE " + " AND ".join(clauses) + ") history "
@@ -1904,6 +1907,14 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "ORDER BY COALESCE(NULLIF(delivered_at, ''), created_at) DESC LIMIT %s",
             (*params, *clock_params, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
         ).fetchall()
+        # A subject can have many multi-megabyte proof packets. Keep only the
+        # identity/receipt inventory resident, and decode one body at a time.
+        # Callers must consume this iterator while their connection is open.
+        for head in heads:
+            body = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s",
+                                      (head["job_id"],)).fetchone()
+            if body:
+                yield {**body, **head}
 
     def recheck_delivery_cadence(self, job):
         """Last receipt check while the workflow holds the subject send lock."""
@@ -1925,16 +1936,16 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             group = notification_subject_group_key(job)
             rows = self.delivery_history_with_connection(connection, job, cutoff,
                 subject_group=group, fingerprint=notification_fingerprint(job, rule), delivered_only=True)
-        last_sent = ""
-        for row in rows:
-            previous = self.job_from_row(row)
-            if group and notification_subject_group_key(previous) != group:
-                continue
-            if not group and notification_fingerprint(previous, rule) != notification_fingerprint(job, rule):
-                continue
-            last_sent = str(row.get("delivered_at") or "")
-            if last_sent:
-                break
+            last_sent = ""
+            for row in rows:
+                previous = self.job_from_row(row)
+                if group and notification_subject_group_key(previous) != group:
+                    continue
+                if not group and notification_fingerprint(previous, rule) != notification_fingerprint(job, rule):
+                    continue
+                last_sent = str(row.get("delivered_at") or "")
+                if last_sent:
+                    break
         allowed = not last_sent or minutes <= 0 or age_minutes_since(last_sent) >= minutes
         return {"allowed": allowed, "tier": tier, "minutes": minutes, "lastDeliveredAt": last_sent,
                 "reason": "발송 직전 성공 영수증 기준 최소 간격 " + str(minutes) + "분 " + ("충족" if allowed else "미충족")}
@@ -2263,7 +2274,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             query_specs = [
                 (
                     """
-                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
+                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at,
+                           OCTET_LENGTH(payload_json) + OCTET_LENGTH(text) AS payload_bytes FROM notification_jobs
                     WHERE status = 'pending'
                       AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
@@ -2275,7 +2287,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
+                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at,
+                           OCTET_LENGTH(payload_json) + OCTET_LENGTH(text) AS payload_bytes FROM notification_jobs
                     WHERE status = 'processing'
                       AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= %s
                     """ + lane_sql + """
@@ -2287,7 +2300,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at FROM notification_jobs
+                    SELECT job_id, COALESCE(NULLIF(retry_at, ''), created_at) AS ready_at,
+                           OCTET_LENGTH(payload_json) + OCTET_LENGTH(text) AS payload_bytes FROM notification_jobs
                     WHERE status = 'failed' AND attempts < %s
                       AND (retry_at = '' OR retry_at <= %s)
                     """ + lane_sql + """
@@ -2304,7 +2318,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             for sql, params in query_specs:
                 candidates.extend(connection.execute(sql, tuple(params) + (requested,)).fetchall())
             candidates.sort(key=lambda row: (str(row.get("ready_at") or ""), str(row.get("job_id") or "")))
+            claimed_bytes = 0
             for row in candidates[:requested]:
+                size = int(row.get("payload_bytes") or 0)
+                # Bound simultaneous frozen packets, not evidence per message.
+                # One oversized head still progresses intact on its own turn.
+                if claimed and claimed_bytes + size > NOTIFICATION_CLAIM_PAYLOAD_BYTES:
+                    break
                 # The locked lane heads contain IDs only. Large frozen graph
                 # packets are loaded for selected jobs, never all three lanes.
                 row = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s",
@@ -2345,6 +2365,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     ),
                 )
                 if cursor.rowcount:
+                    claimed_bytes += size
                     self.record_lifecycle_with_connection(
                         connection,
                         job,
@@ -2419,7 +2440,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     ) -> Dict[str, int]:
         rows = connection.execute(
             """
-            SELECT job_id, text, payload_json FROM notification_jobs
+            SELECT job_id FROM notification_jobs
             WHERE status = 'failed' AND attempts >= %s
             ORDER BY updated_at, job_id
             LIMIT %s FOR UPDATE SKIP LOCKED
@@ -2429,6 +2450,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         summary = {"retried": 0, "superseded": 0, "retained": 0}
         now = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
         for row in rows or []:
+            row = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s",
+                                     (row["job_id"],)).fetchone()
             job = self.job_from_row(row)
             decision = terminal_delivery_recovery_decision(job.to_dict(), now=now)
             action = str(decision.get("action") or "retain-failed")

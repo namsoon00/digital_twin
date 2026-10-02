@@ -39,6 +39,37 @@ def store_fixture():
 
 
 class RuntimeStabilityTests(unittest.TestCase):
+    def test_selected_price_clock_stays_with_its_provider_across_kis_merge(self):
+        from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider
+        provider = object.__new__(KISMarketSignalProvider)
+        position = Position("TEST", "Fixture", market="KR", currency="KRW", current_price=120,
+            quote_source="Toss", freshness_status="fresh", source_as_of="2026-10-02T07:52:15Z",
+            source_fetched_at="2026-10-02T07:52:53Z", source_timestamp_state="provider")
+        signal = {"currentPrice": 100, "quoteSource": "KIS", "marketSignalCoverage": {"price": {
+            "sourceAsOf": "2026-10-02T06:57:06Z", "fetchedAt": "2026-10-02T06:57:10Z",
+            "sourceTimestampState": "provider", "freshnessStatus": "last-close"}}}
+        original = deepcopy(signal)
+        selected = provider.merge_position(position, signal)
+        self.assertEqual((120, position.source_as_of), (selected.current_price, selected.source_as_of))
+        facts = {"currentPrice": selected.current_price, "sourceAsOf": selected.source_as_of,
+            "sourceFetchedAt": selected.source_fetched_at, "marketSignalCoverage": selected.market_signal_coverage}
+        snapshot = relation_change_snapshot({"ontologyRelationContext": {"facts": facts}})
+        self.assertEqual(position.source_as_of, snapshot["observedAt"])
+        self.assertEqual(position.source_fetched_at, snapshot["sourceFetchedAt"])
+        self.assertIn("10/02 16:52 KST", repr(market_snapshot_sections(snapshot)))
+        position.freshness_status = "stale"
+        selected = provider.merge_position(position, signal)
+        self.assertEqual((100, "KIS", "2026-10-02T06:57:06Z", "last-close"),
+                         (selected.current_price, selected.quote_source, selected.source_as_of, selected.freshness_status))
+        self.assertEqual("2026-10-02T06:57:10Z", selected.source_fetched_at)
+        missing = provider.merge_position(position, {"currentPrice": 90})
+        self.assertEqual("", missing.source_as_of)
+        self.assertEqual("unknown", missing.freshness_status)
+        facts["sourceAsOf"], facts["sourceFetchedAt"] = "", ""
+        unknown = relation_change_snapshot({"ontologyRelationContext": {"facts": facts}})
+        self.assertEqual("", unknown["observedAt"], "a missing selected clock cannot borrow the other price clock")
+        self.assertEqual(original, signal)
+
     def test_question_recovery_clock_matches_capture_successor(self):
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
         agenda = object.__new__(MySQLBrainAgendaStore)

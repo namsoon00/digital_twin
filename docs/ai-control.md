@@ -267,7 +267,7 @@ oversized required packet fails explicitly instead of silently losing facts.
 The producing evidence contract retains its own category and 96,000-byte packet
 limits; increasing the prompt budget does not override evidence admission.
 
-New source-clock prompts (author v8, repair v4, review v2) distinguish immutable
+Source-clock prompts (author v8, repair v4, review v2) distinguish immutable
 source quality from elapsed time at capture. The evidence owner supplies a
 versioned `quoteAssessment`; fresh capture/fetch clocks cannot renew old quotes.
 Publication renders source age again at its fixed rendering clock and preserves
@@ -277,6 +277,18 @@ policy, with explicit source-time wording. No new intraday TTL or market-hours
 delivery gate is introduced. Prior prompt and review versions remain replayable.
 See `docs/observation-evidence-protocol.md` for clock integrity and failure-stage
 diagnostics. A successful replay is not evidence of a new model call or delivery.
+
+Clock citation prompts (author v9, repair v5, review v3) give `counterEvidence`
+an explicit `period=assessment` reference. `factId` still names the captured
+stock; the allowed scalar fields resolve to its `quoteAssessment` entry and
+the shared `checkedAt`. Every resolution recomputes the assessment from frozen
+facts and capture time. Changed assessments, missing clocks and other fact IDs
+cannot manufacture evidence. These references cannot support a market
+hypothesis, numerical market comparison or follow-up condition. The reviewer
+also recognizes sourceAsOf/maxAgeMinutes citations for a matching clock-only
+limitation instead of requiring fields absent from facts. Independent review
+and receipt admission stay mandatory; old prompts and schemas replay byte for
+byte, and rejected historical results are never rewritten or automatically sent.
 
 Independent observation calls first persist their exact input, selected memories
 and prompt locally, including failed attempts; calls require a matching task and

@@ -225,7 +225,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # repair headroom, timeout diagnostics and capacity sampling under load.
         # Five storage regressions protect overdue admission, fair lock turns,
         # durable retention progress, active source SQL and lossless compression.
-        self.assertLessEqual(total, 1968)
+        # Four agenda contracts cover scoped memory, due review, transactional
+        # research feedback, and owner review without inventing empirical success.
+        self.assertLessEqual(total, 1972)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

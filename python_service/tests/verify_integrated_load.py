@@ -273,8 +273,12 @@ class Rehearsal:
             "_skipNotificationRuleDefaultsSeed": "1",
             "_skipOperationalHistoryRetention": "1",
         })
-        self.jobs = fixtures.MySQLReasoningEngineJobStore(self.settings)
+        # Schema construction is setup, outside the measured five-second
+        # operation budget. Keep workload timeouts strict after the DDL completes.
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
+        MySQLOperationalConnection({**self.settings, "mysqlOperationTimeoutSeconds": "30"})
         self.settings["_skipOperationalSchemaBootstrap"] = "1"
+        self.jobs = fixtures.MySQLReasoningEngineJobStore(self.settings)
         self.registry = fixtures.MySQLReasoningEngineRegistryStore(self.settings)
         self.events = fixtures.MySQLEventLog(self.settings)
         self.monitor = fixtures.MySQLMonitorStore(self.settings)

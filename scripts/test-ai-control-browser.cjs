@@ -5,6 +5,12 @@ const http = require('node:http');
 const { once } = require('node:events');
 const { frontendDependency } = require('./frontend-toolchain.cjs');
 const root = path.resolve(__dirname, '../public');
+const brain = {goals:['미해결 질문을 근거로 재검토합니다.'],cases:[
+ {caseId:'question',accountId:'owner',symbol:'TEST',status:'review-needed',question:'오래된 원래 질문을 다시 확인합니다.',researchAttempts:1,
+  origin:{capturedAt:'2026-01-01T00:00:00Z',hypothesis:'처음의 설명 <script>bad</script>',evidence:[{id:'old-fact',value:10}]},
+  history:[{status:'review-needed',reason:'조사는 끝났지만 답은 아직 검토 중입니다.',details:{executionInputId:'captured-review',evidenceIds:['new-fact']}}]},
+ ...['data','experience'].map((category,index)=>({caseId:'feedback-'+index,accountId:'owner',symbol:'TEST',revision:2,kind:'service-feedback',status:'proposed',category,
+  problem:'근거가 부족한 항목을 구분할 수 없습니다.',proposal:'자료의 조회 상태를 함께 표시합니다.',verification:'없음과 실패를 구분해 확인합니다.'}))]};
 const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 안의 단기 회복일 수 있습니다.',portfolioImpact:'보유 손실의 회복 여부를 구분해 봅니다.',
   development:{requestId:'development-fixture',status:'pending'},developmentQuestions:['가설 개선 질문 <script>bad</script>'],
   quality:{status:'rejected',errors:['가격과 매입가 항목이 다릅니다.'],review:{reason:'<script>bad</script>'}},
@@ -15,7 +21,7 @@ const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 
 const server = http.createServer((req,res) => {
   if (req.url === '/api/ai-control/status') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,configuredEnabled:true,tasksStartedToday:2,dailyTaskBudget:48,activeTaskCount:1,dailyCallBudget:24,
     modelCallsUsedToday:24,observationScheduling:{status:'budget-wait',reason:'ai-call-budget-exhausted',nextCheckAt:'2026-10-02T00:00:00Z'},
-    qualitySummary:{accepted:0,rejected:1},tasks:[{taskId:'fixture',symbol:'TEST',status:'completed',capability:'observe',result}],callsToday:[]}));return;}
+    brain,qualitySummary:{accepted:0,rejected:1},tasks:[{taskId:'fixture',symbol:'TEST',status:'completed',capability:'observe',result}],callsToday:[]}));return;}
   const file = path.resolve(root,'.'+req.url);
   if (!file.startsWith(root+path.sep) || !fs.existsSync(file)) {res.writeHead(404);res.end();return;}
   res.setHeader('content-type',file.endsWith('.mjs')?'application/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(file));
@@ -47,7 +53,7 @@ const server = http.createServer((req,res) => {
    assert(await page.locator('#taskBudget').isDisabled());
    await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,configuredEnabled:true,budgetEnabled:false,
     tasksStartedToday:50,dailyTaskBudget:48,modelCallsUsedToday:30,dailyCallBudget:24,activeTaskCount:1,
-    observationScheduling:{status:'ready'},qualitySummary:{accepted:0,rejected:1},
+    brain,observationScheduling:{status:'ready'},qualitySummary:{accepted:0,rejected:1},
     tasks:[{taskId:'fixture',symbol:'TEST',status:'completed',capability:'observe',result}],callsToday:[]}}));
    await page.locator('#settings button').click();
    await page.getByText('30 / 제한 없음',{exact:true}).waitFor();
@@ -60,9 +66,33 @@ const server = http.createServer((req,res) => {
    assert.match(await page.locator('article').innerText(),/기간 만료 · 평가 불가/);
    await page.getByText('문장별 인용과 검토 기록',{exact:true}).click();
    assert.equal(await page.locator('article script').count(),0);
+   assert.match(await page.locator('#brain').innerText(),/오래된 원래 질문/);
+   await page.getByText(/처음 생긴 이유와 근거 ·/).first().click();
+   assert.match(await page.locator('#brain').innerText(),/처음의 설명 <script>bad<\/script>/);
+   await page.getByText('진행과 평가 이력',{exact:true}).first().click();
+   assert.match(await page.locator('#brain').innerText(),/captured-review/);
+   assert.equal(await page.locator('#brain script').count(),0);
+   const forms=page.locator('.feedback-review');
+   await forms.nth(0).locator('textarea').fill('자료 상태를 화면에 표시하도록 개선할 계획입니다.');
+   await forms.nth(1).locator('textarea').fill('다른 개선 제안에 작성 중인 내용을 보존합니다.');
+   await page.locator('#refresh').click();
+   assert.equal(await forms.nth(0).locator('textarea').inputValue(),'자료 상태를 화면에 표시하도록 개선할 계획입니다.');
+   let reviewed=false;
+   await page.route('**/api/ai-control/feedback', async route=>{
+    assert.equal(route.request().method(),'PUT');
+    assert.deepEqual(route.request().postDataJSON(),{caseId:'feedback-0',accountId:'owner',symbol:'TEST',revision:2,status:'planned',note:'자료 상태를 화면에 표시하도록 개선할 계획입니다.'});
+    reviewed=true;await route.fulfill({json:{saved:true,caseId:'feedback-0',revision:3}});
+   });
+   await forms.nth(0).locator('[type="submit"]').click();
+   await page.getByText('검토 내용을 기록했습니다.',{exact:true}).waitFor();
+   assert(reviewed);
+   assert.equal(await forms.nth(1).locator('textarea').inputValue(),'다른 개선 제안에 작성 중인 내용을 보존합니다.');
+   await forms.nth(1).locator('[type="reset"]').click();
+   await forms.nth(1).locator('textarea').filter({visible:true}).waitFor();
+   assert.equal(await forms.nth(1).locator('textarea').inputValue(),'');
    const diagnosticResult = {...result, publication:{status:'recorded',reason:'검증 보류',diagnostic:{status:'queued',deliveryStatus:'done',reason:'운영 채널 발송 완료',
     receipt:{body:'검증되지 않은 AI 원문 <script>bad</script>',deliveredAt:'2026-10-01T04:00:00Z'}}}};
-   await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,budgetEnabled:false,
+   await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,budgetEnabled:false,brain,
     observationScheduling:{status:'ready'},tasks:[{taskId:'diagnostic',symbol:'TEST',status:'completed',capability:'observe',result:diagnosticResult}],callsToday:[]}}));
    await page.locator('#refresh').click();
    await page.getByText(/검증 미통과 초안 · 운영 알림: 발송 완료/).waitFor();
@@ -75,6 +105,6 @@ const server = http.createServer((req,res) => {
    await page.screenshot({path:'/tmp/orbit-ai-control-'+width+'.png',fullPage:true});
    await page.close();
   }
-  console.log('AI control browser: desktop/mobile, limit wait/removal, exact receipt, rejected claims, expired checks and escaping passed');
+  console.log('AI control browser: desktop/mobile, agenda origins, proposal review, draft preservation, limits, receipts, rejections and escaping passed');
  } finally {if(browser) await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -119,8 +119,12 @@ def build_ai_control_service(settings=None):
     from digital_twin.modules.news_intelligence.infrastructure.mysql_observation_development import MySQLObservationDevelopmentStore
     development = AIControlDevelopment(MySQLObservationDevelopmentStore(configured), lambda case_id: hypothesis_development_store(configured).get(case_id))
     store.development_writer = development.record
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
+    agenda = MySQLBrainAgendaStore(configured)
+    store.agenda_writer, store.agenda_failure = agenda.record, agenda.failed
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
-                            delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory)
+                            delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
+                            brain_memory=agenda.memory, brain_waker=agenda.wake_due)
 
 
 def ai_control_status(settings=None, account_id=""):
@@ -129,6 +133,8 @@ def ai_control_status(settings=None, account_id=""):
     from digital_twin.modules.ai_orchestration.contracts import CAPABILITIES, enabled
     configured = settings if settings is not None else runtime_settings()
     status = MySQLAIControlStore(configured).status(account_id)
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
+    status["brain"] = MySQLBrainAgendaStore(configured).status(account_id)
     from digital_twin.infrastructure.transactions.ai_control_development import AIControlDevelopment
     from digital_twin.infrastructure.operational_store import hypothesis_development_store
     from digital_twin.modules.news_intelligence.infrastructure.mysql_observation_development import MySQLObservationDevelopmentStore
@@ -191,3 +197,9 @@ def save_ai_control_settings(payload):
             raise ValueError("관찰 또는 한도 사용 여부를 확인하세요.")
     save_runtime_settings(payload)
     return {"saved": True}
+
+
+def review_ai_service_feedback(payload):
+    from digital_twin.infrastructure.settings import runtime_settings
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
+    return MySQLBrainAgendaStore(runtime_settings()).review_feedback(payload)

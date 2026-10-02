@@ -10,13 +10,15 @@ from digital_twin.modules.outcomes.contracts import evaluate_observation_conditi
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
         self.delivery_memory = delivery_memory or (lambda account, symbol: {})
         self.reviewer = reviewer
         self.development_memory = development_memory or (lambda account, symbol: [])
+        self.brain_memory = brain_memory or (lambda account, symbol, world: [])
+        self.brain_waker = brain_waker or (lambda subjects: None)
 
     def run_once(self):
         if not enabled(self.settings):
@@ -24,6 +26,7 @@ class AIControlService:
         subjects = list(self.subjects())
         for subject in subjects:
             self.store.seed(subject)
+        self.brain_waker(subjects)
         try:
             job = self.store.claim()
         except AIControlBudgetWait as wait:
@@ -40,7 +43,8 @@ class AIControlService:
                     if not packet.get("facts") or not packet.get("sourceSnapshotId"):
                         raise ValueError("current verified graph facts unavailable")
                     history = self.store.memory(job["accountId"], job["symbol"])
-                    research = list(self.research_memory(job["accountId"], job["symbol"]))
+                    research = list(self.brain_memory(job["accountId"], job["symbol"], job["worldId"]))
+                    research.extend(self.research_memory(job["accountId"], job["symbol"]))
                     research.extend(self.development_memory(job["accountId"], job["symbol"]))
                     packet["taskId"] = job["taskId"]
                     packet["questionsToCheck"] = job.get("watchQuestions", [])
@@ -49,7 +53,8 @@ class AIControlService:
                         (history[0] if history else {}).get("followUpEvaluations", []))
                     fingerprint = observation_fingerprint(packet, research)
                     previous = history[0] if history else {}
-                    if (previous.get("inputFingerprint") == fingerprint and previous.get("observedAt")
+                    from digital_twin.modules.ai_orchestration.domain.brain_management import due_memory
+                    if (not due_memory(research) and previous.get("inputFingerprint") == fingerprint and previous.get("observedAt")
                             and previous.get("executionPromptVersion") == PROMPT_VERSION
                             and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
@@ -66,7 +71,7 @@ class AIControlService:
                     if not input_id:
                         return {"status": "lease-lost", "taskId": job["taskId"]}
                     raw = self.planner(envelope, input_id)
-                    plan = validate_plan(raw, packet)
+                    plan = validate_plan(raw, packet, envelope["researchResults"])
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
                               "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
                               "followUpEvaluations": packet["followUpEvaluations"],
@@ -94,7 +99,7 @@ class AIControlService:
                             if not repair_id:
                                 return {"status": "lease-lost", "taskId": job["taskId"]}
                             result["repair"]["inputId"] = repair_id
-                            repaired = validate_plan(self.planner(correction, repair_id), packet)
+                            repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"])
                             result.update(repaired, executionInputId=repair_id, observedAt=stamp())
                         except AIControlBudgetWait:
                             raise

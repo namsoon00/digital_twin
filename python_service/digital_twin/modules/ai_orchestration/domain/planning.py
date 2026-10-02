@@ -35,12 +35,12 @@ def observation_fingerprint(packet, research):
     return evidence_change_identity(packet, research, packet.get("questionsToCheck", []))
 
 
-def validate_plan(value, packet):
+def validate_plan(value, packet, research=()):
     if not isinstance(value, dict):
         raise ValueError("AI plan must be an object")
     # No model-authored account, symbol, command, source URL or action is executable.
     allowed = {"summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questions", "nextCheckMinutes", "notification",
-               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions"}
+               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback"}
     if set(value) - allowed:
         raise ValueError("AI plan contains unsupported fields")
     known = {str(row["id"]) for row in packet.get("facts", []) if row.get("id")}
@@ -64,12 +64,14 @@ def validate_plan(value, packet):
     result["questions"] = []
     result["researchQuestions"] = []
     result["developmentQuestions"] = []
+    result["workQuestions"] = []
     for item in questions:
         if not isinstance(item, dict) or set(item) != {"question", "capability"}:
             raise ValueError("research questions must name an allowed capability")
         question = item["question"]
         if item["capability"] not in CAPABILITIES or not isinstance(question, str) or not 8 <= len(question.strip()) <= 500:
             raise ValueError("invalid research question")
+        result["workQuestions"].append({"question": question.strip(), "capability": item["capability"]})
         if item["capability"] == "develop-hypothesis":
             result["developmentQuestions"].append(question.strip())
         else:
@@ -88,6 +90,8 @@ def validate_plan(value, packet):
             result["followUpConditions"] = prepare_observation_conditions(value.get("followUpConditions"), packet)
         except (ValueError, KeyError, TypeError):
             result["followUpConditions"] = []
+    from digital_twin.modules.ai_orchestration.domain.brain_management import validate_management
+    result.update(validate_management(value, packet, research))
     return result
 
 

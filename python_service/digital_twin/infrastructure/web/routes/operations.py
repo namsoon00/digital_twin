@@ -42,6 +42,14 @@ class OperationsRoutes:
         return NOT_HANDLED
 
     def route_operations_health(self, request, path: str, query: Query):
+        if path == "/api/ai-control/feedback" and request.command == "PUT":
+            if not request.ensure_writable("서비스 개선 검토는 소유자만 기록할 수 있습니다."):
+                return
+            from digital_twin.infrastructure.composition.ai_orchestration import review_ai_service_feedback
+            try:
+                return request.send_payload(200, review_ai_service_feedback(request.read_json_body()))
+            except (ValueError, TypeError):
+                return request.send_payload(400, {"error": "개선 제안과 검토 사유를 확인하고 새로고침해 주세요."})
         if path == "/api/ai-control/settings" and request.command == "PUT":
             if not request.ensure_writable("중앙 AI 설정은 소유자만 변경할 수 있습니다."):
                 return

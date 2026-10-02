@@ -131,6 +131,9 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             development = getattr(self, "development_writer", None)
             if development is not None and job["capability"] == "observe" and result.get("summary"):
                 result["development"] = development(connection, job, result)
+            agenda = getattr(self, "agenda_writer", None)
+            if agenda is not None:
+                result["brain"] = agenda(connection, job, result, children)
             writer = getattr(self, "outbox_writer", None)
             if writer is not None and job["capability"] == "observe" and result.get("summary"):
                 result["publication"] = writer(connection, job, result)
@@ -147,6 +150,9 @@ class MySQLAIControlStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             changed = connection.execute("UPDATE ai_control_tasks SET status=%s,last_error=%s,available_at=%s,updated_at=%s,lease_token='',lease_until='' WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
                 ("failed" if terminal else "pending", error_kind[:100], due, stamp(), job["taskId"], job["leaseToken"], stamp())).rowcount
+            failure = getattr(self, "agenda_failure", None)
+            if changed and terminal and failure is not None:
+                failure(connection, job, error_kind[:100])
             if changed and terminal and job["capability"] == "observe":
                 next_due = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},

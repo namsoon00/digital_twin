@@ -284,7 +284,8 @@ class AIControlStorageTests(unittest.TestCase):
         self.store.runtime_settings.update(aiControlBudgetEnabled="true", aiControlDailyCallBudget=5)
         # A new UTC day admits due work without a counter reset or lost task.
         self.store.runtime_settings["aiControlDailyTaskBudget"] = 10
-        with patch("digital_twin.modules.ai_orchestration.infrastructure.mysql_control.stamp", return_value=reset):
+        next_reset = budget_state({}, 0, 0, datetime.now(timezone.utc))["budgetResetAt"]
+        with patch("digital_twin.modules.ai_orchestration.infrastructure.mysql_control.stamp", return_value=next_reset):
             self.assertEqual(job["taskId"], self.store.claim()["taskId"])
 
     def test_central_model_requires_frozen_input_and_keeps_failed_attempt_replay(self):

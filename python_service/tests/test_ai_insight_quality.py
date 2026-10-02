@@ -22,7 +22,8 @@ class InsightGroundingTests(unittest.TestCase):
         self.assertEqual(256 * 1024, prompt_budget('invalid'))
         self.assertEqual(512 * 1024, prompt_budget(9999999))
         envelope = freeze_execution_input(packet(), [{'summary': 'a' * 30000}],
-                                          [{'result': 'b' * 23000}], max_prompt_bytes=65536)
+                                          [{'result': 'b' * 18000}], max_prompt_bytes=65536)
+        self.assertEqual(1, len(envelope['researchResults']))
         original = copy.deepcopy(envelope)
         rejected = plan(); rejected['summary'] = 'c' * 30000
         repair = freeze_repair_input(envelope, rejected, ['invalid summary'], 'parent')
@@ -328,7 +329,7 @@ class InsightControlTests(unittest.TestCase):
         self.assertEqual('original', result['repair']['initialInputId'])
         self.assertTrue(result['repair']['initialErrors'])
         correction = planner.call_args.args[0]
-        self.assertEqual('independent-observation-repair-v2-ontology-development', correction['promptVersion'])
+        self.assertEqual('independent-observation-repair-v3-persistent-agenda', correction['promptVersion'])
         self.assertEqual(bad, correction['repair']['rejectedDraft'])
         self.assertTrue(correction['repair']['comparisons'])
         validate_execution_input(correction)

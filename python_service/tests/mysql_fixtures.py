@@ -194,6 +194,10 @@ def mysql_test_settings(seed=None):
         "mysqlPassword": os.environ.get("MYSQL_PASSWORD", ""),
         "mysqlUnixSocket": os.environ.get("MYSQL_UNIX_SOCKET", ""),
         "operationalHistoryRetentionEnabled": "0",
+        # Full fixture resets rebuild the shared test schema and its indexes.
+        # Allow bounded DDL headroom while live workers use the same server;
+        # production's operation timeout and all behavioral assertions stay intact.
+        "mysqlOperationTimeoutSeconds": "30",
         # Unit/integration schemas validate SQL contracts, not production
         # repartitioning. DDL partition probes add minutes and can disconnect
         # the shared local MySQL server while the application is running.

@@ -105,11 +105,80 @@ TBox types, model implementations and service-code changes require development.
 This loop does not train the underlying LLM weights or let it rewrite its own
 validation criteria. Actual improvement still requires future observations.
 
-Generation v6 and correction v2 introduce the capability. Historical v3–v5 and
-correction v1 inputs retain their original prompts and schemas. Tests in
+Generation v6 and correction v2 introduced the capability. Historical inputs
+retain their original prompts and schemas. Tests in
 `test_ai_ontology_development.py` cover the existing worker handoff, immutable
 evidence, scope isolation, historical input compatibility, feedback memory,
 daily coalescing and transactional failure/lease-loss behavior.
+
+## Persistent questions and service feedback
+
+The existing observation worker now owns a durable agenda in `ai_brain_cases`
+and an append-only assessment history in `ai_brain_case_events`. These are
+operational work records owned by `ai_orchestration`, not market ABox facts,
+investment decisions or proof that the underlying model learned. The central
+worker coordinates this memory; existing research and hypothesis-development
+modules still own their execution and validation. No additional model service,
+daemon or MCP server is needed for this loop.
+
+Each question preserves its original explanation, counter-evidence, captured
+fact values and source snapshots, exact model-input identity, completion
+criterion, follow-up date and linked work. Observations review questions against
+current captured facts and append an assessment with its own input and evidence
+IDs. The original evidence is not replaced by a later interpretation. Historical
+explanations are work memory and cannot substitute for fresh source evidence.
+
+At most five active questions, ordered by due date, enter each scoped observation,
+alongside up to three service proposals and the existing research/development
+memory. Due questions are mandatory context: optional recent analyses and
+research are trimmed first, including in correction prompts. If the required
+packet does not fit, execution fails visibly without silently forgetting due
+questions. Questions from another account, symbol or strategy world cannot be
+reviewed. Completed questions remain in the ledger; this first iteration does
+not implement semantic search over all past closed questions.
+
+Each due case requires a reasoned `caseReviews` entry: wait, source research,
+answered, blocked or dismissed. An answer needs usable current evidence but
+remains an AI assessment, not independent proof of the answer's meaning. A
+rejected observation cannot close a question. Research completion or failure
+marks the original question for reassessment and wakes an unstarted observation;
+it does not mean the question was answered. Due dates can also wake observations
+without a user prompt or a market-data change. Existing budgets, pause controls
+and lease fencing still apply. Wake-ups preserve failed-task retry intervals;
+terminal observation failure defers due cases to the six-hour recovery window.
+
+Work is bounded to twelve active questions per account/symbol/world, three
+research tasks per question and at least six hours between new research tasks.
+Pending research and unchanged input suppress another task. Each task retains
+the existing bounded failure retries. Exact questions coalesce after whitespace
+and case normalization; this is not semantic deduplication of paraphrases.
+Saturated cases remain visible as blocked/deferred instead of gaining unlimited
+execution authority. Question state, research successors, model-development
+handoff and notification outbox commit together under the task lease.
+
+`serviceFeedback` allows at most one evidence-bound proposal per observation,
+covering analysis, data, experience or operations. It records the observed
+limitation, proposed change and a checkable success criterion. Inputs currently
+focus on captured domain evidence, not arbitrary UI sessions or full production
+telemetry, so the model may not claim to have observed screen failures or user
+complaints absent from its input. There is at most one open proposal per subject
+and category; daily coalescing preserves the original evidence. Proposals can be
+retained from rejected observations, but are always explicitly unverified.
+
+The owner can record planned, implemented or dismissed with a reason using
+`PUT /api/ai-control/feedback`. Scope and captured revision must match. Owner
+reports return in subsequent observation memory; an implementation report is
+not an automated deployment or an empirical success measurement. The owner page
+shows original evidence and recent case history. This workflow does not modify
+service code, install collectors, rewrite goals or bypass the governed ontology
+adoption process. Measuring whether a service change helped still requires
+actual before/after outcomes.
+
+Generation v7 and correction v3 add the agenda contract while retaining exact
+historical v3–v6 and correction v1–v2 replay. `test_ai_brain_agenda.py` covers
+due-memory capture, scope, owner permissions, lease loss, rollback, research
+feedback, failure backoff and immutable origin evidence. Browser coverage also
+checks proposal review and draft preservation on mobile and desktop.
 
 ## Independent observation notifications
 
@@ -163,8 +232,10 @@ Observation, repair and independent review prompts default to **256 KiB of UTF-8
 text**. Set `aiObservationPromptMaxBytes` or `AI_OBSERVATION_PROMPT_MAX_BYTES` to
 override this operational limit (64–512 KiB). It is a byte budget, not the model's
 token context window. Current evidence and the delivered comparison baseline are
-preserved intact. Prior analyses (64 KiB) and research memory (48 KiB) are admitted
-as whole records in recency order, subject to the total budget. Oversized optional
+preserved intact, together with due case memory. Optional prior analyses (64 KiB)
+and research memory (48 KiB, including the space already used by due cases) are admitted
+as whole records in recency order, subject to the total budget. Due cases may
+exceed the research allowance but must still fit the total budget. Oversized optional
 records are skipped with hashes and exclusion reasons in the frozen input.
 Repairs can drop optional memory to fit the rejected draft and feedback; an
 oversized required packet fails explicitly instead of silently losing facts.
@@ -244,6 +315,7 @@ operations transport remains a visible delivery failure, without account fallbac
   process counts, enable switch and daily limits; linked from Operations.
 - `GET /api/ai-control/status`: bounded owner-only task and call summary.
 - `PUT /api/ai-control/settings`: writable-owner settings, validated limits.
+- `PUT /api/ai-control/feedback`: writable-owner service-proposal review with revision checks.
 - `python3 python_service/service.py ai-control status|once|watch`.
 
 Tests in `test_ai_control.py` cover untrusted plans, independent operation,

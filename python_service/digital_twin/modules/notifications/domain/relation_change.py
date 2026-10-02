@@ -54,10 +54,16 @@ def relation_change_authority(context):
         contract = relation_lifecycle_transition_contract({"hypothesisLifecycle": {"transitions": [item]}})
         if not contract.get("material"):
             continue
-        transitions.append({key: deepcopy(contract.get(key)) for key in (
+        transition = {key: deepcopy(contract.get(key)) for key in (
             "transitionId", "lifecycleKey", "changeKind", "changeLabel", "previousState", "currentState",
             "previousStateLabel", "currentStateLabel", "occurredAt", "reason", "evidenceDelta",
-        )})
+        )}
+        snapshot = mapping(mapping(item.get("record")).get("snapshot"))
+        # Bind each change to its own hypothesis; never attach one lifecycle
+        # state to every hypothesis in a multi-hypothesis observation.
+        transition["hypothesisIds"] = strings(snapshot.get("hypothesisIds") or item.get("hypothesisIds"))
+        transition["sourceRuleIds"] = strings(snapshot.get("sourceRuleIds") or item.get("sourceRuleIds"))
+        transitions.append(transition)
     return transitions
 
 

@@ -8,6 +8,21 @@ function renderRelationChangeEvidence(packet) {
     return escapeHtml(value === undefined || value === null || value === "" ? "미보존"
       : typeof value === "object" ? JSON.stringify(value) : String(value));
   }
+  function outcome(row) {
+    var contract = (row.claimContract || {}).outcomeContract || {};
+    var periods = contract.outcomeHorizonMinutes || contract.horizonMinutes || [];
+    var labels = { instrumentReturnPct: "확인 이후 주가 등락률(%)", ma20DistanceChangePp: "20일 평균 가격과의 거리 변화(%p)" };
+    var criteria = Array.isArray(contract.criteria) ? contract.criteria : [];
+    if (!criteria.length && !periods.length) return "";
+    return '<details><summary>검증 기준과 확인 기간</summary>'
+      + (Array.isArray(periods) && periods.length ? '<p>확인 기간: ' + text(periods.join(" · ")) + '분</p>' : '')
+      + criteria.map(function (item) {
+        var field = item.field || item.metric;
+        return '<p>' + text({ result: "결과 확인", invalidation: "반대 결과 확인", cause: "원인 확인" }[item.role] || item.role)
+          + ': ' + text(labels[field] || field) + ' ' + text(item.operator) + ' ' + text(item.value === undefined ? item.threshold : item.value)
+          + (Number(item.horizonMinutes) > 0 ? ' · ' + text(item.horizonMinutes) + '분 뒤' : ' · 위 확인 기간 적용') + '</p>';
+      }).join('') + '</details>';
+  }
   function values(row, kind) {
     if (!row) return "기록 없음";
     if (kind === "facts") return text(row.value);
@@ -16,6 +31,7 @@ function renderRelationChangeEvidence(packet) {
       + "<br>지지 근거: " + text((row.evidenceIds || []).join(", "))
       + "<br>반대 근거: " + text((row.counterEvidenceIds || []).join(", "))
       + "<br>반증 조건: " + text(row.falsificationContract || (row.invalidationConditions || []).join(" · "))
+      + outcome(row)
       + (row.qualification && row.qualification.reason ? "<br>예측 검증: " + text(row.qualification.reason) : "");
     return text(row.label) + " · " + (row.matched === true ? "성립" : row.matched === false ? "불성립" : "성립 여부 미기록")
       + (row.referenceOnly ? " · 참고 규칙" : "")
@@ -26,7 +42,7 @@ function renderRelationChangeEvidence(packet) {
           + " / 근거 " + text((c.evidenceIds || []).join(", "));
       }).join("") + "<br>추론 기록: " + text(row.traceId);
   }
-  return '<section class="notification-detail-section"><strong>관계 변화 · 가설 → 규칙 → ABox 사실</strong><p>'
+  return '<section class="notification-detail-section"><details><summary>전체 추론 근거 · 가설·규칙·측정값</summary><p>'
     + text(packet.reason) + '</p><p>' + (packet.baselineAvailable
       ? "비교 기준: 마지막 성공 발송 " + text(packet.baselineDeliveredAt)
       : "이전 발송의 상세 근거가 보존되지 않아 이전 값은 표시할 수 없습니다.")
@@ -55,7 +71,7 @@ function renderRelationChangeEvidence(packet) {
               + '</td><td>' + values(row.previous, entry[0]) + '</td><td>' + values(row.current, entry[0]) + '</td></tr>';
           }).join("") + '</tbody></table></div>' : '<p>상세 근거 미보존</p>') + '</details>';
     }).join("")
-    + '<p>발송 판단 당시 저장된 근거입니다. 미보존 표시는 근거가 없다는 뜻이 아니며, 현재 데이터로 보충하지 않습니다. 관계 변화 안내이며 매수·매도 판단은 아닙니다.</p></section>';
+    + '<p>발송 판단 당시 저장된 근거입니다. 미보존 표시는 근거가 없다는 뜻이 아니며, 현재 데이터로 보충하지 않습니다. 관계 변화 안내이며 매수·매도 판단은 아닙니다.</p></details></section>';
 }
 
 export { renderRelationChangeEvidence };

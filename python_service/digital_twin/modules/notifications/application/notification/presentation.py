@@ -5,6 +5,7 @@ import re
 from dataclasses import replace
 
 from digital_twin.modules.notifications.domain.notification.presentation import mapping, presentation_metadata
+from digital_twin.modules.notifications.domain.relation_change_presentation import PRESENTATION_VERSION as RELATION_PRESENTATION_VERSION
 
 
 def _text(value):
@@ -88,6 +89,10 @@ def present_notification(message_type, context, text) -> str:
     seen_rows = set()
     cleaned = []
     for line in lines:
+        if context.get("relationChangePresentationVersion") == RELATION_PRESENTATION_VERSION and line.strip().startswith("<b>"):
+            # Identical qualification/proof wording can belong to different
+            # hypotheses. Deduplicate within a section, never across claims.
+            seen_rows.clear()
         plain = _plain(line)
         if plain.startswith("• "):
             # Keep links distinct even when their visible labels are identical.
@@ -125,6 +130,8 @@ def typed_customer_document(document, message_type, context):
     seen = {document.lead.strip()} if document.lead else set()
     unique_sections = []
     for section in sections:
+        if context.get("relationChangePresentationVersion") == RELATION_PRESENTATION_VERSION:
+            seen = set()
         rows = []
         for row in section.rows:
             if row.strip() not in seen:

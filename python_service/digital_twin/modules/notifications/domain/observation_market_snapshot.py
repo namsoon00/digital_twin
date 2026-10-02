@@ -84,9 +84,11 @@ def investor_rows(snapshot):
     source = stage(snapshot, "investor")
     states = source.get("participantStatus") or snapshot.get("investorFlowParticipantStatus") or {}
     market = str(facts.get("market") or snapshot.get("market") or "").upper()
-    if source.get("status") in {"unsupported", "unsupported-market"} or (not source and not states and market in {"US", "CRYPTO"}):
+    if (source.get("status") in {"unsupported", "unsupported-market"}
+            or all(states.get(party) == "unsupported" for party in ("foreign", "institution", "individual"))
+            or (not source and not states and market in {"US", "CRYPTO"})):
         return ["외국인·기관·개인 구분 수급: 이 시장의 자료 미지원"]
-    result, missing_totals = [], False
+    result = []
     currency = str(facts.get("currency") or "KRW")
     for party, label in (("foreign", "외국인"), ("institution", "기관"), ("individual", "개인")):
         state = states.get(party, "")
@@ -108,10 +110,7 @@ def investor_rows(snapshot):
             parts.append("매수 " + decimal(buy, 0) + "주")
         if sell is not None:
             parts.append("매도 " + decimal(sell, 0) + "주")
-        missing_totals = missing_totals or (net is not None and (buy is None or sell is None))
         result.append(label + ": " + (" · ".join(parts) or "자료 미확인"))
-    if missing_totals:
-        result.append("총 매수·총 매도 수량은 제공된 항목만 표시합니다.")
     result.append(source_note(snapshot, "investor"))
     return result
 
@@ -144,8 +143,9 @@ def market_snapshot_sections(current, previous=None):
         value = numeric(facts.get(field))
         if value is not None:
             old = numeric(before.get(field))
-            text = decimal(old, signed=True) + "% → " if old is not None else ""
-            trend.append(label + " 평균 가격 대비 " + text + decimal(value, signed=True) + "%")
+            text = decimal(abs(value)) + "% " + ("높음" if value > 0 else "낮음") if value != 0 else "같음"
+            prior = " (이전 알림 " + decimal(old, signed=True) + "%)" if old is not None else ""
+            trend.append(label + " 평균 가격보다 " + text + prior)
     activity = []
     for field, label, unit in (("volume", "누적 거래량", quantity_unit), ("tradingValue", "누적 거래대금", "원" if currency == "KRW" else " " + currency)):
         value = observed(current, field, "ccnl")
@@ -162,7 +162,8 @@ def market_snapshot_sections(current, previous=None):
     if ratios:
         activity.append(" · ".join(ratios))
     if activity:
-        activity.append(source_note(current, "ccnl"))
+        activity = [" · ".join(activity[:2]), *activity[2:]]
+        activity[-1] += " · 거래 기준 " + source_note(current, "ccnl").replace("기준 시각", "시각")
     executions = []
     strength = observed(current, "tradeStrength", "ccnl")
     if strength is not None and strength > 0:
@@ -175,15 +176,14 @@ def market_snapshot_sections(current, previous=None):
     if amounts:
         executions.append(" · ".join(amounts))
     if executions:
-        executions.append(source_note(current, "ccnl"))
+        executions[-1] += " · 체결 기준 " + source_note(current, "ccnl").replace("기준 시각", "시각")
     book = []
     for field, label in (("orderbookBidVolume", "매수 대기"), ("orderbookAskVolume", "매도 대기")):
         value = observed(current, field, "orderbook")
         if value is not None:
             book.append(label + " " + decimal(value, 0) + quantity_unit)
     if book:
-        executions.append(" · ".join(book) + " · " + source_note(current, "orderbook"))
-        executions.append("호가는 대기 주문이며 실제 체결량과 구분합니다.")
+        executions.append(" · ".join(book) + " · 호가 기준 " + source_note(current, "orderbook").replace("기준 시각", "시각"))
     holding = []
     if (numeric(facts.get("quantity")) or 0) > 0 or facts.get("isHolding") is True:
         for field, label, unit in (("quantity", "보유", quantity_unit), ("profitLossRate", "평가 수익률", "%"), ("positionWeight", "계좌 비중", "%")):

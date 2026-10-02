@@ -755,7 +755,11 @@ def customer_investment_document_quality(
         issues.append("missing-lead")
     section_keys = {section.key for section in document.sections if section.rows}
     if document.role == "typedb-observation" and "current-price" in section_keys:
-        for key in ("change", "hypotheses", "rules", "investor-flow", "market-activity", "execution-flow", "provenance", "limitations"):
+        # V3 keeps each claim, its rule proof, falsification and qualification
+        # together. Market measurements and source notes are grouped too.
+        required = (("hypotheses", "investor-flow", "next-update") if "trading" in section_keys else
+                    ("change", "hypotheses", "rules", "investor-flow", "market-activity", "execution-flow", "provenance", "limitations"))
+        for key in required:
             if key not in section_keys:
                 issues.append("missing-observation-" + key)
         if re.fullmatch(r"(?:강화|약화|유지|새로 확인|반증·해소|근거 만료)(?:\s*·\s*(?:강화|약화|유지|새로 확인|반증·해소|근거 만료))*", document.lead.strip()):

@@ -531,7 +531,16 @@ def render_template(template: str, context: Dict[str, object]) -> str:
     while compacted and not compacted[-1].strip():
         compacted.pop()
     rendered = "\n".join(compacted)
-    return beginner_friendly_text(rendered or context_value(values.get("body") or values.get("title") or ""))
+    rendered = rendered or context_value(values.get("body") or values.get("title") or "")
+    return rendered if prepared_relation_document(values) else beginner_friendly_text(rendered)
+
+
+def prepared_relation_document(context: Dict[str, object]) -> bool:
+    """The versioned customer document already owns its wording and units."""
+    from digital_twin.modules.notifications.domain.relation_change_presentation import PRESENTATION_VERSION
+    document = context.get("customerInvestmentDocument") or {}
+    return (context.get("relationChangePresentationVersion") == PRESENTATION_VERSION
+            and isinstance(document, dict) and document.get("role") == "typedb-observation")
 
 
 def context_raw_lines(context: Dict[str, object]) -> List[str]:
@@ -1113,7 +1122,9 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rendered = render_template(template.template, values)
         rich = template_prefers_rich_text(template.template, rendered)
         rendered = append_ai_opinion(rendered, values, rich)
-        rendered = beginner_friendly_text(append_reasoning_explanation(rendered, values, rich))
+        rendered = append_reasoning_explanation(rendered, values, rich)
+        if not prepared_relation_document(values):
+            rendered = beginner_friendly_text(rendered)
         rendered = append_external_api_sources(rendered, values, rich)
         rendered = append_message_footer(rendered, values, rich)
         rendered = prepend_message_start_badge(rendered, rich, values)
@@ -1122,7 +1133,9 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_text(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
-    rendered = beginner_friendly_text(append_reasoning_explanation(rendered, values, rich))
+    rendered = append_reasoning_explanation(rendered, values, rich)
+    if not prepared_relation_document(values):
+        rendered = beginner_friendly_text(rendered)
     rendered = append_external_api_sources(rendered, values, rich)
     rendered = append_message_footer(rendered, values, rich)
     rendered = prepend_message_start_badge(rendered, rich, values)

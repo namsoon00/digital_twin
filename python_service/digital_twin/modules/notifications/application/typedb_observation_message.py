@@ -914,8 +914,8 @@ def typedb_observation_telegram_message(
         summary = relation_change_summary(relation_packet)
         lead = summary["lead"]
         relation_sections = list(summary["sections"])
-        relation_sections.insert(-4, ("financial-evidence", "재무 참고 · 보고 기간 기준", financial_evidence_rows(context, include_context=True)))
-        relation_sections.insert(-2, ("tracking", "시스템이 추적 중", follow_up_rows))
+        relation_sections.insert(-1, ("financial-evidence", "재무 참고 · 보고 기간 기준", financial_evidence_rows(context, include_context=True)))
+        relation_sections.insert(-1, ("tracking", "자동으로 확인 중인 조건", follow_up_rows))
         # These sentences are already authored in readable Korean. Repeated
         # beginner substitutions used to obscure hypothesis and rule semantics.
         level = "intermediate"

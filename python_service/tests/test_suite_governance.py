@@ -241,7 +241,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Five incident regressions cover verifiable clock metadata and legacy
         # prompt replay, coupled provider/price clocks, lossless byte-bounded
         # claims and one-at-a-time history reads against isolated MySQL.
-        self.assertLessEqual(total, 2010)
+        # Hypothesis-scoped wording preserves distinct changes, checks and qualification through transport.
+        self.assertLessEqual(total, 2011)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

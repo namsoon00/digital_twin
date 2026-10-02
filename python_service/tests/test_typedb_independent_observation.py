@@ -129,10 +129,11 @@ class IndependentTypeDBTests(unittest.TestCase):
     def test_render_keeps_linked_proof_current_data_and_distinct_clocks(self):
         context = readable_fixture()
         text = typedb_observation_telegram_message(context)
-        for value in ("관찰 가설", "반등이 이어지지 않을 가능성", "11,000원", "+2.5%", "10,000원 → 11,000원", "외국인: 순매도 500주",
+        for value in ("살펴볼 가설", "반등이 이어지지 않을 가능성", "11,000원", "+2.5%", "10,000원 → 11,000원", "외국인: 순매도 500주",
                       "기관: 순매수·매도 차이 0주", "개인: 아직 집계 전", "장중 누적 추정", "10/02 10:00 KST", "10/02 10:10 KST",
                       "체결강도 120", "매수 체결 6,000주", "매수 대기 500주", "매도 대기 600주", "110,000,000원", "계좌 비중 2.5%",
-                      "연결된 분석 신호 조건 확인", "참고 측정값", "검증 자료 축적 중", "독립 결과 1건", "60분 · 1일", "-0.5%"):
+                      "판정 규칙: 분석 신호 조건 확인", "함께 본 수치", "아직 검증 중", "확인한 결과 1건", "60분 · 1일", "0.5% 이상 하락",
+                      "20일 평균 가격보다 1.25% 낮음"):
             self.assertIn(value, text)
         for value in ("long machine statement", "조건값 미보존", "매수 0주", "매도 0주", "100%", "0분 뒤", "/api/private", "계좌 정책 0 —"):
             self.assertNotIn(value, text)
@@ -149,13 +150,62 @@ class IndependentTypeDBTests(unittest.TestCase):
         from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
         from digital_twin.modules.notifications.domain.notifications import NotificationJob
         job = NotificationJob.create("fallback", message_type="investmentInsight", context=context)
-        renderer = NotificationRenderingService()
+        from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
+        renderer = NotificationRenderingService(template_renderer=lambda job: render_notification(NotificationTemplate.default("investmentInsight"), job.context))
         first = renderer.render(job)
+        self.assertIn("살펴볼 가설", first, "the transport template must not rewrite the normalized document")
         previous_price = next(row for row in job.context["relationChangeEvidence"]["previous"]["facts"] if row["id"] == "currentPrice")
         previous_price["value"] = 10500
         self.assertIn("10,500원 → 11,000원", renderer.render(job))
         job.context["transportDelivery"] = {"message": first, "relationChangeEvidence": deepcopy(context["relationChangeEvidence"])}
         self.assertEqual(first, renderer.render(job), "partial delivery must keep its exact original body")
+
+    def test_multi_hypothesis_changes_keep_their_own_meaning_conditions_and_qualification(self):
+        from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words
+        context = readable_fixture()
+        relation = context["ontologyRelationContext"]
+        first = relation["hypothesisSet"]["hypotheses"][0]
+        first.update(expectedOutcome="사용자가 작성한 별도의 회복 설명", falsificationContract="별도로 작성한 조건", evidenceState="blocked")
+        # Unrecognized release wording is preserved, not replaced from an ID.
+        self.assertEqual("사용자가 작성한 별도의 회복 설명", hypothesis_words(first)[1])
+        first.update(expectedOutcome="과도한 가격 이탈이 기준 경로로 수렴",
+                     falsificationContract="회복 가격대를 재이탈하거나 하락 속도가 재가속")
+        second = {**deepcopy(first), "hypothesisId": "h2", "supportingRuleIds": ["rule:other"],
+                  "expectedOutcome": "거시·연관자산 충격이 종목 위험으로 전이",
+                  "falsificationContract": "충격이 완화되거나 종목이 독립적인 상대 강도를 확인",
+                  "evidenceState": "supported", "qualification": {"status": "observed", "decisiveOutcomeCount": 5}}
+        relation["hypothesisSet"]["hypotheses"].append(second)
+        raw = relation["hypothesisLifecycle"]["transitions"][0]
+        raw.update(currentState="invalidated", previousState="maintained")
+        raw["record"] = {"snapshot": {"hypothesisIds": ["h2"], "sourceRuleIds": ["rule:linked"]}}
+        context["relationChangeEvidence"] = relation_change_evidence(context)
+        packet = deepcopy(context["relationChangeEvidence"])
+        self.assertEqual(["h2"], packet["transitions"][0]["hypothesisIds"])
+        text = typedb_observation_telegram_message(context)
+        doc = context["customerInvestmentDocument"]
+        self.assertIn("외부 시장의 위험 전달 가능성", doc["lead"])
+        self.assertNotIn("가격 회복", doc["lead"], "do not assign another hypothesis's change to this one")
+        self.assertIn("더 이상 충족되지", doc["lead"])
+        self.assertNotIn("위험이 해소", text)
+        sections = {s["key"]: s for s in doc["sections"]}
+        self.assertIn("외부 시장", sections["hypotheses"]["title"], "the changed hypothesis is shown first")
+        first_text, second_text = " ".join(sections["hypotheses-2"]["rows"]), " ".join(sections["hypotheses"]["rows"])
+        self.assertIn("하락 속도가 빨라지는지", first_text)
+        self.assertIn("현재 판단 근거로 사용 보류", first_text)
+        self.assertNotIn("외부 충격", first_text)
+        self.assertIn("외부 충격이 줄거나", second_text)
+        self.assertIn("결과 5건", second_text)
+        self.assertNotIn("현재 판단 근거로 사용 보류", second_text)
+        self.assertEqual(packet, context["relationChangeEvidence"], "presentation cannot rewrite native evidence")
+        from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
+        from digital_twin.modules.notifications.domain.notifications import NotificationJob
+        from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
+        context["relationChangeEvidence"]["current"]["hypotheses"][1]["state"] = "blocked"
+        context["relationChangeEvidence"]["current"]["hypotheses"][1]["qualification"] = dict(first["qualification"])
+        job = NotificationJob.create("preview", message_type="investmentInsight", context=context)
+        rendered = NotificationRenderingService(template_renderer=lambda j: render_notification(NotificationTemplate.default("investmentInsight"), j.context)).render(job)
+        self.assertEqual(2, rendered.count("현재 판단 근거로 사용 보류"))
+        self.assertEqual(2, rendered.count("검증 상태: 아직 검증 중"), "equal statuses still belong to separate hypotheses")
 
     def test_complete_flow_shows_reported_buy_sell_and_zero_but_never_estimates_amount(self):
         from digital_twin.modules.notifications.domain.observation_market_snapshot import investor_rows
@@ -190,6 +240,17 @@ class IndependentTypeDBTests(unittest.TestCase):
         snapshot["marketSignalCoverage"] = {"investor": {"status": "unsupported", "observedFields": []}}
         sections = {key: rows for key, _, rows in market_snapshot_sections(snapshot)}
         self.assertIn("미지원", sections["investor-flow"][0])
+        snapshot["marketSignalCoverage"]["investor"] = {"participantStatus": {party: "unsupported" for party in ("foreign", "institution", "individual")}}
+        self.assertEqual(1, len(dict((key, rows) for key, _, rows in market_snapshot_sections(snapshot))["investor-flow"]))
+        context = readable_fixture()
+        for row in context["relationChangeEvidence"]["current"]["facts"]:
+            if row["id"] == "volumeRatio":
+                row["value"] = .004
+        from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
+        context["telegramMessage"] = typedb_observation_telegram_message(context)
+        rendered = render_notification(NotificationTemplate.default("investmentInsight"), context)
+        self.assertIn("거래량 비율 0.004배", rendered)
+        self.assertNotIn("거래량 비율 0배", rendered)
 
 
 if __name__ == "__main__":

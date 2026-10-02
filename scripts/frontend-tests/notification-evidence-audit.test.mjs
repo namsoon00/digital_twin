@@ -34,11 +34,22 @@ test("relation detail explains model proof and source coverage without losing ob
   const packet = {version: "relation-change-evidence-v1", current: {marketSignalCoverage: {
     investor: {sourceAsOf: "2026-10-02T10:00:00+09:00", measurementType: "intraday-estimate", observedFields: ["institutionNetVolume", "<script>x</script>"]}
   }}, changes: {
-    hypotheses: [{id: "h", current: {claim: "verbose old claim", expectedOutcome: "반등이 이어지지 않을 가능성", falsificationContract: "회복 유지", qualification: {reason: "표본 부족"}}}],
+    hypotheses: [{id: "h", current: {claim: "verbose old claim", expectedOutcome: "반등이 이어지지 않을 가능성", falsificationContract: "회복 유지", qualification: {reason: "표본 부족"}, claimContract: {outcomeContract: {outcomeHorizonMinutes: [60, 1440], criteria: [{role: "cause", metric: "ma20DistanceChangePp", operator: "<", threshold: 0, horizonMinutes: 0}]}}}}],
     rules: [{id: "r", current: {conditions: [{modelSignalMatched: true, observedValue: {contractMatched: true}, measuredFactIds: ["ma20Distance"]}]}}],
     facts: [{id: "institutionNetVolume", current: {value: 0}}]
   }};
   const html = renderRelationChangeEvidence(packet);
   for (const value of ["반등이 이어지지 않을 가능성", "회복 유지", "표본 부족", "분석 신호 조건 확인", "자료별 집계 시각", "2026-10-02T10:00:00+09:00", "institutionNetVolume", "<td>0</td>"]) assert.ok(html.includes(value), value);
   assert.doesNotMatch(html, /\[object Object\]|verbose old claim|<script>/);
+  assert.match(html, /<details><summary>전체 추론 근거/);
+  assert.match(html, /원인 확인.*20일 평균 가격과의 거리 변화/);
+  assert.doesNotMatch(html, /0분 뒤/);
+  const { renderNotificationCustomerDocument } = await import("../../public/modules/notifications/customer-document.mjs");
+  const compact = renderNotificationCustomerDocument({customerInvestmentDocument: {role: "typedb-observation", sections: [
+    {key: "current-price", title: "시세", rows: ["11000원"]},
+    {key: "hypotheses", title: "회복 가설", rows: ["설명", "규칙", "다음 확인: 회복 유지", "아직 검증 중"]},
+    {key: "hypotheses-2", title: "외부 영향 가설", rows: ["설명", "규칙", "다음 확인: 충격 완화", "아직 검증 중"]}
+  ]}}, true);
+  for (const value of ["11000원", "회복 유지", "충격 완화"]) assert.ok(compact.includes(value), value);
+  assert.equal((compact.match(/아직 검증 중/g) || []).length, 2);
 });

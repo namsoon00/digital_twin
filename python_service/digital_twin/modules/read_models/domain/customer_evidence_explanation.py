@@ -200,7 +200,9 @@ def customer_safe_text(value: object) -> str:
     )
     text = re.sub(
         r"(?<![\d.])(-?\d+\.\d{3,})(?!\d)",
-        lambda match: (f"{float(match.group(1)):.2f}").rstrip("0").rstrip("."),
+        # A small measured quantity/ratio must not turn into an observed zero.
+        lambda match: (match.group(1) if 0 < abs(float(match.group(1))) < .01 else
+                       (f"{float(match.group(1)):.2f}").rstrip("0").rstrip(".")),
         text,
     )
     text = re.sub(

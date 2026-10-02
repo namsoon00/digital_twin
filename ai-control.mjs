@@ -10,6 +10,25 @@ const reasons = {"no-new-research-path":"추가로 조사할 자료 경로를 �
 const date = (value) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString("ko-KR") : "미정";
 let loading = false;
 let dirty = false;
+let brainDirty = false;
+let brainCases = [];
+const brainLabels = {open:"질문 등록",waiting:"자료·조사 대기","review-needed":"조사 결과 재검토",blocked:"추가 자료·기능 필요",answered:"AI 답변 기록",dismissed:"검토 종료",proposed:"개선 제안",planned:"개선 계획",implemented:"반영 신고 · 효과 미검증"};
+const categoryLabels = {analysis:"분석 품질",data:"데이터",experience:"이용 경험",operations:"운영"};
+function brainView(brain = {}) {
+  brainCases = brain.cases || [];
+  const cards = brainCases.map((row) => {
+    const feedback = row.kind === "service-feedback";
+    const origin = row.origin || {};
+    return `<div class="panel brain-card"><header><h3>${escape(row.symbol)} · ${escape(feedback ? categoryLabels[row.category] : "지속 질문")}</h3><span>${escape(brainLabels[row.status] || row.status)}</span></header>
+      <p><strong>${escape(feedback ? row.problem : row.question)}</strong></p>
+      ${feedback ? `<p>${escape(row.proposal)}</p><p class="muted">개선 확인 기준: ${escape(row.verification)}</p>` : `<p>${escape(row.reason)}</p><p class="muted">완료 기준: ${escape(row.completionCriterion)}<br>다음 확인 ${escape(date(row.nextCheckAt))} · 연결된 조사 ${escape(row.researchAttempts || 0)}회</p>`}
+      <details><summary>처음 생긴 이유와 근거 · ${escape(date(origin.capturedAt))}</summary><p>${escape(origin.summary)}</p><p>${escape(origin.hypothesis)}</p><p class="muted">반대 근거: ${escape(origin.counterEvidence)}</p><pre>${escape(JSON.stringify({sourceSnapshots:origin.sourceSnapshots,evidence:origin.evidence},null,2))}</pre></details>
+      <details><summary>진행과 평가 이력</summary>${(row.history || []).map(event => `<p>${escape(date(event.at))} · ${escape(brainLabels[event.status] || event.status)}<br>${escape(event.reason)}</p><pre>${escape(JSON.stringify(event.details || {},null,2))}</pre>`).join("") || '<p>기록이 없습니다.</p>'}</details>
+      ${feedback ? `<form class="feedback-review" data-case="${escape(row.caseId)}"><label>검토 결과 <select name="status"><option value="planned">개선 계획에 반영</option><option value="implemented">반영 사실 기록</option><option value="dismissed">사유를 남기고 종료</option></select></label><label>검토 사유 또는 확인한 변경 <textarea name="note" minlength="8" maxlength="600" required placeholder="어떤 변경을 했거나 계획했는지 적어 주세요."></textarea></label><button type="submit">검토 기록</button><button type="reset">입력 취소</button><span class="feedback-status" role="status"></span></form><p class="muted">반영 사실 기록은 소유자의 보고입니다. 개선 효과의 입증과 구분하며 다음 AI 분석에서 참고합니다.</p>` : ""}
+      </div>`;
+  }).join("");
+  return `<p class="muted">${(brain.goals || []).map(escape).join(" · ")}</p>${cards || '<p class="panel">아직 등록된 지속 질문이나 개선 제안이 없습니다. 새 관찰에서 근거가 있는 질문과 제안을 등록합니다.</p>'}`;
+}
 async function request(url, options) {
   const response = await fetch(url, {cache:"no-store", ...options});
   const payload = await response.json();
@@ -49,6 +68,7 @@ async function load() {
     const waiting = data.enabled && scheduling.status === "budget-wait";
     $("overview").innerHTML = `${waiting ? `<p role="status"><strong>AI 관찰이 사용 한도로 대기 중입니다.</strong> ${scheduling.reason === "ai-task-budget-exhausted" ? "오늘 작업 시작 한도에 도달했습니다." : "새 분석과 독립 검토에 필요한 호출 여유가 없습니다."} 한도 갱신 ${escape(date(scheduling.nextCheckAt))}. 설정에서 한도를 늘리면 다음 실행부터 다시 확인합니다.</p>` : ""}<p>문장 검토 통과 ${escape(data.qualitySummary?.accepted ?? 0)}건 · 보류 ${escape(data.qualitySummary?.rejected ?? 0)}건. 검토 통과는 투자 가설의 적중이나 유료 가치 인증을 뜻하지 않습니다.</p><p>기존 규칙 기반 투자 알림은 종료했습니다. AI가 마지막 발송과 비교해 새로운 해석이 있을 때 알립니다. 같은 종목은 일반 관찰 3시간, 등록한 반증 조건의 새 전환은 1시간 간격이며 하루 최대 2회 · 계정당 하루 최대 8회입니다. 일일 한도는 UTC 기준입니다.</p><div class="metrics"><div class="metric">독립 관찰 상태<strong>${!data.enabled ? "일시 중지" : waiting ? "사용 한도 대기" : "사용"}</strong></div><div class="metric">오늘 시작한 작업<strong>${escape(data.tasksStartedToday)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyTaskBudget)}</strong></div><div class="metric">오늘 독립 AI 호출<strong>${escape(data.modelCallsUsedToday ?? 0)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyCallBudget)}</strong></div><div class="metric">대기·진행 작업<strong>${escape(data.activeTaskCount)}</strong></div></div><p class="muted">관찰 분석과 발송 전 검토는 각각 호출을 사용합니다. 뉴스 분석 등 별도 작업의 호출은 아래 이력에 표시되며 독립 AI 한도와 구분됩니다.</p>`;
     if (!dirty) { $("enabled").checked = data.configuredEnabled; $("budgetEnabled").checked = data.budgetEnabled !== false; syncBudgetFields(); $("taskBudget").value = data.dailyTaskBudget; $("callBudget").value = data.dailyCallBudget; }
+    if (!brainDirty) $("brain").innerHTML = brainView(data.brain);
     const analyses = data.tasks.filter((task) => task.result?.summary);
     const queue = data.tasks.filter((task) => !task.result?.summary);
     $("tasks").innerHTML = (analyses.map((task) => card(task, scheduling)).join("") || '<p class="panel">첫 관찰을 준비하고 있습니다. 유효한 계정·종목·그래프 근거가 준비되면 작업을 시작합니다.</p>') + `<details><summary>예약·조사·처리 기록 ${queue.length}개</summary>${queue.map((task) => card(task, scheduling)).join("")}</details>`;
@@ -57,6 +77,34 @@ async function load() {
   finally { loading = false; }
 }
 $("refresh").addEventListener("click", load);
+$("brain").addEventListener("input", (event) => {
+  const form = event.target.closest(".feedback-review");
+  if (form) { form.dataset.dirty = "true"; brainDirty = true; }
+});
+$("brain").addEventListener("reset", (event) => {
+  delete event.target.dataset.dirty;
+  brainDirty = !!$("brain").querySelector('[data-dirty="true"]');
+  if (!brainDirty) load();
+});
+$("brain").addEventListener("submit", async (event) => {
+  const form = event.target.closest(".feedback-review");
+  if (!form) return;
+  event.preventDefault();
+  const item = brainCases.find(row => row.caseId === form.dataset.case);
+  const status = form.querySelector(".feedback-status");
+  const button = form.querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    const saved = await request("/api/ai-control/feedback", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      caseId:item.caseId,accountId:item.accountId,symbol:item.symbol,revision:item.revision,
+      status:form.elements.status.value,note:form.elements.note.value})});
+    item.revision = saved.revision;
+    form.reset();
+    status.textContent = "검토 내용을 기록했습니다.";
+    await load();
+  } catch (error) { status.textContent = error.message; }
+  finally { button.disabled = false; }
+});
 function syncBudgetFields() { for (const id of ["taskBudget", "callBudget"]) $(id).disabled = !$("budgetEnabled").checked; }
 $("settings").addEventListener("input", () => { dirty = true; syncBudgetFields(); });
 $("settings").addEventListener("submit", async (event) => {

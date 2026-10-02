@@ -2129,7 +2129,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         from digital_twin.modules.notifications.public import NotificationIngressService
 
         from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired, RETIRED_REASON
-        if job.message_type == "investmentInsight" and legacy_route_retired(self.runtime_settings):
+        from digital_twin.modules.notifications.domain.typedb_publication import independent_typedb_publication
+        if job.message_type == "investmentInsight" and legacy_route_retired(self.runtime_settings) and not independent_typedb_publication(job.context, account_id=job.account_id):
             job.status, job.last_error = "suppressed", RETIRED_REASON
             job.context["deliverySuppressionReason"] = "legacy-investment-route-retired"
             if persist_suppressed and not connection.execute("SELECT job_id FROM notification_jobs WHERE job_id=%s", (job.job_id,)).fetchone():

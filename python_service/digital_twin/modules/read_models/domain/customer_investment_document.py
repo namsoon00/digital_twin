@@ -700,7 +700,10 @@ def _unique_rows(values: Iterable[object], level: str, limit: int = 8) -> Tuple[
             continue
         if any(
             key == prior
-            or (len(key) >= 24 and (key in prior or prior in key))
+            # A longer row may share a clock or label while adding measurements.
+            # Never discard those measurements merely because an earlier row is
+            # contained in it.
+            or (len(key) >= 24 and key in prior)
             for prior in keys
         ):
             continue
@@ -751,6 +754,12 @@ def customer_investment_document_quality(
     if not _clean_spaces(document.lead):
         issues.append("missing-lead")
     section_keys = {section.key for section in document.sections if section.rows}
+    if document.role == "typedb-observation" and "current-price" in section_keys:
+        for key in ("change", "hypotheses", "rules", "investor-flow", "market-activity", "execution-flow", "provenance", "limitations"):
+            if key not in section_keys:
+                issues.append("missing-observation-" + key)
+        if re.fullmatch(r"(?:강화|약화|유지|새로 확인|반증·해소|근거 만료)(?:\s*·\s*(?:강화|약화|유지|새로 확인|반증·해소|근거 만료))*", document.lead.strip()):
+            issues.append("unexplained-observation-change")
     if document.role in {"ai-judgement", "system-judgement"} and "action" not in section_keys:
         issues.append("missing-ai-action")
     if "next-update" not in section_keys:

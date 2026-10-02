@@ -103,8 +103,12 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   document. Review acceptance is not empirical qualification. This is an
   explicit exception for observation narratives, not authority to choose an
   investment action, mutate a rule or create a decision episode. The former
-  `investmentInsight` transport and rule-triggered AI queue are retired in
-  runtime composition. See `docs/ai-control.md` for the full publication contract.
+  rule-triggered AI queue and AI-authored `investmentInsight` transport are
+  retired in runtime composition. Owner-approved correction (2026-10-02):
+  deterministic, graph-proven `investmentInsight` relation observations publish
+  independently with `PUBLISH_TYPEDB`, matching account/subject/case/generation/
+  ABox identity and `NO_ACTION`. They never enter the old AI queue or advance
+  central AI memory. See `docs/ai-control.md` for the full publication contract.
 - Independent observations must consume the versioned evidence contract in
   `docs/observation-evidence-protocol.md`. Planner topology is not an evidence
   inventory. The producing owner accounts for included, missing, budget-excluded

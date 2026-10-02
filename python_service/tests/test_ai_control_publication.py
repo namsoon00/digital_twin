@@ -304,3 +304,30 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertEqual([], legacy.claim("manual"))
         self.assertEqual("retired", legacy.enqueue(next_job, None)["status"])
         self.assertFalse(legacy.complete(None, "manual", None, {}))
+
+    def test_independent_typedb_survives_retirement_and_worker_delivers_without_ai(self):
+        from test_typedb_independent_observation import independent_fixture
+        from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner
+        from digital_twin.modules.notifications.domain.typedb_publication import independent_typedb_publication
+        result, _, handoff, _ = independent_fixture(queue=self.queue, account_id=SUBJECT["accountId"])
+        self.assertEqual(1, result["typedbPublishedCount"], result)
+        self.assertEqual([], handoff.events)
+        self.assertEqual(0, self.publication.retire_legacy_work()["notifications"])
+        with self.queue.connect() as connection:
+            row = connection.execute("SELECT text,payload_json FROM notification_jobs WHERE account_id=%s AND message_type='investmentInsight'", (SUBJECT["accountId"],)).fetchone()
+        job = self.queue.job_from_row(row)
+        self.assertTrue(independent_typedb_publication(job.context, account_id=job.account_id))
+        notifier = Mock(supports_delivery_checkpoints=False)
+        notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
+        account = SimpleNamespace(account_id=job.account_id, quiet_hours_active=lambda *_: False)
+        old_ai = Mock()
+        runner = NotificationQueueRunner(self.queue, SimpleNamespace(load_all=lambda: [account]), lambda _: notifier,
+            settings=self.settings, include_message_types=["investmentInsight"], ai_request_enqueuer=old_ai,
+            delivery_guard=self.publication.delivery_guard)
+        self.assertEqual(1, runner.run_once(), runner.last_run_details)
+        old_ai.enqueue.assert_not_called()
+        notifier.send.assert_called_once()
+        with self.queue.connect() as connection:
+            self.assertEqual("done", connection.execute("SELECT status FROM notification_jobs WHERE job_id=%s", (job.job_id,)).fetchone()["status"])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) AS n FROM notification_delivery_attempts WHERE job_id=%s AND status='delivered'", (job.job_id,)).fetchone()["n"])
+        self.assertEqual([], self.publication.receipts(job.account_id), "TypeDB cannot advance independent AI memory")

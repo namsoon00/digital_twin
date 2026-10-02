@@ -19,6 +19,7 @@ from digital_twin.modules.notifications.application.ai_observation_diagnostic im
 from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATION_DIAGNOSTIC
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
+from digital_twin.modules.notifications.contracts import independent_typedb_publication
 
 
 def validate_narrative(result):
@@ -56,13 +57,17 @@ class AIControlPublication:
             rows = connection.execute(
                 "SELECT text,payload_json FROM notification_jobs WHERE message_type='investmentInsight' "
                 "AND status IN ('pending','failed','processing','awaiting_ai') FOR UPDATE").fetchall()
+            retired_count = 0
             for row in rows:
                 job = self.notifications.job_from_row(row)
+                if independent_typedb_publication(job.context, account_id=job.account_id):
+                    continue
                 job.status, job.last_error, job.updated_at = "suppressed", RETIRED_REASON, stamp()
                 job.context["deliverySuppressionReason"] = "legacy-investment-route-retired"
                 self.notifications.upsert_job_with_connection(connection, job)
                 self.notifications.record_lifecycle_with_connection(connection, job, "suppressed", "suppressed", RETIRED_REASON)
-        return {"requests": requests, "notifications": len(rows)}
+                retired_count += 1
+        return {"requests": requests, "notifications": retired_count}
 
     def receipts(self, account_id, symbol=""):
         with self.notifications.connect() as connection:
@@ -130,7 +135,7 @@ class AIControlPublication:
 
     @contextmanager
     def delivery_guard(self, job, message):
-        if job.message_type == "investmentInsight" and legacy_route_retired(self.settings):
+        if job.message_type == "investmentInsight" and legacy_route_retired(self.settings) and not independent_typedb_publication(job.context, account_id=job.account_id):
             raise NotificationDeliverySuppressed(RETIRED_REASON)
         if job.message_type == AI_OBSERVATION_DIAGNOSTIC:
             with self.notifications.delivery_subject_lock(job.account_id, "ai-control-diagnostic") as acquired:

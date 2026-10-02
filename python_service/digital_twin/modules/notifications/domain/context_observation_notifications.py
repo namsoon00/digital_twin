@@ -341,7 +341,7 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
                 or subject_case.get("sourceAboxSnapshotId")
             ),
             "inferenceGenerationId": generation_id,
-            "aiHandoffPending": True,
+            "aiHandoffPending": stage_observation.get("independent") is not True,
         }
     lifecycle_transition = relation_lifecycle_transition_contract(relation)
     if (

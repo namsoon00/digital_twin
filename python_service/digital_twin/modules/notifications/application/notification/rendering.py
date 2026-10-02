@@ -4,6 +4,7 @@ import html
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Dict
@@ -22,6 +23,7 @@ from digital_twin.modules.notifications.application.customer_investment_message 
 from digital_twin.modules.notifications.public import execution_telegram_message
 from digital_twin.modules.notifications.application.typedb_observation_message import typedb_observation_telegram_message
 from digital_twin.modules.notifications.application.notification.presentation import content_body, present_notification, typed_customer_document
+from digital_twin.modules.notifications.domain.relation_change_presentation import PRESENTATION_VERSION as RELATION_PRESENTATION_VERSION
 
 
 class NotificationRenderingService:
@@ -55,6 +57,11 @@ class NotificationRenderingService:
                 sent_at=job.context["aiControlRenderedAt"], debug_number=notification_debug_number(job.job_id))
             job.text = rendered
             return rendered
+        progress = job.context.get("transportDelivery") or {}
+        if job.message_type == INVESTMENT_INSIGHT and progress.get("message") and progress.get("relationChangeEvidence"):
+            job.context["relationChangeEvidence"] = deepcopy(progress["relationChangeEvidence"])
+            job.text = str(progress["message"])
+            return job.text
         self.apply_send_time_context(job)
         if bool((job.context or {}).get("notificationReplayPreserveOriginal")):
             rendered = str(job.text or "").strip()
@@ -193,6 +200,14 @@ class NotificationRenderingService:
         if narrative_only:
             context.setdefault("notificationDecisionMode", narrative_only.get("decisionMode") or "typedb-review-observation")
         document = customer_investment_document_from_dict(context.get("customerInvestmentDocument"))
+        relation_packet = context.get("relationChangeEvidence") or {}
+        relation_revision = ""
+        if observation and relation_packet.get("version") == "relation-change-evidence-v1":
+            relation_revision = hashlib.sha256((RELATION_PRESENTATION_VERSION + json.dumps(
+                relation_packet, sort_keys=True, default=str,
+            )).encode()).hexdigest()
+            if context.get("customerInvestmentDocumentRelationRevision") != relation_revision:
+                document = None
         registration = context.get("followUpRegistration") or {
             "conditions": (context.get("investmentDecisionEpisode") or {}).get("followUpConditions") or []
         }
@@ -232,6 +247,7 @@ class NotificationRenderingService:
                 notification_number=str(context.get("notificationNumber") or document.notification_number or ""),
             ))
             context["customerInvestmentDocument"] = document.to_dict()
+            context["customerInvestmentDocumentRelationRevision"] = relation_revision
             context["customerInvestmentDocumentRegistrationRevision"] = registration_revision
             context["customerInvestmentDocumentQuality"] = customer_investment_document_quality(document)
             rendered = render_customer_investment_document(document)

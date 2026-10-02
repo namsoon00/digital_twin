@@ -370,7 +370,8 @@ class NotificationQueueRunner:
             self.active_job_index = index
             self.active_job_stage = "claimed"
             from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired, RETIRED_REASON
-            if job.message_type == INVESTMENT_INSIGHT and legacy_route_retired(self.settings):
+            from digital_twin.modules.notifications.domain.typedb_publication import independent_typedb_publication
+            if job.message_type == INVESTMENT_INSIGHT and legacy_route_retired(self.settings) and not independent_typedb_publication(job.context, account_id=job.account_id):
                 job.context["deliverySuppressionReason"] = "legacy-investment-route-retired"
                 self.queue.mark_suppressed(job, RETIRED_REASON)
                 self.last_run_details.append(self.job_detail(job, "suppressed", RETIRED_REASON))

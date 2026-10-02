@@ -679,7 +679,7 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assertIn("확인된 관계", typedb_message)
         self.assertNotIn("대표 관계", typedb_message)
         self.assertIn(
-            "이 변화가 투자 행동을 바꿀 수준이면 AI 종합 판단이 별도 알림으로 이어집니다.",
+            "AI 관찰은 별도로 진행됩니다.",
             typedb_message,
         )
         self.assertNotIn("AI 투자 인사이트", typedb_message)

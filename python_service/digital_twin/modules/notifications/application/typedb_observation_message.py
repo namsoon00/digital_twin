@@ -910,14 +910,21 @@ def typedb_observation_telegram_message(
     relation_sections = None
     if relation_packet.get("version") == "relation-change-evidence-v1":
         from digital_twin.modules.notifications.domain.relation_change import relation_change_summary
+        from digital_twin.modules.notifications.domain.relation_change_presentation import PRESENTATION_VERSION
         summary = relation_change_summary(relation_packet)
         lead = summary["lead"]
-        relation_sections = summary["sections"]
+        relation_sections = list(summary["sections"])
+        relation_sections.insert(-4, ("financial-evidence", "재무 참고 · 보고 기간 기준", financial_evidence_rows(context, include_context=True)))
+        relation_sections.insert(-2, ("tracking", "시스템이 추적 중", follow_up_rows))
+        # These sentences are already authored in readable Korean. Repeated
+        # beginner substitutions used to obscure hypothesis and rule semantics.
+        level = "intermediate"
+        context["relationChangePresentationVersion"] = PRESENTATION_VERSION
     document = CustomerInvestmentDocument(
         role="typedb-observation",
         headline=headline,
         target=target,
-        role_label="룰박스 관계 변화 · 가설, 규칙, 관측 사실을 연결한 결과입니다." if relation_sections else "관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
+        role_label="가설과 규칙, 실제 측정값을 함께 확인하는 관계 변화 알림입니다." if relation_sections else "관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
         lead=lead,
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))
@@ -938,7 +945,7 @@ def typedb_observation_telegram_message(
                     [
                         "추적 조건에 도달하면 최신 가격·수급·뉴스를 다시 연결해 결과를 알려드립니다."
                     ] if follow_up_rows else [
-                        "이 변화가 투자 행동을 바꿀 수준이면 AI 종합 판단이 별도 알림으로 이어집니다."
+                        "새로운 근거 변화가 확인되면 발송 간격을 확인해 알려드립니다. AI 관찰은 별도로 진행됩니다."
                     ],
                 ),
                 ("current", "현재 상황", flow_rows),

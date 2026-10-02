@@ -34,12 +34,14 @@ class InvestmentInsightDispatchService:
         ai_handoff_service,
         reasoning_orchestrator,
         account_repository=None,
+        legacy_ai_handoff_enabled=True,
     ):
         self.notification_ingress = notification_ingress
         self.notification_queue = notification_queue
         self.ai_handoff_service = ai_handoff_service
         self.reasoning_orchestrator = reasoning_orchestrator
         self.account_repository = account_repository
+        self.legacy_ai_handoff_enabled = bool(legacy_ai_handoff_enabled)
 
     def enqueue(self, events: Iterable[AlertEvent]) -> Dict[str, object]:
         """Compatibility entry point used by the versioned reasoning engine."""
@@ -110,6 +112,33 @@ class InvestmentInsightDispatchService:
                 continue
 
             if decision.route == HANDOFF_AI:
+                if not self.legacy_ai_handoff_enabled:
+                    # Central AI observes independently. Publish the verified
+                    # graph stage without creating or consulting a legacy AI job.
+                    route_counts[HANDOFF_AI] -= 1
+                    route_counts[PUBLISH_TYPEDB] += 1
+                    outcome, observation_event = self._publish_ai_handoff_typedb_observation(
+                        event, source_event, subject_case, decision,
+                        account_contexts.get(str(getattr(event, "account_id", "") or ""), {}),
+                        independent=True,
+                    )
+                    outcomes.append(outcome)
+                    if not outcome.get("queued") and observation_event is None:
+                        outcome.pop("companionOfRoute", None)
+                        outcome["status"] = "typedb-observation-archived"
+                        outcome["route"] = ARCHIVE
+                        route_counts[PUBLISH_TYPEDB] -= 1
+                        route_counts[ARCHIVE] += 1
+                        archived = InferenceDispatchDecision.create(
+                            subject_case, ARCHIVE, outcome["reasonCode"], outcome["reason"],
+                            source_event_id=source_event.event_id,
+                        )
+                        self.reasoning_orchestrator.record_inference_dispatch(
+                            subject_case_id, archived, delivery_state="archived",
+                        )
+                    if outcome.get("queued") and observation_event is not None:
+                        typedb_queued_events.append(observation_event)
+                    continue
                 self.reasoning_orchestrator.record_inference_dispatch(
                     subject_case_id,
                     decision,
@@ -220,8 +249,10 @@ class InvestmentInsightDispatchService:
         subject_case,
         parent_decision: InferenceDispatchDecision,
         account_context: Mapping[str, object],
+        *,
+        independent: bool = False,
     ):
-        """Publish the verified TypeDB stage without replacing the AI route."""
+        """Publish verified graph evidence, optionally without any AI handoff."""
 
         context = deepcopy(_mapping(getattr(event, "metadata", {}) or {}))
         for key in (
@@ -278,6 +309,7 @@ class InvestmentInsightDispatchService:
             self.reasoning_orchestrator.compact_subject_context(subject_case)
         )
         context["typedbAiHandoffObservation"] = {
+            "independent": independent,
             "status": "eligible",
             "subjectCaseId": subject_case.subject_case_id,
             "inferenceGenerationId": subject_case.inference_generation_id,
@@ -312,7 +344,7 @@ class InvestmentInsightDispatchService:
             subject_case,
             PUBLISH_TYPEDB,
             "material-typedb-stage-observation",
-            str(semantic_delivery.get("reason") or "AI 판단 전 TypeDB 관계 변화가 확인됐습니다."),
+            str(semantic_delivery.get("reason") or "TypeDB 관계 변화가 확인됐습니다."),
             source_event_id=source_event.event_id,
             details={
                 "semanticDeliveryDecision": semantic_delivery,
@@ -328,10 +360,11 @@ class InvestmentInsightDispatchService:
             source_event,
             companion_decision,
             account_context,
-            record_subject=False,
-            reconcile_subject=False,
+            record_subject=independent,
+            reconcile_subject=independent,
         )
-        outcome["companionOfRoute"] = HANDOFF_AI
+        if not independent:
+            outcome["companionOfRoute"] = HANDOFF_AI
         return outcome, companion_event
 
     @staticmethod

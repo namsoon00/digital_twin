@@ -42,9 +42,9 @@ def financial_evidence_title(context):
     return "판단 근거 · 재무"
 
 
-def financial_evidence_rows(context, limit=5):
+def financial_evidence_rows(context, limit=5, *, include_context=False):
     packet, use, rule_text = financial_evidence_context(context)
-    if "graph.company." not in rule_text:
+    if "graph.company." not in rule_text and not (include_context and packet):
         return []
     if not packet:
         return ["판단에 사용한 재무 수치와 보고 기간을 확인하지 못했습니다."]

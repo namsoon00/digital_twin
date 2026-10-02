@@ -231,7 +231,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # invalid/stale clocks, audit input and receipt times, retain legacy
         # replay, keep read-stage failures out of model execution, and bound
         # the union of separately queried subject and macro evidence.
-        self.assertLessEqual(total, 1982)
+        # Six independent-observation regressions cover proof-scoped cutover,
+        # unchanged archival, complete source-clocked display, observed zero,
+        # small/unsupported measurements and real queue/worker delivery.
+        self.assertLessEqual(total, 1988)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

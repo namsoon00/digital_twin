@@ -33,9 +33,10 @@ graph projection. AI-generated account IDs, commands, URLs, trading actions or
 unregistered capabilities are rejected. Hypothesis development requests now enter
 the existing governed experiment lifecycle described below; the central AI does
 not acquire rule or model promotion authority. The owner-requested central AI cutover retires the former
-`investmentInsight` customer route, including relation-change and AI review
-messages. Graph collection, RuleBox inference and internal case history continue
-as evidence; they cannot trigger the former customer AI queue.
+rule-triggered AI review and AI-authored `investmentInsight` route. The 2026-10-02
+correction restores deterministic TypeDB relation observations as an independent
+`PUBLISH_TYPEDB` path. Graph collection, RuleBox inference and internal case history
+continue as evidence; they cannot trigger the former customer AI queue.
 
 ## AI and ontology development
 
@@ -222,7 +223,14 @@ Runtime settings pin `investmentNotificationRoute=ai-control`; the old worker
 count cannot revive it. New legacy queue admissions, claims, completions, direct
 notification admission and final sends are blocked. The central worker retires
 pending/in-flight legacy requests as superseded and old pending notifications as
-suppressed, retaining their history and reason. Historical component tests can
+suppressed, retaining their history and reason. A deterministic TypeDB observation
+is exempt only when its graph observation contract, `NO_ACTION`, writer provenance,
+dispatch route, account, symbol, subject case, generation and ABox identities agree.
+The same predicate applies at queue admission, worker processing, legacy retirement
+and final transport. Writer flags alone cannot reopen the old AI route. Production
+dispatch converts graph-verified handoff candidates to direct TypeDB observations
+without enqueueing AI; unchanged relationships remain archived. TypeDB delivery
+does not advance central AI receipts, memory or cooldowns. Historical component tests can
 still exercise old contracts using an explicit non-runtime settings fixture;
 there is no production UI switch back to that route.
 

@@ -35,8 +35,8 @@
       "function": "wire_v2_decision_services",
       "importCount": 7,
       "returnBundle": true,
-      "bodyHash": "6adee70b80289245f9cc132b849dd7cc05a690a84b6ba70b3ee581054f9232eb",
-      "reviewedChange": "Inject cutoff-bound dated company research memory into the existing AI continuity service without changing action authority; test_company_report_reading and test_decision_continuity."
+      "bodyHash": "6e4bb56cb813bae17bd8f4d35a21c5617ac5d589378288a7700ede4faa095f6a",
+      "reviewedChange": "Inject cutoff-bound dated company research memory into the existing AI continuity service without changing action authority; test_company_report_reading and test_decision_continuity. Production central-AI cutover now disables rule-triggered AI handoff while directly publishing graph-proven TypeDB observations; test_typedb_independent_observation and test_ai_control_publication."
     }
   ]
 }

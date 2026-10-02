@@ -79,7 +79,12 @@ def relation_change_snapshot(context):
             "ruleIds": strings(item.get("supportingRuleIds")),
             "evidenceIds": strings(item.get("supportingEvidenceIds")),
             "counterEvidenceIds": strings(item.get("counterEvidenceIds")),
+            "counterRuleIds": strings(item.get("counterRuleIds")),
             "invalidationConditions": strings(item.get("invalidationConditions")),
+            "expectedOutcome": str(item.get("expectedOutcome") or mapping(item.get("claimContract")).get("expectedOutcome") or ""),
+            "falsificationContract": str(item.get("falsificationContract") or mapping(item.get("claimContract")).get("falsificationContract") or ""),
+            "qualification": deepcopy(mapping(item.get("qualification"))),
+            "claimContract": deepcopy(mapping(item.get("claimContract"))),
         })
     # Compact subject packets may retain only exact candidate IDs. Do not invent
     # a claim from an unrelated rule or promote a policy rule into a hypothesis.
@@ -92,19 +97,29 @@ def relation_change_snapshot(context):
                                    "claim": "", "ruleIds": [], "evidenceIds": [], "counterEvidenceIds": [], "invalidationConditions": []})
                 known.add(identity)
     rules = {}
-    for item in [*rows(relation.get("referenceRules")), *rows(relation.get("activeRules")), *rows(relation.get("matchedRules"))]:
-        identity = str(item.get("ruleId") or item.get("rule_id") or "")
+    for item in [*rows(relation.get("referenceRules")), *rows(relation.get("activeRules")), *rows(relation.get("matchedRules")), *rows(graph.get("relations")), *rows(graph.get("traces"))]:
+        identity = str(item.get("ruleId") or item.get("rule_id") or item.get("sourceRuleId") or "")
         if not identity:
             continue
-        conditions = []
+        existing = rules.get(identity, {})
+        conditions = {row.get("conditionId") or str(index): row for index, row in enumerate(existing.get("conditions") or [])}
         for condition in rows(item.get("matchedConditions")) + rows(item.get("conditionMatches")):
-            conditions.append({key: deepcopy(condition.get(key)) for key in (
-                "conditionId", "label", "field", "operator", "expectedValue", "observedValue", "matched", "evidenceIds",
-            ) if isinstance(condition.get(key), (str, int, float, bool, list))})
-        rules[identity] = {"id": identity, "label": str(item.get("label") or item.get("ruleLabel") or identity),
-                           "matched": item.get("matched") if isinstance(item.get("matched"), bool) else None,
-                           "referenceOnly": bool(item.get("referenceOnly")) or mapping(item.get("knowledgeBasis")).get("decisionEligibility") == "reference-only", "conditions": conditions,
-                           "traceId": str(item.get("inferenceTraceId") or "")}
+            captured = {key: deepcopy(condition.get(key)) for key in (
+                "conditionId", "label", "field", "operator", "observedValue", "matched", "evidenceIds",
+                "matchedByTypeDB", "observedAt", "source", "freshnessStatus", "judgementEvidenceUsable",
+            ) if isinstance(condition.get(key), (str, int, float, bool, list, dict))}
+            captured["expectedValue"] = deepcopy(condition.get("expectedValue", condition.get("value")))
+            measured = mapping(condition.get("matchedTargetProperties"))
+            captured["measuredFactIds"] = [value.rsplit("#", 1)[-1] for value in strings(measured.get("modelEvidenceIds")) if "#" in value]
+            captured["modelSignalMatched"] = bool(measured.get("contractMatched") or condition.get("matchedByModelSignalInterpretationPolicy"))
+            conditions[str(condition.get("conditionId") or len(conditions))] = captured
+        rules[identity] = {"id": identity, "label": existing.get("label") or str(item.get("label") or item.get("ruleLabel") or identity),
+                           "matched": item.get("matched") if isinstance(item.get("matched"), bool) else existing.get("matched"),
+                           "referenceOnly": bool(existing.get("referenceOnly") or item.get("referenceOnly") or item.get("reference_only")) or mapping(item.get("knowledgeBasis")).get("decisionEligibility") == "reference-only",
+                           "conditions": list(conditions.values()),
+                           "traceId": str(item.get("inferenceTraceId") or item.get("id") or existing.get("traceId") or ""),
+                           "nextChecks": strings(item.get("nextChecks")) or existing.get("nextChecks", []),
+                           "claimContract": deepcopy(mapping(item.get("claimContract"))) or existing.get("claimContract", {})}
     fact_rows = []
     for key, value in facts.items():
         # Structured/vendor payloads are not an ABox fact table. Never copy
@@ -115,14 +130,25 @@ def relation_change_snapshot(context):
             continue
         fact_rows.append({"id": key, "label": FACT_LABELS.get(key, key), "value": value})
     source = mapping(relation.get("sourceSnapshot"))
+    coverage = mapping(facts.get("marketSignalCoverage"))
+    coverage_keys = ("status", "sourceAsOf", "fetchedAt", "observedFields", "fields", "participantStatus",
+                     "measurementType", "isEstimate", "provider", "freshnessStatus", "judgementEvidenceUsable",
+                     "tradeStrengthQualityState", "providerUpdateSlot", "nextProviderUpdateAt", "validUntil")
+    price_source = mapping(coverage.get("price"))
     return {
         "version": VERSION, "symbol": str(subject.get("symbol") or context.get("symbol") or ""),
+        "market": str(subject.get("market") or facts.get("market") or ""),
         "sourceAboxSnapshotId": str(case.get("sourceAboxSnapshotId") or graph.get("sourceAboxSnapshotId") or relation.get("sourceAboxSnapshotId") or ""),
         "inferenceGenerationId": str(case.get("inferenceGenerationId") or relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId") or ""),
-        "observedAt": str(source.get("generatedAt") or facts.get("quoteUpdatedAt") or facts.get("observedAt") or mapping(context.get("reasoningDeliveryTrigger")).get("observedAt") or ""),
+        "observedAt": str(price_source.get("sourceAsOf") or facts.get("quoteUpdatedAt") or facts.get("observedAt") or ""),
+        "capturedAt": str(source.get("generatedAt") or ""),
         "source": str(facts.get("quoteSource") or facts.get("apiSource") or ""),
         "dataState": str(mapping(relation.get("decisionState")).get("dataState") or "미기록"),
         "hypotheses": hypotheses, "rules": list(rules.values()), "facts": fact_rows,
+        "marketSignalCoverage": {name: {key: deepcopy(value[key]) for key in coverage_keys if key in value}
+                                 for name, value in coverage.items() if isinstance(value, Mapping)},
+        "investorFlowObservedFields": strings(facts.get("investorFlowObservedFields")),
+        "investorFlowParticipantStatus": deepcopy(mapping(facts.get("investorFlowParticipantStatus"))),
         "transitions": relation_change_authority(context),
     }
 
@@ -149,53 +175,6 @@ def relation_change_evidence(context, baseline=None):
 
 
 def relation_change_summary(packet):
-    """Short customer explanation; the detail packet keeps every captured row."""
-    current = mapping(packet.get("current"))
-    transitions = rows(packet.get("transitions"))
-    transition_rows = [
-        (item.get("previousStateLabel") or "이전 상태 미기록") + " → "
-        + str(item.get("currentStateLabel") or item.get("changeLabel") or "변경")
-        for item in transitions
-    ]
-    hypotheses = rows(current.get("hypotheses"))
-    rules = rows(current.get("rules"))
-    hypothesis_rows = [str(item.get("claim") or item.get("label") or item["id"])
-                       + " · " + str(STATE_LABELS.get(item.get("state"), item.get("state")) or "상태 미기록") for item in hypotheses[:3]]
-    rule_rows = []
-    for item in rules[:3]:
-        conditions = []
-        for condition in rows(item.get("conditions"))[:2]:
-            conditions.append(str(condition.get("label") or FACT_LABELS.get(condition.get("field"), condition.get("field")) or "조건")
-                              + " " + str(condition.get("operator") or "") + " " + str(condition.get("expectedValue", "미기록"))
-                              + " / 관측 " + str(condition.get("observedValue", "미기록")))
-        rule_rows.append(str(item.get("label") or item["id"]) + (" · " + "; ".join(conditions) if conditions else " · 조건값 미보존"))
-    fact_changes = rows(mapping(packet.get("changes")).get("facts"))
-    relevant = {condition.get("field") for rule in rules for condition in rows(rule.get("conditions"))}
-    fact_changes.sort(key=lambda item: (item["id"] not in relevant, item["id"] not in FACT_LABELS, item.get("change") == "unchanged"))
-    fact_rows = []
-    for item in fact_changes[:3]:
-        before, after = mapping(item.get("previous")), mapping(item.get("current"))
-        old = str(before.get("value")) if before else "미보존" if not packet.get("baselineAvailable") else "없음"
-        new = str(after.get("value")) if after else "없음"
-        fact_rows.append(str(after.get("label") or before.get("label") or item["id"]) + ": " + old + " → " + new)
-    limits = []
-    if not packet.get("baselineAvailable"):
-        limits.append("이전 발송의 상세 근거가 보존되지 않아 관측값의 전후 비교는 제한됩니다.")
-    if not hypotheses:
-        limits.append("이번 알림에 가설 상세가 보존되지 않았습니다. 관계 전환 기록을 기준으로 표시합니다.")
-    opposing = sum(len(item.get("counterEvidenceIds") or []) for item in hypotheses)
-    limits.append("반대 근거 " + str(opposing) + "건 · 상세에서 근거 식별자와 반증 조건을 확인할 수 있습니다." if opposing
-                  else "이번 스냅샷에 반대 근거가 기록되지 않았습니다. 반대 근거가 없다는 뜻은 아닙니다.")
-    limits.append("관계 변화 안내이며 매수·매도 판단은 아닙니다.")
-    provenance = ["관측 " + str(current.get("observedAt") or "시각 미보존") + " · 출처 " + str(current.get("source") or "미보존")]
-    return {"lead": " · ".join(str(STATE_LABELS.get(item.get("currentState"), item.get("changeLabel")) or "관계 상태 변경") for item in transitions[:3]) or str(packet.get("reason") or "관계 변화"),
-            "sections": [
-                ("change", "관계의 전후 변화", transition_rows[:3]),
-                ("hypotheses", "가설", hypothesis_rows or ["가설 상세 미보존"]),
-                ("rules", "판정 규칙", rule_rows or ["규칙 상세 미보존"]),
-                ("facts", "관측 사실 · 이전 발송 → 이번", fact_rows or ["관측값 미보존"]),
-                ("provenance", "관측 시점과 출처", provenance),
-                ("limitations", "반대 근거와 한계", limits),
-                ("next-update", "다음 알림", ["가설이 새로 성립하거나 근거가 강화·약화·반증·만료되면 발송 간격을 확인해 알려드립니다."]),
-                ("detail", "전체 근거", ["가설 " + str(len(hypotheses)) + "개 · 규칙 " + str(len(rules)) + "개 · 관측 사실 " + str(len(current.get("facts") or [])) + "개. 전체 비교는 알림 상세에서 확인할 수 있습니다."]),
-            ]}
+    """Render the frozen evidence through the customer presentation policy."""
+    from digital_twin.modules.notifications.domain.relation_change_presentation import readable_relation_change
+    return readable_relation_change(packet)

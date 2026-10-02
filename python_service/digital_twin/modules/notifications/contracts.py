@@ -16,6 +16,7 @@ _EXPORTS = {'DeliveryPolicyContext': ('digital_twin.modules.notifications.domain
  'presentation_metadata': ('digital_twin.modules.notifications.domain.notification.presentation',
                            'presentation_metadata')}
 
+_EXPORTS['independent_typedb_publication'] = ('digital_twin.modules.notifications.domain.typedb_publication', 'independent_typedb_publication')
 _EXPORTS['DEFAULT_QUIET_HOURS_ENABLED'] = ('digital_twin.modules.notifications.domain.account_preferences', 'DEFAULT_QUIET_HOURS_ENABLED')
 _EXPORTS['DEFAULT_QUIET_HOURS_START'] = ('digital_twin.modules.notifications.domain.account_preferences', 'DEFAULT_QUIET_HOURS_START')
 _EXPORTS['DEFAULT_QUIET_HOURS_END'] = ('digital_twin.modules.notifications.domain.account_preferences', 'DEFAULT_QUIET_HOURS_END')

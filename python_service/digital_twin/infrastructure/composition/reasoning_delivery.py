@@ -113,12 +113,14 @@ def wire_v2_decision_services(
         detached_ai_enqueuer,
         account_repository=account_repository,
     )
+    from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired
     insight_dispatch_service = InvestmentInsightDispatchService(
         insight_notification_ingress,
         insight_notification_queue,
         ai_insight_handoff_service,
         subject_decision_orchestrator,
         account_repository=account_repository,
+        legacy_ai_handoff_enabled=not legacy_route_retired(candidate_settings),
     )
     return ReasoningDelivery(
         delivery_authorized,

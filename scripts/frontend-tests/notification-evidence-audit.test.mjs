@@ -28,3 +28,17 @@ test("relation evidence keeps frozen before/after, missing baseline and escaped 
   assert.match(html, /&lt;script&gt;/);
   assert.match(renderRelationChangeEvidence({...packet, baselineAvailable: false}), /이전 발송의 상세 근거가 보존되지/);
 });
+
+test("relation detail explains model proof and source coverage without losing observed zero", async () => {
+  const { renderRelationChangeEvidence } = await import("../../public/modules/notifications/relation-change.mjs");
+  const packet = {version: "relation-change-evidence-v1", current: {marketSignalCoverage: {
+    investor: {sourceAsOf: "2026-10-02T10:00:00+09:00", measurementType: "intraday-estimate", observedFields: ["institutionNetVolume", "<script>x</script>"]}
+  }}, changes: {
+    hypotheses: [{id: "h", current: {claim: "verbose old claim", expectedOutcome: "반등이 이어지지 않을 가능성", falsificationContract: "회복 유지", qualification: {reason: "표본 부족"}}}],
+    rules: [{id: "r", current: {conditions: [{modelSignalMatched: true, observedValue: {contractMatched: true}, measuredFactIds: ["ma20Distance"]}]}}],
+    facts: [{id: "institutionNetVolume", current: {value: 0}}]
+  }};
+  const html = renderRelationChangeEvidence(packet);
+  for (const value of ["반등이 이어지지 않을 가능성", "회복 유지", "표본 부족", "분석 신호 조건 확인", "자료별 집계 시각", "2026-10-02T10:00:00+09:00", "institutionNetVolume", "<td>0</td>"]) assert.ok(html.includes(value), value);
+  assert.doesNotMatch(html, /\[object Object\]|verbose old claim|<script>/);
+});

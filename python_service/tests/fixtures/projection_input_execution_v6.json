@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "granular-v15-episode-catalog-items",
+  "contractVersion": "projection-input-execution-v6",
+  "reason": "Only the physical scope topology identity changes. Restoring v14 reproduces every v5 scenario; test_abox_lifecycle proves partial subject endpoint preservation.",
+  "scenarios": {
+    "full": "dbed7682e3c8b499721f305b152f7a28d8d7e627d81744835ec0b0c839b24b7c",
+    "target": "74c49e8609dd6264b246dab3231c5eb79ef09614a74ab682f0cf389893d9d275",
+    "source-facts": "1da21b195042eecb3ad71e8fc95d8f8ba2a9d933b4e37071c4ada053ec90836d",
+    "live-context": "8018d727cb19907079bf221858af3fdee23c3527c1ed23947332744b333c8fe5",
+    "memory-hit": "099a286e5f4482d25c81e03ab53ea14d7479ec4531b4b133d3a341a7697bc875",
+    "persistent-hit": "9f32e08fbbdf173a0783c5b7a8eec2f02c8eda9bbdf0cddb7985b54eace62e68",
+    "cache-errors": "c481fbc16cded88f432a8d209482c1a8fb4bf5c9ad3c955d76e12ac0b5440264",
+    "scoring-failure": "ada92c6ff05f9706a102bdae008ee2eb7ed05abf76f76c31efe1a9317bd973f3",
+    "world-identity": "9562b45680e6adc5e2a88fcabb3bb12f58917418fc3465d133c31806fb05cd1c"
+  }
+}

@@ -97,7 +97,7 @@ class AIControlPublication:
         return restore_legacy_receipt(receipt, json.loads(row["result_json"])) if row else receipt
 
     def publish(self, connection, task, result):
-        reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result)
+        reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result, connection=connection)
         if reason:
             publication = {"status": "recorded", "reason": reason}
             diagnostic = observation_diagnostic(result, task["taskId"], reason)
@@ -126,9 +126,14 @@ class AIControlPublication:
         return {"status": "queued" if accepted else "suppressed", "jobId": job_id,
                 "reason": "AI가 새 해석을 제안해 발송 검증을 기다립니다." if accepted else job.last_error}
 
-    def review_block(self, task_id, result):
+    def review_block(self, task_id, result, *, connection=None):
         quality = result.get("quality") or {}
-        proof = self.control.review_proof(quality.get("reviewInputId", ""))
+        input_id = quality.get("reviewInputId", "")
+        # Completion owns the task lock. A concurrent lease heartbeat can be
+        # waiting for that lock on the other pooled connection; borrowing a
+        # third connection here would stall the transaction that releases it.
+        proof = (self.control.review_proof_with_connection(connection, input_id)
+                 if connection is not None else self.control.review_proof(input_id))
         if not isinstance(proof, dict) or proof.get("taskId") != task_id or proof.get("draftHash") != quality.get("draftHash"):
             return "저장된 원문과 일치하는 독립 검토 실행을 확인하지 못했습니다."
         return ""

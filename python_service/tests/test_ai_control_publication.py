@@ -304,6 +304,54 @@ class CentralPublicationStorageTests(unittest.TestCase):
                 self.assertEqual("processing", connection.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s", (task["taskId"],)).fetchone()["status"])
                 self.assertEqual(0, connection.execute("SELECT COUNT(*) AS n FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],)).fetchone()["n"])
 
+    def test_completion_needs_only_its_owned_connection_and_preserves_recovery(self):
+        import json
+        self.control.seed(SUBJECT)
+        with self.control.connect() as connection:
+            connection.execute("UPDATE ai_control_tasks SET last_error='Empty' WHERE account_id=%s", (SUBJECT["accountId"],))
+        task = self.control.claim()
+        result = observation()
+        persist_review(self.control, task, result)
+        # A heartbeat may occupy the other pool slot waiting on this task's
+        # lock. Publication must never borrow another connection under it.
+        with patch.object(self.control, "connect", side_effect=AssertionError("nested connection")):
+            self.assertTrue(self.control.complete(task, result, []))
+        with self.control.connect() as connection:
+            row = connection.execute("SELECT status,last_error,result_json FROM ai_control_tasks WHERE task_id=%s", (task["taskId"],)).fetchone()
+            self.assertEqual("completed", row["status"])
+            self.assertEqual("", row["last_error"])
+            self.assertEqual("Empty", json.loads(row["result_json"])["recovery"]["previousError"])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) AS n FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],)).fetchone()["n"])
+
+    def test_completion_deadlock_retries_outbox_without_repeating_model_or_mutation(self):
+        import pymysql
+        self.control.seed(SUBJECT)
+        task = self.control.claim()
+        result = observation()
+        persist_review(self.control, task, result)
+        children = [{**SUBJECT, "taskId": "retry-child", "capability": "observe"},
+                    {**SUBJECT, "taskId": "removed-child", "capability": "research"}]
+        sizes, calls = [], []
+        def agenda(connection, job, saved, pending):
+            sizes.append(len(pending))
+            pending.pop()
+            return {"status": "recorded"}
+        def writer(connection, job, saved):
+            published = self.publication.publish(connection, job, saved)
+            calls.append(published)
+            if len(calls) == 1:
+                raise pymysql.err.OperationalError(1213, "isolated deadlock rehearsal")
+            return published
+        self.control.agenda_writer, self.control.outbox_writer = agenda, writer
+        with patch.object(self.control, "begin_call", side_effect=AssertionError("model repetition")):
+            self.assertTrue(self.control.complete(task, result, children))
+        self.assertEqual([2, 2], sizes)
+        self.assertEqual(1, len(children))
+        self.assertEqual(2, len(calls))
+        with self.control.connect() as connection:
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) AS n FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],)).fetchone()["n"])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) AS n FROM ai_control_tasks WHERE task_id='retry-child'").fetchone()["n"])
+
     def test_retirement_preserves_history_and_prevents_direct_enqueue_and_claim(self):
         from digital_twin.infrastructure.transactions.ai_publication import MySQLAIInferenceQueueStore
         old = NotificationJob.create("previous", account_id=SUBJECT["accountId"], message_type="investmentInsight")

@@ -120,3 +120,77 @@ class MySQLFixturesCleanupTests(unittest.TestCase):
         self.assertEqual(1, len(created))
         self.assertEqual([True, False], second.autocommit_values)
         self.assertEqual(1, second.rollback_count)
+
+    def test_pool_waiter_replaces_a_discarded_connection(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from unittest.mock import Mock
+        waiting = Event()
+        factory = Mock(side_effect=lambda _: Mock())
+        pool = MySQLConnectionPool(factory, size=1, acquire_timeout=1)
+        first = pool.acquire()
+        wait = pool.available.wait
+        def entered(timeout):
+            waiting.set()
+            return wait(timeout)
+        with patch.object(pool.available, "wait", side_effect=entered), ThreadPoolExecutor(1) as executor:
+            pending = executor.submit(pool.acquire)
+            self.assertTrue(waiting.wait(1))
+            # Nothing enters the idle queue. The newly free slot must wake it.
+            pool.discard(first)
+            replacement = pending.result(timeout=0.5)
+        self.assertIsNot(first, replacement)
+        self.assertEqual(2, factory.call_count)
+        self.assertEqual(1, pool.created)
+        pool.release(replacement)
+
+    def test_pool_factory_failure_releases_slot_to_waiter(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from unittest.mock import Mock
+        creating, waiting, fail = Event(), Event(), Event()
+        healthy = Mock()
+        def factory(_):
+            if not creating.is_set():
+                creating.set()
+                if not fail.wait(2):
+                    raise AssertionError("test factory was not released")
+                raise ConnectionError("factory unavailable")
+            return healthy
+        pool = MySQLConnectionPool(factory, size=1, acquire_timeout=1)
+        wait = pool.available.wait
+        def entered(timeout):
+            waiting.set()
+            return wait(timeout)
+        with patch.object(pool.available, "wait", side_effect=entered), ThreadPoolExecutor(2) as executor:
+            creator = executor.submit(pool.acquire)
+            self.assertTrue(creating.wait(1))
+            pending = executor.submit(pool.acquire)
+            self.assertTrue(waiting.wait(1))
+            fail.set()
+            with self.assertRaises(ConnectionError):
+                creator.result(timeout=0.5)
+            self.assertIs(healthy, pending.result(timeout=0.5))
+        self.assertEqual(1, pool.created)
+        pool.release(healthy)
+
+    def test_pool_limits_broken_replacements_and_reports_capacity_timeout(self):
+        from unittest.mock import Mock
+        from digital_twin.infrastructure.mysql_connection_pool import MySQLPoolTimeout, MySQLPoolUnavailable
+        factory = Mock(side_effect=lambda _: Mock(ping=Mock(side_effect=ConnectionError("broken"))))
+        pool = MySQLConnectionPool(factory, size=1)
+        with self.assertRaises(MySQLPoolUnavailable):
+            pool.acquire()
+        self.assertEqual(3, factory.call_count)
+        self.assertEqual(0, pool.created)
+        pool.factory = lambda _: Mock()
+        pool.acquire_timeout = 0.01
+        healthy = pool.acquire()
+        with self.assertRaises(MySQLPoolTimeout) as caught:
+            pool.acquire()
+        self.assertEqual(1, caught.exception.pool_size)
+        self.assertEqual(1, caught.exception.created_connections)
+        pool.release(healthy)
+        self.assertIs(healthy, pool.acquire())
+        from digital_twin.infrastructure.mysql_connection_pool import mysql_pool_size
+        self.assertEqual(2, mysql_pool_size({"mysqlConnectionPoolSize": "inf"}))

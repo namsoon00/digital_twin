@@ -18,6 +18,41 @@ from digital_twin.modules.reasoning.domain.ontology_scopes import (
 
 
 class ABoxLifecycleContractTests(unittest.TestCase):
+    def test_partial_subject_preserves_other_episode_catalog_endpoints(self):
+        from copy import deepcopy
+        from digital_twin.modules.reasoning.domain.ontology_scopes import merge_target_scoped_abox_manifest
+        def graph(symbols, price):
+            entities = [OntologyEntity("portfolio:main", "Portfolio", "portfolio", {"ontologyBox": "ABox"}),
+                        OntologyEntity("portfolio-decision-cycle:main", "Cycle", "portfolio-decision-cycle", {"ontologyBox": "ABox", "revision": price})]
+            relations = [OntologyRelation("portfolio:main", "portfolio-decision-cycle:main", "HAS_DECISION_CYCLE", properties={"ontologyBox": "ABox"})]
+            for symbol in symbols:
+                entities.extend([
+                    OntologyEntity("stock:" + symbol, symbol, "stock", {"ontologyBox": "ABox", "symbol": symbol, "currentPrice": price}),
+                    OntologyEntity("hypothesis-template:" + symbol, "Template", "hypothesis-template", {"ontologyBox": "ABox"}),
+                    OntologyEntity("hypothesis-family-definition:" + symbol, "Family", "hypothesis-family-definition", {"ontologyBox": "ABox"}),
+                ])
+                relations.extend([
+                    OntologyRelation("stock:" + symbol, "hypothesis-template:" + symbol, "USES_TEMPLATE", properties={"ontologyBox": "ABox", "symbol": symbol}),
+                    OntologyRelation("hypothesis-template:" + symbol, "hypothesis-family-definition:" + symbol, "IN_FAMILY", properties={"ontologyBox": "ABox"}),
+                ])
+            value = PortfolioOntology("main", entities=entities, relations=relations)
+            apply_scoped_abox_identity(value, account_id="main")
+            value.worldview["targetScopeRetentionMode"] = "incremental-target-patch"
+            return value
+        full, partial = graph(["AAPL", "MSFT"], 100), graph(["AAPL"], 101)
+        active = {**deepcopy(full.worldview), "status": "ok"}
+        untouched = deepcopy(active)
+        result = merge_target_scoped_abox_manifest(partial, active, ["AAPL"], source_graph_complete=False)
+        self.assertTrue(result["applied"], result)
+        self.assertEqual(untouched, active, "planning must not rewrite the serving Manifest")
+        after = {row["scopeId"]: row for row in partial.worldview["scopePlan"]}
+        for row in active["scopePlan"]:
+            if any("MSFT" in node for node in row.get("nodeIds", [])):
+                self.assertEqual(row["generationId"], after[row["scopeId"]]["generationId"])
+        retained = {node for row in after.values() for node in row.get("nodeIds", [])}
+        self.assertIn("hypothesis-template:MSFT", retained)
+        self.assertIn("hypothesis-family-definition:MSFT", retained)
+
     def setUp(self):
         self.evidence_scope = "symbol:035420:evidence:bucket:12"
         self.link_scope = "link:symbol:035420:quality:bucket:06"

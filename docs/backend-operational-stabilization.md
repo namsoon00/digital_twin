@@ -16,6 +16,29 @@ bounded observation of the running system.
 
 ## AI Claim Boundary
 
+Central observation completion also uses the existing bounded deadlock retry
+policy. Each retry clones its result and successor list, then commits the task,
+agenda and notification outbox together. Model calls stay outside this retry;
+connection loss and ambiguous commits are not blindly replayed. A successful
+recovery clears the active `last_error` and retains the previous error and
+attempt number in the result's `recovery` record.
+
+Publication reads the frozen review proof on that same transaction connection.
+Opening a second connection while holding the task row could exhaust the
+two-slot pool when a heartbeat held the other connection waiting for that row.
+The completion regression prohibits any nested connection, and an isolated
+MySQL rehearsal verifies rollback/retry with exactly one notification and one
+successor. This removes a reproducible failure mechanism; the historical
+`Empty` production incident had no captured stack, so its attribution remains
+an inference.
+
+The process-local connection pool wakes waiters when a broken connection is
+discarded or connection creation fails, as well as when a healthy connection
+returns. It rechecks available creation slots under one condition lock and
+reports a credential-free `MySQLPoolTimeout` after its wait budget. Broken
+connection replacement is iterative and capped at three validation failures,
+avoiding recursive retries during database outages. Pool capacity is unchanged.
+
 `MySQLAIInferenceQueueStore.claim` now uses
 `transaction_with_deadlock_retry("ai-inference-claim", ...)`. Existing settings
 control the budget: three retries by default, exponential backoff with jitter,

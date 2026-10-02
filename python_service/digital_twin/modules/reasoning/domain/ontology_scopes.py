@@ -25,7 +25,7 @@ from digital_twin.modules.reasoning.domain.ontology_worlds import world_scoped_s
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v14-hypothesis-calibration-state"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v15-episode-catalog-items"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -156,6 +156,12 @@ _PORTFOLIO_ITEM_KINDS = {
 }
 
 _EPISODE_ITEM_KINDS = {
+    # A scoped subject includes only the templates/families it references.
+    # Grouping these with the changing account cycle makes that partial set
+    # replace a shared endpoint inventory and forces complete-source repair.
+    "hypothesis-family-definition",
+    "hypothesis-template",
+    "portfolio-decision-cycle",
     "inferred-portfolio-activity",
     "portfolio-action-candidate",
     "portfolio-activity-episode",

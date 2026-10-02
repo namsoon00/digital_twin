@@ -1,6 +1,7 @@
 """Central work ledger; completion and successor scheduling share one transaction."""
 import json
 import gzip
+from copy import deepcopy
 import threading
 import uuid
 from contextlib import contextmanager
@@ -97,7 +98,8 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             until = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
             connection.execute("UPDATE ai_control_tasks SET status='processing',lease_token=%s,lease_until=%s,attempts=attempts+1,updated_at=%s WHERE task_id=%s", (token, until, now, row["task_id"]))
             connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
-            return {**json.loads(row["payload_json"]), "leaseToken": token, "attempts": int(row["attempts"]) + 1}
+            return {**json.loads(row["payload_json"]), "leaseToken": token, "attempts": int(row["attempts"]) + 1,
+                    "previousError": row["last_error"]}
 
     def heartbeat(self, job):
         until = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
@@ -123,26 +125,39 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             thread.join(timeout=1)
 
     def complete(self, job, result, children):
-        now = stamp()
-        with self.transaction() as connection:
-            cursor = connection.execute("UPDATE ai_control_tasks SET status='completed',result_json=%s,updated_at=%s,lease_token='',lease_until='' WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
-                                        (json.dumps(result, ensure_ascii=False), now, job["taskId"], job["leaseToken"], now))
+        def write(connection):
+            # Retry only a rolled-back transaction, with independent mutable
+            # results each time. No author/reviewer call belongs to this unit.
+            saved_result, saved_children = deepcopy(result), deepcopy(children)
+            if job.get("previousError"):
+                saved_result["recovery"] = {"previousError": job["previousError"], "completedAttempt": job["attempts"]}
+            now = stamp()
+            cursor = connection.execute("UPDATE ai_control_tasks SET status='completed',last_error='',result_json=%s,updated_at=%s,lease_token='',lease_until='' WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
+                                        (json.dumps(saved_result, ensure_ascii=False), now, job["taskId"], job["leaseToken"], now))
             if not cursor.rowcount:
-                return False
+                return None
             development = getattr(self, "development_writer", None)
-            if development is not None and job["capability"] == "observe" and result.get("summary"):
-                result["development"] = development(connection, job, result)
+            if development is not None and job["capability"] == "observe" and saved_result.get("summary"):
+                saved_result["development"] = development(connection, job, saved_result)
             agenda = getattr(self, "agenda_writer", None)
             if agenda is not None:
-                result["brain"] = agenda(connection, job, result, children)
+                saved_result["brain"] = agenda(connection, job, saved_result, saved_children)
             writer = getattr(self, "outbox_writer", None)
-            if writer is not None and job["capability"] == "observe" and result.get("summary"):
-                result["publication"] = writer(connection, job, result)
+            if writer is not None and job["capability"] == "observe" and saved_result.get("summary"):
+                saved_result["publication"] = writer(connection, job, saved_result)
             connection.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s",
-                               (json.dumps(result, ensure_ascii=False), job["taskId"]))
-            for child in children:
+                               (json.dumps(saved_result, ensure_ascii=False), job["taskId"]))
+            for child in saved_children:
                 self.insert(connection, child)
-            return True
+            return saved_result, saved_children
+
+        committed = self.transaction_with_deadlock_retry("ai-control-complete", write)
+        if committed is None:
+            return False
+        result.clear()
+        result.update(committed[0])
+        children[:] = committed[1]
+        return True
 
     def fail(self, job, error_kind):
         failures = job["attempts"] - int(job.get("budgetDeferrals", 0))
@@ -240,13 +255,17 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))
 
     def review_proof(self, input_id):
+        with self.connect() as connection:
+            return self.review_proof_with_connection(connection, input_id)
+
+    @staticmethod
+    def review_proof_with_connection(connection, input_id):
         from digital_twin.modules.ai_orchestration.domain.execution_input import REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION
         from digital_twin.modules.ai_orchestration.domain.insight_contract import narrative_digest
-        with self.connect() as connection:
-            row = connection.execute("SELECT i.task_id,i.artifact_gzip FROM ai_control_inputs i "
-                "JOIN ai_control_input_calls l ON l.input_id=i.input_id "
-                "JOIN ai_control_calls c ON c.call_id=l.call_id AND c.task_id=i.task_id AND c.prompt_hash=i.prompt_hash "
-                "WHERE i.input_id=%s AND c.status='completed' LIMIT 1", (input_id,)).fetchone()
+        row = connection.execute("SELECT i.task_id,i.artifact_gzip FROM ai_control_inputs i "
+            "JOIN ai_control_input_calls l ON l.input_id=i.input_id "
+            "JOIN ai_control_calls c ON c.call_id=l.call_id AND c.task_id=i.task_id AND c.prompt_hash=i.prompt_hash "
+            "WHERE i.input_id=%s AND c.status='completed' LIMIT 1", (input_id,)).fetchone()
         if not row:
             return {}
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))

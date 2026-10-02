@@ -78,6 +78,23 @@ The hot path does not read or delete the retired generation. Unchanged scopes
 keep their physical generation, and maintenance removes generations no longer
 referenced by the active or retained rollback Manifest.
 
+Topology `granular-v15-episode-catalog-items` gives each hypothesis template,
+hypothesis family definition and portfolio decision cycle its own physical
+scope. Previously these facts shared one account-wide episode inventory. A
+one-symbol input contained only its own templates, so changing the cycle could
+force complete-source reconstruction to preserve another symbol's endpoints.
+Item scopes preserve those endpoints without replacing the whole inventory.
+The regression reproduces the previous incomplete-endpoint rejection and
+checks that the new patch retains the other subject's exact generation.
+
+The topology version change selects complete input once through the existing
+migration preflight. Candidate validation and atomic activation still protect
+the serving and rollback generations; subsequent requests return to scoped
+updates. This does not change TBox/RuleBox meaning, bypass missing-endpoint
+checks or delete stored evidence. It reduces unnecessary reconstruction and
+write amplification; WAL allocation and long-running disk growth still require
+separate observation and the existing guarded rotation policy.
+
 Inspect it with:
 
 ```bash

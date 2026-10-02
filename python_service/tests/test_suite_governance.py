@@ -242,7 +242,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # prompt replay, coupled provider/price clocks, lossless byte-bounded
         # claims and one-at-a-time history reads against isolated MySQL.
         # Hypothesis-scoped wording preserves distinct changes, checks and qualification through transport.
-        self.assertLessEqual(total, 2011)
+        # Pool discard/factory recovery, bounded broken sockets, atomic AI
+        # completion/retry, and independent episode endpoints add six cases.
+        self.assertLessEqual(total, 2017)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

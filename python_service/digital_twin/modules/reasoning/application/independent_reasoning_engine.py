@@ -13,7 +13,7 @@ from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batc
 
 from digital_twin.modules.notifications.contracts import is_typedb_context_observation_notification, typedb_review_observation_contract
 from digital_twin.shared_kernel.events import DomainEvent
-from digital_twin.modules.reasoning.domain.independent_reasoning import IndependentReasoningRequest, IndependentReasoningResult, independent_reasoning_request, reasoning_event_scope
+from digital_twin.modules.reasoning.domain.independent_reasoning import IndependentReasoningRequest, IndependentReasoningResult, independent_reasoning_request, reasoning_event_scope, VERIFIED_PROJECTION_STATUSES
 from digital_twin.modules.decisions.contracts import FactDelta, rule_evaluation_records_from_projection_results
 from digital_twin.modules.market_data.contracts import market_observation_completion_scope
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology
@@ -21,14 +21,6 @@ from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import at
 from digital_twin.modules.reasoning.domain.ontology_store_routing import ontology_store_route
 from digital_twin.modules.reasoning.domain.reasoning_source_facts import reasoning_source_facts_runtime_eligibility
 
-
-VERIFIED_PROJECTION_STATUSES = {
-    "ok",
-    "partial",
-    "unchanged-material-facts",
-    "unchanged-material-facts-reasoning-retry",
-    "reused-shared-account-inference",
-}
 
 NO_CHANGE_PROJECTION_STATUSES = {
     "unchanged-scoped-manifest",
@@ -396,7 +388,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "status": str(values.get("status") or ""),
         "reason": str(values.get("reason") or "")[:500],
         "graphStore": str(values.get("graphStore") or ""),
-        "worldId": str(values.get("worldId") or ""),
+        "worldId": str(values.get("worldId") or (values.get("ontologyWorld") or {}).get("worldId") or ""),
         "accountId": account_id,
         "entityCount": int(values.get("entityCount") or 0),
         "relationCount": int(values.get("relationCount") or 0),

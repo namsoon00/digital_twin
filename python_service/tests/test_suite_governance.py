@@ -250,7 +250,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # claims and physical rollback accounting add six failure boundaries.
         # Historical metadata also skips discarded output before copying facts.
         # Twelve directed-read, exact-replay, quota and durable ABox wakeup regressions.
-        self.assertLessEqual(total, 2040)
+        # Four live V2 evidence-ready scope, completion, deployment and rollback regressions.
+        self.assertLessEqual(total, 2044)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

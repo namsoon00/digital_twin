@@ -78,8 +78,16 @@ Small configured quotas therefore do not repeatedly spend every call on retrieva
 without ever reaching a final observation. The per-call hard gate remains final
 authority if another worker consumes quota concurrently.
 
-`ontology.reasoning_completed` now carries the explicit portfolio world in each
-projection outcome. A transactional consumer admits only matching active subjects
+The production V2 worker publishes `ontology.observation_evidence_ready` in the
+same lease-fenced transaction as job completion and market-source receipts. The
+current delivery deployment is locked and checked again at that boundary, so a
+shadow or retired deployment cannot wake live observations. Native completion,
+aligned ABox identity and per-account evaluated symbols are required even when
+no rule matched and no alert was emitted. The compact result preserves the
+portfolio world from `ontologyWorld` as well as direct world metadata.
+
+The legacy `ontology.reasoning_completed` event also carries the explicit world.
+A transactional consumer of both events admits only matching active subjects
 with a completed native inference run, aligned ABox identity and explicit target
 symbols; an empty rule result is allowed. Collection alone, another world and
 uncommitted/unaligned results cannot wake this path. `ai_control_evidence_events`
@@ -98,7 +106,8 @@ shared-premise-only changes and any projection path without this completion even
 
 `test_ai_directed_retrieval.py` and `test_ai_evidence_wake.py` cover excluded-fact
 retrieval, scope, immutable capture, repeated/oversized reads, lease loss, exact
-legacy replay, late event commits, coalescing, retry preservation and atomic rollback.
+legacy replay, late event commits, coalescing, retry preservation, live V2 routing,
+deployment/attempt fences and atomic completion/event/receipt rollback.
 
 Questions explicitly select an allowed capability. Future price/order-flow
 checks remain observations and wait for the existing collectors; they do not

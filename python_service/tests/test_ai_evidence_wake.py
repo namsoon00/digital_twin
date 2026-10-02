@@ -1,14 +1,18 @@
 """Durable committed-evidence wakeups survive late commits, retries and restarts."""
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 import json
 import os
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+import stabilization_database as db_helpers
 
 from digital_twin.modules.ai_orchestration.domain.evidence_wake import evidence_wake_targets
 from digital_twin.modules.ai_orchestration.domain.planning import identity, stamp
-from digital_twin.modules.reasoning.contracts import ONTOLOGY_REASONING_COMPLETED
+from digital_twin.modules.reasoning.contracts import (
+    ONTOLOGY_REASONING_COMPLETED, OBSERVATION_EVIDENCE_READY, completed_observation_evidence_event,
+)
 from test_ai_control import SUBJECT
 
 
@@ -18,7 +22,42 @@ def payload(subject=SUBJECT, snapshot="snapshot-new"):
         "alertPipeline": {"targetSymbols": [subject["symbol"]]}}]}
 
 
+def completed_result(deployment="live", subject=SUBJECT):
+    from digital_twin.modules.reasoning.application.independent_reasoning_engine import compact_projection_result
+    projection = compact_projection_result({
+        "status": "ok", "accountId": subject["accountId"], "ontologyWorld": {"worldId": subject["worldId"]},
+        "inferenceBox": {"nativeTypeDbReasoningCompleted": True, "generationAligned": True,
+                         "sourceAboxSnapshotId": "v2-snapshot", "inferenceGenerationId": "v2-generation"},
+        "sharedInferenceExecution": {"evaluatedSymbols": [subject["symbol"]]},
+    })
+    return {"deployment_id": deployment, "delivery_authorized": True, "status": "ok",
+            "account_ids": [subject["accountId"]], "evaluated_symbols": [subject["symbol"]],
+            "projection_results": {subject["accountId"]: projection}, "candidate_events": [], "delivery_events": []}
+
+
 class EvidenceWakeContractTests(unittest.TestCase):
+    def test_v2_handoff_preserves_native_scope_without_requiring_a_rule_match(self):
+        job = {"job_id": "v2-job", "deployment_id": "live", "source_event_id": "source"}
+        result = completed_result()
+        result["evaluated_symbols"].append("OTHER")
+        event = completed_observation_evidence_event(job, result)
+        self.assertEqual(OBSERVATION_EVIDENCE_READY, event.name)
+        self.assertEqual(event.event_id, completed_observation_evidence_event(job, result).event_id)
+        self.assertEqual(0, event.payload["alertCount"])
+        self.assertEqual([SUBJECT["symbol"]], event.payload["symbols"])
+        self.assertEqual(SUBJECT["worldId"], event.payload["projectionOutcomes"][0]["worldId"])
+        self.assertEqual("v2-snapshot", evidence_wake_targets(event.payload, [SUBJECT])[0]["sourceSnapshotId"])
+        for patch_values in ({"status": "blocked"}, {"generationAligned": False},
+                             {"nativeTypeDbReasoningCompleted": False}, {"worldId": ""},
+                             {"sourceAboxSnapshotId": ""}, {"sharedInferenceExecution": {"evaluatedSymbols": []}}):
+            changed = deepcopy(result)
+            changed["projection_results"][SUBJECT["accountId"]].update(patch_values)
+            with self.subTest(patch=patch_values):
+                self.assertIsNone(completed_observation_evidence_event(job, changed))
+        for changed in ({"delivery_authorized": False}, {"deployment_id": "shadow"}, {"status": "deferred"}):
+            with self.subTest(patch=changed):
+                self.assertIsNone(completed_observation_evidence_event(job, {**result, **changed}))
+
     def test_only_explicit_committed_subject_scope_routes_and_producer_includes_world(self):
         self.assertEqual("snapshot-new", evidence_wake_targets(payload(), [SUBJECT])[0]["sourceSnapshotId"])
         for changed in ({"worldId": "shadow:elsewhere"}, {"accountId": "other"}, {"generationAligned": False},
@@ -143,3 +182,86 @@ class EvidenceWakeStorageTests(unittest.TestCase):
             self.assertEqual(0, connection.execute("SELECT COUNT(*) AS n FROM ai_control_evidence_wakes").fetchone()["n"])
         self.assertEqual(1, self.waker.run_once([SUBJECT])["tasksWoken"])
         self.assertEqual(0, self.waker.run_once([SUBJECT])["tasksWoken"])
+
+@unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
+class V2EvidenceHandoffStorageTests(db_helpers.StabilizationDatabaseCase):
+    def setUp(self):
+        super().setUp()
+        from digital_twin.infrastructure.transactions.reasoning_observation_event import publish_observation_evidence_ready
+        self.publisher = publish_observation_evidence_ready
+        self.jobs.completion_event_writer = self.publisher
+        self.addCleanup(delattr, self.jobs, "completion_event_writer")
+        self.subject = {"accountId": "stabilization", "symbol": "AAPL", "worldId": "portfolio:" + self.deployment}
+
+    def completion_events(self, job):
+        return list(self.sql("SELECT * FROM domain_events WHERE name=%s AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.reasoningJobId'))=%s",
+                            (OBSERVATION_EVIDENCE_READY, job["jobId"]), all_rows=True))
+
+    def complete(self, job, result):
+        return self.jobs.complete(job["jobId"], result, worker_id="fixture-worker", claimed_at=job["claimedAt"])
+
+    def test_live_v2_completion_publishes_durable_event_and_wakes_only_the_matching_subject(self):
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
+        from digital_twin.infrastructure.transactions.ai_observation_wake import AIObservationEvidenceWake
+        control = MySQLAIControlStore(self.settings)
+        waker = AIObservationEvidenceWake(self.settings)
+        with control.transaction() as connection:
+            for suffix, subject in (("live", self.subject), ("shadow", {**self.subject, "worldId": "shadow:" + self.deployment})):
+                control.insert(connection, {**subject, "taskId": self.deployment + suffix, "capability": "observe",
+                                            "availableAt": "2099-01-01T00:00:00Z"})
+        job = self.claimed_job()
+        self.complete(job, completed_result(self.deployment, self.subject))
+        self.assertEqual(1, len(self.completion_events(job)))
+        self.assertEqual(1, waker.run_once([self.subject])["tasksWoken"])
+        live = self.sql("SELECT * FROM ai_control_tasks WHERE task_id=%s", (self.deployment + "live",))
+        shadow = self.sql("SELECT * FROM ai_control_tasks WHERE task_id=%s", (self.deployment + "shadow",))
+        self.assertEqual("v2-snapshot", json.loads(live["payload_json"])["evidenceWake"]["sourceSnapshotId"])
+        self.assertNotEqual("2099-01-01T00:00:00Z", live["available_at"])
+        self.assertEqual("2099-01-01T00:00:00Z", shadow["available_at"])
+        self.assertEqual(0, waker.run_once([self.subject])["tasksWoken"])
+
+    def test_shadow_unauthorized_and_retired_completions_do_not_publish_live_evidence(self):
+        for mode in ("unauthorized", "shadow", "retired"):
+            self.sql("UPDATE reasoning_engine_control SET delivery_deployment_id=%s WHERE control_id='global'", (self.deployment,))
+            job = self.claimed_job()
+            result = completed_result(self.deployment, self.subject)
+            if mode == "unauthorized":
+                result["delivery_authorized"] = False
+            elif mode == "shadow":
+                result["deployment_id"] = "shadow-deployment"
+            else:
+                self.sql("UPDATE reasoning_engine_control SET delivery_deployment_id='new-delivery' WHERE control_id='global'")
+            with self.subTest(mode=mode):
+                self.complete(job, result)
+                self.assertEqual("completed", self.jobs.get(job["jobId"])["status"])
+                self.assertEqual([], self.completion_events(job))
+
+    def test_event_receipts_and_job_completion_rollback_together_and_lost_lease_cannot_publish(self):
+        from digital_twin.modules.reasoning.domain.job_claim import ReasoningJobLeaseLost
+        job = self.claimed_job()
+        result = completed_result(self.deployment, self.subject)
+        self.sql("INSERT INTO market_observation_reasoning_anchors "
+                 "(account_id,symbol,pending_price,pending_event_id,pending_at,updated_at) VALUES (%s,%s,100,%s,%s,%s)",
+                 (self.subject["accountId"], self.subject["symbol"], job["sourceEventId"], job["sourceSnapshotAt"], stamp()))
+        def fail_after_publish(connection, job_id, values):
+            self.publisher(connection, job_id, values)
+            raise ValueError("injected completion failure")
+        self.jobs.completion_event_writer = fail_after_publish
+        with self.assertRaisesRegex(ValueError, "injected"):
+            self.complete(job, result)
+        self.assertEqual("processing", self.jobs.get(job["jobId"])["status"])
+        self.assertEqual([], self.completion_events(job))
+        self.assertEqual(0, self.sql("SELECT COUNT(*) AS n FROM market_observation_reasoning_receipts WHERE survivor_job_id=%s", (job["jobId"],))["n"])
+        anchor = self.sql("SELECT pending_event_id FROM market_observation_reasoning_anchors WHERE account_id=%s AND symbol=%s",
+                          (self.subject["accountId"], self.subject["symbol"]))
+        self.assertEqual(job["sourceEventId"], anchor["pending_event_id"])
+        publisher = Mock(wraps=self.publisher)
+        self.jobs.completion_event_writer = publisher
+        self.sql("UPDATE reasoning_engine_jobs SET lease_expires_at='2000-01-01T00:00:00Z' WHERE job_id=%s", (job["jobId"],))
+        with self.assertRaises(ReasoningJobLeaseLost):
+            self.complete(job, result)
+        publisher.assert_not_called()
+        replacement = self.jobs.claim(self.deployment, "fixture-worker", 1, 60)[0]
+        self.complete(replacement, result)
+        self.assertEqual(1, len(self.completion_events(job)))
+        self.assertEqual(1, self.sql("SELECT COUNT(*) AS n FROM market_observation_reasoning_receipts WHERE survivor_job_id=%s", (job["jobId"],))["n"])

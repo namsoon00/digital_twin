@@ -2191,6 +2191,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             )
             if str(worker_id or "") and int(getattr(cursor, "rowcount", 0) or 0) != 1:
                 raise RuntimeError("The V2 reasoning job lease was lost before completion publication.")
+            publish_evidence = getattr(self, "completion_event_writer", None)
+            if publish_evidence is not None:
+                publish_evidence(connection, job_id, values)
         return completion_summary
 
     @reasoning_queue_deadlock_retry("reasoning-engine-receipt-repair")

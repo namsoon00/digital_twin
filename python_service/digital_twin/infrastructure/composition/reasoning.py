@@ -353,6 +353,8 @@ def build_v2_reasoning_job_runner(
         store_settings
     )
     reasoning_job_store = stores.reasoning_engine_job_store(configured)
+    from digital_twin.infrastructure.transactions.reasoning_observation_event import publish_observation_evidence_ready
+    reasoning_job_store.completion_event_writer = publish_observation_evidence_ready
     comparison_service = IndependentReasoningComparisonService(
         job_store=reasoning_job_store,
         comparison_store=stores.reasoning_engine_comparison_store(store_settings),

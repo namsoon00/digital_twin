@@ -16,6 +16,11 @@ from digital_twin.modules.reasoning.domain.semantic_fact_plane import semantic_c
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
 INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v5"
 
+VERIFIED_PROJECTION_STATUSES = {
+    "ok", "partial", "unchanged-material-facts",
+    "unchanged-material-facts-reasoning-retry", "reused-shared-account-inference",
+}
+
 
 def _texts(values: object, uppercase: bool = False) -> Tuple[str, ...]:
     if isinstance(values, str):

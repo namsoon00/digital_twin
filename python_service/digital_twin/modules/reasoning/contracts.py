@@ -4,6 +4,8 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {}
+_EXPORTS['OBSERVATION_EVIDENCE_READY'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'OBSERVATION_EVIDENCE_READY')
+_EXPORTS['completed_observation_evidence_event'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'completed_observation_evidence_event')
 _EXPORTS['ObservationEvidenceSession'] = ('digital_twin.modules.reasoning.domain.observation_session', 'ObservationEvidenceSession')
 _EXPORTS['candidate_consumes_source_events'] = ('digital_twin.modules.reasoning.domain.reasoning_engine_versions', 'candidate_consumes_source_events')
 

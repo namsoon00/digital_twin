@@ -16,7 +16,8 @@ The versioned [observation evidence protocol](observation-evidence-protocol.md)
 owns subject/linked/shared discovery, category budgets and explicit coverage.
 Changing graph generations, missing facts and ownership mismatches defer work.
 
-An observation compares those facts with up to three prior analyses (including
+The model first chooses internal reads over a captured inventory, as described
+below. An observation compares selected facts with up to three prior analyses (including
 their dated numeric facts) and three research results. It produces an explicitly
 unverified hypothesis, counter-evidence, comparison, up to two research questions
 and a next-check interval of 60–1440 minutes. Identical monitored inputs and
@@ -24,6 +25,80 @@ research memory skip the model for up to six hours, with another check in three
 hours. The fingerprint covers supplied business fields by default, including
 nested source revisions, quality and eligibility. Only declared polling/storage
 metadata is ignored. Excluded and unsupported facts retain an inventory digest.
+
+## Internal retrieval and committed-data wakeups
+
+The same managed worker now runs a bounded **read → inspect → read again →
+conclude/defer** loop. No MCP server, additional daemon or message broker is added.
+`StructuredObservationModel` is the model adapter; composition injects the current
+Codex process runner. The application supplies the read capabilities and owns
+iteration limits, while existing evidence and publication owners retain validation.
+
+Before any model call, reasoning captures the subject's active portfolio and
+shared-premise inventory in a short read transaction, then closes that transaction.
+The initial routing prompt contains the required quote, coverage/catalog,
+successful-delivery baseline, due-question summaries and memory counts. It does
+not contain all financial/news bodies or all previous analyses. The model chooses:
+
+| Internal function | Scope |
+| --- | --- |
+| `query_facts` | One evidence category, optional kind, offset and limit |
+| `read_fact` | A known fact ID within that same captured subject/category |
+| `recall_memory` | Bounded recent analyses or research/question/service memory |
+
+These functions read the immutable in-memory capture, not an unrestricted SQL,
+TypeQL or URL supplied by the model. The source inventory includes facts omitted
+by the earlier automatic category budgets. Each read returns whole facts, source
+snapshot identities, pagination and explicit byte exclusions. Historical memory
+cannot become current investment evidence. Due questions remain mandatory final
+context even if the model does not request optional memory. This does not add
+arbitrary-depth graph traversal, unverified external web evidence or semantic
+search over the full lifetime history.
+
+There are at most three routing calls, two internal reads per routing call and
+eight records per page. Fact responses allow 32 KiB and all admitted read results
+share 40 KiB. The configured prompt budget and the 96,000-byte evidence-packet
+limit still apply. Failed/oversized reads and missing coverage are explicit;
+repeated identical reads stop the loop. The final author sees selected facts plus
+the required quote, selected memory, due cases and a compact read audit. Reaching
+the round limit retains its partial coverage; explicit deferral, repeated reads
+and context failure block publication and agenda closure. Existing numeric checks,
+independent review, delivery limits and research-only authority remain in force.
+
+Every routing prompt is frozen in `ai_control_inputs` before its model call,
+using the same lease and call-budget accounting as final author/reviewer calls.
+The final generation v10 / repair v6 artifact also preserves the complete read
+trace, whose hash is bound to the compact audit in the evidence packet. Historical
+v9 / repair v5 prompts remain exactly replayable. The owner page shows what was
+queried, why, and the remaining coverage. Extra routing calls increase latency and
+call usage; the daily quota still includes each of them.
+Routing reserves the remaining author/reviewer capacity: with only those calls
+left, it records `budget-fallback` and uses the existing automatic bounded packet.
+Small configured quotas therefore do not repeatedly spend every call on retrieval
+without ever reaching a final observation. The per-call hard gate remains final
+authority if another worker consumes quota concurrently.
+
+`ontology.reasoning_completed` now carries the explicit portfolio world in each
+projection outcome. A transactional consumer admits only matching active subjects
+with a completed native inference run, aligned ABox identity and explicit target
+symbols; an empty rule result is allowed. Collection alone, another world and
+uncommitted/unaligned results cannot wake this path. `ai_control_evidence_events`
+stores per-event receipts, so late event commits are not lost behind a timestamp
+cursor. `ai_control_evidence_wakes` coalesces new snapshot identities per
+account/symbol/world. Receipt, mailbox and scheduled task timing commit together.
+
+Pending, never-attempted observations can move forward, with a minimum fifteen
+minutes after the last completed observation for this event-driven wake. An
+already-earlier scheduled check remains earlier. Processing work and retry backoff
+are untouched; their mailbox remains pending until a successor can accept it.
+Restarts resume the durable mailbox. Unchanged snapshots do not create repeated
+wakes, and material fingerprints still suppress unnecessary model calls. Normal
+periodic observation remains the fallback for old events without world metadata,
+shared-premise-only changes and any projection path without this completion event.
+
+`test_ai_directed_retrieval.py` and `test_ai_evidence_wake.py` cover excluded-fact
+retrieval, scope, immutable capture, repeated/oversized reads, lease loss, exact
+legacy replay, late event commits, coalescing, retry preservation and atomic rollback.
 
 Questions explicitly select an allowed capability. Future price/order-flow
 checks remain observations and wait for the existing collectors; they do not

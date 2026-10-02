@@ -199,6 +199,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             saved.pop("comparisonFacts", None)
             keys = ("id", "label", "symbol", "currentPrice", "changeRate", "ma20", "ma60", "volumeRatio", "profitLossRate", "sourceAsOf", "asOf", "sourceSnapshotId", "source", "freshnessStatus")
             saved["previousFacts"] = [{key: fact[key] for key in keys if key in fact} for fact in previous.get("facts", [])[:20]]
+            saved.update({key: previous[key] for key in ("accountId", "symbol", "worldId") if key in previous})
             result.append({**saved, "completedAt": row["updated_at"]})
         if result and condition_state:
             result[0]["followUpEvaluations"] = json.loads(condition_state["result_json"])["followUpEvaluations"]
@@ -244,6 +245,15 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             if input_id:
                 connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
         return call_id
+
+    def retrieval_round_budget(self):
+        from digital_twin.modules.ai_orchestration.domain.retrieval import MAX_ROUNDS
+        if not budgets_enabled(self.runtime_settings):
+            return MAX_ROUNDS
+        with self.connect() as connection:
+            row = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + stamp()[:10],)).fetchone()
+        maximum = bounded(self.runtime_settings.get("aiControlDailyCallBudget"), 24, 0, 300)
+        return max(0, min(MAX_ROUNDS, maximum - int((row or {}).get("used_count", 0)) - 2))
 
     def finish_call(self, call_id, error_kind="", metrics=None):
         with self.transaction() as connection:

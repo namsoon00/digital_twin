@@ -9,6 +9,10 @@ from digital_twin.modules.ai_orchestration.domain.insight_schema import planning
 from digital_twin.modules.ai_orchestration.domain.brain_management import management_prompt, management_schema, required_case_memory
 from digital_twin.modules.ai_orchestration.domain.observation_clock import clocked_management_prompt, clocked_review_prompt
 from digital_twin.modules.ai_orchestration.domain.observation_clock import citable_management_prompt, citable_review_prompt, citable_management_schema
+from digital_twin.modules.ai_orchestration.domain.retrieval import (
+    RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
+    validate_read_decision,
+)
 
 
 EXECUTION_INPUT_PROTOCOL = "ai-observation-execution-v1"
@@ -18,12 +22,14 @@ BOUNDED_PROMPT_VERSION = "independent-observation-v5-bounded-memory"
 DEVELOPMENT_PROMPT_VERSION = "independent-observation-v6-ontology-development"
 AGENDA_PROMPT_VERSION = "independent-observation-v7-persistent-agenda"
 SOURCE_CLOCK_PROMPT_VERSION = "independent-observation-v8-source-clock"
-PROMPT_VERSION = "independent-observation-v9-clock-citations"
+CITABLE_PROMPT_VERSION = "independent-observation-v9-clock-citations"
+PROMPT_VERSION = "independent-observation-v10-directed-reads"
 LEGACY_REPAIR_PROMPT_VERSION = "independent-observation-repair-v1"
 DEVELOPMENT_REPAIR_PROMPT_VERSION = "independent-observation-repair-v2-ontology-development"
 AGENDA_REPAIR_PROMPT_VERSION = "independent-observation-repair-v3-persistent-agenda"
 SOURCE_CLOCK_REPAIR_PROMPT_VERSION = "independent-observation-repair-v4-source-clock"
-REPAIR_PROMPT_VERSION = "independent-observation-repair-v5-clock-citations"
+CITABLE_REPAIR_PROMPT_VERSION = "independent-observation-repair-v5-clock-citations"
+REPAIR_PROMPT_VERSION = "independent-observation-repair-v6-directed-reads"
 LEGACY_REVIEW_PROMPT_VERSION = "independent-observation-review-v1"
 SOURCE_CLOCK_REVIEW_PROMPT_VERSION = "independent-observation-review-v2-source-clock"
 REVIEW_PROMPT_VERSION = "independent-observation-review-v3-clock-citations"
@@ -37,11 +43,11 @@ def prompt_budget(value=DEFAULT_PROMPT_BYTES):
         return DEFAULT_PROMPT_BYTES
 
 
-def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_PROMPT_BYTES):
+def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_PROMPT_BYTES, retrieval_trace=None):
     validate_evidence_packet(packet)
     current = copy.deepcopy(packet)
     previous, results = [], [copy.deepcopy(row) for row in research if required_case_memory(row)]
-    prompt = citable_management_prompt(current, previous, results)
+    prompt = directed_planning_prompt(current, previous, results)
     limit = prompt_budget(max_prompt_bytes)
     if len(prompt.encode()) > limit:
         raise EvidenceContractError("observation execution exceeds context budget")
@@ -57,7 +63,7 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
                 continue
             size = len(json.dumps(row, ensure_ascii=False, allow_nan=False).encode())
             selected.append(copy.deepcopy(row))
-            candidate = citable_management_prompt(current, previous, results)
+            candidate = directed_planning_prompt(current, previous, results)
             if used + size > budget or len(candidate.encode()) > limit:
                 selected.pop()
                 excluded[name].append({"hash": content_hash(row), "bytes": size, "reason": "context-budget"})
@@ -66,6 +72,7 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
                 prompt = candidate
     return {"protocolVersion": EXECUTION_INPUT_PROTOCOL, "promptVersion": PROMPT_VERSION, "promptBudgetBytes": limit,
         "current": current, "previousAnalyses": previous, "researchResults": results,
+        "retrievalTrace": copy.deepcopy(retrieval_trace or []),
         "memoryCoverage": {"analysesAvailable": len(history), "analysesIncluded": len(previous),
                            "researchAvailable": len(research), "researchIncluded": len(results),
                            "excluded": excluded, "promptBytes": len(prompt.encode())},
@@ -73,10 +80,13 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
-    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION}:
+    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION}:
         raise EvidenceContractError("unsupported AI execution input")
     validate_evidence_packet(envelope["current"])
-    if envelope["promptVersion"] in {REVIEW_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
+    if envelope["promptVersion"] == RETRIEVAL_PROMPT_VERSION:
+        prompt = retrieval_prompt(envelope["current"], envelope["retrievalContext"])
+        schema = retrieval_schema()
+    elif envelope["promptVersion"] in {REVIEW_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
         from digital_twin.modules.ai_orchestration.domain.insight_quality import review_prompt
         builder = citable_review_prompt if envelope["promptVersion"] == REVIEW_PROMPT_VERSION else clocked_review_prompt if envelope["promptVersion"] == SOURCE_CLOCK_REVIEW_PROMPT_VERSION else review_prompt
         prompt = builder(envelope["current"], envelope["draft"])
@@ -86,15 +96,22 @@ def validate_execution_input(envelope):
         schema = legacy_planning_schema(envelope["current"])
     else:
         old = envelope["promptVersion"] in {PREVIOUS_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}
-        citable = envelope["promptVersion"] in {PROMPT_VERSION, REPAIR_PROMPT_VERSION}
+        directed = envelope["promptVersion"] in {PROMPT_VERSION, REPAIR_PROMPT_VERSION}
+        citable = directed or envelope["promptVersion"] in {CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION}
         clocked = citable or envelope["promptVersion"] in {SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION}
         managed = clocked or envelope["promptVersion"] in {AGENDA_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION}
-        builder = bounded_planning_prompt if old else citable_management_prompt if citable else clocked_management_prompt if clocked else management_prompt if managed else planning_prompt
+        builder = bounded_planning_prompt if old else directed_planning_prompt if directed else citable_management_prompt if citable else clocked_management_prompt if clocked else management_prompt if managed else planning_prompt
         prompt = builder(envelope["current"], envelope["previousAnalyses"], envelope["researchResults"])
-        if envelope["promptVersion"] in {REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}:
+        if envelope["promptVersion"] in {REPAIR_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}:
             from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
             prompt = repair_prompt(prompt, envelope["repair"])
         schema = (citable_management_schema if citable else management_schema)(envelope["current"], envelope["researchResults"]) if managed else (bounded_planning_schema if old else planning_schema)(envelope["current"])
+        if directed and envelope["current"].get("retrieval"):
+            trace = envelope.get("retrievalTrace", [])
+            for step in trace:
+                validate_read_decision(step["decision"])
+            if trace_summary(trace, envelope["current"]["retrieval"]["status"]) != envelope["current"]["retrieval"]:
+                raise EvidenceContractError("retrieval trace does not match input")
     if prompt != envelope["prompt"] or hashlib.sha256(prompt.encode()).hexdigest() != envelope["promptHash"]:
         raise EvidenceContractError("frozen AI prompt does not match input")
     if envelope.get("outputSchema") != schema:
@@ -114,7 +131,7 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
                        "errors": list(errors), "comparisons": comparison_diagnostics(draft, value["current"])}
     if review:
         value["repair"]["independentReview"] = copy.deepcopy(review)
-    value["prompt"] = repair_prompt(citable_management_prompt(value["current"], value["previousAnalyses"], value["researchResults"]), value["repair"])
+    value["prompt"] = repair_prompt(directed_planning_prompt(value["current"], value["previousAnalyses"], value["researchResults"]), value["repair"])
     # A repair adds the rejected draft and feedback. Re-budget optional memory
     # without changing the packet or the parent audit artifact.
     for field, kind in (("researchResults", "research"), ("previousAnalyses", "analyses")):
@@ -125,7 +142,7 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
             omitted = value[field].pop(eligible[-1])
             value.setdefault("memoryCoverage", {}).setdefault("excluded", {}).setdefault(kind, []).append(
                 {"hash": content_hash(omitted), "reason": "repair-context-budget"})
-            value["prompt"] = repair_prompt(citable_management_prompt(value["current"], value["previousAnalyses"], value["researchResults"]), value["repair"])
+            value["prompt"] = repair_prompt(directed_planning_prompt(value["current"], value["previousAnalyses"], value["researchResults"]), value["repair"])
     value["outputSchema"] = citable_management_schema(value["current"], value["researchResults"])
     value.setdefault("memoryCoverage", {}).update(analysesIncluded=len(value["previousAnalyses"]),
         researchIncluded=len(value["researchResults"]), promptBytes=len(value["prompt"].encode()))

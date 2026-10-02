@@ -4953,6 +4953,7 @@ class OntologyReasoningRunner:
             pipeline = result.get("alertPipeline") if isinstance(result.get("alertPipeline"), dict) else {}
             outcomes.append({
                 "accountId": str(account_id or ""),
+                "worldId": str(result.get("worldId") or (result.get("ontologyWorld") or {}).get("worldId") or ""),
                 "projectionStatus": str(result.get("status") or ""),
                 "inferenceStatus": str(inference.get("status") or ""),
                 "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),

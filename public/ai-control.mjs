@@ -14,6 +14,13 @@ let brainDirty = false;
 let brainCases = [];
 const brainLabels = {open:"질문 등록",waiting:"자료·조사 대기","review-needed":"조사 결과 재검토",blocked:"추가 자료·기능 필요",answered:"AI 답변 기록",dismissed:"검토 종료",proposed:"개선 제안",planned:"개선 계획",implemented:"반영 신고 · 효과 미검증"};
 const categoryLabels = {analysis:"분석 품질",data:"데이터",experience:"이용 경험",operations:"운영"};
+function retrievalView(retrieval) {
+  if (!retrieval) return "";
+  const states = {ready:"조회 완료",deferred:"자료 부족으로 보류","round-limit":"이번 조회 한도 도달","repeated-read":"중복 조회로 중단","context-budget":"입력 용량 한도로 보류","budget-fallback":"호출 여유 부족 · 기본 근거로 관찰"};
+  const tools = {query_facts:"근거 조회",read_fact:"선택한 근거 확인",recall_memory:"과거 기억 조회"};
+  const categories = {quote:"시세",valuation:"가치 평가",company:"기업·재무",research:"조사 자료",macro:"거시 지표",technical:"가격 흐름",flow:"수급",quality:"자료 품질",analyses:"과거 판단",memories:"조사·질문·피드백"};
+  return `<details class="retrieval"><summary>AI가 조회한 과정 · ${escape(states[retrieval.status] || retrieval.status)}</summary>${(retrieval.steps || []).map((step, index) => `<p><strong>${index + 1}. ${escape(step.reason)}</strong></p>${(step.reads || []).map((read) => `<p>${escape(tools[read.request?.tool] || "조회")} · ${escape(categories[read.request?.category] || read.request?.category)} · ${read.request?.tool === "recall_memory" ? "현재 사실과 구분해 참고" : `사실 ${escape(read.factIds?.length || 0)}개`}<br><small>${read.status === "ok" ? "조회 결과 기록" : escape(states[read.status] || "조회 제한 또는 자료 확인 필요")}${read.omitted?.length ? ` · 용량 한도로 제외 ${escape(read.omitted.length)}개` : ""}${read.nextOffset != null ? " · 다음 페이지 있음" : ""}</small></p>`).join("")}`).join("")}<p class="muted">동일한 시점의 근거에서 선택해 읽었습니다. 조회하지 않은 자료가 없다는 뜻은 아닙니다.</p></details>`;
+}
 function brainView(brain = {}) {
   brainCases = brain.cases || [];
   const cards = brainCases.map((row) => {
@@ -50,6 +57,7 @@ function card(task, scheduling = {}) {
   ${r.summary ? `<p>${escape(r.summary)}</p>` : `<p class="muted">${escape(reasons[r.stopReason] || r.reason || (task.status === "pending" && scheduling.status === "budget-wait" ? "오늘 AI 사용 한도로 관찰을 기다리고 있습니다." : task.lastError?.startsWith("ai-call-budget") ? "AI 호출 여유가 생기면 관찰을 다시 시작합니다." : task.lastError ? "작업에 실패해 재확인이 필요합니다." : task.status === "pending" ? "예약된 시점에 확인합니다." : "아직 분석 결과가 없습니다."))}</p>`}
   ${quote ? `<p>근거 시점 가격 <strong>${escape(Number(quote.currentPrice).toLocaleString("ko-KR"))} ${escape(quote.currency)}</strong>${quote.changeRate != null ? ` · 등락 ${escape(quote.changeRate)}%` : ""}<br><small>시세 기준 ${escape(date(quote.sourceAsOf || quote.asOf || quote.updatedAt))}</small></p>` : ""}
   <div class="analysis">${section("가능한 설명 · 가설",r.hypothesis)}${section("이전 알림과 비교",r.comparison)}${section("내 보유·관심 상황에서의 의미",r.portfolioImpact)}${section("반대 근거와 한계",r.counterEvidence)}${section("다음에 확인할 질문",(r.questions || []).join(" / "))}</div>
+  ${retrievalView(r.input?.retrieval)}
   ${r.followUpConditions?.length ? `<details><summary>등록한 확인 조건 ${r.followUpConditions.length}개</summary>${r.followUpConditions.map((row) => `<p>${escape(row.description)}<br><small>${escape(date(row.expiresAt))}까지 다음 관찰에서 확인</small></p>`).join("")}</details>` : ""}
   ${r.followUpEvaluations?.length ? `<details><summary>이전 설명의 확인 결과</summary>${r.followUpEvaluations.map((row) => `<p>${escape(row.description)} · ${escape(followUpLabels[row.status] || row.status)}<br><small>${escape(row.reason)}</small></p>`).join("")}</details>` : ""}
   ${r.publication?.receipt ? `<details><summary>실제 발송 원문 · ${escape(date(r.publication.receipt.deliveredAt))}</summary><pre>${escape(r.publication.receipt.body || "원문 보존 기간이 지나 본문을 표시할 수 없습니다.")}</pre></details>` : ""}

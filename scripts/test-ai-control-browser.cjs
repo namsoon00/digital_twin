@@ -17,7 +17,8 @@ const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 
   claimEvidence:{summary:[{factId:'fact',field:'currentPrice',period:'current'}]},
   followUpEvaluations:[{description:'평균 가격 회복을 확인합니다.',status:'expired',reason:'기간 내 자료 없음'}],
   publication:{status:'queued',deliveryStatus:'done',reason:'전송 성공',receipt:{body:'실제 전송된 과거 원문 <b>증거</b>',deliveredAt:'2026-10-01T03:00:00Z'}},
-  input:{name:'테스트 종목',facts:[{currentPrice:100,currency:'KRW',sourceAsOf:'2026-10-01T03:00:00Z'}]}};
+  input:{name:'테스트 종목',facts:[{currentPrice:100,currency:'KRW',sourceAsOf:'2026-10-01T03:00:00Z'}],
+    retrieval:{status:'ready',steps:[{reason:'반대 근거 확인 <script>bad</script>',reads:[{request:{tool:'query_facts',category:'company'},factIds:['f1'],status:'ok',nextOffset:1,omitted:[]}]}]}}};
 const server = http.createServer((req,res) => {
   if (req.url === '/api/ai-control/status') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,configuredEnabled:true,tasksStartedToday:2,dailyTaskBudget:48,activeTaskCount:1,dailyCallBudget:24,
     modelCallsUsedToday:24,observationScheduling:{status:'budget-wait',reason:'ai-call-budget-exhausted',nextCheckAt:'2026-10-02T00:00:00Z'},
@@ -41,6 +42,11 @@ const server = http.createServer((req,res) => {
    await page.getByText('온톨로지 개선 · 현재 진행 기록 없음',{exact:true}).click();
    assert.match(await page.locator('article').innerText(),/가설 개선 질문 <script>bad<\/script>/);
    assert.equal(await page.locator('article script').count(),0);
+   await page.getByText('AI가 조회한 과정 · 조회 완료',{exact:true}).click();
+   assert.match(await page.locator('.retrieval').innerText(),/기업·재무 · 사실 1개/);
+   assert.match(await page.locator('.retrieval').innerText(),/다음 페이지 있음/);
+   assert.match(await page.locator('.retrieval').innerText(),/반대 근거 확인 <script>bad<\/script>/);
+   assert.equal(await page.locator('.retrieval script').count(),0);
    assert.match(await page.locator('#overview').innerText(),/사용 한도로 대기/);
    assert.match(await page.locator('#overview').innerText(),/24 \/ 24/);
    assert.match(await page.locator('#overview').innerText(),/한도 갱신/);

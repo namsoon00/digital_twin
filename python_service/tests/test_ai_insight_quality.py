@@ -329,7 +329,8 @@ class InsightControlTests(unittest.TestCase):
         self.assertEqual('original', result['repair']['initialInputId'])
         self.assertTrue(result['repair']['initialErrors'])
         correction = planner.call_args.args[0]
-        self.assertEqual('independent-observation-repair-v5-clock-citations', correction['promptVersion'])
+        from digital_twin.modules.ai_orchestration.domain.execution_input import REPAIR_PROMPT_VERSION
+        self.assertEqual(REPAIR_PROMPT_VERSION, correction['promptVersion'])
         self.assertEqual(bad, correction['repair']['rejectedDraft'])
         self.assertTrue(correction['repair']['comparisons'])
         validate_execution_input(correction)

@@ -3,20 +3,13 @@ import json
 
 
 def call_observation_model(envelope, configured):
-    import os
-    import tempfile
-    from pathlib import Path
     from digital_twin.modules.model_registry.infrastructure.model_reviewer import codex_process_arguments, background_ai_runtime_dir, run_background_ai_prompt
     from digital_twin.infrastructure.news_ai_analyzer import first_json_object
-    from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
-    validate_execution_input(envelope)
-    with tempfile.TemporaryDirectory(prefix="orbit-observation-schema-") as directory:
-        schema = Path(directory) / "response.json"
-        schema.write_text(json.dumps(envelope["outputSchema"], ensure_ascii=False))
-        os.chmod(schema, 0o600)
-        command = codex_process_arguments("high", background_ai_runtime_dir(), output_schema_path=schema)
-        completed = run_background_ai_prompt(command, envelope["prompt"], 240, configured)
-        return first_json_object(completed.stdout)
+    from digital_twin.modules.ai_orchestration.infrastructure.observation_model import StructuredObservationModel
+    adapter = StructuredObservationModel(
+        lambda schema: codex_process_arguments("high", background_ai_runtime_dir(), output_schema_path=schema),
+        run_background_ai_prompt, first_json_object)
+    return adapter(envelope, configured)
 
 
 def ai_control_subjects(configured):
@@ -63,7 +56,7 @@ def build_ai_control_service(settings=None):
 
     def evidence(job):
         from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
-        return GraphObservationReader(typedb_repository_from_settings(configured))(job)
+        return GraphObservationReader(typedb_repository_from_settings(configured)).capture_session(job)
 
     def planner(envelope, input_id):
         token = CURRENT_TASK.set(envelope["current"]["taskId"])
@@ -122,9 +115,12 @@ def build_ai_control_service(settings=None):
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
     agenda = MySQLBrainAgendaStore(configured)
     store.agenda_writer, store.agenda_failure = agenda.record, agenda.failed
+    from digital_twin.infrastructure.transactions.ai_observation_wake import AIObservationEvidenceWake
+    evidence_wake = AIObservationEvidenceWake(configured)
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
-                            brain_memory=agenda.memory, brain_waker=agenda.wake_due)
+                            brain_memory=agenda.memory, brain_waker=agenda.wake_due, read_planner=planner,
+                            evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget)
 
 
 def ai_control_status(settings=None, account_id=""):

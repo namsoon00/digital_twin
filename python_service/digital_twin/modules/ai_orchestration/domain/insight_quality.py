@@ -41,6 +41,8 @@ JSON만 반환하세요. sections의 모든 항목을 각각 검토하며 빈 �
 
 def local_quality(result):
     errors = insight_errors(result, result["input"])
+    if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
+        errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
     if not result.get("followUpConditions"):
         errors.append("관찰 가능한 확인 조건과 기간이 없습니다.")
     if errors:

@@ -249,7 +249,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Native inventory hydration/fences, capture isolation, fair compatible
         # claims and physical rollback accounting add six failure boundaries.
         # Historical metadata also skips discarded output before copying facts.
-        self.assertLessEqual(total, 2028)
+        # Twelve directed-read, exact-replay, quota and durable ABox wakeup regressions.
+        self.assertLessEqual(total, 2040)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

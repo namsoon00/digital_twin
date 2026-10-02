@@ -1,5 +1,7 @@
 {
   "tests": [
+    {"file": "test_ai_directed_retrieval.py", "tier": "contract", "core": true},
+    {"file": "test_ai_evidence_wake.py", "tier": "integration", "core": true},
     {"file": "test_runtime_stability.py", "tier": "contract", "core": true},
     {"file": "test_typedb_independent_observation.py", "tier": "contract", "core": true},
     {"file": "test_relation_observation_narrative.py", "tier": "contract", "core": true},

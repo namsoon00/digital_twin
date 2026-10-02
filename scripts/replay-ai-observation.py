@@ -6,6 +6,7 @@ model outputs are saved only in an operator-selected private local directory.
 """
 import argparse
 import copy
+import gzip
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,24 @@ def private_write(path, text):
         stream.write(text)
 
 
+def replay_input(packet, settings, input_id=""):
+    if not packet.get('retrieval'):
+        return freeze_execution_input(packet, [], [])
+    # The notification capture carries only the compact read audit. Recover
+    # its exact local artifact; never invent missing tool results or erase a
+    # deferred-retrieval status to make a historical draft look publishable.
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
+    with MySQLAIControlStore(settings).connect() as connection:
+        row = connection.execute('SELECT artifact_gzip FROM ai_control_inputs WHERE input_id=%s', (input_id,)).fetchone()
+    if not row:
+        raise ValueError('Directed observation replay requires its original frozen execution input')
+    envelope = json.loads(gzip.decompress(row['artifact_gzip']))
+    validate_execution_input(envelope)
+    if envelope['current'] != packet:
+        raise ValueError('Captured observation does not match its frozen execution input')
+    return envelope
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('capture', type=Path)
@@ -37,10 +56,12 @@ def main():
     args = parser.parse_args()
     capture = json.loads(args.capture.read_text())
     packets = {}
+    input_ids = {}
     for row in capture.get('records', []):
         saved = row.get('context', {}).get('aiControlObservation', {})
         if saved.get('input'):
             packets.setdefault(saved['input']['symbol'], saved['input'])
+            input_ids.setdefault(saved['input']['symbol'], saved.get('executionInputId', ''))
     args.output.mkdir(parents=True, exist_ok=True, mode=0o700)
     settings = runtime_settings()
     results = []
@@ -51,13 +72,14 @@ def main():
         if not packet.get('protocolVersion'):
             packet['facts'], packet['coverage'] = select_evidence(packet['facts'])
             packet.update(protocolVersion=EVIDENCE_PROTOCOL, profile=EVIDENCE_PROFILE)
-        envelope = freeze_execution_input(packet, [], [])
+        envelope = replay_input(packet, settings, input_ids.get(symbol, ''))
         private_write(args.output / (symbol + '-input.json'), json.dumps(envelope, ensure_ascii=False, indent=2))
         validate_execution_input(envelope)
         print(symbol + ': real model analysis started', flush=True)
         raw = call_observation_model(envelope, {**settings, 'aiWorkload': 'observation-replay'})
         private_write(args.output / (symbol + '-response.json'), json.dumps(raw, ensure_ascii=False, indent=2))
-        result = {**validate_plan(raw, packet), 'input': packet, 'observedAt': stamp(), 'inputFingerprint': observation_fingerprint(packet, [])}
+        result = {**validate_plan(raw, packet, envelope.get('researchResults', [])), 'input': packet, 'observedAt': stamp(),
+                  'inputFingerprint': observation_fingerprint(packet, envelope.get('researchResults', []))}
         result['quality'] = local_quality(result)
         if result['notification']['send'] and result['quality']['status'] == 'awaiting-review':
             review_input = freeze_review_input(result)

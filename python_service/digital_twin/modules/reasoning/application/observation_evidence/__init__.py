@@ -8,6 +8,7 @@ from digital_twin.modules.reasoning.domain.observation_evidence import (
     quote_clock_assessment,
 )
 from .reads import read_evidence_stage
+from digital_twin.modules.reasoning.domain.observation_session import ObservationEvidenceSession
 
 
 class ObservationEvidenceSource(Protocol):
@@ -22,6 +23,9 @@ class ObservationEvidenceReader:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def __call__(self, request):
+        return self.capture_session(request).packet()
+
+    def capture_session(self, request):
         return read_evidence_stage("snapshot", lambda: self._read_snapshot(request))
 
     def _read_snapshot(self, request):
@@ -67,4 +71,4 @@ class ObservationEvidenceReader:
             "includedFactCount": len(facts), "requiresMatchedRule": False}
         packet["quoteAssessment"] = quote_clock_assessment(facts, packet["capturedAt"])
         validate_evidence_packet(packet)
-        return packet
+        return ObservationEvidenceSession(packet, candidates)

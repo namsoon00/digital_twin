@@ -93,7 +93,9 @@ def mysql_statement_label(sql: object) -> str:
     verb = raw_verb.split()[0]
     table_match = MYSQL_STATEMENT_TABLE_PATTERNS.get(verb).search(statement)
     table = str(table_match.group("table") or "") if table_match else ""
-    return (verb + (" " + table if table else "")).strip()
+    operation = re.search(r"/\* operation:([a-z][a-z0-9-]{0,63}) \*/", statement)
+    return (verb + (" " + table if table else "")
+            + (" [" + operation.group(1) + "]" if operation else "")).strip()
 
 
 def attach_mysql_error_context(error: Exception, sql: object, started_at: float) -> None:

@@ -89,3 +89,34 @@ model quality test. Native TypeDB recovery is tested separately.
 - Source coordinator is now 366 lines (previously 1,874). Scoped manifest repair
   is still 514 lines; the large transaction coordinators remain explicit shared
   boundaries, not services that should all become asynchronous.
+
+## External-fact read timeout remediation (2026-10-03)
+
+The realtime monitor reported MySQL error 2013 after a 30-second read during
+snapshot construction. The old table-only diagnostic could identify an inner
+`external_fact_revision` existence check as well as the historical fact read,
+so it does not prove which SQL statement timed out. Heavy host swapping was
+also observed; the following change does not establish a sole incident cause.
+
+Current facts now use a single repeatable, read-only snapshot with 16-row
+payload pages. Historical valuation first reads retained revision IDs through
+a covering history index, then loads only uncached immutable revisions in
+16-row pages. The valuation domain projects the exact fields consumed by its
+existing point-in-time join. The process-local cache stores these projections
+under a 4 MiB serialized-content budget and 10,000-entry limit; oversized values
+are returned intact without caching. Original provider records are unchanged.
+The cache survives per-snapshot adapter construction and is partitioned by
+database connection identity, principal, projector and revision clock.
+Each request rechecks retained membership. Read failures and missing pages
+propagate, and cached values are isolated from caller mutation. SQL operation
+labels distinguish current keys/pages from historical IDs/pages without
+including parameters.
+
+A bounded read-only production check covered 842 immutable revisions: 63,132,912
+raw payload bytes became 717,033 bytes of projected results, with every consumed
+price/analyst input equal. The cold read took 2.173 seconds and the warm read
+with a reconstructed adapter took 0.261 seconds; the latter transferred no
+provider bodies. Current-fact paging read 206 rows in 0.894 seconds. A separate
+215-row comparison of old and new current-fact queries in the same read-only
+snapshot preserved every output field. These are individual local measurements,
+not a latency guarantee or a completed continuous-operation verification.

@@ -64,6 +64,28 @@ def _symbol_payload(row: Mapping[str, object], group: str, symbol: str) -> Dict[
     return dict(value)
 
 
+def historical_multiple_fact_projection(row: Mapping[str, object]) -> Dict[str, object]:
+    """Preserve every input consumed by the historical multiple builder.
+
+    Large statements, profiles and price series are not inputs to this join.
+    Source IDs, hashes and clocks still refer to the original immutable fact.
+    """
+    symbol = _text(row.get("subjectKey")).upper()
+    overview = _symbol_payload(row, "companyOverviews", symbol)
+    yfinance = _symbol_payload(row, "yfinanceData", symbol)
+    return {
+        **_source_reference(row),
+        "payload": {
+            "companyOverviews": {symbol: {
+                key: overview[key]
+                for key in ("currentPrice", "currency", "securityLine", "earningsEstimates")
+                if key in overview
+            }},
+            "yfinanceData": {symbol: {"querySymbol": yfinance.get("querySymbol")}},
+        },
+    }
+
+
 def _analyst_snapshot(row: Mapping[str, object], symbol: str) -> Dict[str, object]:
     overview = _symbol_payload(row, "companyOverviews", symbol)
     yfinance = _symbol_payload(row, "yfinanceData", symbol)

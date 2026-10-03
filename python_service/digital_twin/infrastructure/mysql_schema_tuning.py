@@ -132,6 +132,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "external_fact_revision": (
         MySQLIndexDefinition(
             "external_fact_revision",
+            "idx_external_fact_revision_history",
+            "`subject_key`, `dataset_id`, `fetched_at`",
+        ),
+        MySQLIndexDefinition(
+            "external_fact_revision",
             "idx_external_fact_source_revision",
             "`dataset_id`, `subject_key`, `source_revision`",
         ),

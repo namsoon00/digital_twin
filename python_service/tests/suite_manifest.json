@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_external_fact_bounded_reads.py", "tier": "unit", "core": true},
     {"file": "test_ai_directed_retrieval.py", "tier": "contract", "core": true},
     {"file": "test_ai_retrieval_recovery.py", "tier": "integration", "core": true},
     {"file": "test_ai_evidence_wake.py", "tier": "integration", "core": true},

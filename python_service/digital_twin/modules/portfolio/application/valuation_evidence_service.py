@@ -13,6 +13,7 @@ from digital_twin.modules.news_intelligence.contracts import (
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_driver_dcf_input_bundle
 from digital_twin.modules.portfolio.domain.valuation.historical_multiples import (
     build_historical_forward_multiple_observations,
+    historical_multiple_fact_projection,
     normalize_current_consensus_contract,
 )
 
@@ -32,13 +33,19 @@ class HistoricalMultipleEvidenceService:
     def enrich(self, signals: Dict[str, object], symbols: Iterable[object]) -> Dict[str, object]:
         result = dict(signals or {})
         requested = sorted({str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()})
-        if not requested or not hasattr(self.fact_store, "list_revisions"):
+        projected_reader = getattr(self.fact_store, "list_revision_projections", None)
+        revision_reader = getattr(self.fact_store, "list_revisions", None)
+        if not requested or not (callable(projected_reader) or callable(revision_reader)):
             return result
-        revisions = self.fact_store.list_revisions(
-            dataset_ids=["yfinance.fundamental", "yfinance.analyst"],
-            subject_keys=requested,
-            limit=max(100, len(requested) * 240),
-        )
+        read_args = {
+            "dataset_ids": ["yfinance.fundamental", "yfinance.analyst"],
+            "subject_keys": requested,
+            "limit": max(100, len(requested) * 240),
+        }
+        if callable(projected_reader):
+            revisions = projected_reader(**read_args, projector=historical_multiple_fact_projection)
+        else:
+            revisions = revision_reader(**read_args)
         grouped = {}
         for row in revisions or []:
             if not isinstance(row, Mapping):

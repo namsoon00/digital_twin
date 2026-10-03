@@ -12,6 +12,7 @@ from ..mysql_operational_connection import MySQLOperationalConnection
 from ..mysql_operational_events import insert_domain_event_with_connection
 from ..mysql_operational_helpers import _json_loads
 from ..operational_common import json_dumps
+from .revision_projection_cache import process_revision_projection_cache
 
 
 def utc_now() -> datetime:
@@ -1110,20 +1111,38 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
 
     def list_current(self, subject_keys: Iterable[str] = None) -> List[Dict[str, object]]:
         subjects = sorted({str(item or "").strip() for item in subject_keys or [] if str(item or "").strip()})
-        sql = (
-            "SELECT fact.*, EXISTS(SELECT 1 FROM external_fact_revision revision "
-            "WHERE revision.revision_id = fact.revision_id) AS revision_available "
-            "FROM external_fact_current fact"
-        )
+        sql = "SELECT /* operation:external-current-keys */ dataset_id, subject_key FROM external_fact_current"
         params: List[object] = []
         if subjects:
             placeholders = ", ".join(["%s"] * len(subjects))
             sql += " WHERE subject_key = 'global' OR subject_key IN (" + placeholders + ")"
             params.extend(subjects)
         sql += " ORDER BY dataset_id, subject_key"
-        with self.connect() as connection:
-            rows = connection.execute(sql, tuple(params)).fetchall()
-        return [self._fact_row(row) for row in rows]
+        result = []
+        with self.transaction() as connection:
+            # Keep membership, current payloads and retention evidence at one
+            # read view while avoiding one large sorted LONGTEXT result.
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            connection.execute("START TRANSACTION READ ONLY")
+            keys = connection.execute(sql, tuple(params)).fetchall()
+            for offset in range(0, len(keys), 16):
+                batch = keys[offset:offset + 16]
+                rows = connection.execute(
+                    "SELECT /* operation:external-current-page */ fact.*, "
+                    "(revision.revision_id IS NOT NULL) AS revision_available "
+                    "FROM external_fact_current fact LEFT JOIN external_fact_revision revision "
+                    "ON revision.revision_id = fact.revision_id "
+                    "WHERE (fact.dataset_id, fact.subject_key) IN ("
+                    + ", ".join(["(%s, %s)"] * len(batch)) + ") "
+                    "ORDER BY fact.dataset_id, fact.subject_key",
+                    tuple(value for key in batch for value in (key["dataset_id"], key["subject_key"])),
+                ).fetchall()
+                if {(row["dataset_id"], row["subject_key"]) for row in rows} != {
+                    (key["dataset_id"], key["subject_key"]) for key in batch
+                }:
+                    raise RuntimeError("Current fact missing from its read snapshot")
+                result.extend(self._fact_row(row) for row in rows)
+        return result
 
     def list_revisions(
         self,
@@ -1151,6 +1170,59 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(sql, tuple(params)).fetchall()
         return [self._revision_fact_row(row) for row in rows]
+
+    def list_revision_projections(
+        self, *, dataset_ids, subject_keys, limit, projector,
+    ) -> List[Dict[str, object]]:
+        """Read exact retained history, loading uncached bodies in small pages.
+
+        The projector is a pure, stable function owned by the consumer. Its
+        identity namespaces the cache; original source records stay untouched.
+        Database errors propagate even when a previous projection is cached.
+        """
+        datasets = sorted({str(item or "").strip() for item in dataset_ids or [] if str(item or "").strip()})
+        subjects = sorted({str(item or "").upper().strip() for item in subject_keys or [] if str(item or "").strip()})
+        if not datasets or not subjects:
+            return []
+        cache = getattr(self, "_revision_projection_cache", None)
+        if cache is None:
+            cache = process_revision_projection_cache()
+        # Providers/stores are reconstructed on every monitor snapshot. The
+        # shared cache must therefore be bounded across adapters and partitioned
+        # by database and principal, not by the short-lived store's identity.
+        namespace = tuple(str(self.mysql_config.get(key) or "") for key in (
+            "host", "port", "database", "user", "unix_socket",
+        ))
+        with self.transaction() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            connection.execute("START TRANSACTION READ ONLY")
+            identities = connection.execute(
+                "SELECT /* operation:external-revision-ids */ revision_id, fetched_at FROM external_fact_revision "
+                "WHERE dataset_id IN (" + ", ".join(["%s"] * len(datasets)) + ") "
+                "AND subject_key IN (" + ", ".join(["%s"] * len(subjects)) + ") "
+                "ORDER BY subject_key, dataset_id, fetched_at ASC LIMIT %s",
+                tuple(datasets + subjects + [max(1, min(10000, int(limit or 1000)))]),
+            ).fetchall()
+            revision_ids = [row["revision_id"] for row in identities]
+            cache_keys = {row["revision_id"]: (namespace, projector, row["revision_id"], row["fetched_at"])
+                          for row in identities}
+            projected = {revision_id: cache.get(cache_keys[revision_id]) for revision_id in revision_ids}
+            missing = [revision_id for revision_id in revision_ids if projected[revision_id] is None]
+            for offset in range(0, len(missing), 16):
+                batch = missing[offset:offset + 16]
+                rows = connection.execute(
+                    "SELECT /* operation:external-revision-page */ * FROM external_fact_revision "
+                    "WHERE revision_id IN (" + ", ".join(["%s"] * len(batch)) + ")",
+                    tuple(batch),
+                ).fetchall()
+                if {row["revision_id"] for row in rows} != set(batch):
+                    raise RuntimeError("Immutable fact revision missing from its read snapshot")
+                for row in rows:
+                    revision_id = row["revision_id"]
+                    value = projector(self._revision_fact_row(row))
+                    cache.put(cache_keys[revision_id], value)
+                    projected[revision_id] = value
+        return [projected[revision_id] for revision_id in revision_ids]
 
     def fact_fitness_rows(self, subject_keys: Iterable[str] = None) -> List[Dict[str, object]]:
         """Read only metadata needed by the status fitness model."""

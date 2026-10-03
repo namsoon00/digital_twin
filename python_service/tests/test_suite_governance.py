@@ -252,7 +252,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Twelve directed-read, exact-replay, quota and durable ABox wakeup regressions.
         # Four live V2 evidence-ready scope, completion, deployment and rollback regressions.
         # Ten scoped-cursor, local correction, legacy replay and durable audit/failure boundaries.
-        self.assertLessEqual(total, 2054)
+        # Eleven external-fact read regressions cover consistent paging, retained
+        # membership, cache lifetime/isolation/budgets and unchanged valuation inputs.
+        self.assertLessEqual(total, 2065)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

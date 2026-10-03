@@ -31,7 +31,10 @@ def session():
 
 
 def request(category="company", tool="query_facts", **values):
-    return {"tool": tool, "category": category, "kind": "", "factId": "", "offset": 0, "limit": 2, **values}
+    fields = {"factId": ""} if tool == "read_fact" else {"cursor": ""}
+    if tool == "query_facts":
+        fields["kind"] = ""
+    return {"tool": tool, "category": category, **fields, **values}
 
 
 def read(*requests):
@@ -74,7 +77,7 @@ class DirectedRetrievalTests(unittest.TestCase):
 
     def test_second_decision_sees_first_result_and_final_prompt_has_only_read_evidence(self):
         (packet, history, memories, trace), envelopes, model, _ = self.run_reads([
-            read(request(limit=1)), read(request("flow"), request("analyses", "recall_memory")), FINISH],
+            read(request()), read(request("flow"), request("analyses", "recall_memory")), FINISH],
             history=[{"summary": "previous explanation", "previousFacts": [{"currentPrice": 80}]}])
         self.assertNotIn("verified report", envelopes[0]["prompt"])
         self.assertIn("verified report", envelopes[1]["prompt"])
@@ -111,7 +114,7 @@ class DirectedRetrievalTests(unittest.TestCase):
             [read(request("analyses", "recall_memory"))], history=[{"summary": "x" * 80000}], research=[required])
         self.assertEqual([], history)
         self.assertEqual([required], memories)
-        self.assertEqual("deferred", packet["retrieval"]["status"])
+        self.assertEqual("context-budget", packet["retrieval"]["status"])
         self.assertEqual("context-budget", trace[0]["reads"][0]["result"]["status"])
         from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
         from ai_insight_fixtures import observation

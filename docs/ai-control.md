@@ -42,7 +42,7 @@ not contain all financial/news bodies or all previous analyses. The model choose
 
 | Internal function | Scope |
 | --- | --- |
-| `query_facts` | One evidence category, optional kind, offset and limit |
+| `query_facts` | One evidence category, optional kind, server-issued cursor |
 | `read_fact` | A known fact ID within that same captured subject/category |
 | `recall_memory` | Bounded recent analyses or research/question/service memory |
 
@@ -56,7 +56,10 @@ arbitrary-depth graph traversal, unverified external web evidence or semantic
 search over the full lifetime history.
 
 There are at most three routing calls, two internal reads per routing call and
-eight records per page. Fact responses allow 32 KiB and all admitted read results
+four records per page. Page size and offsets belong to the server. The v2 model
+schema and validator share the same tool-specific field definitions; numeric
+offsets/limits and unused fields are not accepted. A cursor must have been issued
+by the same captured session for the same tool/category/kind. Fact responses allow 32 KiB and all admitted read results
 share 40 KiB. The configured prompt budget and the 96,000-byte evidence-packet
 limit still apply. Failed/oversized reads and missing coverage are explicit;
 repeated identical reads stop the loop. The final author sees selected facts plus
@@ -69,7 +72,7 @@ Every routing prompt is frozen in `ai_control_inputs` before its model call,
 using the same lease and call-budget accounting as final author/reviewer calls.
 The final generation v10 / repair v6 artifact also preserves the complete read
 trace, whose hash is bound to the compact audit in the evidence packet. Historical
-v9 / repair v5 prompts remain exactly replayable. The owner page shows what was
+v9 / repair v5 and retrieval v1 prompts/traces remain exactly replayable. The owner page shows what was
 queried, why, and the remaining coverage. Extra routing calls increase latency and
 call usage; the daily quota still includes each of them.
 Routing reserves the remaining author/reviewer capacity: with only those calls
@@ -77,6 +80,23 @@ left, it records `budget-fallback` and uses the existing automatic bounded packe
 Small configured quotas therefore do not repeatedly spend every call on retrieval
 without ever reaching a final observation. The per-call hard gate remains final
 authority if another worker consumes quota concurrently.
+
+An invalid request gets at most one local correction within those same three
+routing calls and the shared daily quota. The entire batch is checked before any
+read; earlier admitted evidence is retained. Each response and its validation
+errors/results are saved in `ai_control_retrieval_rounds` against the exact frozen
+input, task attempt and live lease before proceeding. The local audit keeps up to
+32 KiB of response JSON text, otherwise its byte count/hash and explicit omission;
+it is immutable and expires with its parent input. The owner UI shows error fields
+and correction attempts without exposing raw responses.
+
+If correction fails or no routing call remains, the task records a terminal
+`ai-retrieval-invalid-request` failure without authoring or publishing a judgment.
+Its normal delayed recovery successor remains available. This is distinct from
+`deferred` (insufficient evidence), `context-budget`, and operational failures
+such as provider timeouts, which retain their existing bounded retry behavior.
+Execution success and accepted explanation quality remain separate measures;
+successful retrieval is not proof that an investment hypothesis is correct.
 
 The production V2 worker publishes `ontology.observation_evidence_ready` in the
 same lease-fenced transaction as job completion and market-source receipts. The
@@ -104,7 +124,7 @@ wakes, and material fingerprints still suppress unnecessary model calls. Normal
 periodic observation remains the fallback for old events without world metadata,
 shared-premise-only changes and any projection path without this completion event.
 
-`test_ai_directed_retrieval.py` and `test_ai_evidence_wake.py` cover excluded-fact
+`test_ai_directed_retrieval.py`, `test_ai_retrieval_recovery.py`, and `test_ai_evidence_wake.py` cover excluded-fact
 retrieval, scope, immutable capture, repeated/oversized reads, lease loss, exact
 legacy replay, late event commits, coalescing, retry preservation, live V2 routing,
 deployment/attempt fences and atomic completion/event/receipt rollback.

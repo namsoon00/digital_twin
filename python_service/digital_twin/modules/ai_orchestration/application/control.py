@@ -1,7 +1,7 @@
 """Durable independent research loop, with capabilities supplied by composition."""
 from datetime import datetime, timedelta, timezone
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceReadError, ObservationEvidenceSession
-from digital_twin.modules.ai_orchestration.application.retrieval import retrieve_evidence, RetrievalLeaseLost
+from digital_twin.modules.ai_orchestration.application.retrieval import retrieve_evidence, RetrievalLeaseLost, RetrievalContractFailure
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
@@ -79,7 +79,8 @@ class AIControlService:
                     if session and self.read_planner:
                         packet, history, research, retrieval_trace = retrieve_evidence(session, packet, history, research,
                             self.read_planner, lambda value: self.store.save_execution_input(job, value),
-                            self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget())
+                            self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget(),
+                            record_round=lambda step: self.store.save_retrieval_round(job, step))
                     envelope = freeze_execution_input(packet, history, research,
                         max_prompt_bytes=self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), retrieval_trace=retrieval_trace)
                     input_id = self.store.save_execution_input(job, envelope)
@@ -140,14 +141,18 @@ class AIControlService:
             return {"status": "completed", "taskId": job["taskId"], "capability": job["capability"]}
         except RetrievalLeaseLost:
             return {"status": "lease-lost", "taskId": job["taskId"]}
+        except RetrievalContractFailure as error:
+            saved = self.store.fail(job, error.code, terminal=True, result={"failure": error.failure})
+            return {"status": saved["status"], "taskId": job["taskId"], "reason": error.code}
         except AIControlBudgetWait as wait:
             saved = self.store.defer_budget(job, wait)
             return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
             reason = error.code if isinstance(error, (EvidenceContractError, EvidenceReadError)) else type(error).__name__
-            self.store.fail(job, reason)
-            return {"status": "deferred", "taskId": job["taskId"], "reason": reason}
+            saved = self.store.fail(job, reason)
+            status = saved.get("status") if isinstance(saved, dict) else "pending"
+            return {"status": "deferred" if status == "pending" else status, "taskId": job["taskId"], "reason": reason}
 
     @staticmethod
     def subject(job):

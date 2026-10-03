@@ -11,7 +11,7 @@ from digital_twin.modules.ai_orchestration.domain.observation_clock import clock
 from digital_twin.modules.ai_orchestration.domain.observation_clock import citable_management_prompt, citable_review_prompt, citable_management_schema
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
-    validate_read_decision,
+    LEGACY_RETRIEVAL_PROMPT_VERSION, legacy, validate_trace,
 )
 
 
@@ -80,12 +80,16 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
-    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION}:
+    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION, LEGACY_RETRIEVAL_PROMPT_VERSION}:
         raise EvidenceContractError("unsupported AI execution input")
     validate_evidence_packet(envelope["current"])
     if envelope["promptVersion"] == RETRIEVAL_PROMPT_VERSION:
+        validate_trace(envelope["retrievalContext"].get("trace", []))
         prompt = retrieval_prompt(envelope["current"], envelope["retrievalContext"])
-        schema = retrieval_schema()
+        schema = retrieval_schema(envelope["retrievalContext"])
+    elif envelope["promptVersion"] == LEGACY_RETRIEVAL_PROMPT_VERSION:
+        prompt = legacy.retrieval_prompt(envelope["current"], envelope["retrievalContext"])
+        schema = legacy.retrieval_schema()
     elif envelope["promptVersion"] in {REVIEW_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
         from digital_twin.modules.ai_orchestration.domain.insight_quality import review_prompt
         builder = citable_review_prompt if envelope["promptVersion"] == REVIEW_PROMPT_VERSION else clocked_review_prompt if envelope["promptVersion"] == SOURCE_CLOCK_REVIEW_PROMPT_VERSION else review_prompt
@@ -108,9 +112,9 @@ def validate_execution_input(envelope):
         schema = (citable_management_schema if citable else management_schema)(envelope["current"], envelope["researchResults"]) if managed else (bounded_planning_schema if old else planning_schema)(envelope["current"])
         if directed and envelope["current"].get("retrieval"):
             trace = envelope.get("retrievalTrace", [])
-            for step in trace:
-                validate_read_decision(step["decision"])
-            if trace_summary(trace, envelope["current"]["retrieval"]["status"]) != envelope["current"]["retrieval"]:
+            version = envelope["current"]["retrieval"]["version"]
+            validate_trace(trace, version)
+            if trace_summary(trace, envelope["current"]["retrieval"]["status"], version) != envelope["current"]["retrieval"]:
                 raise EvidenceContractError("retrieval trace does not match input")
     if prompt != envelope["prompt"] or hashlib.sha256(prompt.encode()).hexdigest() != envelope["promptHash"]:
         raise EvidenceContractError("frozen AI prompt does not match input")

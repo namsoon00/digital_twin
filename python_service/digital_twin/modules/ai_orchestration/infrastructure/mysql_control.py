@@ -12,6 +12,8 @@ from digital_twin.modules.ai_orchestration.domain.planning import bounded, ident
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
+from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PROMPT_VERSION, validate_trace
+from digital_twin.modules.reasoning.contracts import content_hash
 
 
 SCHEMA = (
@@ -41,6 +43,13 @@ SCHEMA = (
     protocol_version VARCHAR(64) NOT NULL, input_hash VARCHAR(64) NOT NULL, prompt_hash VARCHAR(64) NOT NULL,
     artifact_gzip LONGBLOB NOT NULL, created_at VARCHAR(40) NOT NULL,
     INDEX ai_input_task(task_id, attempt)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS ai_control_retrieval_rounds (
+    input_id VARCHAR(64) PRIMARY KEY, task_id VARCHAR(64) NOT NULL, attempt INT NOT NULL,
+    round_status VARCHAR(24) NOT NULL, artifact_hash VARCHAR(64) NOT NULL,
+    artifact_gzip LONGBLOB NOT NULL, created_at VARCHAR(40) NOT NULL,
+    INDEX ai_retrieval_task(task_id, attempt),
+    FOREIGN KEY (input_id) REFERENCES ai_control_inputs(input_id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS ai_control_input_calls (
     call_id VARCHAR(64) PRIMARY KEY, input_id VARCHAR(64) NOT NULL,
@@ -159,15 +168,19 @@ class MySQLAIControlStore(MySQLOperationalConnection):
         children[:] = committed[1]
         return True
 
-    def fail(self, job, error_kind):
+    def fail(self, job, error_kind, terminal=False, result=None):
         failures = job["attempts"] - int(job.get("budgetDeferrals", 0))
-        terminal = failures >= 3
+        terminal = terminal or failures >= 3
+        status = "failed" if terminal else "pending"
         delay, recovery_delay = retry_delays(job["capability"], error_kind, failures)
         now = datetime.now(timezone.utc)
         due = (now + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
         with self.transaction() as connection:
-            changed = connection.execute("UPDATE ai_control_tasks SET status=%s,last_error=%s,available_at=%s,updated_at=%s,lease_token='',lease_until='' WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
-                ("failed" if terminal else "pending", error_kind[:100], due, stamp(), job["taskId"], job["leaseToken"], stamp())).rowcount
+            changed = connection.execute("UPDATE ai_control_tasks SET status=%s,last_error=%s,available_at=%s,updated_at=%s,"
+                "result_json=COALESCE(%s,result_json),lease_token='',lease_until='' "
+                "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
+                (status, error_kind[:100], due, stamp(), json.dumps(result, ensure_ascii=False, allow_nan=False) if result is not None else None,
+                 job["taskId"], job["leaseToken"], stamp())).rowcount
             failure = getattr(self, "agenda_failure", None)
             if changed and terminal and failure is not None:
                 failure(connection, job, error_kind[:100])
@@ -175,6 +188,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                 next_due = (now + timedelta(seconds=recovery_delay)).isoformat().replace("+00:00", "Z")
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
                     "capability": "observe", "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
+        return {"status": status if changed else "lease-lost"}
 
     def defer_budget(self, job, wait):
         # Keep attempt identities immutable for frozen input/call audit. Budget
@@ -221,6 +235,34 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                 "(input_id,task_id,attempt,protocol_version,input_hash,prompt_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                 (input_id, job["taskId"], job["attempts"], envelope["protocolVersion"], digest, envelope["promptHash"], artifact, stamp()))
         return input_id
+
+    def save_retrieval_round(self, job, step):
+        raw = json.dumps(step, ensure_ascii=False, allow_nan=False).encode()
+        if len(raw) > 256 * 1024:
+            raise ValueError("retrieval round exceeds audit budget")
+        digest = content_hash(step)
+        with self.transaction() as connection:
+            owned = connection.execute("SELECT task_id FROM ai_control_tasks WHERE task_id=%s AND status='processing' "
+                "AND attempts=%s AND lease_token=%s AND lease_until>=%s FOR UPDATE",
+                (job["taskId"], job["attempts"], job["leaseToken"], stamp())).fetchone()
+            if not owned:
+                return False
+            frozen = connection.execute("SELECT artifact_gzip FROM ai_control_inputs "
+                "WHERE input_id=%s AND task_id=%s AND attempt=%s", (step["inputId"], job["taskId"], job["attempts"])).fetchone()
+            if not frozen:
+                raise ValueError("retrieval audit requires owned frozen input")
+            envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
+            validate_execution_input(envelope)
+            if envelope["promptVersion"] != RETRIEVAL_PROMPT_VERSION:
+                raise ValueError("retrieval audit requires retrieval input")
+            validate_trace([*envelope["retrievalContext"].get("trace", []), step])
+            connection.execute("INSERT IGNORE INTO ai_control_retrieval_rounds "
+                "(input_id,task_id,attempt,round_status,artifact_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (step["inputId"], job["taskId"], job["attempts"], step["status"], digest, gzip.compress(raw, mtime=0), stamp()))
+            saved = connection.execute("SELECT artifact_hash FROM ai_control_retrieval_rounds WHERE input_id=%s", (step["inputId"],)).fetchone()
+            if saved["artifact_hash"] != digest:
+                raise ValueError("retrieval audit is immutable")
+        return True
 
     def begin_call(self, workload, prompt_hash, task_id="", input_id=""):
         call_id = uuid.uuid4().hex

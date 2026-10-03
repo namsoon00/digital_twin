@@ -18,7 +18,7 @@ const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 
   followUpEvaluations:[{description:'평균 가격 회복을 확인합니다.',status:'expired',reason:'기간 내 자료 없음'}],
   publication:{status:'queued',deliveryStatus:'done',reason:'전송 성공',receipt:{body:'실제 전송된 과거 원문 <b>증거</b>',deliveredAt:'2026-10-01T03:00:00Z'}},
   input:{name:'테스트 종목',facts:[{currentPrice:100,currency:'KRW',sourceAsOf:'2026-10-01T03:00:00Z'}],
-    retrieval:{status:'ready',steps:[{reason:'반대 근거 확인 <script>bad</script>',reads:[{request:{tool:'query_facts',category:'company'},factIds:['f1'],status:'ok',nextOffset:1,omitted:[]}]}]}}};
+    retrieval:{status:'ready',corrections:1,steps:[{status:'invalid-request',reason:'조회 요청 규격 오류',errors:[{field:'requests[0].cursor',expected:'서버가 발급한 값 <script>bad</script>'}],reads:[]},{correction:true,reason:'반대 근거 확인 <script>bad</script>',reads:[{request:{tool:'query_facts',category:'company'},factIds:['f1'],status:'ok',nextCursor:'page:fixture',omitted:[]}]}]}}};
 const server = http.createServer((req,res) => {
   if (req.url === '/api/ai-control/status') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,configuredEnabled:true,tasksStartedToday:2,dailyTaskBudget:48,activeTaskCount:1,dailyCallBudget:24,
     modelCallsUsedToday:24,observationScheduling:{status:'budget-wait',reason:'ai-call-budget-exhausted',nextCheckAt:'2026-10-02T00:00:00Z'},
@@ -45,6 +45,8 @@ const server = http.createServer((req,res) => {
    await page.getByText('AI가 조회한 과정 · 조회 완료',{exact:true}).click();
    assert.match(await page.locator('.retrieval').innerText(),/기업·재무 · 사실 1개/);
    assert.match(await page.locator('.retrieval').innerText(),/다음 페이지 있음/);
+   assert.match(await page.locator('.retrieval').innerText(),/요청 보정/);
+   assert.match(await page.locator('.retrieval').innerText(),/서버가 발급한 값 <script>bad<\/script>/);
    assert.match(await page.locator('.retrieval').innerText(),/반대 근거 확인 <script>bad<\/script>/);
    assert.equal(await page.locator('.retrieval script').count(),0);
    assert.match(await page.locator('#overview').innerText(),/사용 한도로 대기/);
@@ -106,6 +108,16 @@ const server = http.createServer((req,res) => {
    assert.match(await page.locator('article').innerText(),/검증되지 않은 AI 원문 <script>bad<\/script>/);
    assert.equal(await page.locator('article script').count(),0);
    assert.equal(await page.getByText(/실제 발송 원문 ·/).count(),0);
+   const failed = {failure:{kind:'retrieval-contract',retrieval:{...result.input.retrieval,status:'invalid-request'}},rawResponse:'private raw response sentinel'};
+   await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,budgetEnabled:false,brain,
+    observationScheduling:{status:'ready'},tasks:[{taskId:'failure',symbol:'TEST',status:'failed',capability:'observe',result:failed}],callsToday:[]}}));
+   await page.locator('#refresh').click();
+   await page.getByText('예약·조사·처리 기록 1개',{exact:true}).click();
+   await page.getByText('AI가 조회한 과정 · 조회 요청 오류',{exact:true}).click();
+   assert.match(await page.locator('article').innerText(),/판단 작성 전 중단/);
+   assert.match(await page.locator('.retrieval').innerText(),/requests\[0\].cursor/);
+   assert.doesNotMatch(await page.locator('article').innerText(),/자료 부족|private raw response sentinel/);
+   assert.equal(await page.locator('article script').count(),0);
    assert(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1));
    assert.deepEqual(errors,[]);
    await page.screenshot({path:'/tmp/orbit-ai-control-'+width+'.png',fullPage:true});

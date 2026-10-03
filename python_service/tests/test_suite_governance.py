@@ -251,7 +251,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Historical metadata also skips discarded output before copying facts.
         # Twelve directed-read, exact-replay, quota and durable ABox wakeup regressions.
         # Four live V2 evidence-ready scope, completion, deployment and rollback regressions.
-        self.assertLessEqual(total, 2044)
+        # Ten scoped-cursor, local correction, legacy replay and durable audit/failure boundaries.
+        self.assertLessEqual(total, 2054)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

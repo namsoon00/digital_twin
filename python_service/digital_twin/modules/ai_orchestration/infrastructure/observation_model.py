@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
+from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PROMPT_VERSION
 
 
 class StructuredObservationModel:
@@ -20,4 +21,12 @@ class StructuredObservationModel:
             schema.write_text(json.dumps(envelope["outputSchema"], ensure_ascii=False), encoding="utf-8")
             os.chmod(schema, 0o600)
             result = self.run_prompt(self.command_builder(schema), envelope["prompt"], 240, settings)
-            return self.parse_response(result.stdout)
+            if envelope["promptVersion"] != RETRIEVAL_PROMPT_VERSION:
+                return self.parse_response(result.stdout)
+            # An invalid model response is locally correctable. Transport/runtime
+            # failures still propagate to operational retry without being relabelled.
+            try:
+                parsed = self.parse_response(result.stdout)
+            except (ValueError, TypeError):
+                parsed = None
+            return parsed if parsed else {"unparseableResponse": result.stdout}

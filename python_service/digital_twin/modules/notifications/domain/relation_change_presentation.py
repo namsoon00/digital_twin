@@ -8,7 +8,7 @@ from digital_twin.modules.notifications.domain.relation_observation_language imp
 from digital_twin.modules.notifications.domain.relation_observation_proof import model_evidence_paragraphs
 
 
-PRESENTATION_VERSION = "readable-relation-change-v4"
+PRESENTATION_VERSION = "readable-relation-change-v5"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -263,6 +263,7 @@ def readable_relation_change(packet):
         ("holding", "내 보유 상황 · 시세 등락과 구분", [" · ".join(market["holding"][1])] if market["holding"][1] else []),
         ("current-price", "지금 확인한 시세와 가격 흐름", quote),
         ("investor-flow", "외국인·기관·개인", market["investor-flow"][1]),
-        ("trading", "거래·체결·대기 주문", [*market["market-activity"][1], *market["execution-flow"][1]]),
+        ("trading", "체결강도와 대기 주문", market["execution-flow"][1]),
+        ("volume", "거래량과 시간 보정", market["market-activity"][1]),
         ("next-update", "자료 참고 · 다음 알림", notes),
     ]}

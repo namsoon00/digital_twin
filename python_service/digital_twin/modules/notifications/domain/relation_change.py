@@ -143,7 +143,10 @@ def relation_change_snapshot(context):
     coverage = mapping(facts.get("marketSignalCoverage"))
     coverage_keys = ("status", "sourceAsOf", "fetchedAt", "observedFields", "fields", "participantStatus",
                      "measurementType", "isEstimate", "provider", "freshnessStatus", "judgementEvidenceUsable",
-                     "tradeStrengthQualityState", "providerUpdateSlot", "nextProviderUpdateAt", "validUntil")
+                     "tradeStrengthQualityState", "tradeStrengthQualityReason", "tradeStrengthDecisionUsable",
+                     "tradeStrengthSampleCount", "tradeStrengthSampleState", "sourceTimestampState", "marketSession",
+                     "measurementScope", "ratioBasis", "numeratorVolume", "denominatorVolume", "sampleCount",
+                     "providerUpdateSlot", "nextProviderUpdateAt", "validUntil")
     price_source = mapping(coverage.get("price"))
     # Position clocks belong to the selected currentPrice. KIS coverage can
     # describe a different last-close quote retained alongside a Toss quote.

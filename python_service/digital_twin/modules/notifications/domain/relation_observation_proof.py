@@ -96,6 +96,14 @@ def window_paragraph(window, currency):
             measurements.append(name + " " + decimal(value, signed=True) + unit)
     if measurements:
         text += " " + ", ".join(measurements) + "입니다."
+    flow = []
+    for key, name, unit in (("tradeStrengthEnd", "체결강도", ""), ("volumeRatioEnd", "거래량 비율", "배")):
+        value = numeric(window.get(key))
+        # Legacy windows store numeric zero when a feed did not provide flow.
+        if value is not None and value > 0:
+            flow.append(name + " " + decimal(value) + unit)
+    if flow:
+        text += " 이 기간 데이터에 저장된 마지막 값은 " + ", ".join(flow) + "입니다."
     text += " 기간 자료 기준은 " + clock(window.get("knowledgeCutoffAt")) + "입니다."
     if window.get("hasSufficientHistory") is not True:
         text += " 필요한 기간 관측이 충분히 확보됐는지는 미확인입니다." if window.get("hasSufficientHistory") is None else " 필요한 기간 관측이 부족한 참고 수치입니다."

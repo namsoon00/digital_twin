@@ -115,6 +115,75 @@ def investor_rows(snapshot):
     return result
 
 
+def execution_rows(current, previous=None):
+    strength = observed(current, "tradeStrength", "ccnl")
+    source = stage(current, "ccnl")
+    market = str(snapshot_facts(current).get("market") or current.get("market") or "").upper()
+    if strength is None or strength < 0:
+        unsupported = source.get("status") in {"unsupported", "unsupported-market"} or (not source and market in {"US", "CRYPTO"})
+        return ["체결강도 미제공 · 현재 연결된 시세에는 매수·매도 체결 구분 자료가 없습니다." if unsupported
+                else "체결강도 미확인 · 이번 자료에 확인된 체결강도 값이 없습니다."]
+    reference = (source.get("judgementEvidenceUsable") is False or source.get("tradeStrengthDecisionUsable") is False
+                 or source.get("tradeStrengthQualityState") in {"market-close-reference", "stale", "insufficient-samples"}
+                 or source.get("freshnessStatus") in {"stale", "expired"}
+                 or source.get("status") in {"stale", "expired", "unavailable"})
+    row = "체결강도 " + decimal(strength)
+    row += " · 참고값" if reference else (" · " + trade_strength_label(strength) if strength > 0 else " · 관측값 0")
+    rows = [row]
+    old = observed(previous or {}, "tradeStrength", "ccnl")
+    if old is not None and old >= 0:
+        rows.append("체결강도 추적: 이전 알림 " + decimal(old) + " → 이번 " + decimal(strength)
+                    + " (" + decimal(strength - old, signed=True) + "포인트) · 이전 " + clock(stage(previous or {}, "ccnl").get("sourceAsOf")))
+    note = source_note(current, "ccnl")
+    origin = {"websocket-received": "수신 시각", "queried-at-fallback": "조회 시각 · 실제 체결 시각 미확인"}.get(source.get("sourceTimestampState"), "기준 시각")
+    count = numeric(source.get("tradeStrengthSampleCount"))
+    rows.append("체결 " + origin + " " + note + ((" · 매수·매도 체결 표본 " + decimal(count, 0) + "주") if count is not None and count > 0 and source.get("tradeStrengthSampleState") == "execution-volume" else ""))
+    if reference:
+        rows.append(str(source.get("tradeStrengthQualityReason") or "장중 현재 강도로 해석하지 않는 참고 자료입니다."))
+    return rows
+
+
+def volume_pace_rows(current, previous=None):
+    facts, before = snapshot_facts(current), snapshot_facts(previous or {})
+    raw = numeric(facts.get("volumeRatio"))
+    if raw is None or raw < 0 or (raw == 0 and observed(current, "volumeRatio", "volume") is None):
+        return ["거래량 비율 미확인"]
+    basis = str(facts.get("volumeRatioBasis") or "")
+    label = {"previous-session-total": "전 거래일 전체 대비 누적 거래량",
+             "prior-completed-session-average": "완료된 과거 거래일 평균 대비 누적 거래량",
+             "latest-positive-candle-average-including-current": "일봉 거래량 비율"}.get(basis, "거래량 비율")
+    rows = [label + " " + decimal(raw) + "배"]
+    numerator, denominator = numeric(facts.get("volumeRatioNumerator")), numeric(facts.get("volumeRatioDenominator"))
+    if numerator is not None and denominator is not None and denominator > 0:
+        sample = numeric(facts.get("volumeRatioSampleCount"))
+        denominator_label = ("최근 " + decimal(sample, 0) + "개 양수 거래량 일봉 평균(마지막 봉 포함) ") if basis == "latest-positive-candle-average-including-current" and sample else "비교 거래량 "
+        rows.append("계산 근거: " + decimal(numerator, 0) + "주 ÷ " + denominator_label + decimal(denominator, 0) + "주")
+    at = facts.get("volumePaceSourceAsOf")
+    if at:
+        at_text = str(at) + " (일봉 날짜)" if facts.get("volumePaceSourceTimestampState") == "provider-candle" and len(str(at)) == 10 else clock(at)
+        origin = {"websocket-received": "거래량 수신 시각 ", "queried-at-fallback": "거래량 조회 시각 ",
+                  "fetched-at-fallback": "거래량 조회 시각 "}.get(facts.get("volumePaceSourceTimestampState"), "거래량 기준 ")
+        rows.append(origin + at_text + (" · 실제 집계 시각 미확인" if origin != "거래량 기준 " else "")
+                    + ((" · " + str(facts["volumePaceProvider"])) if facts.get("volumePaceProvider") else ""))
+    adjusted = numeric(facts.get("timeAdjustedVolumeRatio"))
+    expected = numeric(facts.get("expectedVolumeRatioNow"))
+    verified = (facts.get("volumePaceMethod") == "regular-u-curve-v2" and facts.get("volumePaceStatus") == "open"
+                and facts.get("volumePaceSession") == "regular" and expected is not None and expected > 0)
+    if adjusted is not None and verified:
+        rows.append("장중 시간 보정 추정 약 " + decimal(adjusted) + "배 ≈ 원본 " + decimal(raw) + "배 ÷ 기대 누적 비중 " + decimal(expected * 100) + "%"
+                    + " · 정규장 " + decimal(facts.get("volumePaceElapsedPct")) + "% 경과")
+        rows.append("고정된 장중 분포를 적용한 추정입니다. 실제 과거 동시간 거래량 비교가 아니며 단축장 등은 반영하지 못합니다.")
+    elif adjusted is not None:
+        rows.append("기존 시간 보정 기록 " + decimal(adjusted) + "배 · 원자료와 집계 기준의 일치가 검증되지 않은 참고값입니다.")
+    else:
+        rows.append("시간 보정 미적용 · " + ("일봉 거래량을 장중 누적 거래량으로 보정하지 않습니다." if basis == "latest-positive-candle-average-including-current"
+                    else str(facts.get("volumePaceBasis") or "거래량 원자료의 시각·집계 기준을 확인하지 못했습니다.")))
+    old = numeric(before.get("volumeRatio"))
+    if old is not None and basis and before.get("volumeRatioBasis") == basis and before.get("volumePaceProvider") == facts.get("volumePaceProvider"):
+        rows.append("거래량 비율 추적: 이전 알림 " + decimal(old) + "배 → 이번 " + decimal(raw) + "배 · 이전 기준 " + clock(before.get("volumePaceSourceAsOf")))
+    return rows
+
+
 def market_snapshot_sections(current, previous=None):
     """Keep essential groups visible regardless of the three-row evidence budget."""
     facts, before = snapshot_facts(current), snapshot_facts(previous or {})
@@ -152,22 +221,10 @@ def market_snapshot_sections(current, previous=None):
         if value is not None:
             suffix = " · 추정" if field == "tradingValue" and facts.get("tradingValueEstimated") else ""
             activity.append(label + " " + decimal(value, 0) + unit + suffix)
-    ratios = []
-    # Vendors use different denominators (including prior-day total). The
-    # normalized ratio alone does not prove a daily-average comparison.
-    for field, label in (("volumeRatio", "거래량 비율"), ("timeAdjustedVolumeRatio", "장중 시간 보정 추정")):
-        value = numeric(facts.get(field))
-        if value is not None and value > 0:
-            ratios.append(label + " " + decimal(value) + "배")
-    if ratios:
-        activity.append(" · ".join(ratios))
     if activity:
-        activity = [" · ".join(activity[:2]), *activity[2:]]
-        activity[-1] += " · 거래 기준 " + source_note(current, "ccnl").replace("기준 시각", "시각")
-    executions = []
-    strength = observed(current, "tradeStrength", "ccnl")
-    if strength is not None and strength > 0:
-        executions.append("체결강도 " + decimal(strength) + " · " + trade_strength_label(strength))
+        activity = [" · ".join(activity) + " · 거래 기준 " + source_note(current, "ccnl").replace("기준 시각", "시각")]
+    activity.extend(volume_pace_rows(current, previous))
+    executions = execution_rows(current, previous)
     amounts = []
     for field, label in (("buyVolume", "매수 체결"), ("sellVolume", "매도 체결")):
         value = observed(current, field, "ccnl")
@@ -175,8 +232,6 @@ def market_snapshot_sections(current, previous=None):
             amounts.append(label + " " + decimal(value, 0) + quantity_unit)
     if amounts:
         executions.append(" · ".join(amounts))
-    if executions:
-        executions[-1] += " · 체결 기준 " + source_note(current, "ccnl").replace("기준 시각", "시각")
     book = []
     for field, label in (("orderbookBidVolume", "매수 대기"), ("orderbookAskVolume", "매도 대기")):
         value = observed(current, field, "orderbook")
@@ -195,7 +250,8 @@ def market_snapshot_sections(current, previous=None):
                 holding.append(label + " " + decimal(value, signed=field == "profitLossRate") + unit)
         pnl = numeric(facts.get("profitLoss"))
         if pnl is not None:
-            holding.append("평가손익 " + ("+" if pnl > 0 else "") + price_money(pnl, currency))
+            amount = price_money(abs(pnl), currency) if pnl else ("0원" if currency == "KRW" else "$0" if currency == "USD" else "0 " + currency)
+            holding.append("평가손익 " + ("+" if pnl > 0 else "-" if pnl < 0 else "") + amount)
     return [
         ("current-price", "가격 · 이전 알림과 비교", quote),
         ("investor-flow", "외국인·기관·개인", investor_rows(current)),

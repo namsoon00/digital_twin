@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "regular-u-curve-v2-source-volume-provenance",
+  "contractVersion": "projection-input-execution-v7",
+  "reason": "Source-bound volume provenance and unavailable correction replace quote-clock assumptions in position facts and volume ABox properties. Restoring only the two volume fact builders and their prior calculator reproduces all v6 scenarios; test_relation_market_tracking validates source clocks and raw/daily/regular boundaries. No RuleBox or graph ownership change.",
+  "scenarios": {
+    "full": "1d78eca04e0d769610a377450b2125cf9db9e22e66b76ea0f0e48eb1d7d47406",
+    "target": "6de3007b414a0c4789250bd83b66dd9ce359f4d6091883dcb70f8a6bffe8b9d5",
+    "source-facts": "d09166eda1683533ca31cd1b4af8b1c86fb547f1f9992a573b92d5062aca07f9",
+    "live-context": "ff87db9964e73eb855b2ee929f7144fc93cda55db2f755ed370831d4d912d9b9",
+    "memory-hit": "c74478372101ed423b3c09e7a35e7a258b8e936264054d5ce42c89c7565114ff",
+    "persistent-hit": "6518f4a30a6c68c4bfaa0c15709a3d2ad327327bf51bca4618ac4c0e5a977a0c",
+    "cache-errors": "c2b6c0c2b7d6a8a585be645623d93efffab949bb1583dae01115e010919f144a",
+    "scoring-failure": "3f007bd6c3d93ac629b00bba9ad0aa1667eea113544df5e2771ab1cd3d9ebc05",
+    "world-identity": "f8cea4a43ccb53a2ff6c537b5c785d12f2bce4419c3ffc6452bc79e8dd1f0313"
+  }
+}

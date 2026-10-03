@@ -196,6 +196,8 @@ def technical_indicators_from_candles(
         or latest_row.get("time")
         or ""
     )
+    volume_rows = [item for item in ordered if number(item.get("volume")) > 0]
+    volume_row = volume_rows[-1] if volume_rows else {}
     return {
         "currentPrice": latest,
         "ma5": ma5,
@@ -210,6 +212,8 @@ def technical_indicators_from_candles(
         "volume": latest_volume,
         "volumeMa20": volume_ma20,
         "volumeRatio": latest_volume / volume_ma20 if volume_ma20 else 0.0,
+        "volumeRatioSourceAsOf": str(volume_row.get("timestamp") or volume_row.get("date") or volume_row.get("tradingDate") or volume_row.get("time") or ""),
+        "volumeRatioSampleCount": min(20, len(volume_rows)),
         "sourceAsOf": latest_candle_at,
         "latestCandleAt": latest_candle_at,
         "latestCandleClose": latest,

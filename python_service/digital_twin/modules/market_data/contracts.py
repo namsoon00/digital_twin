@@ -113,6 +113,7 @@ _EXPORTS.update({
     'trade_strength_quality_snapshot': ('digital_twin.modules.market_data.domain.trade_strength_quality', 'trade_strength_quality_snapshot'),
     'utc_iso': ('digital_twin.modules.market_data.domain.data_freshness', 'utc_iso'),
     'volume_pace_snapshot': ('digital_twin.modules.market_data.domain.volume_time_adjustment', 'volume_pace_snapshot'),
+    'position_volume_pace_snapshot': ('digital_twin.modules.market_data.domain.volume_observation', 'position_volume_pace_snapshot'),
 })
 
 __all__ = list(_EXPORTS)

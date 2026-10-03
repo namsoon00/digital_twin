@@ -1253,6 +1253,20 @@ class TossProvider:
             or position.volume_ratio
             or number(cached.get("volumeRatio"))
         )
+        volume_coverage = dict(position.market_signal_coverage or {})
+        if indicators and number(indicators.get("volumeRatio")):
+            volume_coverage["volume"] = {
+                "status": "available", "provider": "Toss candles",
+                "observedFields": ["volumeRatio"], "fields": ["volumeRatio"],
+                "values": {"volumeRatio": volume_ratio},
+                "measurementScope": "daily-candle", "ratioBasis": "latest-positive-candle-average-including-current",
+                "sourceAsOf": str(indicators.get("volumeRatioSourceAsOf") or ""),
+                "sourceTimestampState": "provider-candle",
+                "numeratorVolume": indicators.get("volume"), "denominatorVolume": indicators.get("volumeMa20"),
+                "sampleCount": indicators.get("volumeRatioSampleCount"),
+            }
+        elif number(indicator_source.get("volumeRatio")) or (used_cached_price and number(cached.get("volumeRatio"))):
+            volume_coverage["volume"] = dict((cached.get("marketSignalCoverage") or {}).get("volume") or {})
         raw_trading_value = (
             number(first_present(quote, ["tradingValue", "tradeValue", "tradingAmount"]))
             or (number(cached.get("tradingValue")) if used_cached_price else 0)
@@ -1477,6 +1491,7 @@ class TossProvider:
             trading_value=trading_value,
             volume=volume,
             volume_ratio=volume_ratio,
+            market_signal_coverage=volume_coverage,
             ma5=ma5,
             ma20=ma20,
             ma60=ma60,

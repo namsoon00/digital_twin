@@ -131,6 +131,18 @@ def parse_kis_realtime_text(text: str) -> Optional[Tuple[str, List[Dict[str, obj
     return tr_id, rows
 
 
+def volume_source_time(row: Dict[str, object]) -> str:
+    from zoneinfo import ZoneInfo
+    date, clock = str(row.get("bsop_date") or ""), str(row.get("stck_cntg_hour") or "")
+    if len(date) != 8 or len(clock) != 6 or not (date + clock).isdigit():
+        return ""
+    try:
+        stamp = datetime.strptime(date + clock, "%Y%m%d%H%M%S")
+        return stamp.replace(tzinfo=ZoneInfo("Asia/Seoul")).isoformat()
+    except ValueError:
+        return ""
+
+
 def normalize_ws_ccnl(row: Dict[str, object]) -> Dict[str, object]:
     symbol = clean_symbol(row.get("mksc_shrn_iscd"))
     info = known_stock(symbol)
@@ -148,6 +160,7 @@ def normalize_ws_ccnl(row: Dict[str, object]) -> Dict[str, object]:
         "currentPrice": current_price,
         "changeRate": number(row.get("prdy_ctrt")),
         "volume": volume,
+        "volumeSourceAsOf": volume_source_time(row),
         "volumeRatio": (number(row.get("prdy_vol_vrss_acml_vol_rate")) or 0) / 100 if row.get("prdy_vol_vrss_acml_vol_rate") not in (None, "") else None,
         "tradingValue": trading_value,
         "tradeStrength": number(row.get("cttr")),
@@ -247,6 +260,16 @@ def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object]
     coverage[stage]["validationVersion"] = KIS_REALTIME_VALIDATION_VERSION
     coverage[stage]["wireFieldCount"] = update.get("wireFieldCount")
     coverage[stage]["values"] = {"symbol": symbol, **{key: update[key] for key in fields}}
+    if stage == "ccnl" and "volumeRatio" in fields:
+        coverage["volume"] = {
+            **coverage[stage], "stage": "volume",
+            "measurementScope": "session-cumulative", "ratioBasis": "previous-session-total",
+            "numeratorVolume": update.get("volume"),
+            "sourceAsOf": str(update.get("volumeSourceAsOf") or ""),
+            "sourceTimestampState": "provider-execution" if update.get("volumeSourceAsOf") else "missing",
+        }
+    elif stage == "ccnl":
+        coverage["volume"] = {}
     merged["marketSignalCoverage"] = coverage
     return merged
 

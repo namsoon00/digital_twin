@@ -3,7 +3,7 @@ from typing import Dict, Iterable, List
 
 from digital_twin.modules.decisions.contracts import canonical_investment_timestamp
 from digital_twin.modules.outcomes.domain.investment_outcomes import DecisionReview, PerformanceAttribution
-from digital_twin.modules.market_data.contracts import market_evidence_profile, volume_pace_snapshot
+from digital_twin.modules.market_data.contracts import market_evidence_profile, position_volume_pace_snapshot
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.outcomes.domain.hypothesis_outcome_facts import premise_observation_facts
 from digital_twin.modules.outcomes.domain.outcome_recovery import benchmark_observation_window, frozen_outcome_facts, DATA_GAP_ELIGIBILITIES
@@ -498,8 +498,7 @@ class InvestmentOutcomeObservationService:
             foreign_net = self.optional_number(getattr(position, "foreign_net_volume", 0)) or 0.0
             institution_net = self.optional_number(getattr(position, "institution_net_volume", 0)) or 0.0
             profile = market_evidence_profile(position, self.settings)
-            volume_at = ((profile.get("capabilities") or {}).get("volume") or {}).get("sourceAsOf") or ""
-            pace = volume_pace_snapshot(position.market, position.volume_ratio, volume=position.volume, observed_at=volume_at)
+            pace = position_volume_pace_snapshot(position)
             observations[symbol] = {
                 "currentPrice": current_price,
                 "profitLossRate": getattr(position, "profit_loss_rate", 0),
@@ -510,6 +509,9 @@ class InvestmentOutcomeObservationService:
                 "volume": getattr(position, "volume", 0),
                 "volumeRatio": getattr(position, "volume_ratio", 0),
                 "timeAdjustedVolumeRatio": pace.get("timeAdjustedVolumeRatio"),
+                "volumePaceSourceAsOf": pace.get("volumePaceSourceAsOf"),
+                "volumePaceSourceTimestampState": pace.get("volumePaceSourceTimestampState"),
+                "volumePaceStatus": pace.get("volumePaceStatus"),
                 "tradeStrength": getattr(position, "trade_strength", 0),
                 "buyVolume": getattr(position, "buy_volume", 0),
                 "sellVolume": getattr(position, "sell_volume", 0),

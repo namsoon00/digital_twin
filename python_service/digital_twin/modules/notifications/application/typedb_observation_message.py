@@ -807,12 +807,30 @@ def _follow_up_rows(context: Dict[str, object]) -> List[str]:
         )
         if not clause:
             continue
-        prefix = "조건 도달" if status in {"satisfied", "invalidated"} else "자동 추적 중"
+        verified = condition.get("transitionVerified") is True
+        prefix = "조건 도달 확인" if status in {"satisfied", "invalidated"} and verified else "자동 추적 중"
         row = prefix + " · " + clause + " → " + purpose
         if outcome:
             row += " → " + outcome
+        measured = []
+        for key, title in (("trackingBaselineValue", "시작"), ("previousValue", "직전 관측"), ("currentValue", "최근 관측")):
+            if _number(condition.get(key)) is not None:
+                measured.append(title + " " + _threshold_text(field, condition[key], context))
+        if measured:
+            row = row.rstrip(". ") + ". " + " → ".join(measured)
+        from digital_twin.modules.notifications.domain.observation_market_snapshot import clock
+        if condition.get("lastSourceAsOf"):
+            row += " · 관측 기준 " + clock(condition["lastSourceAsOf"])
+        policy = _mapping(condition.get("observationPolicy"))
+        required = _number(policy.get("requiredConfirmations"))
+        if required is not None and required > 0:
+            row += " · 연속 확인 " + str(int(condition.get("confirmationCount") or 0)) + "/" + str(int(required)) + "회"
+        if condition.get("observationStatus") == "waiting-fresh-source":
+            row += " · 새 원자료 대기"
+        elif not measured:
+            row += " · 추적 수치 아직 미확인"
         rows.append(row)
-    return _unique(rows, 2)
+    return _unique(rows, 4)
 
 
 def typedb_observation_telegram_message(

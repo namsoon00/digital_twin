@@ -53,10 +53,12 @@ test("relation detail explains model proof and source coverage without losing ob
   const compact = renderNotificationCustomerDocument({customerInvestmentDocument: {role: "typedb-observation", lead: "현재가와 보유 손익을 함께 설명합니다.", sections: [
     {key: "current-price", title: "시세", rows: ["11000원"]},
     {key: "holding", title: "내 보유 상황", rows: ["평균 매입가 10000원 · 평가 수익률 +10%"]},
-    {key: "trading", title: "체결", rows: ["체결 기준"]},
+    {key: "trading", title: "체결", rows: ["체결강도 120", "이전 90 → 이번 120", "체결 표본 5,500주"]},
+    {key: "volume", title: "거래량", rows: ["원본 0.55배", "기대 누적 비중 55%", "고정 분포 추정"]},
+    {key: "tracking", title: "추적", rows: ["시작 -0.1% → 최근 0.25%", "연속 확인 1/2회", "세 번째 조건 <script>위험</script>"]},
     {key: "hypotheses", title: "회복 가설", rows: ["설명", "규칙", "다음 확인: 회복 유지", "아직 검증 중"]},
     {key: "hypotheses-2", title: "외부 영향 가설", rows: ["설명", "규칙", "다음 확인: 충격 완화", "아직 검증 중"]}
   ]}}, true);
-  for (const value of ["11000원", "회복 유지", "충격 완화", "평균 매입가 10000원", "종합해서 보면"]) assert.ok(compact.includes(value), value);
+  for (const value of ["11000원", "회복 유지", "충격 완화", "평균 매입가 10000원", "종합해서 보면", "체결강도 120", "체결 표본 5,500주", "고정 분포 추정", "연속 확인 1/2회", "세 번째 조건 &lt;script&gt;"]) assert.ok(compact.includes(value), value);
   assert.equal((compact.match(/아직 검증 중/g) || []).length, 2);
 });

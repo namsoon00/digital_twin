@@ -18,7 +18,7 @@ from digital_twin.modules.portfolio.contracts import external_valuation_rows, po
 from digital_twin.modules.portfolio.contracts import PortfolioSummary, Position, expects_kr_microstructure_signals
 from digital_twin.modules.portfolio.contracts import position_account_value_in_base
 from digital_twin.modules.portfolio.contracts import evaluate_valuation_models
-from digital_twin.modules.market_data.contracts import trading_value_snapshot, volume_pace_snapshot
+from digital_twin.modules.market_data.contracts import trading_value_snapshot, position_volume_pace_snapshot
 from digital_twin.modules.news_intelligence.contracts import assess_news_eligibility
 from digital_twin.modules.reasoning.domain.ontology_schema_capabilities import RULE_DERIVED_SCHEMA_CONTRACT_VERSION
 
@@ -1014,13 +1014,7 @@ def position_signal_facts(
     sec_filings = external_signals.get("secFilings") if isinstance(external_signals, dict) else {}
     sec_context = sec_filings.get(symbol) if isinstance(sec_filings, dict) and isinstance(sec_filings.get(symbol), dict) else {}
     trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
-    volume_pace = volume_pace_snapshot(
-        position.market,
-        position.volume_ratio,
-        volume=position.volume,
-        trading_value=trading_snapshot.get("tradingValue"),
-        observed_at=position.updated_at,
-    )
+    volume_pace = position_volume_pace_snapshot(position, trading_value=trading_snapshot.get("tradingValue"))
     facts: Dict[str, object] = {
         "symbol": symbol,
         "name": position.name,
@@ -1080,6 +1074,16 @@ def position_signal_facts(
         "volumePaceElapsedPct": volume_pace.get("volumePaceElapsedPct"),
         "volumePaceLocalTime": volume_pace.get("volumePaceLocalTime"),
         "volumePaceBasis": volume_pace.get("volumePaceBasis"),
+        "volumePaceMethod": volume_pace.get("volumePaceMethod"),
+        "volumePaceIsEstimate": volume_pace.get("volumePaceIsEstimate"),
+        "volumePaceSourceAsOf": volume_pace.get("volumePaceSourceAsOf"),
+        "volumePaceSourceTimestampState": volume_pace.get("volumePaceSourceTimestampState"),
+        "volumePaceProvider": volume_pace.get("volumePaceProvider"),
+        "volumeRatioBasis": volume_pace.get("volumeRatioBasis"),
+        "volumeMeasurementScope": volume_pace.get("volumeMeasurementScope"),
+        "volumeRatioNumerator": volume_pace.get("volumeRatioNumerator"),
+        "volumeRatioDenominator": volume_pace.get("volumeRatioDenominator"),
+        "volumeRatioSampleCount": volume_pace.get("volumeRatioSampleCount"),
         "tradingValue": number(trading_snapshot.get("tradingValue")),
         "reportedTradingValue": number(trading_snapshot.get("reportedTradingValue")),
         "estimatedTradingValue": number(trading_snapshot.get("estimatedTradingValue")),

@@ -255,7 +255,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eleven external-fact read regressions cover consistent paging, retained
         # membership, cache lifetime/isolation/budgets and unchanged valuation inputs.
         # Seven memory-continuity, question-specific research and macro projection contracts.
-        self.assertLessEqual(total, 2072)
+        # Nine source-bound volume, session/DST, provider merge and readable tracking contracts.
+        self.assertLessEqual(total, 2081)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

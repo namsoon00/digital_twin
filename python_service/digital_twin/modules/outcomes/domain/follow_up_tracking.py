@@ -154,6 +154,17 @@ def follow_up_source_time(condition, facts):
     field = str(condition.get("field") or "")
     if field not in observable_follow_up_fields(profile):
         return ""
+    if field in {"volumeRatio", "timeAdjustedVolumeRatio"} and "volumePaceSourceAsOf" in facts:
+        if facts.get("volumePaceSourceTimestampState") not in {"provider-execution", "provider-candle", "provider-timestamp"}:
+            return ""
+        if field == "timeAdjustedVolumeRatio" and facts.get("volumePaceStatus") != "open":
+            return ""
+        source_at = str(facts.get("volumePaceSourceAsOf") or "")
+        try:
+            source_clock = datetime.fromisoformat(source_at.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+        return source_at if source_clock.tzinfo is not None else ""
     capability = {
         "currentPrice": "pricePath", "priceChangeRate": "pricePath",
         "ma5Distance": "pricePath", "ma20Distance": "pricePath", "ma60Distance": "pricePath",

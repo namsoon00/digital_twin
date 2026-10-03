@@ -6,7 +6,8 @@ from digital_twin.modules.model_registry.contracts import default_ontology_thres
 from digital_twin.modules.reasoning.contracts import relation_rule_context_summary_lines
 from digital_twin.modules.portfolio.contracts import AccountSnapshot, Position
 from digital_twin.modules.portfolio.contracts import value_in_base
-from digital_twin.modules.market_data.domain.volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
+from digital_twin.modules.market_data.domain.volume_time_adjustment import trading_value_snapshot
+from digital_twin.modules.market_data.domain.volume_observation import position_volume_pace_snapshot
 
 
 class MonitoringPositionContextMixin:
@@ -459,25 +460,19 @@ class MonitoringPositionContextMixin:
         ratio = self.position_volume_ratio(position)
         trading_value_snapshot_value = self.position_trading_value_snapshot(position)
         trading_value = number(trading_value_snapshot_value.get("tradingValue"))
-        pace = volume_pace_snapshot(
-            position.get("market"),
-            ratio,
-            volume=volume,
-            trading_value=trading_value,
-            observed_at=position.get("updated_at") if "updated_at" in position else position.get("updatedAt"),
-        )
+        pace = position_volume_pace_snapshot(position, trading_value=trading_value)
         adjusted_ratio = number(pace.get("timeAdjustedVolumeRatio"))
         if volume > 0:
             volume_label = compact_number(volume)
             if ratio > 0:
-                ratio_bits = [self.volume_activity_label(ratio) + "(평균의 " + self.volume_ratio_label(ratio) + "배)"]
+                ratio_bits = ["거래량 비율 " + self.volume_ratio_label(ratio) + "배"]
                 pace_detail = self.volume_pace_detail_label(pace, adjusted_ratio)
                 if pace_detail:
                     ratio_bits.append(pace_detail)
                 volume_label += "(" + " · ".join(ratio_bits) + ")"
             parts.append("거래량 " + volume_label)
         elif ratio > 0:
-            ratio_label = "거래량 " + self.volume_activity_label(ratio) + "(평균의 " + self.volume_ratio_label(ratio) + "배)"
+            ratio_label = "거래량 비율 " + self.volume_ratio_label(ratio) + "배"
             pace_detail = self.volume_pace_detail_label(pace, adjusted_ratio)
             if pace_detail:
                 ratio_label += " · " + pace_detail

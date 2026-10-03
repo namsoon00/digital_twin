@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import datetime
+import math
 from typing import Dict, Iterable, Tuple
 
 from digital_twin.modules.market_data.domain.market_data import clamp, number
@@ -19,15 +20,13 @@ REGULAR_SESSION_CURVE: Tuple[Tuple[float, float], ...] = (
     (1.0, 1.0),
 )
 
-EXTENDED_SESSION_EXPECTED_SHARE = {
-    "pre": 0.08,
-    "after": 0.06,
-}
+# No calibrated extended-session curve is available.
+EXTENDED_SESSION_EXPECTED_SHARE = {}
 
 
 def parse_observed_at(value: object) -> datetime:
     if isinstance(value, datetime):
-        return value
+        return value if value.tzinfo is not None else None
     text = str(value or "").strip()
     if not text:
         return None
@@ -38,7 +37,7 @@ def parse_observed_at(value: object) -> datetime:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        return None
     return parsed
 
 
@@ -69,13 +68,7 @@ def expected_volume_ratio_for_session(session_key: str, elapsed_ratio: float) ->
     key = str(session_key or "").strip()
     if key == "regular":
         return interpolate_curve(REGULAR_SESSION_CURVE, elapsed_ratio)
-    if key == "after":
-        expected_share = EXTENDED_SESSION_EXPECTED_SHARE[key]
-        return clamp(1.0 + expected_share * clamp(elapsed_ratio, 0.0, 1.0), 1.0, 1.0 + expected_share)
-    expected_share = EXTENDED_SESSION_EXPECTED_SHARE.get(key)
-    if expected_share:
-        return clamp(expected_share * clamp(elapsed_ratio, 0.0, 1.0), 0.01, expected_share)
-    return clamp(elapsed_ratio, 0.05, 1.0)
+    return None
 
 
 def trading_value_snapshot(
@@ -154,20 +147,33 @@ def volume_pace_snapshot(
     trading_value: object = 0,
     observed_at: object = "",
     now: datetime = None,
+    measurement_scope: str = "",
+    ratio_basis: str = "",
+    source_session: str = "",
 ) -> Dict[str, object]:
-    raw_ratio = number(raw_volume_ratio)
+    try:
+        raw_ratio = float(raw_volume_ratio)
+    except (TypeError, ValueError):
+        raw_ratio = float("nan")
+    ratio_valid = (raw_volume_ratio not in (None, "") and not isinstance(raw_volume_ratio, bool)
+                   and math.isfinite(raw_ratio) and raw_ratio >= 0)
     # A volume pace is meaningful only at the source observation time. Falling
     # back to the server clock would make unchanged provider data produce a
     # different ABox and an unnecessary new inference cycle on every read.
-    observed = parse_observed_at(observed_at) or now
+    observed = parse_observed_at(observed_at)
     market_key = normalize_market_key(market)
     session = DEFAULT_MARKET_HOUR_SESSIONS.get(market_key)
     result: Dict[str, object] = {
         "volume": number(volume),
         "tradingValue": number(trading_value),
-        "volumeRatio": raw_ratio,
-        "rawVolumeRatio": raw_ratio,
+        "volumeRatio": raw_ratio if ratio_valid else None,
+        "rawVolumeRatio": raw_ratio if ratio_valid else None,
         "volumePaceMarket": market_key,
+        "volumePaceMethod": "regular-u-curve-v2",
+        "volumePaceIsEstimate": True,
+        "volumePaceSourceAsOf": str(observed_at or ""),
+        "volumeRatioBasis": ratio_basis,
+        "volumeMeasurementScope": measurement_scope,
     }
     if not session:
         result.update({
@@ -182,6 +188,15 @@ def volume_pace_snapshot(
             "volumePaceStatus": "unavailable",
             "volumePaceLabel": "시간 보정 기준시각 없음",
             "volumePaceBasis": "원천 기준시각이 없어 원본 거래량 배율만 사용",
+        })
+        return result
+
+    if (not ratio_valid
+            or measurement_scope != "session-cumulative"
+            or ratio_basis not in {"previous-session-total", "prior-completed-session-average"}):
+        result.update({
+            "volumePaceStatus": "unavailable", "volumePaceLabel": "집계 기준 확인 필요",
+            "volumePaceBasis": "장중 누적 거래량과 비교 대상의 집계 범위가 확인되지 않아 시간 보정을 하지 않음",
         })
         return result
 
@@ -210,10 +225,23 @@ def volume_pace_snapshot(
 
     session_key = str(matched.get("key") or "regular").strip()
     session_label = str(matched.get("label") or "정규장").strip()
+    result.update({"volumePaceSession": session_key,
+                   "volumePaceSessionLabel": market_label + " " + session_label,
+                   "volumePaceLocalTime": current.isoformat()})
+    if session_key != "regular" or source_session != "regular":
+        result.update({
+            "volumePaceStatus": "reference", "volumePaceLabel": "정규장 누적값 확인 필요",
+            "volumePaceBasis": "장전·장후 또는 원천의 정규장 여부가 확인되지 않은 값은 시간 보정을 하지 않음",
+        })
+        return result
     total_seconds = max(1.0, (matched_close - matched_open).total_seconds())
     elapsed_seconds = max(0.0, min(total_seconds, (current - matched_open).total_seconds()))
     elapsed_ratio = clamp(elapsed_seconds / total_seconds, 0.0, 1.0)
     expected_ratio = expected_volume_ratio_for_session(session_key, elapsed_ratio)
+    if expected_ratio <= 0:
+        result.update({"volumePaceStatus": "unavailable", "volumePaceLabel": "개장 직후 보정 대기",
+                       "volumePaceBasis": "장 경과 시간이 0이라 기대 거래량 비율로 나눌 수 없음"})
+        return result
     adjusted_ratio = raw_ratio / expected_ratio if raw_ratio and expected_ratio else 0.0
     policy = default_ontology_threshold_policy().data_quality
     if adjusted_ratio >= policy.volume_pace_strong_ratio:
@@ -231,9 +259,9 @@ def volume_pace_snapshot(
         "volumePaceSessionLabel": " ".join(part for part in [market_label, session_label] if part),
         "volumePaceLocalTime": current.isoformat(),
         "volumePaceElapsedPct": round(elapsed_ratio * 100, 1),
-        "expectedVolumeRatioNow": round(expected_ratio, 3),
+        "expectedVolumeRatioNow": round(expected_ratio, 6),
         "timeAdjustedVolumeRatio": round(adjusted_ratio, 3),
         "volumePaceLabel": label,
-        "volumePaceBasis": "원본 거래량 배율을 현재 세션 경과율과 장중 U자형 기대 거래량 분포로 보정",
+        "volumePaceBasis": "거래량 비율 ÷ 표준 정규장 U자형 분포의 누적 비중. 실제 과거 동시간 비교가 아닌 고정 분포 추정이며 종목별 분포·휴장·단축장 달력은 미보정",
     })
     return result

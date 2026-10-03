@@ -8,7 +8,7 @@ from digital_twin.modules.reasoning.domain.ontology_observation_quality import p
 from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
 from digital_twin.modules.portfolio.contracts import Position, expects_kr_microstructure_signals
 from digital_twin.modules.reasoning.domain.portfolio_ontology_catalog import METRIC_CONCEPTS
-from digital_twin.modules.market_data.contracts import trade_strength_quality_properties, trading_value_snapshot, volume_pace_snapshot
+from digital_twin.modules.market_data.contracts import trade_strength_quality_properties, trading_value_snapshot, position_volume_pace_snapshot
 
 
 def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
@@ -389,13 +389,7 @@ def add_execution_metric_concepts(
 
 def volume_profile(position: Position) -> Dict[str, object]:
     trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
-    volume_pace = volume_pace_snapshot(
-        position.market,
-        position.volume_ratio,
-        volume=position.volume,
-        trading_value=trading_snapshot.get("tradingValue"),
-        observed_at=position.updated_at,
-    )
+    volume_pace = position_volume_pace_snapshot(position, trading_value=trading_snapshot.get("tradingValue"))
     investor = investor_flow_observation(position)
     profile = {
         "volume": round(number(position.volume), 2),
@@ -409,6 +403,17 @@ def volume_profile(position: Position) -> Dict[str, object]:
         "volumePaceSessionLabel": volume_pace.get("volumePaceSessionLabel"),
         "volumePaceElapsedPct": volume_pace.get("volumePaceElapsedPct"),
         "volumePaceBasis": volume_pace.get("volumePaceBasis"),
+        "volumePaceLocalTime": volume_pace.get("volumePaceLocalTime"),
+        "volumePaceMethod": volume_pace.get("volumePaceMethod"),
+        "volumePaceIsEstimate": volume_pace.get("volumePaceIsEstimate"),
+        "volumePaceSourceAsOf": volume_pace.get("volumePaceSourceAsOf"),
+        "volumePaceSourceTimestampState": volume_pace.get("volumePaceSourceTimestampState"),
+        "volumePaceProvider": volume_pace.get("volumePaceProvider"),
+        "volumeRatioBasis": volume_pace.get("volumeRatioBasis"),
+        "volumeMeasurementScope": volume_pace.get("volumeMeasurementScope"),
+        "volumeRatioNumerator": volume_pace.get("volumeRatioNumerator"),
+        "volumeRatioDenominator": volume_pace.get("volumeRatioDenominator"),
+        "volumeRatioSampleCount": volume_pace.get("volumeRatioSampleCount"),
         "tradingValue": round(number(trading_snapshot.get("tradingValue")), 2),
         "reportedTradingValue": round(number(trading_snapshot.get("reportedTradingValue")), 2),
         "estimatedTradingValue": round(number(trading_snapshot.get("estimatedTradingValue")), 2),

@@ -13,7 +13,7 @@ function renderNotificationCustomerDocument(job, compact) {
   var customerLinks = Array.isArray(customerDocument.links) ? customerDocument.links : [];
   if (compact) {
     var compactKeys = customerDocument.role === "typedb-observation"
-      ? ["current-price", "holding", "hypotheses", "hypotheses-2", "hypotheses-3", "change", "importance", "financial-evidence", "tracking", "next-update"]
+      ? ["current-price", "holding", "hypotheses", "hypotheses-2", "hypotheses-3", "change", "importance", "financial-evidence", "trading", "volume", "tracking", "next-update"]
       : ["change", "action", "reasons", "financial-evidence", "counter", "tracking", "next-update"];
     customerSections = customerSections.filter(function (section) {
       return compactKeys.indexOf(String((section || {}).key || "")) >= 0;
@@ -28,7 +28,7 @@ function renderNotificationCustomerDocument(job, compact) {
     customerSections.map(function (section) {
       var rows = Array.isArray(section.rows) ? section.rows : [];
       if (!rows.length) return "";
-      if (compact && !String(section.key).startsWith("hypotheses")) rows = rows.slice(0, section.key === "financial-evidence" ? 4 : 2);
+      if (compact && !String(section.key).startsWith("hypotheses") && ["trading", "volume", "tracking"].indexOf(section.key) < 0) rows = rows.slice(0, section.key === "financial-evidence" ? 4 : 2);
       return '<div class="notification-detail-reasons"><strong>' + escapeHtml(section.title || "상세") + '</strong>'
         + rows.map(function (row) { return '<p>' + escapeHtml(row) + '</p>'; }).join("")
         + '</div>';

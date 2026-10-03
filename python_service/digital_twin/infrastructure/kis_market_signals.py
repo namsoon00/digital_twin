@@ -726,6 +726,8 @@ def merge_fresh_websocket_stages(
                 merged[key] = value
         if isinstance(cached_coverage.get(stage), dict):
             coverage[stage] = dict(cached_coverage.get(stage) or {})
+        if stage == "ccnl" and (cached_coverage[stage].get("values") or {}).get("volumeRatio") is not None:
+            coverage["volume"] = dict(cached_coverage.get("volume") or {})
         used.append(stage)
     if used:
         merged["marketSignalCoverage"] = coverage
@@ -1230,7 +1232,7 @@ class KISMarketSignalProvider:
         if session.get("regular"):
             return signal
         if session.get("microstructureAvailable"):
-            for stage in ["ccnl", "orderbook"]:
+            for stage in ["ccnl", "orderbook", "volume"]:
                 item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
                 if not item:
                     continue
@@ -1256,7 +1258,7 @@ class KISMarketSignalProvider:
             return signal
         for key in MICROSTRUCTURE_SIGNAL_KEYS:
             signal.pop(key, None)
-        for stage in ["ccnl", "investor", "orderbook"]:
+        for stage in ["ccnl", "investor", "orderbook", "volume"]:
             coverage[stage] = unavailable_stage_coverage(stage, session)
         signal["marketSignalCoverage"] = coverage
         signal["quoteStatus"] = "KIS 현재가 반영"
@@ -1616,6 +1618,12 @@ class KISMarketSignalProvider:
                 transport="rest",
                 ai_usable_as_strong_evidence=True,
             )
+            coverage["volume"] = {
+                **coverage["price"], "provider": "KIS", "stage": "volume",
+                "values": {"volumeRatio": normalized_price.get("volumeRatio")},
+                "measurementScope": "session-cumulative", "ratioBasis": "previous-session-total",
+                "numeratorVolume": normalized_price.get("volume"),
+            }
         else:
             coverage["price"] = stage_coverage("price", price, {}, ["currentPrice"], fetched_at=fetched_at, session=session)
         if isinstance(ccnl, list):
@@ -2056,6 +2064,9 @@ class KISMarketSignalProvider:
             return incoming if incoming is not None else existing
 
         preserve_fresh_quote = keep_fresh_position_quote(position, signal)
+        market_signal_coverage = dict(market_signal_coverage or {})
+        if preserve_fresh_quote or volume_ratio is None:
+            market_signal_coverage["volume"] = dict((position.market_signal_coverage or {}).get("volume") or {})
         use_signal_price = current_price is not None and not preserve_fresh_quote
         quote_clocks = {}
         if use_signal_price:

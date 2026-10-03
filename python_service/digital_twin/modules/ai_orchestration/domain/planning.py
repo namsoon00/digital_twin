@@ -35,7 +35,7 @@ def observation_fingerprint(packet, research):
     return evidence_change_identity(packet, research, packet.get("questionsToCheck", []))
 
 
-def validate_plan(value, packet, research=()):
+def validate_plan(value, packet, research=(), require_research=False):
     if not isinstance(value, dict):
         raise ValueError("AI plan must be an object")
     # No model-authored account, symbol, command, source URL or action is executable.
@@ -66,12 +66,19 @@ def validate_plan(value, packet, research=()):
     result["developmentQuestions"] = []
     result["workQuestions"] = []
     for item in questions:
-        if not isinstance(item, dict) or set(item) != {"question", "capability"}:
+        if (not isinstance(item, dict) or set(item) not in ({"question", "capability"}, {"question", "capability", "research"})
+                or (require_research and "research" not in item)):
             raise ValueError("research questions must name an allowed capability")
         question = item["question"]
         if item["capability"] not in CAPABILITIES or not isinstance(question, str) or not 8 <= len(question.strip()) <= 500:
             raise ValueError("invalid research question")
-        result["workQuestions"].append({"question": question.strip(), "capability": item["capability"]})
+        work = {"question": question.strip(), "capability": item["capability"]}
+        if "research" in item:
+            from .research_request import validate_research_request
+            request = validate_research_request(item["research"], item["capability"] == "research", packet.get("accountId", ""))
+            if request:
+                work["researchRequest"] = request
+        result["workQuestions"].append(work)
         if item["capability"] == "develop-hypothesis":
             result["developmentQuestions"].append(question.strip())
         else:
@@ -91,7 +98,7 @@ def validate_plan(value, packet, research=()):
         except (ValueError, KeyError, TypeError):
             result["followUpConditions"] = []
     from digital_twin.modules.ai_orchestration.domain.brain_management import validate_management
-    result.update(validate_management(value, packet, research))
+    result.update(validate_management(value, packet, research, require_research=require_research))
     return result
 
 

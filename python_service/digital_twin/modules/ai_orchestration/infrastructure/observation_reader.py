@@ -3,5 +3,5 @@ from digital_twin.modules.reasoning.public import ObservationEvidenceReader, Typ
 
 
 class GraphObservationReader(ObservationEvidenceReader):
-    def __init__(self, repository):
-        super().__init__(TypeDBObservationEvidenceSource(repository))
+    def __init__(self, repository, macro_world_id=""):
+        super().__init__(TypeDBObservationEvidenceSource(repository), macro_world_id=macro_world_id)

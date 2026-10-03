@@ -1,5 +1,9 @@
 {
   "domain": {
+    "modules/reasoning/domain/market_world_projection.py::MARKET_WORLD_ENTITY_KINDS": {"hash": "52982243e1b12e840e1d2ed32eb8d6f24a2bcc19fdbb266f1d4f996cd40f3276", "reason": "Retain existing MacroPrint observations as shared macro context through source scope, MarketWorld and independent AI reads without inventing stock sensitivity; test_ai_continuity_research; docs/ai-control.md."},
+    "modules/reasoning/domain/ontology_change_impact.py::family_for_entity": {"hash": "e321df9d025a8890788bfae637afa29d1aefb96b9724fe1e25d8866c1959405f", "reason": "Retain existing MacroPrint observations as shared macro context through source scope, MarketWorld and independent AI reads without inventing stock sensitivity; test_ai_continuity_research; docs/ai-control.md."},
+    "modules/reasoning/domain/ontology_scopes.py::_STABLE_ACTIVE_ANCHOR_PREFIXES": {"hash": "31ece9d5e8cac4c365513bae75c530e428e4e8684c9713ed4b485e0af8a9d5ba", "reason": "Retain existing MacroPrint observations as shared macro context through source scope, MarketWorld and independent AI reads without inventing stock sensitivity; test_ai_continuity_research; docs/ai-control.md."},
+    "modules/reasoning/domain/ontology_scopes.py::_MACRO_KINDS": {"hash": "f080398a2bb564a8ed9a5807198457ba46378f923f8343bcdb3652da6f317df6", "reason": "Retain existing MacroPrint observations as shared macro context through source scope, MarketWorld and independent AI reads without inventing stock sensitivity; test_ai_continuity_research; docs/ai-control.md."},
     "platform/domain/operational_storage_capacity.py::evaluate_operational_storage_capacity": {
       "hash": "617ea7bff8389ec7b08e7ad35c4dd3547526c509678b9c075c41f48b9b46ab26",
       "reason": "Expose active, retired, candidate and failed TypeDB physical sizes plus their total without changing rotation or free-disk pressure policy; test_operational_storage_capacity."

@@ -19,7 +19,8 @@ PACKET = {**SUBJECT, "protocolVersion": EVIDENCE_PROTOCOL, "profile": EVIDENCE_P
 PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesis": "실적 변화가 가격 흐름과 연관될 수 있습니다.",
         "counterEvidence": "기간별 실적이 없어 확인이 필요합니다.", "comparison": "첫 관찰입니다.",
         "notification": {"send": False, "reason": "첫 관찰이라 이전 흐름을 더 확인합니다."},
-        "evidenceIds": ["quote-1"], "questions": [{"question": "공식 발표에서 최근 분기 실적이 개선되었는가?", "capability": "research"}], "nextCheckMinutes": 1}
+        "evidenceIds": ["quote-1"], "questions": [{"question": "공식 발표에서 최근 분기 실적이 개선되었는가?", "capability": "research",
+        "research": {"queryTerms": ["분기 실적"], "sourceTypes": ["official-filing", "news"], "maxAgeMinutes": 1440}}], "nextCheckMinutes": 1}
 
 
 class AIControlTests(unittest.TestCase):
@@ -220,10 +221,17 @@ class AIControlStorageTests(unittest.TestCase):
         new = self.store.claim()
         child = {**SUBJECT, "capability": "observe", "taskId": identity("child"), "availableAt": "2099"}
         self.assertFalse(self.store.complete(old, {"summary": "stale"}, [child]))
-        self.assertTrue(self.store.complete(new, {"summary": "saved"}, [child]))
+        macro = {"id": "monthly", "kind": "macro-print", "evidenceCategory": "macro", "seriesId": "KR_RETAIL_SALES",
+                 "value": 99.0, "unit": "2020=100", "observationDate": "2026-08"}
+        facts = [{"id": "quote", "kind": "stock", "currentPrice": 100},
+                 *[{"id": "flow-" + str(i), "kind": "flow-metric"} for i in range(20)], macro]
+        self.assertTrue(self.store.complete(new, {"summary": "saved", "input": {"facts": facts}}, [child]))
         self.assertFalse(self.store.complete(new, {}, [child]))
         self.assertEqual(2, len(self.store.status()["tasks"]))
         self.assertEqual("saved", self.store.memory(SUBJECT["accountId"], "TEST")[0]["summary"])
+        retained = self.store.memory(SUBJECT["accountId"], "TEST")[0]["previousFacts"]
+        self.assertEqual(["quote", "monthly"], [row["id"] for row in retained[:2]])
+        self.assertEqual((99.0, "2020=100", "2026-08"), tuple(retained[1][key] for key in ("value", "unit", "observationDate")))
         self.assertEqual([], self.store.memory("other-account", "TEST"))
         # A skipped model call still records condition state, without replacing
         # the last real analysis or resetting its six-hour reuse window.

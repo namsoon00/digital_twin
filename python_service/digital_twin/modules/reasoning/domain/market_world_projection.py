@@ -236,6 +236,7 @@ MARKET_WORLD_ENTITY_KINDS = {
     "data-latency",
     "external-signal",
     "macro-indicator",
+    "macro-print",
     "interest-rate",
     "yield-curve",
     "fx-rate",

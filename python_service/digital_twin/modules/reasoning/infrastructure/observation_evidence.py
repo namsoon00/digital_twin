@@ -51,6 +51,32 @@ class TypeDBObservationEvidenceSource:
             return scoped_candidates(self.repository, world_id, symbol, metadata)
         return self.legacy_candidates(world_id, symbol)
 
+    def monthly_macro_candidates(self, world_id):
+        """MarketWorld manifests need not materialize portfolio scope pointers."""
+        metadata = read_evidence_stage("macro-inventory-metadata", lambda: self.metadata(world_id))
+        generations = metadata.get("scopeGenerationIds") or {}
+        if metadata.get("scopedAboxManifestVersion") != SCOPED_ABOX_MANIFEST_VERSION or not generations:
+            return [row for row in self.legacy_candidates(world_id, "") if row.get("kind") == "macro-print"]
+        from digital_twin.modules.reasoning.domain.ontology_scopes import scope_family
+        facts = {}
+        for scope_id, generation_id in sorted(generations.items()):
+            if scope_family(scope_id) != "macro-market":
+                continue
+            rows = read_evidence_stage("macro-facts", lambda: self.repository.read_rows(
+                'match $n isa ontology-node, has ontology-box "ABox", has ontology-kind "macro-print", '
+                'has ontology-world-id ' + typedb_string(world_id)
+                + ', has ontology-scope-id ' + typedb_string(scope_id)
+                + ', has ontology-snapshot-id ' + typedb_string(generation_id)
+                + ', has ontology-id $id, has ontology-kind $kind, has ontology-label $label, has ontology-json $json; limit 2001;',
+                ["id", "kind", "label", "json"], label="observation-evidence.macro-facts"))
+            if len(rows) > 2000 or len(facts) + len(rows) > 2000:
+                raise EvidenceContractError("public macro inventory exceeds bounded read contract")
+            for row in rows:
+                if row["id"] in facts:
+                    raise EvidenceContractError("conflicting public macro identity")
+                facts[row["id"]] = {**json.loads(row["json"]), **{key: row[key] for key in ("id", "kind", "label")}}
+        return list(facts.values())
+
     def legacy_candidates(self, world_id, symbol):
         repository = self.repository
         scope = read_evidence_stage("inventory-membership", lambda: repository.active_abox_members_clause([("$n", "observationEvidence")], world_id))

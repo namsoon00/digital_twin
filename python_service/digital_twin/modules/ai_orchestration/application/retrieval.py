@@ -4,6 +4,7 @@ import json
 
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash
 from digital_twin.modules.ai_orchestration.domain.brain_management import required_case_memory
+from digital_twin.modules.ai_orchestration.domain.continuity import continuity_memory, merge_recalled
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     MAX_ROUNDS, MAX_CORRECTIONS, MAX_RESULT_BYTES, freeze_retrieval_input,
     validate_read_decision, trace_summary, response_audit, ReadRequestError,
@@ -33,10 +34,11 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
         return fallback, history, research, []
     current = {**packet, **session.select([])}
     context = {"catalog": session.catalog(), "memoryCounts": {"analyses": len(history), "memories": len(research)},
+        "continuity": continuity_memory(history, research),
         "openQuestions": [{key: row.get(key) for key in ("caseId", "question", "capability", "reviewDue")}
                           for row in research if required_case_memory(row)], "roundLimit": rounds, "trace": []}
     tools = ObservationReadTools(session, history, research)
-    trace, seen, selected, recalled = [], set(), set(), {"analyses": [], "memories": []}
+    trace, seen, selected, recalled = [], set(), {row["id"] for row in current["facts"] if row["kind"] != "stock"}, {"analyses": [], "memories": []}
     used, corrections, status = 0, 0, "round-limit"
 
     def record(step):
@@ -109,7 +111,6 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
             break
     final = {**packet, **session.select(selected)}
     final["retrieval"] = trace_summary(trace, status)
-    required = [row for row in research if required_case_memory(row)]
-    required_hashes = {content_hash(row) for row in required}
-    memories = required + [row for row in recalled["memories"] if content_hash(row) not in required_hashes]
-    return final, recalled["analyses"], memories, trace
+    required = context["continuity"]
+    return (final, merge_recalled(required["previousAnalyses"], recalled["analyses"]),
+            merge_recalled(required["researchResults"], recalled["memories"]), trace)

@@ -81,7 +81,9 @@ class RetrievalRecoveryTests(unittest.TestCase):
         self.assertEqual(3, model.call_count)
         self.assertEqual(2, captured.read.call_count)
         self.assertEqual(1, source.candidates.call_count)
-        self.assertEqual([{"summary": "prior"}], history)
+        self.assertEqual("prior", history[0]["summary"])
+        self.assertEqual("required-continuity", history[0]["memoryRole"])
+        self.assertEqual({"summary": "prior"}, history[1])
         self.assertEqual("round-limit", packet["retrieval"]["status"])
         self.assertEqual(1, packet["retrieval"]["corrections"])
         self.assertEqual({"stock", "flow-metric", "evidence:financial-fact"}, {r["kind"] for r in packet["facts"]})
@@ -90,6 +92,8 @@ class RetrievalRecoveryTests(unittest.TestCase):
         self.assertEqual(0, envelopes[2]["retrievalContext"]["callsRemainingAfterThis"])
         self.assertEqual(trace, audit)
         final = freeze_execution_input(packet, history, memories, retrieval_trace=trace)
+        self.assertEqual(1, final["memoryCoverage"]["analysesIncluded"])
+        self.assertEqual(1, final["memoryCoverage"]["analysesAvailable"])
         validate_execution_input(final)
         changed = copy.deepcopy(final)
         changed["retrievalTrace"][1]["response"]["text"] += " "
@@ -179,6 +183,11 @@ class RetrievalRecoveryTests(unittest.TestCase):
         packet = captured.select([row["id"] for row in result["facts"]])
         packet["retrieval"] = legacy.trace_summary(trace, "round-limit")
         author = freeze_execution_input(packet, [], [], retrieval_trace=trace)
+        from digital_twin.modules.ai_orchestration.domain.execution_input import DIRECTED_PROMPT_VERSION
+        from digital_twin.modules.ai_orchestration.domain.observation_clock import citable_management_schema
+        author.update(promptVersion=DIRECTED_PROMPT_VERSION, prompt=legacy.directed_planning_prompt(packet, [], []),
+                      outputSchema=citable_management_schema(packet, []))
+        author["promptHash"] = hashlib.sha256(author["prompt"].encode()).hexdigest()
         validate_execution_input(author)
         self.assertEqual(legacy.directed_planning_prompt(packet, [], []), author["prompt"])
         self.assertEqual(hashlib.sha256(old_input["prompt"].encode()).hexdigest(), old_input["promptHash"])

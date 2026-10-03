@@ -17,7 +17,8 @@ from digital_twin.modules.ai_orchestration.domain.insight_schema import planning
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
 
 
-QUESTION = {"question": "공식 발표 원문에서 현재 설명을 뒷받침하는 근거를 확인할 수 있는가?", "capability": "research"}
+QUESTION = {"question": "공식 발표 원문에서 현재 설명을 뒷받침하는 근거를 확인할 수 있는가?", "capability": "research",
+            "research": {"queryTerms": ["최근 분기 실적"], "sourceTypes": ["official-filing", "news"], "maxAgeMinutes": 1440}}
 FEEDBACK = {"category": "data", "problem": "가격 설명에 비해 원인 자료의 확인 범위가 부족합니다.",
             "proposal": "출처별 자료 부족 상태와 확인 경로를 함께 표시합니다.",
             "verification": "자료가 없는 경우와 조회에 실패한 경우가 구분되어 표시되는지 확인합니다.", "evidenceIds": ["quote-1"]}
@@ -25,7 +26,8 @@ FEEDBACK = {"category": "data", "problem": "가격 설명에 비해 원인 자�
 
 def review_case(case, action="wait"):
     return {"caseId": case["caseId"], "action": action, "reason": "현재 근거로 원래 질문에 대한 추가 확인이 필요합니다.",
-            "evidenceIds": ["quote-1"], "nextCheckMinutes": 180}
+            "evidenceIds": ["quote-1"], "nextCheckMinutes": 180,
+            "research": QUESTION["research"] if action == "research" else {"queryTerms": [], "sourceTypes": [], "maxAgeMinutes": 0}}
 
 
 class BrainManagementContractTests(unittest.TestCase):
@@ -164,6 +166,8 @@ class BrainAgendaStorageTests(unittest.TestCase):
         self.assertEqual([], [row for row in self.brain.memory("control-test", "TEST", "another-world") if row["kind"] == "brain-case"])
         research = self.control.claim()
         self.assertEqual(case["caseId"], research["brainCaseId"])
+        self.assertEqual(QUESTION["research"]["queryTerms"], research["researchRequest"]["queryTerms"])
+        self.assertEqual(research["researchRequest"], case["researchRequest"])
         with self.control.transaction() as c:
             jobs, pending = [], copy.deepcopy(case)
             self.brain.schedule_research(c, pending, task, result, jobs, stamp())
@@ -171,6 +175,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
             self.assertIn("진행 중", pending["reason"])
         self.assertTrue(self.control.complete(research, {"runId": "source-run", "status": "completed", "changedEvidenceCount": 0}, []))
         memory = next(row for row in self.brain.memory("control-test", "TEST") if row["kind"] == "brain-case")
+        self.assertEqual(research["researchRequest"], memory["researchRequest"])
         self.assertEqual("review-needed", memory["status"])
         self.assertTrue(memory["reviewDue"])
         raw = {**plan(), "questions": [QUESTION], "caseReviews": [review_case(memory, "answered")], "serviceFeedback": []}

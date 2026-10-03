@@ -1,5 +1,6 @@
 """Durable independent research loop, with capabilities supplied by composition."""
 from datetime import datetime, timedelta, timezone
+from digital_twin.modules.ai_orchestration.domain.continuity import judgment_continuity
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceReadError, ObservationEvidenceSession
 from digital_twin.modules.ai_orchestration.application.retrieval import retrieve_evidence, RetrievalLeaseLost, RetrievalContractFailure
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
@@ -39,12 +40,14 @@ class AIControlService:
         if not job:
             return {"status": "idle"}
         try:
-            if not any(all(subject[key] == job[key] for key in ("accountId", "symbol", "worldId")) for subject in subjects):
+            current_subject = next((subject for subject in subjects
+                if all(subject[key] == job[key] for key in ("accountId", "symbol", "worldId"))), None)
+            if current_subject is None:
                 self.store.complete(job, {"status": "retired", "reason": "subject-no-longer-observed"}, [])
                 return {"status": "retired", "taskId": job["taskId"]}
             with self.store.keep_alive(job):
                 if job["capability"] == "observe":
-                    capture = self.evidence(job)
+                    capture = self.evidence({**job, "marketWorldId": current_subject.get("marketWorldId", "")})
                     session = capture if isinstance(capture, ObservationEvidenceSession) else None
                     packet = session.packet() if session else capture
                     if not packet.get("facts") or not packet.get("sourceSnapshotId"):
@@ -87,9 +90,11 @@ class AIControlService:
                     if not input_id:
                         return {"status": "lease-lost", "taskId": job["taskId"]}
                     raw = self.planner(envelope, input_id)
-                    plan = validate_plan(raw, packet, envelope["researchResults"])
+                    plan = validate_plan(raw, packet, envelope["researchResults"], require_research=True)
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
                               "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
+                              "memoryCoverage": envelope["memoryCoverage"],
+                              "judgmentContinuity": judgment_continuity(envelope),
                               "followUpEvaluations": packet["followUpEvaluations"],
                               "comparisonFacts": [fact for previous in envelope["previousAnalyses"] for fact in previous.get("previousFacts", [])[:20]]}
                     for verification in range(2):
@@ -116,8 +121,9 @@ class AIControlService:
                             if not repair_id:
                                 return {"status": "lease-lost", "taskId": job["taskId"]}
                             result["repair"]["inputId"] = repair_id
-                            repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"])
-                            result.update(repaired, executionInputId=repair_id, observedAt=stamp())
+                            repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"], require_research=True)
+                            result.update(repaired, executionInputId=repair_id, observedAt=stamp(), memoryCoverage=correction["memoryCoverage"],
+                                          judgmentContinuity=judgment_continuity(correction))
                         except AIControlBudgetWait:
                             raise
                         except Exception as error:
@@ -127,7 +133,10 @@ class AIControlService:
                         result["repair"]["status"] = result["quality"]["status"]
                     children = []
                     for question in result["researchQuestions"]:
+                        request = next((item.get("researchRequest", {}) for item in result["workQuestions"]
+                                        if item["question"] == question and item["capability"] == "research"), {})
                         children.append({**self.subject(job), "capability": "research", "priority": 5, "question": question,
+                                         "researchRequest": request,
                                          "taskId": identity(job["taskId"], question), "availableAt": stamp()})
                     due = (datetime.now(timezone.utc) + timedelta(minutes=result["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
                     children.append({**self.subject(job), "capability": "observe", "watchQuestions": result["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})

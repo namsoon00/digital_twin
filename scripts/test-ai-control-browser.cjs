@@ -12,6 +12,8 @@ const brain = {goals:['미해결 질문을 근거로 재검토합니다.'],cases
  ...['data','experience'].map((category,index)=>({caseId:'feedback-'+index,accountId:'owner',symbol:'TEST',revision:2,kind:'service-feedback',status:'proposed',category,
   problem:'근거가 부족한 항목을 구분할 수 없습니다.',proposal:'자료의 조회 상태를 함께 표시합니다.',verification:'없음과 실패를 구분해 확인합니다.'}))]};
 const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 안의 단기 회복일 수 있습니다.',portfolioImpact:'보유 손실의 회복 여부를 구분해 봅니다.',
+  memoryCoverage:{continuityVersion:'observation-continuity-v1',requiredAnalyses:1,requiredResearch:3},
+  workQuestions:[{question:'수출 규제 대상 제품 확인',researchRequest:{queryTerms:['수출 규제 <script>bad</script>'],sourceTypes:['news'],maxAgeMinutes:4320}}],
   development:{requestId:'development-fixture',status:'pending'},developmentQuestions:['가설 개선 질문 <script>bad</script>'],
   quality:{status:'rejected',errors:['가격과 매입가 항목이 다릅니다.'],review:{reason:'<script>bad</script>'}},
   claimEvidence:{summary:[{factId:'fact',field:'currentPrice',period:'current'}]},
@@ -42,6 +44,10 @@ const server = http.createServer((req,res) => {
    await page.getByText('온톨로지 개선 · 현재 진행 기록 없음',{exact:true}).click();
    assert.match(await page.locator('article').innerText(),/가설 개선 질문 <script>bad<\/script>/);
    assert.equal(await page.locator('article script').count(),0);
+   await page.getByText('판단에 연결한 기억·거시 자료·검색 조건',{exact:true}).click();
+   assert.match(await page.locator('.continuity').innerText(),/이전 판단 1건/);
+   assert.match(await page.locator('.continuity').innerText(),/수출 규제 <script>bad<\/script>/);
+   assert.equal(await page.locator('.continuity script').count(),0);
    await page.getByText('AI가 조회한 과정 · 조회 완료',{exact:true}).click();
    assert.match(await page.locator('.retrieval').innerText(),/기업·재무 · 사실 1개/);
    assert.match(await page.locator('.retrieval').innerText(),/다음 페이지 있음/);

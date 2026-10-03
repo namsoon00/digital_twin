@@ -211,8 +211,14 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             saved = json.loads(row["result_json"])
             previous = saved.pop("input", {})
             saved.pop("comparisonFacts", None)
-            keys = ("id", "label", "symbol", "currentPrice", "changeRate", "ma20", "ma60", "volumeRatio", "profitLossRate", "sourceAsOf", "asOf", "sourceSnapshotId", "source", "freshnessStatus")
-            saved["previousFacts"] = [{key: fact[key] for key in keys if key in fact} for fact in previous.get("facts", [])[:20]]
+            keys = ("id", "kind", "label", "symbol", "currency", "currentPrice", "changeRate", "ma20", "ma60", "volumeRatio",
+                    "profitLossRate", "seriesId", "value", "unit", "observationDate", "sourceAsOf", "asOf", "sourceSnapshotId",
+                    "source", "sourceUrl", "sourceRevision", "freshnessStatus", "judgementEvidenceUsable")
+            # Retain the required quote/macro baseline before optional detailed
+            # reads, which can otherwise displace every dated macro comparison.
+            facts = sorted(previous.get("facts", []), key=lambda fact:
+                0 if fact.get("kind") == "stock" else 1 if fact.get("evidenceCategory") == "macro" else 2)
+            saved["previousFacts"] = [{key: fact[key] for key in keys if key in fact} for fact in facts[:20]]
             saved.update({key: previous[key] for key in ("accountId", "symbol", "worldId") if key in previous})
             result.append({**saved, "completedAt": row["updated_at"]})
         if result and condition_state:
@@ -312,7 +318,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
 
     @staticmethod
     def review_proof_with_connection(connection, input_id):
-        from digital_twin.modules.ai_orchestration.domain.execution_input import REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION
+        from digital_twin.modules.ai_orchestration.domain.execution_input import REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION
         from digital_twin.modules.ai_orchestration.domain.insight_contract import narrative_digest
         row = connection.execute("SELECT i.task_id,i.artifact_gzip FROM ai_control_inputs i "
             "JOIN ai_control_input_calls l ON l.input_id=i.input_id "
@@ -322,7 +328,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             return {}
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] not in {REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
+        if envelope["promptVersion"] not in {REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
             return {}
         return {"taskId": row["task_id"], "draftHash": narrative_digest({**envelope["draft"], "input": envelope["current"]})}
 

@@ -153,6 +153,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         task_id = identity(case["caseId"], "research", case["researchAttempts"] + 1)
         children.append({**{key: job[key] for key in ("accountId", "symbol", "worldId", "name")},
             "taskId": task_id, "capability": "research", "question": case["question"], "brainCaseId": case["caseId"],
+            "researchRequest": copy.deepcopy(case.get("researchRequest", {})),
             "priority": 5, "availableAt": now})
         case.update(status="waiting", researchAttempts=case["researchAttempts"] + 1,
             lastResearch={"taskId": task_id, "requestedAt": now, "inputFingerprint": fingerprint},
@@ -234,6 +235,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "origin": {key: origin[key] for key in ("taskId", "executionInputId", "capturedAt", "summary", "hypothesis", "counterEvidence", "quality")},
                 "lastAssessment": case.get("lastAssessment", {}), "lastResearch": case.get("lastResearch", {}),
                 "researchAttempts": case["researchAttempts"], "development": case.get("development", {}),
+                "researchRequest": case.get("researchRequest", {}),
                 "authority": "historical-work-status-only"})
         for row in feedback:
             case = json.loads(row["payload_json"])

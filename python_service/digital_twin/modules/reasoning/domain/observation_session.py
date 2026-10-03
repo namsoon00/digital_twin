@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from .observation_evidence import (
     CATEGORIES, MACRO_KINDS, PROMPT_STORAGE_METADATA, EvidenceContractError, canonical_json,
-    content_hash, source_clock, validate_evidence_packet, quote_clock_assessment,
+    content_hash, source_clock, validate_evidence_packet, quote_clock_assessment, EVIDENCE_PROFILE,
 )
 
 
@@ -59,8 +59,9 @@ class ObservationEvidenceSession:
                 "omitted": omitted, "sourceSnapshots": deepcopy(self._packet["sourceSnapshots"])}
 
     def select(self, fact_ids):
-        """Only explicitly read facts plus the mandatory quote enter the final prompt."""
-        selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] == "stock"}
+        """Keep quote and the v2 bounded macro baseline alongside requested facts."""
+        selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] == "stock"
+            or (self._packet["profile"] == EVIDENCE_PROFILE and row["evidenceCategory"] == "macro")}
         if selected - self._facts.keys():
             raise EvidenceContractError("unknown selected evidence")
         packet = self.packet()

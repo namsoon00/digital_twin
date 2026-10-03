@@ -379,7 +379,11 @@ def graph_for_graph_store_persistence(
             for endpoint in (relation.source, relation.target)
             if str(endpoint or "").strip()
         )
-    persisted_entity_ids = source_ids | {
+    # Published macro observations are shared factual context even when the
+    # active catalog has only stock rules. Preserve their whole ABox nodes
+    # without inventing a stock sensitivity or adding them as rule subjects.
+    observation_context_ids = {item.entity_id for item in abox_entities if item.kind == "macro-print"}
+    persisted_entity_ids = source_ids | observation_context_ids | {
         endpoint
         for relation in relations
         for endpoint in [relation.source, relation.target]

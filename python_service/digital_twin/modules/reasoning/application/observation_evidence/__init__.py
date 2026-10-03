@@ -18,9 +18,10 @@ class ObservationEvidenceSource(Protocol):
 
 
 class ObservationEvidenceReader:
-    def __init__(self, source: ObservationEvidenceSource, clock=None):
+    def __init__(self, source: ObservationEvidenceSource, clock=None, macro_world_id=""):
         self.source = source
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.macro_world_id = macro_world_id
 
     def __call__(self, request):
         return self.capture_session(request).packet()
@@ -46,12 +47,34 @@ class ObservationEvidenceReader:
             if not shared.startswith("premise:"):
                 raise EvidenceContractError("invalid shared evidence world")
             worlds.append(shared)
+        if self.macro_world_id:
+            if not self.macro_world_id.startswith("market:"):
+                raise EvidenceContractError("invalid public macro world")
+            macro_metadata = read_evidence_stage("macro-metadata", lambda: self.source.metadata(self.macro_world_id))
+            # A shared manifest can record the account that produced its
+            # projection. Ownership is the configured world plus each fact,
+            # not that projection provenance field.
+            if (macro_metadata.get("status") != "ok" or not macro_metadata.get("aboxSnapshotId")
+                    or macro_metadata.get("worldId", self.macro_world_id) != self.macro_world_id
+                    or macro_metadata.get("worldType", "market") != "market"):
+                raise EvidenceContractError("public macro graph not ready")
+            worlds.append(self.macro_world_id)
         versions = {key: read_evidence_stage("snapshot-before", lambda: self.source.snapshot_id(key)) for key in worlds}
         if not all(versions.values()) or versions[world] != metadata["aboxSnapshotId"]:
             raise EvidenceContractError("graph changed before capture")
         candidates = []
         for key in worlds:
-            for row in read_evidence_stage("candidates", lambda: self.source.candidates(key, request["symbol"])):
+            public_macro = key == self.macro_world_id
+            macro_read = getattr(type(self.source), "monthly_macro_candidates", None)
+            rows = read_evidence_stage("candidates", lambda: macro_read(self.source, key)
+                if public_macro and callable(macro_read) else self.source.candidates(key, "" if public_macro else request["symbol"]))
+            for row in rows:
+                if self.macro_world_id and not public_macro and row.get("kind") == "macro-print":
+                    continue  # Do not count an account mirror as independent evidence.
+                if public_macro and row.get("kind") != "macro-print":
+                    continue
+                if public_macro and row.get("accountId"):
+                    raise EvidenceContractError("public macro fact contains account ownership")
                 if row.get("accountId") and row["accountId"] != request["accountId"]:
                     raise EvidenceContractError("graph fact account mismatch")
                 if row.get("worldId") and row["worldId"] != key:

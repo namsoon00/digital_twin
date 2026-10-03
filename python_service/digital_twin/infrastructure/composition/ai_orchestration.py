@@ -15,7 +15,7 @@ def call_observation_model(envelope, configured):
 def ai_control_subjects(configured):
     from digital_twin.infrastructure.operational_store import monitor_store
     from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state
-    from digital_twin.modules.reasoning.contracts import world_from_snapshot
+    from digital_twin.modules.reasoning.contracts import world_from_snapshot, market_world
     from digital_twin.modules.accounts.infrastructure.mysql_watchlist_account_reader import MySQLWatchlistAccountReader
     accounts = {account.account_id: account for account in MySQLWatchlistAccountReader(configured).load_all() if account.enabled}
     result = {}
@@ -31,7 +31,8 @@ def ai_control_subjects(configured):
             symbol = str(position.symbol or "").upper().strip()
             if symbol:
                 result[(account_id, symbol)] = {"accountId": account_id, "symbol": symbol,
-                    "name": position.name, "worldId": world.world_id}
+                    "name": position.name, "worldId": world.world_id,
+                    "marketWorldId": market_world(world.market_id, configured.get("ontologySharedMarketTenantId") or "shared").world_id}
     return list(result.values())
 
 
@@ -40,10 +41,7 @@ def build_ai_control_service(settings=None):
     from digital_twin.infrastructure.operational_store import investment_research_store
     from digital_twin.infrastructure.typedb_ontology import typedb_repository_from_settings
     from digital_twin.infrastructure.composition.news_intelligence import build_investment_research_orchestrator
-    from digital_twin.modules.decisions.contracts import InvestmentQuestion
-    from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
     from digital_twin.modules.ai_orchestration.public import AIControlService
-    from digital_twin.modules.ai_orchestration.domain.planning import identity, stamp
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
     from digital_twin.modules.ai_orchestration.infrastructure.execution import CURRENT_TASK, CURRENT_INPUT
 
@@ -56,7 +54,8 @@ def build_ai_control_service(settings=None):
 
     def evidence(job):
         from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
-        return GraphObservationReader(typedb_repository_from_settings(configured)).capture_session(job)
+        return GraphObservationReader(typedb_repository_from_settings(configured),
+            macro_world_id=job.get("marketWorldId", "")).capture_session(job)
 
     def planner(envelope, input_id):
         token = CURRENT_TASK.set(envelope["current"]["taskId"])
@@ -77,30 +76,13 @@ def build_ai_control_service(settings=None):
         return result
 
     def researcher(job):
-        run_id = "ai-control-" + job["taskId"][:40]
-        existing = research_store.get_run(run_id)
-        if existing and existing.get("status") not in {"queued", "processing", "failed"}:
-            return {"runId": run_id, "status": existing["status"], "reused": True}
-        question = InvestmentQuestion.create(job["question"], subject_symbol=job["symbol"],
-            subject_name=job["name"], account_id=job["accountId"], source="ai-control")
-        task = {"taskId": identity(job["taskId"], "sources"), "question": job["question"],
-            "purpose": "독립 관찰에서 제기한 가설의 근거와 반대 근거 확인", "status": "blocked-by-data",
-            "requiredEvidenceTypes": ["official-filing", "news"], "sourceTypes": ["official-filing", "news"],
-            "maxAgeMinutes": 1440, "decisionRelevance": "supporting"}
-        orchestrator = build_investment_research_orchestrator(configured, research_store)
-        # The central planner already owns this plan. Preserve the existing source verification,
-        # durable ResearchRun and evidence-change events, without a second planning model call.
-        orchestrator.hypothesis_research_planner = None
+        from digital_twin.modules.ai_orchestration.application.research import execute_research
         token = CURRENT_TASK.set(job["taskId"])
         try:
-            run = orchestrator.run(question, NewsCollectionTarget(job["symbol"], job["name"]),
-                {"researchPlan": {"planId": job["taskId"], "tasks": [task], "unresolvedQuestions": [job["question"]]}},
-                account_id=job["accountId"], run_id=run_id,
-                request_context={"aiControlTaskId": job["taskId"], "source": "ai-control", "question": question.to_dict()})
+            return execute_research(job, research_store,
+                lambda: build_investment_research_orchestrator(configured, research_store))
         finally:
             CURRENT_TASK.reset(token)
-        return {"runId": run.run_id, "status": run.status, "changedEvidenceCount": run.changed_evidence_count,
-                "stopReason": run.stop_reason, "authority": "research-only"}
 
     from digital_twin.infrastructure.transactions.ai_control_publication import AIControlPublication
     from digital_twin.infrastructure.operational_store import notification_job_store

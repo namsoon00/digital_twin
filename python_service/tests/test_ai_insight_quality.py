@@ -21,7 +21,7 @@ class InsightGroundingTests(unittest.TestCase):
         from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, prompt_budget
         self.assertEqual(256 * 1024, prompt_budget('invalid'))
         self.assertEqual(512 * 1024, prompt_budget(9999999))
-        envelope = freeze_execution_input(packet(), [{'summary': 'a' * 30000}],
+        envelope = freeze_execution_input(packet(), [{'summary': 'a' * 25000}],
                                           [{'result': 'b' * 18000}], max_prompt_bytes=65536)
         self.assertEqual(1, len(envelope['researchResults']))
         original = copy.deepcopy(envelope)
@@ -62,8 +62,12 @@ class InsightGroundingTests(unittest.TestCase):
         envelope = freeze_execution_input(p, history, research, max_prompt_bytes=120000)
         self.assertEqual(before, (p, history, research))
         self.assertEqual(p, envelope['current'])
-        self.assertEqual([history[1]], envelope['previousAnalyses'])
-        self.assertEqual([research[1]], envelope['researchResults'])
+        self.assertEqual(['summary'], envelope['previousAnalyses'][0]['truncatedFields'])
+        self.assertEqual(600, len(envelope['previousAnalyses'][0]['summary']))
+        self.assertEqual([history[1]], envelope['previousAnalyses'][1:])
+        self.assertEqual(['too-large', 'small'], [row['runId'] for row in envelope['researchResults'][:2]])
+        self.assertNotIn('claims', envelope['researchResults'][0])
+        self.assertEqual([research[1]], envelope['researchResults'][2:])
         self.assertEqual('context-budget', envelope['memoryCoverage']['excluded']['analyses'][0]['reason'])
         self.assertLessEqual(len(envelope['prompt'].encode()), 120000)
         validate_execution_input(envelope)
@@ -377,12 +381,16 @@ class InsightControlTests(unittest.TestCase):
         service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(return_value=packet()))
         planner.return_value = plan()
         service.reviewer = Mock(return_value=review())
+        store.memory.return_value = [{"summary": "이전에는 원인 자료가 부족했습니다.", "quality": {"status": "observation-only"}}]
         self.assertEqual('completed', service.run_once()['status'])
         self.assertEqual(2, store.save_execution_input.call_count)
         saved = store.complete.call_args.args[1]
         self.assertEqual('accepted', saved['quality']['status'])
         self.assertTrue(saved['followUpConditions'])
-        self.assertEqual('independent-observation-review-v3-clock-citations', service.reviewer.call_args.args[0]['promptVersion'])
+        self.assertEqual('independent-observation-review-v4-continuity', service.reviewer.call_args.args[0]['promptVersion'])
+        historical = service.reviewer.call_args.args[0]['draft']['judgmentContinuity']['previousAnalyses']
+        self.assertEqual(store.memory.return_value[0]['summary'], historical[0]['summary'])
+        self.assertEqual('historical-context-only', historical[0]['authority'])
         service.reviewer.return_value = {**review(), 'usefulness': 'generic'}
         self.assertEqual('completed', service.run_once()['status'])
         self.assertEqual('rejected', store.complete.call_args.args[1]['quality']['status'])

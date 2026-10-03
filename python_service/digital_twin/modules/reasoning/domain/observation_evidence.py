@@ -11,7 +11,8 @@ import math
 
 
 EVIDENCE_PROTOCOL = "observation-evidence-v1"
-EVIDENCE_PROFILE = "independent-observation-v1"
+LEGACY_EVIDENCE_PROFILE = "independent-observation-v1"
+EVIDENCE_PROFILE = "independent-observation-v2-macro-prints"
 
 
 class EvidenceContractError(ValueError):
@@ -84,7 +85,7 @@ CATEGORIES = (
     EvidenceCategory("company", ("company", "evidence:financial-fact", "evidence:filing", "evidence:disclosure",
         "fundamental-event", "earnings-calendar-event", "analyst-revision", "company-governance-state"), 10000),
     EvidenceCategory("research", ("research-evidence", "news-article", "article-ai-analysis", "evidence:news"), 10000),
-    EvidenceCategory("macro", ("interest-rate", "yield-curve", "fx-rate", "benchmark-index", "market-proxy-observation"), 8000),
+    EvidenceCategory("macro", ("macro-print", "interest-rate", "yield-curve", "fx-rate", "benchmark-index", "market-proxy-observation"), 8000),
     EvidenceCategory("technical", ("temporal-window", "trend-observation", "technical-metric", "price-bar", "price-metric"), 6000),
     EvidenceCategory("flow", ("flow-metric", "liquidity-profile", "volume-profile", "exit-capacity"), 6000),
     EvidenceCategory("quality", ("data-quality", "data-availability-assessment", "coverage-gap", "missing-data",
@@ -201,7 +202,7 @@ def select_evidence(candidates):
 
 
 def validate_evidence_packet(packet):
-    if packet.get("protocolVersion") != EVIDENCE_PROTOCOL or packet.get("profile") != EVIDENCE_PROFILE:
+    if packet.get("protocolVersion") != EVIDENCE_PROTOCOL or packet.get("profile") not in {EVIDENCE_PROFILE, LEGACY_EVIDENCE_PROFILE}:
         raise EvidenceContractError("unsupported observation evidence contract")
     if not all(packet.get(key) for key in ("accountId", "symbol", "worldId", "sourceSnapshotId", "capturedAt")):
         raise EvidenceContractError("observation evidence ownership missing")
@@ -215,6 +216,8 @@ def validate_evidence_packet(packet):
     if len({row.get("id") for row in facts}) != len(facts):
         raise EvidenceContractError("duplicate evidence identity")
     for fact in facts:
+        if packet["profile"] == LEGACY_EVIDENCE_PROFILE and fact.get("kind") == "macro-print":
+            raise EvidenceContractError("macro print requires v2 observation profile")
         if snapshots.get(fact.get("sourceWorldId")) != fact.get("sourceSnapshotId"):
             raise EvidenceContractError("fact snapshot mismatch")
         if fact.get("accountId") and fact["accountId"] != packet["accountId"]:

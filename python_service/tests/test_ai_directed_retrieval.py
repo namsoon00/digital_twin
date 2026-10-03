@@ -112,7 +112,9 @@ class DirectedRetrievalTests(unittest.TestCase):
         required = {"kind": "brain-case", "caseId": "due", "reviewDue": True, "capability": "observe"}
         (packet, history, memories, trace), _, _, _ = self.run_reads(
             [read(request("analyses", "recall_memory"))], history=[{"summary": "x" * 80000}], research=[required])
-        self.assertEqual([], history)
+        self.assertEqual(1, len(history))
+        self.assertEqual(["summary"], history[0]["truncatedFields"])
+        self.assertEqual("required-continuity", history[0]["memoryRole"])
         self.assertEqual([required], memories)
         self.assertEqual("context-budget", packet["retrieval"]["status"])
         self.assertEqual("context-budget", trace[0]["reads"][0]["result"]["status"])
@@ -139,7 +141,7 @@ class DirectedRetrievalTests(unittest.TestCase):
         self.assertEqual(2, len(envelope["retrievalTrace"]))
 
     def test_previous_citable_prompts_and_repairs_still_replay_exactly(self):
-        from digital_twin.modules.ai_orchestration.domain.observation_clock import citable_management_prompt
+        from digital_twin.modules.ai_orchestration.domain.observation_clock import citable_management_prompt, citable_management_schema
         from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
         captured, _ = session()
         author = freeze_execution_input(captured.packet(), [], [])
@@ -150,6 +152,7 @@ class DirectedRetrievalTests(unittest.TestCase):
             if version == CITABLE_REPAIR_PROMPT_VERSION:
                 prompt = repair_prompt(prompt, envelope["repair"])
             envelope.update(prompt=prompt, promptHash=hashlib.sha256(prompt.encode()).hexdigest())
+            envelope["outputSchema"] = citable_management_schema(envelope["current"], envelope["researchResults"])
             validate_execution_input(envelope)
         import gzip
         import json

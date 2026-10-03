@@ -352,7 +352,7 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "macro-rates"
     if _matches_any(text, ["crypto-asset", "cryptoasset", "crypto-market"]):
         return "macro-crypto"
-    if _matches_any(text, ["macro-indicator", "macro-regime", "market-regime"]):
+    if _matches_any(text, ["macro-indicator", "macro-regime", "market-regime", "macro-print", "macroprint"]):
         return "macro-market"
     if _matches_any(text, ["benchmark-index", "benchmark-proxy"]):
         return "macro-market"

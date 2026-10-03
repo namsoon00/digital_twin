@@ -126,7 +126,10 @@ class AIObservationDevelopmentTests(unittest.TestCase):
         store.memory.return_value = [{"inputFingerprint": observation_fingerprint(service.evidence.return_value, []),
             "observedAt": stamp(), "executionPromptVersion": PROMPT_VERSION, "quality": {"status": "observation-only"}}]
         self.assertEqual("completed", service.run_once()["status"])
-        self.assertEqual(records, planner.call_args.args[0]["researchResults"])
+        captured = planner.call_args.args[0]["researchResults"]
+        self.assertEqual("required-continuity", captured[0]["memoryRole"])
+        self.assertEqual(records[0]["cases"], captured[0]["cases"])
+        self.assertEqual(records, captured[1:])
 
     def assert_memory_reads_current_case_state_with_exact_subject_scope(self):
         result = development_result(self.task)

@@ -75,7 +75,7 @@ def management_schema(packet, research):
     return result
 
 
-def validate_management(value, packet, research):
+def validate_management(value, packet, research, require_research=False):
     known = {row["id"]: row for row in packet.get("facts", [])}
     memories = case_memories(research)
 
@@ -98,7 +98,9 @@ def validate_management(value, packet, research):
         raise ValueError("brain management exceeds its bounded work budget")
     seen, accepted = set(), []
     for item in reviews:
-        if not isinstance(item, dict) or set(item) != {"caseId", "action", "reason", "evidenceIds", "nextCheckMinutes"}:
+        fields = {"caseId", "action", "reason", "evidenceIds", "nextCheckMinutes"}
+        if (not isinstance(item, dict) or set(item) not in (fields, fields | {"research"})
+                or (require_research and "research" not in item)):
             raise ValueError("invalid case review contract")
         key, action = item["caseId"], item["action"]
         if key not in memories or key in seen or action not in CASE_ACTIONS:
@@ -112,6 +114,10 @@ def validate_management(value, packet, research):
             "evidenceIds": evidence(item, usable=action == "answered"),
             "nextCheckMinutes": bounded(item["nextCheckMinutes"], 180, 60, 1440),
             "expectedRevision": memories[key]["revision"]})
+        if "research" in item:
+            from .research_request import validate_research_request
+            validate_research_request(item["research"], action == "research", packet.get("accountId", ""))
+            accepted[-1]["research"] = copy.deepcopy(item["research"])
     if {key for key, item in memories.items() if item.get("reviewDue")} - seen:
         raise ValueError("due brain cases require an explicit review")
     proposals = []
@@ -137,17 +143,22 @@ def source_memory(job, result):
 
 
 def new_case(job, result, question, capability, now):
+    request = next((item.get("researchRequest", {}) for item in result.get("workQuestions", [])
+                    if item["question"] == question and item["capability"] == capability), {})
     return {"caseId": case_identity(job["accountId"], job["symbol"], job["worldId"], capability, question),
         "accountId": job["accountId"], "symbol": job["symbol"], "worldId": job["worldId"],
         "question": question, "capability": capability, "status": "open", "revision": 0,
         "createdAt": now, "updatedAt": now, "nextCheckAt": later(now, result["nextCheckMinutes"]),
         "completionCriterion": "검증 가능한 근거로 원래 질문에 답하고 남은 불확실성을 설명합니다.",
         "reason": "새 관찰에서 확인할 질문을 등록했습니다.", "researchAttempts": 0,
-        "origin": source_memory(job, result), "authority": "research-only"}
+        "origin": source_memory(job, result), "researchRequest": copy.deepcopy(request), "authority": "research-only"}
 
 
 def review_transition(case, review, source, now):
     value = copy.deepcopy(case)
+    if review["action"] == "research" and review.get("research"):
+        from .research_request import validate_research_request
+        value["researchRequest"] = validate_research_request(review["research"], True, case["accountId"])
     if value["revision"] != review["expectedRevision"] or value["status"] not in ACTIVE_CASE_STATES:
         raise ValueError("brain case changed after input capture")
     action = review["action"]

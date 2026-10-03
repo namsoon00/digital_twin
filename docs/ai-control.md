@@ -36,8 +36,8 @@ iteration limits, while existing evidence and publication owners retain validati
 
 Before any model call, reasoning captures the subject's active portfolio and
 shared-premise inventory in a short read transaction, then closes that transaction.
-The initial routing prompt contains the required quote, coverage/catalog,
-successful-delivery baseline, due-question summaries and memory counts. It does
+The initial routing prompt contains the required quote, bounded macro baseline, coverage/catalog,
+successful-delivery baseline, mandatory continuity summaries and memory counts. It does
 not contain all financial/news bodies or all previous analyses. The model chooses:
 
 | Internal function | Scope |
@@ -70,9 +70,9 @@ independent review, delivery limits and research-only authority remain in force.
 
 Every routing prompt is frozen in `ai_control_inputs` before its model call,
 using the same lease and call-budget accounting as final author/reviewer calls.
-The final generation v10 / repair v6 artifact also preserves the complete read
+The final generation v12 / repair v8 artifact also preserves the complete read
 trace, whose hash is bound to the compact audit in the evidence packet. Historical
-v9 / repair v5 and retrieval v1 prompts/traces remain exactly replayable. The owner page shows what was
+v11 / repair v7, v10 / repair v6, v9 / repair v5 and retrieval v1 prompts/traces remain exactly replayable. The owner page shows what was
 queried, why, and the remaining coverage. Extra routing calls increase latency and
 call usage; the daily quota still includes each of them.
 Routing reserves the remaining author/reviewer capacity: with only those calls
@@ -128,6 +128,101 @@ shared-premise-only changes and any projection path without this completion even
 retrieval, scope, immutable capture, repeated/oversized reads, lease loss, exact
 legacy replay, late event commits, coalescing, retry preservation, live V2 routing,
 deployment/attempt fences and atomic completion/event/receipt rollback.
+
+### Mandatory continuity and question-specific research
+
+`observation-continuity-v1` provides one latest usable prior judgment with dated
+comparison facts, open-question state, service-feedback summaries and recent
+research/development status. It reaches both routing and final generation even
+when the model never chooses `recall_memory`. Non-due summaries share a 24 KiB
+budget; due questions retain their existing whole-record mandatory contract.
+Long summary fields explicitly name their truncation, and a mandatory overflow
+fails before calling the model. Repairs preserve required memory. Detailed recall
+remains optional, and coverage counts a summary and its source record once.
+Historical judgments and research completion are never promoted into current facts.
+The independent reviewer v4 receives the same server-captured prior judgment in
+`judgmentContinuity`, so it can check claims about earlier analysis. First analysis
+and first delivered notification are distinct. Review v3 remains replayable.
+
+New questions and research case reviews carry `observation-research-request-v1`:
+one to four public query phrases, approved `news`/`official-filing` sources, and a
+60–10080 minute source-age requirement. The durable case and child job preserve
+this intent; the existing research orchestrator passes it to the news query builder
+alongside the server-owned company identity. A news task requires the actual
+`news-full-text` evidence type. It still verifies sources and assessments before
+projecting facts, and completion only requests another assessment of the question.
+Other capabilities must supply an empty research specification. Unsupported sources,
+URLs and the account identifier in queries are rejected. This is a bounded public
+query contract, not general detection of every possible personal-information string.
+Previously queued jobs without intent retain an explicit `legacy-subject-refresh`
+scope. Existing retry, cooldown and call-budget limits remain in force.
+Author v12 / repair v8 also enforce the existing one-to-eight captured evidence
+IDs per case review or feedback item in the response schema. A live-input probe
+exposed a v11 research review with an empty evidence list that the validator
+correctly rejected; the old schema remains replayable instead of being rewritten.
+
+The evidence profile `independent-observation-v2-macro-prints` also recognizes
+existing KOSIS production, leading-cycle and retail-sales `MacroPrint` facts.
+They belong to the shared `macro:market` scope, participate in material change
+detection and can enter MarketWorld. Persistence retains their complete ABox nodes
+even when only stock rules are active; it does not invent company sensitivity.
+Automatic macro selection keeps its 8000-byte
+whole-fact, kind-round-robin budget, and that bounded baseline survives directed
+retrieval. Unit, observation period and original provenance remain unchanged.
+Additional macro facts are available through the existing internal reads.
+The current monitored account's server-owned market identity selects the public
+  MarketWorld. Monthly prints are read there in the same native snapshot as the
+account evidence, retaining both world/snapshot identities. This read admits only
+`macro-print` facts without account ownership; it never discovers another account
+by database ordering. An unavailable configured market snapshot fails explicitly.
+MarketWorld's immutable scope generations select the rows directly: shared
+manifests need not contain the per-scope pointers used by portfolio reads. Account
+mirrors of a monthly print are not counted again as independent evidence.
+The existing native completion event owns AI wakeups; a collection receipt alone
+does not bypass ontology projection or authorize another judgment.
+
+`test_ai_continuity_research.py` covers no-recall continuity, repair/overflow,
+question contracts, the actual research orchestration/query handoff, macro scope
+and immutable input changes, and historical author/repair replay. The owner page
+shows required-memory counts, included macro facts and captured research intent.
+This first bundle does not add war/election event ontologies, unrestricted browsing,
+automatic rule promotion or evidence of improved investment accuracy.
+
+Validation on 2026-10-03:
+
+- All 100 inputs in the final production sample replayed exactly (author v10/v11
+  and retrieval v2). An earlier sample also covered repair v6 and reviewer v3.
+- An isolated fixture through the configured real model made three routing
+  calls, including a detailed prior-analysis recall. The final input retained
+  one required judgment, one service-feedback memory and one monthly macro fact.
+  After one bounded wording correction, the independent reviewer accepted the
+  explanation with the same prior-judgment context. No notification was written
+  by this probe. Its author input was 26,883 bytes; the correction was 46,868 bytes.
+- Repeating a captured production input with the v12 response schema passed
+  plan and local quality validation as `observation-only`, with no quality errors.
+  It retained one prior judgment and seven work memories in a 49,369-byte input.
+  This isolated call did not write a production task or notification. Saved
+  v11 author and v7 repair inputs also replayed after the schema revision.
+- Two different research questions produced distinct query phrases at the real
+  orchestrator and encoded Google RSS transport boundary (stubbed HTTP response).
+  This verifies execution of search intent, not retrieval relevance or answer quality.
+- The current ECOS/FRED/KOSIS source rows contained ten normalized macro series.
+  All three KOSIS monthly series survived persistence with a stock-only catalog,
+  retaining their `macro:market` identity. Existing units and periods were preserved.
+- After the normal shared-world projection completed, the native production read
+  exposed all three monthly prints. Its 7.76-second capture reported nine available
+  macro facts and five included by the existing byte budget, including the monthly
+  production index (118.7, original unit `2020＝100`, period `2026-08`). Remaining
+  facts stayed in the captured inventory for directed reads; no production graph
+  rows or source-change events were inserted by the verification script.
+- The final full suite passed 1,843 Python tests, 54 frontend tests, syntax checks
+  and the web smoke checks. One preceding smoke run exceeded the 60-second
+  `/api/ontology/audit` request allowance; complete reruns passed with the test-only
+  `SMOKE_REQUEST_TIMEOUT_MS=120000`. No production timeout was changed. Desktop
+  and 390-pixel mobile browser checks also passed, including escaping and overflow.
+
+These checks establish data and memory continuity. They are not a paired
+production latency benchmark, a forecast-accuracy study or a return measurement.
 
 Questions explicitly select an allowed capability. Future price/order-flow
 checks remain observations and wait for the existing collectors; they do not
@@ -361,7 +456,7 @@ Observation, repair and independent review prompts default to **256 KiB of UTF-8
 text**. Set `aiObservationPromptMaxBytes` or `AI_OBSERVATION_PROMPT_MAX_BYTES` to
 override this operational limit (64–512 KiB). It is a byte budget, not the model's
 token context window. Current evidence and the delivered comparison baseline are
-preserved intact, together with due case memory. Optional prior analyses (64 KiB)
+preserved intact, together with mandatory continuity and due case memory. Optional prior analyses (64 KiB)
 and research memory (48 KiB, including the space already used by due cases) are admitted
 as whole records in recency order, subject to the total budget. Due cases may
 exceed the research allowance but must still fit the total budget. Oversized optional

@@ -14,6 +14,15 @@ let brainDirty = false;
 let brainCases = [];
 const brainLabels = {open:"질문 등록",waiting:"자료·조사 대기","review-needed":"조사 결과 재검토",blocked:"추가 자료·기능 필요",answered:"AI 답변 기록",dismissed:"검토 종료",proposed:"개선 제안",planned:"개선 계획",implemented:"반영 신고 · 효과 미검증"};
 const categoryLabels = {analysis:"분석 품질",data:"데이터",experience:"이용 경험",operations:"운영"};
+function continuityView(result) {
+  const coverage = result.memoryCoverage;
+  const macro = (result.input?.facts || []).filter((row) => row.evidenceCategory === "macro");
+  const intents = result.researchRequest ? [{researchRequest:result.researchRequest}] : (result.workQuestions || []);
+  const searches = intents.filter((row) => row.researchRequest?.queryTerms?.length).map(({question,researchRequest:intent}) => `<p>${question ? `${escape(question)}<br>` : ""}질문별 검색어 · ${intent.queryTerms.map(escape).join(" / ")}<br><small>출처 · ${(intent.sourceTypes || []).map(escape).join(" / ")} · 자료 기간 ${escape(intent.maxAgeMinutes)}분 이내</small></p>`).join("");
+  const memory = coverage?.continuityVersion ? `<p>기본 기억 · 이전 판단 ${escape(coverage.requiredAnalyses || 0)}건 · 과제·조사·피드백 ${escape(coverage.requiredResearch || 0)}건<br><small>과거 해석과 작업 상태이며 현재 시장 사실과 구분합니다.</small></p>` : "";
+  const context = macro.length ? `<p>거시 근거 ${escape(macro.length)}개 · ${macro.map((row) => escape(row.label || row.seriesId || row.kind)).join(" / ")}</p>` : "";
+  return memory || searches || context ? `<details class="continuity"><summary>판단에 연결한 기억·거시 자료·검색 조건</summary>${memory}${context}${searches}</details>` : "";
+}
 function retrievalView(retrieval) {
   if (!retrieval) return "";
   const states = {ready:"조회 완료",deferred:"자료 부족으로 보류","round-limit":"이번 조회 한도 도달","repeated-read":"중복 조회로 중단","context-budget":"입력 용량 한도로 보류","budget-fallback":"호출 여유 부족 · 기본 근거로 관찰","invalid-request":"조회 요청 오류"};
@@ -58,6 +67,7 @@ function card(task, scheduling = {}) {
   ${quote ? `<p>근거 시점 가격 <strong>${escape(Number(quote.currentPrice).toLocaleString("ko-KR"))} ${escape(quote.currency)}</strong>${quote.changeRate != null ? ` · 등락 ${escape(quote.changeRate)}%` : ""}<br><small>시세 기준 ${escape(date(quote.sourceAsOf || quote.asOf || quote.updatedAt))}</small></p>` : ""}
   <div class="analysis">${section("가능한 설명 · 가설",r.hypothesis)}${section("이전 알림과 비교",r.comparison)}${section("내 보유·관심 상황에서의 의미",r.portfolioImpact)}${section("반대 근거와 한계",r.counterEvidence)}${section("다음에 확인할 질문",(r.questions || []).join(" / "))}</div>
   ${retrievalView(r.input?.retrieval || r.failure?.retrieval)}
+  ${continuityView(r)}
   ${r.followUpConditions?.length ? `<details><summary>등록한 확인 조건 ${r.followUpConditions.length}개</summary>${r.followUpConditions.map((row) => `<p>${escape(row.description)}<br><small>${escape(date(row.expiresAt))}까지 다음 관찰에서 확인</small></p>`).join("")}</details>` : ""}
   ${r.followUpEvaluations?.length ? `<details><summary>이전 설명의 확인 결과</summary>${r.followUpEvaluations.map((row) => `<p>${escape(row.description)} · ${escape(followUpLabels[row.status] || row.status)}<br><small>${escape(row.reason)}</small></p>`).join("")}</details>` : ""}
   ${r.publication?.receipt ? `<details><summary>실제 발송 원문 · ${escape(date(r.publication.receipt.deliveredAt))}</summary><pre>${escape(r.publication.receipt.body || "원문 보존 기간이 지나 본문을 표시할 수 없습니다.")}</pre></details>` : ""}

@@ -13,6 +13,7 @@ from digital_twin.modules.model_registry.domain.hypothesis_lifecycle import (
     HypothesisLifecycleSnapshot,
     lifecycle_snapshots_from_relation_context,
     record_for_snapshot,
+    record_for_absent_snapshot,
     relation_lifecycle_transition_contract,
     stable_fingerprint,
 )
@@ -257,6 +258,109 @@ def account_snapshot(generation="generation-1", targets=None, aligned=True, symb
 
 
 class HypothesisLifecycleTests(unittest.TestCase):
+    def test_unknown_evidence_count_changes_never_strengthen_or_weaken(self):
+        previous = None
+        for index, count in enumerate([1, 4, 1, 4, 1]):
+            context = relation_context("generation-" + str(index), support=["unknown:%s:%s" % (index, n) for n in range(count)])
+            snapshot = lifecycle_snapshots_from_relation_context(context)[0]
+            previous, transition = record_for_snapshot(previous, snapshot)
+            self.assertNotIn(previous.state, {"strengthened", "weakened"})
+            if index:
+                self.assertFalse(previous.material_change)
+        # Previously queued v4 count-only transitions are rechecked as well.
+        contract = relation_lifecycle_transition_contract({"transitions": [{
+            "transitionId": "legacy:count-change", "currentState": "strengthened", "materialChange": True,
+            "evidenceDelta": {"addedSupportingEvidenceKeys": ["support:unresolved-slot:rule:2"]},
+        }]})
+        self.assertFalse(contract["material"])
+
+    def test_source_assertions_resolve_across_freshness_and_id_rotation(self):
+        previous = None
+        support_keys = None
+        for index, stale in enumerate([False, True, False, True]):
+            identity = "assertion:" + str(index)
+            context = relation_context("generation-" + str(index), support=[identity])
+            trace = context["graphStoreInference"]["traces"][0]
+            trace.update(evidenceUsableForJudgement=not stale, freshnessStatus="stale" if stale else "fresh")
+            trace["matchedConditions"] = [{"conditionId": "trend-below-ma20", "relationId": identity,
+                "relationType": "HAS_MODEL_SIGNAL", "observedValue": {"strengthBand": "strong"},
+                "judgementEvidenceUsable": not stale}]
+            if stale:
+                context["hypothesisSet"]["hypotheses"][0]["supportingEvidenceIds"] = ["relation-evidence:" + str(n) for n in range(3)]
+                context["graphStoreInference"]["traces"].append({
+                    "ruleId": "unrelated-account-policy", "evidenceRelationIds": [identity],
+                    "matchedConditions": [{"conditionId": "unrelated-condition", "relationId": identity}],
+                })
+            snapshot = lifecycle_snapshots_from_relation_context(context)[0]
+            support_keys = support_keys or snapshot.supporting_evidence_keys
+            self.assertEqual(support_keys, snapshot.supporting_evidence_keys)
+            self.assertFalse(any("unresolved-slot" in key for key in support_keys))
+            previous, transition = record_for_snapshot(previous, snapshot)
+            if index:
+                self.assertEqual("maintained", previous.state)
+                self.assertFalse(previous.material_change)
+                contract = relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})
+                self.assertEqual("data-availability", contract["changeCategory"])
+                self.assertTrue(contract["deliverable"])
+                self.assertFalse(contract["material"])
+        # Upgrading a legacy record without availability metadata still exposes
+        # its first data issue once, without fabricating market weakening.
+        legacy = replace(previous, snapshot={**previous.snapshot, "dataAvailability": {}})
+        migrated, transition = record_for_snapshot(legacy, replace(snapshot, inference_generation_id="migration"))
+        self.assertFalse(migrated.material_change)
+        self.assertEqual("data-unavailable", transition.data_availability_change["kind"])
+        _, duplicate = record_for_snapshot(migrated, replace(snapshot, inference_generation_id="after-migration"))
+        self.assertIsNone(duplicate)
+
+    def test_new_verified_support_and_counter_evidence_remain_material(self):
+        first = relation_context()
+        first["graphStoreInference"]["relations"] = [{"id": "evidence:price", "semanticKey": "price-path"}]
+        previous, _ = record_for_snapshot(None, lifecycle_snapshots_from_relation_context(first)[0])
+        second = deepcopy(first)
+        second["inferenceGenerationId"] = "generation-2"
+        second["hypothesisSet"]["hypotheses"][0]["supportingEvidenceIds"].append("evidence:filing")
+        second["graphStoreInference"]["relations"].append({"id": "evidence:filing", "semanticKey": "verified-document-revision-1"})
+        strengthened, _ = record_for_snapshot(previous, lifecycle_snapshots_from_relation_context(second)[0])
+        self.assertEqual("strengthened", strengthened.state)
+        third = deepcopy(second)
+        third["inferenceGenerationId"] = "generation-3"
+        third["hypothesisSet"]["hypotheses"][0]["counterEvidenceIds"] = ["evidence:counter"]
+        third["graphStoreInference"]["relations"].append({"id": "evidence:counter", "semanticKey": "verified-counter-document"})
+        weakened, transition = record_for_snapshot(strengthened, lifecycle_snapshots_from_relation_context(third)[0])
+        self.assertEqual("weakened", weakened.state)
+        self.assertTrue(transition.material_change)
+        # Counter assertions are resolved through their own opposing rule,
+        # which is distinct from the hypothesis's supporting rule set.
+        native_counter = deepcopy(second)
+        native_counter["inferenceGenerationId"] = "native-counter-generation"
+        native_counter["hypothesisSet"]["hypotheses"][0].update(
+            counterEvidenceIds=["assertion:counter"], counterRuleIds=["opposing-rule"])
+        native_counter["graphStoreInference"]["traces"].append({
+            "ruleId": "opposing-rule", "evidenceRelationIds": ["assertion:counter"],
+            "matchedConditions": [{"conditionId": "verified-counter", "relationId": "assertion:counter", "relationType": "HAS_MODEL_SIGNAL"}],
+        })
+        weakened, transition = record_for_snapshot(strengthened, lifecycle_snapshots_from_relation_context(native_counter)[0])
+        self.assertEqual("weakened", weakened.state)
+        self.assertTrue(transition.material_change)
+        self.assertEqual("opposing-rule", transition.evidence_changes[0]["evidence"]["ruleId"])
+
+    def test_unavailable_data_preserves_hypothesis_and_real_disappearance_invalidates(self):
+        snapshot = lifecycle_snapshots_from_relation_context(relation_context())[0]
+        previous, _ = record_for_snapshot(None, snapshot)
+        unavailable, transition = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z", "시세 원천 자료 미확인")
+        self.assertEqual("maintained", unavailable.state)
+        contract = relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})
+        self.assertEqual("data-unavailable", contract["changeKind"])
+        self.assertFalse(contract["material"])
+        same, duplicate = record_for_absent_snapshot(unavailable, "2026-07-23T00:02:00Z", "시세 원천 자료 미확인")
+        self.assertIsNone(duplicate)
+        restored, transition = record_for_snapshot(same, replace(snapshot, inference_generation_id="generation-2"))
+        self.assertEqual("maintained", restored.state)
+        self.assertEqual("data-restored", relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})["changeKind"])
+        invalidated, transition = record_for_absent_snapshot(restored, "2026-07-23T00:03:00Z")
+        self.assertEqual("invalidated", invalidated.state)
+        self.assertTrue(relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})["material"])
+
     def test_rulebox_resolves_formation_policy_for_bootstrap_rules(self):
         rule = GraphInferenceRule(
             rule_id="rule.lifecycle.test.v1",

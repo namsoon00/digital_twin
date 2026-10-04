@@ -50,6 +50,35 @@ class MemoryQuoteCache:
 
 
 class ExternalApiSourceTests(unittest.TestCase):
+    def test_closed_quote_uses_source_clock_not_polling_or_queue_delay(self):
+        position = normalize_position({
+            "symbol": "TEST", "market": "US", "currency": "USD", "currentPrice": 100,
+            "dataQuality": "actual", "quoteSource": "Fixture",
+            "sourceAsOf": "2026-10-02T23:48:24Z", "sourceFetchedAt": "2026-10-04T02:58:40Z",
+            "freshnessStatus": "last-close", "freshnessReason": "장 마감 기준값",
+        })
+        first = position_observation_profiles(position, {"asOf": "2026-10-04T03:00:00Z"})["quote"]
+        delayed = position_observation_profiles(position, {"asOf": "2026-10-04T03:20:00Z"})["quote"]
+        for profile in [first, delayed]:
+            self.assertTrue(profile["judgementEvidenceUsable"])
+            self.assertEqual("last-close", profile["freshnessReferenceState"])
+            self.assertEqual("sourceAsOf", profile["freshnessClockBasis"])
+        self.assertEqual("recent", first["collectionStatus"])
+        self.assertEqual("delayed", delayed["collectionStatus"])
+        # A successful fetch cannot revive an expired or future source quote.
+        for source in ["2026-09-25T23:48:24Z", "2026-10-05T23:48:24Z", "invalid"]:
+            position.source_as_of = source
+            position.source_fetched_at = "2026-10-04T03:19:00Z"
+            profile = position_observation_profiles(position, {"asOf": "2026-10-04T03:20:00Z"})["quote"]
+            self.assertFalse(profile["judgementEvidenceUsable"])
+
+    def test_closed_flow_cannot_borrow_reference_quote_eligibility(self):
+        from digital_twin.modules.reasoning.domain.ontology_observation_quality import observation_profile
+        profile = observation_profile({"status": "last-close", "sourceAsOf": "2026-10-02T23:48:24Z",
+            "sourceFetchedAt": "2026-10-04T03:19:00Z", "maxAgeMinutes": 10},
+            {"status": "closed"}, "flow", "US", datetime(2026, 10, 4, 3, 20, tzinfo=timezone.utc))
+        self.assertFalse(profile["judgementEvidenceUsable"])
+
     def test_fred_uses_dedicated_timeout_on_default_transport(self):
         settings = {
             "externalAlphaEnabled": "0",

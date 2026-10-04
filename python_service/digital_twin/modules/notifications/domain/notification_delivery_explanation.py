@@ -388,6 +388,16 @@ def _context_observation_cause(context: Mapping[str, object]) -> CustomerDeliver
         if not transitions:
             return None
         transition = transitions[0]
+        if transition.get("changeCategory") == "data-availability":
+            change = _mapping(transition.get("dataAvailabilityChange"))
+            return _cause(
+                "verified-data-availability-transition", "readiness-transition",
+                change.get("summary") or "자료의 사용 가능 상태가 바뀌었습니다.",
+                label="자료 상태 변화", previous_value=change.get("previousState"),
+                current_value=change.get("currentState"), observed_at=transition.get("occurredAt"),
+                source_references=[row["transitionId"] for row in transitions],
+                basis="typedb-hypothesis-data-availability",
+            )
         return _cause(
             "verified-rulebox-relation-transition", "relation-transition",
             (transition.get("previousStateLabel") or "이전 상태 미기록") + " → " + str(transition.get("currentStateLabel") or "변경"),

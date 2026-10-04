@@ -48,16 +48,17 @@ def relation_change_authority(context):
     if not generation or len(generations) != 1 or len(aboxes) > 1 or relation.get("generationAligned") is False:
         return []
     for item in rows(lifecycle.get("transitions")):
-        if (item.get("currentState") or item.get("current_state")) not in {"observed", "strengthened", "weakened", "invalidated", "expired"}:
+        if (item.get("currentState") or item.get("current_state")) not in {"observed", "strengthened", "weakened", "invalidated", "expired"} and not item.get("dataAvailabilityChange"):
             continue
         if generation and item.get("inferenceGenerationId") and generation != item["inferenceGenerationId"]:
             continue
         contract = relation_lifecycle_transition_contract({"hypothesisLifecycle": {"transitions": [item]}})
-        if not contract.get("material"):
+        if not (contract.get("material") or contract.get("deliverable")):
             continue
         transition = {key: deepcopy(contract.get(key)) for key in (
             "transitionId", "lifecycleKey", "changeKind", "changeLabel", "previousState", "currentState",
             "previousStateLabel", "currentStateLabel", "occurredAt", "reason", "evidenceDelta",
+            "changeCategory", "dataAvailabilityChange", "evidenceChanges",
         )}
         snapshot = mapping(mapping(item.get("record")).get("snapshot"))
         # Bind each change to its own hypothesis; never attach one lifecycle
@@ -172,16 +173,26 @@ def relation_change_snapshot(context):
         "investorFlowObservedFields": strings(facts.get("investorFlowObservedFields")),
         "investorFlowParticipantStatus": deepcopy(mapping(facts.get("investorFlowParticipantStatus"))),
         "transitions": relation_change_authority(context),
+        "dataAvailability": {row.get("lifecycleKey"): deepcopy(mapping(row.get("dataAvailability")))
+                             for row in rows(mapping(relation.get("hypothesisLifecycle")).get("records")) if row.get("lifecycleKey")},
+        "evidenceComparisonPartial": any(mapping(row.get("evidenceComparison")).get("status") == "partial"
+                                         for row in rows(mapping(relation.get("hypothesisLifecycle")).get("records"))),
     }
 
 
-def relation_change_evidence(context, baseline=None):
+def relation_change_evidence(context, baseline=None, *, require_recovery_receipt=True):
     current = relation_change_snapshot(context)
     previous = deepcopy(mapping(baseline))
     if previous.get("symbol") != current["symbol"]:
         previous = {}
     previous_ids = {row.get("transitionId") for row in rows(previous.get("transitions"))}
     transitions = [row for row in current["transitions"] if row["transitionId"] not in previous_ids]
+    transitions = [row for row in transitions if row.get("changeCategory") != "data-availability"
+                   or mapping(mapping(previous.get("dataAvailability")).get(row.get("lifecycleKey"))).get("state")
+                   != mapping(row.get("dataAvailabilityChange")).get("currentState")]
+    if require_recovery_receipt:
+        transitions = [row for row in transitions if row.get("changeKind") != "data-restored"
+                       or mapping(mapping(previous.get("dataAvailability")).get(row.get("lifecycleKey"))).get("state") == "unavailable"]
     changes = {}
     for kind in ("hypotheses", "rules", "facts"):
         before = {row["id"]: row for row in rows(previous.get(kind))}

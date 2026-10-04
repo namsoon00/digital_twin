@@ -942,7 +942,7 @@ def typedb_observation_telegram_message(
         role="typedb-observation",
         headline=headline,
         target=target,
-        role_label="가설과 규칙, 실제 측정값을 함께 확인하는 관계 변화 알림입니다." if relation_sections else "관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
+        role_label="판단에 필요한 자료의 사용 가능 상태를 안내합니다." if kind.key == "data-status" else "가설과 규칙, 실제 측정값을 함께 확인하는 관계 변화 알림입니다." if relation_sections else "관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
         lead=lead,
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))

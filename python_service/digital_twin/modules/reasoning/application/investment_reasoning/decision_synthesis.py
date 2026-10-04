@@ -197,7 +197,7 @@ class V2GraphDecisionCandidateBuilder:
         )
         if not severity and first_holding_review:
             severity = "WATCH"
-        if not severity and lifecycle_transition.get("material"):
+        if not severity and (lifecycle_transition.get("material") or lifecycle_transition.get("deliverable")):
             severity = "WATCH"
         if not severity and source_trigger.get("material"):
             severity = "WATCH"

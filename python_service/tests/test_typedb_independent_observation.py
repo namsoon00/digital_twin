@@ -12,7 +12,7 @@ from test_investment_insight_dispatch_service import (
 from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
 from digital_twin.modules.decisions.domain.investment_reasoning import PUBLISH_TYPEDB, ARCHIVE
 from digital_twin.modules.notifications.domain.typedb_publication import independent_typedb_publication
-from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract, context_observation_delivery_decision
 from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
 from digital_twin.modules.notifications.application.typedb_observation_message import typedb_observation_telegram_message
 from digital_twin.modules.read_models.contracts import customer_investment_document_from_dict, customer_investment_document_quality
@@ -20,7 +20,7 @@ from digital_twin.infrastructure.transactions.ai_control_publication import AICo
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 
 
-def independent_fixture(queue=None, material=True, account_id="main"):
+def independent_fixture(queue=None, material=True, account_id="main", data_change=False):
     case = subject_case("subject:independent", action_authority="originate", eligible=("hypothesis:fixture",), outcome="READY")
     case.account_id = account_id
     case.synthesis = replace(case.synthesis, account_id=account_id)
@@ -32,6 +32,14 @@ def independent_fixture(queue=None, material=True, account_id="main"):
         row["knowledgeBasis"] = dict(basis)
     if not material:
         relation["hypothesisLifecycle"] = {}
+    if data_change:
+        restored = data_change == "restored"
+        relation["hypothesisLifecycle"]["transitions"][0].update(
+            currentState="maintained", previousState="maintained", materialChange=False,
+            dataAvailabilityChange={"kind": "data-restored" if restored else "data-unavailable",
+                                    "previousState": "unavailable" if restored else "usable",
+                                    "currentState": "usable" if restored else "unavailable",
+                                    "summary": "판단에 필요한 자료를 다시 확인해야 합니다.", "reasons": ["체결 자료의 유효기간이 지났습니다."]})
     context["requiresAiJudgement"] = True
     queue = queue if queue is not None else FakeNotificationQueue()
     handoff = FakeAIHandoff()
@@ -92,6 +100,64 @@ def readable_fixture():
 
 
 class IndependentTypeDBTests(unittest.TestCase):
+    def test_data_issue_publishes_as_data_status_without_false_hypothesis_change(self):
+        result, queue, handoff, case = independent_fixture(data_change=True)
+        self.assertEqual(1, result["typedbPublishedCount"])
+        self.assertEqual([], handoff.events)
+        job = next(iter(queue.jobs.values()))
+        self.assertTrue(independent_typedb_publication(job.context))
+        # The production receipt/cadence check freezes this before rendering.
+        job.context["relationChangeEvidence"] = relation_change_evidence(job.context)
+        text = typedb_observation_telegram_message(job.context)
+        self.assertIn("자료 상태", text)
+        self.assertIn("체결 자료의 유효기간", text)
+        self.assertNotIn("근거가 이전 분석보다", text)
+        self.assertIn("이번 알림이 온 이유", text)
+
+    def test_data_restoration_requires_a_delivered_unavailability_baseline(self):
+        result, queue, handoff, _ = independent_fixture(data_change="restored")
+        self.assertEqual(1, result["typedbPublishedCount"])
+        self.assertEqual([], handoff.events)
+        queued = next(iter(queue.jobs.values())).context
+        # Source-proof admission must reach the durable receipt check; a
+        # missing successful receipt still suppresses actual delivery.
+        queued["relationChangeEvidence"] = relation_change_evidence(queued, {})
+        self.assertEqual("suppress", context_observation_delivery_decision(queued)["decision"])
+        prior = deepcopy(queued["relationChangeEvidence"]["current"])
+        key = prior["transitions"][0]["lifecycleKey"]
+        prior["transitions"] = []
+        prior["dataAvailability"] = {key: {"state": "unavailable"}}
+        queued["relationChangeEvidence"] = relation_change_evidence(queued, prior)
+        self.assertEqual("send", context_observation_delivery_decision(queued)["decision"])
+        context = readable_fixture()
+        relation = context["ontologyRelationContext"]
+        transition = relation["hypothesisLifecycle"]["transitions"][0]
+        transition.update(currentState="maintained", previousState="maintained", materialChange=False,
+                          dataAvailabilityChange={"kind": "data-restored", "previousState": "unavailable", "currentState": "usable"})
+        self.assertFalse(relation_change_evidence(context)["eligible"])
+        previous = deepcopy(context["relationChangeEvidence"]["previous"])
+        previous["dataAvailability"] = {transition["lifecycleKey"]: {"state": "unavailable"}}
+        self.assertTrue(relation_change_evidence(context, previous)["eligible"])
+        previous["dataAvailability"][transition["lifecycleKey"]]["state"] = "usable"
+        self.assertFalse(relation_change_evidence(context, previous)["eligible"])
+
+    def test_cause_uses_changed_measurement_from_its_own_rule(self):
+        context = readable_fixture()
+        relation = context["ontologyRelationContext"]
+        transition = relation["hypothesisLifecycle"]["transitions"][0]
+        transition["sourceRuleIds"] = ["rule:linked"]
+        relation["graphStoreInference"]["traces"][0]["matchedConditions"].append({
+            "conditionId": "price-recovered", "field": "ma20Distance", "operator": ">", "expectedValue": 0,
+            "observedValue": .8, "matchedByTypeDB": True,
+        })
+        relation["facts"]["ma20Distance"] = .8
+        previous = context["relationChangeEvidence"]["previous"]
+        context["relationChangeEvidence"] = relation_change_evidence(context, previous)
+        text = typedb_observation_telegram_message(context)
+        self.assertIn("이번 알림이 온 이유", text)
+        self.assertIn("이전 알림 -1.25% → 이번 +0.8%", text)
+        self.assertIn("판정 기준 20일 평균 가격 대비 0% 초과", text)
+
     def test_material_graph_observation_never_calls_retired_ai_and_passes_transport_guard(self):
         result, queue, handoff, case = independent_fixture()
         self.assertEqual(1, result["typedbPublishedCount"])

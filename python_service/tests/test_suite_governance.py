@@ -256,7 +256,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # membership, cache lifetime/isolation/budgets and unchanged valuation inputs.
         # Seven memory-continuity, question-specific research and macro projection contracts.
         # Nine source-bound volume, session/DST, provider merge and readable tracking contracts.
-        self.assertLessEqual(total, 2081)
+        # Nine count-churn, canonical source-proof, data availability, source-clock,
+        # independent transport and condition-explanation incident regressions.
+        self.assertLessEqual(total, 2090)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

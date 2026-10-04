@@ -27,6 +27,10 @@ test("relation evidence keeps frozen before/after, missing baseline and escaped 
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);
   assert.match(renderRelationChangeEvidence({...packet, baselineAvailable: false}), /이전 발송의 상세 근거가 보존되지/);
+  const availability = renderRelationChangeEvidence({...packet, transitions: [{changeCategory: "data-availability",
+    currentStateLabel: "근거 유지", dataAvailabilityChange: {summary: "자료 복구", reasons: ["<script>source</script>"]}}]});
+  assert.match(availability, /자료 상태 · 자료 복구/);
+  assert.doesNotMatch(availability, /→ 근거 유지|<script>/);
 });
 
 test("relation detail explains model proof and source coverage without losing observed zero", async () => {
@@ -51,6 +55,7 @@ test("relation detail explains model proof and source coverage without losing ob
   for (const value of ["가설에 연결된 기간별 측정값", "source:frozen", "153.09", "156.72", "등락률 변화(%p): -7.2", "기간 자료 충분 여부: false"]) assert.ok(html.includes(value), value);
   const { renderNotificationCustomerDocument } = await import("../../public/modules/notifications/customer-document.mjs");
   const compact = renderNotificationCustomerDocument({customerInvestmentDocument: {role: "typedb-observation", lead: "현재가와 보유 손익을 함께 설명합니다.", sections: [
+    {key: "delivery-cause", title: "이번 알림이 온 이유", rows: ["조건 변화", "자료 기준 시각", "비교 불가: <script>source</script>"]},
     {key: "current-price", title: "시세", rows: ["11000원"]},
     {key: "holding", title: "내 보유 상황", rows: ["평균 매입가 10000원 · 평가 수익률 +10%"]},
     {key: "trading", title: "체결", rows: ["체결강도 120", "이전 90 → 이번 120", "체결 표본 5,500주"]},
@@ -61,4 +66,6 @@ test("relation detail explains model proof and source coverage without losing ob
   ]}}, true);
   for (const value of ["11000원", "회복 유지", "충격 완화", "평균 매입가 10000원", "종합해서 보면", "체결강도 120", "체결 표본 5,500주", "고정 분포 추정", "연속 확인 1/2회", "세 번째 조건 &lt;script&gt;"]) assert.ok(compact.includes(value), value);
   assert.equal((compact.match(/아직 검증 중/g) || []).length, 2);
+  assert.match(compact, /이번 알림이 온 이유/);
+  assert.match(compact, /비교 불가: &lt;script&gt;source/);
 });

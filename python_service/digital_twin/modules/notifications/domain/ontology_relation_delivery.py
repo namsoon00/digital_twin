@@ -277,6 +277,8 @@ def relation_delivery_components(
             "previousState": _normalized(lifecycle_transition.get("previousState")),
             "currentState": _normalized(lifecycle_transition.get("currentState")),
             "material": bool(lifecycle_transition.get("material")),
+            "deliverable": bool(lifecycle_transition.get("deliverable")),
+            "changeCategory": _text(lifecycle_transition.get("changeCategory")),
             "evidenceDelta": _mapping(lifecycle_transition.get("evidenceDelta")),
         }
     return {
@@ -398,7 +400,7 @@ def _decision_transition(
     current_lifecycle = _mapping(current_components.get("relationLifecycleTransition"))
     previous_lifecycle = _mapping(previous_components.get("relationLifecycleTransition"))
     lifecycle_changed = bool(
-        current_lifecycle.get("material")
+        (current_lifecycle.get("material") or current_lifecycle.get("deliverable"))
         and current_lifecycle.get("transitionId")
         and current_lifecycle.get("transitionId") != previous_lifecycle.get("transitionId")
     )

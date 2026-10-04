@@ -35,6 +35,9 @@ def position_observation_profiles(
         quote["reason"] = position.freshness_reason
     if position.source_timestamp_state:
         quote["sourceTimestampState"] = position.source_timestamp_state
+    # A dated closing reference has a source-clock lifetime, independent of
+    # polling/queue latency. Reuse the governed technical reference horizon.
+    quote["referenceMaxAgeMinutes"] = int_setting(settings, "dataFreshnessTechnicalMaxAgeMinutes", 4320)
     indicator_as_of = position.indicator_as_of or position.source_as_of
     indicator_fetched_at = position.indicator_fetched_at or position.source_fetched_at
     trend = freshness_record(
@@ -159,12 +162,19 @@ def observation_profile(
     except (TypeError, ValueError):
         max_age_minutes = 1
     closed_market_reference = (
-        session_status in {"closed", "closed_exception"}
+        domain == "quote"
+        and session_status in {"closed", "closed_exception"}
         and raw_status in {"last-close", "market-closed-reference"}
         and timestamp_present
-        and fetched_age_minutes is not None
-        and fetched_age_minutes <= max_age_minutes
+        and parse_datetime(source_as_of) is not None
     )
+    source_time = parse_datetime(source_as_of)
+    current_time = checked_at or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    source_age = (current_time - source_time).total_seconds() / 60 if source_time else None
+    reference_max_age = max(1, int((record or {}).get("referenceMaxAgeMinutes") or 4320))
+    closed_market_reference = closed_market_reference and source_age is not None and 0 <= source_age <= reference_max_age
     status = "fresh" if closed_market_reference else raw_status
     explicit_evidence_usable = (record or {}).get("judgementEvidenceUsable")
     evidence_usable = status == "fresh" and timestamp_present and explicit_evidence_usable is not False
@@ -175,7 +185,7 @@ def observation_profile(
     elif explicit_evidence_usable is False:
         gate_reason = str((record or {}).get("reason") or "현재 관측 품질 기준을 통과하지 못해 투자 판단 근거로 사용하지 않습니다.")
     elif closed_market_reference:
-        gate_reason = "최근 조회한 장 마감 기준값으로 판단에 사용하며 실시간 체결 신호로 보지 않습니다."
+        gate_reason = "원천 시각 기준 유효기간 안의 장 마감 기준값입니다. 실시간 체결 신호로 보지 않습니다."
     elif session_status != "open":
         gate_reason = "장 시간은 참고 정보이며 원천 시각과 신선도 기준을 통과한 근거는 판단에 사용합니다."
     else:
@@ -185,10 +195,13 @@ def observation_profile(
         "freshnessRequired": True,
         "freshnessStatus": status,
         "freshnessReferenceState": "last-close" if closed_market_reference else "",
+        "freshnessClockBasis": "sourceAsOf",
+        "collectionStatus": "missing" if fetched_age_minutes is None else "recent" if fetched_age_minutes <= max_age_minutes else "delayed",
+        "referenceMaxAgeMinutes": reference_max_age if closed_market_reference else None,
         "freshnessReason": str((record or {}).get("reason") or ""),
         "freshnessGateReason": gate_reason,
         "freshnessAgeMinutes": (record or {}).get("ageMinutes"),
-        "maxAgeMinutes": (record or {}).get("maxAgeMinutes"),
+        "maxAgeMinutes": reference_max_age if closed_market_reference else (record or {}).get("maxAgeMinutes"),
         "observationSource": str((record or {}).get("source") or ""),
         "sourceAsOf": source_as_of,
         "sourceFetchedAt": source_fetched_at,

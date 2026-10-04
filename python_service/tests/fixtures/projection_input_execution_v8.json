@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "source-clock-closing-reference-v1",
+  "contractVersion": "projection-input-execution-v8",
+  "reason": "Quote reference eligibility uses bounded original source time, independent of fetch and queue age; exposes collection state separately. Restoring only ontology_observation_quality reproduces all nine v7 scenarios. test_external_api_sources verifies expired/future/missing source clocks and excludes flow from closing quote eligibility. No RuleBox ownership or market thresholds changed.",
+  "scenarios": {
+    "full": "98aaf575a905f5f8997385326240088464fc1852392f1d4f4fc881bb6cf72bf6",
+    "target": "8aa88fb7edbf57e1c2f0b8c328cdf8ac3e3870d398666bb310dac823ff2ddf0e",
+    "source-facts": "b77d48aba12eef55f1c07a90344e2738d2a196befcd9c7c8679df29004debd54",
+    "live-context": "63a721c2512922b2c23df911c84eee27a6cdb9d98dd5cefc03a3928c0b3121f0",
+    "memory-hit": "07e4e3178868ea8d2c7b8aef081dba916d9df8b589c8a0e3bb88b26619bfccb6",
+    "persistent-hit": "24eea015047be22ddc4d60f89078c97db630dcb7e05a517b058d7ef0d802be01",
+    "cache-errors": "c1555677224f15fa1c125e9dfce220c2d347c53a0f65e1dd0fea2a670402873d",
+    "scoring-failure": "a246783a32f5a454de1e3af507ce92cb201a11d8ce44d78d0e2e846c75846eee",
+    "world-identity": "60ed03122d372486c5d9b01081fb908b00f896278393f5b88c302ea5c4b1173e"
+  }
+}

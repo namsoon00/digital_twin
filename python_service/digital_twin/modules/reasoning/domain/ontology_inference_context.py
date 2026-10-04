@@ -250,7 +250,7 @@ def relation_lifecycle_context_from_inferencebox(
     symbol = str(position.symbol or "").upper().strip()
     lifecycle = dict(hypothesis_lifecycle or {})
     transition = relation_lifecycle_transition_contract(lifecycle)
-    if not symbol or not transition or not bool(transition.get("material")):
+    if not symbol or not transition or not bool(transition.get("material") or transition.get("deliverable")):
         return {}
     if str(inferencebox.get("status") or "").lower() != "ok":
         return {}
@@ -278,6 +278,7 @@ def relation_lifecycle_context_from_inferencebox(
     source_abox_snapshot_id = str(inferencebox.get("sourceAboxSnapshotId") or "")
     market_world_id = market_world(facts.get("market") or position.market or "global").world_id
     label = str(transition.get("changeLabel") or "관계 변화 확인")
+    data_state = "partial" if transition.get("changeKind") == "data-unavailable" else "sufficient"
     action_envelope = {
         "status": "NO_ELIGIBLE_THESIS",
         "preferredAction": "NO_ACTION",
@@ -286,7 +287,7 @@ def relation_lifecycle_context_from_inferencebox(
         "investmentJudgementAvailable": False,
         "judgementBlocked": False,
         "decisionDisposition": "observe",
-        "dataReadiness": {"state": "sufficient", "judgementBlocked": False},
+        "dataReadiness": {"state": data_state, "judgementBlocked": False},
     }
     decision = {
         "basis": source_name,
@@ -327,12 +328,12 @@ def relation_lifecycle_context_from_inferencebox(
         "missingData": [],
         "dominantSignals": [label],
         "reviewLevel": "check",
-        "dataState": "sufficient",
+        "dataState": data_state,
         "changeState": "changed",
         "conflictState": "context-only",
         "decisionState": {
             "reviewLevel": "check",
-            "dataState": "sufficient",
+            "dataState": data_state,
             "changeState": "changed",
             "conflictState": "context-only",
             "validationState": "lifecycle-observation",

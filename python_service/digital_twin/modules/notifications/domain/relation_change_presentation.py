@@ -8,7 +8,7 @@ from digital_twin.modules.notifications.domain.relation_observation_language imp
 from digital_twin.modules.notifications.domain.relation_observation_proof import model_evidence_paragraphs
 
 
-PRESENTATION_VERSION = "readable-relation-change-v5"
+PRESENTATION_VERSION = "readable-relation-change-v6"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -132,6 +132,9 @@ def transition_hypotheses(transition, hypotheses):
 
 
 def transition_sentence(transition, hypotheses):
+    if transition.get("changeCategory") == "data-availability":
+        change = transition.get("dataAvailabilityChange") or {}
+        return str(change.get("summary") or "자료의 사용 가능 상태가 바뀌었습니다.")
     linked = transition_hypotheses(transition, hypotheses)
     topics = unique(hypothesis_words(h)[0] for h in linked)
     topic = " · ".join(topics)
@@ -140,6 +143,44 @@ def transition_sentence(transition, hypotheses):
     if state == "observed" and transition.get("previousState") in {"invalidated", "expired"}:
         return prefix + "이전에 해제되거나 만료됐던 조건이 다시 확인됐습니다."
     return prefix + CHANGE.get(state, "연결된 근거가 달라졌습니다.")
+
+
+def delivery_cause_rows(packet, currency):
+    """Explain only the conditions attached to the admitted transition."""
+    current, previous = packet.get("current") or {}, packet.get("previous") or {}
+    facts, before = snapshot_facts(current), snapshot_facts(previous)
+    result = []
+    for transition in items(packet.get("transitions")):
+        if transition.get("changeCategory") == "data-availability":
+            change = transition.get("dataAvailabilityChange") or {}
+            result.extend(change.get("reasons") or [])
+            result.append("자료의 사용 가능 여부를 안내합니다. 가설의 강화·약화로 해석하지 않습니다.")
+            continue
+        for row in items(transition.get("evidenceChanges")):
+            evidence = row.get("evidence") or {}
+            role = "반대 근거" if row.get("role") == "counter" else "지지 근거"
+            verb = "추가" if row.get("change") == "added" else "해제"
+            field = evidence.get("field")
+            if field in FIELDS and evidence.get("observedValue") is not None:
+                result.append(role + " " + verb + ": " + FIELDS[field][0] + " "
+                              + measurement(field, evidence["observedValue"], currency))
+            else:
+                result.append(role + " " + verb + ": 연결된 규칙의 조건 변화가 확인됐습니다.")
+        for rule in items(current.get("rules")):
+            if rule.get("id") not in (transition.get("sourceRuleIds") or []):
+                continue
+            for condition in items(rule.get("conditions")):
+                field, actual = condition.get("field"), condition.get("observedValue")
+                if field not in FIELDS or actual is None or isinstance(actual, (dict, list)):
+                    continue
+                if field in before and before[field] != actual:
+                    row = FIELDS[field][0] + ": 이전 알림 " + measurement(field, before[field], currency) + " → 이번 " + measurement(field, actual, currency)
+                    if condition.get("expectedValue") is not None:
+                        row += " · 판정 기준 " + condition_clause(field, str(condition.get("operator") or "="), condition["expectedValue"], currency)
+                    result.append(row)
+    if not result and packet.get("transitions"):
+        result.append("연결된 규칙의 성립 상태가 바뀌었습니다. 아래에 현재 조건과 확인값을 함께 표시합니다.")
+    return unique(result)[:6]
 
 
 def hypothesis_sections(hypotheses, rules, facts, currency, snapshot):
@@ -253,12 +294,15 @@ def readable_relation_change(packet):
         notes.append("이전 알림의 측정값이 없어 전후 비교는 미제공")
     if len(hypotheses) > 3:
         notes.append("추가 가설 " + str(len(hypotheses) - 3) + "개는 상세 근거에서 확인")
+    if current.get("evidenceComparisonPartial"):
+        notes.append("일부 근거의 의미를 연결하지 못해 전후 비교가 제한됩니다. 해당 근거의 개수는 강화·약화 판정에 사용하지 않았습니다.")
     notes.append("가설은 검증할 설명이며 매수·매도 의견이 아닙니다.")
     source = " + ".join(value.split(" /api/")[0].strip() for value in str(current.get("source") or "출처 미기록").split(" + "))
     notes.append("확인 시점·출처: " + clock(current.get("observedAt")) + " · " + source)
     notes.append("전체 근거: 가설 " + str(len(hypotheses)) + "개 · 규칙 " + str(len(rules)) + "개 · 측정 항목 " + str(len(current.get("facts") or [])) + "개")
     notes.append("다음 알림: 근거에 새로운 변화가 생기면 발송 간격을 확인해 알려드립니다.")
     return {"lead": lead, "sections": [
+        ("delivery-cause", "이번 알림이 온 이유", delivery_cause_rows(packet, currency)),
         *stories,
         ("holding", "내 보유 상황 · 시세 등락과 구분", [" · ".join(market["holding"][1])] if market["holding"][1] else []),
         ("current-price", "지금 확인한 시세와 가격 흐름", quote),

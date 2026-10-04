@@ -18,6 +18,7 @@ NOTIFICATION_KINDS = {
     item.key: item for item in (
         NotificationKind("price-change", "시세 변화", "📊"),
         NotificationKind("relation-change", "관계 변화", "🔗"),
+        NotificationKind("data-status", "자료 상태", "🗂️"),
         NotificationKind("ai-interpretation", "AI 해석", "🧠"),
         NotificationKind("investment-decision", "투자 판단", "🧭"),
         NotificationKind("news", "뉴스·공시", "📰"),
@@ -55,7 +56,7 @@ LEGACY_KINDS = {
 }
 
 DEFAULT_POLICY_TYPES = {
-    "price-change": "marketObservation", "relation-change": "investmentInsight",
+    "price-change": "marketObservation", "relation-change": "investmentInsight", "data-status": "investmentInsight",
     "ai-interpretation": "investmentInsight", "investment-decision": "investmentInsight",
     "news": "newsDigest", "account-change": "portfolioActivityObservation",
     "holdings": "portfolioHoldingsSnapshot", "calendar": "investmentCalendarReminder",
@@ -124,6 +125,10 @@ def notification_kind(message_type: str, context: Mapping = None) -> Notificatio
             return NOTIFICATION_KINDS["investment-decision"]
         if ai_authored:
             return NOTIFICATION_KINDS["ai-interpretation"]
+        packet = mapping(values.get("relationChangeEvidence"))
+        changes = packet.get("transitions") or []
+        if changes and all(mapping(row).get("changeCategory") == "data-availability" for row in changes):
+            return NOTIFICATION_KINDS["data-status"]
         rules = mapping(context_value(values, "ontologyRelationContext"))
         if not rules and not mode and requested != "relation-change":
             return NOTIFICATION_KINDS["notice"]

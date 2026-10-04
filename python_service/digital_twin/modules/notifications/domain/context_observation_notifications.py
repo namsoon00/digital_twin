@@ -83,11 +83,11 @@ def _material_review_lifecycle_transition(value: object) -> Dict[str, object]:
     relation = _relation_context(payload)
     if not transition:
         transition = relation_lifecycle_transition_contract(relation)
-    if not transition or not bool(transition.get("material")):
+    if not transition or not bool(transition.get("material") or transition.get("deliverable")):
         return {}
     current_state = _text(transition.get("currentState")).lower()
     evidence_delta = _mapping(transition.get("evidenceDelta"))
-    if current_state in {"observed", "invalidated", "expired"} or has_material_delta(evidence_delta):
+    if current_state in {"observed", "invalidated", "expired"} or has_material_delta(evidence_delta) or transition.get("changeCategory") == "data-availability":
         return transition
     return {}
 
@@ -347,7 +347,7 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
     if (
         relation.get("relationLifecycleOnly") is True
         and lifecycle_transition
-        and bool(lifecycle_transition.get("material"))
+        and bool(lifecycle_transition.get("material") or lifecycle_transition.get("deliverable"))
     ):
         subject = _mapping(relation.get("subject"))
         facts = _mapping(relation.get("facts"))
@@ -722,7 +722,10 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     lifecycle_transition = relation_lifecycle_transition_contract(relation)
     reasoning_trigger = _reasoning_delivery_trigger(payload)
     saved = _mapping(payload.get("relationChangeEvidence"))
-    relation_change = relation_change_evidence(payload, saved.get("previous"))
+    # Before enqueueing, no receipt has been loaded yet. Admit proven recovery
+    # to that check; the durable delivery gate freezes a packet (even when its
+    # previous receipt is empty) and enforces the actual delivered baseline.
+    relation_change = relation_change_evidence(payload, saved.get("previous"), require_recovery_receipt=bool(saved))
     authorization_sources = ["typedb-relation-transition"] if relation_change["eligible"] else []
 
     decision = {
@@ -762,7 +765,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         stage_observation = contract.get("decisionEligibility") == "stage-observation"
         decision.update({
             "decision": "send",
-            "reason": "룰박스 관계 변화: " + relation_change["reason"],
+            "reason": ("자료 상태 변화: " if all(row.get("changeCategory") == "data-availability" for row in relation_change["transitions"]) else "룰박스 관계 변화: ") + relation_change["reason"],
             "suppressionReason": "",
             "pushValueClass": (
                 "material-typedb-stage-observation"

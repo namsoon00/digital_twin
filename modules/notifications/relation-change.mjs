@@ -73,6 +73,11 @@ function renderRelationChangeEvidence(packet) {
           + text((source.observedFields || source.fields || []).join(", ")) + '</p>';
       }).join("") + '</details>' : "")
     + (packet.transitions || []).map(function (row) {
+      if (row.changeCategory === "data-availability") {
+        var availability = row.dataAvailabilityChange || {};
+        return '<p>자료 상태 · ' + text(availability.summary || row.changeLabel)
+          + ' · ' + text((availability.reasons || []).join(" · ")) + '</p>';
+      }
       return '<p>' + text(row.previousStateLabel || "이전 상태 미기록") + " → " + text(row.currentStateLabel)
         + " · " + text(row.reason) + '</p>';
     }).join("")

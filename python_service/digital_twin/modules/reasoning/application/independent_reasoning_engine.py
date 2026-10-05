@@ -3385,7 +3385,7 @@ class IndependentReasoningJobRunner:
             }
         return dict(self._last_failure_recovery)
 
-    def watch(self) -> None:
+    def watch(self, should_retire=None) -> None:
         interval = _int_setting(self.settings, "reasoningEngineV2IntervalSeconds", 5, 1, 300)
         descriptor = self.engine.descriptor()
         liveness_stop = threading.Event()
@@ -3399,6 +3399,10 @@ class IndependentReasoningJobRunner:
         try:
             while True:
                 result = self.run_watch_turn()
+                # The turn has settled durable claims and released its graph
+                # writer guard. Never retire midway through a publication.
+                if callable(should_retire) and should_retire():
+                    return
                 if result.get("status") == "inactive-control-binding":
                     return
                 if result.get("status") == "idle":

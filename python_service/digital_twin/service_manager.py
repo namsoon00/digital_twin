@@ -1085,6 +1085,9 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     for name, spec in list(workers.items()):
         environment = dict(spec.get("env") or {})
         environment.update(local_ai_environment)
+        if (name in {"reasoning-engine-delivery", "reasoning-engine-shadow", "notifications"}
+                and (configured_supervisor_available() or supervisor_running())):
+            environment["ORBIT_MANAGED_WORKER_LIFETIME"] = "1"
         spec = {**dict(spec), "env": environment}
         if name in {"mysql", "web", "cloudflare-share"}:
             workers[name] = spec

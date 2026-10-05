@@ -686,8 +686,11 @@ class HistoricalReplayScheduler:
 
 
 class NotificationQueueScheduler:
-    def __init__(self, runner, interval_seconds: int, error_reporter=None):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None, lifetime=None):
+        from .worker_lifetime import managed_worker_lifetime
+
         self.runner = runner
+        self.lifetime = lifetime if lifetime is not None else managed_worker_lifetime()
         self.interval_seconds = max(5, int(interval_seconds or 30))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
@@ -711,6 +714,8 @@ class NotificationQueueScheduler:
             except Exception as error:  # noqa: BLE001 - worker must continue after a cycle failure.
                 print("Python notification worker error: " + str(error))
                 report_runtime_error(self.error_reporter, "Python notification worker", error, "notification delivery")
+            if self.lifetime is not None and self.lifetime.should_retire():
+                return
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 

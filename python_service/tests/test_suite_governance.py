@@ -260,7 +260,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # independent transport and condition-explanation incident regressions.
         # Twelve operational regressions cover incident direction/hysteresis,
         # safe diagnostic retention, isolated cycle reaping/checkpoints and bounded reads.
-        self.assertLessEqual(total, 2102)
+        # Thirteen worker-lifetime regressions cover swap-aware measurement,
+        # garbage reclamation, unavailable probes, supervisor ownership,
+        # settled writer/receipt boundaries and bounded event/error retention.
+        self.assertLessEqual(total, 2115)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

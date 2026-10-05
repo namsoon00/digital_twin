@@ -27,6 +27,33 @@ TypeDB materialized ontology. It is a storage policy, not an investment rule.
 Retention never removes active snapshots, pending or processing jobs, current
 world manifests, current InferenceBox output, credentials, or delivery state.
 
+## Managed Worker Memory
+
+Managed delivery/candidate reasoning and notification processes also bound
+their lifetime to reduce disk pressure from swapped-out worker memory. At a
+completed turn, they sample current memory at most once per minute (macOS
+physical footprint; Linux RSS plus swap). At 2 GiB they first collect unreachable
+Python objects, then exit cleanly if pressure remains. A one-hour lifetime is
+the fallback even when memory cannot be measured. The existing supervisor
+starts a fresh process from durable queues. Graph writes and notification
+receipt handling finish before retirement; this is a cooperative boundary, not
+a hard cap on a single running transaction or batch. No database is rotated or
+recreated by this policy. Manual watches are unaffected.
+
+The supervisor enables `ORBIT_MANAGED_WORKER_LIFETIME=1` for these workers.
+`ORBIT_WORKER_MAX_MEMORY_MB` and `ORBIT_WORKER_MAX_AGE_SECONDS` can override
+positive defaults in the managed environment. `worker-lifetime` log records
+contain the reason, age, memory before/after collection and retirement action.
+Routine planned PID replacements must be distinguished from crashes in uptime
+verification. Validate queue completion and receipt uniqueness across changes,
+not PID continuity alone. The guard contains accumulated native/Python memory;
+it does not establish the allocating stack responsible for a leak.
+
+The production event bus writes its history to the durable event log without
+retaining dispatched payloads in memory. Debug buses retain at most 100 events
+by default; handler failures retain only 100 bounded descriptions, with no
+traceback references to graph inputs.
+
 ## ABox Maintenance
 
 The delivery reasoning process owns physical generation cleanup when the

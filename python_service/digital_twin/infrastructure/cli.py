@@ -1266,6 +1266,9 @@ def watch_v2_reasoning_engine(
     deployment_id: str = "",
 ) -> int:
     """Keep the managed V2 process alive while its release DB is rebuilding."""
+    from .worker_lifetime import managed_worker_lifetime
+
+    lifetime = managed_worker_lifetime()
     while True:
         try:
             factory_parameters = inspect.signature(runner_factory).parameters
@@ -1311,7 +1314,14 @@ def watch_v2_reasoning_engine(
             except (RuntimeError, ValueError, OSError):
                 stack_dump_registered = False
         try:
-            runner.watch()
+            if lifetime is None:
+                runner.watch()
+            else:
+                runner.watch(should_retire=lifetime.should_retire)
+                if lifetime.retired:
+                    # Exit the process, not just the release-bound runner.
+                    # The finally block releases this identity's leases.
+                    return 0
             if str(worker_role or "configured").strip().lower() == "configured" and not deployment_id:
                 return 0
             sleep(1.0)

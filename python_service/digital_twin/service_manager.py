@@ -4819,6 +4819,7 @@ def supervise() -> int:
     try:
         if start(supervisor_async=True) != 0:
             return 1
+        last_log_maintenance_at = 0.0
         last_maintenance_at = 0.0
         last_typedb_capacity_notice = ""
         last_typedb_auto_rotation_notice = ""
@@ -4847,6 +4848,20 @@ def supervise() -> int:
                 time.sleep(1)
                 continue
             specs = worker_specs()
+            if time.monotonic() - last_log_maintenance_at >= 60:
+                from .infrastructure.operational_logs import maintain_operational_logs
+                last_log_maintenance_at = time.monotonic()
+                try:
+                    log_paths = [spec["log"] for spec in list(BASE_WORKERS.values()) + list(specs.values())]
+                    log_paths += [supervisor_log_path(), supervisor_watchdog_log_path()]
+                    log_result = maintain_operational_logs(
+                        data_dir(), log_paths,
+                        int_value(runtime_settings(fast_operational_read=True).get("operationalLogMaxSizeMb"), 512, 1) * 1024 * 1024,
+                    )
+                    if log_result.get("rotated") or log_result.get("failures"):
+                        append_log(supervisor_log_path(), "log maintenance " + json.dumps(log_result))
+                except (OSError, ValueError) as error:
+                    append_log(supervisor_log_path(), "log maintenance failed " + type(error).__name__)
             typedb_spec = specs.get("typedb")
             typedb_pid = read_pid(typedb_spec["pid"]) if typedb_spec else 0
             typedb_running = bool(

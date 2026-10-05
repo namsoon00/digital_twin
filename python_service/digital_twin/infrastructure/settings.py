@@ -62,6 +62,8 @@ TEXT_SETTING_KEYS = [
     "operationalStorageCriticalAlertReminderMinutes",
     "operationalStorageRuntimeFailureCooldownMinutes",
     "operationalStorageMaterialWorseningPercent",
+    "operationalStorageRecoveryMarginMb",
+    "operationalStorageRecoveryMarginPercent",
     "operationalStorageForecastEnabled",
     "operationalStorageForecastHorizonMinutes",
     "operationalStorageForecastThresholdMb",
@@ -1483,6 +1485,8 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "OPERATIONAL_STORAGE_RUNTIME_FAILURE_COOLDOWN_MINUTES",
             "5",
         ),
+        "operationalStorageRecoveryMarginMb": value("operationalStorageRecoveryMarginMb", "OPERATIONAL_STORAGE_RECOVERY_MARGIN_MB", "2048"),
+        "operationalStorageRecoveryMarginPercent": value("operationalStorageRecoveryMarginPercent", "OPERATIONAL_STORAGE_RECOVERY_MARGIN_PERCENT", "5"),
         "operationalStorageMaterialWorseningPercent": value(
             "operationalStorageMaterialWorseningPercent",
             "OPERATIONAL_STORAGE_MATERIAL_WORSENING_PERCENT",

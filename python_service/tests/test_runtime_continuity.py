@@ -344,3 +344,47 @@ class RuntimeContinuityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class IsolatedObserverTests(unittest.TestCase):
+    def test_cycles_use_distinct_processes_and_preserve_checkpoint(self):
+        import sys
+        from isolated_observer import run_cycle
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / 'state.json'
+            checkpoint.write_text('{"salt":"preserved","count":0}')
+            code = ('import json, pathlib; p=pathlib.Path(' + repr(str(checkpoint)) + '); '
+                    's=json.loads(p.read_text()); s["count"]+=1; p.write_text(json.dumps(s))')
+            first = run_cycle([sys.executable, '-c', code], timeout=5)
+            second = run_cycle([sys.executable, '-c', code], timeout=5)
+            self.assertNotEqual(first['pid'], second['pid'])
+            self.assertEqual(0, first['returnCode'])
+            self.assertEqual({'salt':'preserved','count':2}, json.loads(checkpoint.read_text()))
+
+    def test_timeout_reaps_child_without_changing_checkpoint(self):
+        import sys
+        from isolated_observer import run_cycle
+        result = run_cycle([sys.executable, '-c', 'import time; time.sleep(60)'], timeout=.2)
+        self.assertEqual('timeout', result['reason'])
+        self.assertNotEqual(0, result['returnCode'])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(result['pid'], 0)
+
+    def test_health_reads_do_not_advance_cursor_on_failure(self):
+        from central_ai_health_reads import collect
+        db = MagicMock()
+        db.read.side_effect = [dict(rows=[{'task_id':'next'}], truncated=True), OSError('read failed')]
+        state = dict(deploymentSince='2026-01-01', centralAiTaskCursor='previous')
+        with self.assertRaises(OSError):
+            collect(db, state)
+        self.assertEqual('previous', state['centralAiTaskCursor'])
+
+    def test_health_reads_are_explicit_samples_and_surface_truncation(self):
+        from central_ai_health_reads import collect
+        db = MagicMock()
+        db.read.side_effect = [dict(rows=[], truncated=False),
+            dict(rows=[dict(workload='author',status='completed',error_kind='',completed_at='now')], truncated=True),
+            dict(rows=[],truncated=False), dict(rows=[],truncated=False)]
+        result = collect(db, dict(deploymentSince='2026-01-01'))
+        self.assertTrue(result['notCumulativeTotals'])
+        self.assertTrue(result['coverage']['callsTruncated'])
+        self.assertEqual(1, result['calls'][0]['n'])

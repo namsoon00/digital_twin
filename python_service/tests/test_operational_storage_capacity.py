@@ -373,3 +373,95 @@ class OperationalStorageCapacityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class StorageIncidentRegressionTests(unittest.TestCase):
+    def evaluate(self, free, logs=464, previous=None):
+        from digital_twin.platform.domain.operational_storage_capacity import evaluate_operational_storage_capacity
+        return evaluate_operational_storage_capacity(
+            dict(freeMb=free,logSizeMb=logs,logLimitMb=512), previous,
+            dict(operationalStorageForecastEnabled=False),
+            datetime(2026,10,5,12,0,tzinfo=timezone.utc))
+
+    def test_more_free_space_is_not_component_growth(self):
+        first = self.evaluate(18838.8)
+        improved = self.evaluate(24044.2, 464.8, first)
+        self.assertFalse(improved['alertRequired'])
+
+    def test_disk_recovery_has_margin_and_does_not_flap(self):
+        first = self.evaluate(24000,0)
+        pending = self.evaluate(24700,0,first)
+        self.assertTrue(pending['recoveryPending'])
+        self.assertFalse(pending['alertRequired'])
+        crossed = self.evaluate(24000,0,pending)
+        self.assertFalse(crossed['alertRequired'])
+        recovered = self.evaluate(27000,0,crossed)
+        self.assertEqual('recovered',recovered['alertKind'])
+
+    def test_component_recovery_preserves_incident_severity_until_margin(self):
+        first = self.evaluate(60000,465)
+        pending = self.evaluate(60000,459,first)
+        crossed = self.evaluate(60000,465,pending)
+        self.assertFalse(crossed['alertRequired'])
+        self.assertEqual('recovered',self.evaluate(60000,430,crossed)['alertKind'])
+        self.assertEqual('state-changed',self.evaluate(60000,500,crossed)['alertKind'])
+
+
+class OperationalLogRetentionTests(unittest.TestCase):
+    def test_rotation_preserves_inode_append_writer_and_archived_content(self):
+        import gzip
+        from digital_twin.infrastructure.operational_logs import maintain_operational_logs
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'python-worker.log'
+            body = b'operational diagnostic\n' * 60000
+            path.write_bytes(body)
+            inode = path.stat().st_ino
+            with path.open('ab') as writer:
+                result = maintain_operational_logs(directory, [path], 2*1024*1024)
+                writer.write(b'next cycle\n')
+            self.assertEqual(1,result['rotated'])
+            self.assertEqual(inode,path.stat().st_ino)
+            self.assertEqual(b'next cycle\n',path.read_bytes())
+            archived = next((Path(directory)/'operational-log-archives').glob('*.gz'))
+            self.assertEqual(body,gzip.decompress(archived.read_bytes()))
+
+    def test_unowned_symlink_and_audit_files_are_untouched(self):
+        from digital_twin.infrastructure.operational_logs import maintain_operational_logs
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audit = root/'samples.jsonl'; audit.write_bytes(b'x'*1100000)
+            link = root/'worker.log'; link.symlink_to(audit)
+            result = maintain_operational_logs(root,[audit,link],1024*1024)
+            self.assertEqual(0,result['rotated'])
+            self.assertEqual(1100000,audit.stat().st_size)
+
+    def test_old_archives_are_removed_but_other_files_are_preserved(self):
+        import os
+        import time
+        from digital_twin.infrastructure.operational_logs import maintain_operational_logs
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); archive=root/'operational-log-archives'; archive.mkdir()
+            old=archive/'worker.log.1.gz'; old.write_bytes(b'old')
+            protected=archive/'audit.json'; protected.write_bytes(b'keep')
+            os.utime(old,(time.time()-8*86400,)*2)
+            maintain_operational_logs(root,[],1024*1024)
+            self.assertFalse(old.exists())
+            self.assertEqual(b'keep',protected.read_bytes())
+
+    def test_failed_archive_keeps_original_log(self):
+        from unittest.mock import patch
+        from digital_twin.infrastructure.operational_logs import maintain_operational_logs
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'worker.log'; body=b'x'*1100000; path.write_bytes(body)
+            with patch('digital_twin.infrastructure.operational_logs.gzip.GzipFile',side_effect=OSError('disk full')):
+                result=maintain_operational_logs(directory,[path],1024*1024)
+            self.assertEqual(body,path.read_bytes())
+            self.assertEqual(1,len(result['failures']))
+            self.assertFalse(list((Path(directory)/'operational-log-archives').glob('*.pending')))
+
+    def test_inventory_counts_compressed_archives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            archive=root/'operational-log-archives';archive.mkdir()
+            (archive/'worker.log.1.gz').write_bytes(b'x'*(2*1024*1024))
+            inventory=operational_storage_inventory({},data_path=root,mysql_metadata_provider=lambda _: {})
+            self.assertEqual(2,inventory['logSizeMb'])

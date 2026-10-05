@@ -292,6 +292,7 @@ def operational_storage_inventory(
     # linked to the active store and must not be added again to capacity.
     typedb_checkpoint = sum(apparent_size(path) for path in typedb_root.glob("*/checkpoint"))
     root_logs = sum(apparent_size(path) for path in root.glob("*.log"))
+    root_logs += apparent_size(root / "operational-log-archives")
     typedb_logs = apparent_size(root / "typedb-logs")
     mysql_size_mb = round(apparent_size(mysql_root) / 1024 / 1024, 1)
     mysql_metadata = dict(

@@ -272,6 +272,9 @@ def _materially_worsened(
     if not isinstance(baseline_components, Mapping):
         return False
     for component in limiting_components:
+        # Free space has the opposite direction and is already checked above.
+        if component.get("direction") != "maximum-size":
+            continue
         name = str(component.get("component") or "")
         previous_size = _number(baseline_components.get(name), -1)
         current_size = _number(component.get("currentMb"), -1)
@@ -450,11 +453,26 @@ def evaluate_operational_storage_capacity(
         or forecast_detected
     )
     previous_alert_eligible = bool(prior.get("alertEligible"))
+    # Keep an incident open across small threshold oscillations. This changes
+    # notification recovery only, never the live capacity/write-admission state.
+    recovery_margin_mb = _integer(configured.get("operationalStorageRecoveryMarginMb"), 2048, 0)
+    recovery_margin_percent = _integer(configured.get("operationalStorageRecoveryMarginPercent"), 5, 0, 20)
+    recovery_pending = previous_alert_eligible and not alert_eligible and (
+        free_mb < alert_free_mb + recovery_margin_mb
+        or any(
+            _number(values.get(limit_key)) > 0
+            and _number(values.get(size_key)) / _number(values.get(limit_key))
+            > (component_alert_percent - recovery_margin_percent) / 100.0
+            for _, size_key, limit_key in COMPONENT_SPECS
+        )
+    )
+    alert_eligible = alert_eligible or recovery_pending
     previous_state = str(prior.get("state") or "healthy").strip().lower()
     if previous_state not in STATE_ORDER:
         previous_state = "healthy"
     changed = state != previous_state
-    worsened_state = STATE_ORDER.get(state, 0) > STATE_ORDER.get(previous_state, 0)
+    escalation_baseline = str(prior.get("lastAlertState") or previous_state) if previous_alert_eligible else previous_state
+    worsened_state = STATE_ORDER.get(state, 0) > STATE_ORDER.get(escalation_baseline, 0)
     recovered = not alert_eligible and previous_alert_eligible
     reminder_minutes = _reminder_minutes(configured, state)
     last_alert = parse_datetime(prior.get("lastAlertAt"))
@@ -567,6 +585,9 @@ def evaluate_operational_storage_capacity(
         "suggestedAction": suggested_action,
         "maintenanceFailureReason": str(values.get("maintenanceFailureReason") or "")[:300],
         "alertEligible": alert_eligible,
+        "recoveryPending": bool(recovery_pending),
+        "recoveryMarginMb": recovery_margin_mb,
+        "recoveryMarginPercent": recovery_margin_percent,
         "alertRequired": bool(alert_kind) and operational_storage_capacity_enabled(configured),
         "alertKind": alert_kind,
         "alertReminderMinutes": reminder_minutes,
@@ -583,6 +604,7 @@ def evaluate_operational_storage_capacity(
         "forecastProjectedFreeMb": forecast.get("projectedFreeMb"),
     }
     if alert_kind:
+        result["lastAlertState"] = state
         result["lastAlertAt"] = observed_at
         result["lastAlertFreeMb"] = round(free_mb, 1)
         result["lastAlertComponentSizes"] = {
@@ -594,6 +616,7 @@ def evaluate_operational_storage_capacity(
             result["lastAlertForecastEtaMinutes"] = forecast.get("etaMinutes")
     else:
         for key in (
+            "lastAlertState",
             "lastAlertAt",
             "lastAlertFreeMb",
             "lastAlertComponentSizes",

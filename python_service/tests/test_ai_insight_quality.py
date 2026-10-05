@@ -17,6 +17,15 @@ import test_ai_control as control_helpers
 
 
 class InsightGroundingTests(unittest.TestCase):
+    def assert_historical_causal_guard_replays_without_changing_live_validation(self):
+        result = observation()
+        result['counterEvidence'] = '이전 동반 순매도를 현재 원인으로 연결할 수 없다.'
+        old = local_quality(result, causal_guard_version='observation-causality-v1')
+        new = local_quality(result)
+        self.assertTrue(any('원인으로 단정' in error for error in old['errors']))
+        self.assertFalse(new['errors'])
+        self.assertEqual('observation-causality-v2', new['causalGuardVersion'])
+
     def test_repair_rebudgets_memory_but_preserves_required_facts_and_parent(self):
         from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, prompt_budget
         self.assertEqual(256 * 1024, prompt_budget('invalid'))
@@ -95,12 +104,19 @@ class InsightGroundingTests(unittest.TestCase):
             ('comparison', '현재 자료로 확정적 전환으로 보지는 않습니다.'),
             ('portfolioImpact', '높은 집중도 때문에 가격 변동이 계정 전체에 크게 전달될 수 있다.'),
             ('counterEvidence', '개인 수급 부재와 장중 추정치, 마감 호가 참고값 때문에 수급 정렬의 신뢰도는 제한됩니다.'),
+            ('counterEvidence', '이전 동반 순매도를 현재 원인으로 연결할 수 없다.'),
+            ('hypothesis', '거시 원인은 특정하기 어려우며 추가 근거를 확인한다.'),
+            ('summary', '엇갈린 지표를 단일 거시 원인으로 묶기 어렵다.'),
+            ('comparison', '이전 내부 판단의 해석은 같은 원천값 때문에 유지된다.'),
+            ('comparison', '소매판매 약세 때문에 이를 내수 회복 설명으로 넓히지는 않는다.'),
         ):
             checked = copy.deepcopy(result); checked[section] = text
             self.assertFalse(insight_errors(checked, checked['input']), text)
         for text in ('현재 주가는 5·20·60일선 위이고 10% 상승했습니다.',
                      '확정적 전환으로 보지는 않습니다. 하지만 반등은 확정됐습니다.',
                      '자료 부재 때문에 가격이 하락했습니다. 신뢰도는 제한됩니다.',
+                     '기관 매도 때문에 가격이 하락했고 원인으로 연결할 수 없다는 의견도 있습니다.',
+                     '기관 매도 때문에 가격이 하락했습니다. 이전 판단은 같은 원천값 때문에 유지합니다.',
                      '상승 기울기의 5·20·60일선은 흐름을 지지합니다.'):
             checked = copy.deepcopy(result); checked['counterEvidence'] = text
             self.assertTrue(insight_errors(checked, checked['input']), text)
@@ -169,6 +185,7 @@ class InsightGroundingTests(unittest.TestCase):
             self.assertEqual(altered, restore_legacy_receipt(altered, original), mutation)
 
     def test_wrong_quantities_causes_certainty_and_missing_slope_cannot_publish(self):
+        self.assert_historical_causal_guard_replays_without_changing_live_validation()
         self.assert_readable_forms_keep_causal_guards()
         original = observation()
         for text in ("현재가는 110원입니다.", "이 종목의 포트폴리오 비중은 9.09%입니다.",

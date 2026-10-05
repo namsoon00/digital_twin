@@ -131,9 +131,15 @@ def ai_control_status(settings=None, account_id=""):
         publication = task["result"].get("publication") or {}
         publications.extend(item for item in (publication, publication.get("diagnostic") or {}) if item.get("jobId"))
     if publications:
+        import json
+        from digital_twin.modules.notifications.contracts import delivery_progress
+        from digital_twin.infrastructure.operational_common import MAX_NOTIFICATION_DELIVERY_ATTEMPTS
         with notification_job_store(configured).connect() as connection:
             ids = [publication["jobId"] for publication in publications]
-            rows = connection.execute("SELECT job_id,status,last_error FROM notification_jobs WHERE job_id IN (" + ",".join(["%s"] * len(ids)) + ")", tuple(ids)).fetchall()
+            rows = connection.execute("SELECT job_id,status,last_error,attempts,retry_at,created_at,message_type,"
+                "JSON_EXTRACT(payload_json,'$.context.deliveryRecovery') AS recovery,"
+                "JSON_EXTRACT(payload_json,'$.context.deliveryRetryAfterSeconds') AS retry_after "
+                "FROM notification_jobs WHERE job_id IN (" + ",".join(["%s"] * len(ids)) + ")", tuple(ids)).fetchall()
             receipts = connection.execute("SELECT job_id,completed_at,JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.renderedMessage')) AS body "
                 "FROM notification_delivery_attempts WHERE status='delivered' AND job_id IN (" + ",".join(["%s"] * len(ids)) + ") "
                 "ORDER BY completed_at DESC", tuple(ids)).fetchall()
@@ -143,10 +149,11 @@ def ai_control_status(settings=None, account_id=""):
             delivered.setdefault(receipt["job_id"], {"deliveredAt": receipt["completed_at"], "body": receipt["body"] or "", "source": "transport-receipt"})
         for publication in publications:
             delivery = deliveries.get(publication["jobId"], {})
-            publication["deliveryStatus"] = delivery.get("status", "unknown")
-            if publication["jobId"] in delivered:
-                publication["receipt"] = delivered[publication["jobId"]]
-            if delivery.get("last_error"):
+            delivery["context"] = {"deliveryRecovery": json.loads(delivery.get("recovery") or "null") or {},
+                                   "deliveryRetryAfterSeconds": int(json.loads(delivery.get("retry_after") or "0") or 0)}
+            publication.update(delivery_progress(delivery, delivered.get(publication["jobId"]),
+                               max_attempts=MAX_NOTIFICATION_DELIVERY_ATTEMPTS))
+            if delivery.get("last_error") and not publication.get("receipt"):
                 publication["reason"] = delivery["last_error"]
     results = [task["result"] for task in status["tasks"] if task["result"].get("summary")]
     return {"notificationRoute": "ai-control", "legacyInvestmentNotifications": "retired",

@@ -194,7 +194,7 @@ def run_background_ai_prompt(
         max(0, maximum - 1),
     )
     wait_seconds = _bounded_int(
-        configured.get("notificationAiCapacityWaitSeconds") or os.environ.get("ORBIT_LOCAL_AI_CAPACITY_WAIT_SECONDS") or 300,
+        configured.get("localAiCapacityWaitSeconds") or os.environ.get("ORBIT_LOCAL_AI_CAPACITY_WAIT_SECONDS") or 300,
         300,
         1,
         900,

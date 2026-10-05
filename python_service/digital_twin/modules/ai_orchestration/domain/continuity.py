@@ -87,9 +87,9 @@ truncatedFields가 있는 필드의 생략된 내용이나 기억에 없는 주�
 """ + citable_review_prompt(packet, draft)
 
 
-def continuous_planning_prompt(packet, history, research):
+def continuous_planning_prompt(packet, history, research, legacy_research=False):
     from .retrieval import directed_planning_prompt
-    from .research_request import RESEARCH_INSTRUCTIONS
+    from .research_request import RESEARCH_INSTRUCTIONS, LEGACY_RESEARCH_INSTRUCTIONS
     return """판단 연속성 계약:
 memoryRole=required-continuity는 이전 판단과 진행 작업의 필수 요약입니다. 현재 사실로 인용하지 마세요.
 이전 판단의 유지·수정 이유를 comparison에 쓰세요. 자료가 없으면 비교 한계를 밝히세요.
@@ -97,4 +97,4 @@ memoryRole=required-continuity는 이전 판단과 진행 작업의 필수 요�
 truncatedFields가 있으면 해당 필드는 발췌입니다. 상세 내용은 recall_memory에서 확인할 수 있습니다.
 조사 완료나 verifiedClaimCount만으로 질문이 해결되었다고 판단하지 마세요. 현재 facts에서 답을 확인하세요.
 거시 발표값은 대상 기간·단위·출처 시각을 그대로 사용하세요. 발표 일정은 발표 결과가 아닙니다.
-""" + RESEARCH_INSTRUCTIONS + directed_planning_prompt(packet, history, research)
+""" + (LEGACY_RESEARCH_INSTRUCTIONS if legacy_research else RESEARCH_INSTRUCTIONS) + directed_planning_prompt(packet, history, research)

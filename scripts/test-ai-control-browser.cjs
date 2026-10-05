@@ -114,6 +114,17 @@ const server = http.createServer((req,res) => {
    assert.match(await page.locator('article').innerText(),/검증되지 않은 AI 원문 <script>bad<\/script>/);
    assert.equal(await page.locator('article script').count(),0);
    assert.equal(await page.getByText(/실제 발송 원문 ·/).count(),0);
+   for (const [deliveryStatus, label] of [['retry-wait','전송 재시도 대기'],['failed','전송 실패'],['receipt-unconfirmed','전송 영수증 미확인']]) {
+    const publication = {jobId:'notification-fixture',status:'queued',deliveryStatus,deliveryAttempts:3,deliveryMaxAttempts:5,
+     deliveryRetryAt:deliveryStatus === 'retry-wait' ? '2026-10-05T01:00:46Z' : '',reason:'전송 상태 확인'};
+    await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,budgetEnabled:false,brain,
+     tasks:[{taskId:'retry',symbol:'TEST',status:'completed',capability:'observe',result:{...result,publication}}],callsToday:[]}}));
+    await page.locator('#refresh').click();
+    await page.getByText(new RegExp('알림: '+label)).waitFor();
+    assert.match(await page.locator('article').innerText(),/처리 시도 3\/5회/);
+    if (deliveryStatus === 'retry-wait') assert.match(await page.locator('article').innerText(),/다음 재시도/);
+    assert.equal(await page.getByText(/실제 발송 원문 ·/).count(),0);
+   }
    const failed = {failure:{kind:'retrieval-contract',retrieval:{...result.input.retrieval,status:'invalid-request'}},rawResponse:'private raw response sentinel'};
    await page.route('**/api/ai-control/status', route => route.fulfill({json:{enabled:true,budgetEnabled:false,brain,
     observationScheduling:{status:'ready'},tasks:[{taskId:'failure',symbol:'TEST',status:'failed',capability:'observe',result:failed}],callsToday:[]}}));

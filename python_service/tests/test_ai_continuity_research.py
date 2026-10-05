@@ -23,6 +23,110 @@ INTENT = {"queryTerms": ["export restrictions product scope"], "sourceTypes": ["
 
 
 class AIContinuityResearchTests(unittest.TestCase):
+    def assert_historical_filings_require_explicit_window_without_extending_news_freshness(self):
+        from digital_twin.modules.ai_orchestration.domain.research_request import executable_research_request
+        filing = {'queryTerms': ['2026 quarterly net loss'], 'sourceTypes': ['official-filing'], 'maxAgeMinutes': 259200}
+        requested = validate_research_request(filing, True)
+        self.assertEqual('observation-research-request-v2', requested['version'])
+        self.assertEqual(requested, executable_research_request(requested))
+        for invalid in (dict(filing, sourceTypes=['news']), dict(filing, sourceTypes=['news', 'official-filing']),
+                        dict(filing, maxAgeMinutes=527041)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_research_request(invalid, True)
+        old = {**INTENT, 'version': 'observation-research-request-v1'}
+        self.assertEqual(old, executable_research_request(old))
+        with self.assertRaises(ValueError):
+            executable_research_request({**requested, 'version': 'observation-research-request-v1'})
+
+    def assert_official_questions_select_different_complete_passages_after_document_prefix(self):
+        from digital_twin.infrastructure.investment_research_gateway import ExistingApiResearchGateway
+        from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget, select_question_filings
+        from digital_twin.modules.news_intelligence.contracts import select_question_passages
+        accession = '0001834584-26-000123'
+        url = 'https://www.sec.gov/Archives/edgar/data/1834584/000183458426000123/report.htm'
+        filing = {'form': '10-Q', 'accessionNumber': accession, 'filingDate': '2026-08-07',
+                  'reportDate': '2026-06-30', 'primaryDocument': 'report.htm', 'url': url}
+        loss = 'Net loss increased primarily due to a one-time legal provision in the current quarter. This provision does not describe a recurring operating expense or a change in cash receipts.'
+        demand = 'Consumer demand and spending remained uneven across the domestic market. Active customers increased, while management cautioned that these observations do not establish a forecast.'
+        raw = '<p>' + ('An unrelated document cover page. ' * 250) + '</p><p>' + loss + '</p><p>' + demand + '</p>'
+        provider = Mock()
+        provider.signals_for_positions.return_value = {'secFilings': {'CPNG': {'cik': '0001834584',
+            'latestFiling': dict(filing, form='4'), 'reportFilings': [filing]}}}
+        provider.sec_document_access_configured.return_value = True
+        provider.sec_document_text_max_chars.return_value = 6000
+        provider.guarded_call.side_effect = lambda _provider, _key, work: work()
+        provider.fetch_text.return_value = raw
+        target = NewsCollectionTarget(symbol='CPNG', name='Coupang', market='US', currency='USD')
+        gathered = []
+        for terms, expected, absent in ((['순손실 원인'], loss, demand), (['소비 수요'], demand, loss)):
+            items, statuses = ExistingApiResearchGateway(provider=provider).collect_for_target(target,
+                source_types=['official-filing'], research_tasks=[{'taskId': 'question-1', 'question': '', 'queryTerms': terms}])
+            selected = [item for item in items if ':sec-question:' in item.evidence_id]
+            self.assertEqual(1, len(selected))
+            item = selected[0]
+            self.assertEqual(url, item.url)
+            self.assertEqual('2026-08-07', item.published_at)
+            self.assertIn(expected, item.raw_payload['officialDocumentText'])
+            self.assertNotIn(absent, item.raw_payload['officialDocumentText'])
+            self.assertEqual([expected], [p['quote'] for p in item.raw_payload['documentPassages']])
+            self.assertEqual(hashlib.sha256(raw.encode()).hexdigest(), item.raw_payload['sourceDocumentHash'])
+            self.assertEqual(['question-1'], item.raw_payload['researchTaskIds'])
+            self.assertEqual('question-selected-passages', item.raw_payload['officialDocumentScope'])
+            self.assertTrue(any(s.get('status') == 'passages-collected' for s in statuses))
+            from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import verification_for_evidence
+            from datetime import datetime, timezone
+            cutoff = datetime(2026, 10, 5, tzinfo=timezone.utc)
+            item.observed_at = cutoff.isoformat()
+            fresh_claim, fresh_ok = verification_for_evidence(item, target, 10080, now=cutoff)
+            historical_claim, historical_ok = verification_for_evidence(item, target, 259200, now=cutoff)
+            self.assertFalse(fresh_ok)
+            self.assertIn('evidence-stale', fresh_claim.reasons)
+            self.assertTrue(historical_ok, historical_claim.reasons)
+            self.assertEqual('2026-08-07', historical_claim.published_at)
+            gathered.append(item.evidence_id)
+        self.assertNotEqual(*gathered)
+        paragraphs = [loss + str(i) + 'x' * 1100 for i in range(8)]
+        bounded = select_question_passages(paragraphs, [{'queryTerms': ['net loss']}], limit=2600)
+        self.assertLessEqual(len('\n\n'.join(p['quote'] for p in bounded)), 2600)
+        self.assertTrue(all(p['quote'] in paragraphs for p in bounded))
+        self.assertEqual([filing], select_question_filings([None, dict(filing, form='4'),
+            dict(filing, accessionNumber='future', filingDate='2099-01-01'),
+            dict(filing, accessionNumber='invalid-date', filingDate='2026-99-99'), filing], [], '2026-10-05'))
+
+    def assert_official_exhibits_preserve_identity_and_provider_deferrals(self):
+        from digital_twin.infrastructure.official_question_research import collect_question_documents, official_document_url
+        from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
+        from digital_twin.modules.market_data.contracts import ExternalCallDeferred
+        root = 'https://www.sec.gov/Archives/edgar/data/1834584/000183458426000123/'
+        filing = {'form': '8-K', 'accessionNumber': '0001834584-26-000123', 'filingDate': '2026-09-01',
+                  'primaryDocument': 'filing.htm', 'url': root + 'filing.htm'}
+        target = NewsCollectionTarget(symbol='CPNG', name='Coupang', market='US', currency='USD')
+        signals = {'secFilings': {'CPNG': {'cik': '1834584', 'latestFiling': filing}}}
+        tasks = [{'taskId': 'q', 'question': 'Net loss', 'queryTerms': []}]
+        paragraph = 'Net loss includes a provision recognized during the quarter, which is described in the notes to the financial statements. The provision has not been presented as a change in consumer demand.'
+        html = '<a href="https://untrusted.example/ex99.htm">Exhibit 99</a><a href="../other/ex99.htm">Exhibit 99</a><a href="ex99.htm">Exhibit 99.1</a>'
+        provider = Mock()
+        provider.sec_document_access_configured.return_value = True
+        provider.sec_document_text_max_chars.return_value = 6000
+        provider.guarded_call.side_effect = lambda _provider, _key, work: work()
+        provider.fetch_text.side_effect = lambda url, _headers: html if url.endswith('filing.htm') else '<p>' + paragraph + '</p>'
+        items, statuses = collect_question_documents(provider, target, signals, tasks)
+        self.assertEqual([root + 'filing.htm', root + 'ex99.htm'], [call.args[0] for call in provider.fetch_text.call_args_list])
+        self.assertEqual(root + 'ex99.htm', items[0].url)
+        self.assertEqual(root + 'filing.htm', items[0].raw_payload['parentDocumentUrl'])
+        self.assertEqual(paragraph, items[0].raw_payload['documentPassages'][0]['quote'])
+        for url in ('http://www.sec.gov/Archives/edgar/data/1834584/000183458426000123/ex99.htm',
+                    root + '../ex99.htm', root + 'ex99.htm?token=x', 'https://www.sec.gov@untrusted.example/ex99.htm', 'https://[bad'):
+            self.assertFalse(official_document_url(url, '1834584', filing['accessionNumber']))
+        provider.guarded_call.side_effect = ExternalCallDeferred('circuit', '2026-10-05T03:00:00Z', 'circuit-open')
+        items, statuses = collect_question_documents(provider, target, signals, tasks)
+        self.assertEqual([], items)
+        self.assertEqual('2026-10-05T03:00:00Z', next(s for s in statuses if s['status'] == 'deferred')['retryAt'])
+        self.assertEqual('unresolved', statuses[-1]['status'])
+        provider.guarded_call.reset_mock()
+        self.assertEqual(([], []), collect_question_documents(provider, target, signals, []))
+        provider.guarded_call.assert_not_called()
+
     def test_no_recall_still_delivers_prior_judgment_open_work_and_feedback(self):
         captured, _ = session()
         past = {"summary": "이전 판단의 핵심", "hypothesis": "이전의 미확인 설명", "observedAt": "2026-01-01T00:00:00Z",
@@ -69,6 +173,7 @@ class AIContinuityResearchTests(unittest.TestCase):
             continuity_memory([{**historical, "followUpConditions": [{"body": "x" * 30000}]}], [])
 
     def test_question_contract_rejects_unsupported_and_private_searches(self):
+        self.assert_historical_filings_require_explicit_window_without_extending_news_freshness()
         captured, _ = session()
         from digital_twin.modules.ai_orchestration.domain.research_request import continuous_planning_schema
         schema = continuous_planning_schema(captured.packet(), [])
@@ -91,6 +196,8 @@ class AIContinuityResearchTests(unittest.TestCase):
             validate_plan(value, captured.packet(), require_research=True)
 
     def test_question_terms_reach_real_research_orchestrator_and_news_query(self):
+        self.assert_official_questions_select_different_complete_passages_after_document_prefix()
+        self.assert_official_exhibits_preserve_identity_and_provider_deferrals()
         from digital_twin.modules.news_intelligence.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
         from digital_twin.infrastructure.news_sources import NewsSourceGateway
         queries = []
@@ -227,12 +334,25 @@ class AIContinuityResearchTests(unittest.TestCase):
             old["promptHash"] = hashlib.sha256(old["prompt"].encode()).hexdigest()
             old["outputSchema"] = citable_management_schema(old["current"], [])
             validate_execution_input(old)
-        from digital_twin.modules.ai_orchestration.domain.execution_input import CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION
+        from digital_twin.modules.ai_orchestration.domain.execution_input import (
+            CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION,
+            MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION,
+        )
+        from digital_twin.modules.ai_orchestration.domain.continuity import continuous_planning_prompt
         from digital_twin.modules.ai_orchestration.domain.research_request import continuous_planning_schema
-        for original, version in ((frozen, CONTINUITY_PROMPT_VERSION),
-                (freeze_repair_input(frozen, PLAN, ["verify"], "parent"), CONTINUITY_REPAIR_PROMPT_VERSION)):
+        repaired = freeze_repair_input(frozen, PLAN, ["verify"], "parent")
+        for original, version in ((frozen, CONTINUITY_PROMPT_VERSION), (repaired, CONTINUITY_REPAIR_PROMPT_VERSION),
+                                  (frozen, MANAGEMENT_BOUNDS_PROMPT_VERSION), (repaired, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION)):
             old = copy.deepcopy(original)
             old["promptVersion"] = version
-            old["outputSchema"] = continuous_planning_schema(old["current"], old["researchResults"], bounded_evidence=False)
+            bounded = version in {MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION}
+            old["prompt"] = continuous_planning_prompt(old['current'], old['previousAnalyses'], old['researchResults'], legacy_research=True)
+            if 'repair' in old:
+                from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
+                old['prompt'] = repair_prompt(old['prompt'], old['repair'])
+            old['promptHash'] = hashlib.sha256(old['prompt'].encode()).hexdigest()
+            old["outputSchema"] = continuous_planning_schema(old["current"], old["researchResults"], bounded_evidence=bounded, legacy_research=True)
             validate_execution_input(old)
-            self.assertNotIn("minItems", old["outputSchema"]["properties"]["caseReviews"]["items"]["properties"]["evidenceIds"])
+            self.assertEqual(10080, old['outputSchema']['properties']['questions']['items']['properties']['research']['properties']['maxAgeMinutes']['maximum'])
+            if not bounded:
+                self.assertNotIn("minItems", old["outputSchema"]["properties"]["caseReviews"]["items"]["properties"]["evidenceIds"])

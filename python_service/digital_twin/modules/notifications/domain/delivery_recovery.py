@@ -122,3 +122,32 @@ def terminal_delivery_recovery_decision(
         "recoveryCount": recovery_count,
         "retryAt": retry_at,
     }
+
+
+def delivery_progress(job, receipt=None, *, max_attempts, now=None):
+    """Describe durable queue progress without mistaking completion for receipt."""
+    values = dict(job or {})
+    state = str(values.get("status") or "unknown")
+    attempts = int(values.get("attempts") or 0)
+    retry_at = str(values.get("retryAt") or values.get("retry_at") or "")
+    progress = {"deliveryStatus": state, "deliveryAttempts": attempts,
+                "deliveryMaxAttempts": max_attempts, "deliveryRetryAt": retry_at}
+    if receipt and receipt.get("source") == "transport-receipt" and receipt.get("deliveredAt"):
+        progress.update(deliveryStatus="done", receipt=dict(receipt), deliveryRetryAt="")
+    elif state == "done":
+        progress["deliveryStatus"] = "receipt-unconfirmed"
+    elif state == "failed":
+        if attempts < max_attempts:
+            progress["deliveryStatus"] = "retry-wait"
+        else:
+            recovery = terminal_delivery_recovery_decision(values, now=now)
+            progress["deliveryRecovery"] = recovery
+            if recovery["action"] == "retry":
+                progress.update(deliveryStatus="recovery-wait", deliveryRetryAt=recovery["retryAt"])
+            elif recovery["action"] == "supersede":
+                progress.update(deliveryStatus="expired", deliveryRetryAt="")
+            else:
+                progress["deliveryRetryAt"] = ""
+    elif state == "pending" and retry_at:
+        progress["deliveryStatus"] = "retry-wait"
+    return progress

@@ -34,7 +34,7 @@ class ExistingApiResearchGateway:
         source_types: Iterable[str] = None,
         research_tasks: Iterable[Dict[str, object]] = None,
     ) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
-        del research_tasks
+        tasks = list(research_tasks or [])
         requested = normalized_source_types(source_types)
         if requested and not requested.intersection(self.SUPPORTED_SOURCE_TYPES):
             return [], [{
@@ -52,13 +52,20 @@ class ExistingApiResearchGateway:
             sector=str(target.sector or "기타"),
             source="research",
         )
-        signals = self.provider_for(requested).signals_for_positions([position])
+        provider = self.provider_for(requested)
+        signals = provider.signals_for_positions([position])
         items = research_evidence_from_external_signals(target.normalized_symbol(), signals)
         company = (signals.get("companyKnowledge") or {}).get(target.normalized_symbol()) or {}
         items.extend(financial_research_evidence(target.normalized_symbol(), company))
         self.attach_target_market(items, target)
         items = self.filter_items(items, requested)
         statuses = [dict(item) for item in signals.get("statuses") or [] if isinstance(item, dict)]
+        if tasks and (not requested or requested.intersection({"official", "official-filing", "company-ir"})):
+            from .official_question_research import collect_question_documents
+            documents, document_statuses = collect_question_documents(provider, target, signals, tasks)
+            items.extend(documents)
+            self.attach_target_market(documents, target)
+            statuses.extend(document_statuses)
         statuses.append({
             "source": "existing-api-bundle",
             "symbol": target.normalized_symbol(),

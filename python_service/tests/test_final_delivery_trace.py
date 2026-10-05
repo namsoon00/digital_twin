@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, Mock
 from digital_twin.modules.notifications.application.notification.query import NotificationTraceQueryService
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.delivery_recovery import (
+    delivery_progress,
     notification_failure_retry_at,
     terminal_delivery_recovery_decision,
 )
@@ -13,6 +14,28 @@ from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs i
 
 
 class FinalDeliveryTraceTests(unittest.TestCase):
+    def assert_queue_retry_and_terminal_failure_are_distinct_from_transport_receipts(self):
+        now = datetime(2026, 10, 5, 0, 45, tzinfo=timezone.utc)
+        job = {"status": "failed", "attempts": 3, "retry_at": "2026-10-05T01:00:46Z",
+               "created_at": "2026-10-05T00:29:36Z", "message_type": "aiObservation",
+               "last_error": "circuit open until 2026-10-05T01:00:46Z"}
+        progress = delivery_progress(job, max_attempts=5, now=now)
+        self.assertEqual("retry-wait", progress["deliveryStatus"])
+        self.assertEqual(job["retry_at"], progress["deliveryRetryAt"])
+        self.assertEqual(3, progress["deliveryAttempts"])
+        exhausted = dict(job, attempts=5)
+        self.assertEqual("recovery-wait", delivery_progress(exhausted, max_attempts=5, now=now)["deliveryStatus"])
+        exhausted["context"] = {"deliveryRecovery": {"count": 1}}
+        self.assertEqual("failed", delivery_progress(exhausted, max_attempts=5, now=now)["deliveryStatus"])
+        self.assertEqual("failed", delivery_progress(dict(job, attempts=5, last_error="HTTP 401"), max_attempts=5, now=now)["deliveryStatus"])
+        self.assertEqual("expired", delivery_progress(dict(job, attempts=5, created_at="2026-10-04T00:00:00Z"), max_attempts=5, now=now)["deliveryStatus"])
+        self.assertEqual("receipt-unconfirmed", delivery_progress({"status": "done"}, max_attempts=5)["deliveryStatus"])
+        receipt = {"source": "transport-receipt", "deliveredAt": "2026-10-05T01:00:49Z", "body": "received"}
+        confirmed = delivery_progress(job, receipt, max_attempts=5, now=now)
+        self.assertEqual("done", confirmed["deliveryStatus"])
+        self.assertEqual(receipt, confirmed["receipt"])
+        self.assertEqual("", confirmed["deliveryRetryAt"])
+
     def test_final_suppression_reason_survives_outbox_cleanup(self):
         job = NotificationJob.create("fixture", account_id="fixture", message_type="investmentInsight", context={
             "deliverySuppressionReason": "account_quiet_hours", "investmentSubjectDecisionCaseId": "subject:1",
@@ -36,6 +59,7 @@ class FinalDeliveryTraceTests(unittest.TestCase):
         self.assertEqual("historical-reason-unrecorded", trace["finalDelivery"]["reasonCode"])
 
     def test_no_lifecycle_row_does_not_claim_success(self):
+        self.assert_queue_retry_and_terminal_failure_are_distinct_from_transport_receipts()
         store = SimpleNamespace(lifecycle_for_job=lambda _: [], delivery_attempts_for_job=lambda _: [])
         trace = NotificationTraceQueryService(store).trace_for_job("missing")
         self.assertEqual("unknown", trace["finalDelivery"]["state"])

@@ -38,10 +38,15 @@ class _Paragraphs(HTMLParser):
         self.parts = []
 
 
-def report_passages(raw_html, limit=6000):
+def document_blocks(raw_html):
     parser = _Paragraphs()
     parser.feed(str(raw_html or ''))
     parser.flush()
+    return parser.blocks
+
+
+def report_passages(raw_html, limit=6000):
+    blocks = document_blocks(raw_html)
     topics = (
         ('income-tax', r'income tax|tax expense|tax provision|effective tax'),
         ('operating-cash', r'cash.*operating activities|operating.*cash flow'),
@@ -50,7 +55,7 @@ def report_passages(raw_html, limit=6000):
     )
     selected, seen, remaining = [], set(), max(500, min(20000, int(limit)))
     for topic, pattern in topics:
-        candidates = [block for block in parser.blocks if 100 <= len(block) <= 2200
+        candidates = [block for block in blocks if 100 <= len(block) <= 2200
                       and re.search(pattern, block, re.I) and block not in seen]
         # Prefer explanatory prose over index/table headings; preserve exact text.
         def relevance(block):

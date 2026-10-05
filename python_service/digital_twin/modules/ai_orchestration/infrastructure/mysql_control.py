@@ -169,18 +169,21 @@ class MySQLAIControlStore(MySQLOperationalConnection):
         return True
 
     def fail(self, job, error_kind, terminal=False, result=None):
-        failures = job["attempts"] - int(job.get("budgetDeferrals", 0))
-        terminal = terminal or failures >= 3
+        capacity_wait = error_kind == "LocalAICapacityUnavailable" and not terminal
+        capacity_deferrals = int(job.get("capacityDeferrals", 0))
+        failures = job["attempts"] - int(job.get("budgetDeferrals", 0)) - capacity_deferrals
+        terminal = terminal or (not capacity_wait and failures >= 3)
         status = "failed" if terminal else "pending"
-        delay, recovery_delay = retry_delays(job["capability"], error_kind, failures)
+        delay, recovery_delay = retry_delays(job["capability"], error_kind,
+                                             capacity_deferrals + 1 if capacity_wait else failures)
         now = datetime.now(timezone.utc)
         due = (now + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
         with self.transaction() as connection:
             changed = connection.execute("UPDATE ai_control_tasks SET status=%s,last_error=%s,available_at=%s,updated_at=%s,"
-                "result_json=COALESCE(%s,result_json),lease_token='',lease_until='' "
+                "result_json=COALESCE(%s,result_json),payload_json=JSON_SET(payload_json,'$.capacityDeferrals',%s),lease_token='',lease_until='' "
                 "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
                 (status, error_kind[:100], due, stamp(), json.dumps(result, ensure_ascii=False, allow_nan=False) if result is not None else None,
-                 job["taskId"], job["leaseToken"], stamp())).rowcount
+                 capacity_deferrals + int(capacity_wait), job["taskId"], job["leaseToken"], stamp())).rowcount
             failure = getattr(self, "agenda_failure", None)
             if changed and terminal and failure is not None:
                 failure(connection, job, error_kind[:100])

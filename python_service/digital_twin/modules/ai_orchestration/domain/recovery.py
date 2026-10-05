@@ -2,6 +2,8 @@
 
 
 def retry_delays(capability, error_kind, failures):
+    if error_kind == "LocalAICapacityUnavailable":
+        return min(300, 30 * max(1, failures)), 300
     capture_failure = capability == "observe" and (
         error_kind.startswith("evidence-read:")
         or error_kind in {"evidence-contract:graph-changed-before-capture",

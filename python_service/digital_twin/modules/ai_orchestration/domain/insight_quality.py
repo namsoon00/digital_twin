@@ -2,7 +2,7 @@
 import json
 
 from digital_twin.modules.ai_orchestration.domain.insight_contract import (
-    SECTIONS, insight_errors, insight_fingerprint, narrative_digest,
+    CAUSAL_GUARD_VERSION, SECTIONS, insight_errors, insight_fingerprint, narrative_digest,
 )
 
 
@@ -39,19 +39,20 @@ JSON만 반환하세요. sections의 모든 항목을 각각 검토하며 빈 �
     return instructions + json.dumps({"current": packet, "draft": draft}, ensure_ascii=False)
 
 
-def local_quality(result):
-    errors = insight_errors(result, result["input"])
+def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
+    errors = insight_errors(result, result["input"], causal_guard_version=causal_guard_version)
+    version = {"version": REVIEW_VERSION, "causalGuardVersion": causal_guard_version}
     if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
         errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
     if not result.get("followUpConditions"):
         errors.append("관찰 가능한 확인 조건과 기간이 없습니다.")
     if errors:
-        return {"version": REVIEW_VERSION, "status": "rejected", "errors": errors}
+        return {**version, "status": "rejected", "errors": errors}
     fingerprint = insight_fingerprint(result, result["input"])
     baseline = result["input"].get("lastDeliveredNotification") or {}
     if baseline.get("insightFingerprint") == fingerprint:
-        return {"version": REVIEW_VERSION, "status": "rejected", "errors": ["가격의 작은 변화 외에 지난 알림과 다른 설명 근거가 없습니다."]}
-    return {"version": REVIEW_VERSION, "status": "awaiting-review" if result.get("notification", {}).get("send") else "observation-only",
+        return {**version, "status": "rejected", "errors": ["가격의 작은 변화 외에 지난 알림과 다른 설명 근거가 없습니다."]}
+    return {**version, "status": "awaiting-review" if result.get("notification", {}).get("send") else "observation-only",
             "errors": [], "insightFingerprint": fingerprint}
 
 

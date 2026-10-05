@@ -12,6 +12,7 @@ from digital_twin.modules.reasoning.contracts import content_hash, material_fact
 
 
 INSIGHT_VERSION = "observation-insight-v1"
+CAUSAL_GUARD_VERSION = "observation-causality-v2"
 SECTIONS = ("summary", "comparison", "hypothesis", "portfolioImpact", "counterEvidence", "notificationReason")
 METRICS = {
     "currentPrice": ("현재가", "money"), "averagePrice": ("평균 매입가", "money"),
@@ -121,19 +122,48 @@ def expand_period_names(text):
     return re.sub(pattern, lambda m: "·".join(period + m[3] for period in re.findall(r"\d+", m[1]) + [m[2]]), text)
 
 
-def unsupported_cause(sentence, section):
+def unsupported_cause_v1(sentence, section):
+    """Historical guard retained for explicit, read-only judgment replay."""
     if not re.search(r"때문|원인으로|원인입니다|원인은", sentence):
         return False
     if re.search(r"(?:확정|단정|확인|판단|알).{0,12}(?:없|못|않|어렵)|가능|일 수|될 수", sentence):
         return False
-    # A stated data limitation is not a claim about what caused a price move.
     limitation = (section == "counterEvidence"
         and re.search(r"(?:부재|추정치|참고값|부족|누락).{0,30}때문에.{0,30}(?:신뢰도|비교|해석|검증).{0,12}(?:제한|어렵|불가|한계)", sentence)
         and not re.search(r"(?:상승|하락|반등|급등|급락|회복|발생)(?:했|하였|했습|한 것|했다)|(?:올랐|내렸|떨어졌)", sentence))
     return not limitation
 
 
-def insight_errors(result, packet):
+def unsupported_cause(sentence, section):
+    if not re.search(r"때문|원인으로|원인입니다|원인은", sentence):
+        return False
+    # A denial of causality or a reason for retaining an analysis is not an
+    # asserted cause of a market move. Do not let a later caveat excuse an
+    # actual price-movement assertion in the same sentence.
+    asserted_move = re.search(
+        r"(?:상승|하락|반등|급등|급락|회복|발생)(?:했|하였|했습|한 것|했다)|(?:올랐|내렸|떨어졌)", sentence)
+    denied_cause = re.search(
+        r"원인(?:으로|은).{0,35}(?:연결|확장|특정|설명|묶|좁히|보)(?:.{0,15})(?:없|않|어렵|어려|못)", sentence)
+    analysis_reason = re.search(
+        r"때문에.{0,45}(?:판단|해석|설명|관찰|신뢰도|비교|검증).{0,25}(?:유지|보류|유보|제한|어렵|약|넓히지|확장하지)", sentence)
+    unresolved_cause = re.search(r"미해결 원인은.{0,35}(?:조사|확인|검토)", sentence)
+    retained_analysis = re.search(r"(?:판단|해석|설명).{0,45}때문에.{0,12}(?:유지|보류|유보|제한)", sentence)
+    observation_reason = re.search(r"때문에.{0,40}관찰할 이유(?:는|가).{0,12}(?:남아|있|없)", sentence)
+    if not asserted_move and (denied_cause or analysis_reason or unresolved_cause or retained_analysis or observation_reason):
+        return False
+    if re.search(r"(?:확정|단정|확인|판단|알).{0,12}(?:없|못|않|어렵)|가능|일 수|될 수", sentence):
+        return False
+    # A stated data limitation is not a claim about what caused a price move.
+    limitation = (section == "counterEvidence"
+        and re.search(r"(?:부재|추정치|참고값|부족|누락).{0,30}때문에.{0,30}(?:신뢰도|비교|해석|검증).{0,12}(?:제한|어렵|불가|한계)", sentence)
+        and not asserted_move)
+    return not limitation
+
+
+def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION):
+    if causal_guard_version not in {CAUSAL_GUARD_VERSION, "observation-causality-v1"}:
+        raise ValueError("unknown observation causality guard")
+    causal_guard = unsupported_cause if causal_guard_version == CAUSAL_GUARD_VERSION else unsupported_cause_v1
     errors = []
     if result.get("insightVersion") != INSIGHT_VERSION:
         return ["새 설명 계약과 문장별 근거 연결이 없습니다."]
@@ -153,7 +183,7 @@ def insight_errors(result, packet):
         if asserts_certainty(text) or narrative_presentation_errors("NO_ACTION", [text]):
             errors.append(section + ": 확정적 전망 또는 행동 지시가 포함됐습니다.")
         for sentence in re.split(r"[.!?。\n]", text):
-            if unsupported_cause(sentence, section):
+            if causal_guard(sentence, section):
                 errors.append(section + ": 관측 사실을 확인된 원인으로 단정할 수 없습니다.")
         resolved = []
         for ref in refs:

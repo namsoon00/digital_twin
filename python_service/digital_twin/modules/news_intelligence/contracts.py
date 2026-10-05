@@ -60,6 +60,11 @@ _EXPORTS['ResearchEvidenceGateway'] = ('digital_twin.modules.news_intelligence.d
 
 
 _EXPORTS.update({
+    'QUESTION_PASSAGES_VERSION': ('digital_twin.modules.news_intelligence.domain.question_passages', 'VERSION'),
+    'question_terms': ('digital_twin.modules.news_intelligence.domain.question_passages', 'question_terms'),
+    'select_question_filings': ('digital_twin.modules.news_intelligence.domain.question_passages', 'select_question_filings'),
+    'select_question_passages': ('digital_twin.modules.news_intelligence.domain.question_passages', 'select_question_passages'),
+    'sec_research_evidence': ('digital_twin.modules.news_intelligence.domain.investment_research', 'sec_research_evidence'),
     'COMPANY_VALUATION_CONTEXT_VERSION': ('digital_twin.modules.news_intelligence.domain.company_knowledge', 'COMPANY_VALUATION_CONTEXT_VERSION'),
     'DISCLOSURE_ANALYSIS_PROMPT_VERSION': ('digital_twin.modules.news_intelligence.domain.disclosure_analysis', 'DISCLOSURE_ANALYSIS_PROMPT_VERSION'),
     'DisclosureAnalysisResult': ('digital_twin.modules.news_intelligence.domain.disclosure_analysis', 'DisclosureAnalysisResult'),

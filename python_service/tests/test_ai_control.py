@@ -1,4 +1,5 @@
 import os
+import json
 import unittest
 from contextlib import nullcontext
 from unittest.mock import Mock, patch
@@ -24,6 +25,16 @@ PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesi
 
 
 class AIControlTests(unittest.TestCase):
+    def assert_background_capacity_wait_does_not_inherit_notification_zero(self):
+        from digital_twin.modules.model_registry.infrastructure import model_reviewer
+        with patch('digital_twin.modules.ai_orchestration.public.execute_ai_work',
+                   side_effect=lambda workload, prompt, invoke, settings: invoke()), \
+                patch.object(model_reviewer, 'run_ai_prompt_command') as run:
+            model_reviewer.run_background_ai_prompt(['fixture'], 'fixture', 240,
+                {'localAiCapacityWaitSeconds': '300', 'notificationAiCapacityWaitSeconds': '0'})
+        self.assertEqual(300, run.call_args.kwargs['wait_seconds'])
+        self.assertEqual('background', run.call_args.kwargs['lane'])
+
     def assert_execution_metrics_survive_timeout_without_private_error_output(self):
         from digital_twin.modules.ai_orchestration.infrastructure.execution import current_execution_metrics
         store = Mock(); store.begin_call.return_value = 'call-timing'
@@ -107,6 +118,7 @@ class AIControlTests(unittest.TestCase):
         planner.assert_not_called(); store.fail.assert_not_called()
 
     def test_execution_audit_records_failure_without_prompt_or_error_contents(self):
+        self.assert_background_capacity_wait_does_not_inherit_notification_zero()
         store = Mock()
         store.begin_call.return_value = "call-1"
         with self.assertRaises(ValueError):
@@ -183,7 +195,33 @@ class AIControlStorageTests(unittest.TestCase):
     def tearDown(self):
         self.clean()
 
+    def assert_capacity_deferrals_preserve_error_budget_and_reject_stale_lease(self):
+        from datetime import datetime, timezone
+        self.store.runtime_settings['aiControlBudgetEnabled'] = 'false'
+        self.store.seed(SUBJECT)
+        first = None
+        for count in range(1, 5):
+            job = self.store.claim()
+            first = first or job
+            before = datetime.now(timezone.utc)
+            self.assertEqual('pending', self.store.fail(job, 'LocalAICapacityUnavailable')['status'])
+            with self.store.connect() as c:
+                row = c.execute('SELECT payload_json,available_at FROM ai_control_tasks WHERE task_id=%s', (job['taskId'],)).fetchone()
+                self.assertEqual(count, json.loads(row['payload_json'])['capacityDeferrals'])
+                delay = (datetime.fromisoformat(row['available_at'].replace('Z', '+00:00')) - before).total_seconds()
+                self.assertGreaterEqual(delay, 30 * count)
+                self.assertLess(delay, 30 * count + 5)
+                c.execute("UPDATE ai_control_tasks SET available_at='2000' WHERE task_id=%s", (job['taskId'],))
+        self.assertEqual('lease-lost', self.store.fail(first, 'LocalAICapacityUnavailable')['status'])
+        for number in range(1, 4):
+            job = self.store.claim()
+            self.assertEqual('failed' if number == 3 else 'pending', self.store.fail(job, 'TimeoutError')['status'])
+            with self.store.connect() as c:
+                c.execute("UPDATE ai_control_tasks SET available_at='2000' WHERE task_id=%s", (job['taskId'],))
+
     def test_capture_retries_are_bounded_and_stale_leases_cannot_schedule_recovery(self):
+        self.assert_capacity_deferrals_preserve_error_budget_and_reject_stale_lease()
+        self.clean()
         from datetime import datetime, timezone
         self.store.seed(SUBJECT)
         reason = "evidence-read:inventory-subject:TimeoutError"

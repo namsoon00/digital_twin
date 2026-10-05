@@ -507,6 +507,13 @@ process timeout without storing raw process errors. Historical calls do not have
 these timings. Rendering observation citations sorts section keys so equivalent
 JSON objects produce the same message after database round trips.
 
+Background model calls wait for `localAiCapacityWaitSeconds` (default 300,
+bounded to 1–900 seconds); the notification lane's zero-wait setting does not
+shorten that wait. A `LocalAICapacityUnavailable` result preserves the leased
+task as pending, with 30-second increments capped at five minutes. Its separate
+`capacityDeferrals` counter keeps capacity contention out of the three-error
+failure allowance while preserving attempt IDs, call accounting and lease fences.
+
 Independent work defaults to **48 task starts and 24 model calls per UTC day**.
 The owner can set `aiControlBudgetEnabled=false` to remove both daily limits.
 Usage accounting, duplicate-input suppression, leases, process concurrency and
@@ -527,7 +534,9 @@ completion, stable root identities and transactional successor creation. A
 completed ResearchRun is reused after retry. Source-provider work is at-least-once
 when a process dies before its result is saved; this is not exactly-once external
 execution. Three failed attempts terminate the task; failed observations start a
-new recovery check six hours later. Removed subjects are retired when claimed.
+new recovery check six hours later (capture failures use their existing shorter
+recovery policy). Capacity and budget deferrals do not exhaust this allowance.
+Removed subjects are retired when claimed.
 Older in-progress process audit rows may remain `running` after an abrupt kill;
 they must not be interpreted as proof the process still exists.
 
@@ -539,6 +548,44 @@ disclosure and other domain AI features retain their own admission budgets.
 Priority is research follow-up before new observations, then oldest due work.
 
 ## Operator surfaces
+
+Publication progress distinguishes retry waiting, exhausted failure, recovery
+waiting and expiry. It shows the persisted retry time and attempts. A completed
+job without a transport receipt is explicitly unconfirmed; only a delivered
+transport receipt establishes success. Retrying a message still revalidates its
+frozen evidence age and publication policy; an expired observation is suppressed.
+
+The `observation-causality-v2` local guard recognizes explicit denials of causality
+and reasons to retain, limit or defer an analysis. Positive claims that a market
+move occurred because of a particular cause remain rejected. New quality records
+include `causalGuardVersion`; explicit v1 replay remains available without
+rewriting or resending historical judgments. Replaying 357 frozen observations
+from the October 5 audit removed 15 false causal errors: 11 became valid silent
+observations, while four retained other blocking errors. Independent review,
+numeric grounding and delivery controls remain mandatory.
+
+Question-directed official research now carries the task's question and query
+terms into SEC report paragraph selection. It selects relevant report forms
+(excluding ownership Form 4), scans beyond the initial document prefix, and may
+follow one earnings exhibit in the same issuer/accession directory. Each collection
+call attempts at most three documents and retains whole matching paragraphs,
+publication date, URL, accession and content hashes. Matching text is evidence to
+review, never proof that the question is answered. It follows the existing
+ResearchEvidence governance, persistence and graph projection path. SEC access
+deferrals keep their retry time; inaccessible or unmatched documents remain
+unresolved. DART and other existing sources retain their collection paths; new
+question-directed document fetching is currently SEC only.
+The v2 research request allows an explicitly selected 60–527,040 minute window
+only for an `official-filing`-only task (up to 366 days). Any task including news
+retains the 60–10,080 minute limit. Author v13 and repair v9 explain this distinction;
+old author v11/v12, repair v7/v8 and v1 research requests retain their original
+prompts, schemas and seven-day bound for replay. Publication dates still determine
+evidence age: widening a historical filing query never refreshes a market quote
+or silently changes an existing task's requested window.
+A read-only live probe against the stored CPNG filing inventory retrieved matching
+paragraphs from two 10-Q reports in three document requests; both met the existing
+document verification and analysis readiness checks. This validates collection,
+not the truth of a causal conclusion or a new completed AI research assessment.
 
 An explicit send candidate that fails final publication validation now creates
 one `aiObservationDiagnostic` operations notification in the same transaction as

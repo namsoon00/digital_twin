@@ -27,7 +27,8 @@ SOURCE_CLOCK_PROMPT_VERSION = "independent-observation-v8-source-clock"
 CITABLE_PROMPT_VERSION = "independent-observation-v9-clock-citations"
 DIRECTED_PROMPT_VERSION = "independent-observation-v10-directed-reads"
 CONTINUITY_PROMPT_VERSION = "independent-observation-v11-continuity-research"
-PROMPT_VERSION = "independent-observation-v12-management-evidence-bounds"
+MANAGEMENT_BOUNDS_PROMPT_VERSION = "independent-observation-v12-management-evidence-bounds"
+PROMPT_VERSION = "independent-observation-v13-filing-research-windows"
 LEGACY_REPAIR_PROMPT_VERSION = "independent-observation-repair-v1"
 DEVELOPMENT_REPAIR_PROMPT_VERSION = "independent-observation-repair-v2-ontology-development"
 AGENDA_REPAIR_PROMPT_VERSION = "independent-observation-repair-v3-persistent-agenda"
@@ -35,7 +36,8 @@ SOURCE_CLOCK_REPAIR_PROMPT_VERSION = "independent-observation-repair-v4-source-c
 CITABLE_REPAIR_PROMPT_VERSION = "independent-observation-repair-v5-clock-citations"
 DIRECTED_REPAIR_PROMPT_VERSION = "independent-observation-repair-v6-directed-reads"
 CONTINUITY_REPAIR_PROMPT_VERSION = "independent-observation-repair-v7-continuity-research"
-REPAIR_PROMPT_VERSION = "independent-observation-repair-v8-management-evidence-bounds"
+MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION = "independent-observation-repair-v8-management-evidence-bounds"
+REPAIR_PROMPT_VERSION = "independent-observation-repair-v9-filing-research-windows"
 LEGACY_REVIEW_PROMPT_VERSION = "independent-observation-review-v1"
 SOURCE_CLOCK_REVIEW_PROMPT_VERSION = "independent-observation-review-v2-source-clock"
 CITABLE_REVIEW_PROMPT_VERSION = "independent-observation-review-v3-clock-citations"
@@ -91,7 +93,7 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
-    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION, LEGACY_RETRIEVAL_PROMPT_VERSION}:
+    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION, LEGACY_RETRIEVAL_PROMPT_VERSION}:
         raise EvidenceContractError("unsupported AI execution input")
     validate_evidence_packet(envelope["current"])
     if envelope["promptVersion"] == RETRIEVAL_PROMPT_VERSION:
@@ -111,20 +113,23 @@ def validate_execution_input(envelope):
         schema = legacy_planning_schema(envelope["current"])
     else:
         old = envelope["promptVersion"] in {PREVIOUS_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}
-        continuous = envelope["promptVersion"] in {PROMPT_VERSION, REPAIR_PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION}
+        continuous = envelope["promptVersion"] in {PROMPT_VERSION, REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION}
+        legacy_research = envelope["promptVersion"] not in {PROMPT_VERSION, REPAIR_PROMPT_VERSION}
         directed = continuous or envelope["promptVersion"] in {DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION}
         citable = directed or envelope["promptVersion"] in {CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION}
         clocked = citable or envelope["promptVersion"] in {SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION}
         managed = clocked or envelope["promptVersion"] in {AGENDA_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION}
         builder = continuous_planning_prompt if continuous else bounded_planning_prompt if old else directed_planning_prompt if directed else citable_management_prompt if citable else clocked_management_prompt if clocked else management_prompt if managed else planning_prompt
-        prompt = builder(envelope["current"], envelope["previousAnalyses"], envelope["researchResults"])
-        if envelope["promptVersion"] in {REPAIR_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}:
+        prompt = builder(envelope["current"], envelope["previousAnalyses"], envelope["researchResults"],
+                         **({"legacy_research": legacy_research} if continuous else {}))
+        if envelope["promptVersion"] in {REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}:
             from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
             prompt = repair_prompt(prompt, envelope["repair"])
         schema = (citable_management_schema if citable else management_schema)(envelope["current"], envelope["researchResults"]) if managed else (bounded_planning_schema if old else planning_schema)(envelope["current"])
         if continuous:
             schema = continuous_planning_schema(envelope["current"], envelope["researchResults"],
-                bounded_evidence=envelope["promptVersion"] in {PROMPT_VERSION, REPAIR_PROMPT_VERSION})
+                bounded_evidence=envelope["promptVersion"] in {PROMPT_VERSION, REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION},
+                legacy_research=legacy_research)
         if directed and envelope["current"].get("retrieval"):
             trace = envelope.get("retrievalTrace", [])
             version = envelope["current"]["retrieval"]["version"]

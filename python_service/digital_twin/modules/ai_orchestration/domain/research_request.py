@@ -3,9 +3,10 @@ from copy import deepcopy
 import re
 
 
-RESEARCH_REQUEST_VERSION = "observation-research-request-v1"
+LEGACY_RESEARCH_REQUEST_VERSION = "observation-research-request-v1"
+RESEARCH_REQUEST_VERSION = "observation-research-request-v2"
 SOURCE_TYPES = ("news", "official-filing")
-RESEARCH_INSTRUCTIONS = """질문별 원문 조사 계약:
+LEGACY_RESEARCH_INSTRUCTIONS = """질문별 원문 조사 계약:
 questions와 caseReviews의 각 항목에는 research={queryTerms,sourceTypes,maxAgeMinutes}를 포함하세요.
 capability=research 또는 action=research일 때 queryTerms는 질문에 답할 구체적인 공개 주제 1~4개,
 sourceTypes는 news/official-filing 중 1~2개, maxAgeMinutes는 60~10080입니다.
@@ -14,16 +15,24 @@ sourceTypes는 news/official-filing 중 1~2개, maxAgeMinutes는 60~10080입니�
 observe/develop-hypothesis 및 research 외의 caseReviews는 queryTerms=[],sourceTypes=[],maxAgeMinutes=0입니다.
 새 질문으로 기존 조사 과제를 복제하지 말고 caseReviews에서 같은 질문의 검색 조건을 보완하세요.
 """
+RESEARCH_INSTRUCTIONS = LEGACY_RESEARCH_INSTRUCTIONS.replace(
+    "sourceTypes는 news/official-filing 중 1~2개, maxAgeMinutes는 60~10080입니다.",
+    "sourceTypes는 news/official-filing 중 1~2개입니다. news를 포함하면 maxAgeMinutes는 60~10080입니다.\n"
+    "official-filing만 조사할 때는 maxAgeMinutes를 60~527040 범위에서 명시적으로 선택할 수 있습니다.\n"
+    "분기·연간 실적 조사에는 질문의 보고 기간을 포함할 만큼 공시 조회 기간을 선택하세요. "
+    "과거 공시의 발행일·보고 기간을 유지하고 이를 현재 시장 상황이나 주가 변동 원인으로 바꾸지 마세요.")
 
 
-def research_schema():
+def research_schema(legacy=False):
     from .insight_schema import obj, array, choice
     return obj({"queryTerms": {**array({"type": "string", "minLength": 2, "maxLength": 80}), "maxItems": 4},
         "sourceTypes": {**array(choice(SOURCE_TYPES)), "maxItems": 2},
-        "maxAgeMinutes": {"type": "integer", "minimum": 0, "maximum": 10080}})
+        "maxAgeMinutes": {"type": "integer", "minimum": 0, "maximum": 10080 if legacy else 527040}})
 
 
-def validate_research_request(value, active, account_id=""):
+def validate_research_request(value, active, account_id="", *, version=RESEARCH_REQUEST_VERSION):
+    if version not in {RESEARCH_REQUEST_VERSION, LEGACY_RESEARCH_REQUEST_VERSION}:
+        raise ValueError("unsupported research request")
     if not isinstance(value, dict) or set(value) != {"queryTerms", "sourceTypes", "maxAgeMinutes"}:
         raise ValueError("invalid research request fields")
     terms, sources, age = value["queryTerms"], value["sourceTypes"], value["maxAgeMinutes"]
@@ -33,7 +42,8 @@ def validate_research_request(value, active, account_id=""):
         if terms or sources or age != 0:
             raise ValueError("non-documentary work cannot request source research")
         return {}
-    if not 1 <= len(terms) <= 4 or not 1 <= len(sources) <= 2 or not 60 <= age <= 10080:
+    maximum_age = 527040 if version == RESEARCH_REQUEST_VERSION and sources == ["official-filing"] else 10080
+    if not 1 <= len(terms) <= 4 or not 1 <= len(sources) <= 2 or not 60 <= age <= maximum_age:
         raise ValueError("research request exceeds bounds")
     if any(not isinstance(source, str) or source not in SOURCE_TYPES for source in sources):
         raise ValueError("unsupported research source")
@@ -44,24 +54,25 @@ def validate_research_request(value, active, account_id=""):
                 or (account_id and account_id.casefold() in term.casefold())):
             raise ValueError("invalid public research query")
         cleaned.append(" ".join(term.split()))
-    return {"version": RESEARCH_REQUEST_VERSION, "queryTerms": list(dict.fromkeys(cleaned)),
+    return {"version": version, "queryTerms": list(dict.fromkeys(cleaned)),
             "sourceTypes": list(dict.fromkeys(sources)), "maxAgeMinutes": age}
 
 
 def executable_research_request(value, account_id=""):
     if not value:
         return {}
-    if value.get("version") != RESEARCH_REQUEST_VERSION:
+    if value.get("version") not in {RESEARCH_REQUEST_VERSION, LEGACY_RESEARCH_REQUEST_VERSION}:
         raise ValueError("unsupported research request")
-    return validate_research_request({key: val for key, val in value.items() if key != "version"}, True, account_id)
+    return validate_research_request({key: val for key, val in value.items() if key != "version"}, True, account_id,
+                                     version=value["version"])
 
 
-def continuous_planning_schema(packet, research, bounded_evidence=True):
+def continuous_planning_schema(packet, research, bounded_evidence=True, legacy_research=False):
     from .observation_clock import citable_management_schema
     schema = citable_management_schema(packet, research)
     for name in ("questions", "caseReviews"):
         item = schema["properties"][name]["items"]
-        item["properties"]["research"] = deepcopy(research_schema())
+        item["properties"]["research"] = deepcopy(research_schema(legacy=legacy_research))
         item["required"].append("research")
     if bounded_evidence:
         # Match the existing management validator before generation, while the

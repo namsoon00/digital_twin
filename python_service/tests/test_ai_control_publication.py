@@ -135,12 +135,17 @@ class CentralPublicationStorageTests(unittest.TestCase):
         return task, result, self.queue.job_from_row(row)
 
     def test_successful_send_is_only_baseline_and_cannot_be_replayed(self):
-        task, result, job = self.publish()
+        from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_WORDING_VERSION
+        draft = observation()
+        draft['wordingVersion'] = OBSERVATION_WORDING_VERSION
+        draft['followUpConditions'][0]['description'] = '중기 약세가 이어진다고 볼 근거가 약해집니다.'
+        task, result, job = self.publish(draft)
         self.assertEqual({}, self.publication.memory(job.account_id, "TEST"))
         renderer = NotificationRenderingService(context_enricher=Mock(side_effect=AssertionError("must not enrich")))
         message = renderer.render(job)
         self.assertIn("현재가: 100원", message)
         self.assertIn("평가 손익률: -9.09%", message)
+        self.assertIn('현재가가 20일 평균 가격 초과로 전환 → 중기 약세가 이어진다고 볼 근거가 약해집니다.', message)
         notifier = Mock(supports_delivery_checkpoints=False)
         notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
         dispatcher = NotificationDispatchService(self.queue, lambda _: notifier, delivery_guard=self.publication.delivery_guard)

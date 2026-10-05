@@ -337,22 +337,38 @@ class AIContinuityResearchTests(unittest.TestCase):
         from digital_twin.modules.ai_orchestration.domain.execution_input import (
             CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION,
             MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION,
+            FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION,
+            freeze_review_input,
         )
         from digital_twin.modules.ai_orchestration.domain.continuity import continuous_planning_prompt
         from digital_twin.modules.ai_orchestration.domain.research_request import continuous_planning_schema
         repaired = freeze_repair_input(frozen, PLAN, ["verify"], "parent")
         for original, version in ((frozen, CONTINUITY_PROMPT_VERSION), (repaired, CONTINUITY_REPAIR_PROMPT_VERSION),
-                                  (frozen, MANAGEMENT_BOUNDS_PROMPT_VERSION), (repaired, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION)):
+                                  (frozen, MANAGEMENT_BOUNDS_PROMPT_VERSION), (repaired, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION),
+                                  (frozen, FILING_PROMPT_VERSION), (repaired, FILING_REPAIR_PROMPT_VERSION)):
             old = copy.deepcopy(original)
             old["promptVersion"] = version
-            bounded = version in {MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION}
-            old["prompt"] = continuous_planning_prompt(old['current'], old['previousAnalyses'], old['researchResults'], legacy_research=True)
+            bounded = version not in {CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION}
+            legacy_research = version not in {FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION}
+            old["prompt"] = continuous_planning_prompt(old['current'], old['previousAnalyses'], old['researchResults'], legacy_research=legacy_research)
             if 'repair' in old:
                 from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
                 old['prompt'] = repair_prompt(old['prompt'], old['repair'])
             old['promptHash'] = hashlib.sha256(old['prompt'].encode()).hexdigest()
-            old["outputSchema"] = continuous_planning_schema(old["current"], old["researchResults"], bounded_evidence=bounded, legacy_research=True)
+            old["outputSchema"] = continuous_planning_schema(old["current"], old["researchResults"], bounded_evidence=bounded, legacy_research=legacy_research)
             validate_execution_input(old)
-            self.assertEqual(10080, old['outputSchema']['properties']['questions']['items']['properties']['research']['properties']['maxAgeMinutes']['maximum'])
+            if legacy_research:
+                self.assertEqual(10080, old['outputSchema']['properties']['questions']['items']['properties']['research']['properties']['maxAgeMinutes']['maximum'])
             if not bounded:
                 self.assertNotIn("minItems", old["outputSchema"]["properties"]["caseReviews"]["items"]["properties"]["evidenceIds"])
+        from digital_twin.modules.ai_orchestration.domain.continuity import continuous_review_prompt
+        current_review = freeze_review_input({'input': frozen['current'], 'summary': '이전 관찰 문장입니다.'})
+        old_review = copy.deepcopy(current_review)
+        old_review['promptVersion'] = CONTINUITY_REVIEW_PROMPT_VERSION
+        old_review['prompt'] = continuous_review_prompt(old_review['current'], old_review['draft'])
+        old_review['promptHash'] = hashlib.sha256(old_review['prompt'].encode()).hexdigest()
+        validate_execution_input(old_review)
+        for current in (frozen, repaired, current_review):
+            validate_execution_input(current)
+            self.assertIn('독자가 바로 이해할 수 있는 관찰 문장', current['prompt'])
+        self.assertNotIn('독자가 바로 이해할 수 있는 관찰 문장', old_review['prompt'])

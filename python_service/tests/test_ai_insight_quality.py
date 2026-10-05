@@ -7,6 +7,7 @@ from unittest.mock import Mock
 from ai_insight_fixtures import observation, packet, plan, ref, review
 from digital_twin.modules.ai_orchestration.domain.insight_contract import insight_errors, insight_fingerprint, instant, resolve_ref
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review, quality_block
+from digital_twin.modules.ai_orchestration.domain.observation_wording import OBSERVATION_WORDING_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, validate_execution_input, freeze_execution_input, freeze_repair_input, LEGACY_PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
@@ -17,6 +18,59 @@ import test_ai_control as control_helpers
 
 
 class InsightGroundingTests(unittest.TestCase):
+    def assert_condition_meaning_is_reviewed_and_immutable(self):
+        from digital_twin.modules.ai_orchestration.domain.insight_contract import narrative_digest
+        from digital_twin.modules.reasoning.contracts import content_hash
+        result = observation()
+        legacy_hash = content_hash({key: result.get(key) for key in (
+            'insightVersion', 'summary', 'comparison', 'hypothesis', 'portfolioImpact', 'counterEvidence',
+            'notification', 'claimEvidence', 'observations', 'evidenceIds', 'followUpConditions', 'input')})
+        self.assertEqual(legacy_hash, narrative_digest(result))
+        result['wordingVersion'] = OBSERVATION_WORDING_VERSION
+        result['followUpConditions'][0]['description'] = '중기 약세가 이어진다고 볼 근거가 약해집니다.'
+        result['quality'] = accept_review(result, review(), 'readable-review')
+        self.assertEqual('', quality_block(result))
+        frozen = freeze_review_input(result)
+        self.assertEqual(OBSERVATION_WORDING_VERSION, frozen['draft']['wordingVersion'])
+        self.assertIn('hypothesis.supported=false', frozen['prompt'])
+        self.assertIn('followUpConditions.description은 고객에게 그대로 보입니다', frozen['prompt'])
+        validate_execution_input(frozen)
+        rejected = review(); rejected['sections']['hypothesis'] = {'supported': False, 'reason': '조건 설명에서 무엇이 약해지는지 확인할 수 없습니다.'}
+        self.assertEqual('rejected', accept_review(result, rejected, 'rejected-meaning')['status'])
+        for mutation in ('description', 'version', 'removed-version'):
+            changed = copy.deepcopy(result)
+            if mutation == 'description': changed['followUpConditions'][0]['description'] = '중기 회복이 이어진다고 볼 근거가 강해집니다.'
+            elif mutation == 'version': changed['wordingVersion'] = 'unknown-version'
+            else: changed.pop('wordingVersion')
+            self.assertTrue(quality_block(changed), mutation)
+        for text in ('지금 매수하세요.', '내일은 900원에 도달합니다.', '반등이 확정됐습니다.',
+                     '기관 매도 때문에 가격이 하락했습니다.'):
+            changed = copy.deepcopy(result)
+            changed['followUpConditions'][0]['description'] = text
+            self.assertEqual('rejected', local_quality(changed)['status'], text)
+
+    def assert_readable_conditions_preserve_legacy_rendering(self):
+        legacy = observation()
+        before = render_ai_observation(legacy, sent_at=legacy['observedAt'], debug_number='N-TEST')
+        self.assertIn('현재가가 20일 평균 가격 초과로 전환 → 설명 약화', before)
+        meanings = (
+            ('supports', '설명을 뒷받침', '단기 회복이 이어진다고 볼 근거가 강해집니다.'),
+            ('weakens', '설명 약화', '중기 약세가 이어진다고 볼 근거가 약해집니다.'),
+            ('invalidates', '설명 재검토', '최근 회복이 이어진다는 판단을 유지하기 어려워집니다.'),
+        )
+        for effect, old_label, description in meanings:
+            result = copy.deepcopy(legacy)
+            result['followUpConditions'][0].update(effect=effect, description=description)
+            old_text = render_ai_observation(result)
+            self.assertIn('전환 → ' + old_label, old_text)
+            self.assertNotIn(description, old_text)
+            result['wordingVersion'] = OBSERVATION_WORDING_VERSION
+            new_text = render_ai_observation(result)
+            self.assertIn('현재가가 20일 평균 가격 초과로 전환 → ' + description, new_text)
+            self.assertNotIn('전환 → ' + old_label, new_text)
+            self.assertIn('조건 성립이 예측 적중을 뜻하지는 않습니다', new_text)
+        self.assertEqual(before, render_ai_observation(legacy, sent_at=legacy['observedAt'], debug_number='N-TEST'))
+
     def assert_historical_causal_guard_replays_without_changing_live_validation(self):
         result = observation()
         result['counterEvidence'] = '이전 동반 순매도를 현재 원인으로 연결할 수 없다.'
@@ -161,6 +215,25 @@ class InsightGroundingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_execution_input(correction)
 
+    def assert_previous_review_proof_still_authorizes_queued_body(self):
+        import gzip
+        import hashlib
+        import json
+        from digital_twin.modules.ai_orchestration.domain.continuity import continuous_review_prompt
+        from digital_twin.modules.ai_orchestration.domain.execution_input import CONTINUITY_REVIEW_PROMPT_VERSION
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
+        result = observation()
+        envelope = freeze_review_input(result)
+        envelope['promptVersion'] = CONTINUITY_REVIEW_PROMPT_VERSION
+        envelope['prompt'] = continuous_review_prompt(envelope['current'], envelope['draft'])
+        envelope['promptHash'] = hashlib.sha256(envelope['prompt'].encode()).hexdigest()
+        connection = Mock()
+        connection.execute.return_value.fetchone.return_value = {
+            'task_id': 'previous-task', 'artifact_gzip': gzip.compress(json.dumps(envelope).encode())}
+        proof = MySQLAIControlStore.review_proof_with_connection(connection, 'previous-review')
+        self.assertEqual({'taskId': 'previous-task', 'draftHash': result['quality']['draftHash']}, proof)
+        self.assertEqual('', quality_block(result))
+
     def assert_legacy_receipt_uses_original_delivered_source(self):
         original = observation(); original['input']['taskId'] = 'old-task'
         original['publication'] = {'jobId': 'sent-job'}
@@ -233,6 +306,7 @@ class InsightGroundingTests(unittest.TestCase):
             self.assertTrue(insight_errors(result, p), mutation)
 
     def test_review_must_cover_every_section_and_new_meaning(self):
+        self.assert_condition_meaning_is_reviewed_and_immutable()
         result = observation()
         for patch in ({'usefulness': 'generic'}, {'novelty': 'repetition'}, {'sections': {}}, {'version': 'old'}):
             rejected = accept_review(result, {**review(), **patch}, 'review-id')
@@ -252,6 +326,7 @@ class InsightGroundingTests(unittest.TestCase):
 
     def test_price_jitter_does_not_create_new_insight_and_review_is_frozen(self):
         self.assert_legacy_input_and_repair_remain_frozen()
+        self.assert_previous_review_proof_still_authorizes_queued_body()
         original = observation()
         changed = copy.deepcopy(original)
         changed['input']['facts'][0]['currentPrice'] = 100.1
@@ -265,6 +340,7 @@ class InsightGroundingTests(unittest.TestCase):
             validate_execution_input(envelope)
 
     def test_renderer_shows_named_values_provider_and_registered_conditions(self):
+        self.assert_readable_conditions_preserve_legacy_rendering()
         result = observation(); text = render_ai_observation(result)
         self.assertIn('현재가: 100원', text)
         self.assertIn('평균 매입가: 110원', text)
@@ -346,6 +422,7 @@ class InsightControlTests(unittest.TestCase):
         self.assertEqual('completed', service.run_once()['status'])
         result = store.complete.call_args.args[1]
         self.assertEqual('accepted', result['quality']['status'])
+        self.assertEqual(OBSERVATION_WORDING_VERSION, result['wordingVersion'])
         self.assertEqual('correction', result['executionInputId'])
         self.assertEqual('original', result['repair']['initialInputId'])
         self.assertTrue(result['repair']['initialErrors'])
@@ -404,7 +481,10 @@ class InsightControlTests(unittest.TestCase):
         saved = store.complete.call_args.args[1]
         self.assertEqual('accepted', saved['quality']['status'])
         self.assertTrue(saved['followUpConditions'])
-        self.assertEqual('independent-observation-review-v4-continuity', service.reviewer.call_args.args[0]['promptVersion'])
+        self.assertEqual('independent-observation-review-v5-readable-meaning', service.reviewer.call_args.args[0]['promptVersion'])
+        self.assertEqual(OBSERVATION_WORDING_VERSION, saved['wordingVersion'])
+        self.assertEqual(OBSERVATION_WORDING_VERSION, service.reviewer.call_args.args[0]['draft']['wordingVersion'])
+        self.assertIn(saved['followUpConditions'][0]['description'], render_ai_observation(saved))
         historical = service.reviewer.call_args.args[0]['draft']['judgmentContinuity']['previousAnalyses']
         self.assertEqual(store.memory.return_value[0]['summary'], historical[0]['summary'])
         self.assertEqual('historical-context-only', historical[0]['authority'])

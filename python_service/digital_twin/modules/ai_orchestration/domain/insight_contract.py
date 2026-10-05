@@ -9,6 +9,7 @@ import re
 
 from digital_twin.modules.decisions.contracts import narrative_presentation_errors
 from digital_twin.modules.reasoning.contracts import content_hash, material_fact
+from digital_twin.modules.ai_orchestration.domain.observation_wording import OBSERVATION_WORDING_VERSION
 
 
 INSIGHT_VERSION = "observation-insight-v1"
@@ -165,6 +166,8 @@ def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION)
         raise ValueError("unknown observation causality guard")
     causal_guard = unsupported_cause if causal_guard_version == CAUSAL_GUARD_VERSION else unsupported_cause_v1
     errors = []
+    if result.get("wordingVersion") not in {None, OBSERVATION_WORDING_VERSION}:
+        errors.append("지원하지 않는 관찰 문장 계약입니다.")
     if result.get("insightVersion") != INSIGHT_VERSION:
         return ["새 설명 계약과 문장별 근거 연결이 없습니다."]
     citations = result.get("claimEvidence", {})
@@ -227,6 +230,12 @@ def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION)
     for row in result.get("followUpConditions", []):
         if re.search(r"\d", PERIOD.sub("평균 가격", expand_period_names(row.get("description", "")))) or asserts_certainty(row.get("description", "")):
             errors.append("확인 조건 설명에 직접 작성한 수치나 확정적 전망이 있습니다.")
+        if result.get("wordingVersion") == OBSERVATION_WORDING_VERSION:
+            text = row.get("description", "")
+            if narrative_presentation_errors("NO_ACTION", [text]):
+                errors.append("확인 조건의 의미에 행동 지시가 포함됐습니다.")
+            if any(causal_guard(sentence, "hypothesis") for sentence in re.split(r"[.!?。\n]", text)):
+                errors.append("확인 조건의 의미에서 관측 사실을 확인된 원인으로 단정할 수 없습니다.")
     return list(dict.fromkeys(errors))
 
 
@@ -248,6 +257,11 @@ def insight_fingerprint(result, packet):
 
 
 def narrative_digest(result):
-    return content_hash({key: result.get(key) for key in (
+    content = {key: result.get(key) for key in (
         "insightVersion", "summary", "comparison", "hypothesis", "portfolioImpact", "counterEvidence",
-        "notification", "claimEvidence", "observations", "evidenceIds", "followUpConditions", "input")})
+        "notification", "claimEvidence", "observations", "evidenceIds", "followUpConditions", "input")}
+    # Legacy queued bodies keep their original review hash and rendering. New
+    # presentation versions are part of the independently reviewed draft.
+    if result.get("wordingVersion") is not None:
+        content["wordingVersion"] = result["wordingVersion"]
+    return content_hash(content)

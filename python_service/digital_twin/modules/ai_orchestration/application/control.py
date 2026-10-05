@@ -7,6 +7,7 @@ from digital_twin.modules.ai_orchestration.domain.planning import enabled, ident
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review
+from digital_twin.modules.ai_orchestration.domain.observation_wording import OBSERVATION_WORDING_VERSION
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
 from digital_twin.modules.outcomes.contracts import evaluate_observation_conditions
 
@@ -93,6 +94,7 @@ class AIControlService:
                     plan = validate_plan(raw, packet, envelope["researchResults"], require_research=True)
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
                               "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
+                              "wordingVersion": OBSERVATION_WORDING_VERSION,
                               "memoryCoverage": envelope["memoryCoverage"],
                               "judgmentContinuity": judgment_continuity(envelope),
                               "followUpEvaluations": packet["followUpEvaluations"],

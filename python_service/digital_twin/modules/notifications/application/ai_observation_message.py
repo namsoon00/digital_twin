@@ -1,7 +1,7 @@
 """Render verified central observations without another AI or live enrichment."""
 from datetime import datetime
 import math
-from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, resolve_observation_ref
+from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, OBSERVATION_WORDING_VERSION, resolve_observation_ref
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment
 from zoneinfo import ZoneInfo
 
@@ -125,6 +125,8 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
             right = OBSERVATION_METRICS[row["right"]["field"]][0]
             operator = {"gt": "초과로", "gte": "이상으로", "lt": "미만으로", "lte": "이하로"}[row["operator"]]
             effect = {"supports": "설명을 뒷받침", "weakens": "설명 약화", "invalidates": "설명 재검토"}[row["effect"]]
+            if result.get("wordingVersion") == OBSERVATION_WORDING_VERSION:
+                effect = row["description"]
             particle = "이" if 0xAC00 <= ord(left[-1]) <= 0xD7A3 and (ord(left[-1]) - 0xAC00) % 28 else "가"
             lines.append(f"• {left}{particle} {right} {operator} 전환 → {effect}")
         lines.append("확인 기간 " + clock_label(min(row["expiresAt"] for row in checks)) + "까지 · 조건 성립이 예측 적중을 뜻하지는 않습니다.")

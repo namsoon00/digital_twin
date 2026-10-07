@@ -9,6 +9,7 @@ from digital_twin.modules.ai_orchestration.domain.insight_repair import correcti
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review
 from digital_twin.modules.ai_orchestration.domain.observation_wording import OBSERVATION_WORDING_VERSION
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
+from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred, AIExecutionError
 from digital_twin.modules.outcomes.contracts import evaluate_observation_conditions
 
 
@@ -48,6 +49,7 @@ class AIControlService:
                 return {"status": "retired", "taskId": job["taskId"]}
             with self.store.keep_alive(job):
                 if job["capability"] == "observe":
+                    self.store.execution_wait()
                     capture = self.evidence({**job, "marketWorldId": current_subject.get("marketWorldId", "")})
                     session = capture if isinstance(capture, ObservationEvidenceSession) else None
                     packet = session.packet() if session else capture
@@ -109,7 +111,7 @@ class AIControlService:
                                 return {"status": "lease-lost", "taskId": job["taskId"]}
                             try:
                                 result["quality"] = accept_review(result, self.reviewer(review_input, review_id), review_id)
-                            except AIControlBudgetWait:
+                            except (AIControlBudgetWait, AIExecutionDeferred):
                                 raise
                             except Exception:
                                 result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
@@ -126,7 +128,7 @@ class AIControlService:
                             repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"], require_research=True)
                             result.update(repaired, executionInputId=repair_id, observedAt=stamp(), memoryCoverage=correction["memoryCoverage"],
                                           judgmentContinuity=judgment_continuity(correction))
-                        except AIControlBudgetWait:
+                        except (AIControlBudgetWait, AIExecutionDeferred):
                             raise
                         except Exception as error:
                             result["repair"].update(status="failed", errorKind=type(error).__name__)
@@ -158,9 +160,12 @@ class AIControlService:
         except AIControlBudgetWait as wait:
             saved = self.store.defer_budget(job, wait)
             return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
+        except AIExecutionDeferred as wait:
+            saved = self.store.defer_execution(job, wait)
+            return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
-            reason = error.code if isinstance(error, (EvidenceContractError, EvidenceReadError)) else type(error).__name__
+            reason = error.code if isinstance(error, (EvidenceContractError, EvidenceReadError, AIExecutionError)) else type(error).__name__
             saved = self.store.fail(job, reason)
             status = saved.get("status") if isinstance(saved, dict) else "pending"
             return {"status": "deferred" if status == "pending" else status, "taskId": job["taskId"], "reason": reason}

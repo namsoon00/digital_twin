@@ -6,6 +6,7 @@ from functools import lru_cache
 import time
 
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
+from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionError, process_diagnostic, exception_diagnostic
 
 
 CURRENT_TASK = ContextVar("ai_control_task", default="")
@@ -29,7 +30,12 @@ def ai_execution(workload, prompt="", settings=None, store=None):
         from digital_twin.infrastructure.settings import runtime_settings
         configured = settings if settings is not None else runtime_settings()
         store = _store(tuple(sorted((key, str(value)) for key, value in configured.items())))
-    call_id = store.begin_call(workload, hashlib.sha256(prompt.encode()).hexdigest(), CURRENT_TASK.get(), CURRENT_INPUT.get())
+    ticket = store.acquire_execution()
+    try:
+        call_id = store.begin_call(workload, hashlib.sha256(prompt.encode()).hexdigest(), CURRENT_TASK.get(), CURRENT_INPUT.get())
+    except BaseException:
+        store.finish_execution(ticket, "cancelled")
+        raise
     metrics = {}
     token = CURRENT_CALL_METRICS.set(metrics)
     started = time.monotonic()
@@ -53,10 +59,19 @@ def ai_execution(workload, prompt="", settings=None, store=None):
         with capacity:
             yield call_id
     except BaseException as error:
-        finish(type(error).__name__)
+        diagnostic = exception_diagnostic(error)
+        if diagnostic:
+            metrics["failure"] = diagnostic
+        try:
+            finish(error.code if isinstance(error, AIExecutionError) else type(error).__name__)
+        finally:
+            store.finish_execution(ticket, "failure", diagnostic)
         raise
     else:
-        finish()
+        try:
+            finish()
+        finally:
+            store.finish_execution(ticket, "success")
     finally:
         CURRENT_CALL_METRICS.reset(token)
 
@@ -64,6 +79,7 @@ def ai_execution(workload, prompt="", settings=None, store=None):
 def execute_ai_work(workload, prompt, invoke, settings=None):
     with ai_execution(workload, prompt, settings):
         result = invoke()
-        if getattr(result, "returncode", 0):
-            raise RuntimeError("AI process failed")
+        diagnostic = process_diagnostic(result)
+        if diagnostic:
+            raise AIExecutionError(diagnostic)
         return result

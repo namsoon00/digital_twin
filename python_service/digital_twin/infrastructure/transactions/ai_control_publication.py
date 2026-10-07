@@ -20,6 +20,7 @@ from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATI
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
 from digital_twin.modules.notifications.contracts import independent_typedb_publication
+from digital_twin.modules.notifications.domain.observation_price_basis import PRICE_PRESENTATION_VERSION, price_basis_for_result
 
 
 def validate_narrative(result):
@@ -114,6 +115,8 @@ class AIControlPublication:
                                              "reason": "검증 미통과 초안을 운영 채널로 보냅니다." if accepted else job.last_error}
             return publication
         job_id = identity("ai-control", task["taskId"])[:48]
+        # Existing queued and partial deliveries retain their renderer and bytes.
+        result["pricePresentationVersion"] = PRICE_PRESENTATION_VERSION
         body = render_ai_observation(result)
         context = {"accountId": task["accountId"], "symbol": task["symbol"], "name": task["name"],
                    "messageType": MESSAGE_TYPE, "title": task["name"] + " AI 관찰",
@@ -199,6 +202,10 @@ class AIControlPublication:
                 job.context["aiControlDeliverySnapshot"].update(
                     captureQuoteAssessment=packet["quoteAssessment"],
                     deliveryQuoteAssessment=quote_clock_assessment(packet["facts"], stamp()))
+            if result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION:
+                job.context["aiControlDeliverySnapshot"].update(
+                    renderedPriceBasis=price_basis_for_result(result, job.context.get("aiControlRenderedAt") or result["observedAt"]),
+                    deliveryPriceBasis=price_basis_for_result(result, stamp()))
             yield
 
     def check_diagnostic_delivery(self, job, message):

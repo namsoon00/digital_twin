@@ -3,6 +3,7 @@ from datetime import datetime
 import math
 from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, OBSERVATION_WORDING_VERSION, resolve_observation_ref
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment
+from digital_twin.modules.notifications.domain.observation_price_basis import PRICE_PRESENTATION_VERSION, observation_price_basis
 from zoneinfo import ZoneInfo
 
 
@@ -42,10 +43,14 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
     packet = result["input"]
     quote = next((row for row in packet["facts"] if figure(row.get("currentPrice")) and float(row["currentPrice"]) > 0), {})
     assessment = {}
-    if "quoteAssessment" in packet:
+    if "quoteAssessment" in packet or result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION:
         current = quote_clock_assessment(packet["facts"], sent_at or result["observedAt"])
         assessment = next((row for row in current["quotes"] if row["evidenceId"] == quote.get("id")), {})
-    lines = [f"🧠 AI 관찰 · {packet['name']} ({packet['symbol']})", "", result["summary"]]
+    basis = observation_price_basis(quote, assessment) if result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION else {}
+    lines = [f"🧠 AI 관찰 · {packet['name']} ({packet['symbol']})", ""]
+    if basis and not basis["currentUseAllowed"]:
+        lines += [basis["label"] + " 기준 · " + clock_label(basis.get("sourceAsOf")), basis["reason"], ""]
+    lines.append(result["summary"])
     lines += ["", "이전 알림과 비교", result["comparison"]]
     compared = set()
     for row in result.get("observations", []):
@@ -56,7 +61,10 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         if field not in OBSERVATION_METRICS or field in compared:
             continue
         current, baseline = [resolve_observation_ref(packet, next(ref for ref in refs if ref["period"] == period))[0] for period in ("current", "baseline")]
-        lines.append("• " + metric(baseline, field) + " → " + metric(current, field).split(": ", 1)[1])
+        label = metric(baseline, field)
+        if basis and field == "currentPrice":
+            label = "관측 시점 가격: " + label.split(": ", 1)[1]
+        lines.append("• " + label + " → " + metric(current, field).split(": ", 1)[1])
         compared.add(field)
     lines += ["", "확인한 데이터" if assessment else "확인한 현재 데이터"]
     fields = ["currentPrice", "changeRate", "averagePrice", "profitLossRate", "positionWeight", "ma5", "ma20", "ma60", "volume", "volumeRatio"]
@@ -78,14 +86,16 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         if key == "changeRate" and value == 0 and quote.get("dataState") == "partial":
             continue
         text = metric(quote, key)
-        if key == "currentPrice" and assessment and assessment["status"] != "fresh":
+        if key == "currentPrice" and basis:
+            text = basis["label"] + ": " + text.split(": ", 1)[1]
+        elif key == "currentPrice" and assessment and assessment["status"] != "fresh":
             text = "기준 시점 가격: " + text.split(": ", 1)[1]
         lines.append("• " + text)
     if quote.get("volumeRatio"):
         lines.append("거래량 비율은 같은 장중 시각끼리의 비교가 아닙니다.")
     session = (" · 출처의 마감 참고값" if assessment.get("referenceState") == "last-close" else "") if assessment else (
         " · 장 마감 자료" if quote.get("marketSessionStatus") == "closed" else "")
-    lines += ["시세 기준 " + clock_label(quote.get("sourceAsOf") or quote.get("asOf")) + session,
+    lines += [(basis.get("sourceClockLabel", "시세 기준") + " ") + clock_label(quote.get("sourceAsOf") or quote.get("asOf")) + session,
               "출처 " + source_label(quote)]
     if assessment:
         status = assessment["status"]

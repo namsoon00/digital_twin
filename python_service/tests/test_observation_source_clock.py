@@ -113,6 +113,8 @@ class ObservationSourceClockTests(unittest.TestCase):
         self.assertEqual("advisory", result["quoteAssessment"]["policy"])
 
     def test_bad_clocks_and_budget_cannot_be_presented_as_fresh(self):
+        from ai_execution_resilience_checks import ExecutionResilienceChecks
+        ExecutionResilienceChecks().check_reference_prices_never_become_current_from_freshness_alone()
         base = {"id": "q", "kind": "stock", "sourceFetchedAt": CAPTURE, "maxAgeMinutes": 10}
         for source, status in (("", "missing-time"), ("bad", "invalid-time"),
                                ("2026-10-01T23:14:08", "invalid-time"),
@@ -177,6 +179,8 @@ class ObservationSourceClockTests(unittest.TestCase):
             validate_execution_input(old)
 
     def test_delayed_delivery_rechecks_age_without_blocking_dated_analysis(self):
+        from ai_execution_resilience_checks import ExecutionResilienceChecks
+        ExecutionResilienceChecks().check_new_price_presentation_is_explicit_and_legacy_body_is_stable()
         value = aged_packet()
         value["capturedAt"] = "2026-10-01T19:58:00Z"
         value["quoteAssessment"] = quote_clock_assessment(value["facts"], value["capturedAt"])

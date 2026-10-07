@@ -14,9 +14,12 @@ from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetW
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PROMPT_VERSION, validate_trace
 from digital_twin.modules.reasoning.contracts import content_hash
+from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import AIExecutionPersistence, EXECUTION_SCHEMA
+from digital_twin.modules.ai_orchestration.domain.execution_resilience import safe_diagnostic
 
 
 SCHEMA = (
+    EXECUTION_SCHEMA,
     """CREATE TABLE IF NOT EXISTS ai_control_call_metrics (
     call_id VARCHAR(64) PRIMARY KEY, metrics_json TEXT NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
@@ -58,7 +61,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(MySQLOperationalConnection):
+class MySQLAIControlStore(AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None):
         super().__init__(settings)
         with self.connect() as connection:
@@ -158,6 +161,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                                (json.dumps(saved_result, ensure_ascii=False), job["taskId"]))
             for child in saved_children:
                 self.insert(connection, child)
+            self.record_observation_progress(connection, job, saved_result, now)
             return saved_result, saved_children
 
         committed = self.transaction_with_deadlock_retry("ai-control-complete", write)
@@ -171,7 +175,7 @@ class MySQLAIControlStore(MySQLOperationalConnection):
     def fail(self, job, error_kind, terminal=False, result=None):
         capacity_wait = error_kind == "LocalAICapacityUnavailable" and not terminal
         capacity_deferrals = int(job.get("capacityDeferrals", 0))
-        failures = job["attempts"] - int(job.get("budgetDeferrals", 0)) - capacity_deferrals
+        failures = job["attempts"] - int(job.get("budgetDeferrals", 0)) - capacity_deferrals - int(job.get("executionDeferrals", 0))
         terminal = terminal or (not capacity_wait and failures >= 3)
         status = "failed" if terminal else "pending"
         delay, recovery_delay = retry_delays(job["capability"], error_kind,
@@ -310,7 +314,9 @@ class MySQLAIControlStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             if metrics:
                 safe = {key: metrics[key] for key in ("stage", "configuredTimeoutSeconds", "promptBytes",
-                    "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason") if key in metrics}
+                    "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason", "failure") if key in metrics}
+                if "failure" in safe:
+                    safe["failure"] = safe_diagnostic(safe["failure"])
                 connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s) "
                     "ON DUPLICATE KEY UPDATE metrics_json=VALUES(metrics_json)", (call_id, json.dumps(safe)))
             connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))
@@ -346,6 +352,8 @@ class MySQLAIControlStore(MySQLOperationalConnection):
             budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", (day,)).fetchone()
             call_budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
             active = connection.execute("SELECT COUNT(*) AS count FROM ai_control_tasks WHERE status IN ('pending','processing') AND (%s='' OR account_id=%s)", (account_id, account_id)).fetchone()
+            from digital_twin.modules.ai_orchestration.domain.planning import enabled
+            health = self.operational_health(connection, now, enabled(self.runtime_settings))
         state = budget_state(self.runtime_settings, (budget or {}).get("used_count", 0), (call_budget or {}).get("used_count", 0), now)
         wait = admission_wait(state)
         return {"tasks": [{"taskId": row["task_id"], "accountId": row["account_id"], "symbol": row["symbol"],
@@ -355,4 +363,4 @@ class MySQLAIControlStore(MySQLOperationalConnection):
                            "result": json.loads(row["result_json"])} for row in rows],
                 "callsToday": list(calls), **state,
                 "observationScheduling": wait.result() if wait else {"status": "ready"},
-                "activeTaskCount": int(active["count"])}
+                "activeTaskCount": int(active["count"]), "executionHealth": health}

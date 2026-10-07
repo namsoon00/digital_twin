@@ -137,13 +137,14 @@ class CentralPublicationStorageTests(unittest.TestCase):
     def test_successful_send_is_only_baseline_and_cannot_be_replayed(self):
         from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_WORDING_VERSION
         draft = observation()
+        draft['input']['facts'][0]['maxAgeMinutes'] = 15
         draft['wordingVersion'] = OBSERVATION_WORDING_VERSION
         draft['followUpConditions'][0]['description'] = '중기 약세가 이어진다고 볼 근거가 약해집니다.'
         task, result, job = self.publish(draft)
         self.assertEqual({}, self.publication.memory(job.account_id, "TEST"))
         renderer = NotificationRenderingService(context_enricher=Mock(side_effect=AssertionError("must not enrich")))
         message = renderer.render(job)
-        self.assertIn("현재가: 100원", message)
+        self.assertIn("최근 관측 가격: 100원", message)
         self.assertIn("평가 손익률: -9.09%", message)
         self.assertIn('현재가가 20일 평균 가격 초과로 전환 → 중기 약세가 이어진다고 볼 근거가 약해집니다.', message)
         notifier = Mock(supports_delivery_checkpoints=False)
@@ -203,7 +204,7 @@ class CentralPublicationStorageTests(unittest.TestCase):
         result["input"]["quoteAssessment"] = quote_clock_assessment(result["input"]["facts"], result["input"]["capturedAt"])
         task, result, job = self.publish(result)
         message = NotificationRenderingService().render(job)
-        self.assertIn("기준 시점 가격: 100원", message)
+        self.assertIn("과거 참고 가격: 100원", message)
         self.assertIn("과거 시점 참고 자료", message)
         notifier = Mock(supports_delivery_checkpoints=False)
         notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
@@ -212,6 +213,8 @@ class CentralPublicationStorageTests(unittest.TestCase):
             dispatcher.deliver(job, {job.account_id: object()}, message)
         baseline = self.publication.memory(job.account_id, "TEST")
         self.assertEqual("fresh", baseline["captureQuoteAssessment"]["quotes"][0]["status"])
+        self.assertEqual("historical-reference", baseline["deliveryPriceBasis"]["purpose"])
+        self.assertFalse(baseline["renderedPriceBasis"]["currentUseAllowed"])
         self.assertEqual("stale", baseline["deliveryQuoteAssessment"]["quotes"][0]["status"])
         self.assertEqual("fresh", baseline["facts"][0]["freshnessStatus"])
         self.assertEqual("fresh", result["input"]["quoteAssessment"]["quotes"][0]["status"])

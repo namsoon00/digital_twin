@@ -452,6 +452,63 @@ history is not rewritten or resent automatically.
 
 ## Execution and limits
 
+### Execution health and shared recovery (2026-10-07)
+
+The common model entry point records a classified, secret-free failure in
+`ai_control_call_metrics.failure`: quota, authentication, rate limit, network,
+provider availability, timeout, invalid request or unknown process failure.
+Only approved signal names, a canonical explanation, exit code and diagnostic
+hash are retained. Raw stdout/stderr, provider messages and credentials are
+never persisted as error diagnostics. A structured failed model turn remains
+a failure even when the CLI exit code is zero. Older generic `RuntimeError`
+records cannot be retrospectively classified from their exit code alone.
+
+`ai_control_execution_state` holds two bounded records: shared local model
+recovery and observation progress. Three consecutive execution failures pause
+model calls; quota/authentication errors pause immediately. Recovery probes use
+60-second exponential delays capped at 15 minutes (quota/authentication start
+at 15 minutes). Row locking and a fenced, 15-minute probe lease allow one worker
+to check recovery. Cancellation releases the probe without declaring success.
+A late success cannot erase a newer failure or a replacement worker's probe.
+Invalid requests, local capacity waits and application validation errors do not
+trip the shared provider pause.
+
+Blocked calls are not recorded as model invocations or charged against the
+model call budget. Central work is durably deferred without consuming its
+failure retry allowance; immutable attempt/input identities are preserved.
+An observation checks the shared pause before graph capture. When resumed,
+the existing workflow captures current evidence again. Actual model failures
+retain their terminal task audit and schedule a fresh observation successor
+after five minutes; historical failed tasks are not bulk-replayed or erased.
+
+`GET /api/ai-control/status` includes `executionHealth` for the shared runtime,
+separate from account-filtered task cards. It reports the last committed
+judgment/check, a one-hour call window, overdue observation work, expired leases,
+the classified last failure and recovery time. Call success alone does not
+establish a saved judgment: the UI explicitly distinguishes awaiting a result,
+recovery, delay, idle and paused states. New progress tracking starts when the
+new runtime commits observation work. These are operational signals, not
+judgment correctness or return measurements. External daily-report scheduling
+remains owned by the reporting automation.
+
+### Observation price presentation
+
+New customer outbox entries opt into `observation-price-basis-v1`. The renderer
+uses the immutable quote and the rendering clock to distinguish recent
+observations, last-close references, aged references, unknown quote clocks or
+budgets, and evidence excluded from judgment. A fresh fetch timestamp does not
+establish a source quote timestamp. A last-close quote remains a reference
+even when within its age budget. Only explicitly usable evidence can receive
+the recent-observation presentation.
+
+Reference purpose and limitations precede the AI narrative; comparison rows
+refer to prices at their observation times. Successful delivery receipts retain
+both rendered and pre-send price-basis assessments. These display assessments
+do not grant investment authority or change the existing advisory freshness
+and market-hours policy. Account switches, frozen facts, prompts and independent
+reviews remain separate. Existing queued/partial deliveries retain their old
+renderer and receipt bytes; no historical customer message is re-sent.
+
 Observation, repair and independent review prompts default to **256 KiB of UTF-8
 text**. Set `aiObservationPromptMaxBytes` or `AI_OBSERVATION_PROMPT_MAX_BYTES` to
 override this operational limit (64–512 KiB). It is a byte budget, not the model's

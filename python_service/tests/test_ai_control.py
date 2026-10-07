@@ -105,6 +105,12 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual([], store.complete.call_args.args[2])
 
     def test_pause_and_lost_lease_do_not_claim_success(self):
+        from ai_execution_resilience_checks import ExecutionResilienceChecks
+        checks = ExecutionResilienceChecks()
+        checks.check_consecutive_failures_open_then_only_one_probe_can_recover()
+        checks.check_late_success_and_expired_probe_cannot_erase_newer_failure()
+        checks.check_open_gate_never_invokes_or_counts_a_model_call()
+        checks.check_recovery_wait_defers_before_graph_capture_and_does_not_fail_task()
         service, store, planner = self.runner(settings={"aiControlEnabled": "false", "notificationAiQueueWorkerCount": 0})
         self.assertEqual("paused", service.run_once()["status"])
         store.claim.assert_not_called()
@@ -118,6 +124,10 @@ class AIControlTests(unittest.TestCase):
         planner.assert_not_called(); store.fail.assert_not_called()
 
     def test_execution_audit_records_failure_without_prompt_or_error_contents(self):
+        from ai_execution_resilience_checks import ExecutionResilienceChecks
+        checks = ExecutionResilienceChecks()
+        checks.check_error_signals_exclude_secrets_and_successful_model_content()
+        checks.check_nonzero_and_failed_turn_are_audited_as_failures()
         self.assert_background_capacity_wait_does_not_inherit_notification_zero()
         store = Mock()
         store.begin_call.return_value = "call-1"
@@ -164,6 +174,9 @@ class AIControlTests(unittest.TestCase):
         self.assertFalse(packet["requiresMatchedRule"])
 
     def test_private_status_and_invalid_settings_have_no_write_or_read(self):
+        from ai_execution_resilience_checks import ExecutionResilienceChecks
+        checks = ExecutionResilienceChecks()
+        checks.check_health_separates_active_process_from_success_and_backlog()
         from digital_twin.infrastructure.web.routes.operations import OperationsRoutes
         from digital_twin.infrastructure.composition.ai_orchestration import save_ai_control_settings
         request = Mock(command="GET")
@@ -189,7 +202,7 @@ class AIControlStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.store.transaction() as c:
-            for table in ("ai_control_call_metrics", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls"):
+            for table in ("ai_control_call_metrics", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls", "ai_control_execution_state"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):
@@ -220,6 +233,9 @@ class AIControlStorageTests(unittest.TestCase):
                 c.execute("UPDATE ai_control_tasks SET available_at='2000' WHERE task_id=%s", (job['taskId'],))
 
     def test_capture_retries_are_bounded_and_stale_leases_cannot_schedule_recovery(self):
+        from ai_execution_persistence_checks import ExecutionPersistenceChecks
+        checks = ExecutionPersistenceChecks()
+        checks.check_isolated("check_gate_waits_keep_failure_budget_and_reject_old_task_lease")
         self.assert_capacity_deferrals_preserve_error_budget_and_reject_stale_lease()
         self.clean()
         from datetime import datetime, timezone
@@ -250,6 +266,9 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertLess(recovery, 1805)
 
     def test_idempotent_seed_lease_recovery_and_atomic_successors(self):
+        from ai_execution_persistence_checks import ExecutionPersistenceChecks
+        checks = ExecutionPersistenceChecks()
+        checks.check_isolated("check_two_workers_share_pause_and_only_one_can_probe")
         self.store.seed(SUBJECT)
         self.store.seed(SUBJECT)
         old = self.store.claim()
@@ -291,12 +310,16 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertEqual("RETURNING", rejoined["symbol"])
 
     def test_failed_completion_rolls_back_both_result_and_successors(self):
+        from ai_execution_persistence_checks import ExecutionPersistenceChecks
+        checks = ExecutionPersistenceChecks()
+        checks.check_isolated("check_progress_commits_with_result_and_never_moves_backwards")
         self.store.seed(SUBJECT)
         job = self.store.claim()
         with self.assertRaises(KeyError):
             self.store.complete(job, {"summary": "must not persist"}, [{"taskId": "incomplete"}])
         self.assertEqual("processing", self.store.status()["tasks"][0]["status"])
         self.assertEqual([], self.store.memory(SUBJECT["accountId"], "TEST"))
+        self.assertFalse(self.store.status()["executionHealth"]["lastJudgmentAt"])
 
     def test_budgets_survive_new_store_and_failed_calls_consume_admission(self):
         from datetime import datetime, timezone

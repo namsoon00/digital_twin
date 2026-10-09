@@ -263,7 +263,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Thirteen worker-lifetime regressions cover swap-aware measurement,
         # garbage reclamation, unavailable probes, supervisor ownership,
         # settled writer/receipt boundaries and bounded event/error retention.
-        self.assertLessEqual(total, 2115)
+        # Ten storage forecast regressions cover allocation bursts, sustained
+        # depletion, immediate thresholds, durable confirmation, sampling gaps,
+        # ETA hysteresis, clock rollback and truthful forecast availability.
+        self.assertLessEqual(total, 2125)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.market_data.domain.data_freshness import parse_datetime
@@ -45,8 +46,12 @@ def operational_storage_capacity_read_model(
         "capacityState": capacity_state,
         "capacityObservedAt": str(observed.get("checkedAt") or ""),
         "forecast": {
-            "available": int(observed.get("forecastSampleCount") or 0) >= 2,
+            "available": bool(observed.get(
+                "forecastAvailable", int(observed.get("forecastSampleCount") or 0) >= 2
+            )),
             "detected": bool(observed.get("forecastDetected")),
+            "confirmationPending": bool(observed.get("forecastConfirmationPending")),
+            "recoveryPending": bool(observed.get("forecastRecoveryPending")),
             "sampleCount": int(observed.get("forecastSampleCount") or 0),
             "elapsedMinutes": observed.get("forecastElapsedMinutes"),
             "depletionRateMbPerMinute": _number(
@@ -149,7 +154,7 @@ def _recent_free_samples(
             continue
         observed = _utc(observed)
         amount = _number(value.get("freeMb"), -1)
-        if observed < cutoff or amount < 0:
+        if observed < cutoff or observed > _utc(current) or amount < 0:
             continue
         samples.append((observed, amount))
 
@@ -158,7 +163,7 @@ def _recent_free_samples(
     if not samples:
         observed = parse_datetime(previous.get("checkedAt"))
         amount = _number(previous.get("freeMb"), -1)
-        if observed and amount >= 0 and _utc(observed) >= cutoff:
+        if observed and amount >= 0 and cutoff <= _utc(observed) <= _utc(current):
             samples.append((_utc(observed), amount))
 
     samples.append((_utc(current), max(0.0, free_mb)))
@@ -178,7 +183,21 @@ def _depletion_forecast(
     minimum_samples: int,
     minimum_elapsed_minutes: int,
 ) -> Dict[str, object]:
-    """Estimate time to the protected reserve from the recent net change."""
+    """Require a sustained trend, without extrapolating a single allocation.
+
+    Median pair slopes tolerate isolated jumps. The recent half of the time
+    window must still support that rate: an old burst followed by a plateau
+    or recovery is not evidence of continuing depletion.
+    """
+
+    # A long sampling gap cannot count as sustained observation.
+    maximum_gap = max(5, minimum_elapsed_minutes)
+    for index in range(len(samples) - 1, 0, -1):
+        before = parse_datetime(samples[index - 1].get("at"))
+        after = parse_datetime(samples[index].get("at"))
+        if before and after and (after - before).total_seconds() > maximum_gap * 60:
+            samples = samples[index:]
+            break
 
     if len(samples) < minimum_samples:
         return {
@@ -213,9 +232,24 @@ def _depletion_forecast(
             "projectedFreeMb": None,
             "detected": False,
         }
-    first_free_mb = _number(first.get("freeMb"))
     latest_free_mb = _number(latest.get("freeMb"))
-    rate = max(0.0, (first_free_mb - latest_free_mb) / elapsed_minutes)
+    points = [
+        ((_utc(parse_datetime(item.get("at"))) - _utc(first_at)).total_seconds() / 60,
+         _number(item.get("freeMb")))
+        for item in samples
+    ]
+
+    def depletion_rate(window):
+        slopes = [
+            (left_free - right_free) / (right_at - left_at)
+            for index, (left_at, left_free) in enumerate(window)
+            for right_at, right_free in window[index + 1:]
+            if right_at > left_at
+        ]
+        return median(slopes) if slopes else 0.0
+
+    recent = [point for point in points if point[0] >= elapsed_minutes / 2]
+    rate = max(0.0, min(depletion_rate(points), depletion_rate(recent)))
     projected = latest_free_mb - rate * horizon_minutes
     eta = 0.0 if latest_free_mb <= threshold_mb else (
         (latest_free_mb - threshold_mb) / rate if rate > 0 else None
@@ -443,21 +477,46 @@ def evaluate_operational_storage_capacity(
         forecast_minimum_samples,
         forecast_minimum_elapsed_minutes,
     )
-    forecast_detected = bool(forecast.get("detected")) and forecast_enabled
+    forecast_candidate = bool(forecast.get("detected")) and forecast_enabled
+    previous_checked = parse_datetime(prior.get("checkedAt"))
+    continuous = bool(previous_checked and 0 <= (current - _utc(previous_checked)).total_seconds()
+                      <= max(5, forecast_minimum_elapsed_minutes) * 60)
+    candidate_since = parse_datetime(prior.get("forecastCandidateSince")) if continuous else None
+    if not candidate_since or candidate_since > current:
+        candidate_since = current
+    forecast_confirmed = (
+        (current - _utc(candidate_since)).total_seconds() >= forecast_minimum_elapsed_minutes * 60
+        or (continuous and bool(prior.get("forecastDetected")))
+    )
+    forecast_detected = forecast_candidate and forecast_confirmed
+    # Separate the forecast incident from the actual capacity/write state.
+    # Require ETA to clear a 25% margin before closing an already sent alert.
+    forecast_recovery_pending = bool(
+        forecast_enabled and prior.get("forecastAlertActive", prior.get("forecastDetected"))
+        and not forecast_detected and (
+            not forecast.get("available")
+            or (
+                _number(forecast.get("depletionRateMbPerMinute")) > 0
+                and forecast.get("etaMinutes") is not None
+                and _number(forecast.get("etaMinutes")) <= forecast_horizon_minutes * 1.25
+            )
+        )
+    )
+    forecast_alert_active = forecast_detected or forecast_recovery_pending
     disk_alert_reached = free_mb < alert_free_mb
     component_alert_reached = any(bool(item.get("alertThresholdReached")) for item in limiting_components)
     alert_eligible = bool(
         state in {"limited", "critical"}
         or disk_alert_reached
         or component_alert_reached
-        or forecast_detected
+        or forecast_alert_active
     )
     previous_alert_eligible = bool(prior.get("alertEligible"))
     # Keep an incident open across small threshold oscillations. This changes
     # notification recovery only, never the live capacity/write-admission state.
     recovery_margin_mb = _integer(configured.get("operationalStorageRecoveryMarginMb"), 2048, 0)
     recovery_margin_percent = _integer(configured.get("operationalStorageRecoveryMarginPercent"), 5, 0, 20)
-    recovery_pending = previous_alert_eligible and not alert_eligible and (
+    recovery_pending = forecast_recovery_pending or (previous_alert_eligible and not alert_eligible and (
         free_mb < alert_free_mb + recovery_margin_mb
         or any(
             _number(values.get(limit_key)) > 0
@@ -465,7 +524,7 @@ def evaluate_operational_storage_capacity(
             > (component_alert_percent - recovery_margin_percent) / 100.0
             for _, size_key, limit_key in COMPONENT_SPECS
         )
-    )
+    ))
     alert_eligible = alert_eligible or recovery_pending
     previous_state = str(prior.get("state") or "healthy").strip().lower()
     if previous_state not in STATE_ORDER:
@@ -594,6 +653,15 @@ def evaluate_operational_storage_capacity(
         "materialWorseningPercent": material_worsening_percent,
         "recentFreeSamples": recent_samples,
         "forecastEnabled": forecast_enabled,
+        "forecastAvailable": bool(forecast.get("available")),
+        "forecastMethod": "sustained-median-slopes-v1",
+        "forecastCandidateDetected": forecast_candidate,
+        "forecastCandidateSince": _iso(candidate_since) if forecast_candidate else "",
+        "forecastConfirmationPending": forecast_candidate and not forecast_detected,
+        "forecastConfirmationMinutes": forecast_minimum_elapsed_minutes,
+        "forecastAlertActive": forecast_alert_active,
+        "previousForecastAlertActive": bool(prior.get("forecastAlertActive", prior.get("forecastDetected"))),
+        "forecastRecoveryPending": forecast_recovery_pending,
         "forecastThresholdMb": forecast_threshold_mb,
         "forecastHorizonMinutes": forecast_horizon_minutes,
         "forecastDetected": forecast_detected,

@@ -27,6 +27,24 @@ TypeDB materialized ontology. It is a storage policy, not an investment rule.
 Retention never removes active snapshots, pending or processing jobs, current
 world manifests, current InferenceBox output, credentials, or delivery state.
 
+## Capacity Forecast Notifications
+
+Actual free-space/component thresholds and storage write failures still alert
+immediately under their existing cooldown policy. Forecast-only alerts never
+restrict writes. Their rolling window now uses median pair slopes, capped by
+the slope of the recent half-window, so a one-time allocation followed by a
+plateau or recovery is not extrapolated as sustained depletion.
+
+The existing `operationalStorageForecastMinimumElapsedMinutes` (default five)
+is both the minimum observation span and the additional confirmation period.
+With a new one-minute series, sustained depletion can first page after ten
+minutes. Confirmation is durable across worker restarts; future samples and
+sampling gaps longer than five minutes (or the configured minimum span, if
+larger) do not establish continuous observation. Confirmed forecast incidents
+remain open until the ETA clears the 60-minute horizon by 25%, or usable
+observations show no continuing depletion. Insufficient observations cannot
+prove recovery. Messages distinguish forecasts from actual capacity limits.
+
 ## Managed Worker Memory
 
 Managed delivery/candidate reasoning and notification processes also bound

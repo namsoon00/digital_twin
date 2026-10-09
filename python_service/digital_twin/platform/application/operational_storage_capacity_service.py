@@ -196,8 +196,12 @@ class OperationalStorageCapacityNotificationEnqueuer:
             title = "TypeDB 안전 재구축 실패"
         elif kind in {"forecast", "forecast-eta-worsened"}:
             title = "운영 저장공간 소진 예상"
+        elif kind == "reminder" and values.get("forecastAlertActive") and not components:
+            title = "운영 저장공간 소진 예상 지속"
         elif kind == "material-worsening":
             title = "운영 저장공간 제한 악화"
+        if recovered and values.get("previousForecastAlertActive") and previous == "healthy":
+            title = "운영 저장공간 소진 예상 해소"
         lines = [
             "[운영] " + title,
             "• 상태: " + state + " (이전 " + previous + ")",
@@ -233,8 +237,12 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "• 확인시각: " + str(values.get("checkedAt") or event.occurred_at),
         ]
         if recovered:
-            lines.insert(2, "• 해소: " + str(values.get("recoveredFromState") or previous) + " 상태에서 운영 알림 기준을 벗어났습니다.")
-        if values.get("forecastDetected"):
+            lines.insert(2, (
+                "• 해소: 여유 공간의 감소 추세가 완화되어 소진 예상 알림 기준을 벗어났습니다."
+                if values.get("previousForecastAlertActive") and previous == "healthy"
+                else "• 해소: " + str(values.get("recoveredFromState") or previous) + " 상태에서 운영 알림 기준을 벗어났습니다."
+            ))
+        if values.get("forecastAlertActive", values.get("forecastDetected")):
             eta = values.get("forecastEtaMinutes")
             eta_text = "계산 중" if eta is None else "약 " + str(eta) + "분 후"
             lines.insert(
@@ -243,6 +251,10 @@ class OperationalStorageCapacityNotificationEnqueuer:
                 + "분 흐름에서 " + eta_text + " "
                 + str(values.get("forecastThresholdMb") or 0) + "MB 이하 예상",
             )
+            if not components:
+                lines.insert(4, "• 구분: 현재 용량 제한에 도달한 상태는 아닙니다. 감소 추세에 따른 사전 알림입니다.")
+            if not values.get("forecastAvailable", True):
+                lines.insert(4, "• 추세 확인 중: 연속 표본이 부족해 이전 소진 예상의 해소 여부를 아직 확인하지 못했습니다.")
         if kind == "runtime-write-failure":
             lines.insert(3, "• 감지: 실제 저장소 쓰기 실패(ENOSPC 계열)를 감지해 일반 알림 쿨다운과 별도로 발송했습니다.")
         elif kind == "typedb-auto-rotation":

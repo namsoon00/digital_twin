@@ -374,6 +374,118 @@ class OperationalStorageCapacityTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+class StorageForecastRegressionTests(unittest.TestCase):
+    def setUp(self):
+        self.start = datetime(2026, 10, 9, 11, 30, tzinfo=timezone.utc)
+
+    def evaluate(self, minute, free, previous=None):
+        from digital_twin.platform.domain.operational_storage_capacity import evaluate_operational_storage_capacity
+        return evaluate_operational_storage_capacity(
+            {"freeMb": free}, previous=previous, now=self.start + timedelta(minutes=minute)
+        )
+
+    def sequence(self, values):
+        result = {}
+        results = []
+        for minute, free in enumerate(values):
+            result = self.evaluate(minute, free, result)
+            results.append(result)
+        return results
+
+    def test_startup_burst_then_recovery_does_not_page(self):
+        # Reproduce a short startup allocation followed by recovered space.
+        results = self.sequence([68900, 68700, 66300, 64600, 64400, 63600,
+                                 62300, 62300, 63200, 65000, 66000])
+        self.assertFalse(any(row["alertRequired"] for row in results))
+
+    def test_single_allocation_then_plateau_is_not_continuing_depletion(self):
+        results = self.sequence([90000] * 6 + [65000] * 20)
+        self.assertFalse(any(row["alertRequired"] for row in results))
+        self.assertEqual(0, results[-1]["forecastDepletionRateMbPerMinute"])
+
+    def test_sustained_depletion_confirms_before_the_reserve_is_reached(self):
+        results = self.sequence([80000 - minute * 2000 for minute in range(12)])
+        self.assertTrue(results[5]["forecastConfirmationPending"])
+        self.assertFalse(any(row["alertRequired"] for row in results[:10]))
+        confirmed = results[10]
+        self.assertEqual("forecast", confirmed["alertKind"])
+        self.assertGreater(confirmed["freeMb"], confirmed["alertFreeMb"])
+        self.assertTrue(confirmed["nonEssentialWritesAllowed"])
+        self.assertFalse(results[11]["alertRequired"])
+
+    def test_immediate_thresholds_do_not_wait_for_forecast_confirmation(self):
+        pending = self.sequence([80000 - minute * 2000 for minute in range(6)])[-1]
+        limited = self.evaluate(6, 11000, pending)
+        self.assertEqual("limited", limited["state"])
+        self.assertTrue(limited["alertRequired"])
+        self.assertFalse(limited["nonEssentialWritesAllowed"])
+        critical = self.evaluate(7, 5000, limited)
+        self.assertEqual("critical", critical["state"])
+        self.assertTrue(critical["alertRequired"])
+
+    def test_observation_gap_requires_new_confirmation(self):
+        pending = self.sequence([80000 - minute * 2000 for minute in range(6)])[-1]
+        after_gap = self.evaluate(16, 50000, pending)
+        self.assertFalse(after_gap["forecastAvailable"])
+        self.assertFalse(after_gap["alertRequired"])
+        self.assertEqual("", after_gap["forecastCandidateSince"])
+
+    def test_forecast_recovery_has_eta_margin(self):
+        from unittest.mock import patch
+        prior = self.sequence([80000 - minute * 2000 for minute in range(11)])[-1]
+        def forecast(eta):
+            return dict(available=True, sampleCount=12, elapsedMinutes=11,
+                        depletionRateMbPerMinute=700, etaMinutes=eta,
+                        projectedFreeMb=10000, detected=eta <= 60)
+        target = 'digital_twin.platform.domain.operational_storage_capacity._depletion_forecast'
+        with patch(target, return_value=forecast(65)):
+            pending = self.evaluate(11, 60000, prior)
+        self.assertTrue(pending["forecastRecoveryPending"])
+        self.assertFalse(pending["alertRequired"])
+        with patch(target, return_value=forecast(59)):
+            crossed = self.evaluate(12, 60000, pending)
+        self.assertFalse(crossed["alertRequired"])
+        with patch(target, return_value=forecast(80)):
+            recovered = self.evaluate(13, 60000, crossed)
+        self.assertEqual("recovered", recovered["alertKind"])
+        context = OperationalStorageCapacityNotificationEnqueuer(Queue()).context(
+            recovered, operational_storage_capacity_changed_event(recovered))
+        self.assertEqual("운영 저장공간 소진 예상 해소", context["title"])
+
+    def test_sampling_gap_cannot_prove_an_existing_forecast_incident_recovered(self):
+        prior = self.sequence([80000 - minute * 2000 for minute in range(11)])[-1]
+        after_gap = self.evaluate(20, 58000, prior)
+        self.assertFalse(after_gap["forecastAvailable"])
+        self.assertTrue(after_gap["forecastRecoveryPending"])
+        self.assertTrue(after_gap["alertEligible"])
+        self.assertFalse(after_gap["alertRequired"])
+
+    def test_forecast_confirmation_survives_service_recreation(self):
+        store = StateStore()
+        result = {}
+        for minute in range(11):
+            service = OperationalStorageCapacityService(
+                store=store, now_provider=lambda: self.start + timedelta(minutes=minute))
+            result, event = service.record({"freeMb": 80000 - minute * 2000})
+        self.assertEqual("forecast", result["alertKind"])
+        self.assertIsNotNone(event)
+        context = OperationalStorageCapacityNotificationEnqueuer(Queue()).context(result, event)
+        self.assertIn("감소 추세에 따른 사전 알림", context["readableMessage"])
+
+    def test_future_samples_are_discarded_after_clock_moves_back(self):
+        previous = {"checkedAt": "2026-10-10T00:00:00Z", "freeMb": 90000,
+                    "recentFreeSamples": [{"at": "2026-10-10T00:00:00Z", "freeMb": 90000}]}
+        result = self.evaluate(0, 60000, previous)
+        self.assertEqual(1, len(result["recentFreeSamples"]))
+        self.assertFalse(result["forecastAvailable"])
+        self.assertFalse(result["alertRequired"])
+
+    def test_read_model_does_not_claim_incomplete_forecast_is_available(self):
+        result = operational_storage_capacity_read_model(
+            {}, {"forecastAvailable": False, "forecastSampleCount": 3})
+        self.assertFalse(result["forecast"]["available"])
+
+
 class StorageIncidentRegressionTests(unittest.TestCase):
     def evaluate(self, free, logs=464, previous=None):
         from digital_twin.platform.domain.operational_storage_capacity import evaluate_operational_storage_capacity

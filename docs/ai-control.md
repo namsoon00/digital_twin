@@ -800,6 +800,19 @@ the actual transported text from the receipt (not a freshly rendered replacement
 Its review counts are operational quality diagnostics, not paid-service or return
 qualification. User usefulness and willingness to pay still require a pilot.
 
+Question-specific research returns retain the source owner's task assessment in
+`lastResearch.result.questionAssessment`. Coverage, semantic review state,
+missing requirements and evidence counts remain attached to the original case,
+even when unrelated newer runs displace it from recent research history. These
+bounded work-status summaries contain no source claim text or citable evidence
+IDs. Missing legacy assessments are `unavailable`; collection counts never mean
+the question has been answered. The central observation must still cite usable
+current graph facts and pass the existing assessment/publication gates.
+Reusing a completed source run preserves the same summary, completion clock and
+stop reason without collecting again. Both research completion and due-case
+scheduling wake only pending, never-attempted observations in the case's exact
+account, symbol and world. Historical cases are not rewritten by this change.
+
 Verification:
 
 - `test_ai_insight_quality.py`: wrong price/cost and return/weight claims, unsupported

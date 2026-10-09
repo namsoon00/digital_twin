@@ -147,6 +147,8 @@ class BrainAgendaStorageTests(unittest.TestCase):
         return task, result, [child]
 
     def test_atomic_question_research_reassessment_preserves_origin_and_blocks_duplicate_work(self):
+        self.assert_research_return_and_due_agenda_wake_only_the_owning_world()
+        self.clean()
         task, result, children = self.observation()
         self.assertFalse(self.control.complete({**task, "leaseToken": "lost"}, result, children))
         self.assertEqual([], self.brain.status()["cases"])
@@ -173,8 +175,16 @@ class BrainAgendaStorageTests(unittest.TestCase):
             self.brain.schedule_research(c, pending, task, result, jobs, stamp())
             self.assertEqual([], jobs)
             self.assertIn("진행 중", pending["reason"])
-        self.assertTrue(self.control.complete(research, {"runId": "source-run", "status": "completed", "changedEvidenceCount": 0}, []))
+        assessment = {"version": "question-research-return-v1", "status": "needs-evidence",
+            "coverageState": "incomplete", "missingRequirements": ["official-filing"],
+            "authority": "historical-work-status-only"}
+        self.assertTrue(self.control.complete(research, {"runId": "source-run", "status": "completed",
+            "changedEvidenceCount": 0, "questionAssessment": assessment}, []))
         memory = next(row for row in self.brain.memory("control-test", "TEST") if row["kind"] == "brain-case")
+        self.assertEqual(assessment, memory["lastResearch"]["result"]["questionAssessment"])
+        frozen = freeze_execution_input({**packet(), "taskId": "next-assessment"}, [], [memory])
+        validate_execution_input(frozen)
+        self.assertEqual(assessment, frozen["researchResults"][0]["lastResearch"]["result"]["questionAssessment"])
         self.assertEqual(research["researchRequest"], memory["researchRequest"])
         self.assertEqual("review-needed", memory["status"])
         self.assertTrue(memory["reviewDue"])
@@ -202,6 +212,33 @@ class BrainAgendaStorageTests(unittest.TestCase):
         saved = next(row for row in self.brain.status()["cases"] if row["caseId"] == feedback["caseId"])
         self.assertEqual(feedback["origin"], saved["origin"])
         self.assertEqual("owner-reported-not-empirical", saved["ownerReview"]["qualification"])
+
+    def assert_research_return_and_due_agenda_wake_only_the_owning_world(self):
+        task, result, children = self.observation()
+        self.assertTrue(self.control.complete(task, result, children))
+        research = self.control.claim()
+        due = later(stamp(), 180)
+        other = {**self.subject, "worldId": "another-world", "taskId": "other-world-observation",
+                 "capability": "observe", "availableAt": due}
+        with self.control.transaction() as c:
+            self.control.insert(c, other)
+        self.assertTrue(self.control.complete(research, {"status": "completed"}, []))
+
+        def check_only_owner_woken():
+            with self.control.connect() as c:
+                rows = c.execute("SELECT task_id,available_at,priority FROM ai_control_tasks WHERE status='pending'").fetchall()
+            foreign = next(row for row in rows if row["task_id"] == other["taskId"])
+            owner = next(row for row in rows if row["task_id"] != other["taskId"])
+            self.assertEqual(due, foreign["available_at"])
+            self.assertEqual(0, foreign["priority"])
+            self.assertLessEqual(owner["available_at"], stamp())
+            self.assertEqual(3, owner["priority"])
+
+        check_only_owner_woken()
+        with self.control.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET available_at=%s,priority=0 WHERE status='pending'", (due,))
+        self.brain.wake_due([self.subject, {**self.subject, "worldId": "another-world"}])
+        check_only_owner_woken()
 
     def test_failed_research_wakes_review_and_rejected_assessment_cannot_close_or_spin(self):
         task, result, children = self.observation()

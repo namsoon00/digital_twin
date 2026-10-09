@@ -160,9 +160,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             reason="원래 질문에 연결된 원문 조사를 예약했습니다.")
 
     @staticmethod
-    def wake_observation(connection, account, symbol, due):
+    def wake_observation(connection, account, symbol, world, due):
         connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),priority=GREATEST(priority,3) "
-            "WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending' AND attempts=0", (due, account, symbol))
+            "WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending' AND attempts=0 "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s", (due, account, symbol, world))
 
     def research_completed(self, connection, job, result):
         key = job.get("brainCaseId")
@@ -175,9 +176,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             return {"status": "case-closed", "caseIds": [key]}
         reason = "조사가 실패해 원래 질문과 자료 경로를 다시 검토합니다." if result.get("status") == "failed" else "조사 처리가 끝났습니다. 원래 질문의 해결 여부는 다음 관찰에서 검토합니다."
         case.update(status="review-needed", nextCheckAt=stamp(), reason=reason)
-        case["lastResearch"]["result"] = {key: result[key] for key in ("runId", "status", "stopReason", "changedEvidenceCount") if key in result}
+        case["lastResearch"]["result"] = {key: copy.deepcopy(result[key]) for key in (
+            "runId", "status", "stopReason", "changedEvidenceCount", "completedAt", "questionAssessment") if key in result}
         self.save(connection, case, job["taskId"], "research-returned", case["lastResearch"])
-        self.wake_observation(connection, job["accountId"], job["symbol"], case["nextCheckAt"])
+        self.wake_observation(connection, job["accountId"], job["symbol"], job["worldId"], case["nextCheckAt"])
         return {"status": "review-needed", "caseIds": [case["caseId"]]}
 
     def failed(self, connection, job, error_kind):
@@ -248,13 +250,14 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         if not scopes:
             return
         with self.transaction() as connection:
-            rows = connection.execute("SELECT account_id,symbol,MIN(next_check_at) AS due FROM ai_brain_cases WHERE kind='question' "
+            rows = connection.execute("SELECT account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId')) AS world_id,"
+                "MIN(next_check_at) AS due FROM ai_brain_cases WHERE kind='question' "
                 "AND status IN ('open','waiting','review-needed','blocked') AND next_check_at<=%s "
                 "AND (account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))) IN ("
-                + ",".join(["(%s,%s,%s)"] * len(scopes)) + ") GROUP BY account_id,symbol",
+                + ",".join(["(%s,%s,%s)"] * len(scopes)) + ") GROUP BY account_id,symbol,world_id",
                 (stamp(), *(value for scope in sorted(scopes) for value in scope))).fetchall()
             for row in rows:
-                self.wake_observation(connection, row["account_id"], row["symbol"], row["due"])
+                self.wake_observation(connection, row["account_id"], row["symbol"], row["world_id"], row["due"])
 
     def status(self, account=""):
         with self.connect() as connection:

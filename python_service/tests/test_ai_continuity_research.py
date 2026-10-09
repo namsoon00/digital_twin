@@ -235,7 +235,49 @@ class AIContinuityResearchTests(unittest.TestCase):
         result = execute_research({**SUBJECT, "taskId": "already-done", "question": "공식 자료를 추가 확인하는가?",
             "researchRequest": validate_research_request(INTENT, True)}, store, factory)
         self.assertTrue(result["reused"])
+        self.assertEqual("unavailable", result["questionAssessment"]["status"])
+        self.assertNotIn("changedEvidenceCount", result)
         factory.assert_not_called()
+        self.assert_research_retry_preserves_question_assessment_without_promoting_claims()
+
+    def assert_research_retry_preserves_question_assessment_without_promoting_claims(self):
+        from digital_twin.modules.ai_orchestration.domain.planning import identity
+        from digital_twin.modules.ai_orchestration.domain.research_return import research_return
+        job = {**SUBJECT, "taskId": "question-return", "question": "공식 분기보고서 원문에 근거가 있는가?",
+               "researchRequest": validate_research_request(INTENT, True)}
+        run_id = "ai-control-" + job["taskId"]
+        assessment = {"taskId": identity(job["taskId"], "sources"), "status": "needs-review",
+            "coverageState": "complete", "semanticReviewState": "unreviewed", "assessmentFingerprint": "frozen-assessment",
+            "assessedAt": "2026-10-10T00:00:00Z", "missingRequirements": [], "candidateEvidenceIds": ["doc-1"],
+            "resultEvidenceIds": [], "counterEvidenceIds": [], "reason": "", "excludedEvidence": [{"raw": "not-memory"}]}
+        payload = {"runId": run_id, "status": "evidence-collected", "changedEvidenceCount": 12,
+            "stopReason": "no-new-research-path", "completedAt": "2026-10-10T00:00:01Z", "taskAssessments": [assessment],
+            "verifiedClaims": [{"statement": "must not enter current facts"}]}
+        store, orchestrator, run = Mock(), Mock(), Mock()
+        store.get_run.return_value = None
+        run.to_dict.return_value = payload
+        run.run_id = run_id
+        orchestrator.run.return_value = run
+        fresh = execute_research(job, store, lambda: orchestrator)
+        store.get_run.return_value = payload
+        factory = Mock()
+        reused = execute_research(job, store, factory)
+        self.assertEqual({**fresh, "reused": True}, reused)
+        factory.assert_not_called()
+        self.assertEqual("needs-review", fresh["questionAssessment"]["status"])
+        self.assertEqual(1, fresh["questionAssessment"]["candidateEvidenceCount"])
+        self.assertNotIn("verifiedClaims", fresh)
+        self.assertNotIn("candidateEvidenceIds", fresh["questionAssessment"])
+        self.assertNotIn("excludedEvidence", fresh["questionAssessment"])
+        oversized = {**assessment, "missingRequirements": ["x" * 170] * 20, "reason": "y" * 700}
+        compact = research_return({**payload, "taskAssessments": [oversized]}, run_id, assessment["taskId"], {})["questionAssessment"]
+        self.assertEqual(20, compact["missingRequirementCount"])
+        self.assertEqual(8, len(compact["missingRequirements"]))
+        self.assertEqual({"reason", "missingRequirements"}, set(compact["truncatedFields"]))
+        for rows in ([{**assessment, "taskId": "other-question"}], [assessment, assessment], []):
+            with self.subTest(rows=len(rows)):
+                returned = research_return({**payload, "taskAssessments": rows}, run_id, assessment["taskId"], {})
+                self.assertEqual("unavailable", returned["questionAssessment"]["status"])
 
     def test_macro_print_reaches_first_and_final_input_with_original_units(self):
         from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology

@@ -30,9 +30,28 @@ function retrievalView(retrieval) {
   const categories = {quote:"시세",valuation:"가치 평가",company:"기업·재무",research:"조사 자료",macro:"거시 지표",technical:"가격 흐름",flow:"수급",quality:"자료 품질",analyses:"과거 판단",memories:"조사·질문·피드백"};
   return `<details class="retrieval"><summary>AI가 조회한 과정 · ${escape(states[retrieval.status] || retrieval.status)}</summary>${(retrieval.steps || []).map((step, index) => `<p><strong>${index + 1}. ${step.correction ? "요청 보정 · " : ""}${escape(step.reason)}</strong></p>${(step.errors || []).map((error) => `<p class="muted">요청 규격 오류 · ${escape(error.field)} · 허용 형식: ${escape(typeof error.expected === "string" ? error.expected : JSON.stringify(error.expected))}</p>`).join("")}${(step.reads || []).map((read) => `<p>${escape(tools[read.request?.tool] || "조회")} · ${escape(categories[read.request?.category] || read.request?.category)} · ${read.request?.tool === "recall_memory" ? "현재 사실과 구분해 참고" : `사실 ${escape(read.factIds?.length || 0)}개`}<br><small>${read.status === "ok" ? "조회 결과 기록" : escape(states[read.status] || "조회 제한 또는 자료 확인 필요")}${read.omitted?.length ? ` · 용량 한도로 제외 ${escape(read.omitted.length)}개` : ""}${read.nextCursor || read.nextOffset != null ? " · 다음 페이지 있음" : ""}</small></p>`).join("")}`).join("")}<p class="muted">동일한 시점의 근거에서 선택해 읽었습니다. 조회하지 않은 자료가 없다는 뜻은 아닙니다.</p></details>`;
 }
+const businessMetricLabels = {revenue:"매출",grossProfit:"매출총이익",operatingIncome:"영업이익",netIncome:"순이익",operatingCashFlow:"영업현금흐름",capitalExpenditure:"자본 지출",freeCashFlow:"잉여현금흐름",totalAssets:"자산",totalLiabilities:"부채",equity:"자본",cash:"현금",totalDebt:"차입금",sharesOutstanding:"발행 주식 수"};
+const businessStatuses = {tracking:"다음 실적 추적", "data-needed":"사업 자료 보강 필요", "needs-review":"가설 재검토", superseded:"새 가설로 교체", retired:"검토 종료"};
+const metricStatuses = {"awaiting-report":"다음 비교 가능 실적 대기", "direction-observed":"등록한 지표 방향 확인", "direction-not-observed":"등록한 지표 방향과 다름", "expired-unobserved":"기간 만료 · 관측 자료 없음", "invalid-clock":"시점 확인 필요"};
+function businessThesisView(thesis, observations = []) {
+  return `<p><strong>${escape(thesis.question)}</strong></p><p>사업 연결: ${escape(thesis.mechanism)}</p><p>필요 가정: ${escape(thesis.assumption)}</p><p>다른 설명: ${escape(thesis.alternative)}</p><p>철회·수정 조건: ${escape(thesis.invalidation)}</p>
+    ${thesis.missingEvidence?.length ? `<p class="muted">부족한 근거: ${thesis.missingEvidence.map(escape).join(" / ")}</p>` : ""}
+    ${(thesis.checkpoints || []).map((check, index) => { const base = check.baseline || {}; const observed = observations[index]; return `<p>실적 확인 · ${escape(businessMetricLabels[check.metric] || "공시 지표")}: ${escape(check.meaning)}<br><small>기준 ${escape(base.periodEnd)} · ${escape(base.value)} ${escape(base.basis?.currency)} · 다음 해 같은 기간과 비교</small>${observed ? `<br>${escape(metricStatuses[observed.status] || observed.status)}${observed.current ? ` · ${escape(observed.current.periodEnd)} · ${escape(observed.current.value)} ${escape(observed.current.basis?.currency)}` : ""}` : ""}</p>`; }).join("")}
+    <p class="muted">사업 지표의 확인 기록이며 가설 전체의 성공이나 투자 수익률을 판정하지 않습니다.</p>`;
+}
+function businessView(result) {
+  const business = result.businessResearch;
+  const relationships = (result.input?.facts || []).filter(row => row.kind === "company-relationship");
+  const relationLabels = {SUPPLIES_TO:"공급 관계", SELLS_TO:"판매·고객 관계", COMPETES_WITH:"경쟁 관계"};
+  const theses = business?.theses?.map(row => businessThesisView(row)).join("") || "";
+  const reviews = (result.input?.businessThesisMemory || []).map(row => `<details><summary>이전 가설 확인 · ${escape(row.contract?.question)}</summary>${businessThesisView(row.contract || {}, row.observations)}</details>`).join("");
+  const candidates = relationships.map(row => `<p><strong>${escape(row.counterparty?.name)}</strong>${row.counterparty?.symbol ? ` · ${escape(row.counterparty.symbol)}` : " · 상장 종목 식별 필요"}<br>${escape(relationLabels[row.relationType] || row.relationType)} · ${row.direction === "inbound" ? "상대 기업 → 분석 기업" : "분석 기업 → 상대 기업"}<br><small>공시 ${escape(date(row.publishedAt))} · 최초 확인 ${escape(date(row.firstKnownAt))}<br>현재 관계의 지속 여부와 매출 노출은 추가 확인이 필요합니다.</small></p><blockquote>${escape(row.excerpt)}</blockquote>`).join("");
+  return `${business ? `<details open class="business-research"><summary>사업 가설과 장기 확인</summary><p>${escape(business.coverageNote)}</p>${theses}${reviews}${(business.reviews || []).map(row => `<p>가설 검토: ${escape(row.reason)}</p>`).join("")}</details>` : ""}${candidates ? `<details open><summary>연결 기업 · 추가 조사 후보</summary>${candidates}</details>` : ""}`;
+}
 function brainView(brain = {}) {
   brainCases = brain.cases || [];
   const cards = brainCases.map((row) => {
+    if (row.kind === "business-thesis") return `<div class="panel brain-card"><header><h3>${escape(row.symbol)} · 사업 가설</h3><span>${escape(businessStatuses[row.status] || row.status)}</span></header>${businessThesisView(row.contract || {}, row.observations)}<p>${escape(row.reason)}</p><p class="muted">등록 ${escape(date(row.createdAt))} · 확인 기한 ${escape(date(row.expiresAt))}</p><details><summary>원래 근거와 검토 이력</summary><pre>${escape(JSON.stringify({origin:row.origin,history:row.history},null,2))}</pre></details></div>`;
     const feedback = row.kind === "service-feedback";
     const origin = row.origin || {};
     return `<div class="panel brain-card"><header><h3>${escape(row.symbol)} · ${escape(feedback ? categoryLabels[row.category] : "지속 질문")}</h3><span>${escape(brainLabels[row.status] || row.status)}</span></header>
@@ -73,6 +92,7 @@ function card(task, scheduling = {}) {
   ${r.summary ? `<p>${escape(r.summary)}</p>` : `<p class="muted">${escape((r.failure?.kind === "retrieval-contract" ? "AI 조회 요청이 규격을 충족하지 못했습니다. 판단 작성 전 중단했으며 오류와 재시도 기록을 확인할 수 있습니다." : "") || reasons[r.stopReason] || r.reason || (task.status === "pending" && scheduling.status === "budget-wait" ? "오늘 AI 사용 한도로 관찰을 기다리고 있습니다." : task.lastError === "ai-execution:recovery-wait" ? "AI 실행 오류로 대기 중이며 복구 시 새 자료로 다시 확인합니다." : task.lastError?.startsWith("ai-call-budget") ? "AI 호출 여유가 생기면 관찰을 다시 시작합니다." : task.lastError ? "작업에 실패해 재확인이 필요합니다." : task.status === "pending" ? "예약된 시점에 확인합니다." : "아직 분석 결과가 없습니다."))}</p>`}
   ${quote ? `<p>근거 시점 가격 <strong>${escape(Number(quote.currentPrice).toLocaleString("ko-KR"))} ${escape(quote.currency)}</strong>${quote.changeRate != null ? ` · 등락 ${escape(quote.changeRate)}%` : ""}<br><small>시세 기준 ${escape(date(quote.sourceAsOf || quote.asOf || quote.updatedAt))}</small></p>` : ""}
   <div class="analysis">${section("가능한 설명 · 가설",r.hypothesis)}${section("이전 알림과 비교",r.comparison)}${section("내 보유·관심 상황에서의 의미",r.portfolioImpact)}${section("반대 근거와 한계",r.counterEvidence)}${section("다음에 확인할 질문",(r.questions || []).join(" / "))}</div>
+  ${businessView(r)}
   ${retrievalView(r.input?.retrieval || r.failure?.retrieval)}
   ${continuityView(r)}
   ${r.followUpConditions?.length ? `<details><summary>등록한 확인 조건 ${r.followUpConditions.length}개</summary>${r.followUpConditions.map((row) => `<p>${escape(row.description)}<br><small>${escape(date(row.expiresAt))}까지 다음 관찰에서 확인</small></p>`).join("")}</details>` : ""}

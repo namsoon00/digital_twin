@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 from digital_twin.modules.ai_orchestration.application.research import execute_research
 from digital_twin.modules.ai_orchestration.application.retrieval import retrieve_evidence
-from digital_twin.modules.ai_orchestration.domain.continuity import continuity_memory
+from digital_twin.modules.ai_orchestration.domain.continuity import continuity_memory, MAX_CONTINUITY_BYTES
 from digital_twin.modules.ai_orchestration.domain.execution_input import (
     freeze_execution_input, freeze_repair_input, validate_execution_input,
     DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION,
@@ -170,7 +170,7 @@ class AIContinuityResearchTests(unittest.TestCase):
         old["promptHash"] = hashlib.sha256(old["prompt"].encode()).hexdigest()
         validate_execution_input(old)
         with self.assertRaises(EvidenceContractError):
-            continuity_memory([{**historical, "followUpConditions": [{"body": "x" * 30000}]}], [])
+            continuity_memory([{**historical, "followUpConditions": [{"body": "x" * MAX_CONTINUITY_BYTES}]}], [])
 
     def test_question_contract_rejects_unsupported_and_private_searches(self):
         self.assert_historical_filings_require_explicit_window_without_extending_news_freshness()

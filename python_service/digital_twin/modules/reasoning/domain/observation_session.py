@@ -28,6 +28,33 @@ class ObservationEvidenceSession:
                     raise EvidenceContractError("conflicting retrieval evidence identity")
                 self._facts[row["id"]] = compact
 
+    def business_baseline(self):
+        """Reserve report history and documentary context before discretionary reads."""
+        rows = sorted(self._facts.values(), key=lambda row: (-source_clock(row), row["id"]))
+        groups = [
+            [row for row in rows if row.get("historicalReport") and row.get("frequency") == frequency]
+            for frequency in ("annual", "quarterly")]
+        groups += [[row for row in rows if row.get("kind") == "company-relationship"],
+                   [row for row in rows if row.get("documentVerified")],
+                   [row for row in rows if row.get("kind") == "company" or row.get("evidenceCategory") == "valuation"]]
+        selected, omitted, used = [], [], 0
+        for index in range(4):
+            for group in groups:
+                if index >= len(group):
+                    continue
+                row = group[index]
+                if row["id"] in selected:
+                    continue
+                size = len(canonical_json(row).encode())
+                if used + size > 26000:
+                    omitted.append(row["id"])
+                else:
+                    selected.append(row["id"])
+                    used += size
+        return {"version": "business-evidence-reservation-v1", "factIds": selected,
+                "omittedByBudget": omitted, "bytes": used,
+                "policy": "reported-business-history-before-discretionary-reads"}
+
     def packet(self):
         return deepcopy(self._packet)
 

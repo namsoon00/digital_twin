@@ -45,7 +45,7 @@ def financial_research_evidence(symbol: str, company: Dict[str, object]) -> List
             currencies = list(contract.get("currencies") or [])
             metric_units = {metric["key"]: metric["currency"] for metric in metrics}
             metric_provenance = {metric["key"]: {key: metric.get(key) for key in (
-                "provider", "currency", "scope", "durationBasis", "period", "sourceUrl", "derived", "sourceReferences",
+                "provider", "currency", "scope", "durationBasis", "period", "periodStart", "sourceUrl", "derived", "sourceReferences",
             )} for metric in metrics}
             title = str(company.get("name") or symbol) + " " + period + " " + frequency + " 재무 보고"
             results.append(ResearchEvidence(

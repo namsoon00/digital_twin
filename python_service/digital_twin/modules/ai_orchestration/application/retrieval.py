@@ -27,12 +27,15 @@ class RetrievalContractFailure(RuntimeError):
 
 def retrieve_evidence(session, packet, history, research, decide, save_input, prompt_bytes,
                       max_rounds=MAX_ROUNDS, record_round=None):
+    baseline = session.business_baseline()
+    packet = {**packet, "businessEvidence": baseline}
     rounds = max(0, min(MAX_ROUNDS, int(max_rounds)))
     if not rounds:
-        fallback = deepcopy(packet)
+        selected = {row["id"] for row in packet["facts"]} | set(baseline["factIds"])
+        fallback = {**packet, **session.select(selected)}
         fallback["retrieval"] = trace_summary([], "budget-fallback")
         return fallback, history, research, []
-    current = {**packet, **session.select([])}
+    current = {**packet, **session.select(baseline["factIds"])}
     context = {"catalog": session.catalog(), "memoryCounts": {"analyses": len(history), "memories": len(research)},
         "continuity": continuity_memory(history, research),
         "openQuestions": [{key: row.get(key) for key in ("caseId", "question", "capability", "reviewDue")}

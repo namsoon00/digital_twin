@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_business_research.py", "tier": "contract", "core": true},
     {"file": "test_relation_market_tracking.py", "tier": "contract", "core": true},
     {"file": "test_ai_continuity_research.py", "tier": "contract", "core": true},
     {"file": "test_external_fact_bounded_reads.py", "tier": "unit", "core": true},

@@ -45,7 +45,16 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
     version = {"version": REVIEW_VERSION, "causalGuardVersion": causal_guard_version}
     if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
         errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
-    if not result.get("followUpConditions"):
+    business = result.get("businessResearch") or {}
+    if "businessResearch" in result and result.get("notification", {}).get("send"):
+        facts = {row["id"]: row for row in result["input"].get("facts", [])}
+        available = {key for key, row in facts.items() if (row.get("historicalReport") or row.get("documentVerified") or row.get("kind") == "company-relationship")
+                     and row.get("judgementEvidenceUsable") is not False}
+        cited = {ref.get("factId") for section in ("summary", "hypothesis", "counterEvidence")
+                 for ref in result.get("claimEvidence", {}).get(section, []) if ref.get("period") == "current"}
+        if available and not available.intersection(cited):
+            errors.append("확인 가능한 사업 자료를 설명·가설·한계에 연결하지 않았습니다.")
+    if not result.get("followUpConditions") and not (business.get("theses") or business.get("reviews")):
         errors.append("관찰 가능한 확인 조건과 기간이 없습니다.")
     if errors:
         return {**version, "status": "rejected", "errors": errors, "diagnostics": quality_diagnostics(result, errors)}

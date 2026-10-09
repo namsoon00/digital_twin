@@ -22,6 +22,16 @@ const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 
   publication:{status:'queued',deliveryStatus:'done',reason:'전송 성공',receipt:{body:'실제 전송된 과거 원문 <b>증거</b>',deliveredAt:'2026-10-01T03:00:00Z'}},
   input:{name:'테스트 종목',facts:[{currentPrice:100,currency:'KRW',sourceAsOf:'2026-10-01T03:00:00Z'}],
     retrieval:{status:'ready',corrections:1,steps:[{status:'invalid-request',reason:'조회 요청 규격 오류',errors:[{field:'requests[0].cursor',expected:'서버가 발급한 값 <script>bad</script>'}],reads:[]},{correction:true,reason:'반대 근거 확인 <script>bad</script>',reads:[{request:{tool:'query_facts',category:'company'},factIds:['f1'],status:'ok',nextCursor:'page:fixture',omitted:[]}]}]}}};
+result.businessResearch = {coverageNote:'공식 매출을 확인했으나 현금 회수 근거가 부족합니다.', reviews:[], theses:[{
+ question:'매출 확대가 현금 회수로 이어지는가?',mechanism:'수요 확대와 현금 회수 <script>bad</script>',assumption:'판매 대금이 회수되어야 합니다.',
+ alternative:'할인 판매만 늘었을 가능성이 있습니다.',invalidation:'현금 회수 악화 시 설명을 재검토합니다.',missingEvidence:['매출채권 공시 확인'],
+ checkpoints:[{metric:'revenue',meaning:'다음 해 같은 기간 매출을 확인합니다.',baseline:{periodEnd:'2025-12-31',value:100,basis:{currency:'USD'}}}]}]};
+result.input.facts.push({kind:'company-relationship',counterparty:{name:'연결 기업 <script>bad</script>',symbol:''},relationType:'SUPPLIES_TO',direction:'inbound',
+ publishedAt:'2026-02-01',firstKnownAt:'2026-03-01T00:00:00Z',excerpt:'Our suppliers include Example Devices.'});
+brain.cases.push({kind:'business-thesis',caseId:'business',symbol:'TEST',status:'tracking',contract:result.businessResearch.theses[0],
+ createdAt:'2026-03-01T00:00:00Z',expiresAt:'2027-08-01T00:00:00Z',reason:'후속 공시를 확인해 원래 설명을 다시 검토합니다.',
+ observations:[{status:'direction-not-observed',current:{periodEnd:'2026-12-31',value:90,basis:{currency:'USD'}}}],
+ origin:{evidence:[{title:'공시 원문 <script>bad</script>'}]},history:[]});
 const server = http.createServer((req,res) => {
   if (req.url === '/api/ai-control/status') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,configuredEnabled:true,tasksStartedToday:2,dailyTaskBudget:48,activeTaskCount:1,dailyCallBudget:24,
     modelCallsUsedToday:24,observationScheduling:{status:'budget-wait',reason:'ai-call-budget-exhausted',nextCheckAt:'2026-10-02T00:00:00Z'},
@@ -44,6 +54,13 @@ const server = http.createServer((req,res) => {
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto('http://127.0.0.1:'+server.address().port+'/ai-control.html');
    await page.locator('article').waitFor();
+   assert.match(await page.locator('article').innerText(), /사업 가설과 장기 확인/);
+   assert.match(await page.locator('article').innerText(), /상장 종목 식별 필요/);
+   assert.match(await page.locator('article').innerText(), /다음 해 같은 기간/);
+   assert.equal(await page.locator('.business-research script').count(), 0);
+   assert.match(await page.locator('#brain').innerText(), /등록한 지표 방향과 다름/);
+   assert.equal(await page.locator('#brain script').count(), 0);
+   await page.locator('.business-research').screenshot({path:'/tmp/orbit-business-panel-'+width+'.png'});
    assert.match(await page.locator('#overview').innerText(),/기록 공백은 정확한 중단 시간이나 AI 실패 횟수를 뜻하지 않습니다/);
    assert.match(await page.locator('#overview').innerText(),/이번 구간에서 판단 저장 미확인/);
    assert.match(await page.locator('article').innerText(),/동일 예약 2건/);

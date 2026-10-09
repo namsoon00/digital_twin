@@ -40,7 +40,7 @@ def validate_plan(value, packet, research=(), require_research=False):
         raise ValueError("AI plan must be an object")
     # No model-authored account, symbol, command, source URL or action is executable.
     allowed = {"summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questions", "nextCheckMinutes", "notification",
-               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback"}
+               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback", "businessResearch"}
     if set(value) - allowed:
         raise ValueError("AI plan contains unsupported fields")
     known = {str(row["id"]) for row in packet.get("facts", []) if row.get("id")}
@@ -94,13 +94,17 @@ def validate_plan(value, packet, research=(), require_research=False):
         from digital_twin.modules.outcomes.contracts import prepare_observation_conditions, ObservationConditionError
         result.update({key: value.get(key) for key in ("insightVersion", "portfolioImpact", "claimEvidence", "observations")})
         try:
-            result["followUpConditions"] = prepare_observation_conditions(value.get("followUpConditions"), packet)
+            business = value.get("businessResearch") or {}
+            result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (business.get("theses") or business.get("reviews")) else prepare_observation_conditions(value.get("followUpConditions"), packet)
         except (ValueError, KeyError, TypeError) as error:
             result["followUpConditions"] = []
             result["conditionValidation"] = error.diagnostic if isinstance(error, ObservationConditionError) else {
                 "stage": "followup-validation", "category": "data-or-reference", "reasonCode": "condition-reference-invalid"}
     from digital_twin.modules.ai_orchestration.domain.brain_management import validate_management
     result.update(validate_management(value, packet, research, require_research=require_research))
+    if "businessResearch" in value:
+        from .business_research import validate_business
+        result["businessResearch"] = validate_business(value["businessResearch"], packet, research)
     return result
 
 

@@ -99,7 +99,7 @@ def collect_question_documents(provider, target, signals, tasks):
                 digest = hashlib.sha256((url + '|' + '|'.join(p['passageHash'] for p in passages)).encode()).hexdigest()[:24]
                 row.evidence_id = 'research:' + symbol + ':sec-question:' + digest
                 row.observed_at = now
-                row.raw_payload.update(researchTaskIds=base['taskIds'], researchQueryTerms=base['queryTerms'],
+                row.raw_payload.update(documentIssuerIdentity={'symbol': symbol, 'cik': cik, 'accessionNumber': accession, 'sourceUrl': url, 'verification': 'sec-discovered-issuer-document'}, researchTaskIds=base['taskIds'], researchQueryTerms=base['queryTerms'],
                                        parentDocumentUrl=parent, sourceDocumentHash=hashlib.sha256(str(raw).encode()).hexdigest())
             evidence.extend(rows)
         except ExternalCallDeferred as error:

@@ -21,6 +21,8 @@ from digital_twin.infrastructure.mysql_operational_events import insert_domain_e
 
 
 DERIVED_EVIDENCE_PAYLOAD_KEYS = {
+    "companyRelationships",
+    "documentIssuerIdentity",
     "evidenceQualityAuthority",
     "articleCanonicalUrl",
     "aiAnalysis",
@@ -1089,6 +1091,9 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 payload = dict(item.raw_payload or {})
                 self._persist_news_event_episode_with_connection(connection, item, stamp)
                 payload = dict(item.raw_payload or {})
+            from .mysql_company_relationships import persist_relationship_assertions
+            persist_relationship_assertions(connection, item)
+            payload = dict(item.raw_payload or {})
             merged_states = news_domain.news_state_payload(payload)
             item.source_trust_state = merged_states["sourceTrustState"]
             item.materiality_state = merged_states["materialityState"]

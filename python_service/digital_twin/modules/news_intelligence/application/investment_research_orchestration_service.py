@@ -50,6 +50,7 @@ class InvestmentResearchOrchestrationService:
         article_analysis_service=None,
         hypothesis_research_planner=None,
         settings: Dict[str, object] = None,
+        relationship_research=None,
     ):
         self.evidence_repository = evidence_repository
         self.research_gateway = research_gateway
@@ -58,6 +59,7 @@ class InvestmentResearchOrchestrationService:
         self.article_analysis_service = article_analysis_service
         self.hypothesis_research_planner = hypothesis_research_planner
         self.settings = dict(settings or {})
+        self.relationship_research = relationship_research
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentBrainResearchEnabled"), True)
@@ -375,6 +377,8 @@ class InvestmentResearchOrchestrationService:
         if not items or not self.evidence_repository:
             return 0, handoff
 
+        if self.relationship_research:
+            items = self.relationship_research(items, utc_now_iso())
         persisted_handoff = handoff
 
         def events(

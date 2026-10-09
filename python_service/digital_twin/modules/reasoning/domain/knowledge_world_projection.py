@@ -97,6 +97,7 @@ KNOWLEDGE_RELATION_TYPES = {
 
 KNOWLEDGE_ENTITY_KINDS = {
     "company",
+    "company-relationship",
     "security",
     "security-line",
     "security-listing",

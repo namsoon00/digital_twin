@@ -7,7 +7,7 @@ from .brain_management import required_case_memory
 
 
 CONTINUITY_VERSION = "observation-continuity-v1"
-MAX_CONTINUITY_BYTES = 24 * 1024
+MAX_CONTINUITY_BYTES = 40 * 1024
 MARKER = "required-continuity"
 
 
@@ -41,6 +41,8 @@ def continuity_memory(history, research):
     for row in research:
         if required_memory(row):
             memories.append(deepcopy(row))
+        elif row.get("kind") in {"business-thesis", "company-research-record"}:
+            memories.append({**deepcopy(row), "memoryRole": MARKER, "authority": "historical-context-only"})
         elif row.get("kind") == "brain-case":
             memories.append(_summary(row, ("kind", "caseId", "accountId", "symbol", "worldId", "question",
                 "capability", "status", "revision", "reviewDue", "nextCheckAt", "completionCriterion", "reason",

@@ -84,7 +84,7 @@ class InsightGroundingTests(unittest.TestCase):
         from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, prompt_budget
         self.assertEqual(256 * 1024, prompt_budget('invalid'))
         self.assertEqual(512 * 1024, prompt_budget(9999999))
-        envelope = freeze_execution_input(packet(), [{'summary': 'a' * 25000}],
+        envelope = freeze_execution_input(packet(), [{'summary': 'a' * 20000}],
                                           [{'result': 'b' * 18000}], max_prompt_bytes=65536)
         self.assertEqual(1, len(envelope['researchResults']))
         original = copy.deepcopy(envelope)
@@ -483,7 +483,7 @@ class InsightControlTests(unittest.TestCase):
         saved = store.complete.call_args.args[1]
         self.assertEqual('accepted', saved['quality']['status'])
         self.assertTrue(saved['followUpConditions'])
-        self.assertEqual('independent-observation-review-v5-readable-meaning', service.reviewer.call_args.args[0]['promptVersion'])
+        self.assertEqual('independent-observation-review-v6-business-research', service.reviewer.call_args.args[0]['promptVersion'])
         self.assertEqual(OBSERVATION_WORDING_VERSION, saved['wordingVersion'])
         self.assertEqual(OBSERVATION_WORDING_VERSION, service.reviewer.call_args.args[0]['draft']['wordingVersion'])
         self.assertIn(saved['followUpConditions'][0]['description'], render_ai_observation(saved))

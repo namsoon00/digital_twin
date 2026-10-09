@@ -210,7 +210,9 @@ def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION)
                 if not any(ref["field"] == "ma" + period + "Slope" for ref, _, _ in resolved):
                     errors.append(section + ": 평균 가격의 기울기 근거가 없습니다.")
     comparisons = result.get("observations", [])
-    if not isinstance(comparisons, list) or not 1 <= len(comparisons) <= 6:
+    business = result.get("businessResearch") or {}
+    minimum = 0 if business.get("theses") or business.get("reviews") else 1
+    if not isinstance(comparisons, list) or not minimum <= len(comparisons) <= 6:
         errors.append("확인 가능한 관측 비교가 필요합니다.")
     else:
         for row in comparisons:
@@ -264,4 +266,6 @@ def narrative_digest(result):
     # presentation versions are part of the independently reviewed draft.
     if result.get("wordingVersion") is not None:
         content["wordingVersion"] = result["wordingVersion"]
+    if "businessResearch" in result:
+        content["businessResearch"] = result["businessResearch"]
     return content_hash(content)

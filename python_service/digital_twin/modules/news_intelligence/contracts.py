@@ -122,6 +122,9 @@ _EXPORTS.update({
     'unique_texts': ('digital_twin.modules.news_intelligence.domain.investment_evidence_governance', 'unique_texts'),
 })
 
+_EXPORTS["financial_research_evidence"] = ("digital_twin.modules.news_intelligence.domain.financial_research_evidence", "financial_research_evidence")
+_EXPORTS["valid_company_relationship_assertions"] = ("digital_twin.modules.news_intelligence.domain.company_relationships", "valid_assertions")
+
 __all__ = list(_EXPORTS)
 
 

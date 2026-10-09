@@ -33,8 +33,10 @@ def build_investment_research_orchestrator(settings=None, research_store=None) -
 
     configured_settings = settings or runtime_settings()
     evidence_store = stores.research_evidence_store(configured_settings)
+    from digital_twin.modules.news_intelligence.application.company_relationship_research import CompanyRelationshipResearch
     return InvestmentResearchOrchestrationService(
         evidence_repository=evidence_store,
+        relationship_research=CompanyRelationshipResearch(stores.symbol_universe_store(configured_settings)),
         research_gateway=CompositeInvestmentResearchGateway([
             ExistingApiResearchGateway(configured_settings),
             NewsSourceGateway(configured_settings, request_budget=news_http_budget(configured_settings)),

@@ -678,6 +678,8 @@ def add_research_evidence_concepts(
                 evidence_ids=[item.evidence_id],
                 properties={"source": "prompt-evidence-admission"},
             )
+        from .portfolio_ontology_relationship_concepts import add_company_relationship_concepts
+        add_company_relationship_concepts(graph, stock_id, event_id, item)
         add_governed_claim_concepts(graph, stock_id, item, raw_payload)
         graph.evidence.append(OntologyEvidence(
             item.evidence_id,

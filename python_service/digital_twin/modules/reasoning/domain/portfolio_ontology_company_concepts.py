@@ -15,7 +15,7 @@ from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOn
 from digital_twin.modules.reasoning.domain.ontology_schema import add_entity, add_relation
 
 
-COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v4-paired-financial-ratios"
+COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v5-source-report-observations"
 FINANCIAL_PERIOD_LIMITS = {"annual": 3, "interim": 2, "quarterly": 3}
 MAX_EXECUTIVE_ROLES = 8
 MAX_COMPANY_RELATIONSHIPS = 12
@@ -228,6 +228,17 @@ def add_company_knowledge_concepts(
         )
 
     financials = knowledge.get("financials") if isinstance(knowledge.get("financials"), dict) else {}
+    # Reuse the source owner's normalized report receipt, rather than copying
+    # scalar totals without their reporting period, unit and publication clock.
+    from digital_twin.modules.news_intelligence.contracts import financial_research_evidence
+    reports = {}
+    for evidence in financial_research_evidence(symbol, knowledge):
+        raw = evidence.raw_payload
+        reports[raw["reportObservationId"]] = {
+            **{key: raw[key] for key in ("frequency", "periodEnd", "reportedValues", "metricUnits", "metricProvenance",
+                "sourceReferences", "sourceRevision", "reportObservationId", "historicalReport", "publicationTimeKnown")},
+            "publishedAt": evidence.published_at, "observedAt": evidence.observed_at,
+            "sourceAsOf": evidence.published_at or evidence.observed_at}
     current_state_candidates = []
     for frequency in ("annual", "interim", "quarterly"):
         for index, row in enumerate(_period_rows(financials, frequency)):
@@ -240,6 +251,7 @@ def add_company_knowledge_concepts(
                 company_name + " " + period + " " + frequency_label + " 재무 상태",
                 _financial_properties(
                     row,
+                    **reports.get((row.get("reportContract") or {}).get("observationId"), {}),
                     symbol=symbol,
                     reportingFrequency=frequency,
                     isLatestPeriod=index == 0,
@@ -268,7 +280,7 @@ def add_company_knowledge_concepts(
             period = _text(current.get("period"))
             latest_state_id = add_entity(graph, "company-financial-state", symbol + ":current:" + period,
                 company_name + " " + period + " 현재 재무 근거",
-                _financial_properties(current, symbol=symbol, reportingFrequency=current.get("frequency") or "current",
+                _financial_properties(current, **reports.get((current.get("reportContract") or {}).get("observationId"), {}), symbol=symbol, reportingFrequency=current.get("frequency") or "current",
                                       isLatestPeriod=True, companyFactRevision=revision,
                                       dataState=_text(coverage.get("dataState") or "partial"),
                                       source=_text(current.get("provider") or primary_source)))

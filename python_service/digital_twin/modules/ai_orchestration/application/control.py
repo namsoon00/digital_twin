@@ -16,7 +16,7 @@ from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import t
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
@@ -28,6 +28,7 @@ class AIControlService:
         self.read_planner = read_planner
         self.evidence_waker = evidence_waker or (lambda subjects: None)
         self.read_round_budget = read_round_budget or (lambda: 3)
+        self.company_memory = company_memory or (lambda account, symbol, cutoff: {})
 
     def run_once(self):
         self.store.record_runtime_pulse()
@@ -65,6 +66,9 @@ class AIControlService:
                     history = [row for row in history if not row.get("worldId") or row["worldId"] == job["worldId"]]
                     research = list(self.brain_memory(job["accountId"], job["symbol"], job["worldId"]))
                     research.extend(self.research_memory(job["accountId"], job["symbol"]))
+                    company = self.company_memory(job["accountId"], job["symbol"], packet["capturedAt"])
+                    if company:
+                        research.append(company)
                     research.extend(self.development_memory(job["accountId"], job["symbol"]))
                     packet["taskId"] = job["taskId"]
                     if job.get("evidenceWake"):
@@ -76,7 +80,7 @@ class AIControlService:
                     fingerprint = observation_fingerprint(packet, research)
                     previous = history[0] if history else {}
                     from digital_twin.modules.ai_orchestration.domain.brain_management import due_memory
-                    if (not due_memory(research) and previous.get("inputFingerprint") == fingerprint and previous.get("observedAt")
+                    if (not due_memory(research) and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis") and previous.get("inputFingerprint") == fingerprint and previous.get("observedAt")
                             and previous.get("executionPromptVersion") == PROMPT_VERSION
                             and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
@@ -95,6 +99,16 @@ class AIControlService:
                             self.read_planner, lambda value: self.store.save_execution_input(job, value),
                             self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget(),
                             record_round=lambda step: self.store.save_retrieval_round(job, step))
+                    from ..domain.business_research import evaluate_thesis
+                    from copy import deepcopy
+                    business_memory = []
+                    for memory in research:
+                        if memory.get("kind") == "business-thesis":
+                            observations = evaluate_thesis(memory, packet)
+                            memory["reviewDue"] = memory.get("reviewDue", False) or observations != memory.get("observations", [])
+                            memory["observations"] = observations
+                            business_memory.append(deepcopy(memory))
+                    packet["businessThesisMemory"] = business_memory
                     stage = "input-freeze"
                     envelope = freeze_execution_input(packet, history, research,
                         max_prompt_bytes=self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), retrieval_trace=retrieval_trace)

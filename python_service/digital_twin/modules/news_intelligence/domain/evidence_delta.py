@@ -63,7 +63,7 @@ INFERENCE_PAYLOAD_KEYS = {
     "form", "receiptno", "reportname", "regulatoryeventtype",
     "promptevidenceadmission", "newseligibility", "officialdocumentstate",
     "documentverified", "analysisready", "storyidentityversion",
-    "companyeventcontract", "corporateactiontype", "eventlifecyclestate",
+    "companyrelationships", "companyeventcontract", "corporateactiontype", "eventlifecyclestate",
     "eventrevisionstate", "issuedsharecount", "releasedsharecount",
     "remainingsharecount", "registeredsharecount", "cashdividendpercommonshare",
     "cashdividendperpreferredshare", "commoncashdividendratepct",

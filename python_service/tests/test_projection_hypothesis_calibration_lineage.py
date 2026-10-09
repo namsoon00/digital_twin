@@ -198,7 +198,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "v19-valuation-lineage",
+            "v20-business-source-lineage",
             PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
         )
         self.assertEqual(

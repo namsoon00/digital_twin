@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 
 PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = (
-    "portfolio-graph-assembly-cache-v19-valuation-lineage"
+    "portfolio-graph-assembly-cache-v20-business-source-lineage"
 )
 
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = (

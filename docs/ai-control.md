@@ -828,3 +828,9 @@ Verification:
   facts. It writes private local inputs, outputs and rendered messages. Central
   execution audit rows are recorded for model calls. Passing this replay is not
   a live delivery receipt.
+
+## Business research continuity
+
+The v15 observation contract adds source-bound business theses and durable report
+checkpoints. See [business research loop](business-research-loop.md) for evidence
+reservation, registration, immutable review, company relationships and limits.

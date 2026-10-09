@@ -77,6 +77,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             raise ValueError("brain memory input mismatch")
         if any(envelope["current"].get(key) != job[key] for key in ("accountId", "symbol", "worldId", "taskId")):
             raise ValueError("brain memory subject mismatch")
+        if result.get("businessResearch"):
+            from ..domain.business_research import raw_business, validate_business
+            if validate_business(raw_business(result["businessResearch"]), result["input"], envelope["researchResults"]) != result["businessResearch"]:
+                raise ValueError("business assessment changed after capture")
         raw = {"caseReviews": [{key: value for key, value in item.items() if key != "expectedRevision"}
                                for item in result.get("caseReviews", [])], "serviceFeedback": [
             {key: value for key, value in item.items() if key != "qualification"} for item in result.get("serviceFeedback", [])]}
@@ -101,7 +105,14 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 if case and case["revision"] == review["expectedRevision"] and case["status"] in ACTIVE_CASE_STATES:
                     case.update(nextCheckAt=later(now, 180), reason="이번 관찰의 근거 검증이 보류되어 과제 평가를 다시 확인합니다.")
                     self.save(connection, case, job["taskId"], "review-deferred", {"executionInputId": result["executionInputId"]})
+            for review in (result.get("businessResearch") or {}).get("reviews", []):
+                case = self.read(connection, review["thesisId"], job["accountId"], job["symbol"], lock=True)
+                if case and case["worldId"] == job["worldId"] and case["revision"] == review["expectedRevision"]:
+                    case.update(nextCheckAt=later(now, 1440), reason="사업 설명 검토가 보류되어 다음 관찰에서 다시 평가합니다.")
+                    self.save(connection, case, job["taskId"], "business-review-deferred", {"executionInputId": result["executionInputId"]})
             return {**receipt, "status": "quality-blocked"}
+        from .mysql_business_research import record_business
+        receipt["business"] = record_business(connection, job, result, self.read, self.save, now)
         for review in result.get("caseReviews", []):
             case = self.read(connection, review["caseId"], job["accountId"], job["symbol"], lock=True)
             if not case or case["worldId"] != job["worldId"]:
@@ -188,9 +199,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         elif job["capability"] == "observe":
             now = stamp()
             recovery_minutes = retry_delays(job["capability"], error_kind, 3)[1] // 60
-            rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='question' "
+            rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind IN ('question','business-thesis') "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s "
-                "AND status IN ('open','waiting','review-needed','blocked') AND next_check_at<=%s FOR UPDATE",
+                "AND status IN ('open','waiting','review-needed','blocked','tracking','needs-review','data-needed') AND next_check_at<=%s FOR UPDATE",
                 (job["accountId"], job["symbol"], job["worldId"], now)).fetchall()
             for row in rows:
                 case = json.loads(row["payload_json"])
@@ -228,7 +239,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "AND status IN ('open','waiting','review-needed','blocked') ORDER BY next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
             feedback = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='service-feedback' "
                 "ORDER BY updated_at DESC LIMIT 3", (account, symbol)).fetchall()
-        records = []
+            from .mysql_business_research import business_memories
+            business = business_memories(connection, account, symbol, world, now)
+        records = list(business)
         for row in rows:
             case = json.loads(row["payload_json"])
             origin = case["origin"]
@@ -251,8 +264,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             return
         with self.transaction() as connection:
             rows = connection.execute("SELECT account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId')) AS world_id,"
-                "MIN(next_check_at) AS due FROM ai_brain_cases WHERE kind='question' "
-                "AND status IN ('open','waiting','review-needed','blocked') AND next_check_at<=%s "
+                "MIN(next_check_at) AS due FROM ai_brain_cases WHERE kind IN ('question','business-thesis') "
+                "AND status IN ('open','waiting','review-needed','blocked','tracking','needs-review','data-needed') AND next_check_at<=%s "
                 "AND (account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))) IN ("
                 + ",".join(["(%s,%s,%s)"] * len(scopes)) + ") GROUP BY account_id,symbol,world_id",
                 (stamp(), *(value for scope in sorted(scopes) for value in scope))).fetchall()
@@ -262,7 +275,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
     def status(self, account=""):
         with self.connect() as connection:
             rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE (%s='' OR account_id=%s) "
-                "ORDER BY status IN ('open','waiting','review-needed','blocked','proposed','planned') DESC,updated_at DESC LIMIT 40", (account, account)).fetchall()
+                "ORDER BY status IN ('open','waiting','review-needed','blocked','proposed','planned','tracking','needs-review','data-needed') DESC,updated_at DESC LIMIT 40", (account, account)).fetchall()
             cases = [json.loads(row["payload_json"]) for row in rows]
             if cases:
                 ids = [row["caseId"] for row in cases]

@@ -69,6 +69,8 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
     lines += ["", "확인한 데이터" if assessment else "확인한 현재 데이터"]
     fields = ["currentPrice", "changeRate", "averagePrice", "profitLossRate", "positionWeight", "ma5", "ma20", "ma60", "volume", "volumeRatio"]
     cited_fields = {ref["field"] for refs in result.get("claimEvidence", {}).values() for ref in refs if ref["period"] == "current" and ref["factId"] == quote.get("id")}
+    if result.get("businessResearch", {}).get("theses") or result.get("businessResearch", {}).get("reviews"):
+        fields = ["currentPrice", "profitLossRate", "positionWeight"]
     fields += [field for field in OBSERVATION_METRICS if field in cited_fields and field not in fields]
     for key in fields:
         if key not in quote or quote[key] is None:
@@ -127,6 +129,17 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
             citations.append("• " + title + " · " + source_label(fact))
     if citations:
         lines += ["", "함께 확인한 근거", *citations[:3]]
+    business = result.get("businessResearch") or {}
+    if business.get("theses"):
+        lines += ["", "사업 가설과 확인할 실적"]
+        for thesis in business["theses"][:2]:
+            lines += ["• " + thesis["mechanism"], "다른 설명: " + thesis["alternative"], "재검토 조건: " + thesis["invalidation"]]
+            for check in thesis.get("checkpoints", []):
+                base = check["baseline"]
+                lines.append("• " + check["meaning"] + " · 기준 " + base["periodEnd"] + " " + str(base["value"]) + " " + base["basis"]["currency"] + " · 다음 해 같은 기간 확인")
+        lines.append("사업 지표 확인은 가설 전체의 성공이나 투자 수익률 적중을 뜻하지 않습니다.")
+    if business.get("reviews"):
+        lines += ["", "이전 사업 가설 재검토", *["• " + review["reason"] for review in business["reviews"]]]
     checks = result.get("followUpConditions", [])
     if checks:
         lines += ["", "다음 관찰에서 확인할 조건"]

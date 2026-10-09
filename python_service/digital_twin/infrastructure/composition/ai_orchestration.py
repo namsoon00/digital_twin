@@ -66,6 +66,11 @@ def build_ai_control_service(settings=None):
             CURRENT_INPUT.reset(input_token)
             CURRENT_TASK.reset(token)
 
+    def company_memory(account_id, symbol, cutoff_at):
+        from digital_twin.modules.news_intelligence.infrastructure.mysql_company_report_state import MySQLCompanyReportStateStore
+        dated = MySQLCompanyReportStateStore(configured).research_memory(account_id, symbol, cutoff_at)
+        return {**dated, "kind": "company-research-record"} if dated else {}
+
     def research_memory(account_id, symbol):
         result = []
         for row in research_store.list_runs(account_id=account_id, symbol=symbol, limit=3):
@@ -102,7 +107,7 @@ def build_ai_control_service(settings=None):
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
                             brain_memory=agenda.memory, brain_waker=agenda.wake_due, read_planner=planner,
-                            evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget)
+                            evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory)
 
 
 def ai_control_status(settings=None, account_id=""):

@@ -269,7 +269,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Five source-integrity regressions cover span-based article bodies,
         # DOM/JSON-LD footer boundaries, stored contamination, retryable DART
         # error envelopes and the valid-ZIP versus missing-file distinction.
-        self.assertLessEqual(total, 2130)
+        # Nine business-research contracts cover immutable baselines, forced report
+        # input, missed outcomes, source/identity proof, replay and atomic storage.
+        self.assertLessEqual(total, 2139)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

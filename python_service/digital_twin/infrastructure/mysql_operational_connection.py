@@ -2101,6 +2101,20 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS company_relationship_assertions (
+        assertion_id VARCHAR(64) PRIMARY KEY,
+        subject_symbol VARCHAR(64) NOT NULL,
+        counterparty_symbol VARCHAR(64) NOT NULL DEFAULT '',
+        source_evidence_id VARCHAR(191) NOT NULL,
+        source_revision VARCHAR(191) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        first_known_at VARCHAR(40) NOT NULL,
+        INDEX relationship_subject(subject_symbol,first_known_at),
+        INDEX relationship_counterparty(counterparty_symbol,first_known_at),
+        INDEX relationship_source(source_evidence_id,source_revision)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS news_article_enrichment_revisions (
         enrichment_revision VARCHAR(191) PRIMARY KEY,
         evidence_id VARCHAR(191) NOT NULL,

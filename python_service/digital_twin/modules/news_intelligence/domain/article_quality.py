@@ -3,7 +3,13 @@ from dataclasses import dataclass, field
 from typing import Iterable, List
 
 
-ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v6-feed-contamination"
+ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v7-publisher-footer"
+# A publisher's bracketed reuse notice is a body boundary, even when a feed
+# flattens the following unrelated headlines into one line.
+PUBLISHER_FOOTER_RE = re.compile(
+    r"\[\s*(?:ⓒ|©|저작권자)[^\]\n]{0,200}(?:무단\s*전재|재배포|재판매)[^\]\n]{0,100}\]",
+    re.IGNORECASE,
+)
 CONTAMINATION_PATTERNS = (
     ("publisher-navigation", re.compile(r"\b(?:continue reading|read more|more from|recommended stor(?:y|ies))\b", re.IGNORECASE)),
     ("investment-promotion", re.compile(r"\b(?:is now the time to buy|missed nvidia|top \d+ stocks to buy)\b", re.IGNORECASE)),
@@ -71,6 +77,8 @@ def inspect_article_body(
         issues.append("css-residue")
     if EMBEDDED_INSTRUCTION_RE.search(text):
         issues.append("embedded-instruction-text")
+    if PUBLISHER_FOOTER_RE.search(text):
+        issues.append("publisher-footer")
     for issue, pattern in CONTAMINATION_PATTERNS:
         match = pattern.search(text)
         if match and (
@@ -107,6 +115,7 @@ def inspect_article_body(
             "body-truncated-at-cap": "본문이 저장 길이 한도에서 잘렸을 수 있습니다",
             "text-encoding-corrupt": "본문 문자 인코딩이 손상되었습니다",
             "publisher-navigation": "기사 뒤 탐색 문구가 본문에 섞였습니다",
+            "publisher-footer": "저작권 고지와 기사 밖 문구가 본문에 남아 있습니다",
             "investment-promotion": "투자 홍보 문구가 본문에 섞였습니다",
             "advertising-block": "광고 문구가 본문에 섞였습니다",
             "related-news-tail": "다른 기사 목록이 본문에 섞였습니다",

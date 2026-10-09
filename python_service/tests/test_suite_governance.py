@@ -266,7 +266,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Ten storage forecast regressions cover allocation bursts, sustained
         # depletion, immediate thresholds, durable confirmation, sampling gaps,
         # ETA hysteresis, clock rollback and truthful forecast availability.
-        self.assertLessEqual(total, 2125)
+        # Five source-integrity regressions cover span-based article bodies,
+        # DOM/JSON-LD footer boundaries, stored contamination, retryable DART
+        # error envelopes and the valid-ZIP versus missing-file distinction.
+        self.assertLessEqual(total, 2130)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

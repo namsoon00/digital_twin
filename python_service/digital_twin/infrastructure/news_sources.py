@@ -18,6 +18,7 @@ from html.parser import HTMLParser
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
+from digital_twin.modules.news_intelligence.domain.article_quality import PUBLISHER_FOOTER_RE
 from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import canonical_evidence_url
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
 from digital_twin.modules.market_data.domain.market_data import number
@@ -217,6 +218,10 @@ def strip_html(value: object) -> str:
 
 def article_block_is_useful(text: object) -> bool:
     value = clean_article_block(text)
+    # Keep the boundary until representation assembly, so later headline
+    # blocks cannot replace the footer and appear to be article paragraphs.
+    if PUBLISHER_FOOTER_RE.search(value):
+        return True
     if len(value) < 28:
         return False
     lowered = value.lower()
@@ -291,7 +296,7 @@ class ArticleTextParser(HTMLParser):
         attr_map = {str(key or "").lower(): str(value or "") for key, value in attrs or []}
         identity = (attr_map.get("id", "") + " " + attr_map.get("class", "")).lower()
         scoped = normalized == "article" or "articlebody" in attr_map.get("itemprop", "").lower() or bool(
-            re.search(r"(?:^|\s)(?:article-body|story-body|caas-body|story-news|newsct_article|article-view-content-div)(?:\s|$)", identity)
+            re.search(r"(?:^|\s)(?:article-body|story-body|caas-body|story-news|newsct_article|article-view-content-div|newsview)(?:\s|$)", identity)
         )
         self.has_article_scope = self.has_article_scope or scoped
         excluded = normalized in {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form", "aside", "button", "figcaption", "time"} or attr_map.get("aria-hidden") == "true" or bool(
@@ -377,7 +382,7 @@ def json_ld_article_blocks(raw_html: object) -> List[str]:
             is_article = any(str(item or "").strip().lower().endswith("article") for item in types)
             if not is_article:
                 continue
-            text = clean_article_block(node.get("articleBody") or "", ARTICLE_TEXT_LIMIT)
+            text = clean_article_block(PUBLISHER_FOOTER_RE.split(str(node.get("articleBody") or ""), maxsplit=1)[0], ARTICLE_TEXT_LIMIT)
             if not article_block_is_useful(text):
                 continue
             key = text.casefold()
@@ -467,7 +472,7 @@ def extract_article_text(raw_html: object) -> str:
         blocks.append(block)
         if len(" ".join(blocks)) >= ARTICLE_TEXT_LIMIT:
             break
-    body = compact_text(" ".join(blocks), ARTICLE_TEXT_LIMIT)
+    body = compact_text(PUBLISHER_FOOTER_RE.split(" ".join(blocks), maxsplit=1)[0], ARTICLE_TEXT_LIMIT)
     if len(structured) == 1 and len(structured[0]) > len(body):
         body = structured[0]
     return compact_text(body, ARTICLE_TEXT_LIMIT)

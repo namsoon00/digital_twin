@@ -91,3 +91,24 @@ not an independent verification of the publisher's statistics.
 
 Migration baselines remain frozen. Intentional V17 domain/storage differences
 are recorded in `closed_loop_semantic_changes.json` with the regression tests.
+
+## Publisher body boundary repair (2026-10-09)
+
+The extractor recognizes `newsView` bodies containing `span`/`br` text instead
+of collecting surrounding headings and lists. A bracketed publisher copyright
+and redistribution notice ends a DOM or JSON-LD body; subsequent headlines do
+not count toward its minimum length. The v7 body-quality gate also rejects this
+notice in already stored, flattened source text. Ordinary reporting about
+copyright remains valid. Existing local revalidation and evidence lifecycle
+events own withdrawal of invalid sources; sent messages remain historical.
+
+A live read-only check recovered 1,145 body characters from the affected page,
+preserving its main figure and provisional-results caveat. The old 475-character
+stored extraction now fails; the other three retained news bodies still pass.
+This verifies extraction boundaries, not the truth of the article's claims or
+overall world-news coverage. Synthetic regressions are in
+`test_news_collection_quality.py`; no captured article text is committed.
+The single contaminated active record was withdrawn through the existing
+transactional lifecycle API and its `research_evidence.lifecycle_changed`
+event. It no longer appears among active news; historical delivery records
+were not rewritten or resent.

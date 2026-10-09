@@ -44,6 +44,7 @@ from digital_twin.infrastructure.external_api.adapters.krx import KrxMarketIndex
 from digital_twin.infrastructure.external_api.adapters.opendart import (
     OpenDartCompanyFactsAdapter,
     OpenDartDisclosureAdapter,
+    OpenDartDocumentAdapter,
     OpenDartXbrlFactsAdapter,
 )
 from digital_twin.infrastructure.external_api.opendart_xbrl import parse_opendart_xbrl_archive
@@ -84,7 +85,7 @@ from digital_twin.modules.portfolio.domain.valuation.evidence import (
     collect_earnings_observations,
     earnings_scenario,
 )
-from digital_twin.infrastructure.external_signal_utils import dart_document_permanently_unavailable
+from digital_twin.infrastructure.external_signal_utils import dart_document_permanently_unavailable, dart_document_text
 from digital_twin.infrastructure.schedulers import external_data_failure_requires_alert
 
 
@@ -1369,6 +1370,58 @@ class ExternalDataPlatformTest(unittest.TestCase):
             {"terminalUnavailable": True, "receiptNo": "20260824000219"},
             {"dataUsable": False, "documentState": "document-unavailable"},
         ))
+
+    def test_opendart_document_api_errors_remain_retryable_and_preserve_previous_fact(self):
+        settings = {"opendartApiKey": "test-key"}
+        adapter = OpenDartDocumentAdapter()
+        job = CollectionJob("opendart.document", "005930:receipt:body-v1", "opendart", 75,
+                            ExternalSubject("005930", symbol="005930"), watermark={"receiptNo": "receipt"})
+        for status in ("800", "020", "010", "013", "900"):
+            with self.subTest(status=status):
+                raw = ('<result><status>' + status + '</status><message>'
+                       + 'provider echoed test-key ' * 20 + '</message></result>').encode()
+                provider = legacy_provider(settings)
+                provider.fetch_bytes = lambda *_args: raw
+                provider.guarded_call = lambda _source, _target, call: call()
+                store = MemoryCollectionStore()
+                previous = {"payload": {"dartDisclosures": {"005930": {"documentText": "retained body"}}},
+                            "quality": {"dataUsable": True}}
+                store.current = previous
+                service = ExternalDataCollectionService(settings, ExternalDatasetRegistry([adapter]), store)
+                with patch("digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider", return_value=provider):
+                    result = service._process_job(job)
+                self.assertEqual([], store.completed)
+                self.assertEqual([], store.empty_completed)
+                self.assertEqual(previous, store.current)
+                self.assertIn("OpenDART document API error " + status, result["error"])
+                self.assertNotIn("test-key", result["error"])
+                self.assertNotIn("metadata-only", result["error"])
+                self.assertEqual("", dart_document_text(raw, 6000))
+                self.assertFalse(dart_document_permanently_unavailable(raw))
+
+    def test_opendart_document_archive_and_missing_file_keep_distinct_outcomes(self):
+        settings = {"opendartApiKey": "test-key"}
+        job = CollectionJob("opendart.document", "005930:receipt:body-v1", "opendart", 75,
+                            ExternalSubject("005930", symbol="005930"), watermark={"receiptNo": "receipt"})
+        body = "회사는 신규 시설 투자를 결정했으며 투자 금액과 일정 및 자금 조달 방법을 공시합니다. " * 5
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("document.xml", "<DOCUMENT><P>" + body + "</P></DOCUMENT>")
+        for raw, usable, empty in (
+            (archive.getvalue(), True, False),
+            (b'<result><status>014</status><message>File not found</message></result>', False, True),
+        ):
+            provider = legacy_provider(settings)
+            provider.fetch_bytes = lambda *_args: raw
+            provider.guarded_call = lambda _source, _target, call: call()
+            with patch("digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider", return_value=provider):
+                result = OpenDartDocumentAdapter().fetch(job, settings)
+            self.assertEqual(usable, result.quality["dataUsable"])
+            self.assertEqual(empty, result.empty_result)
+            if usable:
+                self.assertIn("투자 금액", result.payload["dartDisclosures"]["005930"]["documentText"])
+            else:
+                self.assertTrue(result.watermark["terminalUnavailable"])
 
     def test_collection_service_executes_vendor_fetch_outside_request_path(self):
         store = MemoryCollectionStore()

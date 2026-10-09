@@ -38,6 +38,50 @@ from digital_twin.modules.news_intelligence.application.normalize_sources import
 
 
 class NewsCollectionQualityTests(unittest.TestCase):
+    def test_newsview_span_body_excludes_surrounding_headlines(self):
+        paragraphs = [
+            "테스트전자는 신규 공장의 생산 일정을 발표하고 내년부터 제품을 공급한다고 설명했다.",
+            "매출 전망은 120억원으로 제시했지만 원자재 가격 상승으로 수익성이 낮아질 수 있다고 덧붙였다.",
+            "회사는 분기 실적 발표에서 투자 지출과 부문별 손익을 공개할 계획이라고 밝혔다.",
+        ]
+        markup = (
+            '<h1>본문 밖 제목과 별도 기사 목록은 원문 근거로 사용할 수 없는 영역입니다.</h1>'
+            '<div id="newsView" class="edit-txt"><figure><figcaption>과거 사진 설명입니다.</figcaption></figure>'
+            '<span>' + '<br /><br />'.join(paragraphs) + '</span></div>'
+            '<p>[ⓒ 테스트신문, 무단 전재 및 재배포 금지]</p>'
+            '<li>다른회사는 새로운 전기차 공장을 짓고 대규모 투자를 준비하고 있다는 별도 기사</li>'
+        )
+        self.assertEqual(" ".join(paragraphs), extract_article_text(markup))
+
+    def test_publisher_footer_stops_dom_and_structured_body_before_related_titles(self):
+        body = "테스트전자는 실적 전망을 발표했다. 비용 증가 가능성과 추가 투자 계획도 함께 설명했다."
+        footer = "[ⓒ 테스트신문, 무단 전재 및 재배포 금지]"
+        tail = "다른회사의 신규 공장 착공과 전기차 출시 소식을 다루는 별도 기사의 제목"
+        for markup in (
+            '<p>' + body + '</p><p>' + footer + '</p><li>' + tail + '</li>',
+            '<article><p>' + body + footer + tail + '</p></article>',
+            '<script type="application/ld+json">' + news_sources.json.dumps(
+                {"@type": "NewsArticle", "articleBody": body + footer + tail}
+            ) + '</script>',
+        ):
+            with self.subTest(markup=markup[:40]):
+                self.assertEqual(body, extract_article_text(markup))
+                self.assertFalse(inspect_article_body(extract_article_text(markup)).passed)
+
+    def test_stored_flattened_publisher_footer_is_rejected_without_rejecting_copyright_reporting(self):
+        body = "테스트전자는 매출 증가를 발표했다. "
+        contaminated = body + "[ⓒ 테스트신문, 무단 전재 및 재배포 금지] " + (
+            "다른회사 신제품 출시와 신규 공장 투자에 관한 별도 제목 " * 8
+        )
+        quality = inspect_article_body(contaminated)
+        self.assertFalse(quality.passed)
+        self.assertIn("publisher-footer", quality.issues)
+        self.assertTrue(inspect_article_body(
+            "회사는 저작권 보호 사업을 확대한다고 밝혔다. 무단 전재를 방지하는 기술을 개발 중이다. "
+            "새로운 서비스는 출판사와 작가가 사용하고 있으며 연간 이용료는 고객 규모에 따라 달라진다.",
+            minimum_chars=80,
+        ).passed)
+
     def test_source_repair_worker_respects_cooldown_then_publishes_corrected_analysis(self):
         evidence = self.evidence({
             "name": "Apple", "relationScope": "direct", "articleReadStatus": "body",

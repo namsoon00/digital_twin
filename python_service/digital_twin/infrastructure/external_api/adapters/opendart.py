@@ -6,6 +6,7 @@ from digital_twin.modules.market_data.public import CollectionJob, CollectionPar
 from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
 from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
 from ...external_signal_utils import (
+    dart_document_error_response,
     dart_document_permanently_unavailable,
     dart_document_text,
     symbol_assignments,
@@ -245,6 +246,9 @@ class OpenDartDocumentAdapter:
                 empty_result=True,
                 retain_previous=True,
             )
+        error = dart_document_error_response(raw)
+        if error:
+            raise RuntimeError("OpenDART document API error " + error["status"] + ": " + error["reason"])
         text = dart_document_text(raw, bounded_int(settings.get("externalDartDocumentTextMaxChars"), 6000, 500, 20000))
         assessment = assess_disclosure_document(text, "body")
         metadata.update({

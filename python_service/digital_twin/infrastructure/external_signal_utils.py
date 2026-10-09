@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from xml.etree import ElementTree
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Callable, Dict, List, Optional
@@ -85,7 +86,7 @@ def default_text_fetcher(url: str, headers: Dict[str, str] = None, timeout: floa
 def dart_document_text(raw: object, limit: int) -> str:
     """Read the textual portion of an OpenDART ZIP/XML document response."""
     data = bytes(raw or b"")
-    if not data:
+    if not data or dart_document_error_response(data):
         return ""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -121,17 +122,33 @@ def dart_document_text(raw: object, limit: int) -> str:
     return " ".join(fragments)[:max(500, min(20000, int(limit or 6000)))]
 
 
-def dart_document_permanently_unavailable(raw: object) -> bool:
-    """Whether OpenDART explicitly says the requested filing file is absent."""
-
+def dart_document_error_response(raw: object) -> Dict[str, str]:
+    """Separate the official API error envelope from filing content."""
     data = bytes(raw or b"")
-    if not data or zipfile.is_zipfile(io.BytesIO(data)):
-        return False
-    text = data[:2000].decode("utf-8", errors="replace")
-    return bool(
-        re.search(r"<\s*status\s*>\s*014\s*<\s*/\s*status\s*>", text, re.IGNORECASE)
-        and "파일이 존재하지 않습니다" in text
-    )
+    if not data or len(data) > 65536 or zipfile.is_zipfile(io.BytesIO(data)):
+        return {}
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return {}
+    if root.tag != "result":
+        return {}
+    status = str(root.findtext("status") or "").strip()
+    if not re.fullmatch(r"\d{3}", status) or status == "000":
+        return {}
+    # Do not copy a vendor's arbitrary response text (or echoed credentials)
+    # into durable operational errors.
+    reason = {
+        "010": "invalid-api-key", "011": "disabled-api-key", "012": "ip-not-allowed",
+        "013": "no-data", "014": "official-file-not-found", "020": "request-limit",
+        "800": "service-maintenance", "901": "expired-api-key",
+    }.get(status, "provider-error")
+    return {"status": status, "reason": reason}
+
+
+def dart_document_permanently_unavailable(raw: object) -> bool:
+    """Only an explicit missing-file response completes a document job."""
+    return dart_document_error_response(raw).get("status") == "014"
 
 
 def parse_iso(value: str):

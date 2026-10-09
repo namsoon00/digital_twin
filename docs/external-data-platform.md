@@ -95,3 +95,20 @@ scope due, and drains bounded batches through the normal rate-limit, retry, and
 circuit-breaker path. It does not deactivate unrelated subjects or datasets.
 
 Web status is available at `GET /api/external-data/status`. It reports configured policies, partition backlog, current fact storage, provider state, purpose-specific fitness, account-focus `coverageGate`, and 24-hour latency/error aggregates without exposing API keys or raw credentials. Fitness states are `fresh`, `partial`, `stale`, `unsupported`, `failed`, and `not-collected`; `partial` means the minimum usable source exists but the configured cross-check source does not. A successful current poll with no matching disclosure is recorded as fresh empty coverage, while a provider response that explicitly does not support the symbol is `unsupported`. Neither is mislabeled as an unattempted collection.
+
+### OpenDART document error envelopes
+
+The document endpoint may return an XML `result/status` error instead of a ZIP
+archive. Parse this envelope before extracting filing text. Code `014` alone
+marks the official file unavailable; maintenance (`800`), request limits (`020`),
+authentication failures and other errors stay in the existing retry/circuit
+path, preserving any prior usable fact. Diagnostics retain the status code and
+a fixed reason, not arbitrary vendor text or credentials. Error messages must
+never become verified disclosure bodies even if they exceed the body length
+threshold. See the [official document API guide](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019003).
+
+On 2026-10-09, a bounded live check returned `800` (service maintenance),
+explaining the observed metadata-only failures. The adapter repair makes that
+cause explicit; it does not establish that the external service has recovered.
+Offline tests cover retryable errors, previous-fact preservation, missing files
+and valid ZIP bodies in `test_external_data_platform.py`.

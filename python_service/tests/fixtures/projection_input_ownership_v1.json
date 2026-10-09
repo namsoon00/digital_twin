@@ -155,11 +155,11 @@
     "graph_for_graph_store_persistence": {
       "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
       "owner": "",
-      "bodyHash": "e8a9463e9df1e9873a2c415e30162e1b132f2e2174ba4b626f42e7d43012b8f0",
+      "bodyHash": "b69b22cbec3f87e7f84000577e6f7cf4e1ee830e7738a337890972319dee0aeb",
       "restore": {
         "list(fallback_rules or [])": "self.rulebox_rules_for_impact()"
       },
-      "reason": "Retain directed valuation source lineage without pulling foreign assumptions through shared model nodes; test_data_utilization_contract; docs/data-utilization-repair.md. Preserve complete MacroPrint ABox facts independently of enabled stock rule subjects; test_ai_continuity_research; docs/ai-control.md."
+      "reason": "Retain selected-stock business reports and documentary relationship provenance independently of active rule predicates without promoting counterparties into native subjects; test_business_research; docs/business-research-loop.md."
     },
     "decision_episode_projection_context": {
       "path": "digital_twin/modules/reasoning/application/projection_input/decision_memory.py",

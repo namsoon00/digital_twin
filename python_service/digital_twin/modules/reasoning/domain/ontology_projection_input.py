@@ -288,6 +288,17 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
         list_limit=10,
         depth=2,
     )
+    relationships = source.get("companyRelationships") or {}
+    assertions = relationships.get("assertions") if isinstance(relationships, Mapping) else None
+    document = source.get("officialDocumentText")
+    if (isinstance(assertions, list) and 0 < len(assertions) <= 12
+            and isinstance(document, str) and len(document) <= 120000):
+        # Revalidation needs exact excerpt offsets and issuer identity. This
+        # bounded assembly proof is not copied into the persisted ABox node.
+        for key in ("companyRelationships", "officialDocumentText", "documentHash", "documentIssuerIdentity",
+                    "reportDate", "periodEnd", "evidenceLifecycleState"):
+            if key in source:
+                result[key] = deepcopy(source[key])
     for key in [
         "relationScope", "eventType", "articleSummaryKo", "articleReadStatus",
         "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactScore",

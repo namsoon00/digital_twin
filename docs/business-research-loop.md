@@ -75,10 +75,17 @@ exposure remain unknown unless actually disclosed. No revenue share is invented.
 No transitive relation or automatic watchlist entry is created.
 
 Existing saved analyses retain their original input contract. New observation
-runs use the new contract; graph assembly uses the v20 cache identity so a prior
+runs use the new contract; graph assembly uses the v21 cache identity so a prior
 cached graph cannot hide the new report lineage. Documentary relationship
 enrichment runs when the research use case persists source documents. This
 release does not silently backfill all previously cached documents.
+
+The persistence projection also retains each selected stock's financial states,
+relationship claims, source links and resolved corporate edges independently of
+which relations the current RuleBox consumes. Connected companies do not become
+additional rule subjects. Relationship-bearing documents retain exact bounded
+proof during input assembly (up to twelve claims and 120,000 source characters);
+only excerpts and provenance enter the ABox, not the document body.
 
 ## Validation and limits
 

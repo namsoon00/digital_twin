@@ -117,7 +117,13 @@ class BusinessResearchTests(unittest.TestCase):
                 "currency":"USD", "scope":"CFS", "durationBasis":"annual", "filed":"2026-02-01", "official":True}}},
             [{"datasetId":"sec.company_facts", "revisionId":"source", "subjectKey":"TEST", "fetchedAt":"2026-02-02T00:00:00Z"}])
         graph = PortfolioOntology("test")
-        add_company_knowledge_concepts(graph,"stock:TEST","TEST",{"companyKnowledge":{"TEST":{"financials":{"annual":[source]}}}})
+        from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+        from digital_twin.modules.reasoning.domain.projection_facts import graph_for_graph_store_persistence
+        from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology
+        add_entity(graph,'stock','TEST','Test',{'symbol':'TEST'})
+        source_signals=compact_external_signals_for_ontology({'companyKnowledge':{'TEST':{'financials':{'annual':[source]}}}},target_symbols=['TEST'])
+        add_company_knowledge_concepts(graph,"stock:TEST","TEST",source_signals)
+        graph=graph_for_graph_store_persistence(graph,{'inputRelationTypes':['HAS_PRICE']})
         projected = [dict(row.properties,id=row.entity_id,kind=row.kind) for row in graph.entities if row.properties.get("historicalReport")]
         self.assertTrue(projected)
         self.assertTrue(all(row['periodEnd']=='2025-12-31' for row in projected))
@@ -170,10 +176,15 @@ class BusinessResearchTests(unittest.TestCase):
         from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
         from digital_twin.modules.reasoning.domain.portfolio_ontology_relationship_concepts import add_company_relationship_concepts
         item=relationship_source(); item.raw_payload['companyRelationships']=extract_relationships(item,resolver,'2026-03-01T00:00:00Z')
+        from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_research_evidence_item
+        from digital_twin.modules.news_intelligence.domain.investment_research import research_evidence_from_payload
+        item=research_evidence_from_payload(compact_research_evidence_item(item.to_dict()))
         graph=PortfolioOntology('test')
         stock=add_entity(graph,'stock','TEST','TEST',{'symbol':'TEST','tboxClass':'Stock'})
         source=add_entity(graph,'research-evidence',item.evidence_id,'Report',{'symbol':'TEST','tboxClass':'ResearchEvidence'})
         add_company_relationship_concepts(graph,stock,source,item)
+        from digital_twin.modules.reasoning.domain.projection_facts import graph_for_graph_store_persistence
+        graph=graph_for_graph_store_persistence(graph,{'inputRelationTypes':['HAS_PRICE']})
         rel=next(row for row in graph.relations if row.relation_type=='SUPPLIES_TO')
         self.assertEqual('source-stated',rel.properties['assertionState'])
         self.assertFalse(rel.properties['investmentActionAuthority'])

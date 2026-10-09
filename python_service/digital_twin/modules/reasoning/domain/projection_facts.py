@@ -295,6 +295,22 @@ def graph_for_graph_store_persistence(
         )
 
     relations = [item for item in abox_relations if should_persist_relation(item)]
+    # Research facts must survive even when no active rule consumes them.
+    # Keep the selected stock's business facts and explicit source links,
+    # without making connected companies additional native rule subjects.
+    stock_symbols = {str(item.properties.get("symbol") or "").upper() for item in abox_entities
+                     if item.entity_id in source_ids and item.kind == "stock"}
+    business_ids = {item.entity_id for item in abox_entities
+                    if item.kind in {"company-financial-state", "company-relationship"}
+                    and str(item.properties.get("symbol") or "").upper() in stock_symbols}
+    assertions = {str(entity_by_id[key].properties.get("assertionId") or "") for key in business_ids}
+    retained_objects = {id(item) for item in relations}
+    relations += [item for item in abox_relations if id(item) not in retained_objects and (
+        (item.target in business_ids and item.relation_type in {"HAS_FINANCIAL_STATE", "HAS_OBSERVATION"})
+        or (item.source in business_ids and item.relation_type == "HAS_PROVENANCE")
+        or (item.properties.get("source") == "company-relationship-research"
+            and item.properties.get("assertionId") in assertions
+            and item.relation_type in {"SUPPLIES_TO", "SELLS_TO", "COMPETES_WITH"}))]
     # Temporal observations are intentionally structural rather than
     # direct RuleBox predicates. Once a native subject reaches a window,
     # retain the small connected observation chain so time-series
@@ -382,7 +398,7 @@ def graph_for_graph_store_persistence(
     # Published macro observations are shared factual context even when the
     # active catalog has only stock rules. Preserve their whole ABox nodes
     # without inventing a stock sensitivity or adding them as rule subjects.
-    observation_context_ids = {item.entity_id for item in abox_entities if item.kind == "macro-print"}
+    observation_context_ids = {item.entity_id for item in abox_entities if item.kind == "macro-print"} | business_ids
     persisted_entity_ids = source_ids | observation_context_ids | {
         endpoint
         for relation in relations

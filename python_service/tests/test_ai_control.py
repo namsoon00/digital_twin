@@ -124,6 +124,9 @@ class AIControlTests(unittest.TestCase):
         planner.assert_not_called(); store.fail.assert_not_called()
 
     def test_execution_audit_records_failure_without_prompt_or_error_contents(self):
+        from ai_observation_resume_checks import ResumeChecks
+        ResumeChecks().workflow()
+        ResumeChecks().coverage()
         from ai_execution_resilience_checks import ExecutionResilienceChecks
         checks = ExecutionResilienceChecks()
         checks.check_error_signals_exclude_secrets_and_successful_model_content()
@@ -202,7 +205,7 @@ class AIControlStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.store.transaction() as c:
-            for table in ("ai_control_call_metrics", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls", "ai_control_execution_state"):
+            for table in ("ai_control_runtime_intervals", "ai_control_call_metrics", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls", "ai_control_execution_state"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):
@@ -310,6 +313,9 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertEqual("RETURNING", rejoined["symbol"])
 
     def test_failed_completion_rolls_back_both_result_and_successors(self):
+        from ai_observation_resume_checks import ResumeChecks
+        ResumeChecks().persistence(self.store)
+        self.clean()
         from ai_execution_persistence_checks import ExecutionPersistenceChecks
         checks = ExecutionPersistenceChecks()
         checks.check_isolated("check_progress_commits_with_result_and_never_moves_backwards")

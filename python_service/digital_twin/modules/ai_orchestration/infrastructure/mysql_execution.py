@@ -6,6 +6,8 @@ import uuid
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import (
     admit_execution, finish_execution as finish_state, recovery_wait, execution_health, stamp, instant,
 )
+from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import RUNTIME
+from digital_twin.modules.ai_orchestration.domain.runtime_coverage import runtime_view
 
 
 EXECUTION_SCHEMA = """CREATE TABLE IF NOT EXISTS ai_control_execution_state (
@@ -76,12 +78,31 @@ class AIExecutionPersistence:
 
     def operational_health(self, connection, now, enabled=True):
         states = {row["scope_key"]: json.loads(row["state_json"]) for row in connection.execute(
-            "SELECT scope_key,state_json FROM ai_control_execution_state WHERE scope_key IN (%s,%s)", (SCOPE, PROGRESS)).fetchall()}
+            "SELECT scope_key,state_json FROM ai_control_execution_state WHERE scope_key IN (%s,%s,%s)", (SCOPE, PROGRESS, RUNTIME)).fetchall()}
+        runtime = runtime_view(states.get(RUNTIME, {}), now)
+        started = instant(runtime["startedAt"])
+        since = max(now - timedelta(hours=1), started) if started and started <= now else now - timedelta(hours=1)
         calls = connection.execute("SELECT workload,status,COUNT(*) AS count FROM ai_control_calls WHERE started_at>=%s "
-            "GROUP BY workload,status", (stamp(now - timedelta(hours=1)),)).fetchall()
+            "AND started_at<=%s GROUP BY workload,status", (stamp(since), stamp(now))).fetchall()
         overdue = connection.execute("SELECT COUNT(*) AS count FROM ai_control_tasks WHERE status='pending' "
             "AND available_at<%s AND capability='observe'", (stamp(now - timedelta(minutes=20)),)).fetchone()
         expired = connection.execute("SELECT COUNT(*) AS count FROM ai_control_tasks WHERE status='processing' "
             "AND lease_until<%s AND capability='observe'", (stamp(now),)).fetchone()
-        return execution_health(now, states.get(SCOPE, {}), states.get(PROGRESS, {}), calls,
-                                int(overdue["count"]), enabled, expired_leases=int(expired["count"]))
+        # Delay before the current runtime interval is not active-worker latency.
+        grace = bool(started and now - started < timedelta(minutes=20))
+        health = execution_health(now, states.get(SCOPE, {}), states.get(PROGRESS, {}), calls,
+                                  0 if grace else int(overdue["count"]), enabled,
+                                  expired_leases=0 if grace else int(expired["count"]))
+        health.update(version="central-ai-operational-health-v2", runtime=runtime, callWindowStart=stamp(since),
+                      callWindowMinutes=round((now - since).total_seconds() / 60, 2),
+                      carriedOverdueObservationTasks=int(overdue["count"]) if grace else 0,
+                      runtimeCoverage=self.runtime_report(connection, now - timedelta(hours=24), now))
+        if enabled and not runtime["live"]:
+            health.update(status="runtime-unconfirmed", reason="워커 생존 기록이 없거나 중단됐습니다. 중단 시각과 AI 처리 성과는 구분해 확인해야 합니다.")
+        if started:
+            for source, target in (("lastJudgmentAt", "judgmentSavedSinceResume"), ("lastObservationCheckAt", "observationCheckedSinceResume")):
+                value = instant(health[source])
+                health[target] = bool(value and started <= value <= now)
+            if health["status"] == "healthy" and not health["observationCheckedSinceResume"]:
+                health.update(status="awaiting-result", reason="재시작 이후 모델 호출은 완료됐지만 관찰 결과 저장은 아직 확인되지 않았습니다.")
+        return health

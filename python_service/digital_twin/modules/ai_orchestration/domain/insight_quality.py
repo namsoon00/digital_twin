@@ -1,5 +1,6 @@
 """Bounded independent critique and deterministic publication admission."""
 import json
+from .validation_diagnostic import quality_diagnostics
 
 from digital_twin.modules.ai_orchestration.domain.insight_contract import (
     CAUSAL_GUARD_VERSION, SECTIONS, insight_errors, insight_fingerprint, narrative_digest,
@@ -47,11 +48,12 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
     if not result.get("followUpConditions"):
         errors.append("관찰 가능한 확인 조건과 기간이 없습니다.")
     if errors:
-        return {**version, "status": "rejected", "errors": errors}
+        return {**version, "status": "rejected", "errors": errors, "diagnostics": quality_diagnostics(result, errors)}
     fingerprint = insight_fingerprint(result, result["input"])
     baseline = result["input"].get("lastDeliveredNotification") or {}
     if baseline.get("insightFingerprint") == fingerprint:
-        return {**version, "status": "rejected", "errors": ["가격의 작은 변화 외에 지난 알림과 다른 설명 근거가 없습니다."]}
+        errors = ["가격의 작은 변화 외에 지난 알림과 다른 설명 근거가 없습니다."]
+        return {**version, "status": "rejected", "errors": errors, "diagnostics": quality_diagnostics(result, errors)}
     return {**version, "status": "awaiting-review" if result.get("notification", {}).get("send") else "observation-only",
             "errors": [], "insightFingerprint": fingerprint}
 
@@ -73,6 +75,7 @@ def accept_review(result, review, input_id):
         if review.get("usefulness") != "decision-context":
             errors.append("지표 나열을 넘어 고객의 상황을 설명하지 못했습니다.")
     return {**quality, "status": "rejected" if errors else "accepted", "errors": errors,
+            "diagnostics": quality_diagnostics(result, errors, "independent-review"),
             "draftHash": narrative_digest(result), "reviewInputId": input_id, "review": review}
 
 

@@ -81,7 +81,7 @@ class RuntimeStabilityTests(unittest.TestCase):
             agenda.failed(connection, job, "evidence-read:snapshot:TimeoutError")
             self.assertEqual("2026-10-02T00:30:00Z", agenda.save.call_args.args[1]["nextCheckAt"])
             agenda.failed(connection, job, "TimeoutError")
-            self.assertEqual("2026-10-02T06:00:00Z", agenda.save.call_args.args[1]["nextCheckAt"])
+            self.assertEqual("2026-10-02T00:05:00Z", agenda.save.call_args.args[1]["nextCheckAt"])
 
     def test_article_history_uses_cached_keys_and_reads_only_one_legacy_body(self):
         context = {"signalType": "news", "articles": [{"kind": "news", "title": "Example release", "url": "https://example.com/release"}],
@@ -268,11 +268,13 @@ class RuntimeStabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceContractError, "account mismatch"):
             ObservationEvidenceReader(source)(SUBJECT)
 
-    def test_only_pre_model_capture_errors_get_short_retries(self):
+    def test_capture_and_execution_retries_keep_separate_bounded_policies(self):
         for reason in ("evidence-read:inventory-subject:TimeoutError", "evidence-contract:graph-changed-during-capture"):
             self.assertEqual((30, 1800), retry_delays("observe", reason, 1))
             self.assertEqual((120, 1800), retry_delays("observe", reason, 2))
-        for reason in ("TimeoutError", "evidence-contract:graph-account-mismatch", "evidence-contract:graph-fact-subject-mismatch"):
+        for reason in ("TimeoutError", "TimeoutExpired", "ai-execution:timeout"):
+            self.assertEqual((60, 300), retry_delays("observe", reason, 1))
+        for reason in ("evidence-contract:graph-account-mismatch", "evidence-contract:graph-fact-subject-mismatch"):
             self.assertEqual((1800, 21600), retry_delays("observe", reason, 1))
         self.assertEqual((1800, 21600), retry_delays("research", "evidence-read:snapshot:TimeoutError", 1))
 

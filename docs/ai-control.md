@@ -491,6 +491,55 @@ new runtime commits observation work. These are operational signals, not
 judgment correctness or return measurements. External daily-report scheduling
 remains owned by the reporting automation.
 
+### Restart, observation gaps and operational reporting
+
+Observation jobs capture the latest available verified graph snapshot when they
+execute; their scheduled time is not a historical source cutoff. New results retain
+`resumption` with scheduled/claimed/captured clocks, the source snapshot identity,
+schedule delay and `historicalChecksReplayed=false`. Capturing now does not refresh
+the quote's source clock or override its evidence eligibility.
+
+After a fenced successful observation/check, the completion transaction coalesces
+at most 100 already-due, never-attempted plain observation reservations with the
+same account, symbol, world and exact watch questions. Each remains in the ledger
+as a `superseded` result linked to its replacement. It is not an authored judgment.
+Research, case/evidence wakes, different questions/worlds, retries, future work,
+new arrivals after claim and active leases remain separate. Rollback preserves
+both the original reservation and the replacement; no historical failed task or
+customer delivery is replayed.
+
+A condition checked after its horizon is `expired`, `evaluationState=unevaluable`,
+`reasonCode=observation-window-missed`, even if the latest available quote predates
+the deadline. A previously verified transition remains historical evidence;
+missing checks never become a hit or miss. Existing stored results are unchanged.
+
+Execution timeouts use `ai-execution:timeout` in both the call ledger and task
+retry policy. Legacy `TimeoutExpired`/`TimeoutError` tasks use the same bounded
+60/120/240-second retries and five-minute successor after exhaustion. The shared
+execution pause still controls admission. Error records retain stage and safe
+reason codes, never raw exceptions. Follow-up validation distinguishes malformed
+output, unsupported fields and an unusable baseline instead of silently dropping
+conditions without a reason. An unusable frozen baseline skips prose-only repair;
+the scheduled next observation captures data and runs the existing bounded read
+loop again. This does not bypass source eligibility or manufacture missing data.
+
+The worker persists a pulse before each tick and every 45 seconds while holding
+a job lease. `ai_control_runtime_intervals` starts a new interval on process change
+or a pulse gap exceeding 150 seconds. Its indexed, bounded report exposes heartbeat
+coverage, unobserved time, truncation and `exactDowntimeSeconds=null`; absent pulses
+are not proof of an exact shutdown time. Coverage describes worker presence,
+including paused/budget-wait periods, not model utilization or investment quality.
+Do not divide judgment counts by wall-clock deployment age and call it AI throughput.
+Before this instrumentation, uptime is unmeasured. No historical interval is filled.
+
+Operational health v2 counts calls since the later of one hour ago and the current
+runtime interval's start. It separately reports judgment/check persistence since
+resumption and carried reservations, with a 20-minute restart grace before labeling
+old reservations delayed. Missing/stale runtime pulses produce `runtime-unconfirmed`,
+not an AI provider failure. Calls alone cannot establish a saved judgment. Daily
+reports must separate host availability, actual execution failures, current-state
+resumption and historical gaps; `superseded` reservations are not recovered analyses.
+
 ### Observation price presentation
 
 New customer outbox entries opt into `observation-price-basis-v1`. The renderer

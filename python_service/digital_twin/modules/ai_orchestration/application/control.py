@@ -11,6 +11,8 @@ from digital_twin.modules.ai_orchestration.domain.observation_wording import OBS
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred, AIExecutionError
 from digital_twin.modules.outcomes.contracts import evaluate_observation_conditions
+from digital_twin.modules.ai_orchestration.domain.observation_recovery import observation_resume
+from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import task_failure
 
 
 class AIControlService:
@@ -28,6 +30,7 @@ class AIControlService:
         self.read_round_budget = read_round_budget or (lambda: 3)
 
     def run_once(self):
+        self.store.record_runtime_pulse()
         if not enabled(self.settings):
             return {"status": "paused"}
         subjects = list(self.subjects())
@@ -41,6 +44,7 @@ class AIControlService:
             return wait.result()
         if not job:
             return {"status": "idle"}
+        stage = "subject-check"
         try:
             current_subject = next((subject for subject in subjects
                 if all(subject[key] == job[key] for key in ("accountId", "symbol", "worldId"))), None)
@@ -49,6 +53,7 @@ class AIControlService:
                 return {"status": "retired", "taskId": job["taskId"]}
             with self.store.keep_alive(job):
                 if job["capability"] == "observe":
+                    stage = "evidence-capture"
                     self.store.execution_wait()
                     capture = self.evidence({**job, "marketWorldId": current_subject.get("marketWorldId", "")})
                     session = capture if isinstance(capture, ObservationEvidenceSession) else None
@@ -56,6 +61,7 @@ class AIControlService:
                     if not packet.get("facts") or not packet.get("sourceSnapshotId"):
                         raise ValueError("current verified graph facts unavailable")
                     history = self.store.memory(job["accountId"], job["symbol"])
+                    stage = "memory-and-followup"
                     history = [row for row in history if not row.get("worldId") or row["worldId"] == job["worldId"]]
                     research = list(self.brain_memory(job["accountId"], job["symbol"], job["worldId"]))
                     research.extend(self.research_memory(job["accountId"], job["symbol"]))
@@ -79,20 +85,25 @@ class AIControlService:
                             due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
                             child = {**self.subject(job), "capability": "observe", "watchQuestions": job.get("watchQuestions", []), "taskId": identity(job["taskId"], "unchanged"), "availableAt": due}
                             saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다.",
+                                "resumption": observation_resume(job, packet),
                                 "followUpEvaluations": packet["followUpEvaluations"]}, [child])
                             return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
                     retrieval_trace = []
+                    stage = "evidence-retrieval"
                     if session and self.read_planner:
                         packet, history, research, retrieval_trace = retrieve_evidence(session, packet, history, research,
                             self.read_planner, lambda value: self.store.save_execution_input(job, value),
                             self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget(),
                             record_round=lambda step: self.store.save_retrieval_round(job, step))
+                    stage = "input-freeze"
                     envelope = freeze_execution_input(packet, history, research,
                         max_prompt_bytes=self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), retrieval_trace=retrieval_trace)
                     input_id = self.store.save_execution_input(job, envelope)
                     if not input_id:
                         return {"status": "lease-lost", "taskId": job["taskId"]}
+                    stage = "author-execution"
                     raw = self.planner(envelope, input_id)
+                    stage = "plan-validation"
                     plan = validate_plan(raw, packet, envelope["researchResults"], require_research=True)
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
                               "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
@@ -100,6 +111,7 @@ class AIControlService:
                               "memoryCoverage": envelope["memoryCoverage"],
                               "judgmentContinuity": judgment_continuity(envelope),
                               "followUpEvaluations": packet["followUpEvaluations"],
+                              "resumption": observation_resume(job, packet),
                               "comparisonFacts": [fact for previous in envelope["previousAnalyses"] for fact in previous.get("previousFacts", [])[:20]]}
                     for verification in range(2):
                         result["quality"] = local_quality(result)
@@ -113,8 +125,9 @@ class AIControlService:
                                 result["quality"] = accept_review(result, self.reviewer(review_input, review_id), review_id)
                             except (AIControlBudgetWait, AIExecutionDeferred):
                                 raise
-                            except Exception:
+                            except Exception as error:
                                 result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
+                                result["quality"]["failure"] = task_failure("independent-review", error)[1]
                         if (verification or packet.get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}
                                 or not correction_warranted(result)):
                             break
@@ -126,15 +139,20 @@ class AIControlService:
                                 return {"status": "lease-lost", "taskId": job["taskId"]}
                             result["repair"]["inputId"] = repair_id
                             repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"], require_research=True)
+                            result.pop("conditionValidation", None)
                             result.update(repaired, executionInputId=repair_id, observedAt=stamp(), memoryCoverage=correction["memoryCoverage"],
                                           judgmentContinuity=judgment_continuity(correction))
                         except (AIControlBudgetWait, AIExecutionDeferred):
                             raise
                         except Exception as error:
                             result["repair"].update(status="failed", errorKind=type(error).__name__)
+                            result["repair"]["failure"] = task_failure("repair", error)[1]
                             break
                     if result.get("repair", {}).get("status") == "pending":
                         result["repair"]["status"] = result["quality"]["status"]
+                    if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
+                        result["dataRecovery"] = {"status": "awaiting-next-observation", "reasonCode": "condition-baseline-unusable",
+                                                  "sameSnapshotRepairSkipped": True}
                     children = []
                     for question in result["researchQuestions"]:
                         request = next((item.get("researchRequest", {}) for item in result["workQuestions"]
@@ -145,10 +163,12 @@ class AIControlService:
                     due = (datetime.now(timezone.utc) + timedelta(minutes=result["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
                     children.append({**self.subject(job), "capability": "observe", "watchQuestions": result["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})
                 elif job["capability"] == "research":
+                    stage = "research"
                     result = self.researcher(job)
                     children = []
                 else:
                     raise ValueError("unsupported AI capability")
+                stage = "completion"
                 if not self.store.complete(job, result, children):
                     return {"status": "lease-lost", "taskId": job["taskId"]}
             return {"status": "completed", "taskId": job["taskId"], "capability": job["capability"]}
@@ -165,8 +185,13 @@ class AIControlService:
             return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
-            reason = error.code if isinstance(error, (EvidenceContractError, EvidenceReadError, AIExecutionError)) else type(error).__name__
-            saved = self.store.fail(job, reason)
+            reason, diagnostic = task_failure(stage, error)
+            if isinstance(error, (EvidenceContractError, EvidenceReadError, AIExecutionError)):
+                reason = error.code
+            if isinstance(error, (EvidenceContractError, EvidenceReadError)):
+                diagnostic.update(category="evidence-read" if isinstance(error, EvidenceReadError) else "evidence-contract",
+                                  reasonCode=error.code)
+            saved = self.store.fail(job, reason, result={"failure": diagnostic})
             status = saved.get("status") if isinstance(saved, dict) else "pending"
             return {"status": "deferred" if status == "pending" else status, "taskId": job["taskId"], "reason": reason}
 

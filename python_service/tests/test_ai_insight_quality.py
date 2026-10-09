@@ -392,6 +392,8 @@ class ObservationConditionTests(unittest.TestCase):
         self.assertTrue(triggered[0]['transitionVerified'])
 
     def test_expiry_missing_old_and_cross_account_observations_are_not_successes(self):
+        from ai_observation_resume_checks import ResumeChecks
+        ResumeChecks().conditions()
         result = observation(); source = result['input']
         baseline = {'jobId': 'delivered', 'followUpConditions': result['followUpConditions']}
         with self.assertRaises(ValueError):

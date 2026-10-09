@@ -254,7 +254,8 @@ class BrainAgendaStorageTests(unittest.TestCase):
         self.brain.wake_due([self.subject])
         self.assertIsNone(self.control.claim(), "terminal failure must preserve recovery delay")
         postponed = next(row for row in self.brain.status()["cases"] if row["caseId"] == saved["caseId"])
-        self.assertGreater(postponed["nextCheckAt"], later(stamp(), 350))
+        self.assertGreater(postponed["nextCheckAt"], later(stamp(), 4))
+        self.assertLessEqual(postponed["nextCheckAt"], later(stamp(), 6))
         self.assertEqual("review-failed", postponed["history"][0]["stage"])
 
 

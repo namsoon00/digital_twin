@@ -2,7 +2,7 @@
 
 
 def retry_delays(capability, error_kind, failures):
-    if error_kind.startswith("ai-execution:"):
+    if error_kind.startswith("ai-execution:") or error_kind in {"TimeoutExpired", "TimeoutError"}:
         return min(900, 60 * 2 ** min(4, max(0, failures - 1))), 300
     if error_kind == "LocalAICapacityUnavailable":
         return min(300, 30 * max(1, failures)), 300

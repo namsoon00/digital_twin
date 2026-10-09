@@ -63,7 +63,7 @@ def ai_execution(workload, prompt="", settings=None, store=None):
         if diagnostic:
             metrics["failure"] = diagnostic
         try:
-            finish(error.code if isinstance(error, AIExecutionError) else type(error).__name__)
+            finish("ai-execution:" + diagnostic["category"] if diagnostic else type(error).__name__)
         finally:
             store.finish_execution(ticket, "failure", diagnostic)
         raise

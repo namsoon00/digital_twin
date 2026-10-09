@@ -12,6 +12,7 @@ const brain = {goals:['미해결 질문을 근거로 재검토합니다.'],cases
  ...['data','experience'].map((category,index)=>({caseId:'feedback-'+index,accountId:'owner',symbol:'TEST',revision:2,kind:'service-feedback',status:'proposed',category,
   problem:'근거가 부족한 항목을 구분할 수 없습니다.',proposal:'자료의 조회 상태를 함께 표시합니다.',verification:'없음과 실패를 구분해 확인합니다.'}))]};
 const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 안의 단기 회복일 수 있습니다.',portfolioImpact:'보유 손실의 회복 여부를 구분해 봅니다.',
+  resumption:{scheduledAt:'2026-10-01T03:00:00Z',capturedAt:'2026-10-03T03:00:00Z',coalescedTaskCount:2},
   memoryCoverage:{continuityVersion:'observation-continuity-v1',requiredAnalyses:1,requiredResearch:3},
   workQuestions:[{question:'수출 규제 대상 제품 확인',researchRequest:{queryTerms:['수출 규제 <script>bad</script>'],sourceTypes:['news'],maxAgeMinutes:4320}}],
   development:{requestId:'development-fixture',status:'pending'},developmentQuestions:['가설 개선 질문 <script>bad</script>'],
@@ -24,6 +25,8 @@ const result = {summary:'현재 화면의 새 분석',hypothesis:'중기 약세 
 const server = http.createServer((req,res) => {
   if (req.url === '/api/ai-control/status') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,configuredEnabled:true,tasksStartedToday:2,dailyTaskBudget:48,activeTaskCount:1,dailyCallBudget:24,
     modelCallsUsedToday:24,observationScheduling:{status:'budget-wait',reason:'ai-call-budget-exhausted',nextCheckAt:'2026-10-02T00:00:00Z'},
+    executionHealth:{status:'awaiting-result',reason:'재시작 이후 저장 확인 중',callWindowMinutes:3,centralCallsCompleted:1,centralCallsFailed:0,
+      runtime:{startedAt:'2026-10-03T03:00:00Z',lastSeenAt:'2026-10-03T03:03:00Z'},runtimeCoverage:{observedActiveSeconds:180,unobservedSeconds:86220},carriedOverdueObservationTasks:2},
     brain,qualitySummary:{accepted:0,rejected:1},tasks:[{taskId:'fixture',symbol:'TEST',status:'completed',capability:'observe',result}],callsToday:[]}));return;}
   const file = path.resolve(root,'.'+req.url);
   if (!file.startsWith(root+path.sep) || !fs.existsSync(file)) {res.writeHead(404);res.end();return;}
@@ -41,6 +44,9 @@ const server = http.createServer((req,res) => {
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto('http://127.0.0.1:'+server.address().port+'/ai-control.html');
    await page.locator('article').waitFor();
+   assert.match(await page.locator('#overview').innerText(),/기록 공백은 정확한 중단 시간이나 AI 실패 횟수를 뜻하지 않습니다/);
+   assert.match(await page.locator('#overview').innerText(),/이번 구간에서 판단 저장 미확인/);
+   assert.match(await page.locator('article').innerText(),/동일 예약 2건/);
    await page.getByText('온톨로지 개선 · 현재 진행 기록 없음',{exact:true}).click();
    assert.match(await page.locator('article').innerText(),/가설 개선 질문 <script>bad<\/script>/);
    assert.equal(await page.locator('article script').count(),0);

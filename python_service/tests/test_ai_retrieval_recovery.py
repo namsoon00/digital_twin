@@ -132,7 +132,7 @@ class RetrievalRecoveryTests(unittest.TestCase):
             service, store, planner = control_helpers.AIControlTests().runner(evidence=Mock(side_effect=TimeoutError))
             store.fail.return_value = {"status": actual}
             self.assertEqual(reported, service.run_once()["status"])
-            self.assertEqual("TimeoutError", store.fail.call_args.args[1])
+            self.assertEqual("ai-execution:timeout", store.fail.call_args.args[1])
             planner.assert_not_called()
 
     def test_lost_audit_lease_or_input_lease_stops_before_correction_call(self):

@@ -7,6 +7,8 @@ from digital_twin.modules.ai_orchestration.domain.insight_contract import INSIGH
 def correction_warranted(result):
     if result.get("insightVersion") != INSIGHT_VERSION or not result.get("notification", {}).get("send"):
         return False
+    if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
+        return False  # Rewriting the same frozen quote cannot make it observable.
     if insight_errors(result, result["input"]) or not result.get("followUpConditions"):
         return True
     review = result.get("quality", {}).get("review") or {}

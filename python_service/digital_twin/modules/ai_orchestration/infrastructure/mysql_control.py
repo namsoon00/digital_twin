@@ -16,10 +16,13 @@ from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PRO
 from digital_twin.modules.reasoning.contracts import content_hash
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import AIExecutionPersistence, EXECUTION_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import safe_diagnostic
+from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import AIRuntimePersistence, RUNTIME_SCHEMA
+from digital_twin.modules.ai_orchestration.domain.observation_recovery import same_regular_observation
 
 
 SCHEMA = (
     EXECUTION_SCHEMA,
+    RUNTIME_SCHEMA,
     """CREATE TABLE IF NOT EXISTS ai_control_call_metrics (
     call_id VARCHAR(64) PRIMARY KEY, metrics_json TEXT NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
@@ -61,7 +64,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None):
         super().__init__(settings)
         with self.connect() as connection:
@@ -111,7 +114,8 @@ class MySQLAIControlStore(AIExecutionPersistence, MySQLOperationalConnection):
             connection.execute("UPDATE ai_control_tasks SET status='processing',lease_token=%s,lease_until=%s,attempts=attempts+1,updated_at=%s WHERE task_id=%s", (token, until, now, row["task_id"]))
             connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
             return {**json.loads(row["payload_json"]), "leaseToken": token, "attempts": int(row["attempts"]) + 1,
-                    "previousError": row["last_error"]}
+                    "previousError": row["last_error"], "scheduledAt": row["available_at"], "claimedAt": now,
+                    "claimedPriority": int(row["priority"])}
 
     def heartbeat(self, job):
         until = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
@@ -128,6 +132,10 @@ class MySQLAIControlStore(AIExecutionPersistence, MySQLOperationalConnection):
                         return
                 except Exception:
                     return  # Completion still checks the lease; lost ownership cannot publish.
+                try:
+                    self.record_runtime_pulse()
+                except Exception:
+                    pass  # Missing telemetry remains unknown; do not abandon a valid job lease.
         thread = threading.Thread(target=heartbeat, daemon=True)
         thread.start()
         try:
@@ -148,6 +156,9 @@ class MySQLAIControlStore(AIExecutionPersistence, MySQLOperationalConnection):
                                         (json.dumps(saved_result, ensure_ascii=False), now, job["taskId"], job["leaseToken"], now))
             if not cursor.rowcount:
                 return None
+            if job["capability"] == "observe" and (saved_result.get("quality", {}).get("status") in {"accepted", "observation-only"}
+                                                    or saved_result.get("status") == "unchanged"):
+                saved_result.setdefault("resumption", {})["coalescedTaskCount"] = self.coalesce_observations(connection, job, now)
             development = getattr(self, "development_writer", None)
             if development is not None and job["capability"] == "observe" and saved_result.get("summary"):
                 saved_result["development"] = development(connection, job, saved_result)
@@ -171,6 +182,29 @@ class MySQLAIControlStore(AIExecutionPersistence, MySQLOperationalConnection):
         result.update(committed[0])
         children[:] = committed[1]
         return True
+
+    @staticmethod
+    def coalesce_observations(connection, job, now):
+        if not job.get("claimedAt") or job.get("claimedPriority", 0) != 0:
+            return 0
+        original = {k: v for k, v in job.items() if k not in
+                    {"leaseToken", "attempts", "previousError", "scheduledAt", "claimedAt", "claimedPriority"}}
+        if not same_regular_observation(original, original):
+            return 0
+        rows = connection.execute("SELECT task_id,payload_json FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
+            "AND capability='observe' AND status='pending' AND attempts=0 AND priority=0 AND available_at<=%s AND created_at<=%s "
+            "ORDER BY available_at,task_id LIMIT 100 FOR UPDATE SKIP LOCKED",
+            (job["accountId"], job["symbol"], job["claimedAt"], job["claimedAt"])).fetchall()
+        count = 0
+        for row in rows:
+            if not same_regular_observation(original, json.loads(row["payload_json"])):
+                continue
+            result = {"status": "superseded", "reason": "같은 확인 질문을 현재 자료로 함께 확인했습니다.",
+                      "replacementTaskId": job["taskId"], "historicalChecksReplayed": False}
+            count += connection.execute("UPDATE ai_control_tasks SET status='completed',result_json=%s,updated_at=%s "
+                "WHERE task_id=%s AND status='pending' AND attempts=0",
+                (json.dumps(result, ensure_ascii=False), now, row["task_id"])).rowcount
+        return count
 
     def fail(self, job, error_kind, terminal=False, result=None):
         capacity_wait = error_kind == "LocalAICapacityUnavailable" and not terminal

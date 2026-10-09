@@ -91,12 +91,14 @@ def validate_plan(value, packet, research=(), require_research=False):
                   nextCheckMinutes=bounded(value.get("nextCheckMinutes"), 180, 60, 1440),
                   authority="research-only", publicationStatus="internal-research")
     if "insightVersion" in value:
-        from digital_twin.modules.outcomes.contracts import prepare_observation_conditions
+        from digital_twin.modules.outcomes.contracts import prepare_observation_conditions, ObservationConditionError
         result.update({key: value.get(key) for key in ("insightVersion", "portfolioImpact", "claimEvidence", "observations")})
         try:
             result["followUpConditions"] = prepare_observation_conditions(value.get("followUpConditions"), packet)
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError) as error:
             result["followUpConditions"] = []
+            result["conditionValidation"] = error.diagnostic if isinstance(error, ObservationConditionError) else {
+                "stage": "followup-validation", "category": "data-or-reference", "reasonCode": "condition-reference-invalid"}
     from digital_twin.modules.ai_orchestration.domain.brain_management import validate_management
     result.update(validate_management(value, packet, research, require_research=require_research))
     return result

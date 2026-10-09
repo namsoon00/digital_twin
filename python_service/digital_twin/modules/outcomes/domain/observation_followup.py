@@ -9,6 +9,12 @@ FIELDS = {"currentPrice", "ma5", "ma20", "ma60", "ma20Slope", "ma60Slope", "volu
           "tradeStrength", "bidAskImbalance", "foreignNetVolume", "institutionNetVolume", "positionWeight"}
 
 
+class ObservationConditionError(ValueError):
+    def __init__(self, code, category, message):
+        self.diagnostic = {"stage": "followup-validation", "reasonCode": code, "category": category}
+        super().__init__(message)
+
+
 def usable(fact, field):
     if fact.get("freshnessStatus") in {"stale", "invalid", "missing", "expired"} or fact.get("judgementEvidenceUsable") is False:
         return False
@@ -20,24 +26,26 @@ def usable(fact, field):
 
 def prepare_observation_conditions(conditions, packet):
     if not isinstance(conditions, list) or not 1 <= len(conditions) <= 3:
-        raise ValueError("one to three observable follow-up conditions required")
+        raise ObservationConditionError("condition-count", "output", "one to three observable follow-up conditions required")
     result = []
     for row in conditions:
         if not isinstance(row, dict) or set(row) != {"description", "left", "operator", "right", "effect", "horizonMinutes"}:
-            raise ValueError("follow-up condition shape")
+            raise ObservationConditionError("condition-shape", "output", "follow-up condition shape")
         if row["effect"] not in {"supports", "weakens", "invalidates"} or not isinstance(row["description"], str) or not 8 <= len(row["description"]) <= 180:
-            raise ValueError("follow-up meaning missing")
+            raise ObservationConditionError("condition-meaning", "output", "follow-up meaning missing")
         if type(row["horizonMinutes"]) is not int or not 60 <= row["horizonMinutes"] <= 10080:
-            raise ValueError("follow-up horizon invalid")
+            raise ObservationConditionError("condition-horizon", "output", "follow-up horizon invalid")
         selected, clocks = {}, []
         for side in ("left", "right"):
             ref = row[side]
             fact, value = resolve_observation_ref(packet, ref)
             if ref["period"] != "current" or ref["field"] not in FIELDS or fact.get("kind") != "stock":
-                raise ValueError("unsupported automatic follow-up")
+                raise ObservationConditionError("condition-field-unsupported", "condition", "unsupported automatic follow-up")
             clock = observation_instant(fact.get("sourceAsOf") or fact.get("asOf"))
-            if clock is None or not usable(fact, ref["field"]):
-                raise ValueError("follow-up baseline not observable")
+            if clock is None or not usable(fact, "currentPrice"):
+                raise ObservationConditionError("condition-baseline-unusable", "data", "follow-up baseline not observable")
+            if not usable(fact, ref["field"]):
+                raise ObservationConditionError("condition-field-unavailable", "data", "follow-up field not observable")
             selected[side] = {"field": ref["field"], "kind": fact["kind"], "symbol": fact.get("symbol") or packet["symbol"],
                               "currency": fact.get("currency", ""), "baselineValue": value}
             clocks.append(clock)
@@ -62,6 +70,14 @@ def evaluate_observation_conditions(packet, baseline, previous=()):
     for condition in baseline.get("followUpConditions", []):
         state = {**condition, **prior.get(condition["conditionId"], {}), "baselineJobId": baseline.get("jobId", ""), "transitionVerified": False}
         if state["status"] in {"triggered", "expired"}:
+            result.append(state)
+            continue
+        # A late capture is a current check, never a backfilled historical hit,
+        # even if the latest available source quote predates the deadline.
+        if now and now > observation_instant(condition["expiresAt"]):
+            state.update(status="expired", evaluationState="unevaluable", reasonCode="observation-window-missed",
+                         checkedAt=packet["capturedAt"],
+                         reason="관찰 공백으로 확인 기간 안의 조건 성립 여부를 평가할 수 없습니다.")
             result.append(state)
             continue
         observations, clocks = {}, []

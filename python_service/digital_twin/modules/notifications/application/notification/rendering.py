@@ -42,6 +42,27 @@ class NotificationRenderingService:
         self.link_base_resolver = link_base_resolver
 
     def render(self, job: NotificationJob) -> str:
+        from digital_twin.modules.notifications.domain.display_time import notification_times_kst
+        progress = (job.context or {}).get("transportDelivery") or {}
+        if progress.get("message"):
+            job.text = str(progress["message"])
+            if progress.get("relationChangeEvidence"):
+                job.context["relationChangeEvidence"] = deepcopy(progress["relationChangeEvidence"])
+            if progress.get("aiControlRenderedAt"):
+                job.context["aiControlRenderedAt"] = progress["aiControlRenderedAt"]
+            return job.text
+        rendered = self._render(job)
+        if not (job.context or {}).get("notificationReplayPreserveOriginal"):
+            rendered = notification_times_kst(rendered)
+            job.context["notificationDisplayTimezone"] = "Asia/Seoul"
+            audit = job.context.get("notificationPresentationAudit")
+            if audit:
+                audit.update(renderedBytes=len(rendered.encode("utf-8")),
+                    renderedSha256=hashlib.sha256(rendered.encode("utf-8")).hexdigest())
+        job.text = rendered
+        return rendered
+
+    def _render(self, job: NotificationJob) -> str:
         if job.message_type == "researchProgress":
             from digital_twin.modules.notifications.application.research_progress_message import render_research_progress
             job.text = render_research_progress(job.context["researchProgress"])

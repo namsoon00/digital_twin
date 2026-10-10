@@ -1,3 +1,4 @@
+import { notificationClock } from "./clock.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 
 function renderRelationChangeEvidence(packet) {
@@ -31,10 +32,10 @@ function renderRelationChangeEvidence(packet) {
       evidenceId: "근거 연결", sourceFeatureSnapshotId: "원본 자료 버전", knowledgeCutoffAt: "자료 기준 시각" };
     var windows = Array.isArray(condition.sourceTemporalWindows) ? condition.sourceTemporalWindows : [];
     return "<br>연결된 분석 신호 조건 확인 · 근거 항목: " + text((condition.measuredFactIds || []).join(", "))
-      + "<br>원본 자료 버전: " + text(condition.sourceFeatureSnapshotId) + " · 자료 기준: " + text(condition.knowledgeCutoffAt)
+      + "<br>원본 자료 버전: " + text(condition.sourceFeatureSnapshotId) + " · 자료 기준: " + text(condition.knowledgeCutoffAt ? notificationClock(condition.knowledgeCutoffAt) : "")
       + "<br>전체 근거 연결: " + text((condition.modelEvidenceIds || []).join(", "))
       + (windows.length ? '<details><summary>가설에 연결된 기간별 측정값</summary>' + windows.map(function (window) {
-        return '<p>' + Object.entries(window).map(function (entry) { return text(fields[entry[0]] || entry[0]) + ': ' + text(entry[1]); }).join('<br>') + '</p>';
+        return '<p>' + Object.entries(window).map(function (entry) { return text(fields[entry[0]] || entry[0]) + ': ' + text(entry[0] === "knowledgeCutoffAt" ? notificationClock(entry[1]) : entry[1]); }).join('<br>') + '</p>';
       }).join('') + '</details>' : "");
   }
   function values(row, kind) {
@@ -59,16 +60,16 @@ function renderRelationChangeEvidence(packet) {
   }
   return '<section class="notification-detail-section"><details><summary>전체 추론 근거 · 가설·규칙·측정값</summary><p>'
     + text(packet.reason) + '</p><p>' + (packet.baselineAvailable
-      ? "비교 기준: 마지막 성공 발송 " + text(packet.baselineDeliveredAt)
+      ? "비교 기준: 마지막 성공 발송 " + text(packet.baselineDeliveredAt ? notificationClock(packet.baselineDeliveredAt) : "")
       : "이전 발송의 상세 근거가 보존되지 않아 이전 값은 표시할 수 없습니다.")
-    + '</p><p>관측: ' + text(current.observedAt) + " · 출처: " + text(current.source)
+    + '</p><p>관측: ' + text(current.observedAt ? notificationClock(current.observedAt) : "") + " · 출처: " + text(current.source)
     + " · 자료 상태: " + text(current.dataState) + '</p><p>ABox: ' + text(current.sourceAboxSnapshotId)
     + " · 추론 세대: " + text(current.inferenceGenerationId) + '</p>'
     + (current.marketSignalCoverage ? '<details><summary>자료별 집계 시각과 제공 범위</summary>'
       + Object.entries(current.marketSignalCoverage).map(function (entry) {
         var source = entry[1] || {};
         var label = { price: "가격", investor: "투자자별 수급", ccnl: "체결", orderbook: "호가" }[entry[0]] || entry[0];
-        return '<p>' + text(label) + " · " + text(source.sourceAsOf) + " · " + text(source.status)
+        return '<p>' + text(label) + " · " + text(source.sourceAsOf ? notificationClock(source.sourceAsOf) : "") + " · " + text(source.status)
           + "<br>집계 방식: " + text(source.measurementType) + "<br>관측 항목: "
           + text((source.observedFields || source.fields || []).join(", ")) + '</p>';
       }).join("") + '</details>' : "")

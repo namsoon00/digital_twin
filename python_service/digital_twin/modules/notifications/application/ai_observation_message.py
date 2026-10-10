@@ -1,5 +1,5 @@
 """Render verified central observations without another AI or live enrichment."""
-from datetime import datetime
+from datetime import datetime, timezone
 import math
 from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, OBSERVATION_WORDING_VERSION, resolve_observation_ref
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment
@@ -9,7 +9,10 @@ from zoneinfo import ZoneInfo
 
 def clock_label(value):
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(ZoneInfo("Asia/Seoul")).strftime("%m/%d %H:%M KST")
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone(ZoneInfo("Asia/Seoul")).strftime("%m/%d %H:%M KST")
     except (TypeError, ValueError):
         return "시점 미확인"
 

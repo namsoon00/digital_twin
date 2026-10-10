@@ -1237,6 +1237,14 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS notification_research_threads (
+        thread_key CHAR(64) PRIMARY KEY,
+        first_job_id VARCHAR(191) NOT NULL,
+        receipts_json LONGTEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_jobs (
         job_id VARCHAR(191) PRIMARY KEY,
         account_id VARCHAR(191) NOT NULL DEFAULT '',

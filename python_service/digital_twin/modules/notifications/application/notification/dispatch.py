@@ -41,6 +41,11 @@ class NotificationDispatchService:
         context = dict(job.context or {})
         # Unverified drafts must never fall back to an account's destination.
         notifier = factory(None if job.message_type == AI_OBSERVATION_DIAGNOSTIC else accounts.get(job.account_id))
+        threaded = job.message_type == "researchProgress" and getattr(notifier, "supports_research_replies", False) is True
+        with self.queue.research_delivery_thread(job, notifier.destination_fingerprint) if threaded else nullcontext() as reply_id:
+            self._send(job, notifier, message, audience, channel, context, reply_id, threaded)
+
+    def _send(self, job, notifier, message, audience, channel, context, reply_id, threaded):
         resumable = getattr(notifier, "supports_delivery_checkpoints", False) is True
         persist_progress = getattr(self.queue, "save_delivery_progress", None) or getattr(self.queue, "update", None)
         progress = dict(context.get("transportDelivery") or {})
@@ -94,11 +99,15 @@ class NotificationDispatchService:
             current = dict(job.context or {})
             current["transportDelivery"] = {**progress, "message": message, "checkpoint": checkpoint}
             job.context = current
-            persist_progress(job)
+            if threaded:
+                self.queue.save_research_delivery_progress(job, notifier.destination_fingerprint, checkpoint)
+            else:
+                persist_progress(job)
 
         try:
             delivery = (
-                notifier.send_resumable(message, checkpoint=progress.get("checkpoint"), on_checkpoint=save_checkpoint)
+                notifier.send_resumable(message, checkpoint=progress.get("checkpoint"), on_checkpoint=save_checkpoint,
+                    **({"reply_to_message_id": reply_id} if threaded else {}))
                 if resumable else notifier.send(message)
             )
         except Exception as error:

@@ -381,6 +381,8 @@ def reference_date_text(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
+    if len(text) == 10 and text[4:5] == "-" and text[7:8] == "-":
+        return text + " (시각 미기록)"
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if parsed.tzinfo is None:

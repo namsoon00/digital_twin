@@ -485,8 +485,13 @@ class NotificationQueueRunner:
                 continue
             self.active_job_stage = "delivering"
             from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
+            from digital_twin.modules.notifications.domain.research_thread import ResearchDeliveryDeferred
             try:
                 self.deliver(job, accounts, message)
+            except ResearchDeliveryDeferred as error:
+                self.queue.defer_research_delivery(job, str(error))
+                self.last_run_details.append(self.job_detail(job, "deferred", str(error)))
+                processed += 1
             except NotificationDeliverySuppressed as error:
                 self.queue.mark_suppressed(job, str(error))
                 self.last_run_details.append(self.job_detail(job, "suppressed", str(error)))

@@ -119,3 +119,34 @@ narrative approval cannot supply future evidence.
 롤백하며, 사건 ID에 기반한 발송 키와 과제별 상태 지문으로 중복을 방지한다.
 알림 일정의 `연구 진행` 활성화 설정(`alertRules`)으로 수신 여부를 관리하고 기존 계정 야간 제한과 전송 재시도를
 따른다. 큐 접수는 전송 완료가 아니며 최종 전송 상태는 알림 영수증으로 확인한다.
+
+### Research message replies and Korean display clocks
+
+Research progress uses Telegram replies to the first verified message for the
+same account, world, symbol and question. A thesis with exactly one source
+question shares that conversation; a thesis with several source questions owns
+its own conversation to avoid attaching it to an arbitrary question. The small
+`notification_research_threads` ledger retains verified message IDs by bot/chat
+fingerprint independently of large notification payload retention. Existing
+question jobs with retained checkpoints can supply the original anchor.
+
+The worker serializes each research conversation. A pending original question
+defers its results without consuming transport retry attempts. Successful first
+chunks persist the anchor and delivery checkpoint in one transaction; subsequent
+chunks resume with the same body, destination and reply target. Retry-exhausted or
+suppressed originals without a receipt allow a new standalone anchor. Telegram
+`reply_parameters.allow_sending_without_reply` permits delivery when the owner
+has deleted the referenced message; the result still contains its question.
+No synthetic research messages are sent to verify this behavior.
+
+New notification bodies and notification screens display Asia/Seoul (KST).
+Date-only report periods stay dates; UTC source timestamps, evidence URLs and
+frozen already-delivered/partially-delivered message bytes stay unchanged. The
+final AI delivery comparison applies the same display policy, preserving its
+exact-body validation. Telegram's own message timestamp is controlled by the
+recipient's Telegram device settings, separately from these message-body clocks.
+
+Validation: `test_research_replies` covers reply payloads, parse fallback, split
+retries, destination/world isolation, original-question ordering, durable and
+legacy anchors, calendar rollover and display-only conversion;
+`notification-evidence-audit.test.mjs` covers browser KST display.

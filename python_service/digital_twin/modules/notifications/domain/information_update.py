@@ -1,7 +1,7 @@
 """Source and measurement updates with no AI or trading authority."""
 
 import html
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
@@ -12,7 +12,10 @@ def _text(value):
 
 def _time(value):
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(ZoneInfo("Asia/Seoul")).strftime("%m/%d %H:%M KST")
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone(ZoneInfo("Asia/Seoul")).strftime("%m/%d %H:%M KST")
     except (ValueError, TypeError):
         return str(value or "")
 

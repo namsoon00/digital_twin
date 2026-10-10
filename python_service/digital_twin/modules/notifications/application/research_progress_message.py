@@ -1,5 +1,6 @@
 """Render the frozen research event; no fresh facts, model calls or actions."""
 from html import escape
+from digital_twin.modules.notifications.domain.display_time import kst_timestamp, notification_times_kst
 from digital_twin.modules.decisions.contracts import narrative_presentation_errors
 
 
@@ -33,7 +34,7 @@ def render_research_progress(value):
     if observed or missed:
         lines.append(f"등록 지표 방향 관측: 일치 {observed}건 · 불일치 {missed}건. 가설 전체의 입증을 뜻하지 않습니다.")
     if value.get("nextCheckAt") and value["status"] not in {"answered", "dismissed", "retired", "superseded"}:
-        lines.append("다음 검토 예정: " + text(value["nextCheckAt"], 40) + " (자료·실행 상황에 따라 지연될 수 있습니다)")
+        lines.append("다음 검토 예정: " + text(kst_timestamp(value["nextCheckAt"]), 60) + " (자료·실행 상황에 따라 지연될 수 있습니다)")
     lines.extend(["", "연구 과정과 AI 검토 기록입니다. 예측 성과가 검증되었다는 뜻이나 매매 권고가 아닙니다.",
-                  "기록 시각: " + text(value["at"], 40)])
-    return "\n".join(lines)
+                  "기록 시각: " + text(kst_timestamp(value["at"]), 60)])
+    return notification_times_kst("\n".join(lines))

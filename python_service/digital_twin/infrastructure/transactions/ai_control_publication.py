@@ -178,6 +178,9 @@ class AIControlPublication:
                        and subject["worldId"] == packet.get("worldId") for subject in self.subjects()):
                 raise NotificationDeliverySuppressed("현재 관찰 대상에서 제외된 계정 또는 종목입니다.")
             expected = render_ai_observation(result, sent_at=job.context.get("aiControlRenderedAt", ""), debug_number=notification_debug_number(job.job_id))
+            if job.context.get("notificationDisplayTimezone") == "Asia/Seoul":
+                from digital_twin.modules.notifications.domain.display_time import notification_times_kst
+                expected = notification_times_kst(expected)
             if message != expected or ((job.context or {}).get("transportDelivery") or {}).get("message", message) != expected:
                 raise NotificationDeliverySuppressed("발송 본문이 검증한 중앙 AI 관찰 원본과 다릅니다.")
             receipts = self.receipts(job.account_id)
@@ -224,6 +227,9 @@ class AIControlPublication:
                 or (job.context or {}).get("aiObservationDiagnostic") != diagnostic):
             raise NotificationDeliverySuppressed("저장된 AI 초안과 진단 알림의 출처가 일치하지 않습니다.")
         expected = render_ai_observation_diagnostic(diagnostic, debug_number=notification_debug_number(job.job_id))
+        if job.context.get("notificationDisplayTimezone") == "Asia/Seoul":
+            from digital_twin.modules.notifications.domain.display_time import notification_times_kst
+            expected = notification_times_kst(expected)
         if message != expected or ((job.context or {}).get("transportDelivery") or {}).get("message", message) != expected:
             raise NotificationDeliverySuppressed("진단 본문이 저장된 AI 초안과 다릅니다.")
         with self.notifications.connect() as connection:

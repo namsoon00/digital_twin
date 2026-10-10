@@ -67,7 +67,10 @@ def notification_list_presentation_join() -> str:
     return " JOIN JSON_TABLE(notification_jobs.payload_json, '$' COLUMNS (" + ", ".join(fields) + ")) AS presentation_read ON TRUE"
 
 
-class MySQLNotificationJobStore(MySQLOperationalConnection):
+from .research_threads import ResearchThreadStore
+
+
+class MySQLNotificationJobStore(ResearchThreadStore, MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
 
@@ -2223,6 +2226,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             outcome.reason,
             {"suppressionReason": str((job.context or {}).get("deliverySuppressionReason") or "")},
         )
+        if outcome.accepted:
+            self.register_research_thread(connection, job)
         return bool(outcome.accepted)
 
     def enqueue(self, job: NotificationJob) -> bool:

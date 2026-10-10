@@ -1,3 +1,4 @@
+import { notificationClock } from "./clock.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 
 const reasons = {
@@ -43,5 +44,5 @@ export function renderDeliveredMessage(attempts = []) {
   const baseline = metadata.deliveryBaseline || {};
   return '<details class="notification-ai-prompt-audit"><summary>실제 전송 본문</summary>' +
     (message ? '<pre>' + escapeHtml(message) + '</pre>' : '<p>' + (metadata.renderedMessageStatus === "expired" ? "본문 보관 기간 종료 · 발송 확인 기록 유지" : "본문 저장 기록 없음") + '</p>') +
-    (baseline.deliveredAt ? '<p>비교한 직전 성공 발송: ' + escapeHtml(baseline.deliveredAt) + '</p>' : '') + '</details>';
+    (baseline.deliveredAt ? '<p>비교한 직전 성공 발송: ' + escapeHtml(notificationClock(baseline.deliveredAt)) + '</p>' : '') + '</details>';
 }

@@ -4,7 +4,9 @@ import { alertThresholds } from "./alerts.mjs";
 import { canSendNotificationTemplateTest, defaultMarketHoursSessions, defaultNotificationRuleMarketHoursMarkets, defaultNotificationRuleSimilarityFields, defaultNotificationTemplates, isAlertTemplateType, messageScheduleByType, notificationRuleForEdit, notificationTemplateVariables, renderNotificationTemplatePreviewText } from "./policy.mjs";
 import { activeNotificationRule, notificationTemplateItems } from "./workspace.mjs";
 import { settingsSaveButtonClass, settingsSaveButtonLabel, settingsSaveDisabledAttr } from "../settings/fields.mjs";
-import { formatClock, renderRecordChangedAt } from "../shared/format.mjs";
+
+import { notificationClock as formatClock } from "./clock.mjs";
+import { renderNotificationChangedAt as renderRecordChangedAt } from "./changed-at.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { alertRuleCatalog, alertThresholdCatalog, labelWithNotificationIcon } from "../shell/catalog.mjs";
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";

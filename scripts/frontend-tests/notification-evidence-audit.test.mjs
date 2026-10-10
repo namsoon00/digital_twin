@@ -47,7 +47,7 @@ test("relation detail explains model proof and source coverage without losing ob
     facts: [{id: "institutionNetVolume", current: {value: 0}}]
   }};
   const html = renderRelationChangeEvidence(packet);
-  for (const value of ["반등이 이어지지 않을 가능성", "회복 유지", "표본 부족", "분석 신호 조건 확인", "자료별 집계 시각", "2026-10-02T10:00:00+09:00", "institutionNetVolume", "<td>0</td>"]) assert.ok(html.includes(value), value);
+  for (const value of ["반등이 이어지지 않을 가능성", "회복 유지", "표본 부족", "분석 신호 조건 확인", "자료별 집계 시각", "2026-10-02 10:00:00 KST", "institutionNetVolume", "<td>0</td>"]) assert.ok(html.includes(value), value);
   assert.doesNotMatch(html, /\[object Object\]|verbose old claim|<script>/);
   assert.match(html, /<details><summary>전체 추론 근거/);
   assert.match(html, /원인 확인.*20일 평균 가격과의 거리 변화/);
@@ -68,4 +68,17 @@ test("relation detail explains model proof and source coverage without losing ob
   assert.equal((compact.match(/아직 검증 중/g) || []).length, 2);
   assert.match(compact, /이번 알림이 온 이유/);
   assert.match(compact, /비교 불가: &lt;script&gt;source/);
+});
+
+test("notification clocks remain in Korea across local timezone choices", async () => {
+  const { notificationClock } = await import("../../public/modules/notifications/clock.mjs");
+  const previous = process.env.TZ;
+  try {
+    process.env.TZ = "America/New_York";
+    for (const stamp of ["2025-12-31T23:30:00Z", "2025-12-31T23:30:00", "2025-12-31T18:30:00-05:00"]) {
+      assert.equal(notificationClock(stamp), "2026-01-01 08:30:00 KST");
+    }
+    assert.equal(notificationClock("2025-12-31"), "2025-12-31 (시각 미기록)");
+    assert.equal(notificationClock("unknown"), "unknown");
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });

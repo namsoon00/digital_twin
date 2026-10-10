@@ -1325,6 +1325,8 @@ def _format_kst_timestamp(value: object) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
+    if len(text) == 10 and text[4:5] == "-" and text[7:8] == "-":
+        return text + " (시각 미기록)"
     if "KST" in text.upper():
         return text
     normalized = text

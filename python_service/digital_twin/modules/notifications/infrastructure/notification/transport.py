@@ -8,6 +8,7 @@ import urllib.request
 from html import unescape
 from typing import Dict, Iterable
 
+from digital_twin.modules.notifications.domain.display_time import notification_times_kst
 from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.infrastructure.external_signal_utils import guarded_external_call, root_api_error
 from digital_twin.infrastructure.settings import runtime_settings
@@ -79,13 +80,18 @@ class ConsoleNotifier:
     label = "Console"
 
     def send(self, text: str) -> NotificationResult:
-        print(text)
+        print(notification_times_kst(text))
         return NotificationResult(False, self.label, "콘솔 전용 모드")
 
 
 class TelegramNotifier:
     label = "Telegram"
     supports_delivery_checkpoints = True
+    supports_research_replies = True
+
+    @property
+    def destination_fingerprint(self):
+        return hashlib.sha256((self.bot_token.partition(":")[0] + ":" + str(self.chat_id)).encode("utf-8")).hexdigest()
 
     def __init__(self, bot_token: str, chat_id: str):
         self.bot_token = bot_token
@@ -186,18 +192,23 @@ class TelegramNotifier:
                       "formatError": code == 400 and any(term in description.lower() for term in ("can't parse entities", "can't find end", "unsupported start tag"))})
 
     def send(self, text: str) -> NotificationResult:
-        return self.send_resumable(text)
+        return self.send_resumable(notification_times_kst(text))
 
-    def send_resumable(self, text: str, checkpoint=None, on_checkpoint=None) -> NotificationResult:
+    def send_resumable(self, text: str, checkpoint=None, on_checkpoint=None, reply_to_message_id=None) -> NotificationResult:
         if not self.bot_token or not self.chat_id:
             return NotificationResult(False, self.label, "텔레그램 토큰 또는 chat id 미설정")
         text = str(text or "")
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        destination = hashlib.sha256((self.bot_token.partition(":")[0] + ":" + str(self.chat_id)).encode("utf-8")).hexdigest()
+        destination = self.destination_fingerprint
         progress = dict(checkpoint or {})
         message_ids = list(progress.get("messageIds") or [])
         if message_ids and (progress.get("messageSha256") != digest or progress.get("destinationFingerprint") != destination):
             return NotificationResult(False, self.label, "부분 전송 이후 본문 또는 수신처가 변경되어 재전송하지 않았습니다.")
+        reply_id = str(reply_to_message_id or "")
+        if message_ids and str(progress.get("replyToMessageId") or "") != reply_id:
+            return NotificationResult(False, self.label, "부분 전송 이후 답글 대상이 변경되어 재전송하지 않았습니다.")
+        if reply_id and (not reply_id.isdigit() or int(reply_id) <= 0):
+            return NotificationResult(False, self.label, "답글 메시지 번호를 확인할 수 없습니다.")
         payloads = []
         if len(str(text or "")) > TELEGRAM_MESSAGE_LIMIT:
             chunks = list(telegram_message_chunks(telegram_plain_text(text)))
@@ -213,12 +224,15 @@ class TelegramNotifier:
         if len(message_ids) > len(payloads):
             return NotificationResult(False, self.label, "부분 전송 기록의 조각 수가 본문과 일치하지 않습니다.")
         progress.update(messageSha256=digest, destinationFingerprint=destination,
-                        messageIds=message_ids, chunkCount=len(payloads))
+                        messageIds=message_ids, chunkCount=len(payloads), replyToMessageId=reply_id)
         receipt_metadata = {"chatFingerprint": hashlib.sha256(str(self.chat_id).encode("utf-8")).hexdigest()[:16]}
         for payload in payloads[len(message_ids):]:
+            if reply_id:
+                payload["reply_parameters"] = {"message_id": int(reply_id), "allow_sending_without_reply": True}
             result = self.post_message(payload)
             if not result.delivered and payload.get("parse_mode") == "HTML" and result.metadata.get("formatError"):
-                result = self.post_message({"chat_id": self.chat_id, "text": telegram_plain_text(payload["text"])})
+                result = self.post_message({key: (telegram_plain_text(value) if key == "text" else value)
+                    for key, value in payload.items() if key != "parse_mode"})
             if not result.delivered:
                 result.metadata.update({"deliveryCheckpoint": dict(progress), "messageIds": list(message_ids), "chunkCount": len(payloads)})
                 return result

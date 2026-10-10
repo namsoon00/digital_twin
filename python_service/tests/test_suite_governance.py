@@ -274,7 +274,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six research-notification contracts cover milestones, collection versus
         # answers, negative outcomes, channel/setting isolation, directive removal
         # and real atomic outbox rollback/retry/worker delivery.
-        self.assertLessEqual(total, 2145)
+        # Four reply/KST regressions cover transport, frozen clocks, durable lineage and legacy recovery.
+        self.assertLessEqual(total, 2149)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

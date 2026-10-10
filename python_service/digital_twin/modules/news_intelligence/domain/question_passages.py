@@ -9,6 +9,9 @@ _TOPICS = (
     (r'순손실|적자|손실|net loss', ('net loss', 'operating loss', 'losses')),
     (r'순이익|수익성|profitability', ('net income', 'profitability', 'operating income')),
     (r'매출|revenue|sales', ('revenue', 'net sales')),
+    (r'데이터.?센터|data.?center', ('data center', 'datacenter')),
+    (r'영업.?이익|operating income', ('operating income', 'income from operations')),
+    (r'운전.?자본|working capital', ('working capital', 'accounts receivable', 'inventories', 'accounts payable')),
     (r'활성.?고객|고객|customer', ('active customers', 'customers', 'customer')),
     (r'마진|margin', ('margin', 'gross profit')),
     (r'한국|korea', ('korea', 'korean')),
@@ -16,7 +19,7 @@ _TOPICS = (
     (r'전망|가이던스|outlook|guidance', ('outlook', 'guidance', 'expect', 'anticipated')),
     (r'원인|요인|cause|driver', ('due to', 'driven by', 'primarily', 'attributable', 'because')),
     (r'현금.?흐름|cash flow', ('cash flow', 'operating activities')),
-    (r'투자.?지출|설비.?투자|capital', ('capital expenditure', 'capital spending')),
+    (r'투자.?지출|설비.?투자|capital', ('capital expenditure', 'capital spending', 'purchases of property', 'payments for property')),
     (r'세금|법인세|tax', ('income tax', 'tax provision', 'tax expense')),
 )
 
@@ -36,7 +39,7 @@ def select_question_passages(blocks, tasks, limit=6000):
     terms = question_terms(tasks)
     candidates = []
     for index, block in enumerate(dict.fromkeys(blocks)):
-        if not 80 <= len(block) <= 2800:
+        if not 80 <= len(block) <= (12000 if '\n' in block else 2800):
             continue
         matched = [term for term in terms if term in block.casefold()]
         if matched:
@@ -79,4 +82,18 @@ def select_question_filings(filings, tasks, cutoff):
     rows = sorted(selected.values(), key=lambda row: str(row['filingDate']), reverse=True)
     rows.sort(key=lambda row: 0 if str(row['form']).upper().removesuffix('/A') in preferred
               else 1 if str(row['form']).upper().removesuffix('/A') in {'8-K', '6-K'} else 2)
+    if rows and re.search(r'전년|전년도|동기|year.over.year|prior.year|previous.year|yoy', text, re.I):
+        latest = rows[0]
+        try:
+            anchor = date.fromisoformat(str(latest.get('reportDate') or '')[:10])
+            # Fiscal calendars may move by a few days (52/53-week years).
+            peers = [row for row in rows[1:]
+                     if str(row.get('form')).upper().removesuffix('/A') == str(latest['form']).upper().removesuffix('/A')
+                     and row.get('reportDate')
+                     and 330 <= (anchor - date.fromisoformat(str(row['reportDate'])[:10])).days <= 400]
+            if peers:
+                prior = min(peers, key=lambda row: abs((anchor - date.fromisoformat(row['reportDate'][:10])).days - 365))
+                rows = [latest, prior] + [row for row in rows[1:] if row is not prior]
+        except ValueError:
+            pass  # Missing/malformed reporting periods are never guessed.
     return rows[:3]

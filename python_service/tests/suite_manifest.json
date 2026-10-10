@@ -23,6 +23,7 @@
     {"file": "test_data_utilization_contract.py", "tier": "contract", "core": true},
     {"file": "test_scoped_retention_safety.py", "tier": "contract", "core": true},
     {"file": "test_company_report_reading.py", "tier": "unit", "core": true},
+    {"file": "test_documentary_answers.py", "tier": "unit", "core": true},
     {"file": "test_question_research_progress.py", "tier": "unit", "core": true},
     {"file": "test_ontology_maintenance_fairness.py", "tier": "unit", "core": true},
     {"file": "test_hypothesis_research_pipeline.py", "tier": "unit", "core": true},

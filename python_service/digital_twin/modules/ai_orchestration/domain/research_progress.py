@@ -29,11 +29,21 @@ def research_progress(case, event):
         label = {"answered": "연구 답변 검토", "blocked": "연구 진행 보류", "dismissed": "연구 질문 종료"}[status]
     elif stage == "research-returned":
         result = case.get("lastResearch", {}).get("result", {})
-        if result.get("status") in {"failed", "research-cooldown"}:
+        answer = result.get("documentaryAnswer") or {}
+        if answer:
+            category, state = "answer", [answer.get("status"), answer.get("text"),
+                answer.get("missingRequirements"), answer.get("blockers"),
+                [[row.get("evidenceId"), row.get("sourceUrl"), row.get("periodEnd"), row.get("reportDate")]
+                 for row in answer.get("sources", [])]]
+            label = {"answered": "연구 질문 답변", "partial": "연구 질문 부분 답변"}.get(answer.get("status"), "연구 답변 미확보 · 원인 확인")
+        elif result.get("status") in {"failed", "research-cooldown"}:
             return None  # Transport/cooldown churn is not research progress.
-        if not result.get("changedEvidenceCount", 0):
+        elif not result.get("changedEvidenceCount", 0):
             return None
-        category, state, label = "collection", "returned", "연구 자료 갱신 · 답변 검토 대기"
+        else:
+            category, state, label = "collection", "returned", "연구 자료 갱신 · 답변 검토 대기"
+    elif stage == "review-deferred" and case.get("reviewBlocker"):
+        category, state, label = "review-blocker", case["reviewBlocker"], "가설 판단 보류 · 원인 확인"
     elif stage == "development-returned":
         progress = case.get("developmentProgress", {})
         category, state, label = "development", [progress.get("status"), [
@@ -59,4 +69,6 @@ def research_progress(case, event):
         "sourceQuestionIds": [row["caseId"] for row in case.get("origin", {}).get("sourceQuestions", [])],
         "observations": observations, "authority": "research-status-only",
         "qualification": "not-empirically-qualified",
+        "documentaryAnswer": deepcopy(case.get("lastResearch", {}).get("result", {}).get("documentaryAnswer") or {}) if stage == "research-returned" else {},
+        "reviewBlocker": deepcopy(case.get("reviewBlocker") or {}) if stage == "review-deferred" else {},
     }

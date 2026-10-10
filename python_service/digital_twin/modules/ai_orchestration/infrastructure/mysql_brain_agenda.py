@@ -123,6 +123,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                         from ..domain.research_request import validate_research_request
                         case["researchRequest"] = validate_research_request(review["research"], True, job["accountId"])
                         self.schedule_research(connection, case, job, result, children, now)
+                    case["reviewBlocker"] = {"reason": "투자 관찰의 품질 검사를 통과하지 못해 가설 판단을 보류했습니다.",
+                        "errors": list(dict.fromkeys((result.get("quality", {}).get("errors") or []) + local_quality(result)["errors"]))[:4]}
                     self.save(connection, case, job["taskId"], "review-deferred", {"executionInputId": result["executionInputId"],
                         "hypothesisResolution": case.get("hypothesisResolution", {}), "authority": "source-verification-only"})
             for review in (result.get("businessResearch") or {}).get("reviews", []):
@@ -225,10 +227,22 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             raise ValueError("research completion must own its brain case")
         if case["status"] not in ACTIVE_CASE_STATES:
             return {"status": "case-closed", "caseIds": [key]}
+        if result.get("status") == "failed" and not result.get("documentaryAnswer"):
+            result = {**result, "documentaryAnswer": {"version": "documentary-answer-v1",
+                "taskId": identity(job["taskId"], "sources"), "authority": "source-review-only",
+                "status": "unavailable", "text": "자료 조사 실행에 실패해 답변을 만들지 못했습니다. 재시도 전에 수집 경로를 점검해야 합니다.",
+                "sources": [], "missingRequirements": [], "blockers": ["research-execution-failed"]}}
         reason = "조사가 실패해 원래 질문과 자료 경로를 다시 검토합니다." if result.get("status") == "failed" else "조사 처리가 끝났습니다. 원래 질문의 해결 여부는 다음 관찰에서 검토합니다."
         case.update(status="review-needed", nextCheckAt=stamp(), reason=reason)
         case["lastResearch"]["result"] = {key: copy.deepcopy(result[key]) for key in (
-            "runId", "status", "stopReason", "changedEvidenceCount", "completedAt", "questionAssessment") if key in result}
+            "runId", "status", "stopReason", "changedEvidenceCount", "completedAt", "questionAssessment", "documentaryAnswer") if key in result}
+        answer = result.get("documentaryAnswer") or {}
+        if answer and (answer.get("taskId") != identity(job["taskId"], "sources")
+                       or answer.get("authority") != "source-review-only"):
+            raise ValueError("documentary answer must belong to the original source task")
+        if answer:
+            case["reason"] = "자료 답변 검토 결과를 반환했습니다. 투자 가설 판단은 별도로 진행합니다."
+            case.pop("reviewBlocker", None)
         self.save(connection, case, job["taskId"], "research-returned", case["lastResearch"])
         self.wake_observation(connection, job["accountId"], job["symbol"], job["worldId"], case["nextCheckAt"])
         return {"status": "review-needed", "caseIds": [case["caseId"]]}

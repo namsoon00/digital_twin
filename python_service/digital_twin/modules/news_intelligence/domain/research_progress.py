@@ -49,10 +49,13 @@ def audit_retain_until(horizon: str, observed_at: str) -> str:
 
 
 def task_contract(task: Dict[str, object]) -> Dict[str, object]:
-    return {key: task.get(key) for key in (
+    contract = {key: task.get(key) for key in (
         "taskId", "question", "purpose", "relatedHypothesisIds", "requiredEvidenceTypes",
         "sourceTypes", "maxAgeMinutes", "requiredPeriodEnds", "requiredMetrics", "queryTerms",
     )}
+    if "requiresDocumentBody" in task:
+        contract["requiresDocumentBody"] = task["requiresDocumentBody"]
+    return contract
 
 
 def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]) -> List[Dict[str, object]]:
@@ -115,6 +118,19 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
             "corroboratingEvidenceIds": list(claim.corroborating_evidence_ids),
             "officialEvidenceIds": list(claim.official_evidence_ids),
         }
+        # Keep complete, bounded source excerpts alongside the short claim.
+        # Never truncate a numeric table and imply that its headers survived.
+        passages, remaining = [], 20000
+        for row in (raw.get("documentPassages") or [])[:8]:
+            quote = str(row.get("quote") or "") if isinstance(row, dict) else ""
+            if quote and len(quote) <= remaining:
+                passages.append({"quote": quote, "passageHash": hashlib.sha256(quote.encode()).hexdigest()})
+                remaining -= len(quote)
+        if passages:
+            packet.update(documentPassages=passages,
+                documentType=str(raw.get("officialDocumentType") or ""),
+                reportDate=str(raw.get("reportDate") or ""),
+                documentScope=str(raw.get("officialDocumentScope") or ""))
         packet["inputFingerprint"] = fingerprint(packet)
         result.append(packet)
     return sorted(result, key=lambda row: row["evidenceId"])
@@ -169,6 +185,10 @@ def missing_requirements(task: Dict[str, object], packets: List[Dict[str, object
         available.add("independent-confirmation")
     missing = [requirement for requirement in texts(task.get("requiredEvidenceTypes"))
                if requirement not in available and requirement not in SEMANTIC_REQUIREMENTS]
+    if task.get("requiresDocumentBody") and not any(
+            "official-filing" in (packet.get("evidenceTypes") or []) and
+            (packet.get("documentPassages") or packet.get("reportedValues")) for packet in packets):
+        missing.append("공식 원문 본문 또는 출처가 확인된 보고 수치")
     periods = {str(packet.get("periodEnd") or "")[:10] for packet in packets}
     missing.extend("period:" + period for period in texts(task.get("requiredPeriodEnds"), 12) if period not in periods)
     for metric in texts(task.get("requiredMetrics"), 20):

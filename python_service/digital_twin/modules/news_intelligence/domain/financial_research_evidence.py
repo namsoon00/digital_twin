@@ -21,7 +21,7 @@ def financial_research_evidence(symbol: str, company: Dict[str, object]) -> List
     financials = company.get("financials") if isinstance(company.get("financials"), dict) else {}
     results = []
     for frequency in ("annual", "quarterly", "interim"):
-        for row in (financials.get(frequency) or [])[:4]:
+        for row in (financials.get(frequency) or [])[:8 if frequency == "quarterly" else 4]:
             if not isinstance(row, dict) or not financial_report_contract_assessment(row, frequency).get("eligible"):
                 continue
             contract = row["reportContract"]

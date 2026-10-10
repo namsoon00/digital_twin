@@ -73,6 +73,15 @@ class HypothesisResearchPlanningService:
                 "hypothesisResearchBrief": brief.with_planning("planner-unavailable", "typedb-hypothesis-set", audit),
             }
         context = research_planner_input(brief, baseline, question, account_id, symbol)
+        review_only = brain.get("documentaryReviewOnly") is True
+        if review_only:
+            context["guardrails"].update(documentaryReviewOnly=True,
+                mayProposeNovelResearchQuestion=False, maximumAdditionalTaskCount=0)
+            if not any(row.get("candidateEvidenceIds") for row in context["researchProgress"].get("tasks", [])):
+                audit = {"status": "awaiting-evidence", "reason": "질문에 사용할 수 있는 출처 자료가 없습니다.",
+                         "preservesBaselineTasks": True, "decisionEligibility": "research-only"}
+                return {"researchPlan": {**baseline, "planningAudit": audit},
+                        "hypothesisResearchBrief": brief.with_planning("awaiting-evidence", "source-review", audit)}
         try:
             guidance = self.advisor.plan(context)
         except Exception as error:  # noqa: BLE001 - research must retain the graph-derived baseline plan.
@@ -90,7 +99,7 @@ class HypothesisResearchPlanningService:
             baseline,
             brief,
             guidance if isinstance(guidance, dict) else {},
-            self.maximum_additional_tasks(),
+            0 if review_only else self.maximum_additional_tasks(),
         )
         return {
             "researchPlan": planned,

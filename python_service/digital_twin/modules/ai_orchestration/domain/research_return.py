@@ -1,5 +1,6 @@
 """Bounded question-specific research status, never current market evidence."""
 from copy import deepcopy
+from .documentary_answer import documentary_answer
 
 
 def research_return(run, run_id, source_task_id, request):
@@ -30,4 +31,5 @@ def research_return(run, run_id, source_task_id, request):
             assessment[key.removesuffix("Ids") + "Count"] = len(row.get(key, []))
         assessment["truncatedFields"] = truncated
     result["questionAssessment"] = assessment
+    result["documentaryAnswer"] = documentary_answer(run, source_task_id)
     return result

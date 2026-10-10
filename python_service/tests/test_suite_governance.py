@@ -279,7 +279,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # receipt-backed replies, ambiguity isolation, rollback, concurrent roots and monitor admission.
         # Ten source-clock and notification-cause regressions cover midnight replay,
         # model proof gaps, exact thresholds, reassessment transport and hypothesis naming.
-        self.assertLessEqual(total, 2166)
+        # Six documentary-answer contracts cover source review independence, scope,
+        # exact receipts, partial answers, table context and reply/blocker deduplication.
+        self.assertLessEqual(total, 2172)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

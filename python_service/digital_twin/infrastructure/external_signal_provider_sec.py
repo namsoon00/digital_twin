@@ -352,17 +352,17 @@ class ExternalSignalSecMixin:
 
     def report_sec_filings(self, payload, cik):
         recent = payload.get("filings", {}).get("recent", {})
-        selected, seen = [], set()
+        selected, additional, seen = [], [], {}
         for index, form in enumerate(recent.get("form", [])):
             family = "annual" if form in {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"} else "quarterly" if form in {"10-Q", "10-Q/A"} else ""
-            if not family or family in seen:
+            if not family or seen.get(family, 0) >= (8 if family == "quarterly" else 2):
                 continue
             one = {key: [values[index]] for key, values in recent.items() if isinstance(values, list) and index < len(values)}
             filing = self.latest_sec_filing({"filings": {"recent": one}}, cik)
             if filing.get("url"):
-                selected.append(filing)
-                seen.add(family)
-        return selected
+                (additional if seen.get(family, 0) else selected).append(filing)
+                seen[family] = seen.get(family, 0) + 1
+        return selected + additional
 
     def sec_company_facts_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
         facts = payload.get("facts", {}).get("us-gaap", {}) if isinstance(payload.get("facts"), dict) else {}

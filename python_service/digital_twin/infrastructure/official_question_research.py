@@ -10,7 +10,7 @@ from digital_twin.modules.news_intelligence.contracts import (
     QUESTION_PASSAGES_VERSION as VERSION, sec_research_evidence,
     question_terms, select_question_filings, select_question_passages,
 )
-from .sec_report_passages import document_blocks
+from .sec_report_passages import question_document_blocks
 
 
 def official_document_url(url, cik, accession):
@@ -82,12 +82,18 @@ def collect_question_documents(provider, target, signals, tasks):
                 raise ValueError('document-size-budget')
             if any(marker in str(raw).lower() for marker in ('undeclared automated tool', 'request rate threshold exceeded', 'access denied')):
                 raise ValueError('official-document-unavailable')
-            passages = select_question_passages(document_blocks(raw), tasks, provider.sec_document_text_max_chars())
+            passages = select_question_passages(question_document_blocks(raw), tasks, provider.sec_document_text_max_chars())
             if not parent:
                 links = _Exhibits(); links.feed(str(raw))
                 exhibits = [urljoin(url, href) for href in links.links]
-                candidates[0:0] = [(metadata, link, url) for link in dict.fromkeys(exhibits)
-                                   if official_document_url(link, cik, accession)][:1]
+                extra = [(metadata, link, url) for link in dict.fromkeys(exhibits)
+                         if official_document_url(link, cik, accession)][:1]
+                # For comparison reports keep the prior-year primary document
+                # ahead of exhibits; event filings still need their attachment.
+                if str(metadata.get('form') or '').upper() in {'8-K', '6-K'}:
+                    candidates[0:0] = extra
+                else:
+                    candidates.extend(extra)
             if not passages:
                 statuses.append({**base, 'ok': True, 'status': 'no-matching-passages', 'url': url})
                 continue

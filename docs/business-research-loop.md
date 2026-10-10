@@ -150,3 +150,32 @@ Validation: `test_research_replies` covers reply payloads, parse fallback, split
 retries, destination/world isolation, original-question ordering, durable and
 legacy anchors, calendar rollover and display-only conversion;
 `notification-evidence-audit.test.mjs` covers browser KST display.
+
+## Independent documentary answers
+
+Central research keeps its original collection task but now enables the source
+owner's cited review. The reviewer cannot add tasks in this mode and does not run
+without eligible evidence. Its answer is bound to the original task, the exact
+assessment and the saved final-round source packets. Missing metrics, periods or
+source bodies prevent a complete answer; partial reviews retain their citations.
+A source answer never qualifies the investment hypothesis or changes trade authority.
+
+Official report discovery retains eight quarterly and two annual filings.
+Year-over-year questions prioritize the latest and matching prior-year reporting
+period, ahead of intermediate quarters and report exhibits. Whole bounded tables
+retain headers and units alongside source passages. Publication dates and the
+question's authored freshness window remain enforced: rereading an old filing
+does not make it current market evidence. An insufficient window is reported.
+
+Research results publish answered, partial or unavailable artifacts to the same
+question conversation even when no new records were inserted. Unavailable reports,
+missing access configuration, failed review and invalid citations have explicit
+causes. Rejected market-observation reviews publish their quality blockers without
+accepting the rejected market explanation. Material-state deduplication excludes
+retry clocks. Next-check times use KST and describe eligibility, not completion.
+Existing frozen historical notifications retain their original payloads.
+
+Validation: `test_documentary_answers`, `test_ai_continuity_research`,
+`test_question_research_progress`, `test_research_progress`, `test_research_replies`
+and `test_ai_brain_agenda`; live model quality still requires reviewing actual
+source-backed answers after deployment.

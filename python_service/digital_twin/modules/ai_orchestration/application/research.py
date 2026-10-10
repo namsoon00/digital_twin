@@ -20,13 +20,14 @@ def execute_research(job, research_store, orchestrator_factory):
         "purpose": "독립 관찰에서 제기한 가설의 근거와 반대 근거 확인", "status": "blocked-by-data",
         "requiredEvidenceTypes": ["news-full-text" if source == "news" else source for source in sources],
         "sourceTypes": sources, "queryTerms": request.get("queryTerms", []),
+        "requiresDocumentBody": "official-filing" in sources,
         "maxAgeMinutes": request.get("maxAgeMinutes", 1440), "decisionRelevance": "supporting"}
     orchestrator = orchestrator_factory()
-    # The author already specified intent. Source verification and question
-    # assessments remain owned by research; no second planning call is needed.
-    orchestrator.hypothesis_research_planner = None
+    # Keep the authored collection scope, but allow the source owner to review
+    # the collected answer independently of market-observation quality gates.
     run = orchestrator.run(question, NewsCollectionTarget(job["symbol"], job["name"]),
-        {"researchPlan": {"planId": job["taskId"], "tasks": [task], "unresolvedQuestions": [job["question"]]}},
+        {"documentaryReviewOnly": True,
+         "researchPlan": {"planId": job["taskId"], "tasks": [task], "unresolvedQuestions": [job["question"]]}},
         account_id=job["accountId"], run_id=run_id,
         request_context={"aiControlTaskId": job["taskId"], "source": "ai-control", "question": question.to_dict(),
                          "researchRequest": request})

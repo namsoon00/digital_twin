@@ -45,6 +45,46 @@ def document_blocks(raw_html):
     return parser.blocks
 
 
+class _Tables(HTMLParser):
+    """Retain whole tables, including headers; nested/layout tables stay bounded."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.depth, self.skip, self.size = 0, 0, 0
+        self.parts, self.tables = [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {'script', 'style', 'ix:hidden', 'ix:header'}:
+            self.skip += 1
+        if tag == 'table':
+            if not self.depth:
+                self.parts, self.size = [], 0
+            self.depth += 1
+        if self.depth and not self.skip and tag in {'tr', 'td', 'th', 'br'}:
+            self.parts.append('\n' if tag == 'tr' else ' | ' if tag in {'td', 'th'} else ' ')
+
+    def handle_data(self, data):
+        if self.depth and not self.skip:
+            self.size += len(data)
+            if self.size <= 12000:
+                self.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag in {'script', 'style', 'ix:hidden', 'ix:header'}:
+            self.skip = max(0, self.skip - 1)
+        if tag == 'table' and self.depth:
+            self.depth -= 1
+            if not self.depth and self.size <= 12000:
+                value = '\n'.join(re.sub(r'\s+', ' ', row).strip() for row in ''.join(self.parts).split('\n')).strip()
+                if value:
+                    self.tables.append(value)
+
+
+def question_document_blocks(raw_html):
+    parser = _Tables()
+    parser.feed(str(raw_html or ''))
+    return parser.tables + document_blocks(raw_html)
+
+
 def report_passages(raw_html, limit=6000):
     blocks = document_blocks(raw_html)
     topics = (

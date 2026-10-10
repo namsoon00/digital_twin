@@ -78,7 +78,17 @@ class InsightGroundingTests(unittest.TestCase):
         new = local_quality(result)
         self.assertTrue(any('원인으로 단정' in error for error in old['errors']))
         self.assertFalse(new['errors'])
-        self.assertEqual('observation-causality-v2', new['causalGuardVersion'])
+        self.assertEqual('observation-causality-v3', new['causalGuardVersion'])
+        for text in ('제품 구성이나 원가 부담 때문에 이익으로 연결되지 않았을 수 있습니다.',
+                     '공식 원문이 일회성 요인을 주된 원인으로 밝히면 이 설명은 약해집니다.'):
+            result['hypothesis'] = text
+            self.assertTrue(any('원인으로 단정' in e for e in local_quality(result, causal_guard_version='observation-causality-v2')['errors']))
+            self.assertFalse(local_quality(result)['errors'], text)
+        for text in ('기관 매도 때문에 가격이 하락했습니다.',
+                     '원가 부담 때문에 이익이 감소했고 일시적이었을 수 있습니다.',
+                     '기관 매도 때문에 가격이 하락했고 공식 자료가 다른 원인으로 밝히면 다시 검토합니다.'):
+            result['hypothesis'] = text
+            self.assertTrue(any('원인으로 단정' in e for e in local_quality(result)['errors']), text)
 
     def test_repair_rebudgets_memory_but_preserves_required_facts_and_parent(self):
         from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, prompt_budget

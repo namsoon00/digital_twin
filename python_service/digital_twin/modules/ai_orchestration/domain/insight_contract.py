@@ -13,7 +13,7 @@ from digital_twin.modules.ai_orchestration.domain.observation_wording import OBS
 
 
 INSIGHT_VERSION = "observation-insight-v1"
-CAUSAL_GUARD_VERSION = "observation-causality-v2"
+CAUSAL_GUARD_VERSION = "observation-causality-v3"
 SECTIONS = ("summary", "comparison", "hypothesis", "portfolioImpact", "counterEvidence", "notificationReason")
 METRICS = {
     "currentPrice": ("현재가", "money"), "averagePrice": ("평균 매입가", "money"),
@@ -135,7 +135,7 @@ def unsupported_cause_v1(sentence, section):
     return not limitation
 
 
-def unsupported_cause(sentence, section):
+def unsupported_cause_v2(sentence, section):
     if not re.search(r"때문|원인으로|원인입니다|원인은", sentence):
         return False
     # A denial of causality or a reason for retaining an analysis is not an
@@ -161,10 +161,25 @@ def unsupported_cause(sentence, section):
     return not limitation
 
 
+def unsupported_cause(sentence, section):
+    # A future source confirmation is a test condition, not an already
+    # established cause. Remove only that conditional attribution.
+    conditional = re.sub(r"원인으로\s*(?:밝히|확인하|밝혀지|확인되)(?:면|는 경우)", "", sentence)
+    if not unsupported_cause_v2(conditional, section):
+        return False
+    # Scope uncertainty to the end of the causal clause. A hedged second
+    # clause must not excuse an earlier assertion in the same sentence.
+    uncertain_past = re.search(r"(?:았|었|였|됐|했|졌)을\s*수\s*있(?:습니다|다|어요)\s*$", conditional)
+    asserted_clause = re.search(r"(?:았|었|였|됐|했|졌)(?:고|으며|지만|으므로|으나|기 때문에)", conditional)
+    return not bool(uncertain_past and not asserted_clause)
+
+
 def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION):
-    if causal_guard_version not in {CAUSAL_GUARD_VERSION, "observation-causality-v1"}:
+    guards = {CAUSAL_GUARD_VERSION: unsupported_cause, "observation-causality-v2": unsupported_cause_v2,
+              "observation-causality-v1": unsupported_cause_v1}
+    if causal_guard_version not in guards:
         raise ValueError("unknown observation causality guard")
-    causal_guard = unsupported_cause if causal_guard_version == CAUSAL_GUARD_VERSION else unsupported_cause_v1
+    causal_guard = guards[causal_guard_version]
     errors = []
     if result.get("wordingVersion") not in {None, OBSERVATION_WORDING_VERSION}:
         errors.append("지원하지 않는 관찰 문장 계약입니다.")

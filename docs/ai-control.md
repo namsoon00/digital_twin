@@ -853,6 +853,12 @@ An oversized page becomes an explicit omission before admission; it cannot make
 the author step crash after successful tool calls. A later `finish` cannot erase
 an earlier budget omission or bypass the publication guard.
 
+The live causal wording guard (`observation-causality-v3`) recognizes a tentative
+past explanation and a conditional future source confirmation. It still blocks
+an asserted cause, including one followed by a separately hedged clause. Explicit
+v1/v2 replay retains its original wording policy; this change does not qualify
+missing evidence or bypass retrieval and independent publication review.
+
 Question-specific research returns retain the source owner's task assessment in
 `lastResearch.result.questionAssessment`. Coverage, semantic review state,
 missing requirements and evidence counts remain attached to the original case,

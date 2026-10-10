@@ -44,6 +44,7 @@ NON_CADENCE_MESSAGE_GUIDES = {
 }
 
 EVENT_DELIVERY_GUIDES = {
+    "researchProgress": "연구 질문·사업 가설의 등록과 검토 상태가 달라질 때 보냅니다. 같은 상태의 반복 검토는 제외합니다.",
     "investmentInsight": "검증된 변화마다 즉시·중요 변화의 최소 간격을 적용합니다. 동일 판단의 정기 재확인은 웹 이력이며 정기 푸시가 아닙니다.",
     "newsDigest": "새 기사·사건이 선별되면 보냅니다. 기사 중복 억제 시간은 정기 발송 주기가 아닙니다.",
     "informationUpdate": "발표 결과나 1시간·24시간 후 새 관측이 확보되면 보냅니다.",

@@ -101,6 +101,8 @@ def build_ai_control_service(settings=None):
     store.development_writer = development.record
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
     agenda = MySQLBrainAgendaStore(configured)
+    from digital_twin.infrastructure.transactions.research_progress_publication import ResearchProgressPublication
+    agenda.progress_writer = ResearchProgressPublication(publication.notifications, configured).publish
     store.agenda_writer, store.agenda_failure = agenda.record, agenda.failed
     from digital_twin.infrastructure.transactions.ai_observation_wake import AIObservationEvidenceWake
     evidence_wake = AIObservationEvidenceWake(configured)

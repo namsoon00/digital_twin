@@ -27,12 +27,14 @@ NOTIFICATION_KINDS = {
         NotificationKind("calendar", "투자 일정", "🗓️"),
         NotificationKind("operations", "운영 상태", "⚙️"),
         NotificationKind("report", "개발·검토 보고", "📦"),
+        NotificationKind("research-progress", "연구 진행", "🔬"),
         NotificationKind("company-change-report", "기업 보고서", "📑"),
         NotificationKind("notice", "알림", "🔔"),
     )
 }
 
 LEGACY_KINDS = {
+    "researchProgress": "research-progress",
     "aiObservation": "ai-interpretation",
     "aiObservationDiagnostic": "report",
     "marketObservation": "price-change",
@@ -56,6 +58,7 @@ LEGACY_KINDS = {
 }
 
 DEFAULT_POLICY_TYPES = {
+    "research-progress": "researchProgress",
     "price-change": "marketObservation", "relation-change": "investmentInsight", "data-status": "investmentInsight",
     "ai-interpretation": "investmentInsight", "investment-decision": "investmentInsight",
     "news": "newsDigest", "account-change": "portfolioActivityObservation",

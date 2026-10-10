@@ -12,6 +12,7 @@ PORTFOLIO_ONTOLOGY_SIGNAL = "portfolioOntologySignal"
 PORTFOLIO_REBALANCE_REVIEW = "portfolioRebalanceReview"
 HOLDING_TIMING = "holdingTiming"
 AI_OBSERVATION = "aiObservation"
+RESEARCH_PROGRESS = "researchProgress"
 AI_OBSERVATION_DIAGNOSTIC = "aiObservationDiagnostic"
 INVESTMENT_INSIGHT = "investmentInsight"
 MARKET_OBSERVATION = "marketObservation"
@@ -81,6 +82,7 @@ SYSTEM_MESSAGE_TYPES = {
 }
 
 USER_MANAGED_NOTIFICATION_TYPES = [
+    RESEARCH_PROGRESS,
     INFORMATION_UPDATE,
     AI_OBSERVATION,
     INVESTMENT_INSIGHT,
@@ -133,6 +135,7 @@ VISIBLE_NOTIFICATION_TEMPLATE_TYPES = [
 MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
+    RESEARCH_PROGRESS: 1,
     INFORMATION_UPDATE: 1,
     AI_OBSERVATION: 1,
     INVESTMENT_INSIGHT: 1,
@@ -219,6 +222,7 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
 }
 
 DEFAULT_CADENCE = {
+    RESEARCH_PROGRESS: 0,  # Event-driven; exposes the existing alertRules switch.
     AI_OBSERVATION: 180,
     INVESTMENT_INSIGHT: 10,
     MARKET_OBSERVATION: 60,
@@ -241,6 +245,7 @@ DEFAULT_CADENCE = {
 }
 
 MESSAGE_TYPE_LABELS = {
+    RESEARCH_PROGRESS: "연구 진행",
     INFORMATION_UPDATE: "뉴스·공시·발표 후속 확인",
     DEFAULT_MESSAGE: "기본 알림",
     AI_OBSERVATION: "AI 관찰",
@@ -287,6 +292,7 @@ MESSAGE_TYPE_LABELS = {
 }
 
 MESSAGE_TYPE_EMOJIS = {
+    RESEARCH_PROGRESS: "🔬",
     DEFAULT_MESSAGE: "🔔",
     AI_OBSERVATION: "🧠",
     AI_OBSERVATION_DIAGNOSTIC: "🧪",
@@ -332,6 +338,7 @@ MESSAGE_TYPE_EMOJIS = {
 }
 
 TRIGGER_SUMMARIES = {
+    RESEARCH_PROGRESS: "연구 질문과 사업 가설의 등록, 답변 검토, 수정·종료 및 지표 확인 상태의 변화를 알립니다.",
     INFORMATION_UPDATE: "등록된 정보의 발표 결과나 이후 가격 관측이 새로 확보됐을 때 보냅니다. 투자 판단을 만들지 않습니다.",
     AI_OBSERVATION: "AI가 추세와 이전 발송을 비교해 새로운 해석을 제안할 때 보냅니다.",
     AI_OBSERVATION_DIAGNOSTIC: "AI가 발송을 제안했지만 검증을 통과하지 못한 초안과 보류 이유를 운영 채널에 보냅니다.",
@@ -373,6 +380,7 @@ TRIGGER_SUMMARIES = {
 def notification_message_types(extra_types: List[str] = None) -> List[str]:
     keys = [
         DEFAULT_MESSAGE,
+        RESEARCH_PROGRESS,
         *MONITORING_MESSAGE_TYPES,
         AI_OBSERVATION_DIAGNOSTIC,
         MODEL_REVIEW,

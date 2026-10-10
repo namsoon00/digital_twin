@@ -28,6 +28,7 @@ _TRANSIENT_MARKERS = (
 )
 
 _RECOVERY_TTL_MINUTES = {
+    "researchProgress": 1440,
     "investmentInsight": 180,
     "newsDigest": 360,
     "investmentCalendarReminder": 720,

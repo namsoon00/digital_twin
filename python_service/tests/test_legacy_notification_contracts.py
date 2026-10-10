@@ -147,7 +147,7 @@ class LegacyNotificationContractTests(unittest.TestCase):
             internal = notification_configuration.list_notification_rules_payload(include_internal=True)
         visible = {rule["messageType"] for rule in public["rules"]}
         self.assertEqual({
-            "aiObservation", "investmentInsight", "marketObservation", "portfolioHoldingsSnapshot",
+            "researchProgress", "aiObservation", "investmentInsight", "marketObservation", "portfolioHoldingsSnapshot",
             "portfolioActivityObservation", "investmentCalendarReminder", "newsDigest", "informationUpdate",
             "ontologyInferenceMissing", "monitorConnection", "externalDataConnection",
         }, visible)

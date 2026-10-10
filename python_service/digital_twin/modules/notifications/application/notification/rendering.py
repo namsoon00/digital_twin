@@ -42,6 +42,10 @@ class NotificationRenderingService:
         self.link_base_resolver = link_base_resolver
 
     def render(self, job: NotificationJob) -> str:
+        if job.message_type == "researchProgress":
+            from digital_twin.modules.notifications.application.research_progress_message import render_research_progress
+            job.text = render_research_progress(job.context["researchProgress"])
+            return job.text
         if job.message_type == "aiObservationDiagnostic":
             from digital_twin.modules.notifications.application.ai_observation_diagnostic import render_ai_observation_diagnostic
             job.text = render_ai_observation_diagnostic(job.context["aiObservationDiagnostic"],

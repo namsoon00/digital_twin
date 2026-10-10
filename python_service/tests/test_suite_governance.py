@@ -271,7 +271,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # error envelopes and the valid-ZIP versus missing-file distinction.
         # Nine business-research contracts cover immutable baselines, forced report
         # input, missed outcomes, source/identity proof, replay and atomic storage.
-        self.assertLessEqual(total, 2139)
+        # Six research-notification contracts cover milestones, collection versus
+        # answers, negative outcomes, channel/setting isolation, directive removal
+        # and real atomic outbox rollback/retry/worker delivery.
+        self.assertLessEqual(total, 2145)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -1018,6 +1018,15 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
     if not str(job.text or "").strip():
         decision.mark_suppressed("empty_body", "알림 본문이 비어 있어 보내지 않습니다.")
         return decision
+    if message_type == "researchProgress":
+        progress = (job.context or {}).get("researchProgress") or {}
+        if (progress.get("authority") != "research-status-only"
+                or progress.get("accountId") != job.account_id
+                or progress.get("eventId") != job.source_event_id):
+            decision.mark_suppressed("invalid_research_progress", "연구 사건과 수신 계정의 연결을 확인하지 못했습니다.")
+        else:
+            decision.gate_reason = "저장된 연구 진행 사건을 전달합니다. 투자 판단이나 연구 성공 판정이 아닙니다."
+        return decision
     if message_type in SYSTEM_MESSAGE_TYPES:
         decision.gate_reason = "연결·운영 상태 알림은 투자 판단과 분리해 보냅니다."
         return decision

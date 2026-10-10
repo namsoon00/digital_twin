@@ -102,3 +102,20 @@ expectations model or a validated investment edge. Orders/backlog/unit economics
 need source-specific metric contracts before becoming automatic checkpoints.
 Empirical usefulness needs subsequent real filings and user review; tests and
 narrative approval cannot supply future evidence.
+# 연구 진행 알림
+
+`researchProgress`는 계정의 기존 알림 채널로 연구 질문·사업 가설의 등록,
+답변 검토, 보류·종료, 가설 수정과 등록 지표의 관측 상태 변경을 전달한다.
+자료가 실제로 갱신된 첫 조사 반환은 `답변 검토 대기`로 표시한다.
+수집 실패·쿨다운·주기적 유지 검토·문장만 바뀐 동일 상태는 반복 발송하지 않는다.
+기존 이력을 일괄 재발송하지 않고 연결 이후 저장되는 새 사건부터 적용한다.
+
+연구 질문, 연결 과정, 가정, 경쟁 설명, 재검토 조건, 부족 자료와 검토 예정 시각을
+저장된 사건에서 표시한다. AI 답변·지표 방향 관측은 실증된 예측 성과나 매매 권고로
+표시하지 않는다. 투자 해석 알림의 검토·발송 영수증에는 합산하지 않는다.
+이 알림은 연구 업무 상태를 알리는 별도 계약이며 새 투자 판단 권한을 만들지 않는다.
+
+과제 상태·사건·발송 대기 작업은 같은 MySQL 트랜잭션에서 저장한다. 실패하면 함께
+롤백하며, 사건 ID에 기반한 발송 키와 과제별 상태 지문으로 중복을 방지한다.
+알림 일정의 `연구 진행` 활성화 설정(`alertRules`)으로 수신 여부를 관리하고 기존 계정 야간 제한과 전송 재시도를
+따른다. 큐 접수는 전송 완료가 아니며 최종 전송 상태는 알림 영수증으로 확인한다.

@@ -148,6 +148,62 @@ class BrainAgendaStorageTests(unittest.TestCase):
                  "availableAt": later(stamp(), 180)}
         return task, result, [child]
 
+    def test_research_progress_outbox_rolls_back_and_retries_with_case_event(self):
+        from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
+        from digital_twin.infrastructure.transactions.research_progress_publication import ResearchProgressPublication
+        queue = MySQLNotificationJobStore(self.control.runtime_settings)
+        publisher = ResearchProgressPublication(queue)
+        account = self.subject["accountId"]
+
+        def rows():
+            with self.control.connect() as connection:
+                return list(connection.execute("SELECT * FROM notification_jobs WHERE account_id=%s AND message_type='researchProgress'", (account,)).fetchall())
+
+        def clean_queue():
+            with self.control.transaction() as connection:
+                connection.execute("DELETE FROM notification_delivery_attempts WHERE job_id IN "
+                    "(SELECT job_id FROM notification_jobs WHERE account_id=%s AND message_type='researchProgress')", (account,))
+                connection.execute("DELETE FROM notification_jobs WHERE account_id=%s AND message_type='researchProgress'", (account,))
+
+        clean_queue()
+        self.addCleanup(clean_queue)
+        task, result, children = self.observation()
+
+        def fail_after_enqueue(connection, progress):
+            publisher.publish(connection, progress)
+            raise RuntimeError("simulated rollback after enqueue")
+
+        self.brain.progress_writer = fail_after_enqueue
+        with self.assertRaises(RuntimeError):
+            self.control.complete(task, result, children)
+        self.assertEqual([], rows())
+        self.assertEqual([], self.brain.status()["cases"])
+        self.brain.progress_writer = publisher.publish
+        self.assertFalse(self.control.complete({**task, "leaseToken": "lost"}, result, children))
+        self.assertEqual([], rows())
+        self.assertTrue(self.control.complete(task, result, children))
+        self.assertFalse(self.control.complete(task, result, children))
+        saved = rows()
+        self.assertEqual(1, len(saved))
+        self.assertEqual("pending", saved[0]["status"])
+        payload = json.loads(saved[0]["payload_json"])
+        progress = payload["context"]["researchProgress"]
+        with self.control.connect() as connection:
+            stored = connection.execute("SELECT case_id FROM ai_brain_case_events WHERE event_id=%s", (progress["eventId"],)).fetchone()
+        self.assertEqual(progress["caseId"], stored["case_id"])
+        from types import SimpleNamespace
+        from digital_twin.modules.notifications.public import NotificationQueueRunner
+        notifier = Mock(supports_delivery_checkpoints=False)
+        notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
+        owner = SimpleNamespace(account_id=account, quiet_hours_active=lambda *_: False)
+        old_ai = Mock()
+        runner = NotificationQueueRunner(queue, SimpleNamespace(load_all=lambda: [owner]), lambda _: notifier,
+            settings=self.control.runtime_settings, include_message_types=["researchProgress"], ai_request_enqueuer=old_ai)
+        self.assertEqual(1, runner.run_once())
+        notifier.send.assert_called_once()
+        old_ai.enqueue.assert_not_called()
+        self.assertEqual("done", rows()[0]["status"])
+
     def test_atomic_question_research_reassessment_preserves_origin_and_blocks_duplicate_work(self):
         from question_resolution_checks import assert_question_loop
         assert_question_loop(self)

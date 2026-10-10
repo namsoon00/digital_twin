@@ -46,8 +46,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             + (" FOR UPDATE" if lock else ""), (case_id, account, symbol)).fetchone()
         return json.loads(row["payload_json"]) if row else None
 
-    @staticmethod
-    def save(connection, case, task_id, stage, details=None):
+    def save(self, connection, case, task_id, stage, details=None):
         now = stamp()
         case["revision"] += 1
         case["updatedAt"] = now
@@ -55,6 +54,11 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             "caseId": case["caseId"], "taskId": task_id, "stage": stage, "at": now,
             "revision": case["revision"], "status": case["status"], "reason": case.get("reason", ""),
             "details": copy.deepcopy(details or {})}
+        progress_writer = getattr(self, "progress_writer", None)
+        progress = None
+        if progress_writer is not None:
+            from ..domain.research_progress import research_progress
+            progress = research_progress(case, event)
         connection.execute("INSERT INTO ai_brain_cases (case_id,account_id,symbol,kind,status,next_check_at,payload_json,created_at,updated_at) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE status=VALUES(status),"
             "next_check_at=VALUES(next_check_at),payload_json=VALUES(payload_json),updated_at=VALUES(updated_at)",
@@ -62,6 +66,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
              case.get("nextCheckAt", ""), dumps(case), case["createdAt"], now))
         connection.execute("INSERT INTO ai_brain_case_events (event_id,case_id,task_id,payload_json,created_at) VALUES (%s,%s,%s,%s,%s)",
             (event["eventId"], case["caseId"], task_id, dumps(event), now))
+        if progress:
+            progress_writer(connection, progress)
 
     @staticmethod
     def proof(connection, job, result):

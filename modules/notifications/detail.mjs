@@ -5,7 +5,9 @@ import { renderWorkDetailButton } from "../navigation/detail.mjs";
 import { notificationChangeStateLabel, notificationDeliveryStateLabel, notificationJobDecisionFactors, notificationJobDecisionRoute, notificationJobMarketHoursText, notificationJobQuietHoursText, notificationJobSimilarityText, notificationJobStateCooldownText, notificationJobStatusLabel, notificationJobToneClass, notificationJobTypeKey, notificationJobTypeLabel, notificationReviewLevelLabel, renderNotificationDecisionFactors, renderNotificationDecisionRoute, renderNotificationStateMessage, renderNotificationTriggerLedger } from "./history.mjs";
 import { notificationActionFlowActionLabel, notificationJobDetailPayload, notificationPipelineDuration, notificationReverseReasoningTrace, renderNotificationActionFlow, renderNotificationDetailDisclosure, renderNotificationDetailMetric, renderNotificationInferenceStateTransition, renderNotificationJobResearchEvidence, renderNotificationLifecycleTrace, renderNotificationReverseReasoning, renderNotificationUnifiedPipeline } from "./reasoning.mjs";
 import { notificationJobDetailSectionKey } from "./requests.mjs";
-import { formatClock, renderRecordChangedAt } from "../shared/format.mjs";
+
+import { notificationClock as formatClock } from "./clock.mjs";
+import { renderNotificationChangedAt as renderRecordChangedAt } from "./changed-at.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { cardFormatAttrs, cardTypeAttrs, renderEmptyState } from "../shell/layout.mjs";
 import { app } from "../shell/root.mjs";

@@ -7,9 +7,10 @@ import { notificationDeliveryStateLabel } from "./history.mjs";
 import { inferenceLedgerTone } from "../ontology/inference.mjs";
 import { realtimeEventLabel } from "../realtime/labels.mjs";
 import { researchEvidenceImpactMeta, researchEvidenceKoreanSummary, researchEvidenceTranslationMeta } from "../research/quality.mjs";
-import { formatFeedTime } from "../research/requests.mjs";
+import { notificationClock as formatFeedTime } from "./clock.mjs";
 import { feedEvidenceKey } from "../research/workspace.mjs";
-import { formatClock, formatInteger } from "../shared/format.mjs";
+import { formatInteger } from "../shared/format.mjs";
+import { notificationClock as formatClock } from "./clock.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { notificationsState } from "../state/notifications.mjs";
 

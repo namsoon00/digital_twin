@@ -3,7 +3,8 @@ import { mobileInfiniteScrollEnabled, renderMobileInfiniteScrollFooter } from ".
 import { filteredNotificationJobs, renderNotificationJobFilterToolbar } from "./history.mjs";
 import { selectConsoleAlertRows } from "./selectors.mjs";
 import { renderConsoleEmpty, renderConsoleListSkeleton, renderConsoleLiveRegion, renderConsoleManagedPage, renderConsoleSurface } from "../shared/console.mjs";
-import { renderRecordChangedAt } from "../shared/format.mjs";
+
+import { renderNotificationChangedAt as renderRecordChangedAt } from "./changed-at.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { notificationsState } from "../state/notifications.mjs";
 import { shellState } from "../state/shell.mjs";

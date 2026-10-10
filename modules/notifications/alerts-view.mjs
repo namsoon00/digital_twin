@@ -1,7 +1,8 @@
 import { stockDisplayName, textWithDisplaySymbol } from "../instruments/catalog.mjs";
 import { alertRuleLabel, alertSeverityLabel, alertStats, buildAlertItems } from "./alerts.mjs";
 import { renderSettingField, renderSettingSelect, renderSettingsApiSummary, settingsSaveButtonClass, settingsSaveButtonLabel, settingsSaveDisabledAttr, settingsStatusLabel, settingsStatusTone } from "../settings/fields.mjs";
-import { latestChangedFirst, renderRecordChangedAt } from "../shared/format.mjs";
+import { latestChangedFirst } from "../shared/format.mjs";
+import { renderNotificationChangedAt as renderRecordChangedAt } from "./changed-at.mjs";
 import { escapeHtml } from "../shared/text.mjs";
 import { cardFormatAttrs, cardTypeAttrs } from "../shell/layout.mjs";
 import { settingsState } from "../state/settings.mjs";

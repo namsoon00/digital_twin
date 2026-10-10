@@ -251,6 +251,20 @@ class DisclosureTaxonomyTests(unittest.TestCase):
             "official-document-configuration-required",
             configuration.issues,
         )
+        for body in (
+            "OpenDART 서비스 이용에 불편을 드려 죄송합니다. 요청하신 인터넷주소(URL)을 찾을 수 없습니다. " * 5,
+            "<html>서비스 이용에 불편을 드려 죄송합니다. 요청하신 <b>인터넷주소(URL)</b>을 찾을 수 없습니다.</html>" * 5,
+            "서비스 이용에 불편을 드려 죄송합니다. 시스템 점검 중입니다. 잠시 후 다시 시도하십시오. " * 5,
+        ):
+            with self.subTest(body=body[:40]):
+                rejected = assess_disclosure_document(body, "body")
+                self.assertFalse(rejected.document_verified)
+                self.assertEqual("document-rejected", rejected.state)
+                self.assertEqual("", rejected.document_text)
+                self.assertIn("official-document-error-response", rejected.issues)
+        self.assertTrue(assess_disclosure_document(
+            "회사는 시스템 점검과 설비 유지보수 투자를 결정했습니다. 투자금액은 100억원이며 다음 분기 시행합니다. " * 5, "body"
+        ).document_verified)
 
     def test_disclosure_prompt_deduplicates_document_preview(self):
         sentence = "회사는 보통주 100만주를 취득하기로 결정했다."

@@ -122,3 +122,12 @@ Offline tests cover retryable errors, previous-fact preservation, missing files
 and valid ZIP bodies in `test_external_data_platform.py`. The isolated MySQL
 test in `test_information_followup_storage.py` verifies durable, dataset-scoped
 maintenance admission, retry expiry and recovery without calling OpenDART.
+
+An HTTP success is not document recovery: the document adapter requires a ZIP
+archive and a verified textual body. HTML error pages, including OpenDART's
+URL-not-found page, remain retryable failures and cannot replace prior facts.
+The versioned document quality contract also rejects these pages in legacy
+evidence. Current signal assembly excludes such legacy document facts; recovery
+does not replay them and can reopen their completed collection partitions.
+Immutable source revisions remain unchanged for audit. Revalidate affected
+research evidence and use the existing document recovery queue after deployment.

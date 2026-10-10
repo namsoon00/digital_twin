@@ -1447,6 +1447,45 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(1, len(store.completed))
         self.assertTrue(store.completed[0][2].quality["dataUsable"])
 
+    def test_opendart_error_pages_never_complete_or_replace_prior_facts(self):
+        settings = {"opendartApiKey": "test-key"}
+        adapter = OpenDartDocumentAdapter()
+        job = CollectionJob("opendart.document", "005930:receipt:body-v1", "opendart", 75,
+                            ExternalSubject("005930", symbol="005930"), watermark={"receiptNo": "receipt"})
+        page = ("<html>요청하신 인터넷주소(URL)을 찾을 수 없습니다. test-key " * 20 + "</html>").encode()
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("document.html", page)
+        for raw in (page, archive.getvalue(), b"PK-corrupt-archive", b"", b"<DOCUMENT>short</DOCUMENT>"):
+            with self.subTest(raw=raw[:10]):
+                provider = legacy_provider(settings)
+                provider.guarded_call = lambda _source, _target, call: call()
+                provider.fetch_bytes = lambda *_args: raw
+                store = MemoryCollectionStore()
+                previous = {"payload": {"retained": True}, "quality": {"dataUsable": True}}
+                store.current = previous
+                service = ExternalDataCollectionService(settings, ExternalDatasetRegistry([adapter]), store)
+                with patch("digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider", return_value=provider):
+                    result = service._process_job(job)
+                self.assertEqual("error", result["status"])
+                self.assertNotIn("test-key", result["error"])
+                self.assertEqual(previous, store.current)
+                self.assertEqual([], store.completed)
+                self.assertEqual([], store.events)
+
+    def test_read_model_blocks_legacy_error_page_without_mutating_fact(self):
+        store = MemoryFactStore()
+        fact = {"datasetId": "opendart.document", "subjectKey": "005930",
+                "quality": {"dataUsable": True}, "payloadHash": "original-hash",
+                "payload": {"dartDisclosures": {"005930": {"documentText":
+                    "요청하신 인터넷주소(URL)을 찾을 수 없습니다. " * 20}}}}
+        store.list_current = lambda _keys: [fact]
+        result = ExternalSignalsReadModelService(store).signals_for_subjects(["005930"])
+        self.assertEqual({}, result["dartDisclosures"])
+        self.assertFalse(next(s for s in result["statuses"] if s.get("state") == "document-rejected")["dataUsable"])
+        self.assertTrue(fact["quality"]["dataUsable"])
+        self.assertEqual("original-hash", fact["payloadHash"])
+
     def test_maintenance_read_model_exposes_unavailable_source_without_connection_error(self):
         store = MemoryFactStore()
         store.provider_statuses = lambda: [{"datasetId": "opendart.document", "providerId": "opendart",

@@ -283,7 +283,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # exact receipts, partial answers, table context and reply/blocker deduplication.
         # Three maintenance regressions protect preserved evidence and recovery,
         # non-error source visibility, and durable dataset-scoped API admission.
-        self.assertLessEqual(total, 2175)
+        # Three error-page admission, read-model and durable retry regressions.
+        self.assertLessEqual(total, 2178)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

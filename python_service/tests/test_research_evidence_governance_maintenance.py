@@ -159,6 +159,15 @@ class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
 
         self.assertEqual("Codex AI (GPT-5.6 Sol · max)", evidence.raw_payload["disclosureAnalysis"]["source"])
         self.assertEqual("AI가 문서에 근거해 생성한 요약입니다.", evidence.raw_payload["disclosureAnalysis"]["summary"])
+        # A legacy success flag must not preserve AI analysis of a provider's
+        # error page when the current document contract rejects that source.
+        evidence.raw_payload["officialDocumentText"] = "요청하신 인터넷주소(URL)을 찾을 수 없습니다. " * 10
+        service.revalidate(limit=10)
+        self.assertFalse(evidence.raw_payload["documentVerified"])
+        self.assertFalse(evidence.raw_payload["analysisReady"])
+        self.assertEqual("", evidence.raw_payload["documentHash"])
+        self.assertFalse(evidence.raw_payload["promptEvidenceAdmission"]["decisionEligible"])
+        self.assertNotEqual("ready", evidence.raw_payload["disclosureAnalysis"]["status"])
 
     def test_provider_collects_official_document_body_and_maps_it_to_evidence(self):
         dart_zip = io.BytesIO()

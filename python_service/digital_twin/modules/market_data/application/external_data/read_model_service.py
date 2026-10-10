@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.news_intelligence.contracts import (
+    assess_disclosure_document,
     bind_company_event_contract,
     merge_company_knowledge_rows,
     source_reference_from_fact_row,
@@ -402,6 +403,22 @@ class ExternalSignalsReadModelService:
         rows = [dict(row) for row in self.fact_store.list_current(fact_subjects) if row.get("datasetId") not in CALENDAR_REFERENCE_DATASETS]
         for row in rows:
             fragment = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            if row.get("datasetId") == "opendart.document" and any(
+                "official-document-error-response" in assess_disclosure_document(
+                    document.get("documentText"), "body"
+                ).issues
+                for document in (fragment.get("dartDisclosures") or {}).values()
+                if isinstance(document, dict)
+            ):
+                # Reassess legacy facts without rewriting their immutable
+                # payload/hash or letting an old success flag admit an error page.
+                row["quality"] = {**(row.get("quality") or {}), "dataUsable": False,
+                                  "documentState": "document-rejected"}
+                result["statuses"].append({"source": "opendart", "datasetId": "opendart.document",
+                    "target": row.get("subjectKey"), "ok": True, "deferred": True,
+                    "dataUsable": False, "state": "document-rejected",
+                    "message": "공시 본문 오류 페이지가 제외되었습니다. 원문 재수집이 필요합니다."})
+                continue
             fragment = bind_external_event_lineage(fragment, row)
             fragment = bind_consensus_lineage(fragment, row)
             if row.get("datasetId") == "yfinance.analyst":

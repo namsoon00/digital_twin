@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, SourceObservation
 from digital_twin.modules.market_data.contracts import canonical_payload_hash
+from digital_twin.modules.news_intelligence.contracts import assess_disclosure_document
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.market_data.domain.events import external_provider_health_changed_event
 from ..mysql_operational_connection import MySQLOperationalConnection
@@ -75,6 +76,7 @@ def completed_followup_needs_retry(
     job_status: str,
     watermark: Dict[str, object],
     quality: Dict[str, object] = None,
+    payload: Dict[str, object] = None,
 ) -> bool:
     """Identify legacy one-time document jobs completed without a usable body."""
     if bool(dict(watermark or {}).get("terminalUnavailable")):
@@ -85,7 +87,16 @@ def completed_followup_needs_retry(
         and (
             str((watermark or {}).get("documentHash") or "") in {"", EMPTY_DOCUMENT_HASH}
             or dict(quality or {}).get("dataUsable") is False
+            or rejected_opendart_document(dataset_id, payload)
         )
+    )
+
+
+def rejected_opendart_document(dataset_id: str, payload: Dict[str, object]) -> bool:
+    return str(dataset_id) == "opendart.document" and any(
+        "official-document-error-response" in assess_disclosure_document(row.get("documentText"), "body").issues
+        for row in ((payload or {}).get("dartDisclosures") or {}).values()
+        if isinstance(row, dict)
     )
 
 
@@ -266,14 +277,15 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                     """
                     SELECT state.job_status, state.watermark_json,
                         (
-                            SELECT revision.quality_json
+                            SELECT JSON_OBJECT('quality', CAST(revision.quality_json AS JSON),
+                                               'payload', CAST(revision.payload_json AS JSON))
                             FROM external_fact_revision revision
                             WHERE revision.dataset_id = state.dataset_id
                                 AND revision.subject_key = %s
                                 AND revision.source_revision LIKE %s
                             ORDER BY revision.fetched_at DESC, revision.created_at DESC
                             LIMIT 1
-                        ) AS latest_quality_json
+                        ) AS latest_fact_json
                     FROM external_dataset_state state
                     WHERE state.dataset_id = %s AND state.partition_key = %s
                     FOR UPDATE
@@ -285,11 +297,13 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                         str(request.partition_key or "")[:191],
                     ),
                 ).fetchone() or {}
+                latest_fact = _json_loads(existing.get("latest_fact_json"), {})
                 if not completed_followup_needs_retry(
                     descriptor.dataset_id,
                     existing.get("job_status"),
                     _json_loads(existing.get("watermark_json"), {}),
-                    _json_loads(existing.get("latest_quality_json"), {}),
+                    latest_fact.get("quality", {}),
+                    latest_fact.get("payload", {}),
                 ):
                     continue
                 cursor = connection.execute(
@@ -738,6 +752,8 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 "ORDER BY fetched_at DESC LIMIT 1", (request.dataset_id, request.subject.subject_key, identity + ":%"),
             ).fetchone()
         fact = self._fact_row(row) if row else None
+        if fact and rejected_opendart_document(request.dataset_id, fact.get("payload")):
+            return None
         required_version = request.watermark.get("documentTextVersion")
         if fact and required_version and required_version != "body-v1" and fact.get("quality", {}).get("documentTextVersion") != required_version:
             return None

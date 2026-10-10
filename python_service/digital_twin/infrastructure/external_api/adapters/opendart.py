@@ -1,10 +1,12 @@
 import hashlib
+import io
 import urllib.parse
+import zipfile
 from typing import Callable, Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest, SourceObservation, bounded_int
 from digital_twin.modules.market_data.contracts import ExternalCallDeferred
-from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
+from digital_twin.modules.news_intelligence.contracts import assess_disclosure_document
 from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
 from ...external_signal_utils import (
     dart_document_error_response,
@@ -255,8 +257,15 @@ class OpenDartDocumentAdapter:
                     reason="service-maintenance",
                 )
             raise RuntimeError("OpenDART document API error " + error["status"] + ": " + error["reason"])
+        # A successful HTTP response may be the website's HTML error page.
+        # Only the document archive can establish collection success; never
+        # retain echoed vendor content in operational errors.
+        if not zipfile.is_zipfile(io.BytesIO(bytes(raw or b""))):
+            raise RuntimeError("OpenDART document API invalid response: expected-document-archive")
         text = dart_document_text(raw, bounded_int(settings.get("externalDartDocumentTextMaxChars"), 6000, 500, 20000))
         assessment = assess_disclosure_document(text, "body")
+        if not assessment.document_verified:
+            raise RuntimeError("OpenDART document API invalid response: unverified-document-body")
         metadata.update({
             "provider": "OpenDART",
             "receiptNo": receipt,

@@ -17,6 +17,36 @@ from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs i
 
 @unittest.skipUnless(os.environ.get('MYSQL_DATABASE') == 'orbit_alpha_test', 'requires isolated test database')
 class InformationStorageTests(unittest.TestCase):
+    def test_error_page_revision_is_not_replayed_and_completed_document_is_requeued(self):
+        store = MySQLExternalDataStore(runtime_settings())
+        symbol = 'test-error-page-' + uuid.uuid4().hex
+        descriptor = DatasetDescriptor(dataset_id='opendart.document', provider_id='opendart', capability='official-document-body',
+            cadence_seconds=86400, freshness_seconds=86400, completion_mode='once', revision_mode='immutable')
+        request = FollowupCollectionRequest('opendart.document', symbol + ':receipt:body-v1',
+            ExternalSubject(symbol, symbol=symbol), {'receiptNo': 'receipt'})
+        job = CollectionJob('opendart.document', request.partition_key, 'opendart', 50, request.subject,
+                            watermark=request.watermark)
+        now = stamp(datetime.now(timezone.utc))
+        page = '요청하신 인터넷주소(URL)을 찾을 수 없습니다. ' * 10
+        try:
+            store.enqueue_followups([(descriptor, request)])
+            store.complete_observation(job, descriptor, SourceObservation('opendart.document', 'opendart', symbol,
+                'receipt:bad-page', now, now, {'dartDisclosures': {symbol: {'documentText': page}}},
+                watermark={'receiptNo': 'receipt', 'documentHash': 'bad-page'}, quality={'dataUsable': True}), now)
+            self.assertIsNone(store.retained_document_fact(request))
+            self.assertEqual(1, store.enqueue_followups([(descriptor, request)]))
+            with store.connect() as c:
+                state = c.execute('SELECT job_status, active FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s',
+                                  (descriptor.dataset_id, request.partition_key)).fetchone()
+                self.assertEqual('pending', state['job_status'])
+                self.assertEqual(1, state['active'])
+            self.assertEqual('receipt:bad-page', store.official_document_fact(descriptor.dataset_id, symbol)['sourceRevision'])
+        finally:
+            with store.transaction() as c:
+                c.execute('DELETE FROM external_fact_revision WHERE dataset_id=%s AND subject_key=%s', (descriptor.dataset_id, symbol))
+                c.execute('DELETE FROM external_fact_current WHERE dataset_id=%s AND subject_key=%s', (descriptor.dataset_id, symbol))
+                c.execute('DELETE FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s', (descriptor.dataset_id, request.partition_key))
+
     def test_intraday_baseline_filters_before_ranking_and_excludes_late_known_history(self):
         store = MySQLMarketTimeSeriesStore(runtime_settings())
         symbol = 'TEST' + uuid.uuid4().hex[:12].upper()

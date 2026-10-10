@@ -4,12 +4,14 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 
-DISCLOSURE_DOCUMENT_QUALITY_VERSION = "disclosure-document-quality-v2"
+DISCLOSURE_DOCUMENT_QUALITY_VERSION = "disclosure-document-quality-v3"
 DISCLOSURE_REASONING_ELIGIBILITY_VERSION = "disclosure-reasoning-eligibility-v1"
 ERROR_PATTERNS = (
     re.compile(r"\b014\s*파일이\s*존재하지\s*않습니다", re.IGNORECASE),
     re.compile(r"(?:status|error)\s*[:=]\s*(?:013|014|error)", re.IGNORECASE),
     re.compile(r"document\s+(?:is\s+)?not\s+found", re.IGNORECASE),
+    re.compile(r"요청하신\s*인터넷\s*주소\s*\(URL\)\s*을\s*찾을\s*수\s*없습니다", re.IGNORECASE),
+    re.compile(r"서비스\s*이용에\s*불편을\s*드려\s*죄송합니다.*(?:시스템\s*점검|서비스\s*점검|잠시\s*후.*다시)", re.IGNORECASE | re.DOTALL),
 )
 CSS_BLOCK_RE = re.compile(
     r"(?:^|\s)[.@#a-z][a-z0-9_.*#,:>+~\-\[\]=\"'()\s]{0,300}\{[^{}]{0,4000}\}",
@@ -67,7 +69,8 @@ def assess_disclosure_document(
     normalized = normalize_official_document_text(raw)
     quality = str(document_quality or "").strip().lower()
     issues: List[str] = []
-    explicit_error = bool(raw and not normalized and any(pattern.search(raw) for pattern in ERROR_PATTERNS))
+    error_text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    explicit_error = bool(raw and not normalized and any(pattern.search(error_text) for pattern in ERROR_PATTERNS))
     if explicit_error:
         issues.append("official-document-error-response")
     elif raw and len(normalized) < max(80, int(minimum_chars or 120)):

@@ -232,6 +232,8 @@ class MemoryCollectionStore:
         self.followups = []
         self.current = {}
         self.failure_state = "failed"
+        self.deferred = []
+        self.maintenance = []
 
     def list_subjects(self):
         return [ExternalSubject("NVDA", symbol="NVDA", market="US", currency="USD")]
@@ -266,6 +268,12 @@ class MemoryCollectionStore:
     def fail_job(self, job, descriptor, error, next_due_at):
         del job, descriptor, error, next_due_at
         return {"state": self.failure_state}
+
+    def defer_job(self, job, next_due_at, reason=""):
+        self.deferred.append((job, next_due_at, reason))
+
+    def defer_dataset_for_maintenance(self, descriptor, retry_at, message):
+        self.maintenance.append((descriptor.dataset_id, retry_at, message))
 
     def complete_observation(self, job, descriptor, observation, due_at, event=None, events=None):
         self.completed.append((job, descriptor, observation, due_at))
@@ -1376,7 +1384,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         adapter = OpenDartDocumentAdapter()
         job = CollectionJob("opendart.document", "005930:receipt:body-v1", "opendart", 75,
                             ExternalSubject("005930", symbol="005930"), watermark={"receiptNo": "receipt"})
-        for status in ("800", "020", "010", "013", "900"):
+        for status in ("020", "010", "013", "900"):
             with self.subTest(status=status):
                 raw = ('<result><status>' + status + '</status><message>'
                        + 'provider echoed test-key ' * 20 + '</message></result>').encode()
@@ -1398,6 +1406,58 @@ class ExternalDataPlatformTest(unittest.TestCase):
                 self.assertNotIn("metadata-only", result["error"])
                 self.assertEqual("", dart_document_text(raw, 6000))
                 self.assertFalse(dart_document_permanently_unavailable(raw))
+
+    def test_opendart_maintenance_defers_without_alert_or_replacing_evidence_then_recovers(self):
+        settings = {"opendartApiKey": "test-key"}
+        adapter = OpenDartDocumentAdapter()
+        job = CollectionJob("opendart.document", "005930:receipt:body-v1", "opendart", 75,
+                            ExternalSubject("005930", symbol="005930"), watermark={"receiptNo": "receipt"})
+        provider = legacy_provider(settings)
+        provider.guarded_call = lambda _source, _target, call: call()
+        provider.fetch_bytes = lambda *_args: b'<result><status>800</status><message>test-key</message></result>'
+        store = MemoryCollectionStore()
+        previous = {"payload": {"documentText": "retained body"}, "quality": {"dataUsable": True}}
+        store.current = previous
+        service = ExternalDataCollectionService(settings, ExternalDatasetRegistry([adapter]), store, now_provider=lambda: NOW)
+        with patch("digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider", return_value=provider), \
+                patch.object(store, "fail_job", wraps=store.fail_job) as fail:
+            for _ in range(2):
+                result = service._process_job(job)
+                self.assertEqual("deferred", result["status"])
+                self.assertEqual("service-maintenance", result["reason"])
+                self.assertEqual("2026-08-16T00:30:00Z", result["nextDueAt"])
+                self.assertFalse(result["requiresAttention"])
+                self.assertFalse(external_data_failure_requires_alert(result))
+                self.assertNotIn("test-key", result["error"])
+            fail.assert_not_called()
+            self.assertEqual(previous, store.current)
+            self.assertEqual([], store.completed)
+            self.assertEqual([], store.empty_completed)
+            self.assertEqual([], store.events)
+            self.assertEqual(2, len(store.deferred))
+            self.assertEqual("opendart.document", store.maintenance[0][0])
+            self.assertTrue(all(run[0][1] == "deferred" for run in store.recorded))
+            body = "회사는 신규 시설 투자를 결정했으며 투자 금액과 일정 및 자금 조달 방법을 공시합니다. " * 5
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("document.xml", "<DOCUMENT><P>" + body + "</P></DOCUMENT>")
+            provider.fetch_bytes = lambda *_args: archive.getvalue()
+            recovered = service._process_job(job)
+        self.assertEqual("success", recovered["status"])
+        self.assertEqual(1, len(store.completed))
+        self.assertTrue(store.completed[0][2].quality["dataUsable"])
+
+    def test_maintenance_read_model_exposes_unavailable_source_without_connection_error(self):
+        store = MemoryFactStore()
+        store.provider_statuses = lambda: [{"datasetId": "opendart.document", "providerId": "opendart",
+            "state": "maintenance", "lastError": "공시 본문 API 점검으로 수집 대기",
+            "circuitOpenUntil": "2026-08-16T00:30:00Z"}]
+        result = ExternalSignalsReadModelService(store).signals_for_subjects(["005930"])
+        status = next(s for s in result["statuses"] if s.get("state") == "maintenance")
+        self.assertTrue(status["ok"])
+        self.assertTrue(status["deferred"])
+        self.assertFalse(status["dataUsable"])
+        self.assertEqual("2026-08-16T00:30:00Z", status["nextRetryAt"])
 
     def test_opendart_document_archive_and_missing_file_keep_distinct_outcomes(self):
         settings = {"opendartApiKey": "test-key"}

@@ -3,6 +3,7 @@ import urllib.parse
 from typing import Callable, Dict, Iterable, List
 
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject, FollowupCollectionRequest, SourceObservation, bounded_int
+from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 from digital_twin.modules.news_intelligence.domain.disclosure_quality import assess_disclosure_document
 from digital_twin.modules.news_intelligence.domain.disclosure_taxonomy import classify_disclosure
 from ...external_signal_utils import (
@@ -248,6 +249,11 @@ class OpenDartDocumentAdapter:
             )
         error = dart_document_error_response(raw)
         if error:
+            if error["status"] == "800":
+                raise ExternalCallDeferred(
+                    "OpenDART 공시 본문 API 점검(800)으로 수집 대기 중입니다. 30분 후 재확인합니다.",
+                    reason="service-maintenance",
+                )
             raise RuntimeError("OpenDART document API error " + error["status"] + ": " + error["reason"])
         text = dart_document_text(raw, bounded_int(settings.get("externalDartDocumentTextMaxChars"), 6000, 500, 20000))
         assessment = assess_disclosure_document(text, "body")

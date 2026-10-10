@@ -100,9 +100,17 @@ Web status is available at `GET /api/external-data/status`. It reports configure
 
 The document endpoint may return an XML `result/status` error instead of a ZIP
 archive. Parse this envelope before extracting filing text. Code `014` alone
-marks the official file unavailable; maintenance (`800`), request limits (`020`),
-authentication failures and other errors stay in the existing retry/circuit
-path, preserving any prior usable fact. Diagnostics retain the status code and
+marks the official file unavailable. Maintenance (`800`) uses the durable
+`service-maintenance` deferral path: the document dataset pauses for 30 minutes,
+including across worker restarts, then retries through the normal collector.
+Repeated maintenance responses extend that pause without incrementing provider
+failure counters or emitting system-error/connection-error alerts. Other APIs
+from the same provider remain eligible. No fixed maintenance end date is baked
+into code; a successful body download clears the maintenance state. The read
+model exposes the deferred source as unavailable, not freshly collected data.
+Request limits (`020`), authentication failures and other errors retain their
+existing retry/circuit behavior. All paths preserve any prior usable fact.
+Diagnostics retain the status code and
 a fixed reason, not arbitrary vendor text or credentials. Error messages must
 never become verified disclosure bodies even if they exceed the body length
 threshold. See the [official document API guide](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019003).
@@ -111,4 +119,6 @@ On 2026-10-09, a bounded live check returned `800` (service maintenance),
 explaining the observed metadata-only failures. The adapter repair makes that
 cause explicit; it does not establish that the external service has recovered.
 Offline tests cover retryable errors, previous-fact preservation, missing files
-and valid ZIP bodies in `test_external_data_platform.py`.
+and valid ZIP bodies in `test_external_data_platform.py`. The isolated MySQL
+test in `test_information_followup_storage.py` verifies durable, dataset-scoped
+maintenance admission, retry expiry and recovery without calling OpenDART.

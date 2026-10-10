@@ -99,6 +99,42 @@ class InformationStorageTests(unittest.TestCase):
             with first.transaction() as connection:
                 connection.execute('DELETE FROM external_provider_state WHERE provider_id=%s', (identity,))
 
+    def test_dataset_maintenance_survives_reopen_and_releases_without_blocking_other_apis(self):
+        settings = runtime_settings()
+        first = MySQLExternalDataStore(settings)
+        identity = 'test-maintenance-' + uuid.uuid4().hex
+        document = DatasetDescriptor(dataset_id=identity + '.document', provider_id=identity,
+            capability='test', cadence_seconds=60, freshness_seconds=60, rate_limit_seconds=0)
+        listing = DatasetDescriptor(dataset_id=identity + '.list', provider_id=identity,
+            capability='test', cadence_seconds=60, freshness_seconds=60, rate_limit_seconds=0)
+        now = datetime.now(timezone.utc)
+        until = now + timedelta(minutes=30)
+        try:
+            self.assertTrue(first.reserve_provider_call(document, now)['allowed'])
+            first.defer_dataset_for_maintenance(document, stamp(until), 'provider maintenance')
+            reopened = MySQLExternalDataStore(settings)
+            for minute in (1, 15, 29):
+                permit = reopened.reserve_provider_call(document, now + timedelta(minutes=minute))
+                self.assertFalse(permit['allowed'])
+                self.assertEqual('service-maintenance', permit['reason'])
+                self.assertEqual(stamp(until), permit['nextAllowedAt'])
+            self.assertTrue(reopened.reserve_provider_call(listing, now + timedelta(minutes=1))['allowed'])
+            with reopened.connect() as c:
+                row = c.execute('SELECT request_count, consecutive_failures, health_state FROM external_provider_state WHERE provider_id=%s AND bucket_id=%s', (identity, document.dataset_id)).fetchone()
+                self.assertEqual(1, row['request_count'])
+                self.assertEqual(0, row['consecutive_failures'])
+                self.assertEqual('maintenance', row['health_state'])
+            self.assertTrue(reopened.reserve_provider_call(document, until)['allowed'])
+            reopened.mark_provider_success(document)
+            with reopened.connect() as c:
+                row = c.execute('SELECT health_state, circuit_open_until, last_error FROM external_provider_state WHERE provider_id=%s AND bucket_id=%s', (identity, document.dataset_id)).fetchone()
+                self.assertEqual('healthy', row['health_state'])
+                self.assertEqual('', row['circuit_open_until'])
+                self.assertEqual('', row['last_error'])
+        finally:
+            with first.transaction() as c:
+                c.execute('DELETE FROM external_provider_state WHERE provider_id=%s', (identity,))
+
     def test_followup_outbox_rollback_and_duplicate_completion(self):
         settings = runtime_settings()
         store = MySQLInformationFollowups(settings)

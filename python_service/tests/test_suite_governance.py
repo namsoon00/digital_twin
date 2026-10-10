@@ -281,7 +281,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # model proof gaps, exact thresholds, reassessment transport and hypothesis naming.
         # Six documentary-answer contracts cover source review independence, scope,
         # exact receipts, partial answers, table context and reply/blocker deduplication.
-        self.assertLessEqual(total, 2172)
+        # Three maintenance regressions protect preserved evidence and recovery,
+        # non-error source visibility, and durable dataset-scoped API admission.
+        self.assertLessEqual(total, 2175)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -800,6 +800,54 @@ the actual transported text from the receipt (not a freshly rendered replacement
 Its review counts are operational quality diagnostics, not paid-service or return
 qualification. User usefulness and willingness to pay still require a pilot.
 
+Question resolution (`independent-observation-v16-question-resolution`) connects
+reviewed research/development questions to a business thesis, an isolated
+experiment, a documented deferral or an explicit non-applicable decision.
+`questionResolutions` is required for those reviewed cases; targets and evidence
+are validated against the frozen author input and revalidated at commit. When
+notification review runs, its immutable draft hash also covers these decisions.
+A business thesis and its question link commit together.
+Experiment requests preserve the original question ID/revision and its research
+receipt. Their scope includes account, symbol and world. Daily coalescing never
+pretends a different question's request examined the current question.
+
+Linked development results are read by exact request ID, including older runs
+outside recent memory. Changed candidate/experiment status is revision-fenced
+into the original question, wakes only its scope and reaches the next frozen
+input. Merely waiting in the queue does not trigger another analysis. Failure,
+no valid proposal, insufficient data, unavailable history and empirical
+qualification remain distinct. The owner UI shows the disposition and blockers.
+Saved proposals are reused after a development-ingress failure, which remains
+retryable instead of becoming a completed request with a hidden error.
+Proposal workers renew their lease while generating/compiling, claim the next
+item only after finishing the current one, and fence completion/failure by the
+worker and attempt. A late worker cannot overwrite a reclaimed or completed
+request.
+Malformed model arrays fail before any partial proposal save; a string cannot
+be silently split into character-sized causal stages.
+Rejected narrative quality cannot close a question or create a thesis/experiment.
+It can still schedule a validated, bounded source-owner research request to fill
+the evidence gap. This is recorded as source verification, with the rejected
+origin retained, and never grants publication or hypothesis authority. Deferral
+decisions remain visible even when the accompanying narrative is rejected.
+
+Explicit maintenance can restore a missing historical development-question link
+through `AIControlDevelopment.restore_question`. It validates the retained
+immutable request, appends a restoration event and preserves the original
+captured clock. It does not rewrite the old proposal, fabricate missing causal
+stages, replay observations or promote a rule. Character-array damage in old
+cases is surfaced as a data-shape error for a new evidence-based assessment.
+Pre-v16 author/repair/review artifacts remain reconstructible with their original
+prompts and schemas.
+
+Directed retrieval separately bounds one tool result (40 KiB) and all admitted
+results (96 KiB), while retaining the configured prompt limit. Previously the
+single-result allowance was also the entire multi-round allowance: a financial
+page could consume most of it and prevent reading an independent source or
+counter-evidence. The model sees the remaining total allowance. Rejected pages
+do not publish pagination cursors; oversized individual memories and incomplete
+retrieval still block publication.
+
 Question-specific research returns retain the source owner's task assessment in
 `lastResearch.result.questionAssessment`. Coverage, semantic review state,
 missing requirements and evidence counts remain attached to the original case,

@@ -24,9 +24,12 @@ def observation_development_request(task, result):
         "version": OBSERVATION_DEVELOPMENT_VERSION,
         "taskId": task["taskId"], "executionInputId": result.get("executionInputId", ""),
         "inputFingerprint": result.get("inputFingerprint", ""),
-        "packet": deepcopy(packet), "evidenceIds": list(result.get("evidenceIds", [])),
+        "packet": deepcopy(packet), "evidenceIds": list(dict.fromkeys(list(result.get("evidenceIds", [])) + [
+            key for row in result.get("questionResolutions", []) if row["disposition"] == "experiment" for key in row["evidenceIds"]])),
         "analysis": {key: deepcopy(result.get(key)) for key in
                      ("hypothesis", "counterEvidence", "comparison", "followUpEvaluations")},
+        "sourceQuestions": [deepcopy(row["sourceQuestion"]) for row in result.get("questionResolutions", [])
+                            if row["disposition"] == "experiment"],
         "authority": "proposal-only", "empiricalQualification": "unverified",
     }
     context["fingerprint"] = content_hash(context)
@@ -36,8 +39,8 @@ def observation_development_request(task, result):
         raise ValueError("observation development requires a source timezone")
     # One immutable request per subject/day, even if the AI rephrases a question
     # or later prices change. A retry retains the first input and proposal budget.
-    fingerprint = content_hash([OBSERVATION_DEVELOPMENT_VERSION, task["accountId"],
-                                task["symbol"], captured.astimezone(timezone.utc).date().isoformat()])
+    fingerprint = content_hash(["observation-development-scope-v2", task["accountId"],
+                                task["symbol"], task["worldId"], captured.astimezone(timezone.utc).date().isoformat()])
     question = InvestmentQuestion.create(questions[0], task["symbol"], task.get("name", ""),
         task["accountId"], asked_at=packet["capturedAt"], source="ai-control-observation")
     return {"requestId": stable_id("observation-development", fingerprint),

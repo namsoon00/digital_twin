@@ -88,7 +88,9 @@ class BrainManagementContractTests(unittest.TestCase):
         from digital_twin.modules.ai_orchestration.domain.execution_input import PROMPT_VERSION
         store.memory.return_value = [{"inputFingerprint": observation_fingerprint(PACKET, [memory]), "observedAt": stamp(),
             "executionPromptVersion": PROMPT_VERSION, "quality": {"status": "observation-only"}}]
-        planner.return_value = {**PLAN, "caseReviews": [review_case(memory)], "serviceFeedback": []}
+        planner.return_value = {**PLAN, "caseReviews": [review_case(memory)], "serviceFeedback": [],
+            "questionResolutions": [{"caseId": "case", "disposition": "defer", "targetIndex": -1,
+                "reason": "공식 자료가 부족하여 원래 질문의 가설화를 보류합니다.", "evidenceIds": ["quote-1"]}]}
         self.assertEqual("completed", service.run_once()["status"])
         planner.assert_called_once()
         service.brain_waker.assert_called_once()
@@ -147,6 +149,9 @@ class BrainAgendaStorageTests(unittest.TestCase):
         return task, result, [child]
 
     def test_atomic_question_research_reassessment_preserves_origin_and_blocks_duplicate_work(self):
+        from question_resolution_checks import assert_question_loop
+        assert_question_loop(self)
+        self.clean()
         self.assert_research_return_and_due_agenda_wake_only_the_owning_world()
         self.clean()
         task, result, children = self.observation()
@@ -265,6 +270,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
             jobs = []
             self.brain.schedule_research(c, case, follow, rejected, jobs, stamp())
             same = copy.deepcopy(saved)
+            same["lastResearch"]["result"]["status"] = "completed"
             reworded = {**rejected, "input": {**rejected["input"], "questionsToCheck": ["다른 다음 질문을 정하더라도 근거가 변한 것은 아닙니다."]}}
             self.brain.schedule_research(c, same, follow, reworded, jobs, stamp())
             self.assertIn("같은 근거", same["reason"])
@@ -274,6 +280,17 @@ class BrainAgendaStorageTests(unittest.TestCase):
         self.assertEqual([], jobs)
         self.assertEqual("blocked", case["status"])
         self.assertEqual(3, case["researchAttempts"])
+        with self.control.transaction() as c:
+            for changed_intent in (False, True):
+                retry_case = copy.deepcopy(saved)
+                retry_case["lastResearch"]["requestedAt"] = later(stamp(), -361)
+                if changed_intent:
+                    retry_case["lastResearch"]["result"]["status"] = "completed"
+                    retry_case["researchRequest"]["queryTerms"] = ["공식 사업보고서 매출 구성"]
+                retry_jobs = []
+                self.brain.schedule_research(c, retry_case, follow, rejected, retry_jobs, stamp())
+                self.assertEqual(1, len(retry_jobs))
+                self.assertEqual(2, retry_case["researchAttempts"])
         with self.control.transaction() as c:
             saved["nextCheckAt"] = later(stamp(), -5)
             self.brain.save(c, saved, follow["taskId"], "test-due")

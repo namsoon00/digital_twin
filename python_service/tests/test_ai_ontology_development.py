@@ -40,6 +40,8 @@ class AIObservationDevelopmentTests(unittest.TestCase):
         self.task = {**{key: packet()[key] for key in ("accountId", "symbol", "worldId", "name")}, "taskId": "development-task"}
 
     def test_capability_is_bounded_and_preserves_historical_frozen_prompts(self):
+        from question_resolution_checks import assert_resolution_contracts
+        assert_resolution_contracts(self)
         result = development_result(self.task)
         self.assertEqual([QUESTION["question"]], result["developmentQuestions"])
         self.assertEqual([], result["questions"])  # Internal design work is not a customer follow-up question.
@@ -85,6 +87,11 @@ class AIObservationDevelopmentTests(unittest.TestCase):
             validate_observation_development_context(context, self.task["accountId"], "TEST")
 
     def test_existing_proposal_worker_receives_captured_facts_and_development_ingress(self):
+        from digital_twin.modules.model_registry.domain.proposal_shape import proposal_rows
+        for malformed in ({"causalPath": "외국인 순매도 → 흡수 실패"}, {"supportingEvidenceIds": "quote-1"},
+                          {"invalidationConditions": [1]}, {"causalPath": ["단계"] * 13}):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                proposal_rows([{}, malformed])
         request = observation_development_request(self.task, development_result(self.task))
         advisor, proposals, development = Mock(), Mock(), Mock()
         proposals.list_hypothesis_proposals.return_value = []

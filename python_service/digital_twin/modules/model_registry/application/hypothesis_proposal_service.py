@@ -1,9 +1,11 @@
 import time
 import uuid
+from contextlib import nullcontext
 from typing import Dict, List
 
 from digital_twin.modules.model_registry.domain.events import hypothesis_proposed_event, hypothesis_reviewed_event
 from digital_twin.modules.model_registry.domain.observation_development import validate_observation_development_context
+from ..domain.proposal_shape import proposal_rows
 from digital_twin.modules.decisions.contracts import NovelHypothesisProposal, stable_id
 
 
@@ -50,13 +52,22 @@ class HypothesisProposalService:
             for item in (hypothesis_set or {}).get("hypotheses") or []
             if isinstance(item, dict)
         }
+        resumed = []
         if self.store and hasattr(self.store, "list_hypothesis_proposals"):
             for item in self.store.list_hypothesis_proposals("", str(symbol or "").upper(), 100) or []:
                 if isinstance(item, dict) and item.get("accountId") == str(account_id or "") and str(item.get("claim") or "").strip():
                     existing_claims.add(str(item.get("claim") or "").strip().casefold())
+                    if (question or {}).get("questionId") and item.get("sourceQuestionId") == question["questionId"]:
+                        resumed.append(item)
+        lookup = getattr(self.store, "hypothesis_proposals_for_question", None)
+        if callable(lookup) and (question or {}).get("questionId"):
+            exact = lookup(str(account_id or ""), str(symbol or "").upper(), question["questionId"])
+            if isinstance(exact, list):
+                resumed = exact
+        if resumed:
+            return self.develop_proposals(resumed[:3], context.get("inferenceGenerationId", ""), reused=True)
         rows = []
-        development_rows = []
-        for item in self.advisor.propose(context) or []:
+        for item in proposal_rows(self.advisor.propose(context) or []):
             if not isinstance(item, dict):
                 continue
             claim = " ".join(str(item.get("claim") or "").split())
@@ -86,24 +97,20 @@ class HypothesisProposalService:
             rows.append(proposal.to_dict())
             existing_claims.add(claim.casefold())
             self.publish(hypothesis_proposed_event(proposal.to_dict()))
-            if self.development_service and hasattr(self.development_service, "ingest_proposal"):
-                try:
-                    development_rows.append(self.development_service.ingest_proposal(
-                        proposal.to_dict(),
-                        str(context.get("inferenceGenerationId") or ""),
-                    ))
-                except Exception as error:  # noqa: BLE001 - the persisted proposal remains available for retry.
-                    development_rows.append({
-                        "status": "error",
-                        "proposalId": proposal.proposal_id,
-                        "reason": str(error)[:500],
-                    })
+        return self.develop_proposals(rows, context.get("inferenceGenerationId", ""))
+
+    def develop_proposals(self, rows, generation, reused=False):
+        development_rows = []
+        if self.development_service and hasattr(self.development_service, "ingest_proposal"):
+            # Failures stay retryable in the durable request. The persisted
+            # proposals are reused on retry, so model generation is not repeated.
+            for proposal in rows:
+                development_rows.append(self.development_service.ingest_proposal(proposal, str(generation or "")))
         return {
             "status": "review-required" if rows else "no-valid-proposal",
-            "proposalCount": len(rows),
-            "proposals": rows,
+            "proposalCount": len(rows), "proposals": rows,
             "governance": "not-usable-for-investment-judgment-until-rulebox-promotion",
-            "hypothesisDevelopment": development_rows,
+            "hypothesisDevelopment": development_rows, "reusedProposals": reused,
         }
 
     def known_evidence_ids(self, context: Dict[str, object]) -> set:
@@ -171,32 +178,40 @@ class HypothesisProposalQueueRunner:
     def run_once(self, limit: int = 1) -> Dict[str, object]:
         self.last_results = []
         claim = getattr(self.store, "claim_hypothesis_proposal_requests", None)
-        requests = claim(self.worker_id, limit=max(1, min(3, int(limit or 1)))) if callable(claim) else []
-        for request in requests:
+        processed = 0
+        for _ in range(max(1, min(3, int(limit or 1)))):
+            requests = claim(self.worker_id, limit=1) if callable(claim) else []
+            if not requests:
+                break
+            request = requests[0]
+            processed += 1
             request_id = str(request.get("requestId") or "")
+            ownership = {"claim": request} if request.get("leaseOwner") else {}
             try:
-                result = self.proposal_service.propose(
-                    str(request.get("accountId") or ""),
-                    str(request.get("symbol") or ""),
-                    dict(request.get("question") or {}),
-                    dict(request.get("hypothesisSet") or {}),
-                    dict(request.get("researchRun") or {}),
-                    dict(request.get("relationContext") or {}),
-                    **({"observation_context": request["observationContext"]} if "observationContext" in request else {}),
-                )
-                self.store.complete_hypothesis_proposal_request(request_id, result)
-                self.last_results.append({"requestId": request_id, **dict(result or {})})
+                keep_alive = self.store.hypothesis_proposal_keep_alive(request) if ownership else nullcontext()
+                with keep_alive:
+                    result = self.proposal_service.propose(
+                        str(request.get("accountId") or ""),
+                        str(request.get("symbol") or ""),
+                        dict(request.get("question") or {}),
+                        dict(request.get("hypothesisSet") or {}),
+                        dict(request.get("researchRun") or {}),
+                        dict(request.get("relationContext") or {}),
+                        **({"observation_context": request["observationContext"]} if "observationContext" in request else {}),
+                    )
+                saved = self.store.complete_hypothesis_proposal_request(request_id, result, **ownership)
+                self.last_results.append({"requestId": request_id, **({"status": "lease-lost"} if saved is False else dict(result or {}))})
             except Exception as error:  # noqa: BLE001 - one AI proposal cannot stop research work.
-                self.store.fail_hypothesis_proposal_request(request_id, str(error))
+                saved = self.store.fail_hypothesis_proposal_request(request_id, str(error), **ownership)
                 self.last_results.append({
                     "requestId": request_id,
-                    "status": "error",
+                    "status": "lease-lost" if saved is False else "error",
                     "reason": str(error)[:180],
                 })
         reconciliation = self.reconcile_backlog_if_due()
         return {
             "status": "ok",
-            "processedCount": len(requests),
+            "processedCount": processed,
             "results": self.last_results,
             "developmentBacklog": reconciliation,
             "queue": self.status(),

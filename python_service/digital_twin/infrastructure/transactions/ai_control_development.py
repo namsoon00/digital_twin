@@ -30,6 +30,71 @@ class AIControlDevelopment:
             raise ValueError("observation development input mismatch")
         return self.research.enqueue_observation_development_with_connection(connection, observation_development_request(task, result))
 
+    def progress(self, request_id, account_id, symbol, world):
+        record = self.research.observation_development_record(request_id, account_id, symbol, world)
+        if record is None:
+            return {"requestId": request_id, "status": "unavailable", "authority": "experiment-status-only"}
+        result = record["result"]
+        cases = []
+        for entry in result.get("hypothesisDevelopment", [])[:3]:
+            case_id = entry.get("caseId") or entry.get("case", {}).get("caseId")
+            case = self.case_reader(case_id) if case_id else None
+            if case is not None:
+                if case.account_id != account_id or case.symbol != symbol:
+                    raise ValueError("development progress subject mismatch")
+                cases.append({"caseId": case.case_id, "status": case.status,
+                    "blockedReason": str(case.blocked_reason)[:1200], "stage": case.stage,
+                    "experimentId": case.experiment_id, "candidateRuleId": case.candidate_rule.get("id", ""),
+                    "candidateId": case.candidate_id,
+                    "evolutionState": case.evolution.get("state", ""),
+                    "validation": case.to_dict().get("validationSummary", {}),
+                    "dataShapeErrors": ["causal-path-character-array"] if len(getattr(case, "causal_path", [])) >= 4
+                        and all(len(str(item).strip()) == 1 for item in case.causal_path) else []})
+            else:
+                cases.append({"caseId": case_id or "", "status": "unavailable" if case_id else entry.get("status", "unavailable"),
+                    "reason": str(entry.get("reason", ""))[:500], "proposalId": entry.get("proposalId", "")})
+        return {"requestId": request_id, "status": record["status"], "resultStatus": result.get("status", ""),
+                "proposalCount": result.get("proposalCount"), "cases": cases,
+                "authority": "experiment-status-only"}
+
+    def restore_question(self, agenda, request_id, account, symbol, world):
+        """Explicit maintenance: restore missing lineage, never replay old work."""
+        from digital_twin.modules.model_registry.contracts import validate_observation_development_context
+        from digital_twin.modules.ai_orchestration.domain.brain_management import case_identity
+        from digital_twin.modules.ai_orchestration.domain.planning import stamp
+        record = self.research.observation_development_record(request_id, account, symbol, world)
+        if record is None:
+            raise ValueError("development request unavailable")
+        context = record["request"]["observationContext"]
+        validate_observation_development_context(context, account, symbol)
+        question = record["request"]["question"]["text"]
+        key = case_identity(account, symbol, world, "develop-hypothesis", question)
+        now = stamp()
+        progress = self.progress(request_id, account, symbol, world)
+        packet = context["packet"]
+        case = {"caseId": key, "accountId": account, "symbol": symbol, "worldId": world,
+            "kind": "question", "capability": "develop-hypothesis", "question": question,
+            "status": "review-needed", "revision": 0, "createdAt": now, "nextCheckAt": now,
+            "completionCriterion": "원래 질문과 가설 개발의 차단 이유를 현재 근거로 다시 판단합니다.",
+            "reason": "과거 가설 개발 요청의 질문 연결을 복구했습니다. 과거 관측을 재실행한 결과가 아닙니다.",
+            "researchAttempts": 0, "development": {"requestId": request_id}, "developmentProgress": progress,
+            "hypothesisResolution": {"disposition": "experiment", "requestId": request_id,
+                "state": "restored-reference", "at": now, "qualification": "proposal-only"},
+            "origin": {"taskId": context["taskId"], "executionInputId": context["executionInputId"],
+                "capturedAt": packet["capturedAt"], "sourceSnapshots": packet["sourceSnapshots"],
+                "summary": question, "hypothesis": context["analysis"].get("hypothesis", ""),
+                "counterEvidence": context["analysis"].get("counterEvidence", ""), "quality": "historical-development-request",
+                "evidence": [row for row in packet["facts"] if row["id"] in context["evidenceIds"]]},
+            "restoration": {"sourceRequestId": request_id, "sourceFingerprint": context["fingerprint"],
+                            "historicalWorkReplayed": False}, "authority": "research-only"}
+        with agenda.transaction() as connection:
+            existing = agenda.read(connection, key, account, symbol, lock=True)
+            if existing:
+                return {"status": "existing", "caseId": key}
+            agenda.save(connection, case, request_id, "development-link-restored", case["restoration"])
+            agenda.wake_observation(connection, account, symbol, world, now)
+        return {"status": "restored", "caseId": key}
+
     def memory(self, account_id, symbol):
         memories = []
         for row in self.research.observation_development_records(account_id, symbol):
@@ -51,6 +116,7 @@ class AIControlDevelopment:
                 else:
                     cases.append({"status": entry.get("status", "unavailable")})
             memories.append({"kind": "ontology-development", "requestId": row["requestId"],
+                "worldId": request["observationContext"]["packet"]["worldId"],
                 "status": row["status"], "resultStatus": result.get("status", ""),
                 "question": request.get("question", {}).get("text", ""),
                 "sourceCapturedAt": request["observationContext"]["packet"]["capturedAt"],

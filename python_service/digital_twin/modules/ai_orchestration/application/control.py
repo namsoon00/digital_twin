@@ -69,7 +69,8 @@ class AIControlService:
                     company = self.company_memory(job["accountId"], job["symbol"], packet["capturedAt"])
                     if company:
                         research.append(company)
-                    research.extend(self.development_memory(job["accountId"], job["symbol"]))
+                    research.extend(row for row in self.development_memory(job["accountId"], job["symbol"])
+                                    if not row.get("worldId") or row["worldId"] == job["worldId"])
                     packet["taskId"] = job["taskId"]
                     if job.get("evidenceWake"):
                         packet["evidenceWake"] = job["evidenceWake"]
@@ -118,7 +119,7 @@ class AIControlService:
                     stage = "author-execution"
                     raw = self.planner(envelope, input_id)
                     stage = "plan-validation"
-                    plan = validate_plan(raw, packet, envelope["researchResults"], require_research=True)
+                    plan = validate_plan(raw, packet, envelope["researchResults"], require_research=True, require_resolution=True)
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
                               "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
                               "wordingVersion": OBSERVATION_WORDING_VERSION,
@@ -152,7 +153,7 @@ class AIControlService:
                             if not repair_id:
                                 return {"status": "lease-lost", "taskId": job["taskId"]}
                             result["repair"]["inputId"] = repair_id
-                            repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"], require_research=True)
+                            repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"], require_research=True, require_resolution=True)
                             result.pop("conditionValidation", None)
                             result.update(repaired, executionInputId=repair_id, observedAt=stamp(), memoryCoverage=correction["memoryCoverage"],
                                           judgmentContinuity=judgment_continuity(correction))

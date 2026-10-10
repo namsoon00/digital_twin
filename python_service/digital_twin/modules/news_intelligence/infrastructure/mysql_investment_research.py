@@ -105,6 +105,7 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
                     continue
                 payload = _json_loads(row.get("payload_json"), {})
                 payload["attempts"] = int(row.get("attempts") or 0) + 1
+                payload["leaseOwner"] = str(worker_id or "hypothesis-proposal")
                 claimed.append(payload)
         return claimed
 
@@ -112,28 +113,49 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
         self,
         request_id: str,
         result: Dict[str, object],
-    ) -> None:
+        claim=None,
+    ) -> bool:
+        if not claim or not claim.get("leaseOwner"):
+            return False
         stamp = utc_now_iso()
         with self.connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE investment_hypothesis_proposal_requests "
                 "SET status = 'completed', result_json = %s, lease_owner = '', lease_expires_at = '', "
-                "last_error = '', completed_at = %s, updated_at = %s WHERE request_id = %s",
-                (json_dumps(result), stamp, stamp, str(request_id or "")),
+                "last_error = '', completed_at = %s, updated_at = %s WHERE request_id = %s "
+                "AND status='processing' AND lease_owner=%s AND attempts=%s AND lease_expires_at>=%s",
+                (json_dumps(result), stamp, stamp, str(request_id or ""), claim["leaseOwner"], claim["attempts"], stamp),
             )
+        return bool(cursor.rowcount)
 
-    def fail_hypothesis_proposal_request(self, request_id: str, error: str) -> None:
+    def fail_hypothesis_proposal_request(self, request_id: str, error: str, claim=None) -> bool:
+        if not claim or not claim.get("leaseOwner"):
+            return False
         now = datetime.now(timezone.utc)
         stamp = now.isoformat().replace("+00:00", "Z")
         retry_at = (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
         with self.connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE investment_hypothesis_proposal_requests "
                 "SET status = IF(attempts >= 3, 'failed', 'pending'), available_at = %s, "
                 "lease_owner = '', lease_expires_at = '', last_error = %s, updated_at = %s "
-                "WHERE request_id = %s",
-                (retry_at, str(error or "")[:1000], stamp, str(request_id or "")),
+                "WHERE request_id = %s AND status='processing' AND lease_owner=%s AND attempts=%s AND lease_expires_at>=%s",
+                (retry_at, str(error or "")[:1000], stamp, str(request_id or ""), claim["leaseOwner"], claim["attempts"], stamp),
             )
+        return bool(cursor.rowcount)
+
+    def hypothesis_proposal_keep_alive(self, request):
+        from .hypothesis_proposal_lease import proposal_lease
+        return proposal_lease(self, request)
+
+    def renew_hypothesis_proposal_request(self, request):
+        now = datetime.now(timezone.utc)
+        with self.connect() as connection:
+            cursor = connection.execute("UPDATE investment_hypothesis_proposal_requests SET lease_expires_at=%s "
+                "WHERE request_id=%s AND status='processing' AND lease_owner=%s AND attempts=%s AND lease_expires_at>=%s",
+                ((now + timedelta(seconds=300)).isoformat().replace("+00:00", "Z"), request["requestId"],
+                 request["leaseOwner"], request["attempts"], now.isoformat().replace("+00:00", "Z")))
+        return bool(cursor.rowcount)
 
     def hypothesis_proposal_request_summary(self) -> Dict[str, object]:
         with self.connect() as connection:
@@ -358,6 +380,13 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
                 ),
             )
         return proposal
+
+    def hypothesis_proposals_for_question(self, account_id, symbol, question_id):
+        with self.connect() as connection:
+            rows = connection.execute("SELECT payload_json FROM investment_hypothesis_proposals "
+                "WHERE account_id=%s AND symbol=%s AND source_question_id=%s ORDER BY proposal_id LIMIT 3",
+                (account_id, str(symbol).upper(), question_id)).fetchall()
+        return [_json_loads(row["payload_json"], {}) for row in rows]
 
     def list_hypothesis_proposals(self, status: str = "", symbol: str = "", limit: int = 50) -> List[Dict[str, object]]:
         where = []

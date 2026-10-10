@@ -46,13 +46,13 @@ def continuity_memory(history, research):
         elif row.get("kind") == "brain-case":
             memories.append(_summary(row, ("kind", "caseId", "accountId", "symbol", "worldId", "question",
                 "capability", "status", "revision", "reviewDue", "nextCheckAt", "completionCriterion", "reason",
-                "researchAttempts", "lastResearch", "researchRequest")))
+                "researchAttempts", "lastResearch", "researchRequest", "hypothesisResolution", "developmentProgress")))
         elif row.get("kind") == "service-feedback":
             memories.append(_summary(row, ("kind", "caseId", "category", "status", "problem", "proposal", "verification")))
         elif row.get("runId"):
             memories.append(_summary(row, ("kind", "runId", "status", "completedAt", "stopReason", "verifiedClaimCount")))
         elif row.get("kind") == "ontology-development":
-            memories.append(_summary(row, ("kind", "requestId", "status", "question", "blockedReason", "completedAt", "cases")))
+            memories.append(_summary(row, ("kind", "requestId", "worldId", "status", "question", "blockedReason", "sourceCapturedAt", "completedAt", "cases")))
     value = {"version": CONTINUITY_VERSION, "previousAnalyses": analyses, "researchResults": memories}
     # Due cases have their own mandatory budget in final generation. All other
     # continuity is small and explicit; failure must never become silent amnesia.

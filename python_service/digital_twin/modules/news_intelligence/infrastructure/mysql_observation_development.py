@@ -25,9 +25,25 @@ class MySQLObservationDevelopmentStore(MySQLOperationalConnection):
             (item["accountId"], item["symbol"], item["gapFingerprint"])).fetchone()
         if not row:
             raise ValueError("observation development handoff was not persisted")
-        original = _json_loads(row["payload_json"], {})["observationContext"]
+        stored = _json_loads(row["payload_json"], {})
+        original = stored["observationContext"]
         return {"requestId": row["request_id"], "status": row["status"], "sourceTaskId": original["taskId"],
+                "requestedQuestionMatched": stored["question"]["text"] == payload["question"]["text"],
+                "sourceQuestionIds": [item["caseId"] for item in original.get("sourceQuestions", [])],
                 "reused": original["taskId"] != item["observationContext"]["taskId"], "authority": "proposal-only"}
+
+    def observation_development_record(self, request_id, account_id, symbol, world):
+        with self.connect() as connection:
+            row = connection.execute("SELECT request_id,status,payload_json,result_json FROM investment_hypothesis_proposal_requests "
+                "WHERE request_id=%s AND account_id=%s AND symbol=%s", (request_id, account_id, symbol)).fetchone()
+        if not row:
+            return None
+        request = _json_loads(row["payload_json"], {})
+        if (request.get("source") != "ai-control-observation"
+                or request.get("observationContext", {}).get("packet", {}).get("worldId") != world):
+            raise ValueError("development result scope mismatch")
+        return {"requestId": row["request_id"], "status": row["status"], "request": request,
+                "result": _json_loads(row["result_json"], {})}
 
     def observation_development_records(self, account_id, symbol, limit=3):
         with self.connect() as connection:
@@ -36,4 +52,3 @@ class MySQLObservationDevelopmentStore(MySQLOperationalConnection):
                 "ORDER BY created_at DESC,request_id DESC LIMIT %s", (account_id, symbol, max(1, min(3, int(limit))))).fetchall()
         return [{"requestId": row["request_id"], "status": row["status"],
                  "request": _json_loads(row["payload_json"], {}), "result": _json_loads(row["result_json"], {})} for row in rows]
-

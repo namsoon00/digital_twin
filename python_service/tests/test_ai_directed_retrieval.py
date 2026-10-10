@@ -1,6 +1,7 @@
 """Model-selected reads retain provenance, bounded replay and final publication fences."""
 import copy
 import hashlib
+import json
 import unittest
 from unittest.mock import Mock
 
@@ -76,6 +77,7 @@ class DirectedRetrievalTests(unittest.TestCase):
         self.assertEqual(1, source.candidates.call_count)  # Later reads never query a newer world.
 
     def test_second_decision_sees_first_result_and_final_prompt_has_only_read_evidence(self):
+        self.assert_multiple_source_pages_fit_bounded_retrieval()
         (packet, history, memories, trace), envelopes, model, _ = self.run_reads([
             read(request()), read(request("flow"), request("analyses", "recall_memory")), FINISH],
             history=[{"summary": "previous explanation", "previousFacts": [{"currentPrice": 80}]}])
@@ -94,6 +96,24 @@ class DirectedRetrievalTests(unittest.TestCase):
         with self.assertRaises(EvidenceContractError):
             validate_execution_input(broken)
         self.assertEqual(0, packet["coverage"]["valuation"]["included"])
+
+    def assert_multiple_source_pages_fit_bounded_retrieval(self):
+        captured, source = session()
+        source.candidates.return_value[1]["body"] = "report-source " * 2100
+        source.candidates.return_value[3]["body"] = "counter-source " * 1900
+        captured = ObservationEvidenceReader(source).capture_session(SUBJECT)
+        saved = []
+        def save(envelope):
+            validate_execution_input(envelope)
+            saved.append(envelope)
+            return "bounded-input-" + str(len(saved))
+        selected, history, memories, trace = retrieve_evidence(captured, captured.packet(), [], [],
+            Mock(side_effect=[read(request(), request("flow")), FINISH]), save, 256 * 1024)
+        self.assertEqual("ready", selected["retrieval"]["status"])
+        self.assertEqual({"ok"}, {row["result"].get("status", "ok") for row in trace[0]["reads"]})
+        self.assertGreater(sum(len(json.dumps(row["result"]).encode()) for row in trace[0]["reads"]), 40 * 1024)
+        self.assertLess(saved[1]["retrievalContext"]["resultBudgetBytesRemaining"], 56 * 1024)
+        validate_execution_input(freeze_execution_input(selected, history, memories, retrieval_trace=trace))
 
     def test_repetition_unknown_scope_and_lost_lease_cannot_extend_authority(self):
         (packet, _, _, _), _, model, _ = self.run_reads([read(request()), read(request())])

@@ -87,6 +87,11 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         validated = validate_management(raw, result["input"], envelope["researchResults"])
         if any(validated[key] != result.get(key, []) for key in validated):
             raise ValueError("brain assessment changed after captured memory validation")
+        if "questionResolutions" in result:
+            from ..domain.question_resolution import raw_resolutions, validate_resolutions
+            if validate_resolutions(raw_resolutions(result["questionResolutions"]), result["input"],
+                    envelope["researchResults"], result, required=True) != result["questionResolutions"]:
+                raise ValueError("question resolution changed after input capture")
 
     def record(self, connection, job, result, children):
         if job["capability"] == "research":
@@ -102,14 +107,24 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             children[:] = [child for child in children if child["capability"] != "research"]
             for review in result.get("caseReviews", []):
                 case = self.read(connection, review["caseId"], job["accountId"], job["symbol"], lock=True)
-                if case and case["revision"] == review["expectedRevision"] and case["status"] in ACTIVE_CASE_STATES:
+                if case and case["worldId"] == job["worldId"] and case["revision"] == review["expectedRevision"] and case["status"] in ACTIVE_CASE_STATES:
                     case.update(nextCheckAt=later(now, 180), reason="이번 관찰의 근거 검증이 보류되어 과제 평가를 다시 확인합니다.")
-                    self.save(connection, case, job["taskId"], "review-deferred", {"executionInputId": result["executionInputId"]})
+                    from .mysql_question_resolution import defer_resolution
+                    defer_resolution(case, job, result, now)
+                    if review["action"] == "research":
+                        # Asking the source owner for missing evidence is not
+                        # acceptance of the rejected market explanation.
+                        from ..domain.research_request import validate_research_request
+                        case["researchRequest"] = validate_research_request(review["research"], True, job["accountId"])
+                        self.schedule_research(connection, case, job, result, children, now)
+                    self.save(connection, case, job["taskId"], "review-deferred", {"executionInputId": result["executionInputId"],
+                        "hypothesisResolution": case.get("hypothesisResolution", {}), "authority": "source-verification-only"})
             for review in (result.get("businessResearch") or {}).get("reviews", []):
                 case = self.read(connection, review["thesisId"], job["accountId"], job["symbol"], lock=True)
                 if case and case["worldId"] == job["worldId"] and case["revision"] == review["expectedRevision"]:
                     case.update(nextCheckAt=later(now, 1440), reason="사업 설명 검토가 보류되어 다음 관찰에서 다시 평가합니다.")
                     self.save(connection, case, job["taskId"], "business-review-deferred", {"executionInputId": result["executionInputId"]})
+            self.record_questions(connection, job, result, children, source, now, receipt, research_only=True)
             return {**receipt, "status": "quality-blocked"}
         from .mysql_business_research import record_business
         receipt["business"] = record_business(connection, job, result, self.read, self.save, now)
@@ -118,11 +133,20 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if not case or case["worldId"] != job["worldId"]:
                 raise ValueError("brain case scope mismatch")
             case = review_transition(case, review, source, now)
+            from .mysql_question_resolution import link_resolution
+            link_resolution(connection, case, job, result, self.read, now)
             if review["action"] == "research":
                 self.schedule_research(connection, case, job, result, children, now)
             self.save(connection, case, job["taskId"], "assessment", case["lastAssessment"])
             receipt["caseIds"].append(case["caseId"])
+        self.record_questions(connection, job, result, children, source, now, receipt)
+        receipt["caseIds"] = list(dict.fromkeys(receipt["caseIds"]))
+        return receipt
+
+    def record_questions(self, connection, job, result, children, source, now, receipt, research_only=False):
         for item in result.get("workQuestions", []):
+            if research_only and item["capability"] != "research":
+                continue
             key = case_identity(job["accountId"], job["symbol"], job["worldId"], item["capability"], item["question"])
             case = self.read(connection, key, job["accountId"], job["symbol"], lock=True)
             matching = [child for child in children if child["capability"] == "research" and child.get("question") == item["question"]]
@@ -140,22 +164,32 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if case["capability"] == "research":
                 self.schedule_research(connection, case, job, result, children, now)
             if case["capability"] == "develop-hypothesis":
-                case["development"] = copy.deepcopy(result.get("development", {}))
+                development = result.get("development", {})
+                if development.get("requestedQuestionMatched") is False:
+                    case["hypothesisResolution"] = {"disposition": "defer", "state": "deferred-daily-budget",
+                        "qualification": "not-requested", "at": now,
+                        "reason": "같은 날 먼저 등록된 다른 질문의 실험이 있어 이번 질문의 개발은 보류했습니다."}
+                    case["reason"] = case["hypothesisResolution"]["reason"]
+                else:
+                    case["development"] = copy.deepcopy(development)
                 case["status"] = "waiting"
             self.save(connection, case, job["taskId"], "created", {"executionInputId": source["executionInputId"],
                 "evidenceIds": [row["id"] for row in source["evidence"]]})
             receipt["caseIds"].append(key)
-        receipt["caseIds"] = list(dict.fromkeys(receipt["caseIds"]))
-        return receipt
 
     @staticmethod
     def schedule_research(connection, case, job, result, children, now):
         fingerprint = evidence_change_identity(result["input"], [])
         previous = case.get("lastResearch", {})
-        row = connection.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s", (previous.get("taskId", ""),)).fetchone()
+        from ..domain.research_request import research_intent_identity
+        intent = research_intent_identity(case.get("researchRequest"))
+        row = connection.execute("SELECT status,payload_json FROM ai_control_tasks WHERE task_id=%s", (previous.get("taskId", ""),)).fetchone()
+        previous_intent = previous.get("requestFingerprint") or research_intent_identity(
+            json.loads(row["payload_json"]).get("researchRequest") if row else case.get("researchRequest"))
+        retryable = previous.get("result", {}).get("status") in {"failed", "research-cooldown"}
         reason = ("기존 조사가 진행 중입니다." if row and row["status"] in {"pending", "processing"} else
                   "조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= 3 else
-                  "같은 근거로 조사를 반복하지 않고 새 자료를 기다립니다." if previous.get("inputFingerprint") == fingerprint else
+                  "같은 근거로 조사를 반복하지 않고 새 자료를 기다립니다." if previous.get("inputFingerprint") == fingerprint and previous_intent == intent and not retryable else
                   "조사 재시도 간격을 기다립니다." if previous.get("requestedAt") and later(previous["requestedAt"], 360) > now else "")
         if reason:
             case.update(status="blocked" if case["researchAttempts"] >= 3 else "waiting", reason=reason,
@@ -167,7 +201,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             "researchRequest": copy.deepcopy(case.get("researchRequest", {})),
             "priority": 5, "availableAt": now})
         case.update(status="waiting", researchAttempts=case["researchAttempts"] + 1,
-            lastResearch={"taskId": task_id, "requestedAt": now, "inputFingerprint": fingerprint},
+            lastResearch={"taskId": task_id, "requestedAt": now, "inputFingerprint": fingerprint, "requestFingerprint": intent},
             reason="원래 질문에 연결된 원문 조사를 예약했습니다.")
 
     @staticmethod
@@ -251,6 +285,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "lastAssessment": case.get("lastAssessment", {}), "lastResearch": case.get("lastResearch", {}),
                 "researchAttempts": case["researchAttempts"], "development": case.get("development", {}),
                 "researchRequest": case.get("researchRequest", {}),
+                "hypothesisResolution": case.get("hypothesisResolution", {}),
+                "developmentProgress": case.get("developmentProgress", {}),
                 "authority": "historical-work-status-only"})
         for row in feedback:
             case = json.loads(row["payload_json"])

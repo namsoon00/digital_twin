@@ -50,7 +50,10 @@ def hypothesis_proposal_prompt(context: Dict[str, object]) -> str:
         "당신은 투자 온톨로지의 신규 가설 제안자입니다. 기존 가설로 설명되지 않는 인과 경로만 제안하세요. "
         "입력에 있는 evidence ID만 사용하고 새 사실을 만들지 마세요. 제안은 운영 판단에 즉시 사용되지 않습니다. "
         "출력은 JSON 객체 하나이며 proposals 배열 각 항목은 title, claim, causalPath, supportingEvidenceIds, "
-        "counterEvidenceIds, requiredEvidenceTypes, invalidationConditions를 포함합니다. 유효한 신규 가설이 없으면 빈 배열입니다.\n"
+        "counterEvidenceIds, requiredEvidenceTypes, invalidationConditions를 포함합니다. "
+        "title과 claim은 문자열이고 나머지 필드는 문자열 배열입니다. causalPath는 의미 있는 인과 단계 배열이며 문장 하나나 글자 배열이 아닙니다. "
+        "proposals는 최대 세 개, causalPath/requiredEvidenceTypes는 최대 열두 개, supportingEvidenceIds/counterEvidenceIds는 최대 스무 개, invalidationConditions는 최대 여덟 개입니다. "
+        "유효한 신규 가설이 없으면 빈 배열입니다.\n"
         + json.dumps(context, ensure_ascii=False, sort_keys=True)
     )
 

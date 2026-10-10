@@ -483,7 +483,7 @@ class InsightControlTests(unittest.TestCase):
         saved = store.complete.call_args.args[1]
         self.assertEqual('accepted', saved['quality']['status'])
         self.assertTrue(saved['followUpConditions'])
-        self.assertEqual('independent-observation-review-v6-business-research', service.reviewer.call_args.args[0]['promptVersion'])
+        self.assertEqual('independent-observation-review-v7-question-resolution', service.reviewer.call_args.args[0]['promptVersion'])
         self.assertEqual(OBSERVATION_WORDING_VERSION, saved['wordingVersion'])
         self.assertEqual(OBSERVATION_WORDING_VERSION, service.reviewer.call_args.args[0]['draft']['wordingVersion'])
         self.assertIn(saved['followUpConditions'][0]['description'], render_ai_observation(saved))

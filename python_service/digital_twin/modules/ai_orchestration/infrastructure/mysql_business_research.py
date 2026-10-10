@@ -36,6 +36,12 @@ def record_business(connection, job, result, read, save, now):
         if len(active) >= 2:
             raise ValueError("active business contracts changed after capture")
         case["replaces"] = [row["thesisId"] for row in business.get("reviews", []) if row["disposition"] == "revise"]
+        inherited = []
+        for replaced_id in case["replaces"]:
+            replaced = read(connection, replaced_id, job["accountId"], job["symbol"])
+            inherited.extend(deepcopy(replaced.get("origin", {}).get("sourceQuestions", [])))
+        sources = {row["caseId"]: row for row in inherited + case["origin"].get("sourceQuestions", [])}
+        case["origin"]["sourceQuestions"] = list(sources.values())[:5]
         save(connection, case, job["taskId"], "business-registered", {"contract": deepcopy(thesis), "origin": case["origin"], "replaces": case["replaces"]})
         active.append(case)
         receipt["created"].append(case["caseId"])
@@ -54,7 +60,7 @@ def business_memories(connection, account, symbol, world, now):
         case = json.loads(row["payload_json"])
         records.append({**{key: deepcopy(case[key]) for key in ("caseId", "accountId", "symbol", "worldId", "kind", "status",
             "revision", "contract", "createdAt", "expiresAt", "nextCheckAt", "observations")},
-            "origin": {key: case["origin"][key] for key in ("taskId", "executionInputId", "capturedAt")},
+            "origin": {key: deepcopy(case["origin"][key]) for key in ("taskId", "executionInputId", "capturedAt", "sourceQuestions") if key in case["origin"]},
             "lastReview": {key: deepcopy(value) for key, value in case.get("lastReview", {}).items() if key != "observations"}, "reviewDue": case["nextCheckAt"] <= now,
             "authority": "historical-context-only", "qualification": "not-empirically-qualified"})
     return records

@@ -67,6 +67,14 @@ def executable_research_request(value, account_id=""):
                                      version=value["version"])
 
 
+def research_intent_identity(request):
+    from digital_twin.modules.reasoning.contracts import content_hash
+    request = request or {}
+    return content_hash({"version": "research-intent-v1",
+        "queryTerms": sorted({" ".join(str(term).casefold().split()) for term in request.get("queryTerms", [])}),
+        "sourceTypes": sorted(set(request.get("sourceTypes", []))), "maxAgeMinutes": request.get("maxAgeMinutes", 0)})
+
+
 def continuous_planning_schema(packet, research, bounded_evidence=True, legacy_research=False):
     from .observation_clock import citable_management_schema
     schema = citable_management_schema(packet, research)

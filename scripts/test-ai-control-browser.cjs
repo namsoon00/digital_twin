@@ -7,6 +7,8 @@ const { frontendDependency } = require('./frontend-toolchain.cjs');
 const root = path.resolve(__dirname, '../public');
 const brain = {goals:['미해결 질문을 근거로 재검토합니다.'],cases:[
  {caseId:'question',accountId:'owner',symbol:'TEST',status:'review-needed',question:'오래된 원래 질문을 다시 확인합니다.',researchAttempts:1,
+  hypothesisResolution:{disposition:'experiment',reason:'원래 질문의 반증을 격리 실험으로 확인합니다.'},
+  developmentProgress:{status:'completed',resultStatus:'review-required',cases:[{status:'needs-revision',blockedReason:'흡수력 자료가 부족합니다. <script>bad</script>',dataShapeErrors:['causal-path-character-array']}]},
   origin:{capturedAt:'2026-01-01T00:00:00Z',hypothesis:'처음의 설명 <script>bad</script>',evidence:[{id:'old-fact',value:10}]},
   history:[{status:'review-needed',reason:'조사는 끝났지만 답은 아직 검토 중입니다.',details:{executionInputId:'captured-review',evidenceIds:['new-fact']}}]},
  ...['data','experience'].map((category,index)=>({caseId:'feedback-'+index,accountId:'owner',symbol:'TEST',revision:2,kind:'service-feedback',status:'proposed',category,
@@ -104,6 +106,10 @@ const server = http.createServer((req,res) => {
    await page.getByText('문장별 인용과 검토 기록',{exact:true}).click();
    assert.equal(await page.locator('article script').count(),0);
    assert.match(await page.locator('#brain').innerText(),/오래된 원래 질문/);
+   assert.match(await page.locator('#brain').innerText(),/격리 실험 요청/);
+   assert.match(await page.locator('#brain').innerText(),/흡수력 자료가 부족합니다/);
+   assert.match(await page.locator('#brain').innerText(),/이전 인과경로 저장 형식에 오류/);
+   assert.equal(await page.locator('#brain script').count(),0);
    await page.getByText(/처음 생긴 이유와 근거 ·/).first().click();
    assert.match(await page.locator('#brain').innerText(),/처음의 설명 <script>bad<\/script>/);
    await page.getByText('진행과 평가 이력',{exact:true}).first().click();

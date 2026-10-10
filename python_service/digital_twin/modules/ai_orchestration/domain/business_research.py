@@ -240,6 +240,9 @@ def thesis_case(job, result, thesis, now):
         "expiresAt": (clock(now) + timedelta(days=thesis["horizonDays"])).isoformat().replace("+00:00", "Z"),
         "nextCheckAt": (clock(now) + timedelta(days=7)).isoformat().replace("+00:00", "Z"),
         "origin": {"taskId": job["taskId"], "executionInputId": result["executionInputId"],
+            "sourceQuestions": [deepcopy(row["sourceQuestion"]) for row in result.get("questionResolutions", [])
+                if row["disposition"] == "business-thesis"
+                and result["businessResearch"]["theses"][row["targetIndex"]] == thesis],
             "capturedAt": result["input"]["capturedAt"], "sourceSnapshots": result["input"]["sourceSnapshots"],
             "evidence": evidence}, "observations": [], "reason": "사업 가설을 등록하고 다음 공시와 반증을 기다립니다.",
         "authority": "research-only", "qualification": "not-empirically-qualified"}

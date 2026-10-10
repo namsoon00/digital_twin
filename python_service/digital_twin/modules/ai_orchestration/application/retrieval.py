@@ -6,7 +6,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, cont
 from digital_twin.modules.ai_orchestration.domain.brain_management import required_case_memory
 from digital_twin.modules.ai_orchestration.domain.continuity import continuity_memory, merge_recalled
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
-    MAX_ROUNDS, MAX_CORRECTIONS, MAX_RESULT_BYTES, freeze_retrieval_input,
+    MAX_ROUNDS, MAX_CORRECTIONS, MAX_RESULT_BYTES, MAX_TOTAL_RESULT_BYTES, freeze_retrieval_input,
     validate_read_decision, trace_summary, response_audit, ReadRequestError,
 )
 from .read_tools import ObservationReadTools
@@ -50,7 +50,8 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
             raise RetrievalLeaseLost()
 
     for round_index in range(rounds):
-        context.update(tools.context(), trace=trace, callsRemainingAfterThis=rounds - round_index - 1)
+        context.update(tools.context(), trace=trace, callsRemainingAfterThis=rounds - round_index - 1,
+                       resultBudgetBytesRemaining=MAX_TOTAL_RESULT_BYTES - used)
         try:
             envelope = freeze_retrieval_input(current, context, prompt_bytes)
         except EvidenceContractError:
@@ -95,7 +96,9 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
                 seen.add(key)
                 response = tools.read(plan)
                 size = len(json.dumps(response, ensure_ascii=False, allow_nan=False).encode())
-                if used + size > MAX_RESULT_BYTES:
+                if size > MAX_RESULT_BYTES or used + size > MAX_TOTAL_RESULT_BYTES:
+                    # A rejected page must not expose a cursor to unseen data.
+                    tools.cursors.pop(response.get("nextCursor"), None)
                     response = {"status": "context-budget", "facts": [], "omittedResultHash": content_hash(response)}
                 else:
                     used += size

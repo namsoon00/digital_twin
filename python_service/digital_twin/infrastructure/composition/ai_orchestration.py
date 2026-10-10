@@ -104,9 +104,14 @@ def build_ai_control_service(settings=None):
     store.agenda_writer, store.agenda_failure = agenda.record, agenda.failed
     from digital_twin.infrastructure.transactions.ai_observation_wake import AIObservationEvidenceWake
     evidence_wake = AIObservationEvidenceWake(configured)
+    def wake_brain(subjects):
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_question_resolution import refresh_development
+        refresh_development(agenda, subjects, development.progress)
+        agenda.wake_due(subjects)
+
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
-                            brain_memory=agenda.memory, brain_waker=agenda.wake_due, read_planner=planner,
+                            brain_memory=agenda.memory, brain_waker=wake_brain, read_planner=planner,
                             evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory)
 
 

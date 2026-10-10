@@ -503,6 +503,7 @@
     }
   },
   "storage": {
+    "modules/news_intelligence/infrastructure/mysql_investment_research.py::MySQLInvestmentResearchStore": {"hash": "d197d514309835d36668aa2e5ceafc073355e7018ba9fad2f79d6a245e5adb1a", "reason": "Fence proposal completion and renewal by owner, attempt and live lease; retain saved proposals for exact question retries. Covered by test_ai_brain_agenda question_resolution_checks and test_ai_ontology_development; docs/ai-control.md."},
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.next_lane": {
       "hash": "00ab215e2c38d330a5a9f3d04be0a1f82200c48571c24fd3fc983b61cfe5eaee",
       "reason": "Extract the unchanged, bounded lane wait threshold for reuse by claims; test_reasoning_job_fences verifies old-work priority."

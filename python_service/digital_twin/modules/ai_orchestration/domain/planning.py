@@ -35,12 +35,12 @@ def observation_fingerprint(packet, research):
     return evidence_change_identity(packet, research, packet.get("questionsToCheck", []))
 
 
-def validate_plan(value, packet, research=(), require_research=False):
+def validate_plan(value, packet, research=(), require_research=False, require_resolution=False):
     if not isinstance(value, dict):
         raise ValueError("AI plan must be an object")
     # No model-authored account, symbol, command, source URL or action is executable.
     allowed = {"summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questions", "nextCheckMinutes", "notification",
-               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback", "businessResearch"}
+               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback", "businessResearch", "questionResolutions"}
     if set(value) - allowed:
         raise ValueError("AI plan contains unsupported fields")
     known = {str(row["id"]) for row in packet.get("facts", []) if row.get("id")}
@@ -105,6 +105,9 @@ def validate_plan(value, packet, research=(), require_research=False):
     if "businessResearch" in value:
         from .business_research import validate_business
         result["businessResearch"] = validate_business(value["businessResearch"], packet, research)
+    if "questionResolutions" in value or require_resolution:
+        from .question_resolution import validate_resolutions
+        result["questionResolutions"] = validate_resolutions(value.get("questionResolutions"), packet, research, result, required=require_resolution)
     return result
 
 

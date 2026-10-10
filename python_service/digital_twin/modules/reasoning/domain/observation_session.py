@@ -85,7 +85,21 @@ class ObservationEvidenceSession:
         return {"facts": result, "available": len(rows), "nextOffset": end if end < len(rows) else None,
                 "omitted": omitted, "sourceSnapshots": deepcopy(self._packet["sourceSnapshots"])}
 
-    def select(self, fact_ids):
+    def report_index(self):
+        from .observation_report_view import report_metrics
+        return [{"factId": row["id"], "periodEnd": row.get("periodEnd"), "frequency": row.get("frequency"),
+                 "metrics": report_metrics(row), "bytes": len(canonical_json(row).encode())}
+                for row in sorted(self._facts.values(), key=lambda x: (-source_clock(x), x["id"]))
+                if row.get("kind") == "company-financial-state"][:32]
+
+    def read_report(self, fact_id, metrics):
+        from .observation_report_view import report_view
+        if fact_id not in self._facts:
+            raise EvidenceContractError("unknown report evidence")
+        return {"facts": [report_view(self._facts[fact_id], metrics)], "nextCursor": None,
+                "sourceSnapshots": deepcopy(self._packet["sourceSnapshots"])}
+
+    def select(self, fact_ids, views=None):
         """Keep quote and the v2 bounded macro baseline alongside requested facts."""
         selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] == "stock"
             or (self._packet["profile"] == EVIDENCE_PROFILE and row["evidenceCategory"] == "macro")}
@@ -93,6 +107,15 @@ class ObservationEvidenceSession:
             raise EvidenceContractError("unknown selected evidence")
         packet = self.packet()
         packet["facts"] = [deepcopy(row) for row in self._facts.values() if row["id"] in selected]
+        if views:
+            from .observation_report_view import report_view
+            for index, row in enumerate(packet["facts"]):
+                view = views.get(row["id"])
+                if view is not None and view != row:
+                    exact = report_view(row, view.get("evidenceView", {}).get("metrics"))
+                    if exact != view:
+                        raise EvidenceContractError("report view changed captured evidence")
+                    packet["facts"][index] = deepcopy(exact)
         for category, coverage in packet["coverage"].items():
             if category == "unclassified":
                 continue

@@ -2,7 +2,9 @@
 from datetime import datetime, timedelta, timezone
 from digital_twin.modules.ai_orchestration.domain.continuity import judgment_continuity
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceReadError, ObservationEvidenceSession
-from digital_twin.modules.ai_orchestration.application.retrieval import retrieve_evidence, RetrievalLeaseLost, RetrievalContractFailure
+from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
+from .working_retrieval import retrieve_working_evidence
+from ..domain.observation_wait import retry_key, disposition, unchanged_wait
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
@@ -79,6 +81,10 @@ class AIControlService:
                     packet["followUpEvaluations"] = evaluate_observation_conditions(packet, packet["lastDeliveredNotification"],
                         (history[0] if history else {}).get("followUpEvaluations", []))
                     fingerprint = observation_fingerprint(packet, research)
+                    retry_identity = retry_key(packet, research)
+                    previous_outcome = getattr(self.store, "last_processing_outcome", lambda *_: {})(job["accountId"], job["symbol"])
+                    if unchanged_wait(previous_outcome, retry_identity) and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"]):
+                        return self.complete_wait(job, packet, previous_outcome, [], "unchanged-wait")
                     previous = history[0] if history else {}
                     from digital_twin.modules.ai_orchestration.domain.brain_management import due_memory
                     if (not due_memory(research) and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis") and previous.get("inputFingerprint") == fingerprint and previous.get("observedAt")
@@ -96,10 +102,17 @@ class AIControlService:
                     retrieval_trace = []
                     stage = "evidence-retrieval"
                     if session and self.read_planner:
-                        packet, history, research, retrieval_trace = retrieve_evidence(session, packet, history, research,
+                        packet, history, research, retrieval_trace = retrieve_working_evidence(session, packet, history, research,
                             self.read_planner, lambda value: self.store.save_execution_input(job, value),
                             self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget(),
                             record_round=lambda step: self.store.save_retrieval_round(job, step))
+                        if packet["retrieval"]["status"] != "ready":
+                            missing = [item for step in retrieval_trace for item in (step.get("decision") or {}).get("missingEvidence", [])]
+                            blocked = (not missing or packet["retrieval"]["status"] == "context-budget" or any(
+                                read["result"].get("status") in {"context-budget", "repeated-read"} for step in retrieval_trace for read in step["reads"]))
+                            state = disposition(packet, retry_identity, "retrieval-blocked" if blocked else "data-wait",
+                                missing or ["조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다."])
+                            return self.complete_wait(job, packet, state, retrieval_trace)
                     from ..domain.business_research import evaluate_thesis
                     from copy import deepcopy
                     business_memory = []
@@ -172,6 +185,9 @@ class AIControlService:
                     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
                         result["dataRecovery"] = {"status": "awaiting-next-observation", "reasonCode": "condition-baseline-unusable",
                                                   "sameSnapshotRepairSkipped": True}
+                    result["processingOutcome"] = disposition(packet, retry_identity,
+                        "data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready",
+                        result["quality"].get("errors", []))
                     children = []
                     for question in result["researchQuestions"]:
                         request = next((item.get("researchRequest", {}) for item in result["workQuestions"]
@@ -217,3 +233,15 @@ class AIControlService:
     @staticmethod
     def subject(job):
         return {key: job[key] for key in ("accountId", "symbol", "name", "worldId")}
+
+    def complete_wait(self, job, packet, outcome, trace, status="awaiting-evidence"):
+        # No authored judgment, case resolution, hypothesis or notification is
+        # manufactured from an incomplete read. Only the leased task advances.
+        result = {"status": status, "processingOutcome": outcome, "input": packet,
+                  "retrievalInputIds": [row["inputId"] for row in trace],
+                  "followUpEvaluations": packet.get("followUpEvaluations", []),
+                  "resumption": observation_resume(job, packet)}
+        child = {**self.subject(job), "capability": "observe", "watchQuestions": job.get("watchQuestions", []),
+                 "taskId": identity(job["taskId"], "wait"), "availableAt": outcome["retryAt"]}
+        saved = self.store.complete(job, result, [child])
+        return {"status": status if saved else "lease-lost", "taskId": job["taskId"]}

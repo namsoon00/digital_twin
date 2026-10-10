@@ -245,6 +245,21 @@ class RetrievalAuditStorageTests(unittest.TestCase):
             c.execute("DELETE FROM ai_control_inputs WHERE input_id=%s", (rounds[0]["inputId"],))
             remaining = c.execute("SELECT COUNT(*) AS n FROM ai_control_retrieval_rounds").fetchone()["n"]
         self.assertEqual(1, remaining)
+        from digital_twin.modules.ai_orchestration.application.working_retrieval import retrieve_working_evidence
+        from digital_twin.modules.ai_orchestration.domain.observation_wait import disposition
+        from working_evidence_checks import decision
+        captured, _ = session()
+        packet = {**captured.packet(), "taskId": self.job["taskId"]}
+        final, _, _, trace = retrieve_working_evidence(captured, packet, [], [],
+            Mock(return_value=decision("defer", missing=["동일 보고 기간의 원문이 필요합니다."])),
+            lambda value: self.store.save_execution_input(self.job, value), 262144,
+            record_round=lambda step: self.store.save_retrieval_round(self.job, step))
+        self.assertTrue(reloaded.save_retrieval_round(self.job, trace[0]))
+        self.store.outbox_writer = Mock()
+        state = disposition(final, "retry-key", "data-wait", ["공식 자료 필요"])
+        self.assertTrue(self.store.complete(self.job, {"status": "awaiting-evidence", "processingOutcome": state}, []))
+        self.store.outbox_writer.assert_not_called()
+        self.assertEqual(state, self.store.last_processing_outcome(SUBJECT["accountId"], SUBJECT["symbol"]))
 
     def test_stale_attempt_lease_and_foreign_input_cannot_write_an_audit(self):
         _, rounds = self.record_failure()

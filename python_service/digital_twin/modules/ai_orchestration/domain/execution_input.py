@@ -14,6 +14,7 @@ from digital_twin.modules.ai_orchestration.domain.research_request import contin
 from digital_twin.modules.ai_orchestration.domain.observation_wording import readable_planning_prompt, readable_review_prompt
 from .business_research import business_prompt, business_schema, business_review_prompt
 from .question_resolution import resolution_prompt, resolution_schema, resolution_review_prompt
+from . import working_retrieval
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
     LEGACY_RETRIEVAL_PROMPT_VERSION, legacy, validate_trace,
@@ -105,6 +106,17 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
+    if envelope.get("promptVersion") == working_retrieval.VERSION:
+        if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL:
+            raise EvidenceContractError("unsupported AI execution input")
+        validate_evidence_packet(envelope["current"])
+        working_retrieval.validate_trace(envelope["retrievalContext"].get("trace", []))
+        prompt = working_retrieval.prompt(envelope["current"], envelope["retrievalContext"])
+        if (prompt != envelope["prompt"] or hashlib.sha256(prompt.encode()).hexdigest() != envelope["promptHash"]
+                or envelope["outputSchema"] != working_retrieval.schema(envelope["retrievalContext"])
+                or len(prompt.encode()) > prompt_budget(envelope.get("promptBudgetBytes"))):
+            raise EvidenceContractError("frozen working retrieval input mismatch")
+        return content_hash(envelope)
     if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {BUSINESS_REVIEW_PROMPT_VERSION, BUSINESS_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION, PROMPT_VERSION, READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, READABLE_REVIEW_PROMPT_VERSION, FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION, LEGACY_RETRIEVAL_PROMPT_VERSION}:
         raise EvidenceContractError("unsupported AI execution input")
     validate_evidence_packet(envelope["current"])
@@ -150,8 +162,13 @@ def validate_execution_input(envelope):
         if directed and envelope["current"].get("retrieval"):
             trace = envelope.get("retrievalTrace", [])
             version = envelope["current"]["retrieval"]["version"]
-            validate_trace(trace, version)
-            if trace_summary(trace, envelope["current"]["retrieval"]["status"], version) != envelope["current"]["retrieval"]:
+            if version == working_retrieval.VERSION:
+                working_retrieval.validate_trace(trace)
+                summary = working_retrieval.trace_summary(trace, envelope["current"]["retrieval"]["status"])
+            else:
+                validate_trace(trace, version)
+                summary = trace_summary(trace, envelope["current"]["retrieval"]["status"], version)
+            if summary != envelope["current"]["retrieval"]:
                 raise EvidenceContractError("retrieval trace does not match input")
     if prompt != envelope["prompt"] or hashlib.sha256(prompt.encode()).hexdigest() != envelope["promptHash"]:
         raise EvidenceContractError("frozen AI prompt does not match input")

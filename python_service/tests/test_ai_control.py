@@ -62,6 +62,15 @@ class AIControlTests(unittest.TestCase):
                                    {"notificationAiQueueWorkerCount": 1})
         for key, value in kwargs.items():
             setattr(service, key, value)
+        if service.read_planner:
+            original_read = service.read_planner
+            def working_read(envelope, input_id):
+                value = original_read(envelope, input_id)
+                if isinstance(value, dict) and "action" in value and "selectedFactIds" not in value:
+                    value = {**value, "selectedFactIds": [x["factId"] for x in envelope["retrievalContext"]["knownFacts"]],
+                             "missingEvidence": ["확인할 자료가 부족합니다."] if value["action"] == "defer" else []}
+                return value
+            service.read_planner = Mock(side_effect=working_read)
         return service, store, planner
 
     def test_rule_independent_plan_keeps_hypothesis_and_bounded_schedule(self):

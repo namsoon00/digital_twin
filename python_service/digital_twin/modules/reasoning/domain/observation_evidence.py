@@ -14,6 +14,7 @@ EVIDENCE_PROTOCOL = "observation-evidence-v1"
 LEGACY_EVIDENCE_PROFILE = "independent-observation-v1"
 MACRO_EVIDENCE_PROFILE = "independent-observation-v2-macro-prints"
 EVIDENCE_PROFILE = "independent-observation-v3-business-research"
+EVIDENCE_PACKET_MAX_BYTES = 96000
 
 
 class EvidenceContractError(ValueError):
@@ -237,5 +238,5 @@ def validate_evidence_packet(packet):
         raise EvidenceContractError("required quote evidence missing")
     if "quoteAssessment" in packet and packet["quoteAssessment"] != quote_clock_assessment(facts, packet["capturedAt"]):
         raise EvidenceContractError("quote assessment does not match source clock")
-    if len(canonical_json(packet).encode()) > 96000:
+    if len(canonical_json(packet).encode()) > EVIDENCE_PACKET_MAX_BYTES:
         raise EvidenceContractError("observation evidence exceeds context budget")

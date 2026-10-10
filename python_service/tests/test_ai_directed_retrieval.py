@@ -59,6 +59,8 @@ class DirectedRetrievalTests(unittest.TestCase):
         return result, envelopes, model, source
 
     def test_captured_inventory_can_read_a_whole_fact_excluded_by_old_category_budget(self):
+        from working_evidence_checks import check_working_evidence
+        check_working_evidence(self)
         captured, source = session()
         self.assertNotIn(SUBJECT["worldId"] + ":f1", {fact["id"] for fact in captured.packet()["facts"]})
         first = captured.read("company", limit=1)

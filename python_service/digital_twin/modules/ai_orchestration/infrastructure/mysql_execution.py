@@ -67,7 +67,7 @@ class AIExecutionPersistence:
                  job["taskId"], job["leaseToken"], now)).rowcount)
 
     def record_observation_progress(self, connection, job, result, now):
-        if job["capability"] != "observe" or not (result.get("summary") or result.get("status") == "unchanged"):
+        if job["capability"] != "observe" or not (result.get("summary") or result.get("status") in {"unchanged", "awaiting-evidence", "unchanged-wait"}):
             return
         clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
         state = self._locked_execution_state(connection, PROGRESS, clock)

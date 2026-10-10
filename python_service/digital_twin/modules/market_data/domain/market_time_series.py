@@ -416,6 +416,16 @@ def completed_daily_rows(rows: Iterable[Dict[str, object]], snapshot_at: str) ->
     completed = []
     for raw in rows or []:
         row = dict(raw or {})
+        source_at = parse_timestamp(row.get("sourceAsOf") or row.get("source_as_of"))
+        available_at = parse_timestamp(row.get("generatedAt") or row.get("observedAt") or row.get("observed_at"))
+        # Provider daily candles already carry the completed session's close
+        # and the time it became known. Do not wait for local midnight, which
+        # otherwise changes a price path while the quote itself is unchanged.
+        provider_candle = str(row.get("source") or row.get("sourceRole") or row.get("source_role") or "") == "market-history"
+        if provider_candle and str(row.get("dataQuality") or row.get("data_quality") or "") == "actual" and source_at:
+            if available_at and source_at <= cutoff and available_at <= cutoff:
+                completed.append(row)
+            continue
         market = row.get("market") or ""
         currency = row.get("currency") or ""
         cutoff_session = market_session_date(cutoff, market, currency)

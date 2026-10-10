@@ -198,10 +198,12 @@ def customer_safe_text(value: object) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    score_spans = [(match.start(), match.end()) for match in re.finditer(r"모델 점수[^\n]*?\(확률 아님\)", text)]
     text = re.sub(
         r"(?<![\d.])(-?\d+\.\d{3,})(?!\d)",
         # A small measured quantity/ratio must not turn into an observed zero.
-        lambda match: (match.group(1) if 0 < abs(float(match.group(1))) < .01 else
+        lambda match: (match.group(1) if any(start <= match.start() < end for start, end in score_spans)
+                       or 0 < abs(float(match.group(1))) < .01 else
                        (f"{float(match.group(1)):.2f}").rstrip("0").rstrip(".")),
         text,
     )

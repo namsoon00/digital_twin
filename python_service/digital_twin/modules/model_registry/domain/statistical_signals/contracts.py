@@ -14,6 +14,10 @@ SIGNAL_ELIGIBILITY_CONTRACT_VERSION = "statistical-signal-eligibility-v1"
 MODEL_HYPOTHESIS_ASSESSMENT_CONTRACT_VERSION = "model-hypothesis-assessment-v1"
 
 
+def signal_strength_floor(band):
+    return {"strong": 0.70, "moderate": 0.40, "weak": 0.0}.get(band)
+
+
 def _text(value: object) -> str:
     return " ".join(str(value or "").strip().split())
 
@@ -234,8 +238,8 @@ class ModelSignal:
         }
         digest = payload_hash(material)
         strength_band = (
-            "strong" if float(material["score"]) >= 0.70
-            else "moderate" if float(material["score"]) >= 0.40
+            "strong" if float(material["score"]) >= signal_strength_floor("strong")
+            else "moderate" if float(material["score"]) >= signal_strength_floor("moderate")
             else "weak"
         )
         return cls(

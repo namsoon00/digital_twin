@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Optional, Union
 from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import active_material_fingerprint
+from digital_twin.modules.reasoning.domain.hypothesis_change_observations import attach_model_observations
 from digital_twin.modules.reasoning.domain.ontology_worlds import world_metadata
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Dict, List
@@ -134,6 +135,7 @@ def reuse_inference(
                     or material_snapshot_id
                 ),
             )
+        attach_model_observations(result, persistence_graph, inference_symbols)
         _store.store_projection_result(snapshot, result)
         return CompletedProjection(result)
 

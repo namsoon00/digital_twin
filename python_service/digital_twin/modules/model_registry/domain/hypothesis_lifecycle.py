@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -19,9 +19,12 @@ from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts impor
 from digital_twin.modules.model_registry.domain.hypothesis_evidence_comparison import (
     availability_change, availability_for_traces, condition_evidence_rows,
 )
+from digital_twin.modules.model_registry.domain.hypothesis_change_basis import (
+    lifecycle_observation_basis, compare_change_basis, legacy_observation_basis,
+)
 
 
-HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v5"
+HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v6"
 HYPOTHESIS_LIFECYCLE_KEY_VERSION = "v2"
 HYPOTHESIS_LIFECYCLE_KEY_PREFIX = HYPOTHESIS_LIFECYCLE_KEY_VERSION + ":"
 HYPOTHESIS_LIFECYCLE_STATES = (
@@ -41,7 +44,7 @@ HYPOTHESIS_LIFECYCLE_STATE_LABELS = {
     "invalidated": "가설 무효화",
     "expired": "근거 유효기간 만료",
 }
-RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v2"
+RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v3"
 RELATION_LIFECYCLE_CHANGE_KINDS = {
     "observed": "created",
     "maintained": "maintained",
@@ -268,6 +271,7 @@ class HypothesisLifecycleSnapshot:
     semantic_fingerprint: str = ""
     evidence_details: Dict[str, Dict[str, object]] = field(default_factory=dict)
     data_availability: Dict[str, object] = field(default_factory=dict)
+    observation_basis: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return _camelize(asdict(self))
@@ -310,6 +314,7 @@ class HypothesisLifecycleSnapshot:
             semantic_fingerprint=_text(payload.get("semanticFingerprint") or payload.get("semantic_fingerprint")),
             evidence_details=dict(payload.get("evidenceDetails") or payload.get("evidence_details") or {}),
             data_availability=dict(payload.get("dataAvailability") or payload.get("data_availability") or {}),
+            observation_basis=dict(payload.get("observationBasis") or payload.get("observation_basis") or legacy_observation_basis(payload)),
         )
 
 
@@ -396,6 +401,7 @@ class HypothesisLifecycleTransition:
     version: str = HYPOTHESIS_LIFECYCLE_VERSION
     data_availability_change: Dict[str, object] = field(default_factory=dict)
     evidence_changes: List[Dict[str, object]] = field(default_factory=list)
+    change_basis: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = _camelize(asdict(self))
@@ -429,6 +435,7 @@ class HypothesisLifecycleTransition:
             version=_text(payload.get("version")) or HYPOTHESIS_LIFECYCLE_VERSION,
             data_availability_change=dict(payload.get("dataAvailabilityChange") or payload.get("data_availability_change") or {}),
             evidence_changes=list(payload.get("evidenceChanges") or payload.get("evidence_changes") or []),
+            change_basis=dict(payload.get("changeBasis") or payload.get("change_basis") or {}),
         )
 
 
@@ -696,6 +703,7 @@ def lifecycle_snapshots_from_relation_context(
                 and semantic_graph_row_key(evidence_rows[identity], kind)
             },
             data_availability=availability_for_traces(member_traces, profiles, policy.get("requiredFreshnessDomains") or []),
+            observation_basis=lifecycle_observation_basis(context),
         )
 
     market_hypotheses = [item for item in hypothesis_set.get("marketHypotheses") or [] if isinstance(item, dict)]
@@ -933,7 +941,8 @@ def state_for_delta(previous: HypothesisLifecycleRecord, delta: Mapping[str, Seq
     removed_counter = bool(material_delta_values(delta, "removedCounterEvidenceKeys"))
     removed_conditions = bool(material_delta_values(delta, "removedFormationConditionIds"))
     if (added_support or removed_counter) and not (removed_support or added_counter or removed_conditions):
-        return "strengthened", "새 지지 근거 또는 인과 경로가 추가되었습니다."
+        return "strengthened", ("반대 근거의 조건이 해제되었습니다." if removed_counter and not added_support
+                                else "새 지지 근거 또는 인과 경로가 추가되었습니다.")
     if removed_support or added_counter or removed_conditions:
         return "weakened", "지지 근거가 줄었거나 반대 근거가 추가되었습니다."
     return "maintained", "동일한 TypeDB 인과 경로가 다음 세대에서도 유지되었습니다."
@@ -955,6 +964,23 @@ def record_for_snapshot(
     delta = evidence_delta(previous, snapshot) if previous else {}
     material_change = has_material_delta(delta)
     before = HypothesisLifecycleSnapshot.from_dict(previous.snapshot) if previous else None
+    changed_rule_ids = {
+        details[key].get("ruleId")
+        for delta_key, details in (
+            ("addedSupportingEvidenceKeys", snapshot.evidence_details),
+            ("removedSupportingEvidenceKeys", before.evidence_details if before else {}),
+            ("addedCounterEvidenceKeys", snapshot.evidence_details),
+            ("removedCounterEvidenceKeys", before.evidence_details if before else {}),
+        ) for key in material_delta_values(delta, delta_key) if key in details and details[key].get("ruleId")
+    }
+    if before and previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
+        changed_rule_ids.update(snapshot.source_rule_ids)
+    removed = any(material_delta_values(delta, key) for key in (
+        "removedSupportingEvidenceKeys", "removedCounterEvidenceKeys", "removedCausalPathKeys"))
+    change_basis = compare_change_basis(before.observation_basis if before else {}, snapshot.observation_basis,
+                                        changed_rule_ids, removed=removed) if changed_rule_ids and before else {}
+    if change_basis.get("category") == "data-unavailable":
+        snapshot = replace(snapshot, data_availability={"state": "unavailable", "reasons": [change_basis["reason"]]})
     data_change = availability_change(before.data_availability if before else {}, snapshot.data_availability)
     if (not before or before.data_availability.get("state") not in {"usable", "unavailable"}) and snapshot.data_availability.get("state") == "unavailable":
         data_change = {"previousState": "unknown", "currentState": "unavailable", "kind": "data-unavailable",
@@ -962,7 +988,7 @@ def record_for_snapshot(
                        "reasons": list(snapshot.data_availability.get("reasons") or [])}
     if invalidation:
         state, reason = "invalidated", invalidation
-    elif expiry and not expiry.startswith("RuleBox 유효기간 ") and snapshot.data_availability.get("state") == "unavailable" and before:
+    elif snapshot.data_availability.get("state") == "unavailable" and before and not expiry.startswith("RuleBox 유효기간 "):
         # Losing usable data does not falsify a still-materialized hypothesis.
         state, reason = "maintained", "자료 사용이 보류돼 이전 가설의 판단을 유지합니다."
         material_change = False
@@ -973,6 +999,9 @@ def record_for_snapshot(
         reason = "TypeDB 가설 경로가 정상 추론 세대에서 관찰되었습니다."
     else:
         state, reason = state_for_delta(previous, delta)
+    if change_basis.get("category") == "reassessment":
+        reason = change_basis["reason"]
+        material_change = False
     if previous and previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES and state == previous.state:
         # Evidence churn cannot turn an already terminal path into another
         # material transition. A genuine recovery changes the state to
@@ -997,7 +1026,7 @@ def record_for_snapshot(
         last_observed_at=stamp,
         last_transition_at=(
             stamp
-            if not previous or previous.state != state or material_change or data_change
+            if not previous or previous.state != state or material_change or data_change or change_basis.get("category") == "reassessment"
             else previous.last_transition_at
         ),
         inference_generation_id=snapshot.inference_generation_id,
@@ -1007,10 +1036,11 @@ def record_for_snapshot(
         transition_reason=reason,
         material_change=material_change,
         evidence_delta=delta,
-        snapshot=snapshot.to_dict(),
+        snapshot=({**previous.snapshot, "dataAvailability": snapshot.data_availability}
+                  if before and snapshot.data_availability.get("state") == "unavailable" else snapshot.to_dict()),
     )
     previous_state = previous.state if previous else ""
-    changed = not previous or previous.state != record.state or record.material_change or bool(data_change)
+    changed = not previous or previous.state != record.state or record.material_change or bool(data_change) or change_basis.get("category") == "reassessment"
     if not changed:
         return record, None
     transition = HypothesisLifecycleTransition(
@@ -1035,6 +1065,7 @@ def record_for_snapshot(
         evidence_delta=record.evidence_delta,
         record=record.to_dict(),
         data_availability_change=data_change,
+        change_basis=change_basis,
         evidence_changes=[
             {"change": change, "role": role, "evidence": dict(details[key])}
             for change, role, delta_key, details in (
@@ -1053,12 +1084,22 @@ def record_for_absent_snapshot(
     previous: HypothesisLifecycleRecord,
     observed_at: str,
     expiry_reason: str = "",
+    current_basis: Optional[Dict[str, object]] = None,
 ) -> Tuple[HypothesisLifecycleRecord, Optional[HypothesisLifecycleTransition]]:
     """Resolve disappearance only after the caller proves the generation is healthy."""
 
     if previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
         return previous, None
     stamp = canonical_timestamp(observed_at, utc_now_iso())
+    prior = HypothesisLifecycleSnapshot.from_dict(previous.snapshot)
+    change_basis = compare_change_basis(
+        prior.observation_basis, current_basis or {}, prior.source_rule_ids, removed=True,
+        require_model_proof="model-signal" in (prior.policy.get("requiredFreshnessDomains") or []),
+    ) if current_basis is not None else {}
+    if change_basis.get("category") == "data-unavailable" and not expiry_reason.startswith("RuleBox 유효기간 "):
+        expiry_reason = change_basis["reason"]
+    if expiry_reason.startswith("RuleBox 유효기간 "):
+        change_basis = {}
     if expiry_reason and not expiry_reason.startswith("RuleBox 유효기간 "):
         prior = HypothesisLifecycleSnapshot.from_dict(previous.snapshot)
         availability = {"state": "unavailable", "reasons": [expiry_reason]}
@@ -1077,10 +1118,11 @@ def record_for_absent_snapshot(
             previous_state=previous.state, current_state=record.state, occurred_at=stamp,
             previous_generation_id=previous.inference_generation_id, reason=change["summary"],
             data_availability_change=change, record=record.to_dict(),
+            change_basis=change_basis,
         )
         return record, transition
     state = "expired" if expiry_reason else "invalidated"
-    reason = expiry_reason or "정상·정렬된 TypeDB 추론 세대에서 이전 인과 경로가 더 이상 물질화되지 않았습니다."
+    reason = expiry_reason or (change_basis.get("reason") if change_basis.get("category") == "reassessment" else "정상·정렬된 TypeDB 추론 세대에서 이전 인과 경로가 더 이상 물질화되지 않았습니다.")
     record = HypothesisLifecycleRecord(
         **{
             **asdict(previous),
@@ -1091,8 +1133,9 @@ def record_for_absent_snapshot(
             "inference_generation_id": "",
             "inference_generation_at": stamp,
             "transition_reason": reason,
-            "material_change": True,
+            "material_change": change_basis.get("category") != "reassessment",
             "evidence_delta": {"removedActivePath": list(previous.snapshot.get("causalPathIds") or [])},
+            "snapshot": {**previous.snapshot, "observationBasis": current_basis} if current_basis is not None else previous.snapshot,
         }
     )
     transition = HypothesisLifecycleTransition(
@@ -1106,7 +1149,8 @@ def record_for_absent_snapshot(
         inference_generation_id="",
         previous_generation_id=previous.inference_generation_id,
         reason=reason,
-        material_change=True,
+        material_change=record.material_change,
+        change_basis=change_basis,
         evidence_delta=record.evidence_delta,
         record=record.to_dict(),
     )
@@ -1179,6 +1223,8 @@ def relation_lifecycle_transition_contract(value: Mapping[str, object]) -> Dict[
     }
     def transition_is_material(item: Mapping[str, object]) -> bool:
         state = _text(item.get("currentState") or item.get("current_state"))
+        if (item.get("changeBasis") or {}).get("category") in {"reassessment", "data-unavailable"}:
+            return False
         if item.get("dataAvailabilityChange") and not item.get("materialChange") and state in {"observed", "expired", "maintained"}:
             return False
         # A newly observed, invalidated, or expired path is independently
@@ -1203,8 +1249,12 @@ def relation_lifecycle_transition_contract(value: Mapping[str, object]) -> Dict[
     material = transition_is_material(selected)
     data_change = dict(selected.get("dataAvailabilityChange") or {})
     data_only = bool(data_change) and not material
+    change_basis = dict(selected.get("changeBasis") or {})
+    reassessment = change_basis.get("category") == "reassessment" and not material
     if data_only:
         change_kind = _text(data_change.get("kind"))
+    elif reassessment:
+        change_kind = "reassessed"
     material_transitions = [
         item
         for item in transitions
@@ -1212,12 +1262,13 @@ def relation_lifecycle_transition_contract(value: Mapping[str, object]) -> Dict[
     ]
     return {
         "version": RELATION_LIFECYCLE_TRANSITION_VERSION,
-        "status": "changed" if material or data_only else "maintained",
+        "status": "changed" if material or data_only or reassessment else "maintained",
         "changeKind": change_kind,
-        "changeLabel": {"data-unavailable": "자료 확인 필요", "data-restored": "자료 복구"}.get(change_kind) or RELATION_LIFECYCLE_CHANGE_LABELS.get(change_kind, change_kind),
+        "changeLabel": {"data-unavailable": "자료 확인 필요", "data-restored": "자료 복구", "reassessed": "분석 조건 재평가"}.get(change_kind) or RELATION_LIFECYCLE_CHANGE_LABELS.get(change_kind, change_kind),
         "material": material,
-        "deliverable": material or data_only,
-        "changeCategory": "data-availability" if data_only else "relation",
+        "deliverable": material or data_only or reassessment,
+        "changeCategory": "data-availability" if data_only else "reassessment" if reassessment else "relation",
+        "changeBasis": change_basis,
         "dataAvailabilityChange": data_change,
         "evidenceChanges": list(selected.get("evidenceChanges") or []),
         "transitionId": _text(selected.get("transitionId") or selected.get("transition_id")),

@@ -298,6 +298,12 @@ def add_position_statistical_signal_concepts(
                     (_mapping(signal.get("inputFeatures"))).get("evidenceIds") or []
                 )[:64],
                 "sourceTemporalWindows": list(_mapping(signal.get("inputFeatures")).get("sourceTemporalWindows") or [])[:8],
+                "sourceObservation": {
+                    "verified": _mapping(_mapping(signal.get("inputFeatures")).get("familyInputFeatures")).get("sourceClockVerified") is True,
+                    "observedAt": _mapping(_mapping(signal.get("inputFeatures")).get("familyInputFeatures")).get("latestObservedAt") or "",
+                    "currentPrice": _mapping(_mapping(signal.get("inputFeatures")).get("familyInputFeatures")).get("currentPrice"),
+                },
+                "modelInputWindows": _mapping(_mapping(signal.get("inputFeatures")).get("familyInputFeatures")).get("windowMetrics") or {},
                 "measurementBasis": _mapping(signal.get("inputFeatures")).get("measurementBasis") or "unknown",
                 "empiricalSampleCount": _mapping(signal.get("inputFeatures")).get("empiricalSampleCount", 0),
                 **_feature_summary(signal),

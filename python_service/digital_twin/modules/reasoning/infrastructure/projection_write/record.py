@@ -3,6 +3,7 @@
 from __future__ import annotations
 from .record_ports import RecordPort, RecordSnapshotBindings
 from digital_twin.modules.reasoning.domain.ontology_performance_contract import ontology_performance_assessment
+from digital_twin.modules.reasoning.domain.hypothesis_change_observations import attach_model_observations
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from typing import Callable, Dict, List
 import time
@@ -318,6 +319,7 @@ def record_snapshot(
         if isinstance(stage_result, CompletedProjection):
             return stage_result.result
         result = stage_result.result
+        attach_model_observations(result, graph, inference_symbols)
         stage_result = schedule_followups(
             _store=_store,
             _bindings=_bindings,

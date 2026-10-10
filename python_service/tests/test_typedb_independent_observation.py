@@ -20,7 +20,7 @@ from digital_twin.infrastructure.transactions.ai_control_publication import AICo
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 
 
-def independent_fixture(queue=None, material=True, account_id="main", data_change=False):
+def independent_fixture(queue=None, material=True, account_id="main", data_change=False, reassessment=False):
     case = subject_case("subject:independent", action_authority="originate", eligible=("hypothesis:fixture",), outcome="READY")
     case.account_id = account_id
     case.synthesis = replace(case.synthesis, account_id=account_id)
@@ -40,6 +40,10 @@ def independent_fixture(queue=None, material=True, account_id="main", data_chang
                                     "previousState": "unavailable" if restored else "usable",
                                     "currentState": "usable" if restored else "unavailable",
                                     "summary": "판단에 필요한 자료를 다시 확인해야 합니다.", "reasons": ["체결 자료의 유효기간이 지났습니다."]})
+    if reassessment:
+        relation["hypothesisLifecycle"]["transitions"][0].update(
+            currentState="invalidated", materialChange=False,
+            changeBasis={"category": "reassessment", "reason": "동일 시세의 분석 입력을 재평가했습니다.", "ruleComparisons": []})
     context["requiresAiJudgement"] = True
     queue = queue if queue is not None else FakeNotificationQueue()
     handoff = FakeAIHandoff()
@@ -100,6 +104,20 @@ def readable_fixture():
 
 
 class IndependentTypeDBTests(unittest.TestCase):
+    def test_reassessment_publishes_independently_without_claiming_market_change(self):
+        result, queue, handoff, _ = independent_fixture(reassessment=True)
+        self.assertEqual(1, result["typedbPublishedCount"])
+        self.assertEqual([], handoff.events)
+        job = next(iter(queue.jobs.values()))
+        self.assertTrue(independent_typedb_publication(job.context))
+        with AIControlPublication({}, Mock(), Mock(), lambda: []).delivery_guard(job, "saved observation"):
+            pass
+        # The production receipt/cadence check freezes this before rendering.
+        job.context["relationChangeEvidence"] = relation_change_evidence(job.context)
+        text = typedb_observation_telegram_message(job.context)
+        self.assertIn("분석 재평가", text)
+        self.assertNotIn("기존 설명을 뒷받침하던 조건이 더 이상", text)
+
     def test_data_issue_publishes_as_data_status_without_false_hypothesis_change(self):
         result, queue, handoff, case = independent_fixture(data_change=True)
         self.assertEqual(1, result["typedbPublishedCount"])

@@ -23,6 +23,20 @@ class RecordingConnection:
 
 
 class MarketTimeSeriesDailyCandleTests(unittest.TestCase):
+    def test_completed_provider_candle_is_available_before_local_midnight(self):
+        from digital_twin.modules.market_data.domain.market_time_series import completed_daily_rows, temporal_observation_payload
+        observation = MarketTimeSeriesObservation.from_daily_candle(
+            "__market_data__", "CPNG", self.candle("2026-10-09"), market="US", currency="USD",
+            received_at="2026-10-09T20:02:00Z")
+        row = temporal_observation_payload(observation.to_row(), "time-series-store")
+        self.assertEqual([row], completed_daily_rows([row], "2026-10-10T03:59:55Z"))
+        self.assertEqual([row], completed_daily_rows([row], "2026-10-10T04:23:29Z"))
+        self.assertEqual([], completed_daily_rows([row], "2026-10-09T20:01:00Z"))
+        self.assertEqual([], completed_daily_rows([row], "2026-10-09T19:59:00Z"))
+        # A live daily aggregate is not a completed provider candle.
+        intraday = {**row, "source": "holding", "sourceAsOf": "2026-10-09T15:00:00Z", "generatedAt": "2026-10-09T15:00:00Z"}
+        self.assertEqual([], completed_daily_rows([intraday], "2026-10-09T15:01:00Z"))
+
     def candle(self, date="2026-09-10"):
         return {
             "date": date,

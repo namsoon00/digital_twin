@@ -258,6 +258,60 @@ def account_snapshot(generation="generation-1", targets=None, aligned=True, symb
 
 
 class HypothesisLifecycleTests(unittest.TestCase):
+    def model_basis(self, score=.81869, source_at="2026-10-09T23:56:20Z"):
+        return {"models": {"rule.aapl.trend.v1": {
+            "signalType": "price-recovery-support", "score": score,
+            "strengthBand": "strong" if score >= .7 else "moderate", "minimumScore": .7,
+            "requiredStrengthBand": "strong", "freshnessCompatible": True, "eligibilityStatus": "conditional",
+            "sourceObservation": {"verified": True, "observedAt": source_at, "currentPrice": 15.5}}}}
+
+    def test_missing_model_proof_is_not_a_negative_rule_result(self):
+        snapshot = replace(lifecycle_snapshot(), observation_basis=self.model_basis(),
+                           policy={"requiredFreshnessDomains": ["model-signal", "price-path"]})
+        previous, _ = record_for_snapshot(None, snapshot)
+        held, transition = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z", current_basis={"models": {}})
+        contract = relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})
+        self.assertEqual("maintained", held.state)
+        self.assertEqual("data-unavailable", contract["changeKind"])
+        self.assertFalse(contract["material"])
+        self.assertTrue(contract["deliverable"])
+        self.assertEqual(previous.snapshot["observationBasis"], held.snapshot["observationBasis"])
+        _, duplicate = record_for_absent_snapshot(held, "2026-07-23T00:02:00Z", current_basis={"models": {}})
+        self.assertIsNone(duplicate)
+
+    def test_same_source_reassessment_survives_expiry_and_recovery_as_nonmarket_change(self):
+        snapshot = replace(lifecycle_snapshot(), observation_basis=self.model_basis())
+        previous, _ = record_for_snapshot(None, snapshot)
+        retired, transition = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z", current_basis=self.model_basis(.538025))
+        contract = relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})
+        self.assertEqual("invalidated", retired.state)
+        self.assertEqual("reassessment", contract["changeCategory"])
+        self.assertFalse(contract["material"])
+        self.assertTrue(contract["deliverable"])
+        self.assertEqual(.538025, contract["changeBasis"]["ruleComparisons"][0]["current"]["score"])
+        _, revived = record_for_snapshot(retired, replace(snapshot, inference_generation_id="generation-3"))
+        self.assertEqual("reassessment", relation_lifecycle_transition_contract({"transitions": [revived.to_dict()]})["changeCategory"])
+        # A genuinely newer source is a market observation even at the same price.
+        _, changed = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z",
+            current_basis=self.model_basis(.538025, "2026-10-12T14:00:00Z"))
+        self.assertTrue(relation_lifecycle_transition_contract({"transitions": [changed.to_dict()]})["material"])
+
+    def test_removed_counter_with_missing_data_cannot_strengthen_hypothesis(self):
+        context = relation_context(counter=["assertion:counter"])
+        hypothesis = context["hypothesisSet"]["hypotheses"][0]
+        hypothesis["counterRuleIds"] = ["rule.aapl.trend.v1"]
+        context["graphStoreInference"]["traces"][0]["matchedConditions"] = [{
+            "conditionId": "counter", "relationId": "assertion:counter", "relationType": "HAS_MODEL_SIGNAL"}]
+        old = replace(lifecycle_snapshots_from_relation_context(context)[0], observation_basis=self.model_basis())
+        previous, _ = record_for_snapshot(None, old)
+        current = replace(old, inference_generation_id="generation-2", counter_evidence_ids=[], counter_evidence_keys=[],
+                          observation_basis={"models": {}}, semantic_fingerprint="changed")
+        held, transition = record_for_snapshot(previous, current)
+        self.assertEqual("maintained", held.state)
+        self.assertFalse(transition.material_change)
+        self.assertEqual("data-unavailable", relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})["changeKind"])
+        self.assertEqual(old.counter_evidence_keys, held.snapshot["counterEvidenceKeys"])
+
     def test_unknown_evidence_count_changes_never_strengthen_or_weaken(self):
         previous = None
         for index, count in enumerate([1, 4, 1, 4, 1]):

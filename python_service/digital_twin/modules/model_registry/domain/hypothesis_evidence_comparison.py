@@ -49,6 +49,11 @@ def availability_for_traces(traces, profiles, required_domains):
             reasons.append(str(trace.get("freshnessGateReason") or "규칙에 사용된 자료를 다시 확인해야 합니다."))
     for domain in required_domains:
         profile = profiles.get(domain) or {}
+        # A currently matched trace has its own source eligibility assessment.
+        # This may cover a model domain absent from the position-only profiles.
+        if not profile and not any(trace.get("freshnessStatus") == "fresh"
+                                   and trace.get("evidenceUsableForJudgement") is not False for trace in traces):
+            reasons.append(domain + " 자료의 현재 사용 가능 상태를 확인하지 못했습니다.")
         if profile.get("judgementEvidenceUsable") is False or profile.get("freshnessStatus") in {"stale", "unavailable", "expired"}:
             reasons.append(str(profile.get("freshnessGateReason") or "필요한 자료의 유효기간이 지났습니다."))
     return {

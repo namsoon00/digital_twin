@@ -7,6 +7,7 @@ from statistics import mean, pstdev
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from digital_twin.modules.market_data.contracts import parse_timestamp
+from digital_twin.modules.market_data.contracts import market_session_date
 from digital_twin.modules.market_data.contracts import TemporalFeatureSnapshot
 from digital_twin.modules.model_registry.domain.statistical_signals.contracts import ModelSignal, ModelSignalSnapshot, SignalEligibility
 from digital_twin.modules.model_registry.domain.hypothesis_catalog import hypothesis_family_definition
@@ -26,6 +27,7 @@ WINDOW_ROLLING_SAMPLES = {
     "20D": 20,
 }
 PRICE_SIGNAL_MAX_SOURCE_AGE_SECONDS = 4 * 24 * 60 * 60
+PRICE_OBSERVATION_BASIS_VERSION = "price-source-clock-v2"
 
 
 def _number(value: object) -> float:
@@ -51,8 +53,21 @@ def _ordered_rows(rows: Iterable[Mapping[str, object]]) -> List[Dict[str, object
     result = [dict(item) for item in rows or [] if isinstance(item, Mapping)]
     return sorted(
         result,
-        key=lambda row: str(_first(row, "bucketAt", "bucket_at", "generatedAt", "observed_at") or ""),
+        key=lambda row: str(_source_clock(row) or ""),
     )
+
+
+def _source_clock(row):
+    # An explicitly missing source clock cannot be repaired with a poll clock.
+    if "sourceAsOf" in row or "source_as_of" in row:
+        return _first(row, "sourceAsOf", "source_as_of")
+    return _first(row, "bucketAt", "bucket_at", "generatedAt", "observedAt", "observed_at")
+
+
+def _source_session(row):
+    if "sourceAsOf" in row or "source_as_of" in row:
+        return market_session_date(_source_clock(row), row.get("market"), row.get("currency"))
+    return str(_first(row, "marketSessionDate", "market_session_date") or "")[:10]
 
 
 def _rows_at_or_before(rows: Iterable[Mapping[str, object]], cutoff_at: object) -> List[Dict[str, object]]:
@@ -64,7 +79,7 @@ def _rows_at_or_before(rows: Iterable[Mapping[str, object]], cutoff_at: object) 
         if not isinstance(item, Mapping):
             continue
         stamp = parse_timestamp(_first(item, "generatedAt", "observedAt", "observed_at", "bucketAt", "bucket_at"))
-        event_stamp = parse_timestamp(_first(item, "bucketAt", "bucket_at", "generatedAt", "observedAt", "observed_at"))
+        event_stamp = parse_timestamp(_source_clock(item))
         if stamp and event_stamp and stamp <= cutoff and event_stamp <= cutoff:
             result.append(dict(item))
     return result
@@ -136,7 +151,8 @@ def _window_metrics(rows: Iterable[Mapping[str, object]], minimum_samples: int) 
         "rebound": _change(trough, prices[-1]) if prices else 0.0,
         "ma20Distance": _number(_first(latest, "ma20Distance", "ma20_distance")) / 100.0,
         "ma60Distance": _number(_first(latest, "ma60Distance", "ma60_distance")) / 100.0,
-        "latestObservedAt": str(_first(latest, "bucketAt", "bucket_at", "generatedAt", "observed_at") or ""),
+        "latestObservedAt": str(_source_clock(latest) or ""),
+        "sourceClockVerified": bool(parse_timestamp(_first(latest, "sourceAsOf", "source_as_of"))),
         "marketSession": str(
             _first(latest, "marketSession", "market_session", "session") or ""
         ).lower(),
@@ -163,25 +179,12 @@ def _with_latest_session_observation(
     if not live:
         return historical[-max(1, int(maximum_samples or 1)):]
     latest_live = live[-1]
-    live_stamp = parse_timestamp(
-        _first(latest_live, "bucketAt", "bucket_at", "generatedAt", "observedAt", "observed_at")
-    )
-    historical_stamp = parse_timestamp(
-        _first(
-            historical[-1] if historical else {},
-            "bucketAt",
-            "bucket_at",
-            "generatedAt",
-            "observedAt",
-            "observed_at",
-        )
-    )
+    live_stamp = parse_timestamp(_source_clock(latest_live))
+    historical_stamp = parse_timestamp(_source_clock(historical[-1] if historical else {}))
     if not live_stamp or (historical_stamp and live_stamp <= historical_stamp):
         return historical[-max(1, int(maximum_samples or 1)):]
-    live_session = str(_first(latest_live, "marketSessionDate", "market_session_date") or "")[:10]
-    historical_session = str(
-        _first(historical[-1] if historical else {}, "marketSessionDate", "market_session_date") or ""
-    )[:10]
+    live_session = _source_session(latest_live)
+    historical_session = _source_session(historical[-1] if historical else {})
     if historical and live_session and live_session == historical_session:
         historical[-1] = latest_live
     else:
@@ -316,6 +319,8 @@ def _combined_metrics(windows: Mapping[str, object], cutoff_at: object = "") -> 
         )
     )
     combined["windowMetrics"] = metrics
+    combined["observationBasisVersion"] = PRICE_OBSERVATION_BASIS_VERSION
+    combined["sourceClockVerified"] = all(item.get("sourceClockVerified") for item in (primary, short))
     return combined
 
 

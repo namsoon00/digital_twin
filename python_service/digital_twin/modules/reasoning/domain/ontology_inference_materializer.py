@@ -48,6 +48,8 @@ LINEAGE_TARGET_PROPERTY_KEYS = {
     "sourceFeatureSnapshotId",
     "modelEvidenceIds",
     "sourceTemporalWindows",
+    "sourceObservation",
+    "modelInputWindows",
     "measurementBasis",
     "empiricalSampleCount",
     "score",

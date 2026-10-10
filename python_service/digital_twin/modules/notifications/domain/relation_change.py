@@ -48,7 +48,9 @@ def relation_change_authority(context):
     if not generation or len(generations) != 1 or len(aboxes) > 1 or relation.get("generationAligned") is False:
         return []
     for item in rows(lifecycle.get("transitions")):
-        if (item.get("currentState") or item.get("current_state")) not in {"observed", "strengthened", "weakened", "invalidated", "expired"} and not item.get("dataAvailabilityChange"):
+        if ((item.get("currentState") or item.get("current_state")) not in {"observed", "strengthened", "weakened", "invalidated", "expired"}
+                and not item.get("dataAvailabilityChange")
+                and mapping(item.get("changeBasis")).get("category") != "reassessment"):
             continue
         if generation and item.get("inferenceGenerationId") and generation != item["inferenceGenerationId"]:
             continue
@@ -58,7 +60,7 @@ def relation_change_authority(context):
         transition = {key: deepcopy(contract.get(key)) for key in (
             "transitionId", "lifecycleKey", "changeKind", "changeLabel", "previousState", "currentState",
             "previousStateLabel", "currentStateLabel", "occurredAt", "reason", "evidenceDelta",
-            "changeCategory", "dataAvailabilityChange", "evidenceChanges",
+            "changeCategory", "dataAvailabilityChange", "evidenceChanges", "changeBasis",
         )}
         snapshot = mapping(mapping(item.get("record")).get("snapshot"))
         # Bind each change to its own hypothesis; never attach one lifecycle
@@ -173,6 +175,7 @@ def relation_change_snapshot(context):
         "investorFlowObservedFields": strings(facts.get("investorFlowObservedFields")),
         "investorFlowParticipantStatus": deepcopy(mapping(facts.get("investorFlowParticipantStatus"))),
         "transitions": relation_change_authority(context),
+        "modelEvidenceObservations": deepcopy(mapping(relation.get("modelEvidenceObservations"))),
         "dataAvailability": {row.get("lifecycleKey"): deepcopy(mapping(row.get("dataAvailability")))
                              for row in rows(mapping(relation.get("hypothesisLifecycle")).get("records")) if row.get("lifecycleKey")},
         "evidenceComparisonPartial": any(mapping(row.get("evidenceComparison")).get("status") == "partial"

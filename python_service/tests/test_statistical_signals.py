@@ -171,6 +171,65 @@ class FakeSignalConnection:
 
 
 class StatisticalSignalTests(unittest.TestCase):
+    def test_nonmatching_model_input_receipt_is_scoped_and_requires_aligned_native_generation(self):
+        from types import SimpleNamespace
+        from digital_twin.modules.reasoning.domain.hypothesis_change_observations import attach_model_observations
+        from digital_twin.modules.model_registry.domain.hypothesis_change_basis import lifecycle_observation_basis
+        entity = OntologyEntity("model:test", "input", "statistical-model-hypothesis-evidence", {
+            "symbol": "AAPL", "hypothesisContractId": "recovery", "score": .538025, "strengthBand": "moderate",
+            "sourceObservation": {"verified": True, "observedAt": "2026-10-09T23:56:20Z", "currentPrice": 15.5}})
+        foreign = OntologyEntity("model:other", "other", entity.kind, {**entity.properties, "symbol": "NVDA"})
+        graph = SimpleNamespace(entities=[entity, foreign])
+        result = {"inferenceBox": {"status": "ok", "generationAligned": True, "nativeTypeDbReasoningUsed": True,
+                                    "sourceAboxSnapshotId": "abox:one", "targetSymbols": ["AAPL"]}}
+        attach_model_observations(result, graph, ["AAPL"])
+        observed = result["inferenceBox"]["modelEvidenceObservations"]
+        self.assertEqual({"AAPL"}, set(observed))
+        self.assertEqual(.538025, observed["AAPL"]["recovery"]["score"])
+        basis = lifecycle_observation_basis({"modelEvidenceObservations": observed["AAPL"],
+            "graphStoreInference": {"traces": [{"label": "회복", "matchedConditions": [{
+                "matchedTargetProperties": {"hypothesisContractId": "recovery"},
+                "ruleConditionShape": {"targetPropertyFilters": {"strengthBand": "strong"}}}]}]}})
+        self.assertEqual(.7, basis["models"]["recovery"]["minimumScore"])
+        entity.properties["score"] = 999
+        self.assertEqual(.538025, observed["AAPL"]["recovery"]["score"])
+        result = {"inferenceBox": {"status": "ok", "generationAligned": False}}
+        attach_model_observations(result, graph, ["AAPL"])
+        self.assertNotIn("modelEvidenceObservations", result["inferenceBox"])
+
+    def test_same_close_across_us_midnight_does_not_change_recovery_score(self):
+        def candle(day, price):
+            return {"bucketAt": "2026-10-%02dT04:00:00Z" % day,
+                    "sourceAsOf": "2026-10-%02dT20:00:00Z" % day,
+                    "generatedAt": "2026-10-%02dT20:02:00Z" % day,
+                    "market": "US", "currency": "USD", "dataQuality": "actual",
+                    "currentPrice": price, "ma20Distance": 7.668796888, "ma60Distance": .35177072}
+        history = [candle(day, price) for day, price in [(2,13.78),(5,14.2),(6,14.42),(7,14.81),(8,15.41),(9,15.82)]]
+        scores = []
+        for cutoff, bucket, daily in [("2026-10-10T03:59:55Z", "2026-10-10T03:57:00Z", history[:-1]),
+                                      ("2026-10-10T04:23:29Z", "2026-10-10T04:21:00Z", history[1:])]:
+            quote = {**candle(9,15.5), "bucketAt": bucket, "generatedAt": bucket,
+                     "sourceAsOf": "2026-10-09T23:56:20Z", "dataQuality": "reference"}
+            snapshot = TemporalFeatureSnapshot.create(backend_id="fixture", account_id="test", as_of=cutoff,
+                windows={"EXAMPLE": {"5D": daily, "SESSION": [quote]}}, watermark=TimeSeriesWatermark("fixture", cutoff))
+            signal = next(s for s in score_temporal_feature_snapshot(snapshot).signals if s.signal_type == "price-recovery-support")
+            scores.append(signal.score)
+            self.assertEqual("2026-10-09T23:56:20Z", signal.observed_at)
+            self.assertTrue(signal.input_features["sourceClockVerified"])
+            self.assertGreater(signal.source_age_seconds, 4 * 60 * 60)
+        self.assertEqual([.81869, .81869], scores)
+
+    def test_missing_or_future_source_clock_cannot_be_replaced_by_poll_time(self):
+        original = feature_snapshot()
+        for source in ("", "2026-08-11T07:00:00Z"):
+            windows = {"NVDA": {**original.windows["NVDA"], "SESSION": [{
+                "bucketAt": "2026-08-10T06:59:00Z", "generatedAt": "2026-08-10T06:59:00Z",
+                "sourceAsOf": source, "currentPrice": 999, "dataQuality": "reference"}]}}
+            snapshot = TemporalFeatureSnapshot.create(backend_id="fixture", account_id="test", as_of=original.as_of,
+                windows=windows, watermark=TimeSeriesWatermark("fixture", original.as_of))
+            signals = score_temporal_feature_snapshot(snapshot).signals
+            self.assertTrue(all(s.input_features["currentPrice"] != 999 for s in signals))
+
     def test_price_signal_is_immutable_conditional_score_only(self):
         from digital_twin.modules.model_registry.domain.statistical_signals.registry import model_release
 

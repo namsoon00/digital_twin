@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List
 
 from digital_twin.modules.model_registry.contracts import hypothesis_lifecycle_transitioned_event
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
+from digital_twin.modules.model_registry.contracts import lifecycle_observation_basis
 from digital_twin.modules.model_registry.contracts import HYPOTHESIS_LIFECYCLE_KEY_PREFIX, HYPOTHESIS_LIFECYCLE_KEY_VERSION, HYPOTHESIS_LIFECYCLE_VERSION, TERMINAL_HYPOTHESIS_LIFECYCLE_STATES, HypothesisLifecycleRecord, HypothesisLifecycleSnapshot, lifecycle_context_summary, lifecycle_snapshots_from_relation_context, record_for_absent_snapshot, record_for_snapshot, snapshot_expiry_reason
 from digital_twin.modules.reasoning.contracts import inferencebox_from_snapshot, relation_contexts_from_snapshot
 from digital_twin.modules.reasoning.contracts import position_observation_profiles
@@ -77,7 +78,7 @@ class HypothesisLifecycleService:
                 continue
             self.store.save(record, transition)
             next_by_key[record.lifecycle_key] = record
-            if transition.previous_state != transition.current_state or transition.material_change or transition.data_availability_change:
+            if transition.previous_state != transition.current_state or transition.material_change or transition.data_availability_change or transition.change_basis.get("category") == "reassessment":
                 transitions.append((record, transition))
                 self.publish_transition(record, transition)
 
@@ -85,11 +86,16 @@ class HypothesisLifecycleService:
         # full account. Reconcile only those subjects so a two-symbol batch can
         # retire its own missing paths without touching untouched holdings.
         profiles_by_symbol = self.observation_profiles_by_symbol(snapshot, inferencebox)
+        model_rows = inferencebox.get("modelEvidenceObservations") or {}
         for key, previous in previous_by_key.items():
             if key in active_keys or previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
                 continue
             expiry_reason = self.absent_record_expiry_reason(previous, profiles_by_symbol.get(previous.symbol) or {}, observed_at)
-            record, transition = record_for_absent_snapshot(previous, observed_at, expiry_reason)
+            context = contexts.get(previous.symbol) or {}
+            basis = lifecycle_observation_basis({**context, "modelEvidenceObservations": model_rows.get(previous.symbol) or {}})
+            if not basis.get("quote"):
+                basis["quote"] = {"sourceAsOf": (profiles_by_symbol.get(previous.symbol, {}).get("quote") or {}).get("sourceAsOf")}
+            record, transition = record_for_absent_snapshot(previous, observed_at, expiry_reason, current_basis=basis)
             if transition is None:
                 continue
             self.store.save(record, transition)
@@ -260,7 +266,6 @@ class HypothesisLifecycleService:
                 for key, value in dict(profiles or {}).items()
                 if isinstance(value, dict)
             },
-            observed_at=observed_at or previous_snapshot.observed_at,
         )
         return snapshot_expiry_reason(refreshed, observed_at)
 

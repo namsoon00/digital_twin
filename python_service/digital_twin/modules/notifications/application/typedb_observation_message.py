@@ -938,6 +938,9 @@ def typedb_observation_telegram_message(
         # beginner substitutions used to obscure hypothesis and rule semantics.
         level = "intermediate"
         context["relationChangePresentationVersion"] = PRESENTATION_VERSION
+        transitions = relation_packet.get("transitions") or []
+        if transitions and all(row.get("changeCategory") == "reassessment" for row in transitions):
+            headline = "🔎 분석 재평가"
     document = CustomerInvestmentDocument(
         role="typedb-observation",
         headline=headline,

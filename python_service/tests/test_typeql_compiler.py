@@ -15,7 +15,7 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v7.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v8.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class TypeQLCompilerTests(unittest.TestCase):
             typedb_value_match("$s", "ontology-profit-loss-rate", {"field": "typo", "default": -8}, "<=", "$v")
 
     def test_compiler_matches_versioned_account_policy_contract(self):
-        # V6 remains frozen; V7 records the deliberate native field comparison fix.
+        # V7 remains frozen; V8 invalidates cached source-clock interpretations.
         expected = json.loads(GOLDEN.read_text())
         actual = contract_fingerprints(typeql)
         self.assertEqual(expected["engineVersion"], typeql.TYPEDB_NATIVE_RULE_ENGINE_VERSION)

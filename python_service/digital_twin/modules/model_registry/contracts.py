@@ -115,6 +115,7 @@ _EXPORTS.update({
     'prompt_template': ('digital_twin.modules.model_registry.domain.ontology_relation_settings', 'prompt_template'),
     'prompt_template_for_message_type': ('digital_twin.modules.model_registry.domain.ontology_relation_settings', 'prompt_template_for_message_type'),
     'prompt_templates_from_settings': ('digital_twin.modules.model_registry.domain.ontology_relation_settings', 'prompt_templates_from_settings'),
+    'lifecycle_observation_basis': ('digital_twin.modules.model_registry.domain.hypothesis_change_basis', 'lifecycle_observation_basis'),
     'record_for_absent_snapshot': ('digital_twin.modules.model_registry.domain.hypothesis_lifecycle', 'record_for_absent_snapshot'),
     'record_for_snapshot': ('digital_twin.modules.model_registry.domain.hypothesis_lifecycle', 'record_for_snapshot'),
     'relation_definitions_payload': ('digital_twin.modules.model_registry.domain.ontology_tbox', 'relation_definitions_payload'),

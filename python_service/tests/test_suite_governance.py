@@ -277,7 +277,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Four reply/KST regressions cover transport, frozen clocks, durable lineage and legacy recovery.
         # Seven causal conversation contracts cover source ownership, producer lineage,
         # receipt-backed replies, ambiguity isolation, rollback, concurrent roots and monitor admission.
-        self.assertLessEqual(total, 2156)
+        # Ten source-clock and notification-cause regressions cover midnight replay,
+        # model proof gaps, exact thresholds, reassessment transport and hypothesis naming.
+        self.assertLessEqual(total, 2166)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

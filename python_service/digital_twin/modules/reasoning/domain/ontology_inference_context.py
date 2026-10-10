@@ -224,6 +224,7 @@ def relation_contexts_from_snapshot(
                 account_context=account_context,
             )
         if context:
+            context["modelEvidenceObservations"] = dict((inferencebox.get("modelEvidenceObservations") or {}).get(symbol) or {})
             result[symbol] = context
     return result
 

@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 
-from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash
+from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash, validate_evidence_packet
 from digital_twin.modules.ai_orchestration.domain.brain_management import required_case_memory
 from digital_twin.modules.ai_orchestration.domain.continuity import continuity_memory, merge_recalled
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
@@ -23,6 +23,31 @@ class RetrievalContractFailure(RuntimeError):
         super().__init__(self.code)
         self.failure = {"kind": "retrieval-contract", "code": self.code, "stopReason": stop_reason,
                         "retrieval": trace_summary(trace, "invalid-request")}
+
+
+def fits_author_packet(session, packet, selected, research, trace, remaining_rounds):
+    """Check the final evidence contract before a tool page becomes admitted."""
+    from ..domain.business_research import evaluate_thesis
+    try:
+        candidate = {**packet, **session.select(selected), "retrieval": trace_summary(trace, "round-limit")}
+        business = []
+        for memory in research:
+            if memory.get("kind") == "business-thesis":
+                value = deepcopy(memory)
+                observations = evaluate_thesis(value, candidate)
+                value.update(reviewDue=value.get("reviewDue", False) or observations != value.get("observations", []),
+                             observations=observations)
+                business.append(value)
+        candidate["businessThesisMemory"] = business
+        # A later finish/defer round adds a bounded reason and trace metadata.
+        # Read rounds are checked again with their exact prospective trace.
+        candidate["pendingTraceBudget"] = " " * (8192 * remaining_rounds)
+        validate_evidence_packet(candidate)
+        return True
+    except EvidenceContractError as error:
+        if error.code != "evidence-contract:observation-evidence-exceeds-context-budget":
+            raise
+        return False
 
 
 def retrieve_evidence(session, packet, history, research, decide, save_input, prompt_bytes,
@@ -96,10 +121,14 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
                 seen.add(key)
                 response = tools.read(plan)
                 size = len(json.dumps(response, ensure_ascii=False, allow_nan=False).encode())
-                if size > MAX_RESULT_BYTES or used + size > MAX_TOTAL_RESULT_BYTES:
+                prospective = selected | {row["id"] for row in response.get("facts", [])}
+                prospective_trace = trace + [{**step, "reads": step["reads"] + [{"request": request, "result": response}]}]
+                packet_fits = fits_author_packet(session, packet, prospective, research, prospective_trace, rounds - round_index - 1)
+                if size > MAX_RESULT_BYTES or used + size > MAX_TOTAL_RESULT_BYTES or not packet_fits:
                     # A rejected page must not expose a cursor to unseen data.
                     tools.cursors.pop(response.get("nextCursor"), None)
-                    response = {"status": "context-budget", "facts": [], "omittedResultHash": content_hash(response)}
+                    response = {"status": "context-budget", "facts": [], "omittedResultHash": content_hash(response),
+                                "reason": "author-packet-budget" if not packet_fits else "tool-result-budget"}
                 else:
                     used += size
                     tools.admit(response)
@@ -115,6 +144,8 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
         if not progress and any(row["result"].get("status") for row in step["reads"]):
             status = "context-budget" if any(row["result"].get("status") == "context-budget" for row in step["reads"]) else "repeated-read"
             break
+    if any(read["result"].get("status") == "context-budget" for step in trace for read in step["reads"]):
+        status = "context-budget"
     final = {**packet, **session.select(selected)}
     final["retrieval"] = trace_summary(trace, status)
     required = context["continuity"]

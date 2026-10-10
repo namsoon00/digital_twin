@@ -847,6 +847,11 @@ page could consume most of it and prevent reading an independent source or
 counter-evidence. The model sees the remaining total allowance. Rejected pages
 do not publish pagination cursors; oversized individual memories and incomplete
 retrieval still block publication.
+Each page is also checked against the separate final evidence-packet limit,
+including delivery context, thesis memory and reserved later trace metadata.
+An oversized page becomes an explicit omission before admission; it cannot make
+the author step crash after successful tool calls. A later `finish` cannot erase
+an earlier budget omission or bypass the publication guard.
 
 Question-specific research returns retain the source owner's task assessment in
 `lastResearch.result.questionAssessment`. Coverage, semantic review state,

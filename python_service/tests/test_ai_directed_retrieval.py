@@ -114,6 +114,15 @@ class DirectedRetrievalTests(unittest.TestCase):
         self.assertGreater(sum(len(json.dumps(row["result"]).encode()) for row in trace[0]["reads"]), 40 * 1024)
         self.assertLess(saved[1]["retrievalContext"]["resultBudgetBytesRemaining"], 56 * 1024)
         validate_execution_input(freeze_execution_input(selected, history, memories, retrieval_trace=trace))
+        # A legal tool page may still overflow the separate final packet once
+        # prior-delivery context and business memory are included.
+        large_baseline = {**captured.packet(), "priorDeliveryContext": "x" * 28000}
+        bounded, history, memories, trace = retrieve_evidence(captured, large_baseline, [], [],
+            Mock(side_effect=[read(request(), request("flow")), FINISH]), save, 256 * 1024)
+        self.assertEqual("context-budget", bounded["retrieval"]["status"])
+        self.assertTrue(any(row["result"].get("reason") == "author-packet-budget" for row in trace[0]["reads"]))
+        validate_evidence_packet(bounded)
+        validate_execution_input(freeze_execution_input(bounded, history, memories, retrieval_trace=trace))
 
     def test_repetition_unknown_scope_and_lost_lease_cannot_extend_authority(self):
         (packet, _, _, _), _, model, _ = self.run_reads([read(request()), read(request())])

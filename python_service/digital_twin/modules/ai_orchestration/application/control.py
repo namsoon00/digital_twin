@@ -119,7 +119,9 @@ class AIControlService:
                     stage = "author-execution"
                     raw = self.planner(envelope, input_id)
                     stage = "plan-validation"
-                    plan = validate_plan(raw, packet, envelope["researchResults"], require_research=True, require_resolution=True)
+                    from .author_validation import validate_author
+                    plan, raw, envelope, input_id, validation_repair = validate_author(raw, envelope, input_id,
+                        self.planner, lambda value: self.store.save_execution_input(job, value))
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
                               "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
                               "wordingVersion": OBSERVATION_WORDING_VERSION,
@@ -128,6 +130,8 @@ class AIControlService:
                               "followUpEvaluations": packet["followUpEvaluations"],
                               "resumption": observation_resume(job, packet),
                               "comparisonFacts": [fact for previous in envelope["previousAnalyses"] for fact in previous.get("previousFacts", [])[:20]]}
+                    if validation_repair:
+                        result["validationRepair"] = validation_repair
                     for verification in range(2):
                         result["quality"] = local_quality(result)
                         if result["notification"]["send"] and result["quality"]["status"] == "awaiting-review" and self.reviewer:
@@ -143,7 +147,7 @@ class AIControlService:
                             except Exception as error:
                                 result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
                                 result["quality"]["failure"] = task_failure("independent-review", error)[1]
-                        if (verification or packet.get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}
+                        if (verification or validation_repair or packet.get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}
                                 or not correction_warranted(result)):
                             break
                         result["repair"] = {"initialInputId": input_id, "initialErrors": result["quality"]["errors"], "status": "pending"}

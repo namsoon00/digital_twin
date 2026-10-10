@@ -6,7 +6,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, cont
 from digital_twin.modules.ai_orchestration.domain.brain_management import required_case_memory
 from digital_twin.modules.ai_orchestration.domain.continuity import continuity_memory, merge_recalled
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
-    MAX_ROUNDS, MAX_CORRECTIONS, MAX_RESULT_BYTES, MAX_TOTAL_RESULT_BYTES, freeze_retrieval_input,
+    MAX_ROUNDS, MAX_CORRECTIONS, MAX_RESULT_BYTES, MAX_TOTAL_RESULT_BYTES, PAGE_SIZE, freeze_retrieval_input,
     validate_read_decision, trace_summary, response_audit, ReadRequestError,
 )
 from .read_tools import ObservationReadTools
@@ -66,6 +66,7 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
         "openQuestions": [{key: row.get(key) for key in ("caseId", "question", "capability", "reviewDue")}
                           for row in research if required_case_memory(row)], "roundLimit": rounds, "trace": []}
     tools = ObservationReadTools(session, history, research)
+    tools.admit(current)
     trace, seen, selected, recalled = [], set(), {row["id"] for row in current["facts"] if row["kind"] != "stock"}, {"analyses": [], "memories": []}
     used, corrections, status = 0, 0, "round-limit"
 
@@ -113,18 +114,37 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
             record(step)
             break
         progress = False
-        for request, plan in zip(decision["requests"], plans):
+        # When the model requests complementary sources together, reserve one
+        # whole fact for each if that minimum fits. A large first page must not
+        # consume all space before the counter-source can be read.
+        minimums = [{row["id"] for row in tools.preview(plan, 1).get("facts", [])} for plan in plans]
+        minimum = selected.union(*minimums)
+        reserve_minimum = fits_author_packet(session, packet, minimum, research, trace + [step], rounds - round_index - 1)
+        for index, (request, plan) in enumerate(zip(decision["requests"], plans)):
             key = content_hash(plan)
             if key in seen:
                 response = {"status": "repeated-read", "facts": []}
             else:
                 seen.add(key)
-                response = tools.read(plan)
-                size = len(json.dumps(response, ensure_ascii=False, allow_nan=False).encode())
-                prospective = selected | {row["id"] for row in response.get("facts", [])}
-                prospective_trace = trace + [{**step, "reads": step["reads"] + [{"request": request, "result": response}]}]
-                packet_fits = fits_author_packet(session, packet, prospective, research, prospective_trace, rounds - round_index - 1)
-                if size > MAX_RESULT_BYTES or used + size > MAX_TOTAL_RESULT_BYTES or not packet_fits:
+                # Fit a contiguous whole-record page, not an all-or-nothing
+                # four-record batch. Rejected trial cursors never escape, and
+                # the admitted cursor advances only past the records returned.
+                for page_size in range(PAGE_SIZE, 0, -1):
+                    response = tools.read(plan, page_size)
+                    size = len(json.dumps(response, ensure_ascii=False, allow_nan=False).encode())
+                    prospective = selected | {row["id"] for row in response.get("facts", [])}
+                    if reserve_minimum:
+                        prospective = prospective.union(*minimums[index + 1:])
+                    prospective_trace = trace + [{**step, "reads": step["reads"] + [{"request": request, "result": response}]}]
+                    packet_fits = fits_author_packet(session, packet, prospective, research, prospective_trace, rounds - round_index - 1)
+                    fits = (not response.get("omitted") and size <= MAX_RESULT_BYTES
+                            and used + size <= MAX_TOTAL_RESULT_BYTES and packet_fits)
+                    if fits:
+                        break
+                    tools.cursors.pop(response.get("nextCursor"), None)
+                    if request["tool"] == "read_fact":
+                        break
+                if not fits:
                     # A rejected page must not expose a cursor to unseen data.
                     tools.cursors.pop(response.get("nextCursor"), None)
                     response = {"status": "context-budget", "facts": [], "omittedResultHash": content_hash(response),

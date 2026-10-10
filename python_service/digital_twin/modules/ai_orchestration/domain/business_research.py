@@ -95,12 +95,16 @@ def validate_business(value, packet, research):
     metrics = {(row["factId"], row["metric"]): row for row in financial_metrics(packet)}
     memories = {row["caseId"]: row for row in research if row.get("kind") == "business-thesis"}
 
-    def text(raw):
+    def text(raw, field="businessResearch"):
         from .insight_contract import asserts_certainty
         from digital_twin.modules.decisions.contracts import narrative_presentation_errors
-        if (not isinstance(raw, str) or not 8 <= len(raw.strip()) <= 500
-                or re.search(r"\d", raw) or asserts_certainty(raw) or narrative_presentation_errors("NO_ACTION", [raw])):
-            raise ValueError("business research requires bounded actionless explanation")
+        from .validation_diagnostic import PlanValidationError
+        if not isinstance(raw, str) or not 8 <= len(raw.strip()) <= 500:
+            raise PlanValidationError("business-text-length", field, "설명은 양끝 공백을 제외하고 8~500자여야 합니다.")
+        if re.search(r"\d", raw):
+            raise PlanValidationError("business-text-numeric", field, "사업 설명의 숫자는 구조화된 기준값에만 기록하고 문장에서는 제거하세요.")
+        if asserts_certainty(raw) or narrative_presentation_errors("NO_ACTION", [raw]):
+            raise PlanValidationError("business-text-language", field, "사업 설명은 확정적 예측·매매 지시 없이 도메인 용어로 작성하세요.")
         return raw.strip()
 
     def evidence(ids):
@@ -111,8 +115,9 @@ def validate_business(value, packet, research):
     theses, reviews = value["theses"], value["reviews"]
     if not isinstance(theses, list) or len(theses) > 2 or not isinstance(reviews, list) or len(reviews) > 4:
         raise ValueError("business research exceeds work budget")
-    result = {"coverageNote": text(value["coverageNote"]), "theses": [], "reviews": []}
-    for item in theses:
+    result = {"coverageNote": text(value["coverageNote"], "businessResearch.coverageNote"), "theses": [], "reviews": []}
+    for index, item in enumerate(theses):
+        path = "businessResearch.theses[" + str(index) + "]"
         if not isinstance(item, dict) or set(item) != set(TEXT_FIELDS) | {"evidenceIds", "missingEvidence", "horizonDays", "checkpoints"}:
             raise ValueError("incomplete business thesis")
         ids = evidence(item["evidenceIds"])
@@ -127,8 +132,8 @@ def validate_business(value, packet, research):
         checks = item["checkpoints"]
         if not isinstance(missing, list) or len(missing) > 3 or not isinstance(checks, list) or len(checks) > 3:
             raise ValueError("invalid business checkpoints")
-        row = {**{key: text(item[key]) for key in TEXT_FIELDS}, "evidenceIds": ids,
-            "missingEvidence": [text(entry) for entry in missing], "horizonDays": horizon, "checkpoints": []}
+        row = {**{key: text(item[key], path + "." + key) for key in TEXT_FIELDS}, "evidenceIds": ids,
+            "missingEvidence": [text(entry, path + ".missingEvidence[" + str(i) + "]") for i, entry in enumerate(missing)], "horizonDays": horizon, "checkpoints": []}
         seen = set()
         for check in checks:
             if not isinstance(check, dict) or set(check) != {"factId", "metric", "direction", "meaning"}:
@@ -144,14 +149,14 @@ def validate_business(value, packet, research):
                          if all(entry[field] == baseline[field] for field in ("metric", "frequency", "basis")))
             if baseline["periodEnd"] != latest:
                 raise ValueError("checkpoint baseline must be latest comparable report")
-            row["checkpoints"].append({**deepcopy(check), "meaning": text(check["meaning"]), "baseline": deepcopy(baseline),
+            row["checkpoints"].append({**deepcopy(check), "meaning": text(check["meaning"], path + ".checkpoints.meaning"), "baseline": deepcopy(baseline),
                 "comparison": "next-year-same-period", "qualification": "metric-observation-only"})
             seen.add(key)
         if not checks and not missing:
             raise ValueError("unmeasurable thesis must state missing evidence")
         result["theses"].append(row)
     reviewed = set()
-    for item in reviews:
+    for index, item in enumerate(reviews):
         if not isinstance(item, dict) or set(item) != {"thesisId", "disposition", "reason", "evidenceIds"}:
             raise ValueError("invalid business review")
         key = item["thesisId"]
@@ -161,7 +166,7 @@ def validate_business(value, packet, research):
             raise ValueError("business review scope mismatch")
         if item["disposition"] == "revise" and not result["theses"]:
             raise ValueError("revision requires a replacement thesis")
-        result["reviews"].append({**deepcopy(item), "reason": text(item["reason"]),
+        result["reviews"].append({**deepcopy(item), "reason": text(item["reason"], "businessResearch.reviews[" + str(index) + "].reason"),
             "evidenceIds": evidence(item["evidenceIds"]), "expectedRevision": memories[key]["revision"]})
         reviewed.add(key)
     released = sum(item["disposition"] in {"revise", "retire"} for item in result["reviews"])

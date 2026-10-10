@@ -79,7 +79,7 @@ class RetrievalRecoveryTests(unittest.TestCase):
         packet, history, memories, trace = retrieve_evidence(captured, captured.packet(), [{"summary": "prior"}], [],
             model, save, 256 * 1024, record_round=record)
         self.assertEqual(3, model.call_count)
-        self.assertEqual(2, captured.read.call_count)
+        self.assertEqual(4, captured.read.call_count)  # Two local minimum previews and two admitted pages.
         self.assertEqual(1, source.candidates.call_count)
         self.assertEqual("prior", history[0]["summary"])
         self.assertEqual("required-continuity", history[0]["memoryRole"])

@@ -78,6 +78,7 @@ class DirectedRetrievalTests(unittest.TestCase):
 
     def test_second_decision_sees_first_result_and_final_prompt_has_only_read_evidence(self):
         self.assert_multiple_source_pages_fit_bounded_retrieval()
+        self.assert_adaptive_pages_preserve_every_record_and_cursor()
         (packet, history, memories, trace), envelopes, model, _ = self.run_reads([
             read(request()), read(request("flow"), request("analyses", "recall_memory")), FINISH],
             history=[{"summary": "previous explanation", "previousFacts": [{"currentPrice": 80}]}])
@@ -123,6 +124,62 @@ class DirectedRetrievalTests(unittest.TestCase):
         self.assertTrue(any(row["result"].get("reason") == "author-packet-budget" for row in trace[0]["reads"]))
         validate_evidence_packet(bounded)
         validate_execution_input(freeze_execution_input(bounded, history, memories, retrieval_trace=trace))
+
+    def assert_adaptive_pages_preserve_every_record_and_cursor(self):
+        for body_bytes, context_bytes in ((6000, 56000), (10000, 40000)):
+            _, source = session()
+            originals = [{"id": "flow-" + str(i), "kind": "flow-metric", "symbol": "TEST",
+                          "body": str(i) * body_bytes} for i in range(4)]
+            source.candidates.return_value = [source.candidates.return_value[0], *originals]
+            captured = ObservationEvidenceReader(source).capture_session(SUBJECT)
+            packet = {**captured.packet(), "priorDeliveryContext": "x" * context_bytes}
+            seen = []
+            def decide(envelope, _):
+                context = envelope["retrievalContext"]
+                if not context["trace"]:
+                    return read(request("flow"))
+                if len(context["trace"]) == 1:
+                    result = context["trace"][0]["reads"][0]["result"]
+                    self.assertGreater(len(result["facts"]), 0)
+                    self.assertLess(len(result["facts"]), 4)
+                    self.assertEqual([], result["omitted"])
+                    # Trial cursors for larger rejected pages are not exposed.
+                    self.assertEqual([result["nextCursor"]], [x["cursor"] for x in context["availableCursors"]])
+                    return read(request("flow", cursor=result["nextCursor"]))
+                return FINISH
+            def save(envelope):
+                validate_execution_input(envelope)
+                seen.append(envelope)
+                return "adaptive-" + str(len(seen))
+            selected, history, memories, trace = retrieve_evidence(captured, packet, [], [], decide, save, 262144)
+            self.assertEqual("ready", selected["retrieval"]["status"])
+            facts = [f for step in trace for page in step["reads"] for f in page["result"]["facts"]]
+            self.assertEqual(4, len(facts))
+            self.assertEqual(4, len({f["id"] for f in facts}))
+            self.assertEqual({x["body"] for x in originals}, {f["body"] for f in facts})
+            validate_execution_input(freeze_execution_input(selected, history, memories, retrieval_trace=trace))
+        # A single oversized leading fact may not be skipped to a later small
+        # fact while the page cursor pretends that the requested range was read.
+        source.candidates.return_value[1]["body"] = "large" * 9000
+        captured = ObservationEvidenceReader(source).capture_session(SUBJECT)
+        selected, _, _, trace = retrieve_evidence(captured, captured.packet(), [], [],
+            Mock(return_value=read(request("flow"))), lambda _: "oversized", 262144)
+        self.assertEqual("context-budget", selected["retrieval"]["status"])
+        self.assertEqual([], trace[0]["reads"][0]["result"]["facts"])
+        self.assertFalse(trace[0]["reads"][0]["result"].get("nextCursor"))
+        # Share remaining packet space across both requested source families.
+        captured, source = session()
+        source.candidates.return_value = [source.candidates.return_value[0],
+            *[{"id": "company-" + str(i), "kind": "evidence:financial-fact", "symbol": "TEST",
+               "body": "x" * 9500} for i in range(4)],
+            {"id": "counter", "kind": "flow-metric", "symbol": "TEST", "body": "y" * 6000}]
+        captured = ObservationEvidenceReader(source).capture_session(SUBJECT)
+        selected, history, memories, trace = retrieve_evidence(captured,
+            {**captured.packet(), "priorDeliveryContext": "z" * 45000}, [], [],
+            Mock(side_effect=[read(request(), request("flow")), FINISH]), lambda _: "balanced", 262144)
+        self.assertEqual("ready", selected["retrieval"]["status"])
+        self.assertTrue(all(page["result"].get("facts") for page in trace[0]["reads"]))
+        validate_execution_input(freeze_execution_input(selected, history, memories, retrieval_trace=trace))
 
     def test_repetition_unknown_scope_and_lost_lease_cannot_extend_authority(self):
         (packet, _, _, _), _, model, _ = self.run_reads([read(request()), read(request())])

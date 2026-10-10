@@ -80,6 +80,7 @@ class AIControlTests(unittest.TestCase):
                 validate_plan({**PLAN, **patch}, PACKET)
 
     def test_observation_persists_research_and_next_check_with_same_subject(self):
+        self.assert_contract_correction_is_bounded_and_audited()
         service, store, planner = self.runner()
         self.assertEqual("completed", service.run_once()["status"])
         _, result, children = store.complete.call_args.args
@@ -88,6 +89,52 @@ class AIControlTests(unittest.TestCase):
         self.assertTrue(all(child["accountId"] == SUBJECT["accountId"] for child in children))
         self.assertEqual("이전 관찰", planner.call_args.args[0]["previousAnalyses"][0]["summary"])
         self.assertEqual("frozen-input", result["executionInputId"])
+
+    def assert_contract_correction_is_bounded_and_audited(self):
+        from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import task_failure
+        from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
+        from digital_twin.modules.ai_orchestration.application.author_validation import validate_author
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input
+        invalid = {**PLAN, "businessResearch": {"theses": [], "reviews": [], "coverageNote": "20일 자료만 있어 사업 설명을 확인하지 못했습니다."}}
+        valid = {**PLAN, "businessResearch": {"theses": [], "reviews": [], "coverageNote": "사업 자료가 없어 원문 조사가 필요합니다."}}
+        service, store, planner = self.runner()
+        planner.side_effect = [invalid, valid]
+        self.assertEqual("completed", service.run_once()["status"])
+        self.assertEqual(2, planner.call_count)
+        result = store.complete.call_args.args[1]
+        self.assertEqual("business-text-numeric", result["validationRepair"]["diagnostic"]["reasonCode"])
+        self.assertEqual("businessResearch.coverageNote", result["validationRepair"]["diagnostic"]["field"])
+        correction = planner.call_args.args[0]
+        validate_execution_input(correction)
+        self.assertEqual(invalid, correction["repair"]["rejectedDraft"])
+        self.assertEqual("rejected", result["quality"]["status"])  # Shape repair is not publication approval.
+        service, store, planner = self.runner()
+        planner.side_effect = [invalid, invalid]
+        self.assertEqual("deferred", service.run_once()["status"])
+        self.assertEqual(2, planner.call_count)
+        store.complete.assert_not_called()
+        self.assertEqual("business-text-numeric", store.fail.call_args.kwargs["result"]["failure"]["reasonCode"])
+        self.assertNotIn("20일", repr(store.fail.call_args))
+        service, store, planner = self.runner()
+        planner.return_value = invalid
+        store.save_execution_input.side_effect = ["original", ""]
+        self.assertEqual("lease-lost", service.run_once()["status"])
+        self.assertEqual(1, planner.call_count)
+        store.complete.assert_not_called(); store.fail.assert_not_called()
+        service, store, planner = self.runner()
+        planner.side_effect = [invalid, AIControlBudgetWait("call", "2026-10-11T00:00:00Z")]
+        self.assertEqual("budget-wait", service.run_once()["status"])
+        store.defer_budget.assert_called_once(); store.complete.assert_not_called(); store.fail.assert_not_called()
+        for state in ("context-budget", "deferred", "repeated-read"):
+            frozen = freeze_execution_input({**PACKET, "retrieval": {"status": state}}, [], [])
+            model, save = Mock(), Mock()
+            with self.assertRaises(ValueError):
+                validate_author(invalid, frozen, "original", model, save)
+            model.assert_not_called(); save.assert_not_called()
+        reason, diagnostic = task_failure("plan-validation", ValueError("private-account-token-secret"))
+        self.assertEqual("unclassified", diagnostic["reasonCode"])
+        self.assertNotIn("private", repr(diagnostic))
+        self.assertEqual("due-brain-cases-require-an-explicit-review", task_failure("plan-validation", ValueError("due brain cases require an explicit review"))[1]["reasonCode"])
 
     def test_missing_facts_do_not_call_ai_or_schedule_followups(self):
         service, store, planner = self.runner(evidence=Mock(return_value={}))

@@ -15,7 +15,8 @@ class ObservationReadTools:
         self.known = {row["id"]: row["evidenceCategory"] for row in session.select([])["facts"]}
 
     def context(self):
-        return {"pageSize": PAGE_SIZE,
+        return {"pageSize": PAGE_SIZE, "pageSizeIsMaximum": True,
+                "paginationVersion": "packet-budget-pages-v1",
                 "availableCursors": [{"cursor": token, **row["scope"]} for token, row in self.cursors.items()],
                 "knownFacts": [{"factId": key, "category": value} for key, value in self.known.items()]}
 
@@ -33,17 +34,23 @@ class ObservationReadTools:
                 raise ReadRequestError([issue(path + ".kind", ["", *kinds])])
         return {"scope": scope, "offset": self.cursors[cursor]["offset"] if cursor else 0}
 
-    def read(self, plan):
+    def preview(self, plan, page_size=PAGE_SIZE):
+        """Read the immutable local inventory without issuing a cursor."""
         scope, offset = plan["scope"], plan["offset"]
         if scope["tool"] == "recall_memory":
             source = self.memories[scope["category"]]
-            end = min(offset + PAGE_SIZE, len(source))
+            end = min(offset + page_size, len(source))
             result = {"memoryKind": scope["category"], "authority": "historical-context-only",
                       "records": deepcopy(source[offset:end]), "available": len(source),
                       "nextOffset": end if end < len(source) else None}
         else:
             result = self.session.read(scope["category"], scope.get("kind", ""), offset,
-                                       PAGE_SIZE, scope.get("factId", ""))
+                                       page_size, scope.get("factId", ""))
+        return result
+
+    def read(self, plan, page_size=PAGE_SIZE):
+        result = self.preview(plan, page_size)
+        scope = plan["scope"]
         next_offset = result.pop("nextOffset", None)
         result["nextCursor"] = None
         if next_offset is not None:

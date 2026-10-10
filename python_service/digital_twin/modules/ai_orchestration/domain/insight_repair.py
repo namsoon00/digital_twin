@@ -25,7 +25,8 @@ def correction_warranted(result):
 
 def comparison_diagnostics(draft, packet):
     diagnostics = []
-    for row in draft.get("observations", []):
+    rows = draft.get("observations", [])
+    for row in rows if isinstance(rows, list) else []:
         try:
             comparable_refs(packet, row["left"], row["right"])
             _, left = resolve_ref(packet, row["left"])

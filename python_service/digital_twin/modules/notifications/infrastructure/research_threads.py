@@ -27,17 +27,19 @@ class ResearchThreadStore:
                 "(thread_key,first_job_id,receipts_json,updated_at) VALUES (%s,%s,'{}',%s)",
                 (key, original["job_id"] if original else job.job_id, utc_now()))
 
-    @contextmanager
     def research_delivery_thread(self, job, destination):
-        key = research_thread_key(job)
+        return self._delivery_thread(job, destination, research_thread_key(job), self.register_research_thread)
+
+    @contextmanager
+    def _delivery_thread(self, job, destination, key, register):
         lock = "research-send:" + key[:48]
         with self.connect() as connection:
             acquired = connection.execute("SELECT GET_LOCK(%s,0) AS acquired", (lock,)).fetchone()
             if not acquired or acquired["acquired"] != 1:
-                raise ResearchDeliveryDeferred("같은 연구의 앞선 알림 발송을 기다립니다.")
+                raise ResearchDeliveryDeferred("같은 대화의 앞선 알림 발송을 기다립니다.")
             try:
                 with self.transaction() as tx:
-                    self.register_research_thread(tx, job)
+                    register(tx, job)
                     row = tx.execute("SELECT first_job_id,receipts_json FROM notification_research_threads WHERE thread_key=%s", (key,)).fetchone()
                     receipts = json.loads(row["receipts_json"])
                     anchor = receipts.get(destination) or {}
@@ -56,16 +58,18 @@ class ResearchThreadStore:
                         parent = tx.execute("SELECT status,attempts FROM notification_jobs WHERE job_id=%s", (row["first_job_id"],)).fetchone()
                         if parent and (parent["status"] in {"pending", "processing", "awaiting_ai"} or
                                        (parent["status"] == "failed" and parent["attempts"] < MAX_NOTIFICATION_DELIVERY_ATTEMPTS)):
-                            raise ResearchDeliveryDeferred("연구 질문의 원본 메시지가 전송되기를 기다립니다.")
+                            raise ResearchDeliveryDeferred("원본 메시지가 전송되기를 기다립니다.")
                 yield anchor.get("messageId") if anchor.get("jobId") != job.job_id else None
             finally:
                 connection.execute("SELECT RELEASE_LOCK(%s)", (lock,)).fetchone()
 
     def save_research_delivery_progress(self, job, destination, checkpoint):
-        key = research_thread_key(job)
+        self._save_thread_progress(job, destination, checkpoint, research_thread_key(job))
+
+    def _save_thread_progress(self, job, destination, checkpoint, key):
         ids = checkpoint.get("messageIds") or []
         if not ids or checkpoint.get("destinationFingerprint") != destination:
-            raise ValueError("연구 메시지의 전송 영수증이 수신처와 일치하지 않습니다.")
+            raise ValueError("메시지의 전송 영수증이 수신처와 일치하지 않습니다.")
         job.updated_at = utc_now()
         with self.transaction() as connection:
             self.upsert_job_with_connection(connection, job)

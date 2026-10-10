@@ -275,7 +275,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # answers, negative outcomes, channel/setting isolation, directive removal
         # and real atomic outbox rollback/retry/worker delivery.
         # Four reply/KST regressions cover transport, frozen clocks, durable lineage and legacy recovery.
-        self.assertLessEqual(total, 2149)
+        # Seven causal conversation contracts cover source ownership, producer lineage,
+        # receipt-backed replies, ambiguity isolation, rollback, concurrent roots and monitor admission.
+        self.assertLessEqual(total, 2156)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -1237,6 +1237,23 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS notification_conversation_sources (
+        source_key CHAR(64) PRIMARY KEY,
+        thread_key CHAR(64) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notification_conversation_jobs (
+        job_id VARCHAR(191) PRIMARY KEY,
+        thread_key CHAR(64) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        world_id VARCHAR(191) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        KEY idx_conversation_members(thread_key,job_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_research_threads (
         thread_key CHAR(64) PRIMARY KEY,
         first_job_id VARCHAR(191) NOT NULL,

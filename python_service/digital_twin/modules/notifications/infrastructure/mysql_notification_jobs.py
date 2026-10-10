@@ -68,9 +68,10 @@ def notification_list_presentation_join() -> str:
 
 
 from .research_threads import ResearchThreadStore
+from .investment_conversations import InvestmentConversationStore
 
 
-class MySQLNotificationJobStore(ResearchThreadStore, MySQLOperationalConnection):
+class MySQLNotificationJobStore(InvestmentConversationStore, ResearchThreadStore, MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
 
@@ -2227,6 +2228,9 @@ class MySQLNotificationJobStore(ResearchThreadStore, MySQLOperationalConnection)
             {"suppressionReason": str((job.context or {}).get("deliverySuppressionReason") or "")},
         )
         if outcome.accepted:
+            self.register_investment_conversation(connection, job)
+            if job.context.get("notificationConversation"):
+                self.upsert_job_with_connection(connection, job)
             self.register_research_thread(connection, job)
         return bool(outcome.accepted)
 

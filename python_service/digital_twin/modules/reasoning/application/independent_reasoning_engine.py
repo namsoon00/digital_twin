@@ -1651,6 +1651,13 @@ class V2ReasoningEngine:
         insight_dispatch_routes = {}
         insight_dispatch_outcomes = ()
         if delivery_authorized and self.insight_dispatch_service is not None:
+            for event in ready_events:
+                projection = projection_results.get(event.account_id) or {}
+                event.metadata = {**(event.metadata or {}), "notificationAnalysisSources": {
+                    "accountId": event.account_id, "symbol": str(event.symbol or "").upper(),
+                    "worldId": projection.get("worldId") or (projection.get("ontologyWorld") or {}).get("worldId") or "",
+                    "sourceEventIds": list(request.source_event_ids), "requestId": request.request_id,
+                    "analyzedAt": utc_now_iso()}}
             delivery_started = time.perf_counter()
             dispatch = getattr(self.insight_dispatch_service, "dispatch", None)
             handoff = (

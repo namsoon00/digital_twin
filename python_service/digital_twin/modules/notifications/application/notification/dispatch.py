@@ -41,8 +41,12 @@ class NotificationDispatchService:
         context = dict(job.context or {})
         # Unverified drafts must never fall back to an account's destination.
         notifier = factory(None if job.message_type == AI_OBSERVATION_DIAGNOSTIC else accounts.get(job.account_id))
-        threaded = job.message_type == "researchProgress" and getattr(notifier, "supports_research_replies", False) is True
-        with self.queue.research_delivery_thread(job, notifier.destination_fingerprint) if threaded else nullcontext() as reply_id:
+        research = job.message_type == "researchProgress"
+        investment = ((context.get("notificationConversation") or {}).get("version") == "investment-conversation-v1"
+                      and not context.get("notificationReplayPreserveOriginal"))
+        threaded = (research or investment) and getattr(notifier, "supports_research_replies", False) is True
+        thread = getattr(self.queue, "research_delivery_thread" if research else "investment_delivery_thread", None)
+        with thread(job, notifier.destination_fingerprint) if threaded else nullcontext() as reply_id:
             self._send(job, notifier, message, audience, channel, context, reply_id, threaded)
 
     def _send(self, job, notifier, message, audience, channel, context, reply_id, threaded):
@@ -76,6 +80,8 @@ class NotificationDispatchService:
             "renderedMessageStatus": "complete" if len(message_bytes) <= 65536 else "oversize-hash-only",
             "inferenceGenerationId": context.get("inferenceGenerationId") or "",
             "deliveryBaseline": context.get("investmentInsightDeliveryHistory") or {}}
+        if context.get("notificationConversation"):
+            rendered_audit["notificationConversation"] = context["notificationConversation"]
         relation_change = context.get("relationChangeEvidence") or {}
         if context.get("aiControlDeliverySnapshot"):
             rendered_audit["aiControlObservation"] = context["aiControlDeliverySnapshot"]
@@ -100,7 +106,9 @@ class NotificationDispatchService:
             current["transportDelivery"] = {**progress, "message": message, "checkpoint": checkpoint}
             job.context = current
             if threaded:
-                self.queue.save_research_delivery_progress(job, notifier.destination_fingerprint, checkpoint)
+                save = (self.queue.save_research_delivery_progress if job.message_type == "researchProgress"
+                        else self.queue.save_investment_delivery_progress)
+                save(job, notifier.destination_fingerprint, checkpoint)
             else:
                 persist_progress(job)
 

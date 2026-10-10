@@ -1318,6 +1318,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             delivered = bool(guarded_events)
             alert_source_event = alerts_detected_event(guarded_events) if guarded_events else None
             outboxed_events: List[AlertEvent] = []
+            conversation_market_jobs = []
             if alert_source_event:
                 insert_domain_event_with_connection(connection, alert_source_event)
                 for event in guarded_events:
@@ -1330,6 +1331,8 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     if notification_store.enqueue_with_connection(connection, job):
                         queued += 1
                         outboxed_events.append(event)
+                        if job.message_type == MARKET_OBSERVATION:
+                            conversation_market_jobs.append(job)
                 model_review_store.enqueue_from_event_with_connection(connection, alert_source_event)
                 # Independent reasoning creates a decision request here, not a
                 # delivered customer notification. Only the legacy direct
@@ -1394,6 +1397,9 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     continue
                 insert_domain_event_with_connection(connection, reasoning_event)
                 ingress_reasoning_event_with_connection(connection, reasoning_event)
+                for market_job in conversation_market_jobs:
+                    if market_job.account_id == snapshot.account_id:
+                        notification_store.bind_market_conversation_event(connection, market_job, reasoning_event.event_id)
                 self.market_observation_anchor_store.mark_pending_with_connection(
                     connection,
                     snapshot.account_id,

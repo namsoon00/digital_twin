@@ -1,5 +1,6 @@
 import hashlib
 import io
+import re
 import urllib.parse
 import zipfile
 from typing import Callable, Dict, Iterable, List
@@ -261,6 +262,16 @@ class OpenDartDocumentAdapter:
         # Only the document archive can establish collection success; never
         # retain echoed vendor content in operational errors.
         if not zipfile.is_zipfile(io.BytesIO(bytes(raw or b""))):
+            # The observed /error.html redirect is an unavailable endpoint,
+            # not an official missing-file (014) response or a completed job.
+            data = bytes(raw or b"")
+            if len(data) <= 65536 and re.search(br"<html\b", data, re.IGNORECASE):
+                page = dart_document_text(data, 20000)
+                if re.search(r"요청하신\s*인터넷\s*주소\s*\(URL\)\s*을\s*찾을\s*수\s*없습니다", page, re.IGNORECASE):
+                    raise ExternalCallDeferred(
+                        "OpenDART 공시 본문 API가 원문 대신 주소 오류 페이지를 반환해 수집 대기 중입니다. 30분 후 재확인합니다.",
+                        reason="source-unavailable",
+                    )
             raise RuntimeError("OpenDART document API invalid response: expected-document-archive")
         text = dart_document_text(raw, bounded_int(settings.get("externalDartDocumentTextMaxChars"), 6000, 500, 20000))
         assessment = assess_disclosure_document(text, "body")

@@ -456,9 +456,12 @@ class ExternalDataCollectionService:
             }
         except ExternalCallDeferred as error:
             maintenance = error.reason == "service-maintenance"
-            due_at = error.retry_at or iso(self.now_provider() + timedelta(seconds=1800 if maintenance else 60))
+            unavailable = error.reason == "source-unavailable"
+            due_at = error.retry_at or iso(self.now_provider() + timedelta(seconds=1800 if maintenance or unavailable else 60))
             if maintenance:
                 self.store.defer_dataset_for_maintenance(descriptor, due_at, str(error))
+            elif unavailable:
+                self.store.defer_dataset_for_unavailability(descriptor, due_at, str(error))
             self.store.defer_job(job, due_at, str(error)[:500])
             self.store.record_run(job, "deferred", started_at, iso(self.now_provider()), 0, error_message=str(error)[:500])
             return {"datasetId": job.dataset_id, "partitionKey": job.partition_key,

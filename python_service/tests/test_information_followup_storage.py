@@ -130,6 +130,12 @@ class InformationStorageTests(unittest.TestCase):
                 connection.execute('DELETE FROM external_provider_state WHERE provider_id=%s', (identity,))
 
     def test_dataset_maintenance_survives_reopen_and_releases_without_blocking_other_apis(self):
+        self._assert_dataset_deferral_survives_reopen("maintenance", "service-maintenance")
+
+    def test_dataset_unavailability_survives_reopen_and_releases_without_blocking_other_apis(self):
+        self._assert_dataset_deferral_survives_reopen("unavailable", "source-unavailable")
+
+    def _assert_dataset_deferral_survives_reopen(self, state, reason):
         settings = runtime_settings()
         first = MySQLExternalDataStore(settings)
         identity = 'test-maintenance-' + uuid.uuid4().hex
@@ -141,19 +147,20 @@ class InformationStorageTests(unittest.TestCase):
         until = now + timedelta(minutes=30)
         try:
             self.assertTrue(first.reserve_provider_call(document, now)['allowed'])
-            first.defer_dataset_for_maintenance(document, stamp(until), 'provider maintenance')
+            defer = first.defer_dataset_for_maintenance if state == 'maintenance' else first.defer_dataset_for_unavailability
+            defer(document, stamp(until), 'provider deferred')
             reopened = MySQLExternalDataStore(settings)
             for minute in (1, 15, 29):
                 permit = reopened.reserve_provider_call(document, now + timedelta(minutes=minute))
                 self.assertFalse(permit['allowed'])
-                self.assertEqual('service-maintenance', permit['reason'])
+                self.assertEqual(reason, permit['reason'])
                 self.assertEqual(stamp(until), permit['nextAllowedAt'])
             self.assertTrue(reopened.reserve_provider_call(listing, now + timedelta(minutes=1))['allowed'])
             with reopened.connect() as c:
                 row = c.execute('SELECT request_count, consecutive_failures, health_state FROM external_provider_state WHERE provider_id=%s AND bucket_id=%s', (identity, document.dataset_id)).fetchone()
                 self.assertEqual(1, row['request_count'])
                 self.assertEqual(0, row['consecutive_failures'])
-                self.assertEqual('maintenance', row['health_state'])
+                self.assertEqual(state, row['health_state'])
             self.assertTrue(reopened.reserve_provider_call(document, until)['allowed'])
             reopened.mark_provider_success(document)
             with reopened.connect() as c:

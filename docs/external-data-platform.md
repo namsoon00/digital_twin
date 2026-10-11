@@ -131,3 +131,13 @@ evidence. Current signal assembly excludes such legacy document facts; recovery
 does not replay them and can reopen their completed collection partitions.
 Immutable source revisions remain unchanged for audit. Revalidate affected
 research evidence and use the existing document recovery queue after deployment.
+
+The known HTML URL-not-found page returned by the document endpoint is also a
+durable 30-minute dataset deferral (`source-unavailable`, health `unavailable`).
+It is not proof of scheduled maintenance or a missing filing. Repeated identical
+pages do not emit system/connection-error alerts; pending jobs, provider status,
+retry time and deferred collection runs remain visible. The pause survives a
+worker restart, preserves prior facts and does not block other OpenDART datasets.
+Unknown non-ZIP responses, corrupt archives, unverified archived bodies and
+authentication errors keep the error path. Only a verified document or explicit
+official missing-file response may complete the document job.

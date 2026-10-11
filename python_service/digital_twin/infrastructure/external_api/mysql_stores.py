@@ -459,7 +459,8 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             if circuit_until and circuit_until > current:
                 return {
                     "allowed": False,
-                    "reason": "service-maintenance" if dataset_row.get("health_state") == "maintenance" else "circuit-open",
+                    "reason": {"maintenance": "service-maintenance", "unavailable": "source-unavailable"}.get(
+                        dataset_row.get("health_state"), "circuit-open"),
                     "nextAllowedAt": iso(circuit_until),
                 }
             next_allowed = parse_iso(provider_row.get("next_allowed_at"))
@@ -529,6 +530,12 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         return dict(self.transaction_with_deadlock_retry("external-provider-reserve", mutation) or {})
 
     def defer_dataset_for_maintenance(self, descriptor: DatasetDescriptor, retry_at: str, message: str) -> None:
+        self._defer_dataset(descriptor, retry_at, message, "maintenance")
+
+    def defer_dataset_for_unavailability(self, descriptor: DatasetDescriptor, retry_at: str, message: str) -> None:
+        self._defer_dataset(descriptor, retry_at, message, "unavailable")
+
+    def _defer_dataset(self, descriptor: DatasetDescriptor, retry_at: str, message: str, state: str) -> None:
         """Persist a dataset-scoped pause without counting an expected outage as a failure."""
         current = utc_now()
         stamp = iso(current)
@@ -538,16 +545,16 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 INSERT INTO external_provider_state (
                     provider_id, bucket_id, window_date, health_state,
                     circuit_open_until, last_attempt_at, last_error, updated_at
-                ) VALUES (%s, %s, %s, 'maintenance', %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE health_state = 'maintenance',
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE health_state = VALUES(health_state),
                     circuit_open_until = VALUES(circuit_open_until),
                     last_attempt_at = VALUES(last_attempt_at), last_error = VALUES(last_error),
                     updated_at = VALUES(updated_at)
                 """,
-                (descriptor.provider_id, descriptor.dataset_id, current.date().isoformat(),
+                (descriptor.provider_id, descriptor.dataset_id, current.date().isoformat(), state,
                  retry_at, stamp, str(message)[:500], stamp),
             )
-        self.transaction_with_deadlock_retry("external-provider-maintenance", mutation)
+        self.transaction_with_deadlock_retry("external-provider-deferral", mutation)
 
     def defer_job(self, job: CollectionJob, next_due_at: str, reason: str = "") -> None:
         stamp = iso(utc_now())

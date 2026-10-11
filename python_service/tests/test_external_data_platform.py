@@ -234,6 +234,7 @@ class MemoryCollectionStore:
         self.failure_state = "failed"
         self.deferred = []
         self.maintenance = []
+        self.unavailable = []
 
     def list_subjects(self):
         return [ExternalSubject("NVDA", symbol="NVDA", market="US", currency="USD")]
@@ -274,6 +275,9 @@ class MemoryCollectionStore:
 
     def defer_dataset_for_maintenance(self, descriptor, retry_at, message):
         self.maintenance.append((descriptor.dataset_id, retry_at, message))
+
+    def defer_dataset_for_unavailability(self, descriptor, retry_at, message):
+        self.unavailable.append((descriptor.dataset_id, retry_at, message))
 
     def complete_observation(self, job, descriptor, observation, due_at, event=None, events=None):
         self.completed.append((job, descriptor, observation, due_at))
@@ -1408,13 +1412,27 @@ class ExternalDataPlatformTest(unittest.TestCase):
                 self.assertFalse(dart_document_permanently_unavailable(raw))
 
     def test_opendart_maintenance_defers_without_alert_or_replacing_evidence_then_recovers(self):
+        self._assert_opendart_defers_then_recovers(
+            b'<result><status>800</status><message>test-key</message></result>',
+            "service-maintenance", "maintenance",
+        )
+
+    def test_opendart_url_error_page_defers_without_alert_then_recovers(self):
+        for encoding in ("utf-8", "cp949"):
+            with self.subTest(encoding=encoding):
+                self._assert_opendart_defers_then_recovers(
+                    '<HTML><body>요청하신 인터넷주소(URL)을 <strong>찾을 수 없습니다.</strong> test-key</body></HTML>'.encode(encoding),
+                    "source-unavailable", "unavailable",
+                )
+
+    def _assert_opendart_defers_then_recovers(self, raw, reason, state):
         settings = {"opendartApiKey": "test-key"}
         adapter = OpenDartDocumentAdapter()
         job = CollectionJob("opendart.document", "005930:receipt:body-v1", "opendart", 75,
                             ExternalSubject("005930", symbol="005930"), watermark={"receiptNo": "receipt"})
         provider = legacy_provider(settings)
         provider.guarded_call = lambda _source, _target, call: call()
-        provider.fetch_bytes = lambda *_args: b'<result><status>800</status><message>test-key</message></result>'
+        provider.fetch_bytes = lambda *_args: raw
         store = MemoryCollectionStore()
         previous = {"payload": {"documentText": "retained body"}, "quality": {"dataUsable": True}}
         store.current = previous
@@ -1424,7 +1442,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
             for _ in range(2):
                 result = service._process_job(job)
                 self.assertEqual("deferred", result["status"])
-                self.assertEqual("service-maintenance", result["reason"])
+                self.assertEqual(reason, result["reason"])
                 self.assertEqual("2026-08-16T00:30:00Z", result["nextDueAt"])
                 self.assertFalse(result["requiresAttention"])
                 self.assertFalse(external_data_failure_requires_alert(result))
@@ -1435,7 +1453,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
             self.assertEqual([], store.empty_completed)
             self.assertEqual([], store.events)
             self.assertEqual(2, len(store.deferred))
-            self.assertEqual("opendart.document", store.maintenance[0][0])
+            self.assertEqual("opendart.document", getattr(store, state)[0][0])
             self.assertTrue(all(run[0][1] == "deferred" for run in store.recorded))
             body = "회사는 신규 시설 투자를 결정했으며 투자 금액과 일정 및 자금 조달 방법을 공시합니다. " * 5
             archive = io.BytesIO()
@@ -1456,7 +1474,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as bundle:
             bundle.writestr("document.html", page)
-        for raw in (page, archive.getvalue(), b"PK-corrupt-archive", b"", b"<DOCUMENT>short</DOCUMENT>"):
+        for raw in (page, archive.getvalue(), b"PK-corrupt-archive", b"", b"<DOCUMENT>short</DOCUMENT>", b"<html>Unknown failure</html>"):
             with self.subTest(raw=raw[:10]):
                 provider = legacy_provider(settings)
                 provider.guarded_call = lambda _source, _target, call: call()
@@ -1467,7 +1485,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
                 service = ExternalDataCollectionService(settings, ExternalDatasetRegistry([adapter]), store)
                 with patch("digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider", return_value=provider):
                     result = service._process_job(job)
-                self.assertEqual("error", result["status"])
+                self.assertEqual("deferred" if raw == page else "error", result["status"])
                 self.assertNotIn("test-key", result["error"])
                 self.assertEqual(previous, store.current)
                 self.assertEqual([], store.completed)
@@ -1487,12 +1505,17 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("original-hash", fact["payloadHash"])
 
     def test_maintenance_read_model_exposes_unavailable_source_without_connection_error(self):
+        for state in ("maintenance", "unavailable"):
+            with self.subTest(state=state):
+                self._assert_deferred_source_read_model(state)
+
+    def _assert_deferred_source_read_model(self, state):
         store = MemoryFactStore()
         store.provider_statuses = lambda: [{"datasetId": "opendart.document", "providerId": "opendart",
-            "state": "maintenance", "lastError": "공시 본문 API 점검으로 수집 대기",
+            "state": state, "lastError": "공시 본문 API 수집 대기",
             "circuitOpenUntil": "2026-08-16T00:30:00Z"}]
         result = ExternalSignalsReadModelService(store).signals_for_subjects(["005930"])
-        status = next(s for s in result["statuses"] if s.get("state") == "maintenance")
+        status = next(s for s in result["statuses"] if s.get("state") == state)
         self.assertTrue(status["ok"])
         self.assertTrue(status["deferred"])
         self.assertFalse(status["dataUsable"])

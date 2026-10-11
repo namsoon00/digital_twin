@@ -480,7 +480,7 @@ class ExternalSignalsReadModelService:
             if status.get("datasetId") in CALENDAR_REFERENCE_DATASETS:
                 continue
             state = str(status.get("state") or "unknown")
-            if state == "maintenance":
+            if state in {"maintenance", "unavailable"}:
                 result["statuses"].append({
                     "source": str(status.get("providerId") or "External API"),
                     "datasetId": str(status.get("datasetId") or ""),
@@ -488,7 +488,7 @@ class ExternalSignalsReadModelService:
                     "deferred": True,
                     "dataUsable": False,
                     "state": state,
-                    "message": str(status.get("lastError") or "외부 서비스 점검으로 수집 대기 중입니다."),
+                    "message": str(status.get("lastError") or "외부 원천을 사용할 수 없어 수집 대기 중입니다."),
                     "nextRetryAt": str(status.get("circuitOpenUntil") or ""),
                     "lastSuccessAt": str(status.get("lastSuccessAt") or ""),
                 })

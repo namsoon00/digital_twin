@@ -284,7 +284,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Three maintenance regressions protect preserved evidence and recovery,
         # non-error source visibility, and durable dataset-scoped API admission.
         # Three error-page admission, read-model and durable retry regressions.
-        self.assertLessEqual(total, 2178)
+        # HTML outage deferral and its restart-persistent storage admission.
+        self.assertLessEqual(total, 2180)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

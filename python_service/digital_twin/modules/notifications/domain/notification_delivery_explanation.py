@@ -11,7 +11,7 @@ from digital_twin.modules.notifications.domain.notification_ai_delivery import f
 from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
 
 
-CUSTOMER_DELIVERY_EXPLANATION_VERSION = "customer-delivery-explanation-v2"
+CUSTOMER_DELIVERY_EXPLANATION_VERSION = "customer-delivery-explanation-v3"
 VALID_CAUSE_CATEGORIES = {
     "verification",
     "replay",
@@ -580,7 +580,20 @@ def validate_customer_delivery_explanation(
             or transition_values["previousAction"] == transition_values["currentAction"]
         ):
             errors.append("action-transition-values-invalid")
-    if category == "readiness-transition":
+    if category == "readiness-transition" and _text(primary.get("basis")) == "typedb-hypothesis-data-availability":
+        # Data availability can change while the investment hypothesis stays
+        # maintained. Reuse the graph/receipt-backed cause contract instead of
+        # requiring a separate investment-decision materiality flag. Never let
+        # a claimed basis or a generic material transition waive this proof.
+        cause = _context_observation_cause(context)
+        expected = cause.to_dict() if cause is not None else {}
+        proof_fields = (
+            "code", "category", "basis", "previousValue", "currentValue",
+            "observedAt", "sourceReferences",
+        )
+        if not expected or any(primary.get(key) != expected.get(key) for key in proof_fields):
+            errors.append("readiness-transition-evidence-mismatch")
+    elif category == "readiness-transition":
         relation_transition = _mapping(_mapping(context.get("ontologyRelationDiff")).get("decisionTransition"))
         relation_basis_valid = bool(
             _text(primary.get("basis")) == "relation-decision-transition"

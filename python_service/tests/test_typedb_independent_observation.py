@@ -18,6 +18,10 @@ from digital_twin.modules.notifications.application.typedb_observation_message i
 from digital_twin.modules.read_models.contracts import customer_investment_document_from_dict, customer_investment_document_quality
 from digital_twin.infrastructure.transactions.ai_control_publication import AIControlPublication
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
+from digital_twin.modules.notifications.domain.notification_delivery_explanation import (
+    build_customer_delivery_explanation, validate_customer_delivery_explanation,
+)
+from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
 
 
 def independent_fixture(queue=None, material=True, account_id="main", data_change=False, reassessment=False):
@@ -118,6 +122,13 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertTrue(independent_typedb_publication(job.context))
         # The production receipt/cadence check freezes this before rendering.
         job.context["relationChangeEvidence"] = relation_change_evidence(job.context)
+        runner = NotificationQueueRunner(Mock(), Mock(), Mock())
+        self.assertTrue(runner.apply_customer_delivery_explanation_gate(job))
+        explanation = job.context["customerDeliveryExplanation"]
+        self.assertEqual("valid", explanation["validation"]["state"])
+        self.assertEqual("typedb-hypothesis-data-availability", explanation["primaryCause"]["basis"])
+        self.assertFalse(job.context.get("investmentNotificationTransition"))
+        runner.queue.mark_suppressed.assert_not_called()
         text = typedb_observation_telegram_message(job.context)
         self.assertIn("자료 상태", text)
         self.assertIn("체결 자료의 유효기간", text)
@@ -139,6 +150,12 @@ class IndependentTypeDBTests(unittest.TestCase):
         prior["dataAvailability"] = {key: {"state": "unavailable"}}
         queued["relationChangeEvidence"] = relation_change_evidence(queued, prior)
         self.assertEqual("send", context_observation_delivery_decision(queued)["decision"])
+        job = next(iter(queue.jobs.values()))
+        runner = NotificationQueueRunner(Mock(), Mock(), Mock())
+        self.assertTrue(runner.apply_customer_delivery_explanation_gate(job))
+        self.assertEqual("valid", job.context["customerDeliveryExplanation"]["validation"]["state"])
+        self.assertEqual("usable", job.context["customerDeliveryExplanation"]["primaryCause"]["currentValue"])
+        runner.queue.mark_suppressed.assert_not_called()
         context = readable_fixture()
         relation = context["ontologyRelationContext"]
         transition = relation["hypothesisLifecycle"]["transitions"][0]
@@ -150,6 +167,52 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertTrue(relation_change_evidence(context, previous)["eligible"])
         previous["dataAvailability"][transition["lifecycleKey"]]["state"] = "usable"
         self.assertFalse(relation_change_evidence(context, previous)["eligible"])
+
+    def test_data_status_explanation_rejects_missing_or_mismatched_proof(self):
+        _, queue, _, _ = independent_fixture(data_change="restored")
+        context = next(iter(queue.jobs.values())).context
+        prior = relation_change_evidence(context)["current"]
+        key = prior["transitions"][0]["lifecycleKey"]
+        prior["transitions"] = []
+        prior["dataAvailability"] = {key: {"state": "unavailable"}}
+        context["relationChangeEvidence"] = relation_change_evidence(context, prior)
+        explanation = build_customer_delivery_explanation(
+            message_type="investmentInsight", source_event_name="investment.inference_episode_completed", context=context,
+        )
+        self.assertEqual("valid", explanation["validation"]["state"])
+        for field, value in (("previousValue", "usable"), ("currentValue", "unavailable"),
+                             ("observedAt", "2099-01-01T00:00:00Z"),
+                             ("sourceReferences", ["unrelated-transition"]), ("code", "invented")):
+            with self.subTest(field=field):
+                forged = deepcopy(explanation)
+                forged["primaryCause"][field] = value
+                validation = validate_customer_delivery_explanation(
+                    forged, message_type="investmentInsight", source_event_name="investment.inference_episode_completed", context=context,
+                )
+                self.assertIn("readiness-transition-evidence-mismatch", validation["errors"])
+        for invalidation in ("missing-receipt", "already-usable", "already-delivered", "wrong-generation", "no-graph", "no-publication"):
+            with self.subTest(invalidation=invalidation):
+                changed = deepcopy(context)
+                previous = changed["relationChangeEvidence"]["previous"]
+                if invalidation == "missing-receipt":
+                    changed["relationChangeEvidence"] = {}
+                elif invalidation == "already-usable":
+                    previous["dataAvailability"][key]["state"] = "usable"
+                elif invalidation == "already-delivered":
+                    previous["transitions"] = deepcopy(changed["relationChangeEvidence"]["transitions"])
+                elif invalidation == "wrong-generation":
+                    changed["ontologyRelationContext"]["inferenceGenerationId"] = "other"
+                elif invalidation == "no-graph":
+                    changed["ontologyRelationContext"]["graphStoreUsed"] = False
+                else:
+                    changed["typedbObservationPublication"] = {}
+                    changed["decisionPublication"] = {}
+                # An unrelated material decision must not rescue false proof.
+                changed["investmentNotificationTransition"] = {"changed": True, "material": True}
+                validation = validate_customer_delivery_explanation(
+                    explanation, message_type="investmentInsight", source_event_name="investment.inference_episode_completed", context=changed,
+                )
+                self.assertIn("readiness-transition-evidence-mismatch", validation["errors"])
 
     def test_cause_uses_changed_measurement_from_its_own_rule(self):
         context = readable_fixture()

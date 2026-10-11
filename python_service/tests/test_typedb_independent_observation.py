@@ -104,19 +104,11 @@ def readable_fixture():
 
 
 class IndependentTypeDBTests(unittest.TestCase):
-    def test_reassessment_publishes_independently_without_claiming_market_change(self):
+    def test_same_source_reassessment_is_archived_without_customer_delivery(self):
         result, queue, handoff, _ = independent_fixture(reassessment=True)
-        self.assertEqual(1, result["typedbPublishedCount"])
+        self.assertEqual(0, result["typedbPublishedCount"])
         self.assertEqual([], handoff.events)
-        job = next(iter(queue.jobs.values()))
-        self.assertTrue(independent_typedb_publication(job.context))
-        with AIControlPublication({}, Mock(), Mock(), lambda: []).delivery_guard(job, "saved observation"):
-            pass
-        # The production receipt/cadence check freezes this before rendering.
-        job.context["relationChangeEvidence"] = relation_change_evidence(job.context)
-        text = typedb_observation_telegram_message(job.context)
-        self.assertIn("분석 재평가", text)
-        self.assertNotIn("기존 설명을 뒷받침하던 조건이 더 이상", text)
+        self.assertEqual({}, queue.jobs)
 
     def test_data_issue_publishes_as_data_status_without_false_hypothesis_change(self):
         result, queue, handoff, case = independent_fixture(data_change=True)

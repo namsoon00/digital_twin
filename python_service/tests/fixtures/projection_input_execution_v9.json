@@ -1,0 +1,26 @@
+{
+  "sourceRevision": "c876534d0 + source renewal and distinct source-clock price observations",
+  "contractVersion": "projection-input-execution-v9",
+  "reason": "Explicitly missing price source clocks no longer manufacture temporal samples from snapshot time. In the full synthetic packet only BBB temporal-window and temporal-coverage-gap properties change; all relations, source facts, persistence graph, telemetry, events, and contexts are unchanged. AAA-only target scenario is unchanged. Restoring the prior source modules reproduces all nine v8 scenarios. Lifecycle and temporal tests cover same-source repeats, closed sessions, new-source recovery, and independent flow clocks. No investment thresholds changed.",
+  "changedCases": [
+    "full",
+    "source-facts",
+    "live-context",
+    "memory-hit",
+    "persistent-hit",
+    "cache-errors",
+    "scoring-failure",
+    "world-identity"
+  ],
+  "scenarios": {
+    "full": "e62d552fdc2e33950bd5d517b2ffe3bf847edf0145bdac3f154820943b6df939",
+    "target": "8aa88fb7edbf57e1c2f0b8c328cdf8ac3e3870d398666bb310dac823ff2ddf0e",
+    "source-facts": "b446e2a2b353624444d714e0687883d439c6782974e7acc61f721d7e396b6501",
+    "live-context": "4ccda4aa896c9df17fc259d0e19bbe2eb164c10f3109da3d10007e095eff58ad",
+    "memory-hit": "adb2dd2568dcdc85c0a05024b0ecb3228bc4a9682d8f3078ce51290212c4a714",
+    "persistent-hit": "1465992db654da7d79b9b3c561270e50fbcfa48e635c23cdcbd71fcea20b4446",
+    "cache-errors": "0a30dde7da5794ca7c9b944ff766918dd43576f9682ab95d2ce3000ae85796b7",
+    "scoring-failure": "f5ef181e13286a7c40ab92a31f69a52011d04bb6f0223bebed040f9c8c571390",
+    "world-identity": "a5f4cce139024d5313028c1875c0d69ef99fc961772852416c24e97f64224f54"
+  }
+}

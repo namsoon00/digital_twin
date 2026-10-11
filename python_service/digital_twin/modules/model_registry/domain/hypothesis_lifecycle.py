@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -20,11 +21,11 @@ from digital_twin.modules.model_registry.domain.hypothesis_evidence_comparison i
     availability_change, availability_for_traces, condition_evidence_rows,
 )
 from digital_twin.modules.model_registry.domain.hypothesis_change_basis import (
-    lifecycle_observation_basis, compare_change_basis, legacy_observation_basis,
+    lifecycle_observation_basis, compare_change_basis, legacy_observation_basis, source_refresh_decision, clock,
 )
 
 
-HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v6"
+HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v7"
 HYPOTHESIS_LIFECYCLE_KEY_VERSION = "v2"
 HYPOTHESIS_LIFECYCLE_KEY_PREFIX = HYPOTHESIS_LIFECYCLE_KEY_VERSION + ":"
 HYPOTHESIS_LIFECYCLE_STATES = (
@@ -44,7 +45,7 @@ HYPOTHESIS_LIFECYCLE_STATE_LABELS = {
     "invalidated": "가설 무효화",
     "expired": "근거 유효기간 만료",
 }
-RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v3"
+RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v4"
 RELATION_LIFECYCLE_CHANGE_KINDS = {
     "observed": "created",
     "maintained": "maintained",
@@ -948,6 +949,51 @@ def state_for_delta(previous: HypothesisLifecycleRecord, delta: Mapping[str, Seq
     return "maintained", "동일한 TypeDB 인과 경로가 다음 세대에서도 유지되었습니다."
 
 
+def _retain_source_judgement(previous, refresh, stamp):
+    """Keep the last judgment immutable while auditing source availability."""
+    snapshot = dict(previous.snapshot)
+    prior_refresh = snapshot.get("judgementRefresh") or {}
+    notice_baseline = dict(prior_refresh.get("notificationAvailability") or (
+        {"state": "usable"} if prior_refresh.get("status") == "awaiting-source"
+        else snapshot.get("dataAvailability") or {"state": "usable"}))
+    refresh = {**refresh, "lastJudgedAt": previous.last_observed_at,
+               "notificationAvailability": notice_baseline}
+    snapshot["judgementRefresh"] = refresh
+    # Keep the first observed source as the migration baseline when older
+    # records have no source clock. It is never a new market judgment.
+    baseline = dict(snapshot.get("sourceRefreshBaseline") or {})
+    snapshot["sourceRefreshBaseline"] = baseline
+    for row in refresh.get("rules") or []:
+        if row.get("sourceAsOf") and not row.get("previousSourceAsOf"):
+            baseline.setdefault(row["ruleId"], row["sourceAsOf"])
+    change = {}
+    availability = {"state": "unavailable", "reasons": [refresh["reason"]]}
+    if refresh["status"] == "unavailable":
+        change = availability_change(notice_baseline, availability)
+        refresh["notificationAvailability"] = availability
+    snapshot["dataAvailability"] = availability
+    record = replace(previous, snapshot=snapshot, material_change=False, evidence_delta={}, version=HYPOTHESIS_LIFECYCLE_VERSION)
+    if not change:
+        return record, None
+    return record, HypothesisLifecycleTransition(
+        transition_id=stable_id("hypothesis-data-availability", previous.lifecycle_key, stamp, "unavailable"),
+        lifecycle_key=previous.lifecycle_key, lifecycle_id=previous.lifecycle_id, scope=previous.scope,
+        previous_state=previous.state, current_state=previous.state, occurred_at=stamp,
+        reason=change["summary"], data_availability_change=change, record=record.to_dict(),
+        change_basis={"category": "data-unavailable", "reason": refresh["reason"]},
+    )
+
+
+def _refresh_for_snapshot(previous, current_basis, rule_ids):
+    prior = HypothesisLifecycleSnapshot.from_dict(previous.snapshot) if previous else None
+    before = deepcopy(prior.observation_basis) if prior else {}
+    for rule_id, stamp in (previous.snapshot.get("sourceRefreshBaseline", {}) if previous else {}).items():
+        model = before.setdefault("models", {}).setdefault(rule_id, {})
+        if clock((model.get("sourceObservation") or {}).get("observedAt")) is None:
+            model["sourceObservation"] = {"verified": True, "observedAt": stamp}
+    return source_refresh_decision(before, current_basis, rule_ids)
+
+
 def record_for_snapshot(
     previous: Optional[HypothesisLifecycleRecord],
     snapshot: HypothesisLifecycleSnapshot,
@@ -975,13 +1021,23 @@ def record_for_snapshot(
     }
     if before and previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
         changed_rule_ids.update(snapshot.source_rule_ids)
+    refresh = _refresh_for_snapshot(previous, snapshot.observation_basis,
+                                    changed_rule_ids or snapshot.source_rule_ids)
+    if refresh["rules"] and snapshot.data_availability.get("state") == "unavailable":
+        closed = all(row["marketSessionStatus"] == "closed" for row in refresh["rules"])
+        refresh = {**refresh, "status": "awaiting-source" if closed else "unavailable",
+                   "reason": "판단에 필요한 자료가 갱신될 때까지 마지막 판단을 유지합니다."}
+    if previous and refresh["status"] != "ready":
+        return _retain_source_judgement(previous, refresh, stamp)
     removed = any(material_delta_values(delta, key) for key in (
         "removedSupportingEvidenceKeys", "removedCounterEvidenceKeys", "removedCausalPathKeys"))
     change_basis = compare_change_basis(before.observation_basis if before else {}, snapshot.observation_basis,
                                         changed_rule_ids, removed=removed) if changed_rule_ids and before else {}
     if change_basis.get("category") == "data-unavailable":
         snapshot = replace(snapshot, data_availability={"state": "unavailable", "reasons": [change_basis["reason"]]})
-    data_change = availability_change(before.data_availability if before else {}, snapshot.data_availability)
+    before_availability = ((previous.snapshot.get("judgementRefresh") or {}).get("notificationAvailability")
+                           or before.data_availability) if before else {}
+    data_change = availability_change(before_availability, snapshot.data_availability)
     if (not before or before.data_availability.get("state") not in {"usable", "unavailable"}) and snapshot.data_availability.get("state") == "unavailable":
         data_change = {"previousState": "unknown", "currentState": "unavailable", "kind": "data-unavailable",
                        "summary": "판단에 필요한 자료를 다시 확인해야 합니다.",
@@ -994,7 +1050,7 @@ def record_for_snapshot(
         material_change = False
     elif expiry:
         state, reason = "expired", expiry
-    elif not previous or previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
+    elif not previous or not previous.last_observed_at or previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
         state = "observed"
         reason = "TypeDB 가설 경로가 정상 추론 세대에서 관찰되었습니다."
     else:
@@ -1020,7 +1076,7 @@ def record_for_snapshot(
         family_id=snapshot.family_id,
         first_observed_at=(
             previous.first_observed_at
-            if previous and previous.state not in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES
+            if previous and previous.last_observed_at and previous.state not in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES
             else stamp
         ),
         last_observed_at=stamp,
@@ -1040,6 +1096,13 @@ def record_for_snapshot(
                   if before and snapshot.data_availability.get("state") == "unavailable" else snapshot.to_dict()),
     )
     previous_state = previous.state if previous else ""
+    if not previous and refresh["status"] != "ready":
+        # A closed-market initial capture is a reference baseline, not a newly
+        # observed hypothesis. The first new source will perform the judgment.
+        return replace(record, state="maintained", material_change=False, last_observed_at="",
+                       snapshot={**snapshot.to_dict(), "judgementRefresh": {
+                                     **refresh, "notificationAvailability": snapshot.data_availability},
+                                 "dataAvailability": {"state": "unavailable", "reasons": [refresh["reason"]]}}), None
     changed = not previous or previous.state != record.state or record.material_change or bool(data_change) or change_basis.get("category") == "reassessment"
     if not changed:
         return record, None
@@ -1092,6 +1155,10 @@ def record_for_absent_snapshot(
         return previous, None
     stamp = canonical_timestamp(observed_at, utc_now_iso())
     prior = HypothesisLifecycleSnapshot.from_dict(previous.snapshot)
+    if current_basis is not None:
+        refresh = _refresh_for_snapshot(previous, current_basis, prior.source_rule_ids)
+        if refresh["status"] != "ready":
+            return _retain_source_judgement(previous, refresh, stamp)
     change_basis = compare_change_basis(
         prior.observation_basis, current_basis or {}, prior.source_rule_ids, removed=True,
         require_model_proof="model-signal" in (prior.policy.get("requiredFreshnessDomains") or []),
@@ -1176,6 +1243,8 @@ def lifecycle_context_summary(records: Iterable[HypothesisLifecycleRecord]) -> D
             "nextDataRequirements": list(policy.next_data_requirements or []),
             "requiredFreshnessDomains": list(policy.required_freshness_domains or []),
             "dataAvailability": dict(snapshot.data_availability),
+            "lastJudgedAt": record.last_observed_at,
+            "judgementRefresh": dict(record.snapshot.get("judgementRefresh") or {}),
             "evidenceComparison": {
                 "status": "partial" if any(":unresolved-slot:" in key for key in [*snapshot.supporting_evidence_keys, *snapshot.counter_evidence_keys]) else "resolved",
                 "reason": "식별되지 않은 근거는 강화·약화 판정에 사용하지 않습니다.",
@@ -1266,7 +1335,7 @@ def relation_lifecycle_transition_contract(value: Mapping[str, object]) -> Dict[
         "changeKind": change_kind,
         "changeLabel": {"data-unavailable": "자료 확인 필요", "data-restored": "자료 복구", "reassessed": "분석 조건 재평가"}.get(change_kind) or RELATION_LIFECYCLE_CHANGE_LABELS.get(change_kind, change_kind),
         "material": material,
-        "deliverable": material or data_only or reassessment,
+        "deliverable": material or data_only,
         "changeCategory": "data-availability" if data_only else "reassessment" if reassessment else "relation",
         "changeBasis": change_basis,
         "dataAvailabilityChange": data_change,

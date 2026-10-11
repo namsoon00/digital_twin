@@ -20,7 +20,8 @@ def attach_model_observations(result, graph, symbols):
                 for rule in props.get(field) or []:
                     rows[symbol][rule] = {"hypothesisContractId": rule, "status": status,
                                           "observedAt": props.get("observedAt"),
-                                          "sourceFeatureSnapshotId": props.get("sourceFeatureSnapshotId")}
+                                          "sourceFeatureSnapshotId": props.get("sourceFeatureSnapshotId"),
+                                          **deepcopy((props.get("contractObservations") or {}).get(rule) or {})}
     for entity in graph.entities:
         props = entity.properties or {}
         symbol, rule = props.get("symbol"), props.get("hypothesisContractId")

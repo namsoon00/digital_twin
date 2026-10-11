@@ -429,6 +429,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
             if item.relation_type == "HAS_LEVERAGED_FLOW_SIGNAL"
         ))
 
+    def test_weekend_polling_cannot_create_extra_price_samples_or_sessions(self):
+        definition = TemporalWindowDefinition("3D", 3, 3)
+        rows = [{"generatedAt": "2026-10-%02dT21:00:00Z" % day,
+                 "sourceAsOf": "2026-10-%02dT20:00:00Z" % day, "currentPrice": price,
+                 "market": "US", "currency": "USD", "dataQuality": "actual"}
+                for day, price in [(7, 100), (8, 105), (9, 102)]]
+        baseline = temporal_window_values(rows, definition)
+        repeated = rows + [{**rows[-1], "generatedAt": "2026-10-11T06:%02d:00Z" % minute,
+                            "marketSessionDate": "2026-10-11", "dataQuality": "reference"}
+                           for minute in range(60)]
+        after = temporal_window_values(repeated, definition)
+        for key in ("sampleCount", "coveredSessionCount", "recentPriceChangePct", "drawdownFromPeakPct", "lastObservedAt"):
+            self.assertEqual(baseline[key], after[key], key)
+        self.assertEqual(3, after["sampleCount"])
+        self.assertEqual("2026-10-09T20:00:00Z", after["lastObservedAt"])
+        repeated[-1].update(tradeStrength=150, volumeRatio=1.5, bidAskImbalance=7)
+        independent_flow = temporal_window_values(repeated, definition)
+        self.assertEqual(150, independent_flow["tradeStrengthEnd"])
+        self.assertEqual(1.5, independent_flow["volumeRatioEnd"])
+        self.assertEqual(7, independent_flow["bidAskImbalanceEnd"])
+
     def test_temporal_windows_materialize_from_monitor_state_history(self):
         position = Position(
             symbol="000660",
@@ -453,6 +474,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             trade_strength=84,
             bid_ask_imbalance=-12,
             sector="반도체",
+            source_as_of="2026-07-16T00:00:00Z",
         )
         portfolio = portfolio_summary([position], account_cash=200000)
         graph = build_portfolio_ontology(
@@ -586,7 +608,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in graph.relations
         ))
 
-    def test_temporal_window_keeps_raw_trajectory_and_rejects_stale_flow_as_inference_input(self):
+    def test_repeated_source_clock_does_not_manufacture_price_history_or_flow(self):
         rows = [
             {
                 "generatedAt": "2026-07-20T00:00:00Z",
@@ -625,14 +647,16 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         values = temporal_window_values(rows, TemporalWindowDefinition("3D", 3, 3))
 
-        self.assertEqual(-8.0, values["priceChangePct"])
-        self.assertEqual(2, values["consecutiveDeclineCount"])
-        self.assertEqual(2, values["staleObservationCount"])
+        self.assertEqual(0.0, values["priceChangePct"])
+        self.assertEqual(1, values["sampleCount"])
+        self.assertFalse(values["hasSufficientHistory"])
+        self.assertEqual(0, values["consecutiveDeclineCount"])
+        self.assertEqual(0, values["staleObservationCount"])
         self.assertEqual(1, values["smartMoneyObservationCount"])
         self.assertEqual(1, values["smartMoneyDistinctObservationCount"])
         self.assertEqual("partial", values["smartMoneyDataState"])
         self.assertEqual(-300.0, values["smartMoneyNetLatest"])
-        self.assertAlmostEqual(1 / 3, values["validObservationRatio"], places=3)
+        self.assertEqual(1.0, values["validObservationRatio"])
 
     def test_temporal_window_does_not_turn_missing_flow_into_zero_flow(self):
         rows = [

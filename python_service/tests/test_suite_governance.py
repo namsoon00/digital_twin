@@ -287,7 +287,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # HTML outage deferral and its restart-persistent storage admission.
         # Five incident regressions cover nested send locks, pool retry bounds,
         # recovered document authority, source passage boundaries and repair budgets.
-        self.assertLessEqual(total, 2185)
+        # Five source-renewal regressions cover weekend counter retention, initial
+        # close-only baselines, independent news/flow, unknown data and duplicate samples.
+        self.assertLessEqual(total, 2190)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

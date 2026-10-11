@@ -29,7 +29,7 @@ MODEL_HYPOTHESIS_EVIDENCE_FIELDS = (
     "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd", "riskEventCount",
     "supportEventCount", "currency", "provider",
 )
-MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v5-source-evidence"
+MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v6-source-readiness"
 
 
 def _number(value: object):
@@ -161,6 +161,18 @@ def _relation_matches(
             continue
         if condition.target_kind and target.kind != condition.target_kind:
             continue
+        # Data sufficiency predicates qualify a measurement; failing them is
+        # unknown evidence, not a falsified market premise. First select the
+        # authored window so an unrelated empty window cannot mask a non-match.
+        filters = condition.target_property_filters or {}
+        if target.kind == "temporal-window":
+            if "windowKey" in filters and not _value_matches((target.properties or {}).get("windowKey"), "==", filters["windowKey"]):
+                continue
+            quality = {key: value for key, value in filters.items() if key in {
+                "hasSufficientHistory", "coverageRatio", "validObservationRatio", "staleObservationCount"}}
+            if quality and _filters_match(target.properties or {}, quality) is not True:
+                unknown = True
+                continue
         target_verdict = _filters_match(
             target.properties or {},
             condition.target_property_filters or {},
@@ -282,8 +294,8 @@ def evaluate_market_hypothesis_contract(
     known_count = max(0, len(market_conditions) - len(set(unknown_ids)))
     coverage = known_count / max(1.0, float(len(market_conditions)))
     status = (
-        "unmatched" if required_failures
-        else "incomplete" if unknown_ids
+        "incomplete" if unknown_ids
+        else "unmatched" if required_failures
         else "matched"
     )
     return {

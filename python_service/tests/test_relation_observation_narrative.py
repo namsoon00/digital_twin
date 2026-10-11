@@ -43,25 +43,22 @@ def freeze_and_render(context):
 
 
 class RelationObservationNarrativeTests(unittest.TestCase):
-    def test_reassessment_names_its_score_threshold_and_separates_current_data(self):
+    def test_verified_change_names_its_score_threshold_and_separates_current_data(self):
         context = readable_fixture()
         transition = context["ontologyRelationContext"]["hypothesisLifecycle"]["transitions"][0]
-        transition.update(currentState="invalidated", materialChange=False, changeBasis={
-            "category": "reassessment", "reason": "시세는 같고 분석에 사용한 기간 구성이 바뀌었습니다.",
+        transition.update(currentState="invalidated", materialChange=True, changeBasis={
+            "category": "market-change", "reason": "새 시세에서 회복 조건의 변화를 확인했습니다.",
             "ruleComparisons": [{"ruleId": "rule:linked", "label": "가격 회복", "comparison": "verified",
                 "previous": {"score": .81869, "minimumScore": .7},
                 "current": {"score": .538025, "minimumScore": .7}}]})
         context["relationChangeEvidence"] = relation_change_evidence(context)
         text = typedb_observation_telegram_message(context)
-        for value in ("분석 재평가", "직전 분석 0.81869 → 이번 0.538025", "규칙 기준 0.7 이상", "확률 아님",
-                      "규칙 데이터", "현재 전체 데이터", "새 시세 변동이나 시장의 악화·개선"):
+        for value in ("직전 분석 0.81869 → 이번 0.538025", "규칙 기준 0.7 이상", "확률 아님",
+                      "규칙 데이터", "현재 전체 데이터"):
             self.assertIn(value, text)
-        self.assertNotIn("기존 설명을 뒷받침하던 조건이 더 이상", text)
         self.assertTrue(context["relationChangeEvidence"]["eligible"])
-        transition.update(currentState="maintained", previousState="maintained")
-        unchanged_state = relation_change_evidence(context)
-        self.assertTrue(unchanged_state["eligible"])
-        self.assertEqual("reassessment", unchanged_state["transitions"][0]["changeCategory"])
+        transition.update(materialChange=False, changeBasis={"category": "reassessment"})
+        self.assertFalse(relation_change_evidence(context)["eligible"])
 
     def test_rotated_hypothesis_id_still_names_the_correct_removed_rule(self):
         from digital_twin.modules.notifications.domain.relation_change_presentation import transition_sentence

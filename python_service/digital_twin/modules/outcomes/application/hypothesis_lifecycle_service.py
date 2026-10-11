@@ -95,8 +95,12 @@ class HypothesisLifecycleService:
             basis = lifecycle_observation_basis({**context, "modelEvidenceObservations": model_rows.get(previous.symbol) or {}})
             if not basis.get("quote"):
                 basis["quote"] = {"sourceAsOf": (profiles_by_symbol.get(previous.symbol, {}).get("quote") or {}).get("sourceAsOf")}
+            basis["profiles"] = {**profiles_by_symbol.get(previous.symbol, {}), **basis.get("profiles", {})}
             record, transition = record_for_absent_snapshot(previous, observed_at, expiry_reason, current_basis=basis)
             if transition is None:
+                if record != previous:
+                    self.store.save(record)
+                    next_by_key[key] = record
                 continue
             self.store.save(record, transition)
             next_by_key[key] = record

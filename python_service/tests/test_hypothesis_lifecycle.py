@@ -271,7 +271,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
         previous, _ = record_for_snapshot(None, snapshot)
         held, transition = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z", current_basis={"models": {}})
         contract = relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})
-        self.assertEqual("maintained", held.state)
+        self.assertEqual(previous.state, held.state)
         self.assertEqual("data-unavailable", contract["changeKind"])
         self.assertFalse(contract["material"])
         self.assertTrue(contract["deliverable"])
@@ -279,22 +279,95 @@ class HypothesisLifecycleTests(unittest.TestCase):
         _, duplicate = record_for_absent_snapshot(held, "2026-07-23T00:02:00Z", current_basis={"models": {}})
         self.assertIsNone(duplicate)
 
-    def test_same_source_reassessment_survives_expiry_and_recovery_as_nonmarket_change(self):
-        snapshot = replace(lifecycle_snapshot(), observation_basis=self.model_basis())
+    def test_same_source_keeps_judgement_until_a_new_source_arrives(self):
+        snapshot = replace(lifecycle_snapshot(), observation_basis=self.model_basis(),
+                           data_availability={"state": "usable", "reasons": []})
         previous, _ = record_for_snapshot(None, snapshot)
-        retired, transition = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z", current_basis=self.model_basis(.538025))
-        contract = relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})
-        self.assertEqual("invalidated", retired.state)
-        self.assertEqual("reassessment", contract["changeCategory"])
-        self.assertFalse(contract["material"])
-        self.assertTrue(contract["deliverable"])
-        self.assertEqual(.538025, contract["changeBasis"]["ruleComparisons"][0]["current"]["score"])
-        _, revived = record_for_snapshot(retired, replace(snapshot, inference_generation_id="generation-3"))
-        self.assertEqual("reassessment", relation_lifecycle_transition_contract({"transitions": [revived.to_dict()]})["changeCategory"])
-        # A genuinely newer source is a market observation even at the same price.
-        _, changed = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z",
+        for day in (10, 11):
+            current = self.model_basis(.538025)
+            current["profiles"] = {"quote": {"marketSessionStatus": "closed"}}
+            held, transition = record_for_absent_snapshot(previous, "2026-10-%02dT06:00:00Z" % day,
+                "RuleBox 유효기간 60분이 지났습니다.", current_basis=current)
+            self.assertIsNone(transition)
+            self.assertEqual(previous.state, held.state)
+            self.assertEqual(previous.last_observed_at, held.last_observed_at)
+            self.assertEqual(previous.snapshot["observationBasis"], held.snapshot["observationBasis"])
+            self.assertEqual("awaiting-source", held.snapshot["judgementRefresh"]["status"])
+            previous = held
+        new_snapshot = replace(snapshot, inference_generation_id="reopened",
+                               observation_basis=self.model_basis(source_at="2026-10-12T14:00:00Z"))
+        _, reopening = record_for_snapshot(previous, new_snapshot, "2026-10-12T14:01:00Z")
+        self.assertFalse(reopening.data_availability_change)
+        self.assertFalse(relation_lifecycle_transition_contract({"transitions": [reopening.to_dict()]})["deliverable"])
+        unavailable = self.model_basis(.538025)
+        unavailable["profiles"] = {"quote": {"marketSessionStatus": "open", "judgementEvidenceUsable": False}}
+        delayed, warning = record_for_absent_snapshot(previous, "2026-10-12T14:00:00Z", current_basis=unavailable)
+        self.assertEqual("data-unavailable", warning.data_availability_change["kind"])
+        self.assertEqual(previous.last_observed_at, delayed.last_observed_at)
+        self.assertIsNone(record_for_absent_snapshot(delayed, "2026-10-12T14:01:00Z", current_basis=unavailable)[1])
+        still_delayed, _ = record_for_absent_snapshot(delayed, "2026-10-12T22:00:00Z", current_basis=current)
+        self.assertIsNone(record_for_absent_snapshot(still_delayed, "2026-10-13T14:00:00Z", current_basis=unavailable)[1])
+        _, recovered = record_for_snapshot(delayed, new_snapshot, "2026-10-12T14:01:00Z")
+        self.assertEqual("data-restored", recovered.data_availability_change["kind"])
+        _, changed = record_for_absent_snapshot(previous, "2026-10-12T14:01:00Z",
             current_basis=self.model_basis(.538025, "2026-10-12T14:00:00Z"))
         self.assertTrue(relation_lifecycle_transition_contract({"transitions": [changed.to_dict()]})["material"])
+
+    def test_weekend_counter_disappearance_does_not_update_or_notify(self):
+        context = relation_context(counter=["assertion:counter"])
+        context["graphStoreInference"]["traces"][0]["matchedConditions"] = [{
+            "conditionId": "counter", "relationId": "assertion:counter", "relationType": "HAS_MODEL_SIGNAL"}]
+        old = replace(lifecycle_snapshots_from_relation_context(context)[0], observation_basis=self.model_basis())
+        previous, _ = record_for_snapshot(None, old)
+        current = {"models": {"rule.aapl.trend.v1": {"status": "not-supported"}},
+                   "quote": {"sourceAsOf": "2026-10-09T23:56:20Z"},
+                   "profiles": {"quote": {"marketSessionStatus": "closed"}}}
+        after = replace(old, inference_generation_id="new-generation", counter_evidence_keys=[],
+                        counter_evidence_ids=[], observation_basis=current,
+                        data_availability={"state": "unavailable", "reasons": ["시간 경과"]})
+        held, transition = record_for_snapshot(previous, after, "2026-10-11T06:23:11Z")
+        self.assertIsNone(transition)
+        self.assertEqual(old.counter_evidence_keys, held.snapshot["counterEvidenceKeys"])
+        self.assertEqual(previous.last_observed_at, held.last_observed_at)
+        self.assertEqual(previous.state, held.state)
+
+    def test_fresh_quote_cannot_renew_missing_flow_and_news_is_independent(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_change_basis import source_refresh_decision
+        old = {"models": {"flow": {"signalType": "flow-accumulation-support"}},
+               "profiles": {"flow": {"sourceAsOf": "2026-10-09T06:00:00Z"}}}
+        current = {"models": old["models"], "quote": {"sourceAsOf": "2026-10-12T00:01:00Z"},
+                   "profiles": {"flow": {"sourceAsOf": "2026-10-09T06:00:00Z", "judgementEvidenceUsable": False}}}
+        self.assertEqual("unavailable", source_refresh_decision(old, current, ["flow"])["status"])
+        self.assertEqual("ready", source_refresh_decision(old, current, ["new-disclosure-rule"])["status"])
+        news = replace(lifecycle_snapshot(), observation_basis={"models": {
+            "rule.aapl.trend.v1": {"signalType": "event-abnormal-return-support"}},
+            "profiles": {"quote": {"marketSessionStatus": "closed"}}})
+        _, transition = record_for_snapshot(None, news)
+        self.assertTrue(relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})["material"])
+
+    def test_initial_closed_market_capture_waits_for_first_new_trade(self):
+        basis = self.model_basis()
+        basis["profiles"] = {"quote": {"marketSessionStatus": "closed"}}
+        snapshot = replace(lifecycle_snapshot(), observation_basis=basis)
+        reference, transition = record_for_snapshot(None, snapshot)
+        self.assertIsNone(transition)
+        self.assertEqual("", reference.last_observed_at)
+        repeated, transition = record_for_snapshot(reference, replace(snapshot, inference_generation_id="g2"))
+        self.assertIsNone(transition)
+        new = replace(snapshot, inference_generation_id="g3", observation_basis=self.model_basis(source_at="2026-10-12T14:00:00Z"))
+        judged, transition = record_for_snapshot(repeated, new, "2026-10-12T14:01:00Z")
+        self.assertEqual("observed", judged.state)
+        self.assertTrue(transition)
+        # A legacy missing clock is captured once as a comparison baseline;
+        # repeated polls do not lock it permanently or create a market event.
+        legacy = replace(judged, snapshot={**judged.snapshot, "observationBasis": {"models": {
+            "rule.aapl.trend.v1": {"signalType": "price-recovery-support", "sourceObservation": {"verified": False}}}}})
+        waiting, event = record_for_snapshot(legacy, replace(new, inference_generation_id="g4"))
+        self.assertIsNone(event)
+        self.assertTrue(waiting.snapshot.get("sourceRefreshBaseline"))
+        next_tick = replace(new, inference_generation_id="g5", observation_basis=self.model_basis(source_at="2026-10-12T14:02:00Z"))
+        resumed, _ = record_for_snapshot(waiting, next_tick, "2026-10-12T14:03:00Z")
+        self.assertEqual("2026-10-12T14:03:00Z", resumed.last_observed_at)
 
     def test_removed_counter_with_missing_data_cannot_strengthen_hypothesis(self):
         context = relation_context(counter=["assertion:counter"])
@@ -307,7 +380,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
         current = replace(old, inference_generation_id="generation-2", counter_evidence_ids=[], counter_evidence_keys=[],
                           observation_basis={"models": {}}, semantic_fingerprint="changed")
         held, transition = record_for_snapshot(previous, current)
-        self.assertEqual("maintained", held.state)
+        self.assertEqual(previous.state, held.state)
         self.assertFalse(transition.material_change)
         self.assertEqual("data-unavailable", relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})["changeKind"])
         self.assertEqual(old.counter_evidence_keys, held.snapshot["counterEvidenceKeys"])

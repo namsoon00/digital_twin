@@ -518,13 +518,36 @@ def event_counts(symbol: str, rows: List[Dict[str, object]]) -> Dict[str, object
     }
 
 
+def distinct_price_observations(rows):
+    """Repeated polls of a close are one price observation, not new sessions."""
+    observations = {}
+    for row in rows:
+        if row_number(row, "currentPrice", "current_price") <= 0:
+            continue
+        explicit = "sourceAsOf" in row or "source_as_of" in row
+        source = parse_timestamp(camel_or_snake(row, "sourceAsOf")) if explicit else parse_timestamp(row_timestamp(row))
+        if not source:
+            continue
+        receipt = parse_timestamp(row.get("generatedAt") or row.get("sourceFetchedAt"))
+        if explicit and receipt and source > receipt:
+            continue
+        stamp = source.isoformat().replace("+00:00", "Z")
+        normalized = {**row, "bucketAt": stamp,
+                      "marketSessionDate": market_session_date(stamp, row.get("market"), row.get("currency"))}
+        # Retain the original observation quality; a later closed-market poll
+        # must not age an already recorded trade into a failed price condition.
+        observations.setdefault(stamp, normalized)
+    return [observations[key] for key in sorted(observations)]
+
+
 def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWindowDefinition) -> Dict[str, object]:
-    priced_rows = [row for row in rows if row_number(row, "currentPrice", "current_price") > 0]
+    priced_rows = distinct_price_observations(rows)
     valid_rows = [row for row in priced_rows if observation_is_valid(row, definition)]
     # Keep the raw price path visible for diagnostics, while validity counts
     # decide whether a rule may use that path as judgement evidence.
     first = priced_rows[0] if priced_rows else {}
     last = priced_rows[-1] if priced_rows else {}
+    flow_last = next((row for row in reversed(rows) if row_number(row, "currentPrice", "current_price") > 0), {})
     latest_raw = priced_rows[-1] if priced_rows else {}
     first_time = parse_timestamp(row_timestamp(first))
     last_time = parse_timestamp(row_timestamp(last))
@@ -538,7 +561,7 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     start_price = prices[0] if prices else 0.0
     end_price = prices[-1] if prices else 0.0
     smart_money_rows = [
-        row for row in valid_rows
+        row for row in rows if observation_is_valid(row, definition)
         if has_smart_money_flow_observation(row)
     ]
     smart_money_first = smart_money_rows[0] if smart_money_rows else {}
@@ -654,7 +677,7 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         "validObservationCount": len(valid_rows),
         "invalidObservationCount": max(0, len(rows) - len(valid_rows)),
         "staleObservationCount": stale_count,
-        "validObservationRatio": round(len(valid_rows) / max(1, len(rows)), 3),
+        "validObservationRatio": round(len(valid_rows) / max(1, len(priced_rows)), 3),
         "latestObservationQuality": normalized_data_quality(latest_raw),
         "requiredSessionCount": required_sessions,
         "coveredSessionCount": len(session_dates),
@@ -697,9 +720,9 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         "ma20ObservationCount": len(ma20_distances),
         "ma60DistanceStart": round(row_number(first, "ma60Distance", "ma60_distance"), 2),
         "ma60DistanceEnd": round(row_number(last, "ma60Distance", "ma60_distance"), 2),
-        "volumeRatioEnd": round(row_number(last, "volumeRatio", "volume_ratio"), 2),
-        "tradeStrengthEnd": round(row_number(last, "tradeStrength", "trade_strength"), 2),
-        "bidAskImbalanceEnd": round(row_number(last, "bidAskImbalance", "bid_ask_imbalance"), 2),
+        "volumeRatioEnd": round(row_number(flow_last, "volumeRatio", "volume_ratio"), 2),
+        "tradeStrengthEnd": round(row_number(flow_last, "tradeStrength", "trade_strength"), 2),
+        "bidAskImbalanceEnd": round(row_number(flow_last, "bidAskImbalance", "bid_ask_imbalance"), 2),
         "smartMoneyObservationCount": len(smart_money_rows),
         "smartMoneyDistinctObservationCount": len(distinct_smart_money_observations),
         "smartMoneyDistinctSessionCount": len(distinct_smart_money_dates),

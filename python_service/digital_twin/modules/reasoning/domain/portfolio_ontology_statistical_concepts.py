@@ -362,6 +362,7 @@ def add_position_statistical_signal_concepts(
             )
 
     assessments_by_family = {}
+    signal_by_type = {str(item.get("signalType") or ""): item for item in signals}
     for assessment in assessments:
         family_id = str(assessment.get("hypothesisFamilyId") or "").strip()
         if family_id:
@@ -403,6 +404,21 @@ def add_position_statistical_signal_concepts(
                 "supportedContractIds": status_contracts["supported"][:24],
                 "notSupportedContractIds": status_contracts["not-supported"][:24],
                 "untestedContractIds": status_contracts["untested"][:24],
+                "contractObservations": {
+                    item["hypothesisContractId"]: {
+                        **{key: item[key] for key in ("hypothesisContractId", "signalType", "status",
+                            "failedConditionIds", "unknownConditionIds", "sourceFeatureSnapshotId") if key in item},
+                        "sourceObservation": {
+                            "verified": features.get("sourceClockVerified") is True,
+                            "observedAt": features.get("latestObservedAt") or "",
+                            "currentPrice": features.get("currentPrice"),
+                        },
+                    }
+                    for item in rows if item.get("hypothesisContractId")
+                    for signal in [signal_by_type.get(str(item.get("signalType") or ""), {})]
+                    for raw in [_mapping(signal.get("inputFeatures"))]
+                    for features in [{**raw, **_mapping(raw.get("familyInputFeatures"))}]
+                },
                 "decisionEligibleSupportedCount": sum(
                     1 for item in rows
                     if str(item.get("status") or "") == "supported"

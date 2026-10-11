@@ -171,6 +171,26 @@ class FakeSignalConnection:
 
 
 class StatisticalSignalTests(unittest.TestCase):
+    def test_insufficient_price_history_is_unknown_not_failed_recovery_resolved(self):
+        from digital_twin.modules.model_registry.domain.statistical_signals.graph_scoring import evaluate_market_hypothesis_contract
+        rule = next(r for r in governed_graph_inference_rules() if r.rule_id == "graph.temporal.failed_recovery.risk.v1")
+        stock = OntologyEntity("stock:TEST", "Test", "stock", {"symbol": "TEST", "source": "holding"})
+        window = OntologyEntity("window:TEST", "Path", "temporal-window", {
+            "windowKey": "3D", "hasSufficientHistory": False, "coverageRatio": .3,
+            "validObservationRatio": 1, "staleObservationCount": 0,
+            "peakReturnPct": 0, "drawdownFromPeakPct": 0, "recentPriceChangePct": 0})
+        graph = PortfolioOntology("test", entities=[stock, window], relations=[
+            OntologyRelation(stock.entity_id, window.entity_id, "HAS_TEMPORAL_WINDOW")])
+        result = evaluate_market_hypothesis_contract(graph, stock, rule)
+        self.assertEqual("incomplete", result["status"])
+        self.assertEqual(["failed-recovery-window"], result["unknownConditionIds"])
+        window.properties.update(hasSufficientHistory=True, coverageRatio=1)
+        self.assertEqual("unmatched", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
+        window.properties.update(peakReturnPct=5, drawdownFromPeakPct=-3, recentPriceChangePct=-1)
+        self.assertEqual("matched", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
+        window.properties.update(staleObservationCount=1)
+        self.assertEqual("incomplete", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
+
     def test_nonmatching_model_input_receipt_is_scoped_and_requires_aligned_native_generation(self):
         from types import SimpleNamespace
         from digital_twin.modules.reasoning.domain.hypothesis_change_observations import attach_model_observations

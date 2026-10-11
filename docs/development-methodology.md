@@ -588,3 +588,15 @@ The notification is sent through the configured local notifier, usually the acco
 `ai_orchestration` owns independent observation/research work, model execution accounting,
 recurring plans and scoped research memory. Domain prompts, evidence verification and
 publication authority remain in their owning modules. See [Central AI control](ai-control.md).
+
+## Source renewal correction (owner approved 2026-10-11)
+
+Price/flow hypothesis lifecycle judgments require new, usable source observations.
+A closed market or unchanged provider clock preserves the last judgment and its
+clock; it cannot retire a counter premise or manufacture a market change. Missing
+required inputs mean unknown, not a negative market condition. Same-source
+reassessments are audited without customer investment delivery, including old
+queued events. Open-market data outages retain separate operational/data-status
+reporting. This replaces the earlier permission to send same-source reassessments;
+it is not a global market-hours gate on independent news, filings or AI research.
+See `docs/relationship-change-notifications.md` for the versioned contract.

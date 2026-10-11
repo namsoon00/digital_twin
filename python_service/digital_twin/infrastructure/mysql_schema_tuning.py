@@ -129,7 +129,11 @@ class MySQLKeyPartitionDefinition:
 
 
 MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "external_collection_runs": (
+        MySQLIndexDefinition("external_collection_runs", "idx_external_collection_retention", "`completed_at`"),
+    ),
     "external_fact_revision": (
+        MySQLIndexDefinition("external_fact_revision", "idx_external_revision_retention", "`created_at`"),
         MySQLIndexDefinition(
             "external_fact_revision",
             "idx_external_fact_revision_history",

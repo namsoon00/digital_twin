@@ -141,3 +141,26 @@ worker restart, preserves prior facts and does not block other OpenDART datasets
 Unknown non-ZIP responses, corrupt archives, unverified archived bodies and
 authentication errors keep the error path. Only a verified document or explicit
 official missing-file response may complete the document job.
+
+### Collector database pressure and recovery
+
+The watch loop calls `run_once(include_summary=False)`: full fact payload-size
+and 24-hour run aggregates belong to explicit status/one-shot requests, not every
+15-second collection cycle. Startup legacy migration reads only a covering fact
+count (five-second SELECT budget), retrying a lost connection once on a fresh
+checkout. A failed migration check is not marked complete.
+
+Retention uses indexes beginning with `completed_at` and `created_at`. Normal
+startup defers retention for 60 seconds; each pass follows collection, deletes at
+most 250 rows per table (default 100), and retains the existing age cutoffs. A
+full batch schedules another pass after 60 seconds until drained; an empty or
+partial batch returns to the configured six-hour interval. A failed pass remains
+visible in `historyCleanup` and the operational alert and retries after 60 seconds
+without discarding successful collection results. Explicit `force` bypasses the
+maintenance schedule, not the batch limit or retention cutoffs.
+
+Collection errors record the operation stage, safe MySQL verb/table label and
+elapsed query/cycle time without SQL values or provider bodies. Database write
+failures do not increment vendor failure counters or overwrite durable completion.
+The collector never retries the whole cycle inline: existing durable leases and
+completed state determine subsequent eligibility, including uncertain commits.

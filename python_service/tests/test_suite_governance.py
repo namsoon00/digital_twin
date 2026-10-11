@@ -296,7 +296,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # AI status: existing-schema index migration, scoped recency and retryable database failure.
         # Six source-answer recovery contracts cover bounded citation repair,
         # cached review, cooldown resumption, task/case leases and failure allowance.
-        self.assertLessEqual(total, 2211)
+        # Eight collector timeout regressions cover summary isolation, retention
+        # cooldown/drain, uncertain writes, phase diagnostics, migration retry,
+        # bounded read reconnects, deletion limits and scheduler error reporting.
+        self.assertLessEqual(total, 2219)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

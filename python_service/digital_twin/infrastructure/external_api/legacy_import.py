@@ -20,9 +20,12 @@ class LegacyExternalSignalImporter:
     def import_if_empty(self) -> Dict[str, object]:
         if self._checked:
             return {"status": "skipped", "reason": "migration already checked", "savedCount": 0}
+        result = self._import_if_empty()
         self._checked = True
-        summary = self.store.summary()
-        fact_count = int((summary.get("facts") or {}).get("count") or 0)
+        return result
+
+    def _import_if_empty(self) -> Dict[str, object]:
+        fact_count = self.store.current_fact_count()
         if fact_count > 0:
             compacted = self.compact_legacy_cache(fact_count)
             return {

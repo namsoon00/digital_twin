@@ -1524,6 +1524,22 @@ class ExternalDataCollectionScheduler:
         self.interval_seconds = max(5, int(interval_seconds or 15))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
+        self.cycle_started_at = time.monotonic()
+
+    def error_stage(self, error=None, diagnostics=None) -> str:
+        values = dict(diagnostics or {})
+        stage = values.get("stage") or getattr(error, "orbit_collection_stage", "") or "unknown"
+        statement = values.get("mysqlStatement") or getattr(error, "orbit_mysql_statement", "")
+        elapsed = values.get("mysqlElapsedMs") or getattr(error, "orbit_mysql_elapsed_ms", 0)
+        parts = ["collection cycle", str(stage)[:80]]
+        if values.get("errorType"):
+            parts.append("cause=" + str(values["errorType"])[:60])
+        if statement:
+            parts.append("mysql=" + str(statement)[:100])
+        if elapsed:
+            parts.append("query=" + str(round(int(elapsed) / 1000.0, 1)) + "s")
+        parts.append("cycle=" + str(round(time.monotonic() - self.cycle_started_at, 1)) + "s")
+        return " · ".join(parts)
 
     def stop(self, *_args) -> None:
         self.running = False
@@ -1533,8 +1549,9 @@ class ExternalDataCollectionScheduler:
         print("Python external data collector started. interval=" + str(self.interval_seconds) + "s", flush=True)
         while self.running:
             started = time.monotonic()
+            self.cycle_started_at = started
             try:
-                result = self.runner.run_once()
+                result = self.runner.run_once(include_summary=False)
                 print(
                     "External data collection "
                     + str(result.get("status"))
@@ -1544,12 +1561,18 @@ class ExternalDataCollectionScheduler:
                     + str(result.get("failureCount", 0)),
                     flush=True,
                 )
+                cleanup = result.get("historyCleanup") or {}
+                if cleanup.get("status") == "error":
+                    error = RuntimeError(str(cleanup.get("error") or "history cleanup failed"))
+                    stage = self.error_stage(diagnostics=cleanup.get("diagnostics"))
+                    print("External data maintenance error: " + str(error) + " · " + stage, flush=True)
+                    report_runtime_error(self.error_reporter, "Python external data collector", error, stage)
                 for item in result.get("results") or []:
-                    if item.get("requiresAttention"):
+                    if item.get("requiresAttention") and item.get("status") != "error":
                         report_runtime_error(self.error_reporter, "Python external data collector", RuntimeError(str(item.get("error") or "External data access unavailable")), str(item.get("datasetId") or "external dataset"))
                     if str(item.get("status") or "") != "error":
                         continue
-                    if not external_data_failure_requires_alert(item):
+                    if not item.get("diagnostics") and not external_data_failure_requires_alert(item):
                         print(
                             "External data transient failure retained for retry "
                             + str(item.get("datasetId") or "external dataset")
@@ -1565,13 +1588,14 @@ class ExternalDataCollectionScheduler:
                         self.error_reporter,
                         "Python external data collector",
                         error,
-                        str(item.get("datasetId") or "external dataset")
-                        + "/"
-                        + str(item.get("partitionKey") or "global"),
+                        (self.error_stage(diagnostics=item["diagnostics"]) if item.get("diagnostics") else
+                         str(item.get("datasetId") or "external dataset") + "/"
+                         + str(item.get("partitionKey") or "global")),
                     )
             except Exception as error:  # noqa: BLE001 - durable jobs are retried on the next cycle.
-                print("Python external data collector error: " + str(error), flush=True)
-                report_runtime_error(self.error_reporter, "Python external data collector", error, "collection cycle")
+                stage = self.error_stage(error)
+                print("Python external data collector error: " + str(error) + " · " + stage, flush=True)
+                report_runtime_error(self.error_reporter, "Python external data collector", error, stage)
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 

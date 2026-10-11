@@ -1,5 +1,6 @@
 import hashlib
 import json
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
@@ -9,7 +10,7 @@ from digital_twin.modules.market_data.contracts import canonical_payload_hash
 from digital_twin.modules.news_intelligence.contracts import assess_disclosure_document
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.market_data.domain.events import external_provider_health_changed_event
-from ..mysql_operational_connection import MySQLOperationalConnection
+from ..mysql_operational_connection import MySQLOperationalConnection, mysql_is_connection_lost
 from ..mysql_operational_events import insert_domain_event_with_connection
 from ..mysql_operational_helpers import _json_loads
 from ..operational_common import json_dumps
@@ -1129,20 +1130,20 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         self,
         run_retention_days: int = 30,
         revision_retention_days: int = 365,
-        batch_size: int = 1000,
+        batch_size: int = 100,
         now: datetime = None,
     ) -> Dict[str, object]:
         current = now or utc_now()
-        bounded = max(10, min(10000, int(batch_size or 1000)))
+        bounded = max(10, min(250, int(batch_size or 100)))
         run_cutoff = iso(current - timedelta(days=max(1, int(run_retention_days or 30))))
         revision_cutoff = iso(current - timedelta(days=max(30, int(revision_retention_days or 365))))
         with self.transaction() as connection:
             run_cursor = connection.execute(
-                "DELETE FROM external_collection_runs WHERE completed_at < %s ORDER BY completed_at LIMIT %s",
+                "DELETE /* operation:external-retention-runs */ FROM external_collection_runs WHERE completed_at < %s ORDER BY completed_at LIMIT %s",
                 (run_cutoff, bounded),
             )
             revision_cursor = connection.execute(
-                "DELETE FROM external_fact_revision WHERE created_at < %s ORDER BY created_at LIMIT %s",
+                "DELETE /* operation:external-retention-revisions */ FROM external_fact_revision WHERE created_at < %s ORDER BY created_at LIMIT %s",
                 (revision_cutoff, bounded),
             )
         return {
@@ -1380,6 +1381,22 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             }
             for row in dataset_rows
         ]
+
+    def current_fact_count(self) -> int:
+        # A covering metadata count replaces summary()'s LONGTEXT scan and
+        # 24-hour run aggregation on every worker startup. Only this read may
+        # retry once with a new connection; no collection mutation is replayed.
+        for attempt in range(2):
+            try:
+                with self.connect() as connection:
+                    row = connection.execute(
+                        "SELECT /*+ MAX_EXECUTION_TIME(5000) */ /* operation:external-current-count */ COUNT(*) AS fact_count FROM external_fact_current"
+                    ).fetchone() or {}
+                    return int(row.get("fact_count") or 0)
+            except Exception as error:
+                if attempt or not mysql_is_connection_lost(error):
+                    raise
+                time.sleep(0.25)
 
     def summary(self) -> Dict[str, object]:
         with self.connect() as connection:

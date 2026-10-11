@@ -235,5 +235,176 @@ class ExternalFactBoundedReadsTests(unittest.TestCase):
         self.assertEqual("SELECT external_fact_revision", mysql_statement_label("SELECT * FROM external_fact_revision"))
 
 
+class ExternalCollectorResilienceTests(unittest.TestCase):
+    def service(self, store=None):
+        from datetime import datetime, timezone
+        from digital_twin.modules.market_data.application.external_data.collection_service import ExternalDataCollectionService
+        from digital_twin.modules.market_data.application.external_data.registry import ExternalDatasetRegistry
+        from test_external_data_platform import StaticAdapter, MemoryCollectionStore
+        self.clock = datetime(2026, 10, 11, tzinfo=timezone.utc)
+        self.store = store or MemoryCollectionStore()
+        return ExternalDataCollectionService({}, ExternalDatasetRegistry([StaticAdapter()]), self.store,
+                                             now_provider=lambda: self.clock)
+
+    def test_worker_omits_heavy_summary_on_active_and_idle_cycles_but_explicit_reads_remain(self):
+        from unittest.mock import Mock
+        service = self.service()
+        self.store.summary = Mock(return_value={"facts": {"count": 1}})
+        active = service.run_once(include_summary=False)
+        idle = service.run_once(include_summary=False)
+        self.assertEqual(1, active["successCount"])
+        self.assertEqual("idle", idle["status"])
+        self.assertNotIn("summary", active)
+        self.assertNotIn("summary", idle)
+        self.store.summary.assert_not_called()
+        self.assertEqual({"facts": {"count": 1}}, service.run_once()["summary"])
+
+    def test_retention_failure_preserves_collection_and_retries_after_cooldown_not_six_hours(self):
+        from datetime import timedelta
+        from unittest.mock import Mock
+        service = self.service()
+        failure = RuntimeError(2013, "read timeout")
+        failure.orbit_mysql_statement = "DELETE external_collection_runs [external-retention-runs]"
+        failure.orbit_mysql_elapsed_ms = 30000
+        self.store.cleanup_history = Mock(side_effect=[failure, {"status": "ok", "deletedRuns": 100},
+                                                      {"status": "ok", "deletedRuns": 0}])
+        self.assertEqual("deferred", service.run_once(include_summary=False)["historyCleanup"]["status"])
+        self.store.cleanup_history.assert_not_called()
+        self.clock += timedelta(seconds=60)
+        service._last_partition_sync_at = None
+        result = service.run_once(include_summary=False)
+        self.assertEqual(1, result["successCount"])
+        self.assertEqual("partial", result["status"])
+        self.assertIsNone(service._last_cleanup_at)
+        self.assertEqual("history-cleanup", result["historyCleanup"]["diagnostics"]["stage"])
+        self.assertEqual(30000, result["historyCleanup"]["diagnostics"]["mysqlElapsedMs"])
+        self.assertEqual("deferred", service.cleanup_history_if_due()["status"])
+        self.clock += timedelta(seconds=60)
+        self.assertTrue(service.cleanup_history_if_due()["backlogPossible"])
+        self.clock += timedelta(seconds=60)
+        self.assertFalse(service.cleanup_history_if_due()["backlogPossible"])
+        self.assertEqual(3, self.store.cleanup_history.call_count)
+        self.clock += timedelta(seconds=60)
+        self.assertEqual("deferred", service.cleanup_history_if_due()["status"])
+        self.assertEqual(3, self.store.cleanup_history.call_count)
+
+    def test_uncertain_saved_observation_is_not_replayed_or_marked_as_provider_failure(self):
+        from unittest.mock import Mock
+        service = self.service()
+        original = self.store.complete_observation
+        failure = RuntimeError(2013, "commit acknowledgement lost")
+        def commit_then_fail(*args, **kwargs):
+            original(*args, **kwargs)
+            raise failure
+        self.store.complete_observation = Mock(side_effect=commit_then_fail)
+        self.store.fail_job = Mock(side_effect=AssertionError("must not undo durable completion"))
+        result = service.run_once(include_summary=False)
+        self.assertEqual(1, result["failureCount"])
+        self.assertEqual(1, len(self.store.completed))
+        self.assertEqual("store.complete-observation", result["results"][0]["diagnostics"]["stage"])
+        self.store.fail_job.assert_not_called()
+        self.assertEqual("idle", service.run_once(include_summary=False)["status"])
+        self.store.complete_observation.assert_called_once()
+
+    def test_claim_failure_retains_original_error_and_safe_stage(self):
+        from unittest.mock import Mock
+        service = self.service()
+        failure = RuntimeError(2013, "read timeout")
+        self.store.claim_due = Mock(side_effect=failure)
+        with self.assertRaises(RuntimeError) as caught:
+            service.run_once(include_summary=False)
+        self.assertIs(failure, caught.exception)
+        self.assertEqual("claim-due", failure.orbit_collection_stage)
+
+    def test_legacy_check_retries_after_failure_without_loading_full_summary(self):
+        from unittest.mock import Mock
+        from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
+        store = SimpleNamespace(current_fact_count=Mock(side_effect=[RuntimeError(2013, "timeout"), 5]),
+                                summary=Mock(side_effect=AssertionError("heavy query forbidden")))
+        importer = LegacyExternalSignalImporter(None, store, None, {})
+        with self.assertRaises(RuntimeError):
+            importer.import_if_empty()
+        self.assertFalse(importer._checked)
+        self.assertEqual("current facts already exist", importer.import_if_empty()["reason"])
+        self.assertEqual("migration already checked", importer.import_if_empty()["reason"])
+        self.assertEqual(2, store.current_fact_count.call_count)
+        store.summary.assert_not_called()
+
+    def test_only_safe_count_read_retries_once_with_a_new_connection(self):
+        from unittest.mock import Mock
+        store = object.__new__(MySQLExternalDataStore)
+        connections = []
+        failures = [RuntimeError(2013, "lost response"), None]
+        @contextmanager
+        def connect():
+            connections.append(object())
+            failure = failures.pop(0)
+            def execute(sql):
+                self.assertIn("COUNT(*)", sql)
+                self.assertNotIn("payload_json", sql)
+                if failure:
+                    raise failure
+                return SimpleNamespace(fetchone=lambda: {"fact_count": 12})
+            yield SimpleNamespace(execute=execute)
+        store.connect = connect
+        with patch("digital_twin.infrastructure.external_api.mysql_stores.time.sleep") as sleep:
+            self.assertEqual(12, store.current_fact_count())
+            self.assertEqual(2, len(connections))
+            sleep.assert_called_once_with(0.25)
+            failures[:] = [RuntimeError(2013, "first"), RuntimeError(2013, "second")]
+            with self.assertRaisesRegex(RuntimeError, "second"):
+                store.current_fact_count()
+            self.assertEqual(4, len(connections))
+            failures[:] = [RuntimeError(1064, "bad SQL")]
+            with self.assertRaisesRegex(RuntimeError, "bad SQL"):
+                store.current_fact_count()
+            self.assertEqual(5, len(connections))
+
+    def test_cleanup_caps_batch_and_preserves_retention_cutoffs(self):
+        from datetime import datetime, timezone
+        store = object.__new__(MySQLExternalDataStore)
+        calls = []
+        @contextmanager
+        def transaction():
+            def execute(sql, args):
+                calls.append((sql, args))
+                return SimpleNamespace(rowcount=3)
+            yield SimpleNamespace(execute=execute)
+        store.transaction = transaction
+        result = store.cleanup_history(batch_size=10000, now=datetime(2026, 10, 11, tzinfo=timezone.utc))
+        self.assertEqual([250, 250], [args[1] for sql, args in calls])
+        self.assertEqual("2026-09-11T00:00:00Z", result["runCutoff"])
+        self.assertEqual("2025-10-11T00:00:00Z", result["revisionCutoff"])
+        self.assertEqual(3, result["deletedRevisions"])
+
+    def test_scheduler_skips_summary_and_reports_stage_query_and_maintenance_failure(self):
+        from unittest.mock import Mock
+        from digital_twin.infrastructure.schedulers import ExternalDataCollectionScheduler
+        runner = SimpleNamespace()
+        scheduler = ExternalDataCollectionScheduler(runner, 15, error_reporter=object())
+        def run_once(**kwargs):
+            self.assertEqual({"include_summary": False}, kwargs)
+            scheduler.stop()
+            return {"status": "partial", "processedCount": 1, "historyCleanup": {
+                "status": "error", "error": "read timeout", "diagnostics": {
+                    "stage": "history-cleanup", "mysqlStatement": "DELETE external_fact_revision",
+                    "mysqlElapsedMs": 30000, "errorType": "OperationalError"}}}
+        runner.run_once = run_once
+        with patch("digital_twin.infrastructure.schedulers.install_stop_handlers"), \
+             patch("digital_twin.infrastructure.schedulers.wait_until_running"), \
+             patch("digital_twin.infrastructure.schedulers.report_runtime_error") as report, \
+             patch("builtins.print"):
+            scheduler.run_forever()
+        stage = report.call_args[0][3]
+        self.assertIn("history-cleanup", stage)
+        self.assertIn("mysql=DELETE external_fact_revision", stage)
+        self.assertIn("query=30.0s", stage)
+        self.assertIn("cause=OperationalError", stage)
+        failure = RuntimeError(2013, "timeout")
+        failure.orbit_collection_stage = "claim-due"
+        failure.orbit_mysql_statement = "SELECT external_dataset_state"
+        self.assertIn("claim-due", scheduler.error_stage(failure))
+
+
 if __name__ == "__main__":
     unittest.main()

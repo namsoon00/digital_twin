@@ -44,6 +44,17 @@ def next_due_at(descriptor: DatasetDescriptor, settings: Dict[str, object], part
     return iso(utc_now() + timedelta(seconds=max(10, int(cadence * (1.0 + jitter_ratio)))))
 
 
+def collection_error_diagnostics(error) -> Dict[str, object]:
+    """Only bounded stage/statement labels; never SQL parameters or source bodies."""
+    return {
+        "stage": str(getattr(error, "orbit_collection_stage", "") or "unknown")[:80],
+        "stageElapsedMs": int(getattr(error, "orbit_collection_elapsed_ms", 0) or 0),
+        "mysqlStatement": str(getattr(error, "orbit_mysql_statement", "") or "")[:100],
+        "mysqlElapsedMs": int(getattr(error, "orbit_mysql_elapsed_ms", 0) or 0),
+        "errorType": type(error).__name__,
+    }
+
+
 class ExternalDataCollectionService:
     def __init__(
         self,
@@ -67,6 +78,7 @@ class ExternalDataCollectionService:
         self.now_provider = now_provider or utc_now
         self._last_partition_sync_at = None
         self._last_cleanup_at = None
+        self._next_cleanup_at = self.now_provider() + timedelta(seconds=60)
         self.document_recovery = document_recovery
 
     def enabled(self) -> bool:
@@ -145,6 +157,7 @@ class ExternalDataCollectionService:
         dataset_ids: Iterable[str] = None,
         subject_keys: Iterable[str] = None,
         max_batches: int = 1,
+        include_summary: bool = True,
     ) -> Dict[str, object]:
         if not self.enabled() and not force:
             return {"status": "disabled", "processedCount": 0}
@@ -154,7 +167,7 @@ class ExternalDataCollectionService:
             for item in subject_keys or []
             if str(item or "").strip()
         })
-        available_subjects = self.store.list_subjects() if selected_subjects else None
+        available_subjects = self._run_stage("subjects", self.store.list_subjects) if selected_subjects else None
         scoped_subjects = None
         if selected_subjects:
             scoped_subjects = [
@@ -169,24 +182,23 @@ class ExternalDataCollectionService:
             missing = [item for item in selected_subjects if item not in resolved]
             if missing:
                 raise ValueError("Unknown external-data subjects: " + ", ".join(missing))
-        migration = self.legacy_importer.import_if_empty() if self.legacy_importer else {"status": "not-configured"}
+        migration = self._run_stage("legacy-check", self.legacy_importer.import_if_empty) if self.legacy_importer else {"status": "not-configured"}
         projection_before = self.reconcile_official_evidence()
-        cleanup = self.cleanup_history_if_due(force=force)
-        sync = self.sync_partitions(
+        sync = self._run_stage("partition-sync", self.sync_partitions,
             subjects=scoped_subjects,
             force=force,
             dataset_ids=selected_datasets,
         )
         recovery = self.recover_documents()
         if force and hasattr(self.store, "make_due"):
-            self.store.make_due(
+            self._run_stage("make-due", self.store.make_due,
                 dataset_ids=selected_datasets,
                 subject_keys=selected_subjects,
             )
         results: List[Dict[str, object]] = []
         batch_count = 0
         for _ in range(max(1, min(100, int(max_batches or 1)))):
-            jobs = self.store.claim_due(
+            jobs = self._run_stage("claim-due", self.store.claim_due,
                 self.worker_id,
                 self.batch_size(),
                 self.lease_seconds(),
@@ -216,10 +228,15 @@ class ExternalDataCollectionService:
                                     "partitionKey": job.partition_key,
                                     "status": "error",
                                     "error": str(error)[:500],
+                                    "requiresAttention": True,
+                                    "diagnostics": collection_error_diagnostics(error),
                                 })
+        # Maintenance follows collection and cannot discard an already saved batch.
+        cleanup = self.cleanup_history_if_due(force=force)
+        summary = self._run_stage("summary", self.store.summary) if include_summary else None
         if not results:
             idle_payload = {
-                "status": "idle",
+                "status": "partial" if cleanup.get("status") == "error" else "idle",
                 "processedCount": 0,
                 "batchCount": 0,
                 "partitionSync": sync,
@@ -227,7 +244,7 @@ class ExternalDataCollectionService:
                 "legacyMigration": migration,
                 "historyCleanup": cleanup,
                 "officialEvidenceProjection": projection_before,
-                "summary": self.store.summary(),
+                **({"summary": summary} if include_summary else {}),
             }
             if selected_datasets or selected_subjects:
                 idle_payload["scope"] = {
@@ -241,7 +258,7 @@ class ExternalDataCollectionService:
         no_data = [item for item in results if item.get("status") == "no-data"]
         projection_after = self.reconcile_official_evidence()
         return {
-            "status": "partial" if failures or attention else "ok",
+            "status": "partial" if failures or attention or cleanup.get("status") == "error" else "ok",
             "processedCount": len(results),
             "batchCount": batch_count,
             "successCount": len(results) - len(failures) - len(deferred),
@@ -258,7 +275,7 @@ class ExternalDataCollectionService:
                 "before": projection_before,
                 "after": projection_after,
             },
-            "summary": self.store.summary(),
+            **({"summary": summary} if include_summary else {}),
             "scope": {
                 "datasetIds": selected_datasets,
                 "subjectKeys": selected_subjects,
@@ -290,24 +307,54 @@ class ExternalDataCollectionService:
                 "reason": str(error)[:500],
             }
 
+    def _run_stage(self, stage, callback, *args, **kwargs):
+        started = time.monotonic()
+        try:
+            return callback(*args, **kwargs)
+        except Exception as error:
+            if not getattr(error, "orbit_collection_stage", ""):
+                error.orbit_collection_stage = stage
+                error.orbit_collection_elapsed_ms = int((time.monotonic() - started) * 1000)
+            raise
+
     def cleanup_history_if_due(self, force: bool = False) -> Dict[str, object]:
         if not callable(getattr(self.store, "cleanup_history", None)):
             return {"status": "not-supported"}
-        interval = integer_setting(self.settings, "externalDataRetentionCheckIntervalSeconds", 21600, 300, 86400)
         current = self.now_provider()
-        if not force and self._last_cleanup_at and (current - self._last_cleanup_at).total_seconds() < interval:
-            return {"status": "fresh"}
-        self._last_cleanup_at = current
-        return self.store.cleanup_history(
-            run_retention_days=integer_setting(self.settings, "externalDataRunRetentionDays", 30, 1, 365),
-            revision_retention_days=integer_setting(self.settings, "externalDataRevisionRetentionDays", 365, 30, 3650),
-            batch_size=integer_setting(self.settings, "externalDataRetentionBatchSize", 1000, 10, 10000),
-            now=current,
-        )
+        if not force and current < self._next_cleanup_at:
+            return {"status": "deferred", "nextAttemptAt": iso(self._next_cleanup_at)}
+        interval = integer_setting(self.settings, "externalDataRetentionCheckIntervalSeconds", 21600, 300, 86400)
+        batch_size = integer_setting(self.settings, "externalDataRetentionBatchSize", 100, 10, 250)
+        try:
+            result = self._run_stage("history-cleanup", self.store.cleanup_history,
+                run_retention_days=integer_setting(self.settings, "externalDataRunRetentionDays", 30, 1, 365),
+                revision_retention_days=integer_setting(self.settings, "externalDataRevisionRetentionDays", 365, 30, 3650),
+                batch_size=batch_size,
+                now=current,
+            )
+        except Exception as error:
+            # A lost commit acknowledgement is safe to reconcile in a later
+            # bounded retention pass; never replay vendor calls or the cycle.
+            self._next_cleanup_at = self.now_provider() + timedelta(seconds=60)
+            return {"status": "error", "error": str(error)[:500],
+                    "nextAttemptAt": iso(self._next_cleanup_at),
+                    "diagnostics": collection_error_diagnostics(error)}
+        self._last_cleanup_at = self.now_provider()
+        backlog = any(int(result.get(key) or 0) >= batch_size for key in ("deletedRuns", "deletedRevisions"))
+        self._next_cleanup_at = self._last_cleanup_at + timedelta(seconds=60 if backlog else interval)
+        return {**result, "nextAttemptAt": iso(self._next_cleanup_at), "backlogPossible": backlog}
 
     def _process_provider_jobs(self, jobs) -> List[Dict[str, object]]:
         """Keep each vendor serial while independent vendors run concurrently."""
-        return [self._process_job(job) for job in jobs]
+        results = []
+        for job in jobs:
+            try:
+                results.append(self._run_stage("process-job", self._process_job, job))
+            except Exception as error:
+                results.append({"datasetId": job.dataset_id, "partitionKey": job.partition_key,
+                                "status": "error", "error": str(error)[:500],
+                                "requiresAttention": True, "diagnostics": collection_error_diagnostics(error)})
+        return results
 
     def _process_job(self, job) -> Dict[str, object]:
         adapter = self.registry.adapter(job.dataset_id)
@@ -375,7 +422,7 @@ class ExternalDataCollectionService:
                     + " returned an unusable one-time payload: "
                     + quality_state
                 )
-            previous = self.store.current_fact(observation.dataset_id, observation.subject_key)
+            previous = self._run_stage("store.current-fact", self.store.current_fact, observation.dataset_id, observation.subject_key)
             no_data = bool(observation.empty_result)
             transition = (
                 FactTransition(False, False, "no-data", [], "provider returned a valid empty result")
@@ -410,9 +457,9 @@ class ExternalDataCollectionService:
                 ))
             due_at = next_due_at(descriptor, self.settings, job.partition_key)
             if no_data and observation.retain_previous:
-                committed = self.store.complete_empty_observation(job, observation, due_at)
+                committed = self._run_stage("store.complete-empty", self.store.complete_empty_observation, job, observation, due_at)
             else:
-                committed = self.store.complete_observation(
+                committed = self._run_stage("store.complete-observation", self.store.complete_observation,
                     job,
                     descriptor,
                     observation,
@@ -421,15 +468,15 @@ class ExternalDataCollectionService:
                 )
             followup_plans = [] if no_data else self.registry.followups(job.dataset_id, observation, self.settings)
             followup_count = (
-                int(self.store.enqueue_followups(followup_plans, now=self.now_provider()) or 0)
+                int(self._run_stage("store.followups", self.store.enqueue_followups, followup_plans, now=self.now_provider()) or 0)
                 if followup_plans and callable(getattr(self.store, "enqueue_followups", None))
                 else 0
             )
-            self.store.mark_provider_success(descriptor)
+            self._run_stage("store.provider-success", self.store.mark_provider_success, descriptor)
             completed = self.now_provider()
             response_bytes = len(json.dumps(observation.payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             duration_ms = max(0, int((completed - started).total_seconds() * 1000))
-            self.store.record_run(
+            self._run_stage("store.record-run", self.store.record_run,
                 job,
                 "no-data" if no_data else "success",
                 started_at,
@@ -468,6 +515,10 @@ class ExternalDataCollectionService:
                     "status": "deferred", "reason": error.reason, "nextDueAt": due_at,
                     "requiresAttention": error.reason in {"access-denied", "configuration-required"}, "error": str(error)[:500]}
         except Exception as error:  # noqa: BLE001 - provider failures are durable operational state.
+            if str(getattr(error, "orbit_collection_stage", "")).startswith("store."):
+                # Persistence failure is not a vendor failure. Keep durable lease/
+                # completion state intact, especially after an uncertain commit.
+                raise
             completed = self.now_provider()
             previous_fact = self.store.current_fact(
                 job.dataset_id,

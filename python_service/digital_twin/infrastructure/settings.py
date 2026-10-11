@@ -2845,7 +2845,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "externalDataRetentionCheckIntervalSeconds": value("externalDataRetentionCheckIntervalSeconds", "EXTERNAL_DATA_RETENTION_CHECK_INTERVAL_SECONDS", "21600"),
         "externalDataRunRetentionDays": value("externalDataRunRetentionDays", "EXTERNAL_DATA_RUN_RETENTION_DAYS", "30"),
         "externalDataRevisionRetentionDays": value("externalDataRevisionRetentionDays", "EXTERNAL_DATA_REVISION_RETENTION_DAYS", "365"),
-        "externalDataRetentionBatchSize": value("externalDataRetentionBatchSize", "EXTERNAL_DATA_RETENTION_BATCH_SIZE", "1000"),
+        "externalDataRetentionBatchSize": value("externalDataRetentionBatchSize", "EXTERNAL_DATA_RETENTION_BATCH_SIZE", "100"),
         "externalDataCoinGeckoCadenceSeconds": value("externalDataCoinGeckoCadenceSeconds", "EXTERNAL_DATA_COINGECKO_CADENCE_SECONDS", "600"),
         "externalDataCoinGeckoFreshnessSeconds": value("externalDataCoinGeckoFreshnessSeconds", "EXTERNAL_DATA_COINGECKO_FRESHNESS_SECONDS", "1500"),
         "externalDataFredCadenceSeconds": value("externalDataFredCadenceSeconds", "EXTERNAL_DATA_FRED_CADENCE_SECONDS", "21600"),

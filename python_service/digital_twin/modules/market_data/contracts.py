@@ -16,6 +16,7 @@ _EXPORTS = {'CapitalFlowObservation': ('digital_twin.modules.market_data.domain.
 
 _EXPORTS['MarketQuoteRepository'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketQuoteRepository')
 _EXPORTS['ExternalCallDeferred'] = ('digital_twin.modules.market_data.domain.external_call', 'ExternalCallDeferred')
+_EXPORTS['issuer_ir_source'] = ('digital_twin.modules.market_data.domain.issuer_ir', 'issuer_ir_source')
 _EXPORTS['MarketTimeSeriesRepository'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketTimeSeriesRepository')
 _EXPORTS['MarketDataProvider'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketDataProvider')
 

@@ -51,6 +51,8 @@ class InvestmentResearchOrchestrationService:
         hypothesis_research_planner=None,
         settings: Dict[str, object] = None,
         relationship_research=None,
+        source_exploration=None,
+        deferred_errors=(),
     ):
         self.evidence_repository = evidence_repository
         self.research_gateway = research_gateway
@@ -60,6 +62,8 @@ class InvestmentResearchOrchestrationService:
         self.hypothesis_research_planner = hypothesis_research_planner
         self.settings = dict(settings or {})
         self.relationship_research = relationship_research
+        self.source_exploration = source_exploration
+        self.deferred_errors = deferred_errors
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentBrainResearchEnabled"), True)
@@ -108,6 +112,9 @@ class InvestmentResearchOrchestrationService:
         started_at = started_at or utc_now_iso()
         account_id = account_id or question.account_id
         plan = deepcopy(brain.get("researchPlan") or {})
+        exploration_resume = brain.get("sourceExplorationResume")
+        if exploration_resume:
+            plan["sourceExploration"] = deepcopy(exploration_resume)
         plan.setdefault("planId", stable_id("research-plan", question.question_id))
         plan.setdefault("questionId", question.question_id)
         run_id = run_id or stable_id("research-run", question.question_id, target.normalized_symbol(), started_at)
@@ -175,12 +182,13 @@ class InvestmentResearchOrchestrationService:
         if all_tasks_addressed(assessments) and not force:
             return save("cache-satisfied", "requirements-met")
         cooldown = self.cooldown_remaining_minutes(account_id, target.normalized_symbol())
-        if cooldown > 0 and not force:
+        if cooldown > 0 and not force and not exploration_resume:
             statuses.append({"provider": "research-orchestrator", "status": "cooldown", "remainingMinutes": cooldown})
             return save("research-cooldown", "cooldown")
 
-        attempted_requests = set()
+        attempted_requests = {fingerprint(task_contract(row)) for row in tasks()} if exploration_resume else set()
         collection_ids = set()
+        exploration_attempted = False
         stop_reason = "round-budget-exhausted"
         # There is one review before collection and one after each bounded
         # collection round. A follow-up query must differ from attempted work.
@@ -215,17 +223,34 @@ class InvestmentResearchOrchestrationService:
                 break
             # Do not refetch already-attempted tasks just because a new task
             # was added. Completed tasks remain in the immutable plan/audit.
-            pending = [row for row in pending if fingerprint(task_contract(row)) not in attempted_requests]
-            if not pending:
+            unexplored = [row for row in pending if fingerprint(task_contract(row)) not in attempted_requests]
+            explore = bool(not unexplored and not exploration_attempted
+                and brain.get("documentarySourceExploration") is True
+                and self.source_exploration and self.source_exploration.enabled())
+            if not unexplored and not explore:
                 stop_reason = "no-new-research-path"
                 break
-            if not self.research_gateway or not hasattr(self.research_gateway, "collect_for_target"):
+            if not explore and (not self.research_gateway or not hasattr(self.research_gateway, "collect_for_target")):
                 stop_reason = "collector-unavailable"
                 break
-            attempted_requests.update(fingerprint(task_contract(row)) for row in pending)
-            query_terms = unique_strings(term for row in pending for term in row.get("queryTerms") or [])[:6]
-            research_target = replace(target, research_query_terms=query_terms)
-            collected, provider_statuses = self.collect(research_target, sources(pending), pending)
+            if explore:
+                exploration_attempted = True
+                def checkpoint(exploration):
+                    plan["sourceExploration"] = exploration
+                    save("processing")
+                collected, exploration = self.source_exploration.explore(
+                    target, pending, packets, assessments, private_terms=(account_id,), checkpoint=checkpoint,
+                    resume=brain.get("sourceExplorationResume"))
+                plan["sourceExploration"] = exploration
+                provider_statuses = [{"provider": "question-source-exploration", "status": exploration["stopReason"],
+                    "searchCount": exploration["searchCount"], "readCount": exploration["readCount"],
+                    "count": len(collected)}]
+            else:
+                pending = unexplored
+                attempted_requests.update(fingerprint(task_contract(row)) for row in pending)
+                query_terms = unique_strings(term for row in pending for term in row.get("queryTerms") or [])[:6]
+                research_target = replace(target, research_query_terms=query_terms)
+                collected, provider_statuses = self.collect(research_target, sources(pending), pending)
             if self.article_analysis_service and hasattr(self.article_analysis_service, "analyze_many"):
                 collected = self.article_analysis_service.analyze_many(target, collected)
             round_count += 1
@@ -318,6 +343,8 @@ class InvestmentResearchOrchestrationService:
                 target.normalized_symbol(),
             )
         except Exception as error:  # noqa: BLE001 - a planning failure cannot widen collection beyond the base plan.
+            if brain.get("documentaryReviewOnly") and isinstance(error, self.deferred_errors):
+                raise
             audit = {
                 "status": "planner-failed",
                 "reason": str(error)[:180],

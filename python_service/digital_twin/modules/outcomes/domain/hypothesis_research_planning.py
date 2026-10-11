@@ -14,7 +14,7 @@ APPROVED_DISCOVERY_SOURCE_TYPES = {
     "official-macro", "news", "news-full-text", "article",
 }
 APPROVED_DISCOVERY_EVIDENCE_TYPES = {
-    "official-filing", "company-guidance", "financial-fact", "market-data",
+    "official-filing", "official-document", "company-guidance", "financial-fact", "market-data",
     "price-reaction", "investor-flow", "macro-observation", "news-full-text",
     "competitive-event", "customer-event", "supplier-event", "regulatory-event",
     "industry-demand", "provenance", "observation-time", "source-reliability",

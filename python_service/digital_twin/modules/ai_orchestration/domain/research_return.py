@@ -32,4 +32,9 @@ def research_return(run, run_id, source_task_id, request):
         assessment["truncatedFields"] = truncated
     result["questionAssessment"] = assessment
     result["documentaryAnswer"] = documentary_answer(run, source_task_id)
+    exploration = (run.get("executedPlan") or {}).get("sourceExploration")
+    if isinstance(exploration, dict):
+        result["sourceExploration"] = {key: deepcopy(exploration[key]) for key in (
+            "version", "taskIds", "stopReason", "searchCount", "readCount", "evidenceIds", "missingRequirements", "elapsedSeconds")
+            if key in exploration}
     return result

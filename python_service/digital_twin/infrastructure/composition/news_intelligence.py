@@ -15,6 +15,13 @@ if TYPE_CHECKING:
     )
 
 
+def _source_execution_deferrals():
+    from digital_twin.infrastructure.local_ai_process_guard import LocalAICapacityUnavailable
+    from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
+    from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred
+    return (LocalAICapacityUnavailable, AIControlBudgetWait, AIExecutionDeferred)
+
+
 def build_investment_research_orchestrator(settings=None, research_store=None) -> InvestmentResearchOrchestrationService:
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.event_bus import default_event_bus
@@ -48,8 +55,32 @@ def build_investment_research_orchestrator(settings=None, research_store=None) -
             configured_settings,
         ),
         hypothesis_research_planner=build_hypothesis_research_planning_service(configured_settings),
+        source_exploration=build_source_exploration_service(configured_settings),
+        deferred_errors=_source_execution_deferrals(),
         settings=configured_settings,
     )
+
+
+def build_source_exploration_service(settings=None):
+    from digital_twin.modules.news_intelligence.application.source_exploration_service import SourceExplorationService
+    from digital_twin.modules.news_intelligence.infrastructure.source_document_tools import SourceDocumentTools
+    from digital_twin.modules.news_intelligence.infrastructure.source_exploration_ai import (
+        SourceExplorationAdvisor, PublicSourceSearch, source_command,
+    )
+    from digital_twin.modules.model_registry.infrastructure.model_reviewer import (
+        background_codex_process_arguments, run_background_ai_prompt,
+    )
+    configured = dict(settings or {})
+    def invoke(prompt, timeout, search):
+        command = source_command(background_codex_process_arguments(), search)
+        if not command:
+            raise ValueError("exploration-model-unavailable")
+        return run_background_ai_prompt(command, prompt, max(1, int(timeout)),
+            {**configured, "aiWorkload": "source-search" if search else "source-exploration",
+             "localAiCapacityWaitSeconds": min(15, max(1, int(timeout)))})
+    return SourceExplorationService(SourceExplorationAdvisor(invoke),
+        SourceDocumentTools(PublicSourceSearch(invoke)), configured,
+        deferred_errors=_source_execution_deferrals())
 
 
 def build_investment_research_queue_runner(settings=None) -> InvestmentResearchQueueRunner:
@@ -80,6 +111,7 @@ def build_hypothesis_research_planning_service(settings=None) -> HypothesisResea
     return HypothesisResearchPlanningService(
         advisor=hypothesis_research_planning_advisor_from_settings(configured_settings),
         settings=configured_settings,
+        deferred_errors=_source_execution_deferrals(),
     )
 
 

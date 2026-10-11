@@ -15,7 +15,7 @@ from .investment_research import ResearchEvidence
 from .financial_reporting import financial_report_contract_assessment
 
 
-RESEARCH_PROGRESS_VERSION = "question-evidence-coverage-v1"
+RESEARCH_PROGRESS_VERSION = "question-evidence-coverage-v2"
 AUDIT_RETENTION_DAYS = {"intraday": 30, "short-term": 90, "medium-term": 365, "long-term": 730, "multi-horizon": 730}
 SEMANTIC_REQUIREMENTS = {
     "company-guidance", "competitive-event", "customer-event", "supplier-event",
@@ -84,6 +84,9 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
             source_types.update({"official", "official-filing"})
         if item.kind.lower() == "issuer-ir":
             source_types.update({"official", "company-ir"})
+            types.add("official-document")
+        if "official-filing" in types:
+            types.add("official-document")
         if "financial-fact" in types:
             source_types.add("financial-data")
         if types.intersection({"market-data", "price-reaction", "investor-flow"}):
@@ -124,7 +127,8 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
         for row in (raw.get("documentPassages") or [])[:8]:
             quote = str(row.get("quote") or "") if isinstance(row, dict) else ""
             if quote and len(quote) <= remaining:
-                passages.append({"quote": quote, "passageHash": hashlib.sha256(quote.encode()).hexdigest()})
+                passages.append({"quote": quote, "passageHash": hashlib.sha256(quote.encode()).hexdigest(),
+                    **({"page": row["page"]} if type(row.get("page")) is int and row["page"] > 0 else {})})
                 remaining -= len(quote)
         if passages:
             packet.update(documentPassages=passages,
@@ -186,7 +190,7 @@ def missing_requirements(task: Dict[str, object], packets: List[Dict[str, object
     missing = [requirement for requirement in texts(task.get("requiredEvidenceTypes"))
                if requirement not in available and requirement not in SEMANTIC_REQUIREMENTS]
     if task.get("requiresDocumentBody") and not any(
-            "official-filing" in (packet.get("evidenceTypes") or []) and
+            {"official-filing", "official-document"}.intersection(packet.get("evidenceTypes") or []) and
             (packet.get("documentPassages") or packet.get("reportedValues")) for packet in packets):
         missing.append("공식 원문 본문 또는 출처가 확인된 보고 수치")
     periods = {str(packet.get("periodEnd") or "")[:10] for packet in packets}
@@ -233,6 +237,10 @@ def assess_tasks(
         )
         selected = [row for row in candidates if row["evidenceId"] in set(cited + counter)] if review_valid else candidates
         missing = missing_requirements(task, selected)
+        if review_valid and "missingRequirements" in review:
+            missing = texts(missing + [value[:180] for value in texts(review.get("missingRequirements"), 8)])
+            if review.get("status") in {"partial", "unresolved"} and not missing:
+                missing = ["질문에 필요한 수치·기간 또는 설명의 추가 확인"]
         satisfied = review_valid and review.get("status") == "addressed" and not missing
         assessments.append({
             "taskId": str(task.get("taskId") or ""), "question": str(task.get("question") or ""),

@@ -289,7 +289,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # recovered document authority, source passage boundaries and repair budgets.
         # Five source-renewal regressions cover weekend counter retention, initial
         # close-only baselines, independent news/flow, unknown data and duplicate samples.
-        self.assertLessEqual(total, 2190)
+        # Thirteen source-exploration contracts cover API gaps, original question
+        # lineage, execution deferral/resume, provenance, PDF/HTML extraction,
+        # missing requirements, public-address safety and bounded model/tool work.
+        self.assertLessEqual(total, 2203)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

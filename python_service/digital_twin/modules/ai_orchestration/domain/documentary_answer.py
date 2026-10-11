@@ -1,5 +1,4 @@
 """A cited source review is an answer artifact, not a market hypothesis verdict."""
-from copy import deepcopy
 from urllib.parse import urlsplit
 
 
@@ -42,6 +41,18 @@ def documentary_answer(run, task_id):
             blockers.insert(0, "검토의 인용 또는 자료 버전이 맞지 않아 답변으로 채택하지 않았습니다.")
         elif not blockers:
             blockers.append("수집 자료에 대한 유효한 인용 답변을 확보하지 못했습니다.")
+    exploration = (run.get("executedPlan") or {}).get("sourceExploration") or {}
+    if not complete and exploration:
+        stop = exploration.get("stopReason")
+        if stop in {"step-budget-exhausted", "time-budget-exhausted", "context-budget-exhausted"}:
+            blockers.append("추가 탐색 예산을 사용했지만 필요한 근거를 모두 확인하지 못했습니다.")
+        elif stop == "exploration-model-failed":
+            blockers.append("다음 조사 방법을 선택하는 AI 실행에 실패했습니다.")
+        elif stop == "execution-deferred":
+            blockers.append("AI 실행 순서 또는 사용 예산을 기다립니다. 기존 조사 기록에서 이어서 진행합니다.")
+        if any(step.get("status") == "failed" and step.get("decision", {}).get("action") in {"search", "read"}
+               for step in exploration.get("steps", [])):
+            blockers.append("일부 검색 또는 원문 읽기에 실패했습니다. 자료가 공개되지 않았다는 뜻은 아닙니다.")
     sources = []
     if reviewed:
         for key in cited[:8]:
@@ -58,5 +69,7 @@ def documentary_answer(run, task_id):
     return {"version": "documentary-answer-v1", "taskId": task_id, "status": status,
         "authority": "source-review-only", "assessmentFingerprint": str(row.get("assessmentFingerprint") or ""),
         "text": str(row.get("reason") or "")[:600] if reviewed else " ".join(blockers),
-        "missingRequirements": deepcopy(row.get("missingRequirements") or [])[:8],
+        "missingRequirements": list(dict.fromkeys([
+            *(exploration.get("missingRequirements") or [] if not complete else []),
+            *(row.get("missingRequirements") or [])]))[:8],
         "blockers": blockers, "sources": sources, "assessedAt": str(row.get("assessedAt") or "")}

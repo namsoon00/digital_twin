@@ -49,7 +49,7 @@ _SOURCES = {
         IssuerIrSource("AAPL", "Apple", "US", ("https://investor.apple.com/", "https://www.apple.com/newsroom/rss-feed.rss"), ("sec.document",)),
         IssuerIrSource("CPNG", "Coupang", "US", ("https://ir.aboutcoupang.com/",), ("sec.document",)),
         IssuerIrSource("MSTR", "Strategy", "US", ("https://www.strategy.com/investor-relations",), ("sec.document",)),
-        IssuerIrSource("NVDA", "NVIDIA", "US", ("https://investor.nvidia.com/",), ("sec.document",)),
+        IssuerIrSource("NVDA", "NVIDIA", "US", ("https://investor.nvidia.com/", "https://nvidianews.nvidia.com/"), ("sec.document",)),
         IssuerIrSource("PLTR", "Palantir", "US", ("https://investors.palantir.com/",), ("sec.document",)),
         IssuerIrSource("TSLA", "Tesla", "US", ("https://ir.tesla.com/",), ("sec.document",)),
     )

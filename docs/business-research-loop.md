@@ -179,3 +179,86 @@ Validation: `test_documentary_answers`, `test_ai_continuity_research`,
 `test_question_research_progress`, `test_research_progress`, `test_research_replies`
 and `test_ai_brain_agenda`; live model quality still requires reviewing actual
 source-backed answers after deployment.
+
+## AI-directed source exploration
+
+New central documentary research tasks use `official-document` coverage, which
+accepts a verified filing or an issuer document without relabelling IR as an
+audited filing. The request's original question, reporting requirements and
+freshness window remain fixed. The existing source collection runs first. If
+its cited review is incomplete and the next collection would repeat the same
+request, `SourceExplorationService` runs inside the remaining research round.
+`documentaryReviewOnly` still forbids adding unrelated tasks. Exploration is
+enabled by default; `researchSourceExplorationEnabled=0` (environment
+`RESEARCH_SOURCE_EXPLORATION_ENABLED=0`) disables this fallback.
+
+The AI chooses `search`, `read`, or `finish`, with a reason and specific missing
+requirements. Search uses the existing central model execution/accounting path
+with live public web search; it needs no additional search subscription or MCP
+server. The worker retains an actual search-tool execution receipt. Search
+titles and URLs are discovery leads, never verified source text. Document reads
+are internal Python functions. The AI can read only a candidate returned by a
+search or a previously read page; it cannot pass an arbitrary URL to the reader.
+Source decisions and search calls appear as `source-exploration` and
+`source-search` in the existing AI call audit. The model policy is unchanged.
+
+One exploration allows six decisions, two search operations, and three document
+reads. It stops admitting new operations after its six-minute time budget and
+bounds individual model/network/PDF timeouts. Exact decision inputs are saved
+before each model call and selected operations are checkpointed before execution.
+Checkpoints retain candidate provenance, failed reads, hashes, source passages,
+and collected evidence under the original source task. A retry reuses completed
+exploration or continues with its consumed budgets; a changed task contract cannot
+reuse that audit. No completed historical research run is silently rerun.
+Capacity, central usage budget and shared recovery waits propagate to the central
+queue, preserving a processing checkpoint. They neither close the question nor
+consume another search/decision on retry. A pending search resumes its selected
+operation; completed searches and reads are not repeated. Source review uses the
+same deferral policy, so waiting for its model slot cannot turn an answer into a
+terminal research failure.
+
+The reader uses credential-free HTTPS, validates every redirect and public DNS
+address, and pins the actual connection to that address. Private/local addresses,
+non-HTTPS URLs, credentials in URLs and oversized bodies are rejected. HTML
+tables remain whole. Text PDFs are decoded by a short-lived, resource-bounded
+`pypdf==6.20.0` worker; up to 60 pages are examined and omitted pages are explicit.
+Scanned PDFs require OCR and currently remain unavailable instead of producing
+invented text. Original byte hashes and selected passage hashes are retained.
+
+Issuer identity comes from the existing official IR registry, including NVIDIA's
+[official newsroom](https://nvidianews.nvidia.com/) as an alternative to its IR
+host. Exact PDF links from a read official page and PDF redirects originating
+at that issuer retain their provenance. A company mention or AI assertion cannot
+register a new trusted publisher. Other public sites may be explored as leads,
+but unverified issuer identity or publication dates prevent their admission.
+PDF creation dates, HTTP modification times and search snippets are not substituted
+for publication dates. A 403, missing parser, empty search, unknown publisher,
+stale report and exhausted budget stay distinct. None proves that the information
+was never publicly disclosed.
+
+Collected documents pass the existing evidence governance, source persistence,
+projection events and `IssuerIRDocument` ABox mapping. Only then can they enter
+subsequent investment reasoning. The source answer itself remains research-only.
+The v2 question coverage contract retains AI-authored missing requirements; an
+`addressed` claim with missing requirements cannot close a question. Independent
+review must still cite the exact assessment and original source packets.
+
+The central AI page displays the source answer, citation links, missing items and
+search/read counts under the original question. Full exploration inputs and
+receipts remain in `ResearchRun.executedPlan.sourceExploration`. These records
+describe investigation and source coverage, not prediction accuracy or return.
+
+Validation: `test_source_exploration` covers the API-miss → search → original
+read → source review → original question → ABox path, trust/freshness rejection,
+PDF decoding, query privacy, private-address/redirect rejection, checkpoint reuse,
+and operation budgets. `ai-source-exploration.test.mjs` covers answer visibility
+and unsafe citation links. Current Codex search configuration follows the
+[official configuration documentation](https://learn.chatgpt.com/docs/config-file/config-basic).
+
+Live acceptance on 2026-10-11 used the configured central model and real public
+HTTPS sources with an empty fixed-source response and isolated in-memory result
+stores. For a NVIDIA quarterly Data Center revenue question, one search and three
+reads (including an explicit 403) collected one dated official newsroom document;
+independent review returned a cited answer with no missing requirements. No
+operational question, evidence row or investment notification was rewritten by
+this validation. This verifies that path, not coverage of every question/source.

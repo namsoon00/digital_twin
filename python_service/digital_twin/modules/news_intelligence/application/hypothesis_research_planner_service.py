@@ -12,9 +12,10 @@ DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 class HypothesisResearchPlanningService:
     """Lets AI propose collection work without giving it investment authority."""
 
-    def __init__(self, advisor=None, settings: Dict[str, object] = None):
+    def __init__(self, advisor=None, settings: Dict[str, object] = None, deferred_errors=()):
         self.advisor = advisor
         self.settings = dict(settings or {})
+        self.deferred_errors = deferred_errors
 
     def enabled(self) -> bool:
         value = str(self.settings.get("investmentBrainHypothesisResearchPlannerAiEnabled", "1")).strip().lower()
@@ -85,6 +86,8 @@ class HypothesisResearchPlanningService:
         try:
             guidance = self.advisor.plan(context)
         except Exception as error:  # noqa: BLE001 - research must retain the graph-derived baseline plan.
+            if review_only and isinstance(error, self.deferred_errors):
+                raise
             audit = {
                 "status": "planner-failed",
                 "reason": str(error)[:180],

@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const labels = {pending:"대기",processing:"진행 중",completed:"완료",failed:"실패",running:"완료 미확인",observe:"관찰·재검토",research:"추가 조사"};
-const workloads = {"independent-observation":"독립 관찰", "news-analysis":"뉴스 분석", "disclosure-analysis":"공시 분석", "model-review":"모델 검토", "research-planning":"조사 계획", "hypothesis-proposal":"가설 제안", "rule-change-proposal":"규칙 개선 제안", "investment-judgement":"투자 판단", "interactive-chat":"대화"};
+const workloads = {"independent-observation":"독립 관찰", "news-analysis":"뉴스 분석", "disclosure-analysis":"공시 분석", "model-review":"모델 검토", "research-planning":"조사 계획", "source-exploration":"자료 탐색 판단", "source-search":"외부 자료 검색", "hypothesis-proposal":"가설 제안", "rule-change-proposal":"규칙 개선 제안", "investment-judgement":"투자 판단", "interactive-chat":"대화"};
 const qualityLabels = {accepted:"문장·새로움 검토 통과",rejected:"품질 검토 보류","awaiting-review":"독립 검토 미완료","observation-only":"관찰 기록 · 발송 제안 없음"};
 const followUpLabels = {pending:"관찰 중",triggered:"조건 전환 확인",expired:"기간 만료 · 평가 불가",unavailable:"자료 부족 · 평가 불가"};
 const publicationLabels = {queued:"발송 검증 대기",recorded:"관찰 기록",suppressed:"발송 보류",done:"발송 완료",failed:"전송 실패",processing:"전송 중",pending:"전송 대기","retry-wait":"전송 재시도 대기","recovery-wait":"자동 복구 대기","receipt-unconfirmed":"전송 영수증 미확인",expired:"알림 유효시간 만료",superseded:"알림 대체·만료",unknown:"전송 상태 미확인"};
@@ -48,6 +48,21 @@ function businessView(result) {
   const candidates = relationships.map(row => `<p><strong>${escape(row.counterparty?.name)}</strong>${row.counterparty?.symbol ? ` · ${escape(row.counterparty.symbol)}` : " · 상장 종목 식별 필요"}<br>${escape(relationLabels[row.relationType] || row.relationType)} · ${row.direction === "inbound" ? "상대 기업 → 분석 기업" : "분석 기업 → 상대 기업"}<br><small>공시 ${escape(date(row.publishedAt))} · 최초 확인 ${escape(date(row.firstKnownAt))}<br>현재 관계의 지속 여부와 매출 노출은 추가 확인이 필요합니다.</small></p><blockquote>${escape(row.excerpt)}</blockquote>`).join("");
   return `${business ? `<details open class="business-research"><summary>사업 가설과 장기 확인</summary><p>${escape(business.coverageNote)}</p>${theses}${reviews}${(business.reviews || []).map(row => `<p>가설 검토: ${escape(row.reason)}</p>`).join("")}</details>` : ""}${candidates ? `<details open><summary>연결 기업 · 추가 조사 후보</summary>${candidates}</details>` : ""}`;
 }
+function researchAnswerView(result = {}) {
+  const answer = result.documentaryAnswer;
+  const exploration = result.sourceExploration;
+  if (!answer && !exploration) return "";
+  const state = {answered:"자료 답변 확인",partial:"일부 항목 확인",unavailable:"답변 근거 부족"};
+  const stops = {"ai-finished":"답변 검토로 전달", "step-budget-exhausted":"이번 탐색 횟수 소진", "time-budget-exhausted":"이번 탐색 시간 소진", "context-budget-exhausted":"자료 용량 한도 도달", "exploration-model-failed":"탐색 판단 실행 실패", "execution-deferred":"AI 실행 대기 · 기록을 보존해 재개"};
+  const sources = (answer?.sources || []).map(source => {
+    let url;
+    try { url = new URL(source.sourceUrl); } catch { return ""; }
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    return `<li><a href="${escape(url.href)}" target="_blank" rel="noopener noreferrer">${escape(source.title || url.hostname)}</a>${source.publishedAt ? ` · 발행 ${escape(date(source.publishedAt))}` : ""}</li>`;
+  }).join("");
+  const missing = answer?.missingRequirements?.length ? answer.missingRequirements : exploration?.missingRequirements || [];
+  return `<details open class="research-answer"><summary>${escape(state[answer?.status] || "자료 탐색 기록")}</summary>${answer?.text ? `<p>${escape(answer.text)}</p>` : ""}${sources ? `<ul>${sources}</ul>` : ""}${missing.length ? `<p>아직 확인하지 못한 항목: ${missing.map(escape).join(" / ")}</p>` : ""}${answer?.blockers?.length ? `<p class="muted">확인 한계: ${answer.blockers.map(escape).join(" / ")}</p>` : ""}${exploration ? `<p class="muted">AI 추가 탐색 · 검색 ${escape(exploration.searchCount ?? 0)}회 · 문서 읽기 ${escape(exploration.readCount ?? 0)}회 · ${escape(stops[exploration.stopReason] || "탐색 상태 확인 필요")}</p>` : ""}<p class="muted">자료 답변과 투자 가설의 검증 결과는 별도로 확인합니다.</p></details>`;
+}
 function brainView(brain = {}) {
   brainCases = brain.cases || [];
   const cards = brainCases.map((row) => {
@@ -56,6 +71,7 @@ function brainView(brain = {}) {
     const origin = row.origin || {};
     return `<div class="panel brain-card"><header><h3>${escape(row.symbol)} · ${escape(feedback ? categoryLabels[row.category] : "지속 질문")}</h3><span>${escape(brainLabels[row.status] || row.status)}</span></header>
       <p><strong>${escape(feedback ? row.problem : row.question)}</strong></p>
+      ${researchAnswerView(row.lastResearch?.result)}
       ${feedback ? `<p>${escape(row.proposal)}</p><p class="muted">개선 확인 기준: ${escape(row.verification)}</p>` : `<p>${escape(row.reason)}</p><p class="muted">완료 기준: ${escape(row.completionCriterion)}<br>다음 확인 ${escape(date(row.nextCheckAt))} · 연결된 조사 ${escape(row.researchAttempts || 0)}회</p>`}
       ${row.hypothesisResolution ? `<p><strong>가설로 이어진 판단: ${escape(({"business-thesis":"사업 가설 추적",experiment:"격리 실험 요청",defer:"추가 확인 후 판단","not-applicable":"가설 개발 대상 아님"})[row.hypothesisResolution.disposition] || "검토 필요")}</strong><br>${escape(row.hypothesisResolution.reason || "원래 개발 요청과 연결된 진행 상태를 확인합니다.")}</p>${row.hypothesisResolution.state === "deferred-daily-budget" ? '<p class="muted">오늘 먼저 접수된 다른 질문이 있어 이 질문의 실험 요청은 보류됐습니다.</p>' : ''}` : ''}
       ${row.developmentProgress ? `<p class="muted">연결된 개발 결과: ${escape(developmentLabels[row.developmentProgress.resultStatus || row.developmentProgress.status] || row.developmentProgress.resultStatus || row.developmentProgress.status)}</p>${(row.developmentProgress.cases || []).map(item => `<p>${escape(developmentLabels[item.status] || item.status)}${item.blockedReason ? ' · ' + escape(item.blockedReason) : ''}${item.dataShapeErrors?.length ? '<br>이전 인과경로 저장 형식에 오류가 있어 새 근거로 재검토가 필요합니다.' : ''}</p>`).join('')}<p class="muted">후보 생성과 실험 진행은 가설이 검증됐다는 뜻이 아닙니다.</p>` : ''}
@@ -95,6 +111,7 @@ function card(task, scheduling = {}) {
   ${quote ? `<p>근거 시점 가격 <strong>${escape(Number(quote.currentPrice).toLocaleString("ko-KR"))} ${escape(quote.currency)}</strong>${quote.changeRate != null ? ` · 등락 ${escape(quote.changeRate)}%` : ""}<br><small>시세 기준 ${escape(date(quote.sourceAsOf || quote.asOf || quote.updatedAt))}</small></p>` : ""}
   <div class="analysis">${section("가능한 설명 · 가설",r.hypothesis)}${section("이전 알림과 비교",r.comparison)}${section("내 보유·관심 상황에서의 의미",r.portfolioImpact)}${section("반대 근거와 한계",r.counterEvidence)}${section("다음에 확인할 질문",(r.questions || []).join(" / "))}</div>
   ${businessView(r)}
+  ${researchAnswerView(r)}
   ${retrievalView(r.input?.retrieval || r.failure?.retrieval)}
   ${continuityView(r)}
   ${r.followUpConditions?.length ? `<details><summary>등록한 확인 조건 ${r.followUpConditions.length}개</summary>${r.followUpConditions.map((row) => `<p>${escape(row.description)}<br><small>${escape(date(row.expiresAt))}까지 다음 관찰에서 확인</small></p>`).join("")}</details>` : ""}

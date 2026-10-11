@@ -16,17 +16,20 @@ def execute_research(job, research_store, orchestrator_factory):
     question = InvestmentQuestion.create(job["question"], subject_symbol=job["symbol"],
         subject_name=job["name"], account_id=job["accountId"], source="ai-control")
     sources = request.get("sourceTypes", ["official-filing", "news"])
+    documentary = "official-filing" in sources
+    collection_sources = [*sources, "company-ir"] if documentary else sources
     task = {"taskId": source_task_id, "question": job["question"],
         "purpose": "독립 관찰에서 제기한 가설의 근거와 반대 근거 확인", "status": "blocked-by-data",
-        "requiredEvidenceTypes": ["news-full-text" if source == "news" else source for source in sources],
-        "sourceTypes": sources, "queryTerms": request.get("queryTerms", []),
-        "requiresDocumentBody": "official-filing" in sources,
+        "requiredEvidenceTypes": ["news-full-text" if source == "news" else "official-document" for source in sources],
+        "sourceTypes": collection_sources, "queryTerms": request.get("queryTerms", []),
+        "requiresDocumentBody": documentary,
         "maxAgeMinutes": request.get("maxAgeMinutes", 1440), "decisionRelevance": "supporting"}
     orchestrator = orchestrator_factory()
     # Keep the authored collection scope, but allow the source owner to review
     # the collected answer independently of market-observation quality gates.
     run = orchestrator.run(question, NewsCollectionTarget(job["symbol"], job["name"]),
-        {"documentaryReviewOnly": True,
+        {"documentaryReviewOnly": True, "documentarySourceExploration": documentary,
+         "sourceExplorationResume": ((existing or {}).get("executedPlan") or {}).get("sourceExploration"),
          "researchPlan": {"planId": job["taskId"], "tasks": [task], "unresolvedQuestions": [job["question"]]}},
         account_id=job["accountId"], run_id=run_id,
         request_context={"aiControlTaskId": job["taskId"], "source": "ai-control", "question": question.to_dict(),

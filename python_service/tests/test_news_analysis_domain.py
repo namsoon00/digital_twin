@@ -86,6 +86,20 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertTrue(prompt["article"]["sourceContract"]["primaryEventCandidateIds"])
         self.assertIn("70%", prompt["article"]["targetRelevantBodyPreview"])
 
+    def test_source_passages_keep_separate_fragments_after_headline_tail_cleanup(self):
+        from digital_twin.modules.news_intelligence.domain.article_source_contract import build_article_source_contract
+        target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "")
+        title = "Apple supplier expands production capacity"
+        first = "Apple supplier expands production capacity at its overseas factory with new assembly lines and confirmed orders"
+        second = "Apple supplier said the new production capacity will support deliveries over the coming financial year."
+        body = first + " " + title + ". " + second
+        contract = build_article_source_contract(target, title, body, "")
+        passages = contract["passages"]
+        self.assertGreaterEqual(len(passages), 2)
+        self.assertTrue(all(row["text"] in body for row in passages))
+        self.assertTrue(any(row["text"] == first for row in passages))
+        self.assertTrue(any(row["text"] == second for row in passages))
+
     def test_background_only_citations_do_not_verify_primary_summary(self):
         evidence = self.source_contract_evidence()
         answer = self.source_contract_answer(evidence)
@@ -128,6 +142,23 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         evidence.raw_payload["articleText"] += " 현대차는 다음 달에 지역별 판매 수치를 공개한다고 밝혔다."
         evidence = apply_news_ai_analysis(evidence, answer)
         self.assertEqual(1, evidence.raw_payload["aiAnalysis"]["sourceRepairAttempts"])
+
+    def test_repaired_passage_contract_reopens_only_old_missing_passage_failure(self):
+        evidence = self.source_contract_evidence()
+        answer = self.source_contract_answer(evidence)
+        answer["sourceGrounding"]["summarySourceIds"] = []
+        for _ in range(3):
+            evidence = apply_news_ai_analysis(evidence, answer)
+        self.assertEqual("source-invalid", evidence.raw_payload["aiAnalysis"]["status"])
+        self.assertTrue(news_ai_analysis_is_current(evidence))
+        quality = evidence.raw_payload["articleSummaryQuality"]
+        quality["issues"].append("source-passages-unavailable")
+        quality["sourceGrounding"]["version"] = "article-source-contract-v1"
+        self.assertFalse(news_ai_analysis_is_current(evidence))
+        evidence.raw_payload["aiAnalysis"]["sourceRepairFingerprint"] = "legacy-v1-fingerprint"
+        repaired = apply_news_ai_analysis(evidence, answer)
+        self.assertEqual(1, repaired.raw_payload["aiAnalysis"]["sourceRepairAttempts"])
+        self.assertEqual("source-review", repaired.raw_payload["aiAnalysis"]["status"])
 
     def test_generated_summary_is_never_reused_as_source_body(self):
         evidence = self.source_contract_evidence()

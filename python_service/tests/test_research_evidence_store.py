@@ -43,6 +43,17 @@ class FixedCacheKeyExternalSignalProvider(ExternalSignalProvider):
 
 
 class ResearchEvidenceStoreTests(unittest.TestCase):
+    def test_verified_document_replaces_rejection_of_missing_source(self):
+        previous = {"officialDocumentText": "", "documentVerified": False,
+                    "evidenceQualityAuthority": "revalidation-v1", "dataState": "insufficient", "validationState": "blocked"}
+        incoming = {"officialDocumentText": "Verified filing body", "documentVerified": True,
+                    "documentHash": "new-source-hash", "dataState": "sufficient", "validationState": "ready"}
+        self.assertEqual(incoming, merge_derived_evidence_payload(previous, incoming))
+        # Metadata-only refreshes must not remove an authoritative rejection.
+        self.assertEqual("blocked", merge_derived_evidence_payload(previous, {"title": "Listing"})["validationState"])
+        same_source = {**incoming, "evidenceQualityAuthority": "revalidation-v1", "validationState": "blocked"}
+        self.assertEqual("blocked", merge_derived_evidence_payload(same_source, incoming)["validationState"])
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()

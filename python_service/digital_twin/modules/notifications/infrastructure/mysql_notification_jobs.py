@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 import hashlib
-from threading import Lock
+from threading import Lock, local
 from typing import Dict, Iterable, List, Optional, Tuple
 import uuid
 
@@ -21,7 +21,7 @@ from digital_twin.modules.notifications.domain.notification_feedback import norm
 from digital_twin.modules.notifications.contracts import NotificationLifecycleEvent
 from digital_twin.modules.notifications.domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from digital_twin.modules.notifications.domain.sent_article_filter import article_event_family_keys, article_filter_context_summary, collect_article_identity_keys_from_context, filter_sent_articles_from_context, suppressible_identity_key
-from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
+from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy, MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_retention import sent_article_delivery_ledger_cutoff
 from digital_twin.infrastructure.mysql_operational_helpers import _is_duplicate_key_error, _json_loads
 from digital_twin.infrastructure.operational_common import MAX_NOTIFICATION_DELIVERY_ATTEMPTS, NOTIFICATION_HISTORY_LOOKBACK_LIMIT, json_dumps, notification_history_is_recent_in_flight, rule_from_row
@@ -79,16 +79,48 @@ class MySQLNotificationJobStore(InvestmentConversationStore, ResearchThreadStore
     def delivery_subject_lock(self, account_id, symbol):
         """Serialize final receipt comparison and send across worker processes."""
         key = "insight-send:" + hashlib.sha256((str(account_id) + ":" + str(symbol).upper()).encode()).hexdigest()[:48]
-        with self.connect() as connection:
+        with self.delivery_named_lock(key) as acquired:
+            yield acquired
+
+    @contextmanager
+    def delivery_named_lock(self, key):
+        """Share one dedicated session for nested send locks, outside the data pool.
+
+        GET_LOCK is session-scoped, not transaction-scoped. Returning its socket
+        to the pool while sending could leak a lock to another borrower; keeping
+        two pooled sockets instead starves the receipt transaction at pool size 2.
+        The outer scope always closes this non-reconnecting session.
+        """
+        state = self._delivery_lock_state
+        connection = getattr(state, "connection", None)
+        outermost = connection is None
+        if outermost:
+            connection = state.connection = MySQLConnectionProxy(self.raw_connection())
+            state.keys = set()
+        if key in state.keys:
+            # MySQL permits recursive GET_LOCK on one session, but a second
+            # send in the same conversation must still wait for its receipt.
+            yield False
+            return
+        acquired = False
+        try:
             row = connection.execute("SELECT GET_LOCK(%s, 0) AS acquired", (key,)).fetchone()
             acquired = bool(row and row.get("acquired") == 1)
+            if acquired:
+                state.keys.add(key)
+            yield acquired
+        finally:
             try:
-                yield acquired
-            finally:
                 if acquired:
+                    state.keys.discard(key)
                     connection.execute("SELECT RELEASE_LOCK(%s)", (key,)).fetchone()
+            finally:
+                if outermost:
+                    state.connection = None
+                    connection.close()
 
     def __init__(self, settings: Dict[str, str] = None, admission_policy=None):
+        self._delivery_lock_state = local()
         super().__init__(settings)
         self.admission_policy = admission_policy or NotificationAdmissionPolicy()
         skip_rule_seed = str(

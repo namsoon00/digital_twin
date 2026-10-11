@@ -42,6 +42,14 @@ cooldown thresholds, or treat deterministic matching as predictive validation.
   refresh the last successful account/subject delivery and keep both baselines.
 - A connection-scoped MySQL named lock covers receipt comparison and transport
   completion. Busy locks or unavailable receipt history cause retry, not a send.
+- Nested subject/conversation send locks share one dedicated, thread-local
+  MySQL session outside the operational connection pool. The outer scope closes
+  it even after failure; pooled transactions remain available for receipts.
+  A two-connection integration regression covers nesting, competing lock owners,
+  transactional work, exception cleanup and a subsequent delivery scope.
+- Pool exhaustion uses the existing exponential retry delay and one bounded
+  terminal recovery. Receipt comparison still runs before transport, and expired
+  notifications are superseded rather than replayed.
 - The composition layer injects the decisions-owned comparison function into
   notification delivery; the two application modules do not import each other.
 - Suppress an identical actionless opinion already sent during analysis, but
@@ -52,6 +60,20 @@ cooldown thresholds, or treat deterministic matching as predictive validation.
 - `notificationRenderedMessageRetentionDays` defaults to 7, bounded to 1..30.
   Maintenance removes the body only, in bounded batches; delivery receipts and
   hashes remain available for continuity. This does not extend raw ABox retention.
+
+## Source Recovery
+
+- An incoming body after an empty/rejected source is a changed source. Do not
+  inherit the old source's authoritative rejection or enrichment. Unchanged
+  bodies and metadata-only refreshes retain their existing quality authority.
+- Article source contract v2 preserves selected passage boundaries before
+  assigning IDs. Never join selected fragments and then infer their sentence
+  boundaries; headline cleanup may have removed punctuation between them.
+  Each admitted passage must still occur in the source and fit the total budget.
+- An older missing-passage rejection can request a fresh analysis when v2 now
+  supplies passages. Its repair budget and durable work revision include the
+  contract version. Other terminal rejections remain bounded, and repaired
+  extraction alone does not validate a prior AI summary.
 
 ## Verification
 

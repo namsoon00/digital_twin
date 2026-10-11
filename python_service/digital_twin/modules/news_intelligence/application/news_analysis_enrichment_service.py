@@ -21,6 +21,7 @@ from digital_twin.modules.news_intelligence.domain.investment_research import Ne
 from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
 from digital_twin.modules.news_intelligence.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_body_quality_needs_refresh, article_summary_quality_needs_refresh, news_ai_analysis_is_current, news_ai_analysis_retryable, refreshed_article_summary_quality, source_language
 from digital_twin.modules.news_intelligence.domain.article import article_source_revision
+from digital_twin.modules.news_intelligence.domain.article_source_contract import ARTICLE_SOURCE_CONTRACT_VERSION
 from digital_twin.modules.decisions.contracts import assess_prompt_evidence
 import digital_twin.modules.news_intelligence.domain.news_analysis as news_domain
 from digital_twin.modules.news_intelligence.application.analyze_article import annotate_evidence_eligibility
@@ -307,6 +308,7 @@ class NewsAnalysisEnrichmentRunner:
         revision_source = ":".join([
             source_revision,
             NEWS_AI_ANALYSIS_VERSION,
+            ARTICLE_SOURCE_CONTRACT_VERSION,
             str(work_class or "model"),
         ])
         return "news-analysis:" + hashlib.sha256(

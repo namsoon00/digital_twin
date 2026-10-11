@@ -285,7 +285,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # non-error source visibility, and durable dataset-scoped API admission.
         # Three error-page admission, read-model and durable retry regressions.
         # HTML outage deferral and its restart-persistent storage admission.
-        self.assertLessEqual(total, 2180)
+        # Five incident regressions cover nested send locks, pool retry bounds,
+        # recovered document authority, source passage boundaries and repair budgets.
+        self.assertLessEqual(total, 2185)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

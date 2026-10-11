@@ -33,35 +33,31 @@ class ResearchThreadStore:
     @contextmanager
     def _delivery_thread(self, job, destination, key, register):
         lock = "research-send:" + key[:48]
-        with self.connect() as connection:
-            acquired = connection.execute("SELECT GET_LOCK(%s,0) AS acquired", (lock,)).fetchone()
-            if not acquired or acquired["acquired"] != 1:
+        with self.delivery_named_lock(lock) as acquired:
+            if not acquired:
                 raise ResearchDeliveryDeferred("같은 대화의 앞선 알림 발송을 기다립니다.")
-            try:
-                with self.transaction() as tx:
-                    register(tx, job)
-                    row = tx.execute("SELECT first_job_id,receipts_json FROM notification_research_threads WHERE thread_key=%s", (key,)).fetchone()
-                    receipts = json.loads(row["receipts_json"])
-                    anchor = receipts.get(destination) or {}
-                    if not anchor:
-                        old = tx.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s", (row["first_job_id"],)).fetchone()
-                        if old:
-                            previous = self.job_from_row(old)
-                            checkpoint = (previous.context.get("transportDelivery") or {}).get("checkpoint") or {}
-                            ids = checkpoint.get("messageIds") or []
-                            if ids and checkpoint.get("destinationFingerprint") == destination:
-                                anchor = {"messageId": str(ids[0]), "jobId": previous.job_id}
-                                receipts[destination] = anchor
-                                tx.execute("UPDATE notification_research_threads SET receipts_json=%s,updated_at=%s WHERE thread_key=%s",
-                                    (json.dumps(receipts), utc_now(), key))
-                    if not anchor and row["first_job_id"] != job.job_id:
-                        parent = tx.execute("SELECT status,attempts FROM notification_jobs WHERE job_id=%s", (row["first_job_id"],)).fetchone()
-                        if parent and (parent["status"] in {"pending", "processing", "awaiting_ai"} or
-                                       (parent["status"] == "failed" and parent["attempts"] < MAX_NOTIFICATION_DELIVERY_ATTEMPTS)):
-                            raise ResearchDeliveryDeferred("원본 메시지가 전송되기를 기다립니다.")
-                yield anchor.get("messageId") if anchor.get("jobId") != job.job_id else None
-            finally:
-                connection.execute("SELECT RELEASE_LOCK(%s)", (lock,)).fetchone()
+            with self.transaction() as tx:
+                register(tx, job)
+                row = tx.execute("SELECT first_job_id,receipts_json FROM notification_research_threads WHERE thread_key=%s", (key,)).fetchone()
+                receipts = json.loads(row["receipts_json"])
+                anchor = receipts.get(destination) or {}
+                if not anchor:
+                    old = tx.execute("SELECT text,payload_json FROM notification_jobs WHERE job_id=%s", (row["first_job_id"],)).fetchone()
+                    if old:
+                        previous = self.job_from_row(old)
+                        checkpoint = (previous.context.get("transportDelivery") or {}).get("checkpoint") or {}
+                        ids = checkpoint.get("messageIds") or []
+                        if ids and checkpoint.get("destinationFingerprint") == destination:
+                            anchor = {"messageId": str(ids[0]), "jobId": previous.job_id}
+                            receipts[destination] = anchor
+                            tx.execute("UPDATE notification_research_threads SET receipts_json=%s,updated_at=%s WHERE thread_key=%s",
+                                (json.dumps(receipts), utc_now(), key))
+                if not anchor and row["first_job_id"] != job.job_id:
+                    parent = tx.execute("SELECT status,attempts FROM notification_jobs WHERE job_id=%s", (row["first_job_id"],)).fetchone()
+                    if parent and (parent["status"] in {"pending", "processing", "awaiting_ai"} or
+                                   (parent["status"] == "failed" and parent["attempts"] < MAX_NOTIFICATION_DELIVERY_ATTEMPTS)):
+                        raise ResearchDeliveryDeferred("원본 메시지가 전송되기를 기다립니다.")
+            yield anchor.get("messageId") if anchor.get("jobId") != job.job_id else None
 
     def save_research_delivery_progress(self, job, destination, checkpoint):
         self._save_thread_progress(job, destination, checkpoint, research_thread_key(job))

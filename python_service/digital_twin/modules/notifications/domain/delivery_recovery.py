@@ -14,6 +14,8 @@ _CIRCUIT_UNTIL = re.compile(
     re.IGNORECASE,
 )
 _TRANSIENT_MARKERS = (
+    "mysql pool wait exhausted",
+    "mysql connection validation failed after bounded replacement",
     "circuit open",
     "timed out",
     "timeout",

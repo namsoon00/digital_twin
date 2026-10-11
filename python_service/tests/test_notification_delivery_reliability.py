@@ -32,6 +32,17 @@ def receipt(message_id="1"):
 
 
 class DeliveryReliabilityTests(unittest.TestCase):
+    def test_pool_exhaustion_backs_off_and_recovery_remains_bounded(self):
+        from digital_twin.modules.notifications.domain.delivery_recovery import terminal_delivery_recovery_decision
+        now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+        error = "MySQL pool wait exhausted: size=2, created=2"
+        self.assertEqual("2026-10-11T00:01:00Z", notification_failure_retry_at(error, 3, now=now))
+        job = {"messageType": "investmentInsight", "createdAt": now.isoformat(), "lastError": error, "attempts": 5}
+        self.assertEqual("retry", terminal_delivery_recovery_decision(job, now=now)["action"])
+        job["context"] = {"deliveryRecovery": {"count": 1}}
+        self.assertEqual("retain-failed", terminal_delivery_recovery_decision(job, now=now)["action"])
+        self.assertEqual("supersede", terminal_delivery_recovery_decision(job, now=now + timedelta(hours=4))["action"])
+
     def test_relation_push_requires_graph_transition_and_rejects_ticks_or_id_churn(self):
         from test_notification_ai_delivery import lifecycle_observation_context, context_observation_context
         from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
@@ -214,6 +225,32 @@ class DeliveryReliabilityTests(unittest.TestCase):
 
 
 class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
+    def test_nested_delivery_locks_leave_pool_capacity_and_release_after_failure(self):
+        from digital_twin.infrastructure.mysql_connection_pool import MySQLConnectionPool
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        store = self.notifications
+        pool = MySQLConnectionPool(store.raw_connection, size=2, acquire_timeout=0.05)
+        job = NotificationJob.create("lock fixture", account_id="fixture", message_type="fixture-lock")
+        key = "fixture-nested-delivery"
+        def register(tx, job):
+            tx.execute("INSERT IGNORE INTO notification_research_threads (thread_key,first_job_id,receipts_json,updated_at) VALUES (%s,%s,'{}',%s)", (key, job.job_id, job.created_at))
+        with patch.object(store, "pooled_connection", side_effect=lambda autocommit=True: (pool.acquire(autocommit), pool.release)):
+            with self.assertRaisesRegex(ValueError, "fixture interruption"):
+                with store.delivery_subject_lock("fixture", "TEST") as acquired:
+                    self.assertTrue(acquired)
+                    with store._delivery_thread(job, "fixture-destination", key, register):
+                        with store.transaction() as tx:
+                            self.assertEqual(1, tx.execute("SELECT 1 AS ok").fetchone()["ok"])
+                        with MySQLConnectionProxy(store.raw_connection()) as competitor:
+                            self.assertEqual(0, competitor.execute("SELECT GET_LOCK(%s,0) AS acquired", ("research-send:" + key,)).fetchone()["acquired"])
+                        raise ValueError("fixture interruption")
+            with store.delivery_subject_lock("fixture", "TEST") as acquired:
+                self.assertTrue(acquired)
+                with store._delivery_thread(job, "fixture-destination", key, register):
+                    pass
+        while not pool.idle.empty():
+            pool.discard(pool.idle.get_nowait())
+
     def test_article_duplicate_history_keeps_cached_and_legacy_keys_without_bulk_bodies(self):
         import json
         from digital_twin.modules.notifications.domain.sent_article_filter import collect_article_identity_keys_from_context

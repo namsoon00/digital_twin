@@ -1390,6 +1390,14 @@ def news_ai_analysis_is_current(evidence: ResearchEvidence) -> bool:
     analysis = payload.get("aiAnalysis") if isinstance(payload, dict) else {}
     if not isinstance(analysis, dict):
         return False
+    stored_quality = payload.get("articleSummaryQuality") if isinstance(payload.get("articleSummaryQuality"), dict) else {}
+    if "source-passages-unavailable" in (stored_quality.get("issues") or []):
+        # Reopen only a rejection whose missing passage input is now repaired.
+        # A new extraction contract never automatically validates an old summary.
+        stored_grounding = stored_quality.get("sourceGrounding") if isinstance(stored_quality.get("sourceGrounding"), dict) else {}
+        contract = news_source_contract(evidence)
+        if stored_grounding.get("version") != contract["version"] and contract["passages"]:
+            return False
     title, body, feed_summary, _read_scope = article_text_parts(evidence)
     return (
         str(analysis.get("version") or "") == NEWS_AI_ANALYSIS_VERSION
@@ -1646,7 +1654,8 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     grounding = payload["articleSummaryQuality"].get("sourceGrounding") or {}
     if grounding and payload["articleSummaryQuality"].get("issues"):
         previous = previous_analysis
-        fingerprint = str(grounding.get("sourceFingerprint") or "") + ":" + NEWS_AI_ANALYSIS_VERSION
+        fingerprint = ":".join((str(grounding.get("sourceFingerprint") or ""),
+                                NEWS_AI_ANALYSIS_VERSION, str(grounding.get("version") or "")))
         attempts = int(previous.get("sourceRepairAttempts") or 0) if previous.get("sourceRepairFingerprint") == fingerprint else 0
         analysis_dict["sourceRepairAttempts"] = attempts + 1
         analysis_dict["sourceRepairFingerprint"] = fingerprint

@@ -112,7 +112,7 @@ def merge_derived_evidence_payload(
         and str(previous_analysis.get("sourceTextHash") or "").strip()
         == str(incoming_analysis.get("sourceTextHash") or "").strip()
     )
-    if previous_text and incoming_text and previous_text != incoming_text and not same_analysis_source:
+    if incoming_text and previous_text != incoming_text and not same_analysis_source:
         return incoming
     if has_article_source_validation(incoming):
         # A new source audit can revoke an older "ok" result or repair a rejection.

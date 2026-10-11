@@ -8,23 +8,35 @@ from typing import Dict
 from digital_twin.modules.news_intelligence.domain import news_analysis
 
 
-ARTICLE_SOURCE_CONTRACT_VERSION = "article-source-contract-v1"
+ARTICLE_SOURCE_CONTRACT_VERSION = "article-source-contract-v2-preserved-passages"
 
 
 def build_article_source_contract(target, title: str, body: str, feed_summary: str) -> Dict[str, object]:
     source = news_analysis.clean_article_body_text(body or feed_summary, 5000)
     scope = "body" if body else "feed-summary"
-    selected = news_analysis.target_relevant_article_text(target, title, source, limit=3200) if source else ""
+    # Keep candidate boundaries: headline-tail cleanup may remove punctuation.
+    # Joining then splitting can invent a sentence absent from the source.
+    selected = news_analysis.article_sentence_candidates(
+        source, target, limit=16, headline=title, require_target=True,
+        sentence_limit=700, preserve_order=True,
+    ) if source else []
+    if source and not selected:
+        selected = news_analysis.article_source_sentences(
+            news_analysis.target_relevant_article_text(target, title, source, limit=3200)
+        )
     terms = news_analysis.article_headline_terms(target, title)
     passages = []
     title_key = re.sub(r"[^a-z0-9가-힣]", "", news_analysis.clean_article_title(title).casefold())
-    for text in news_analysis.article_source_sentences(selected):
+    remaining = 3200
+    for text in selected:
         text = text.strip()
         text_key = re.sub(r"[^a-z0-9가-힣]", "", text.casefold())
         # A copied headline or a cut sentence is not an independent body source.
         if len(text) < 24 or text.endswith(("...", "…")) or text not in source:
             continue
         if title_key and text_key.startswith(title_key) and len(text_key) <= len(title_key) + 16:
+            continue
+        if len(text) > remaining:
             continue
         digest = hashlib.sha256((scope + "\n" + text).encode("utf-8")).hexdigest()[:20]
         if any(row["id"] == "article-passage:" + digest for row in passages):
@@ -35,6 +47,7 @@ def build_article_source_contract(target, title: str, body: str, feed_summary: s
             "text": text,
             "headlineTermHits": sum(1 for term in terms if term.casefold() in text.casefold()),
         })
+        remaining -= len(text)
     ranked = sorted(passages, key=lambda row: -row["headlineTermHits"])
     best = ranked[0]["headlineTermHits"] if ranked else 0
     primary = [row["id"] for row in ranked if best >= 2 and row["headlineTermHits"] >= best][:2]
